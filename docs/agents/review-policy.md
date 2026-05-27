@@ -13,6 +13,8 @@
 - **Standards Review**: architecture, TDD, Canvas, repo conventions, quality gates, and `docs/agents/engineering-standards.md`.
 - **Spec Review**: PRD, issue brief, acceptance criteria, DAG constraints.
 
+Reviewer agents must not implement fixes. They may run commands and make temporary verification edits inside the reviewer workspace when that helps inspect behavior, but they must not push reviewer edits or turn exploratory changes into implementation work.
+
 ## Approval Rule
 
 Approve only when:
@@ -22,6 +24,20 @@ Approve only when:
 - Required evidence from `docs/agents/quality-gates.md` is present or explicitly skipped.
 - Commit messages follow `docs/agents/engineering-standards.md` when commits are in scope.
 - Any remaining non-blocking findings are accepted or deferred.
+
+## Linear State Decisions
+
+- Move to `Human Review` when both axes have no blocking findings and required evidence is present.
+- Move to `Rework` when the spec is clear and bounded worker fixes are needed.
+- Move to `Needs Human Context` when the spec, acceptance criteria, dependency state, or decision authority is insufficient.
+- Move to `Blocked` when GitHub, Linear, Codex, CI, environment, dependency, or deployment failure prevents review.
+
+Each review round must create a new append-only `## Codex Review Note` with:
+
+- `Round: <n>`,
+- Standards Review blocking/non-blocking/missing evidence,
+- Spec Review blocking/non-blocking/missing evidence,
+- state decision and reason.
 
 ## Escalation
 
