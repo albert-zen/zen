@@ -1,6 +1,6 @@
 # Quality Gates
 
-This repo is currently documentation-only. Add concrete commands when the first implementation scaffold is introduced.
+This repo has a minimal TypeScript implementation scaffold. Keep concrete commands current as tooling changes.
 
 Engineering and commit standards are defined in `docs/agents/engineering-standards.md`.
 
@@ -10,10 +10,10 @@ Worker/reviewer note and state-transition discipline is part of the quality gate
 
 | Gate | Command | Required? | Notes |
 | --- | --- | --- | --- |
-| Format | `<not configured>` | no | Required once implementation tooling exists. |
-| Lint | `<not configured>` | no | Required once implementation tooling exists. |
-| Typecheck | `<not configured>` | no | Required once TypeScript or another typed implementation exists. |
-| Unit tests | `<not configured>` | no | Required for the first kernel implementation. |
+| Format | `<not configured>` | no | Not configured for the minimal scaffold. |
+| Lint | `<not configured>` | no | Not configured for the minimal scaffold. |
+| Typecheck | `npm run typecheck` | yes | Runs TypeScript with `--noEmit`. |
+| Unit tests | `npm test` | yes | Runs Vitest smoke/unit tests. |
 | Integration tests | `<not configured>` | no | Required for end-to-end agent loop behavior. |
 | E2E/browser | `<not configured>` | no | Not relevant until UI exists. |
 | Commit message | Manual review | yes | Must follow `docs/agents/engineering-standards.md`. |
