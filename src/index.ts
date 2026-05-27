@@ -9,6 +9,17 @@ export type {
 } from "./context-compiler.js";
 export { ContextCompiler } from "./context-compiler.js";
 export type {
+  AppendModelResponseItemsInput,
+  ModelErrorEvent,
+  ModelEvent,
+  ModelGateway,
+  ModelMessageCompletedEvent,
+  ModelOptions,
+  ModelResponseItems,
+  ModelTextDeltaEvent
+} from "./model-gateway.js";
+export { appendModelResponseItems } from "./model-gateway.js";
+export type {
   Clock,
   IdGenerator,
   InMemoryItemListOptions,
