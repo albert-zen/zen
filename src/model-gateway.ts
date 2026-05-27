@@ -11,6 +11,11 @@ export type ModelTextDeltaEvent = {
 export type ModelMessageCompletedEvent = {
   readonly type: "message.completed";
   readonly content: unknown;
+  readonly toolCalls?: readonly Readonly<{
+    readonly id: string;
+    readonly name: string;
+    readonly input?: unknown;
+  }>[];
 };
 
 export type ModelErrorEvent = {
@@ -87,13 +92,19 @@ export async function appendModelResponseItems(
       }
 
       if (event.type === "message.completed") {
+        const payload: Record<string, unknown> = { content: event.content };
+
+        if (event.toolCalls) {
+          payload.toolCalls = event.toolCalls;
+        }
+
         completed = input.itemList.append({
           type: "assistant.message.completed",
           runId: input.runId,
           turnId: input.turnId,
           causeId: requestStarted.id,
           targetId: assistantStarted.id,
-          payload: { content: event.content }
+          payload
         });
       }
 

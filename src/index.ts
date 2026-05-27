@@ -1,6 +1,12 @@
 export const kernelEntrypoint = "zen-kernel";
 
 export type {
+  AgentLoopOptions,
+  AgentRunInput,
+  AgentRunResult
+} from "./agent-loop.js";
+export { AgentLoop } from "./agent-loop.js";
+export type {
   ModelContext,
   ModelContextPart,
   ModelMessagePart,
