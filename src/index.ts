@@ -20,6 +20,18 @@ export type {
 } from "./model-gateway.js";
 export { appendModelResponseItems } from "./model-gateway.js";
 export type {
+  AppendToolExecutionItemsInput,
+  ToolCallPayload,
+  ToolErrorEvent,
+  ToolExecutionContext,
+  ToolExecutionItems,
+  ToolOutputDeltaEvent,
+  ToolResultCompletedEvent,
+  ToolRuntime,
+  ToolRuntimeEvent
+} from "./tool-runtime.js";
+export { appendToolExecutionItems } from "./tool-runtime.js";
+export type {
   Clock,
   IdGenerator,
   InMemoryItemListOptions,
