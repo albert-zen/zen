@@ -11,9 +11,10 @@ Use these paths for Canvas-driven agent workflow artifacts in this repo.
 | Execution evidence | `docs/implementation/<slug>-evidence.md` |
 | Review report | `docs/implementation/<slug>-review.md` |
 | Open questions | `docs/implementation/<slug>-open-questions.md` |
+| Engineering standards | `docs/agents/engineering-standards.md` |
 
 ## Naming
 
 - Use short kebab-case slugs.
 - Use the same slug across PRD, DAG, evidence, and review artifacts.
-- Keep local markdown artifacts as the canonical tracker until an external tracker is chosen.
+- Keep local markdown artifacts linked from Linear when they define durable specifications or evidence.

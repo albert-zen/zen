@@ -22,6 +22,7 @@ Managers should give workers:
 | Do-not-touch scope | yes |
 | Required tests | yes |
 | Required evidence | yes |
+| Engineering standards | yes |
 | Review intensity | yes |
 | Base revision/diff scope | yes |
 
@@ -37,6 +38,7 @@ Workers must return:
 | Commands run and results | yes |
 | Evidence links/paths | yes |
 | Decisions made | yes |
+| Standards notes | yes |
 | Open questions | yes |
 | Residual risks | yes |
 

@@ -10,7 +10,7 @@
 
 ## Review Axes
 
-- **Standards Review**: architecture, TDD, Canvas, repo conventions, quality gates.
+- **Standards Review**: architecture, TDD, Canvas, repo conventions, quality gates, and `docs/agents/engineering-standards.md`.
 - **Spec Review**: PRD, issue brief, acceptance criteria, DAG constraints.
 
 ## Approval Rule
@@ -20,6 +20,7 @@ Approve only when:
 - No blocking Standards findings remain.
 - No blocking Spec findings remain.
 - Required evidence from `docs/agents/quality-gates.md` is present or explicitly skipped.
+- Commit messages follow `docs/agents/engineering-standards.md` when commits are in scope.
 - Any remaining non-blocking findings are accepted or deferred.
 
 ## Escalation
