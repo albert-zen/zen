@@ -1,3 +1,4 @@
+import type { HookRuntime } from "./hook-runtime.js";
 import type { Item, ItemList } from "./item-list.js";
 
 export type ToolCallPayload = {
@@ -44,6 +45,7 @@ export type AppendToolExecutionItemsInput = {
   readonly itemList: ItemList;
   readonly toolRuntime: ToolRuntime;
   readonly assistantItem: Item;
+  readonly hookRuntime?: HookRuntime;
 };
 
 export type ToolExecutionItems = {
@@ -59,7 +61,17 @@ export async function appendToolExecutionItems(
   const completed: Item[] = [];
   const errors: Item[] = [];
 
-  for (const call of readToolCalls(input.assistantItem.payload)) {
+  for (const requestedCall of readToolCalls(input.assistantItem.payload)) {
+    const hookDecision = await input.hookRuntime?.beforeToolCall({
+      call: requestedCall,
+      assistantItem: input.assistantItem
+    });
+
+    if (hookDecision?.type === "block") {
+      continue;
+    }
+
+    const call = hookDecision?.call ?? requestedCall;
     const startedItem = input.itemList.append({
       type: "tool.call.started",
       runId: input.assistantItem.runId,

@@ -32,6 +32,24 @@ export type {
 } from "./tool-runtime.js";
 export { appendToolExecutionItems } from "./tool-runtime.js";
 export type {
+  BeforeToolCallHookContext,
+  HookBlockDecision,
+  HookDecision,
+  HookHandlers,
+  HookItemDecision,
+  HookName,
+  HookReplaceDecision,
+  HookResult,
+  HookRuntimeOptions,
+  HookToolCallDecision,
+  HookToolCallReplaceDecision,
+  HookResponse,
+  ItemAppendedHookContext,
+  ItemAppendingHookContext,
+  ToolCallHookPayload
+} from "./hook-runtime.js";
+export { HookRuntime } from "./hook-runtime.js";
+export type {
   Clock,
   IdGenerator,
   InMemoryItemListOptions,

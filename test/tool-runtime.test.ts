@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendToolExecutionItems,
+  HookRuntime,
   InMemoryItemList,
   type ToolRuntime
 } from "../src/index.js";
@@ -224,6 +225,58 @@ describe("appendToolExecutionItems", () => {
       })
     ]);
     expect(result.errors).toEqual([]);
+  });
+
+  it("lets beforeToolCall hooks block a tool call with visible hook.effect evidence", async () => {
+    const items = createItems();
+    const assistant = appendAssistantToolCall(items);
+    const hooks = new HookRuntime({
+      itemList: items,
+      hooks: {
+        beforeToolCall({ call }) {
+          return {
+            decision: {
+              type: "block",
+              reason: `blocked ${call.name}`
+            }
+          };
+        }
+      }
+    });
+    let toolExecuted = false;
+    const runtime: ToolRuntime = {
+      async *execute() {
+        toolExecuted = true;
+        yield { type: "result.completed", content: "should not run" };
+      }
+    };
+
+    const result = await appendToolExecutionItems({
+      itemList: items,
+      toolRuntime: runtime,
+      assistantItem: assistant,
+      hookRuntime: hooks
+    });
+
+    expect(toolExecuted).toBe(false);
+    expect(result).toEqual({ started: [], completed: [], errors: [] });
+    expect(items.getItems()).toEqual([
+      assistant,
+      expect.objectContaining({
+        id: "item-2",
+        type: "hook.effect",
+        runId: "run-1",
+        turnId: "turn-1",
+        visibility: "trace",
+        payload: {
+          hook: "beforeToolCall",
+          effect: "block",
+          reason: "blocked weather",
+          toolCallId: "call-weather-1",
+          toolName: "weather"
+        }
+      })
+    ]);
   });
 });
 
