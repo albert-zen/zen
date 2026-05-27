@@ -21,9 +21,36 @@ export type IdGenerator = () => string;
 
 export type Clock = () => number;
 
+export type ItemObserver = (item: Item) => void;
+
+export type ItemObserverFailure = {
+  readonly observerIndex: number;
+  readonly item: Item;
+  readonly cause: unknown;
+};
+
+export class ItemObserverError extends Error {
+  readonly item: Item;
+  readonly failures: readonly ItemObserverFailure[];
+
+  constructor(item: Item, failures: readonly ItemObserverFailure[]) {
+    super(createObserverErrorMessage(failures), {
+      cause: failures.length === 1 ? failures[0]?.cause : failures
+    });
+    this.name = "ItemObserverError";
+    this.item = cloneItem(item);
+    this.failures = failures.map((failure) => ({
+      observerIndex: failure.observerIndex,
+      item: cloneItem(failure.item),
+      cause: failure.cause
+    }));
+  }
+}
+
 export type InMemoryItemListOptions = {
   readonly generateId?: IdGenerator;
   readonly clock?: Clock;
+  readonly observers?: readonly ItemObserver[];
 };
 
 export interface ItemList {
@@ -33,6 +60,7 @@ export interface ItemList {
 
 export class InMemoryItemList implements ItemList {
   private readonly items: Item[] = [];
+  private readonly observers: ItemObserver[] = [];
   private readonly generateId: IdGenerator;
   private readonly clock: Clock;
   private nextSeq = 1;
@@ -40,6 +68,19 @@ export class InMemoryItemList implements ItemList {
   constructor(options: InMemoryItemListOptions = {}) {
     this.generateId = options.generateId ?? createDefaultIdGenerator();
     this.clock = options.clock ?? Date.now;
+    this.observers = [...(options.observers ?? [])];
+  }
+
+  observe(observer: ItemObserver): () => void {
+    this.observers.push(observer);
+
+    return () => {
+      const index = this.observers.indexOf(observer);
+
+      if (index >= 0) {
+        this.observers.splice(index, 1);
+      }
+    };
   }
 
   append(input: ItemAppendInput): Item {
@@ -51,6 +92,24 @@ export class InMemoryItemList implements ItemList {
     };
 
     this.items.push(item);
+
+    const observerFailures: ItemObserverFailure[] = [];
+
+    this.observers.forEach((observer, observerIndex) => {
+      try {
+        observer(cloneItem(item));
+      } catch (cause) {
+        observerFailures.push({
+          observerIndex,
+          item: cloneItem(item),
+          cause
+        });
+      }
+    });
+
+    if (observerFailures.length > 0) {
+      throw new ItemObserverError(item, observerFailures);
+    }
 
     return cloneItem(item);
   }
@@ -68,6 +127,14 @@ function cloneItem(item: Item): Item {
   }
 
   return cloned;
+}
+
+function createObserverErrorMessage(
+  failures: readonly ItemObserverFailure[]
+): string {
+  const failureCount = failures.length;
+
+  return `${failureCount} item observer${failureCount === 1 ? "" : "s"} failed`;
 }
 
 function createDefaultIdGenerator(): IdGenerator {

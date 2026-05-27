@@ -50,12 +50,20 @@ export type {
 } from "./hook-runtime.js";
 export { HookRuntime } from "./hook-runtime.js";
 export type {
+  RetentionClass,
+  RetentionMode,
+  ShouldRetainItemOptions
+} from "./item-retention-policy.js";
+export { ItemRetentionPolicy } from "./item-retention-policy.js";
+export type {
   Clock,
   IdGenerator,
   InMemoryItemListOptions,
   Item,
   ItemAppendInput,
   ItemList,
+  ItemObserverFailure,
+  ItemObserver,
   ItemVisibility
 } from "./item-list.js";
-export { InMemoryItemList } from "./item-list.js";
+export { InMemoryItemList, ItemObserverError } from "./item-list.js";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { InMemoryItemList, type Item } from "../src/index.js";
+import { InMemoryItemList, ItemObserverError, type Item } from "../src/index.js";
 
 describe("InMemoryItemList", () => {
   it("appends items in order with monotonic sequence numbers", () => {
@@ -147,5 +147,110 @@ describe("InMemoryItemList", () => {
       id: "item-1",
       meta: { source: "test" }
     });
+  });
+
+  it("notifies observers after an item is appended", () => {
+    const observed: Item[] = [];
+    const items = new InMemoryItemList({
+      generateId: () => "item-1",
+      clock: () => 1000
+    });
+
+    items.observe((item) => {
+      observed.push(item);
+    });
+
+    const appended = items.append({
+      type: "user.message.completed",
+      runId: "run-1",
+      turnId: "turn-1",
+      payload: { content: "hello" }
+    });
+
+    expect(observed).toEqual([appended]);
+  });
+
+  it("notifies observers in item sequence order and observer registration order", () => {
+    const observed: string[] = [];
+    const items = new InMemoryItemList({
+      generateId: (() => {
+        let nextId = 0;
+        return () => `item-${++nextId}`;
+      })(),
+      clock: () => 1000
+    });
+
+    items.observe((item) => {
+      observed.push(`first:${item.seq}:${item.type}`);
+    });
+    items.observe((item) => {
+      observed.push(`second:${item.seq}:${item.type}`);
+    });
+
+    items.append({
+      type: "user.message.completed",
+      runId: "run-1",
+      turnId: "turn-1",
+      payload: { content: "hello" }
+    });
+    items.append({
+      type: "assistant.message.completed",
+      runId: "run-1",
+      turnId: "turn-1",
+      payload: { content: "hi" }
+    });
+
+    expect(observed).toEqual([
+      "first:1:user.message.completed",
+      "second:1:user.message.completed",
+      "first:2:assistant.message.completed",
+      "second:2:assistant.message.completed"
+    ]);
+  });
+
+  it("commits appended items and reports observer failures after notifying remaining observers", () => {
+    const observed: string[] = [];
+    const items = new InMemoryItemList({
+      generateId: () => "item-1",
+      clock: () => 1000
+    });
+
+    items.observe((item) => {
+      observed.push(`failing:${item.seq}`);
+      throw new Error("persist failed");
+    });
+    items.observe((item) => {
+      observed.push(`second:${item.seq}`);
+    });
+
+    let observerError: unknown;
+
+    try {
+      items.append({
+        type: "user.message.completed",
+        runId: "run-1",
+        turnId: "turn-1",
+        payload: { content: "hello" }
+      });
+    } catch (cause) {
+      observerError = cause;
+    }
+
+    expect(observerError).toBeInstanceOf(ItemObserverError);
+    expect((observerError as ItemObserverError).failures).toEqual([
+      expect.objectContaining({
+        observerIndex: 0,
+        item: expect.objectContaining({
+          id: "item-1",
+          seq: 1,
+          type: "user.message.completed"
+        }),
+        cause: expect.objectContaining({
+          message: "persist failed"
+        })
+      })
+    ]);
+    expect(observed).toEqual(["failing:1", "second:1"]);
+    expect(items.getItems()).toHaveLength(1);
   });
 });
