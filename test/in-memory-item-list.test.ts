@@ -253,4 +253,66 @@ describe("InMemoryItemList", () => {
     expect(observed).toEqual(["failing:1", "second:1"]);
     expect(items.getItems()).toHaveLength(1);
   });
+
+  it("notifies observers with snapshots that cannot mutate committed item payloads", () => {
+    const items = new InMemoryItemList({
+      generateId: () => "item-1",
+      clock: () => 1000
+    });
+
+    items.observe((item) => {
+      const payload = item.payload as { content: string };
+      payload.content = "mutated by observer";
+    });
+
+    items.append({
+      type: "user.message.completed",
+      runId: "run-1",
+      turnId: "turn-1",
+      payload: { content: "hello" }
+    });
+
+    expect(items.getItems()[0]?.payload).toEqual({ content: "hello" });
+  });
+
+  it("reports async observers as unsupported instead of ignoring rejected promises", () => {
+    const observed: string[] = [];
+    const items = new InMemoryItemList({
+      generateId: () => "item-1",
+      clock: () => 1000
+    });
+
+    items.observe(async () => {
+      observed.push("async");
+      throw new Error("async persist failed");
+    });
+    items.observe((item) => {
+      observed.push(`sync:${item.seq}`);
+    });
+
+    let observerError: unknown;
+
+    try {
+      items.append({
+        type: "user.message.completed",
+        runId: "run-1",
+        turnId: "turn-1",
+        payload: { content: "hello" }
+      });
+    } catch (cause) {
+      observerError = cause;
+    }
+
+    expect(observerError).toBeInstanceOf(ItemObserverError);
+    expect((observerError as ItemObserverError).failures).toEqual([
+      expect.objectContaining({
+        observerIndex: 0,
+        cause: expect.objectContaining({
+          message: "Async item observers are not supported by synchronous append"
+        })
+      })
+    ]);
+    expect(observed).toEqual(["async", "sync:1"]);
+    expect(items.getItems()).toHaveLength(1);
+  });
 });

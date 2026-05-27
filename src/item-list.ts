@@ -97,7 +97,18 @@ export class InMemoryItemList implements ItemList {
 
     this.observers.forEach((observer, observerIndex) => {
       try {
-        observer(cloneItem(item));
+        const observerResult = observer(cloneItem(item)) as unknown;
+
+        if (isPromiseLike(observerResult)) {
+          Promise.resolve(observerResult).catch(() => undefined);
+          observerFailures.push({
+            observerIndex,
+            item: cloneItem(item),
+            cause: new TypeError(
+              "Async item observers are not supported by synchronous append"
+            )
+          });
+        }
       } catch (cause) {
         observerFailures.push({
           observerIndex,
@@ -120,13 +131,36 @@ export class InMemoryItemList implements ItemList {
 }
 
 function cloneItem(item: Item): Item {
-  const cloned = { ...item };
+  return clonePlain(item) as Item;
+}
 
-  if (item.meta) {
-    cloned.meta = { ...item.meta };
+function clonePlain<T>(value: T): T {
+  if (typeof globalThis.structuredClone === "function") {
+    try {
+      return globalThis.structuredClone(value);
+    } catch {
+      // Fall through for values like functions that cannot be structured-cloned.
+    }
   }
 
-  return cloned;
+  return clonePlainFallback(value);
+}
+
+function clonePlainFallback<T>(value: T): T {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(clonePlainFallback) as T;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entryValue]) => [
+      key,
+      clonePlainFallback(entryValue)
+    ])
+  ) as T;
 }
 
 function createObserverErrorMessage(
@@ -135,6 +169,15 @@ function createObserverErrorMessage(
   const failureCount = failures.length;
 
   return `${failureCount} item observer${failureCount === 1 ? "" : "s"} failed`;
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    "then" in value &&
+    typeof value.then === "function"
+  );
 }
 
 function createDefaultIdGenerator(): IdGenerator {
