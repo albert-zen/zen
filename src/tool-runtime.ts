@@ -1,5 +1,5 @@
 import type { HookRuntime } from "./hook-runtime.js";
-import type { Item, ItemList } from "./item-list.js";
+import type { Item, ItemAppendInput, ItemList } from "./item-list.js";
 
 export type ToolCallPayload = {
   readonly id: string;
@@ -43,10 +43,15 @@ export interface ToolRuntime {
 
 export type AppendToolExecutionItemsInput = {
   readonly itemList: ItemList;
+  readonly appendItem?: ItemAppender;
   readonly toolRuntime: ToolRuntime;
   readonly assistantItem: Item;
   readonly hookRuntime?: HookRuntime;
 };
+
+export type ItemAppender = (
+  input: ItemAppendInput
+) => Item | undefined | Promise<Item | undefined>;
 
 export type ToolExecutionItems = {
   readonly started: readonly Item[];
@@ -57,6 +62,7 @@ export type ToolExecutionItems = {
 export async function appendToolExecutionItems(
   input: AppendToolExecutionItemsInput
 ): Promise<ToolExecutionItems> {
+  const appendItem = createAppender(input);
   const started: Item[] = [];
   const completed: Item[] = [];
   const errors: Item[] = [];
@@ -72,7 +78,7 @@ export async function appendToolExecutionItems(
     }
 
     const call = hookDecision?.call ?? requestedCall;
-    const startedItem = input.itemList.append({
+    const startedItem = await appendRequired(appendItem, {
       type: "tool.call.started",
       runId: input.assistantItem.runId,
       turnId: input.assistantItem.turnId,
@@ -92,7 +98,7 @@ export async function appendToolExecutionItems(
         startedItem
       })) {
         if (event.type === "output.delta") {
-          input.itemList.append({
+          await appendItem({
             type: "tool.output.delta",
             runId: input.assistantItem.runId,
             turnId: input.assistantItem.turnId,
@@ -109,7 +115,7 @@ export async function appendToolExecutionItems(
 
         if (event.type === "result.completed") {
           completed.push(
-            input.itemList.append({
+            await appendRequired(appendItem, {
               type: "tool.result.completed",
               runId: input.assistantItem.runId,
               turnId: input.assistantItem.turnId,
@@ -124,12 +130,12 @@ export async function appendToolExecutionItems(
         }
 
         if (event.type === "error") {
-          errors.push(appendToolError(input.itemList, startedItem, call, event.error));
+          errors.push(await appendToolError(appendItem, startedItem, call, event.error));
           break;
         }
       }
     } catch (caughtError) {
-      errors.push(appendToolError(input.itemList, startedItem, call, caughtError));
+      errors.push(await appendToolError(appendItem, startedItem, call, caughtError));
     }
   }
 
@@ -137,12 +143,12 @@ export async function appendToolExecutionItems(
 }
 
 function appendToolError(
-  itemList: ItemList,
+  appendItem: ItemAppender,
   startedItem: Item,
   call: ToolCallPayload,
   cause: unknown
-): Item {
-  return itemList.append({
+): Promise<Item> {
+  return appendRequired(appendItem, {
     type: "tool.error",
     runId: startedItem.runId,
     turnId: startedItem.turnId,
@@ -155,6 +161,23 @@ function appendToolError(
       cause: serializeErrorCause(cause)
     }
   });
+}
+
+function createAppender(input: AppendToolExecutionItemsInput): ItemAppender {
+  return input.appendItem ?? ((item) => input.itemList.append(item));
+}
+
+async function appendRequired(
+  appendItem: ItemAppender,
+  item: ItemAppendInput
+): Promise<Item> {
+  const appended = await appendItem(item);
+
+  if (!appended) {
+    throw new Error(`Required item append was blocked: ${item.type}`);
+  }
+
+  return appended;
 }
 
 function readToolCalls(payload: unknown): readonly ToolCallPayload[] {

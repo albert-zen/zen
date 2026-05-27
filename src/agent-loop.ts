@@ -76,6 +76,7 @@ export class AgentLoop {
       const context = this.contextCompiler.compile(this.itemList.getItems());
       const modelItems = await appendModelResponseItems({
         itemList: this.itemList,
+        appendItem: (item) => this.append(item),
         model: this.model,
         context,
         options: input.modelOptions,
@@ -94,6 +95,7 @@ export class AgentLoop {
 
       await appendToolExecutionItems({
         itemList: this.itemList,
+        appendItem: (item) => this.append(item),
         toolRuntime: this.toolRuntime,
         assistantItem: modelItems.completed,
         hookRuntime: this.hookRuntime

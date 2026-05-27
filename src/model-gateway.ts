@@ -1,5 +1,5 @@
 import type { ModelContext } from "./context-compiler.js";
-import type { Item, ItemList } from "./item-list.js";
+import type { Item, ItemAppendInput, ItemList } from "./item-list.js";
 
 export type ModelOptions = Readonly<Record<string, unknown>>;
 
@@ -37,12 +37,17 @@ export interface ModelGateway {
 
 export type AppendModelResponseItemsInput = {
   readonly itemList: ItemList;
+  readonly appendItem?: ItemAppender;
   readonly model: ModelGateway;
   readonly context: ModelContext;
   readonly options?: ModelOptions;
   readonly runId: string;
   readonly turnId: string;
 };
+
+export type ItemAppender = (
+  input: ItemAppendInput
+) => Item | undefined | Promise<Item | undefined>;
 
 export type ModelResponseItems = {
   readonly requestStarted: Item;
@@ -55,7 +60,8 @@ export type ModelResponseItems = {
 export async function appendModelResponseItems(
   input: AppendModelResponseItemsInput
 ): Promise<ModelResponseItems> {
-  const requestStarted = input.itemList.append({
+  const appendItem = createAppender(input);
+  const requestStarted = await appendRequired(appendItem, {
     type: "model.request.started",
     runId: input.runId,
     turnId: input.turnId,
@@ -65,7 +71,7 @@ export async function appendModelResponseItems(
       contextPartCount: input.context.parts.length
     }
   });
-  const assistantStarted = input.itemList.append({
+  const assistantStarted = await appendRequired(appendItem, {
     type: "assistant.message.started",
     runId: input.runId,
     turnId: input.turnId,
@@ -80,7 +86,7 @@ export async function appendModelResponseItems(
   try {
     for await (const event of input.model.generate(input.context, input.options)) {
       if (event.type === "text.delta") {
-        input.itemList.append({
+        await appendItem({
           type: "assistant.message.delta",
           runId: input.runId,
           turnId: input.turnId,
@@ -98,7 +104,7 @@ export async function appendModelResponseItems(
           payload.toolCalls = event.toolCalls;
         }
 
-        completed = input.itemList.append({
+        completed = await appendRequired(appendItem, {
           type: "assistant.message.completed",
           runId: input.runId,
           turnId: input.turnId,
@@ -109,15 +115,27 @@ export async function appendModelResponseItems(
       }
 
       if (event.type === "error") {
-        error = appendAssistantError(input, requestStarted, assistantStarted, event.error);
+        error = await appendAssistantError(
+          appendItem,
+          input,
+          requestStarted,
+          assistantStarted,
+          event.error
+        );
         break;
       }
     }
   } catch (caughtError) {
-    error = appendAssistantError(input, requestStarted, assistantStarted, caughtError);
+    error = await appendAssistantError(
+      appendItem,
+      input,
+      requestStarted,
+      assistantStarted,
+      caughtError
+    );
   }
 
-  const requestCompleted = input.itemList.append({
+  const requestCompleted = await appendRequired(appendItem, {
     type: "model.request.completed",
     runId: input.runId,
     turnId: input.turnId,
@@ -136,13 +154,14 @@ export async function appendModelResponseItems(
   };
 }
 
-function appendAssistantError(
+async function appendAssistantError(
+  appendItem: ItemAppender,
   input: AppendModelResponseItemsInput,
   requestStarted: Item,
   assistantStarted: Item,
   cause: unknown
-): Item {
-  return input.itemList.append({
+): Promise<Item> {
+  return appendRequired(appendItem, {
     type: "assistant.message.error",
     runId: input.runId,
     turnId: input.turnId,
@@ -154,6 +173,23 @@ function appendAssistantError(
       cause: serializeErrorCause(cause)
     }
   });
+}
+
+function createAppender(input: AppendModelResponseItemsInput): ItemAppender {
+  return input.appendItem ?? ((item) => input.itemList.append(item));
+}
+
+async function appendRequired(
+  appendItem: ItemAppender,
+  item: ItemAppendInput
+): Promise<Item> {
+  const appended = await appendItem(item);
+
+  if (!appended) {
+    throw new Error(`Required item append was blocked: ${item.type}`);
+  }
+
+  return appended;
 }
 
 function readErrorMessage(cause: unknown): string {

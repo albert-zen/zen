@@ -236,6 +236,110 @@ describe("AgentLoop", () => {
     ]);
   });
 
+  it("runs model and tool item appends through hooks in the full fake path", async () => {
+    const itemList = createItems();
+    let modelCalls = 0;
+    const model: ModelGateway = {
+      async *generate() {
+        modelCalls += 1;
+
+        if (modelCalls === 1) {
+          yield {
+            type: "message.completed",
+            content: "Calling fake tool.",
+            toolCalls: [{ id: "call-tool-1", name: "fake-tool" }]
+          };
+          return;
+        }
+
+        yield { type: "message.completed", content: "Fake tool returned." };
+      }
+    };
+    const toolRuntime: ToolRuntime = {
+      async *execute() {
+        yield { type: "result.completed", content: "fake result" };
+      }
+    };
+    const agent = new AgentLoop({
+      itemList,
+      model,
+      toolRuntime,
+      hooks: {
+        onItemAppended({ item }) {
+          if (
+            item.type !== "model.request.started" &&
+            item.type !== "tool.result.completed"
+          ) {
+            return;
+          }
+
+          return {
+            append: [
+              {
+                type: "hook.effect",
+                runId: item.runId,
+                turnId: item.turnId,
+                causeId: item.id,
+                visibility: "trace",
+                payload: {
+                  hook: "onItemAppended",
+                  effect: "audit",
+                  itemType: item.type
+                }
+              }
+            ]
+          };
+        }
+      }
+    });
+
+    const result = await agent.run({
+      input: "Use a fake tool",
+      runId: "run-1",
+      turnId: "turn-1"
+    });
+
+    const auditedItems = result.items.filter(
+      (item) =>
+        item.type === "model.request.started" ||
+        item.type === "tool.result.completed"
+    );
+
+    expect(
+      result.items
+        .filter((item) => item.type === "hook.effect")
+        .map((item) => ({
+          causeId: item.causeId,
+          payload: item.payload
+        }))
+    ).toEqual([
+      {
+        causeId: auditedItems[0]?.id,
+        payload: {
+          hook: "onItemAppended",
+          effect: "audit",
+          itemType: "model.request.started"
+        }
+      },
+      {
+        causeId: auditedItems[1]?.id,
+        payload: {
+          hook: "onItemAppended",
+          effect: "audit",
+          itemType: "tool.result.completed"
+        }
+      },
+      {
+        causeId: auditedItems[2]?.id,
+        payload: {
+          hook: "onItemAppended",
+          effect: "audit",
+          itemType: "model.request.started"
+        }
+      }
+    ]);
+  });
+
   it("notifies observers in the same appended item order as the item list", async () => {
     const observed: string[] = [];
     const itemList = createItems();
