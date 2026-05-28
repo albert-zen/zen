@@ -1,6 +1,28 @@
 export const kernelEntrypoint = "zen-kernel";
 
 export type {
+  AppServerError,
+  AppServerNotification,
+  AppServerRequest,
+  AppServerResponse,
+  ApprovalDecision,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
+  ProtocolItem,
+  ProtocolItemOptions,
+  ThreadSnapshot,
+  ThreadSnapshotInput,
+  ThreadStatus,
+  TurnSnapshot,
+  TurnStatus
+} from "./app-server-protocol.js";
+export {
+  filterProtocolItems,
+  toProtocolItem,
+  toThreadSnapshot
+} from "./app-server-protocol.js";
+export type {
   AgentLoopOptions,
   AgentRunInput,
   AgentRunResult
