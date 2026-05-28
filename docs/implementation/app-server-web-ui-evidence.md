@@ -121,9 +121,23 @@ node --check web/app.js
   passed
 ```
 
-Browser automation was not available in this session, so visual verification is
-covered by static shell tests and JavaScript syntax validation. The page is a
-plain static file and can be opened directly from `web/index.html`.
+Additional browser smoke check:
+
+```text
+Chrome headless CDP
+  opened file:///D:/desktop/zen/web/index.html
+  initialized thread-1
+  submitted normal, tool, and approval turns
+  observed one pending approval control
+  clicked Approve
+  observed approval resolution, tool result, and final assistant message
+  observed status: idle
+  observed 0 runtime exceptions
+  saved screenshot: docs/implementation/app-server-web-ui-smoke.png
+```
+
+The page is a plain static file and can be opened directly from
+`web/index.html`.
 
 ## Productization Gaps
 
