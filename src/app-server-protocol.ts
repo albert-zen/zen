@@ -106,7 +106,7 @@ export type AppServerResponse =
       readonly result: { readonly approvalId: string; readonly decision: ApprovalDecision };
     }
   | {
-      readonly method: AppServerRequest["method"];
+      readonly method: string;
       readonly ok: false;
       readonly error: AppServerError;
     };

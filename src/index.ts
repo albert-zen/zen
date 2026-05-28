@@ -1,6 +1,14 @@
 export const kernelEntrypoint = "zen-kernel";
 
 export type {
+  AppServerClient,
+  AppServerNotificationListener,
+  AppServerOptions,
+  AppServerRequestInput,
+  AppServerSubscription
+} from "./app-server.js";
+export { AppServer } from "./app-server.js";
+export type {
   AppServerError,
   AppServerNotification,
   AppServerRequest,
