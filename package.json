@@ -4,8 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "tui": "npm run build && node dist/cli.js"
+  },
+  "bin": {
+    "zen": "dist/cli.js"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

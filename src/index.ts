@@ -1,6 +1,11 @@
 export const kernelEntrypoint = "zen-kernel";
 
 export type {
+  AgentInteractionSessionOptions,
+  AgentInteractionSnapshot
+} from "./agent-interaction-session.js";
+export { AgentInteractionSession } from "./agent-interaction-session.js";
+export type {
   AppServerClient,
   AppServerNotificationListener,
   AppServerOptions,
@@ -51,6 +56,11 @@ export type {
   AgentRunResult
 } from "./agent-loop.js";
 export { AgentLoop } from "./agent-loop.js";
+export type { DemoAppServerOptions } from "./demo-runtime.js";
+export {
+  createDemoAppServer,
+  createDemoThreadRuntime
+} from "./demo-runtime.js";
 export type {
   ModelContext,
   ModelContextPart,
@@ -147,3 +157,11 @@ export {
   applyAppServerNotification,
   createWebUiState
 } from "./web-ui-state.js";
+export type { TuiOptions } from "./tui.js";
+export { runTui } from "./tui.js";
+export {
+  renderTerminalStatus,
+  renderTerminalTimelineRow,
+  renderTerminalTranscript,
+  renderThreadStarted
+} from "./terminal-transcript.js";
