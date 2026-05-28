@@ -1,6 +1,7 @@
 import type {
   AppServerNotification,
   ApprovalDecision,
+  JsonObject,
   ProtocolItem,
   ThreadSnapshot
 } from "./app-server-protocol.js";
@@ -269,8 +270,8 @@ function buildTimelineRows(items: readonly ProtocolItem[]): readonly TimelineRow
   const assistantDeltaTextByTarget = new Map<string, string>();
   const resolvedApprovalIds = new Set(
     sortedItems
-      .filter((item) => item.type === "approval.resolved")
-      .map((item) => readStringPayloadField(item.payload, "approvalId"))
+      .filter((item) => readApprovalEventType(item) === "approval.resolved")
+      .map((item) => readStringPayloadField(readApprovalPayload(item), "approvalId"))
       .filter((approvalId) => approvalId.length > 0)
   );
 
@@ -313,8 +314,10 @@ function buildTimelineRows(items: readonly ProtocolItem[]): readonly TimelineRow
     }
 
     if (
-      item.type === "approval.requested" &&
-      resolvedApprovalIds.has(readStringPayloadField(item.payload, "approvalId"))
+      readApprovalEventType(item) === "approval.requested" &&
+      resolvedApprovalIds.has(
+        readStringPayloadField(readApprovalPayload(item), "approvalId")
+      )
     ) {
       return [];
     }
@@ -380,26 +383,30 @@ function toTimelineRow(item: ProtocolItem): TimelineRow {
     };
   }
 
-  if (item.type === "approval.requested") {
+  if (readApprovalEventType(item) === "approval.requested") {
+    const approvalPayload = readApprovalPayload(item);
+
     return {
       type: "approval-pending",
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      approvalId: readOptionalStringPayloadField(item.payload, "approvalId"),
-      toolCallId: readOptionalStringPayloadField(item.payload, "toolCallId"),
-      reason: readOptionalStringPayloadField(item.payload, "reason")
+      approvalId: readOptionalStringPayloadField(approvalPayload, "approvalId"),
+      toolCallId: readOptionalStringPayloadField(approvalPayload, "toolCallId"),
+      reason: readOptionalStringPayloadField(approvalPayload, "reason")
     };
   }
 
-  if (item.type === "approval.resolved") {
+  if (readApprovalEventType(item) === "approval.resolved") {
+    const approvalPayload = readApprovalPayload(item);
+
     return {
       type: "approval-resolved",
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      approvalId: readOptionalStringPayloadField(item.payload, "approvalId"),
-      decision: readApprovalDecision(item.payload)
+      approvalId: readOptionalStringPayloadField(approvalPayload, "approvalId"),
+      decision: readApprovalDecision(approvalPayload)
     };
   }
 
@@ -453,4 +460,38 @@ function readApprovalDecision(
   }
 
   return undefined;
+}
+
+function readApprovalEventType(
+  item: ProtocolItem
+): "approval.requested" | "approval.resolved" | undefined {
+  if (item.type === "approval.requested" || item.type === "approval.resolved") {
+    return item.type;
+  }
+
+  const delta = readPayloadField(item.payload, "delta");
+
+  if (typeof delta !== "object" || delta === null || Array.isArray(delta)) {
+    return undefined;
+  }
+
+  const type = readPayloadField(delta as JsonObject, "type");
+
+  return type === "approval.requested" || type === "approval.resolved"
+    ? type
+    : undefined;
+}
+
+function readApprovalPayload(item: ProtocolItem): ProtocolItem["payload"] {
+  const delta = readPayloadField(item.payload, "delta");
+
+  if (typeof delta === "object" && delta !== null && !Array.isArray(delta)) {
+    const type = readPayloadField(delta as JsonObject, "type");
+
+    if (type === "approval.requested" || type === "approval.resolved") {
+      return delta as JsonObject;
+    }
+  }
+
+  return item.payload;
 }

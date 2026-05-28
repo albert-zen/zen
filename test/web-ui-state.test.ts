@@ -290,6 +290,57 @@ describe("web ui state projection", () => {
     ]);
   });
 
+  it("projects approval trace deltas emitted by policy tool runtime", () => {
+    const state = createWebUiState({
+      id: "thread-1",
+      status: "running",
+      turns: [],
+      items: [
+        item({
+          id: "approval-request-delta",
+          seq: 1,
+          type: "tool.output.delta",
+          payload: {
+            toolCallId: "call-1",
+            toolName: "shell",
+            delta: {
+              type: "approval.requested",
+              approvalId: "approval-1",
+              toolCallId: "call-1",
+              toolName: "shell",
+              reason: "Run command?"
+            }
+          }
+        }),
+        item({
+          id: "approval-resolved-delta",
+          seq: 2,
+          type: "tool.output.delta",
+          payload: {
+            toolCallId: "call-1",
+            toolName: "shell",
+            delta: {
+              type: "approval.resolved",
+              approvalId: "approval-1",
+              toolCallId: "call-1",
+              toolName: "shell",
+              decision: "decline"
+            }
+          }
+        })
+      ]
+    });
+
+    expect(state.timelineRows).toEqual([
+      expect.objectContaining({
+        type: "approval-resolved",
+        itemId: "approval-resolved-delta",
+        approvalId: "approval-1",
+        decision: "decline"
+      })
+    ]);
+  });
+
   it("updates current thread state from thread and turn lifecycle notifications", () => {
     let state = createWebUiState();
 

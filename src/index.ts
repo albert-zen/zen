@@ -23,6 +23,21 @@ export {
   toThreadSnapshot
 } from "./app-server-protocol.js";
 export type {
+  ApprovalBrokerOptions,
+  ApprovalDecision as ToolApprovalDecision,
+  ApprovalRequest,
+  ApprovalResolveInput,
+  PendingApprovalRequest,
+  PolicyDecision,
+  PolicyRuntime,
+  PolicyToolRuntimeOptions
+} from "./approval-runtime.js";
+export {
+  ApprovalBroker,
+  PolicyToolRuntime,
+  ToolApprovalDeniedError
+} from "./approval-runtime.js";
+export type {
   AgentLoopOptions,
   AgentRunInput,
   AgentRunResult
@@ -36,6 +51,18 @@ export type {
   ModelToolResultPart
 } from "./context-compiler.js";
 export { ContextCompiler } from "./context-compiler.js";
+export type {
+  ThreadManagerEvent,
+  ThreadManagerObserver,
+  ThreadManagerOptions,
+  ThreadRecord,
+  ThreadRuntime,
+  ThreadRuntimeFactory,
+  ThreadRuntimeFactoryInput,
+  TurnRecord,
+  TurnStartInput
+} from "./thread-manager.js";
+export { ThreadManager } from "./thread-manager.js";
 export type {
   AppendModelResponseItemsInput,
   ModelErrorEvent,
@@ -95,3 +122,20 @@ export type {
   ItemVisibility
 } from "./item-list.js";
 export { InMemoryItemList, ItemObserverError } from "./item-list.js";
+export type {
+  ApprovalPendingTimelineRow,
+  ApprovalResolvedTimelineRow,
+  AssistantProgressTimelineRow,
+  AssistantTimelineRow,
+  TimelineRow,
+  ToolCallTimelineRow,
+  ToolErrorTimelineRow,
+  ToolResultTimelineRow,
+  TraceTimelineRow,
+  UserTimelineRow,
+  WebUiState
+} from "./web-ui-state.js";
+export {
+  applyAppServerNotification,
+  createWebUiState
+} from "./web-ui-state.js";

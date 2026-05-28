@@ -5,5 +5,9 @@ describe("kernel public entry point", () => {
     const kernel = await import("../src/index.js");
 
     expect(kernel.kernelEntrypoint).toBe("zen-kernel");
+    expect(kernel.ThreadManager).toBeDefined();
+    expect(kernel.ApprovalBroker).toBeDefined();
+    expect(kernel.PolicyToolRuntime).toBeDefined();
+    expect(kernel.createWebUiState).toBeDefined();
   });
 });
