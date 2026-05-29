@@ -31,7 +31,8 @@ export type ModelEvent =
 export interface ModelGateway {
   generate(
     context: ModelContext,
-    options?: ModelOptions
+    options?: ModelOptions,
+    signal?: AbortSignal
   ): AsyncIterable<ModelEvent>;
 }
 
@@ -41,6 +42,7 @@ export type AppendModelResponseItemsInput = {
   readonly model: ModelGateway;
   readonly context: ModelContext;
   readonly options?: ModelOptions;
+  readonly signal?: AbortSignal;
   readonly runId: string;
   readonly turnId: string;
 };
@@ -84,7 +86,7 @@ export async function appendModelResponseItems(
   let deltaIndex = 0;
 
   try {
-    for await (const event of input.model.generate(input.context, input.options)) {
+    for await (const event of input.model.generate(input.context, input.options, input.signal)) {
       if (event.type === "text.delta") {
         await appendItem({
           type: "assistant.message.delta",

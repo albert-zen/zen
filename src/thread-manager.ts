@@ -95,6 +95,14 @@ export class ThreadManager {
   private readonly generateItemId: IdGenerator;
   private readonly clock: Clock;
   private readonly runtimeFactory: ThreadRuntimeFactory;
+  private readonly activeTurns = new Map<
+    string,
+    {
+      readonly thread: MutableThreadRecord;
+      readonly turn: MutableTurnRecord;
+      readonly controller: AbortController;
+    }
+  >();
 
   constructor(options: ThreadManagerOptions = {}) {
     this.generateThreadId = options.generateThreadId ?? createSequence("thread");
@@ -206,6 +214,21 @@ export class ThreadManager {
     return await this.runTurn(thread, turn, input);
   }
 
+  interruptTurn(threadId: string): TurnSnapshot {
+    const thread = this.getThread(threadId);
+    const active = [...this.activeTurns.values()]
+      .filter((entry) => entry.thread.id === threadId)
+      .at(-1);
+
+    if (!active) {
+      throw new Error(`No active turn for thread: ${threadId}`);
+    }
+
+    active.controller.abort();
+
+    return toTurnSnapshot(active.turn);
+  }
+
   private createTurn(thread: MutableThreadRecord): MutableTurnRecord {
     const turn: MutableTurnRecord = {
       id: this.generateUniqueTurnId(thread),
@@ -296,6 +319,9 @@ export class ThreadManager {
     turn: MutableTurnRecord,
     input: TurnStartInput
   ): Promise<TurnSnapshot> {
+    const controller = new AbortController();
+    this.activeTurns.set(turn.id, { thread, turn, controller });
+
     try {
       const runtime = this.runtimeFactory({
         thread: toThreadRecord(thread),
@@ -306,8 +332,12 @@ export class ThreadManager {
         input: input.input,
         runId: turn.runId,
         turnId: turn.id,
-        modelOptions: input.modelOptions
+        modelOptions: input.modelOptions,
+        signal: controller.signal
       });
+      if (controller.signal.aborted) {
+        return this.cancelTurn(thread, turn);
+      }
       const failureItem = result.items.find(
         (item) =>
           item.turnId === turn.id &&
@@ -315,6 +345,9 @@ export class ThreadManager {
       );
 
       if (failureItem) {
+        if (controller.signal.aborted) {
+          return this.cancelTurn(thread, turn);
+        }
         return this.failTurn(thread, turn, {
           code: "TURN_FAILED",
           message: readFailureMessage(failureItem.payload),
@@ -335,11 +368,16 @@ export class ThreadManager {
 
       return snapshot;
     } catch (cause) {
+      if (controller.signal.aborted) {
+        return this.cancelTurn(thread, turn);
+      }
       return this.failTurn(thread, turn, {
         code: "TURN_FAILED",
         message: readErrorMessage(cause),
         details: serializeError(cause)
       });
+    } finally {
+      this.activeTurns.delete(turn.id);
     }
   }
 
@@ -382,6 +420,25 @@ export class ThreadManager {
       threadId: thread.id,
       turn: snapshot,
       error
+    });
+
+    return snapshot;
+  }
+
+  private cancelTurn(
+    thread: MutableThreadRecord,
+    turn: MutableTurnRecord
+  ): TurnSnapshot {
+    turn.status = "canceled";
+    turn.error = { code: "TURN_INTERRUPTED", message: "Turn interrupted" };
+    thread.status = "idle";
+
+    const snapshot = toTurnSnapshot(turn);
+
+    this.emit({
+      type: "turn/completed",
+      threadId: thread.id,
+      turn: snapshot
     });
 
     return snapshot;

@@ -24,6 +24,7 @@ export type AgentRunInput = {
   readonly runId: string;
   readonly turnId: string;
   readonly modelOptions?: ModelOptions;
+  readonly signal?: AbortSignal;
 };
 
 export type AgentRunResult = {
@@ -73,6 +74,7 @@ export class AgentLoop {
     let shouldContinue = true;
 
     while (shouldContinue) {
+      throwIfAborted(input.signal);
       const context = this.contextCompiler.compile(this.itemList.getItems());
       const modelItems = await appendModelResponseItems({
         itemList: this.itemList,
@@ -80,6 +82,7 @@ export class AgentLoop {
         model: this.model,
         context,
         options: input.modelOptions,
+        signal: input.signal,
         runId: input.runId,
         turnId: input.turnId
       });
@@ -102,6 +105,7 @@ export class AgentLoop {
       });
     }
 
+    throwIfAborted(input.signal);
     await this.append({
       type: "turn.completed",
       runId: input.runId,
@@ -131,6 +135,12 @@ export class AgentLoop {
     }
 
     return this.itemList.append(input);
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new Error("Turn interrupted");
   }
 }
 

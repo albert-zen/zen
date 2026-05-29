@@ -23,10 +23,12 @@ export class OpenAiCompatibleModelGateway implements ModelGateway {
 
   async *generate(
     context: ModelContext,
-    options?: ModelOptions
+    options?: ModelOptions,
+    signal?: AbortSignal
   ): AsyncIterable<ModelEvent> {
     const response = await fetch(this.endpoint, {
       method: "POST",
+      signal,
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${this.options.apiKey}`

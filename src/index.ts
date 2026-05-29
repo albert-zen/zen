@@ -1,8 +1,11 @@
 export const kernelEntrypoint = "zen-kernel";
 
 export type {
+  AgentInteractionSessionEvent,
+  AgentInteractionSessionListener,
   AgentInteractionSessionOptions,
-  AgentInteractionSnapshot
+  AgentInteractionSnapshot,
+  AgentThreadListEntry
 } from "./agent-interaction-session.js";
 export { AgentInteractionSession } from "./agent-interaction-session.js";
 export type {

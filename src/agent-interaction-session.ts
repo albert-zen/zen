@@ -21,6 +21,13 @@ export type AgentInteractionSnapshot = {
   readonly timelineRows: readonly TimelineRow[];
 };
 
+export type AgentThreadListEntry = {
+  readonly id: string;
+  readonly status: ThreadSnapshot["status"];
+  readonly turns: number;
+  readonly items: number;
+};
+
 export type AgentInteractionSessionEvent =
   | {
       readonly type: "rows";
@@ -81,6 +88,56 @@ export class AgentInteractionSession {
     }
 
     this.state = createWebUiState(response.result.thread);
+
+    return this.getSnapshot();
+  }
+
+  async listThreads(): Promise<readonly AgentThreadListEntry[]> {
+    const response = await this.options.client.request({ method: "thread/list" });
+
+    if (!response.ok || response.method !== "thread/list") {
+      throw new Error(response.ok ? "Unexpected thread/list response" : response.error.message);
+    }
+
+    return response.result.threads.map((thread) => ({
+      id: thread.id,
+      status: thread.status,
+      turns: thread.turns.length,
+      items: thread.items.length
+    }));
+  }
+
+  async resumeThread(threadId: string): Promise<AgentInteractionSnapshot> {
+    this.subscribeOnce();
+    const response = await this.options.client.request({
+      method: "thread/read",
+      params: {
+        threadId
+      }
+    });
+
+    if (!response.ok || response.method !== "thread/read") {
+      throw new Error(response.ok ? "Unexpected thread/read response" : response.error.message);
+    }
+
+    this.state = createWebUiState(response.result.thread);
+    this.emit({ type: "state", snapshot: this.getSnapshot() });
+
+    return this.getSnapshot();
+  }
+
+  async interrupt(): Promise<AgentInteractionSnapshot> {
+    const currentThread = await this.ensureThread();
+    const response = await this.options.client.request({
+      method: "turn/interrupt",
+      params: {
+        threadId: currentThread.id
+      }
+    });
+
+    if (!response.ok || response.method !== "turn/interrupt") {
+      throw new Error(response.ok ? "Unexpected turn/interrupt response" : response.error.message);
+    }
 
     return this.getSnapshot();
   }

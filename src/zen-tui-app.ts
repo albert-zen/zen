@@ -21,8 +21,12 @@ export class ZenTuiApp {
   private readonly root = new Container();
   private readonly transcript = new TextBlock(() => this.renderLines());
   private readonly editor = new EditorComponent("Ask Zen...");
-  private pending = Promise.resolve();
+  private readonly queuedInputs: string[] = [];
+  private drainingQueue = false;
   private closed = false;
+  private showToolDetails = false;
+  private localNotice?: string;
+  private resumeChoices: readonly { readonly id: string; readonly label: string }[] = [];
 
   constructor(options: ZenTuiAppOptions) {
     this.session = new AgentInteractionSession({ client: options.client });
@@ -77,57 +81,153 @@ export class ZenTuiApp {
 
     if (trimmed === "/new") {
       await this.session.newThread();
+      this.resumeChoices = [];
+      this.localNotice = undefined;
       this.engine.requestRender();
       return;
     }
 
     if (trimmed === "/help") {
-      this.appendLocalNotice("Commands: /help, /status, /new, /exit");
+      this.setLocalNotice("Commands: /help, /status, /resume, /resume <n|id>, /interrupt, /tools, /new, /exit");
       return;
     }
 
     if (trimmed === "/status") {
-      this.appendLocalNotice(renderStatus(this.session.getSnapshot().state));
+      this.setLocalNotice(renderStatus(this.session.getSnapshot().state));
       return;
     }
 
-    this.pending = this.pending
-      .then(async () => {
-        await this.session.submit(trimmed);
-      })
-      .catch((cause) => {
-        this.appendLocalNotice(
-          `Error: ${cause instanceof Error ? cause.message : String(cause)}`
-        );
-      });
+    if (trimmed === "/interrupt") {
+      await this.interrupt();
+      return;
+    }
+
+    if (trimmed === "/tools") {
+      this.showToolDetails = !this.showToolDetails;
+      this.setLocalNotice(`Tool detail ${this.showToolDetails ? "expanded" : "collapsed"}`);
+      return;
+    }
+
+    if (trimmed === "/resume") {
+      await this.showResumeChoices();
+      return;
+    }
+
+    if (trimmed.startsWith("/resume ")) {
+      await this.resume(trimmed.slice("/resume ".length).trim());
+      return;
+    }
+
+    this.enqueueInput(trimmed);
   }
 
-  private appendLocalNotice(message: string): void {
-    const snapshot = this.session.getSnapshot();
-    const synthetic: TimelineRow = {
-      type: "trace",
-      itemId: `local-${Date.now()}`,
-      seq: Number.MAX_SAFE_INTEGER,
-      turnId: snapshot.thread?.turns.at(-1)?.id ?? "local",
-      event: message
-    };
-    this.localRows.push(synthetic);
+  private enqueueInput(input: string): void {
+    this.queuedInputs.push(input);
+    this.localNotice = undefined;
+    this.engine.requestRender();
+    void this.drainQueuedInputs();
+  }
+
+  private async drainQueuedInputs(): Promise<void> {
+    if (this.drainingQueue) {
+      return;
+    }
+
+    this.drainingQueue = true;
+
+    try {
+      while (this.queuedInputs.length > 0) {
+        const next = this.queuedInputs.shift();
+
+        if (!next) {
+          continue;
+        }
+
+        this.engine.requestRender();
+        await this.session.submit(next);
+      }
+    } catch (cause) {
+      this.setLocalNotice(`Error: ${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      this.drainingQueue = false;
+      this.engine.requestRender();
+    }
+  }
+
+  private async interrupt(): Promise<void> {
+    try {
+      await this.session.interrupt();
+      this.queuedInputs.splice(0);
+      this.setLocalNotice("Interrupted current turn");
+    } catch (cause) {
+      this.setLocalNotice(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  private async showResumeChoices(): Promise<void> {
+    const threads = await this.session.listThreads();
+    this.resumeChoices = threads.map((thread, index) => ({
+      id: thread.id,
+      label: `${index + 1}. ${thread.id} (${thread.status}, ${thread.turns} turns, ${thread.items} items)`
+    }));
+    this.setLocalNotice(
+      this.resumeChoices.length > 0
+        ? "Select with /resume <number> or /resume <thread-id>"
+        : "No saved threads"
+    );
+  }
+
+  private async resume(value: string): Promise<void> {
+    const numeric = Number(value);
+    const selected =
+      Number.isInteger(numeric) && numeric > 0
+        ? this.resumeChoices[numeric - 1]?.id
+        : value;
+
+    if (!selected) {
+      this.setLocalNotice("Unknown resume selection");
+      return;
+    }
+
+    try {
+      await this.session.resumeThread(selected);
+      this.resumeChoices = [];
+      this.queuedInputs.splice(0);
+      this.setLocalNotice(`Resumed ${selected}`);
+    } catch (cause) {
+      this.setLocalNotice(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  private setLocalNotice(message: string): void {
+    this.localNotice = message;
     this.engine.requestRender();
   }
-
-  private readonly localRows: TimelineRow[] = [];
 
   private renderLines(): readonly string[] {
     const snapshot = this.session.getSnapshot();
     const state = snapshot.state;
-    const lines = [
-      "Zen Agent",
-      renderThreadSummary(snapshot.thread, state),
-      ""
-    ];
-    const rows = [...state.timelineRows, ...this.localRows];
-    lines.push(...rows.flatMap(renderRow));
-    lines.push("", state.currentThread?.status === "running" ? "Working..." : "Ready");
+    const lines = ["Zen Agent", renderThreadSummary(snapshot.thread, state), ""];
+    const rows = state.timelineRows.filter((row) => row.type !== "trace");
+
+    lines.push(...renderTranscript(rows, { showToolDetails: this.showToolDetails }));
+
+    if (this.resumeChoices.length > 0) {
+      lines.push("", "Resume");
+      lines.push(...this.resumeChoices.map((choice) => `  ${choice.label}`));
+    }
+
+    if (this.localNotice) {
+      lines.push("", `Notice: ${this.localNotice}`);
+    }
+
+    const queuedCount = this.queuedInputs.length + (this.drainingQueue ? 1 : 0);
+    lines.push(
+      "",
+      state.currentThread?.status === "running" || this.drainingQueue
+        ? `Working${queuedCount > 0 ? ` | queued ${this.queuedInputs.length}` : ""}`
+        : "Ready"
+    );
     return lines;
   }
 }
@@ -147,29 +247,47 @@ function renderStatus(state: WebUiState): string {
   return `thread: ${thread.id} | status: ${thread.status} | turns: ${thread.turns.length} | items: ${state.items.length}`;
 }
 
-function renderRow(row: TimelineRow): readonly string[] {
+function renderTranscript(
+  rows: readonly TimelineRow[],
+  options: { readonly showToolDetails: boolean }
+): readonly string[] {
+  if (rows.length === 0) {
+    return ["No messages yet."];
+  }
+
+  return rows.flatMap((row) => renderRow(row, options));
+}
+
+function renderRow(
+  row: TimelineRow,
+  options: { readonly showToolDetails: boolean }
+): readonly string[] {
   if (row.type === "user") {
-    return [`You: ${stringify(row.content)}`];
+    return ["", `You`, indent(stringify(row.content))];
   }
   if (row.type === "assistant" || row.type === "assistant-progress") {
-    return [`Zen: ${stringify(row.content)}`];
+    return ["", `Zen`, indent(stringify(row.content))];
   }
   if (row.type === "tool-call") {
-    return [`Tool ${row.toolName ?? "tool"}: ${stringify(row.input)}`];
+    return options.showToolDetails
+      ? ["", `Tool: ${row.toolName ?? "tool"}`, indent(stringify(row.input))]
+      : [`  Tool: ${row.toolName ?? "tool"} (${summarize(row.input)})`];
   }
   if (row.type === "tool-result") {
-    return [`Tool result ${row.toolName ?? "tool"}: ${stringify(row.content)}`];
+    return options.showToolDetails
+      ? [`  Result: ${row.toolName ?? "tool"}`, indent(stringify(row.content))]
+      : [`  Result: ${row.toolName ?? "tool"} (${summarize(row.content)})`];
   }
   if (row.type === "tool-error") {
-    return [`Tool error ${row.toolName ?? "tool"}: ${row.message ?? "failed"}`];
+    return [`  Tool error: ${row.toolName ?? "tool"} (${row.message ?? "failed"})`];
   }
   if (row.type === "approval-pending") {
-    return [`Approval pending: ${row.reason ?? row.approvalId ?? "approval requested"}`];
+    return [`  Approval pending: ${row.reason ?? row.approvalId ?? "approval requested"}`];
   }
   if (row.type === "approval-resolved") {
-    return [`Approval resolved: ${row.decision ?? "resolved"}`];
+    return [`  Approval resolved: ${row.decision ?? "resolved"}`];
   }
-  return [`Notice: ${row.event}`];
+  return [];
 }
 
 function stringify(value: unknown): string {
@@ -180,4 +298,19 @@ function stringify(value: unknown): string {
     return "";
   }
   return JSON.stringify(value);
+}
+
+function indent(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+function summarize(value: unknown): string {
+  const rendered = stringify(value).replace(/\s+/g, " ").trim();
+  if (rendered.length <= 80) {
+    return rendered;
+  }
+  return `${rendered.slice(0, 77)}...`;
 }

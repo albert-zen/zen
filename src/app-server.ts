@@ -113,6 +113,18 @@ export class AppServer implements AppServerClient {
       };
     }
 
+    if (request.method === "turn/interrupt") {
+      const params = readParams(request.params);
+
+      return {
+        method: "turn/interrupt",
+        ok: true,
+        result: {
+          turn: this.threadManager.interruptTurn(readRequiredString(params, "threadId"))
+        }
+      };
+    }
+
     if (request.method === "approval/resolve") {
       return {
         method: "approval/resolve",

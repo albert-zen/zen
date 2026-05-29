@@ -67,6 +67,13 @@ export type TurnStartRequest = {
   };
 };
 
+export type TurnInterruptRequest = {
+  readonly method: "turn/interrupt";
+  readonly params: {
+    readonly threadId: string;
+  };
+};
+
 export type ApprovalResolveRequest = {
   readonly method: "approval/resolve";
   readonly params: {
@@ -82,6 +89,7 @@ export type AppServerRequest =
   | ThreadReadRequest
   | ThreadListRequest
   | TurnStartRequest
+  | TurnInterruptRequest
   | ApprovalResolveRequest;
 
 export type AppServerError = {
@@ -108,6 +116,11 @@ export type AppServerResponse =
     }
   | {
       readonly method: "turn/start";
+      readonly ok: true;
+      readonly result: { readonly turn: TurnSnapshot };
+    }
+  | {
+      readonly method: "turn/interrupt";
       readonly ok: true;
       readonly result: { readonly turn: TurnSnapshot };
     }

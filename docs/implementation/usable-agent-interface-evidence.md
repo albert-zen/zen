@@ -56,7 +56,8 @@ product Module for TUI now and Web/transport later.
     synchronized output, cursor marker handling, and line-diff rendering.
 - `src/zen-tui-app.ts`
   - Binds `AgentInteractionSession` snapshots to the component TUI and supports
-    live transcript rerendering plus `/help`, `/status`, `/new`, and `/exit`.
+    live transcript rerendering plus `/help`, `/status`, `/resume`,
+    `/interrupt`, `/tools`, `/new`, and `/exit`.
 - `src/tui.ts`
   - Selects the component TUI for interactive TTYs and preserves the
     line-oriented adapter for pipes and smoke automation.
@@ -86,6 +87,10 @@ Supported commands:
 ```text
 /help
 /status
+/resume
+/resume <number-or-thread-id>
+/interrupt
+/tools
 /new
 /exit
 /quit
@@ -149,7 +154,7 @@ npm run typecheck
   passed
 
 npm test
-  passed: 22 files, 88 tests
+  passed: 22 files, 92 tests
 
 npm run build
   passed
@@ -158,7 +163,7 @@ non-interactive npm run tui smoke
   passed
 
 component TUI virtual-terminal tests
-  passed
+  passed, including trace filtering, queued input, interrupt, and resume choices
 
 OpenClaw model smoke
   passed with configured DashScope-compatible provider
@@ -171,6 +176,6 @@ Next wave:
 - Approval long-running interaction.
 - Real transport between UI clients and App Server.
 - Web UI switch from browser-local fake adapter to App Server client.
-- Richer TUI controls: interrupt, resume picker, queued-input display, and
-  collapsible tool detail views.
+- Richer TUI controls beyond slash-driven flows: keyboard-native resume picker,
+  true overlay menus, and scrollback navigation.
 - Better sandbox/permission profiles for local tools.
