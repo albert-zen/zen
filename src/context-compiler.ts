@@ -6,6 +6,11 @@ export type ModelMessagePart = {
   readonly type: "message";
   readonly role: ModelMessageRole;
   readonly content: unknown;
+  readonly toolCalls?: readonly Readonly<{
+    readonly id: string;
+    readonly name: string;
+    readonly input?: unknown;
+  }>[];
 };
 
 export type ModelToolResultPart = {
@@ -50,11 +55,14 @@ export class ContextCompiler {
 }
 
 function toMessagePart(role: ModelMessageRole, item: Item): ModelMessagePart {
-  return {
+  const part: ModelMessagePart = {
     type: "message",
     role,
     content: readContent(item.payload)
   };
+  const toolCalls = readToolCalls(item.payload);
+
+  return toolCalls.length > 0 ? { ...part, toolCalls } : part;
 }
 
 function toToolResultPart(item: Item): ModelToolResultPart[] {
@@ -85,6 +93,29 @@ function readContent(payload: unknown): unknown {
   }
 
   return payload;
+}
+
+function readToolCalls(
+  payload: unknown
+): readonly Readonly<{ id: string; name: string; input?: unknown }>[] {
+  if (!isRecord(payload) || !Array.isArray(payload.toolCalls)) {
+    return [];
+  }
+
+  return payload.toolCalls.flatMap((call) => {
+    if (!isRecord(call)) {
+      return [];
+    }
+
+    const id = readString(call.id);
+    const name = readString(call.name);
+
+    if (!id || !name) {
+      return [];
+    }
+
+    return [{ id, name, input: call.input }];
+  });
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

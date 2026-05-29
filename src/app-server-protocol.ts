@@ -53,6 +53,11 @@ export type ThreadReadRequest = {
   };
 };
 
+export type ThreadListRequest = {
+  readonly method: "thread/list";
+  readonly params?: {};
+};
+
 export type TurnStartRequest = {
   readonly method: "turn/start";
   readonly params: {
@@ -75,6 +80,7 @@ export type ApprovalResolveRequest = {
 export type AppServerRequest =
   | ThreadStartRequest
   | ThreadReadRequest
+  | ThreadListRequest
   | TurnStartRequest
   | ApprovalResolveRequest;
 
@@ -94,6 +100,11 @@ export type AppServerResponse =
       readonly method: "thread/read";
       readonly ok: true;
       readonly result: { readonly thread: ThreadSnapshot };
+    }
+  | {
+      readonly method: "thread/list";
+      readonly ok: true;
+      readonly result: { readonly threads: readonly ThreadSnapshot[] };
     }
   | {
       readonly method: "turn/start";

@@ -114,7 +114,18 @@ describe("AgentLoop", () => {
     ]);
     expect(observedContexts[1]?.parts).toEqual([
       { type: "message", role: "user", content: "What is the weather?" },
-      { type: "message", role: "assistant", content: "Checking the weather." },
+      {
+        type: "message",
+        role: "assistant",
+        content: "Checking the weather.",
+        toolCalls: [
+          {
+            id: "call-weather-1",
+            name: "weather",
+            input: { city: "Shanghai" }
+          }
+        ]
+      },
       {
         type: "toolResult",
         toolCallId: "call-weather-1",
@@ -124,7 +135,18 @@ describe("AgentLoop", () => {
     ]);
     expect(result.finalContext.parts).toEqual([
       { type: "message", role: "user", content: "What is the weather?" },
-      { type: "message", role: "assistant", content: "Checking the weather." },
+      {
+        type: "message",
+        role: "assistant",
+        content: "Checking the weather.",
+        toolCalls: [
+          {
+            id: "call-weather-1",
+            name: "weather",
+            input: { city: "Shanghai" }
+          }
+        ]
+      },
       {
         type: "toolResult",
         toolCallId: "call-weather-1",

@@ -61,6 +61,17 @@ export {
   createDemoAppServer,
   createDemoThreadRuntime
 } from "./demo-runtime.js";
+export type { LocalToolRuntimeOptions } from "./local-tool-runtime.js";
+export { LocalToolRuntime, localToolDefinitions } from "./local-tool-runtime.js";
+export type { OpenClawConfigOptions, OpenClawModelConfig } from "./openclaw-config.js";
+export { loadOpenClawModelConfig } from "./openclaw-config.js";
+export type { OpenClawAppServerOptions } from "./openclaw-runtime.js";
+export {
+  createOpenClawAppServer,
+  createOpenClawThreadRuntimeFactory
+} from "./openclaw-runtime.js";
+export type { OpenAiCompatibleModelGatewayOptions } from "./openai-compatible-model-gateway.js";
+export { OpenAiCompatibleModelGateway } from "./openai-compatible-model-gateway.js";
 export type {
   ModelContext,
   ModelContextPart,
@@ -165,3 +176,5 @@ export {
   renderTerminalTranscript,
   renderThreadStarted
 } from "./terminal-transcript.js";
+export type { FileThreadStoreOptions, ThreadStore } from "./thread-store.js";
+export { FileThreadStore } from "./thread-store.js";

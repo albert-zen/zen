@@ -17,6 +17,7 @@ describe("demo runtime", () => {
       method: "turn/start",
       params: { threadId: start.result.thread.id, input: "hello" }
     });
+    await waitForTurn(server, start.result.thread.id);
     const read = await server.request({
       method: "thread/read",
       params: { threadId: start.result.thread.id }
@@ -55,6 +56,7 @@ describe("demo runtime", () => {
       method: "turn/start",
       params: { threadId: start.result.thread.id, input: "use a tool for zen" }
     });
+    await waitForTurn(server, start.result.thread.id);
     const read = await server.request({
       method: "thread/read",
       params: { threadId: start.result.thread.id }
@@ -83,6 +85,30 @@ describe("demo runtime", () => {
     );
   });
 });
+
+async function waitForTurn(
+  server: ReturnType<typeof createDemoAppServer>,
+  threadId: string
+): Promise<void> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const read = await server.request({
+      method: "thread/read",
+      params: { threadId }
+    });
+
+    if (
+      read.ok &&
+      read.method === "thread/read" &&
+      read.result.thread.status !== "running"
+    ) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  throw new Error("Timed out waiting for turn");
+}
 
 function deterministicIds() {
   return {

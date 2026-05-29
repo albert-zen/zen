@@ -402,6 +402,35 @@ describe("web ui state projection", () => {
     });
   });
 
+  it("uses the latest terminal turn to derive idle status after an older failure", () => {
+    let state = createWebUiState({
+      id: "thread-1",
+      status: "failed",
+      turns: [
+        {
+          id: "turn-1",
+          runId: "run-1",
+          status: "failed",
+          itemIds: []
+        }
+      ],
+      items: []
+    });
+
+    state = applyAppServerNotification(state, {
+      type: "turn/completed",
+      threadId: "thread-1",
+      turn: {
+        id: "turn-2",
+        runId: "run-2",
+        status: "completed",
+        itemIds: []
+      }
+    });
+
+    expect(state.currentThread?.status).toBe("idle");
+  });
+
   it("ignores item notifications for a different current thread", () => {
     const state = applyAppServerNotification(
       createWebUiState({

@@ -10,6 +10,7 @@ import {
   type ThreadManagerOptions,
   type TurnStartInput
 } from "./thread-manager.js";
+import type { ThreadStore } from "./thread-store.js";
 
 export type AppServerRequestInput =
   | AppServerRequest
@@ -20,6 +21,7 @@ export type AppServerRequestInput =
 
 export type AppServerOptions = {
   readonly threadManagerOptions?: ThreadManagerOptions;
+  readonly threadStore?: ThreadStore;
 };
 
 export type AppServerSubscription = () => void;
@@ -35,9 +37,14 @@ export type AppServerNotificationListener = (
 
 export class AppServer implements AppServerClient {
   private readonly threadManager: ThreadManager;
+  private readonly threadStore?: ThreadStore;
 
   constructor(options: AppServerOptions = {}) {
+    this.threadStore = options.threadStore;
     this.threadManager = new ThreadManager(options.threadManagerOptions);
+    this.threadManager.observe((event) => {
+      void this.persistEventThread(event);
+    });
   }
 
   subscribe(listener: AppServerNotificationListener): AppServerSubscription {
@@ -81,6 +88,14 @@ export class AppServer implements AppServerClient {
       };
     }
 
+    if (request.method === "thread/list") {
+      return {
+        method: "thread/list",
+        ok: true,
+        result: { threads: this.threadManager.listThreads() }
+      };
+    }
+
     if (request.method === "turn/start") {
       const params = readParams(request.params);
       const turnInput: TurnStartInput = {
@@ -94,7 +109,7 @@ export class AppServer implements AppServerClient {
       return {
         method: "turn/start",
         ok: true,
-        result: { turn: await this.threadManager.startTurn(turnInput) }
+        result: { turn: this.threadManager.enqueueTurn(turnInput) }
       };
     }
 
@@ -117,6 +132,17 @@ export class AppServer implements AppServerClient {
         message: `Unknown App Server method: ${request.method}`
       }
     };
+  }
+
+  private async persistEventThread(event: ThreadManagerEvent): Promise<void> {
+    if (!this.threadStore) {
+      return;
+    }
+
+    const threadId =
+      event.type === "thread/started" ? event.thread.id : event.threadId;
+
+    await this.threadStore.save(this.threadManager.readThread(threadId));
   }
 }
 

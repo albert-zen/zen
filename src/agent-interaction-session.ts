@@ -21,9 +21,25 @@ export type AgentInteractionSnapshot = {
   readonly timelineRows: readonly TimelineRow[];
 };
 
+export type AgentInteractionSessionEvent =
+  | {
+      readonly type: "rows";
+      readonly rows: readonly TimelineRow[];
+      readonly snapshot: AgentInteractionSnapshot;
+    }
+  | {
+      readonly type: "state";
+      readonly snapshot: AgentInteractionSnapshot;
+    };
+
+export type AgentInteractionSessionListener = (
+  event: AgentInteractionSessionEvent
+) => void;
+
 export class AgentInteractionSession {
   private state: WebUiState = createWebUiState();
   private subscription?: AppServerSubscription;
+  private readonly listeners: AgentInteractionSessionListener[] = [];
 
   constructor(private readonly options: AgentInteractionSessionOptions) {}
 
@@ -44,6 +60,13 @@ export class AgentInteractionSession {
 
   async start(): Promise<AgentInteractionSnapshot> {
     this.subscribeOnce();
+    const list = await this.options.client.request({ method: "thread/list" });
+
+    if (list.ok && list.method === "thread/list" && list.result.threads.length > 0) {
+      this.state = createWebUiState(list.result.threads[0]);
+      return this.getSnapshot();
+    }
+
     await this.newThread();
 
     return this.getSnapshot();
@@ -65,6 +88,7 @@ export class AgentInteractionSession {
   async submit(input: JsonValue): Promise<AgentInteractionSnapshot> {
     this.subscribeOnce();
     const currentThread = await this.ensureThread();
+    const completion = this.waitForNextTurnCompletion(currentThread.id);
     const response = await this.options.client.request({
       method: "turn/start",
       params: {
@@ -77,12 +101,27 @@ export class AgentInteractionSession {
       throw new Error(response.ok ? "Unexpected turn/start response" : response.error.message);
     }
 
+    await completion;
+
     return this.getSnapshot();
+  }
+
+  observe(listener: AgentInteractionSessionListener): () => void {
+    this.listeners.push(listener);
+
+    return () => {
+      const index = this.listeners.indexOf(listener);
+
+      if (index >= 0) {
+        this.listeners.splice(index, 1);
+      }
+    };
   }
 
   dispose(): void {
     this.subscription?.();
     this.subscription = undefined;
+    this.listeners.splice(0);
   }
 
   private async ensureThread(): Promise<{ readonly id: string }> {
@@ -105,9 +144,55 @@ export class AgentInteractionSession {
     }
 
     const listener: AppServerNotificationListener = (notification) => {
+      const previousRows = this.state.timelineRows;
+      const previousRowKeys = new Set(previousRows.map(toTimelineRowKey));
       this.state = applyAppServerNotification(this.state, notification);
+      const snapshot = this.getSnapshot();
+      const nextRows = this.state.timelineRows.filter(
+        (row) => !previousRowKeys.has(toTimelineRowKey(row))
+      );
+
+      if (nextRows.length > 0) {
+        this.emit({ type: "rows", rows: nextRows, snapshot });
+      }
+
+      this.emit({ type: "state", snapshot });
     };
 
     this.subscription = this.options.client.subscribe(listener);
   }
+
+  private waitForNextTurnCompletion(threadId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const unsubscribe = this.options.client.subscribe((notification) => {
+        if (
+          notification.type !== "turn/completed" &&
+          notification.type !== "turn/failed"
+        ) {
+          return;
+        }
+
+        if (notification.threadId !== threadId) {
+          return;
+        }
+
+        unsubscribe();
+
+        if (notification.type === "turn/failed") {
+          reject(new Error(notification.error.message));
+          return;
+        }
+
+        resolve();
+      });
+    });
+  }
+
+  private emit(event: AgentInteractionSessionEvent): void {
+    this.listeners.forEach((listener) => listener(event));
+  }
+}
+
+function toTimelineRowKey(row: TimelineRow): string {
+  return `${row.type}:${row.itemId}`;
 }

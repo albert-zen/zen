@@ -68,6 +68,10 @@ describe("AppServer", () => {
         input: "Hello"
       }
     });
+    await waitForNotification(
+      notifications,
+      (notification) => notification.type === "turn/completed"
+    );
 
     unsubscribe();
 
@@ -78,7 +82,7 @@ describe("AppServer", () => {
         turn: expect.objectContaining({
           id: "turn-1",
           runId: "run-1",
-          status: "completed"
+          status: "inProgress"
         })
       }
     });
@@ -141,6 +145,21 @@ describe("AppServer", () => {
     });
   });
 });
+
+async function waitForNotification(
+  notifications: readonly AppServerNotification[],
+  predicate: (notification: AppServerNotification) => boolean
+): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (notifications.some(predicate)) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  throw new Error("Timed out waiting for notification");
+}
 
 function createServer(options: { readonly model?: ModelGateway } = {}): AppServer {
   return new AppServer({

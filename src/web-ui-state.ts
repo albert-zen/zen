@@ -226,7 +226,7 @@ function deriveThreadStatus(
     return "running";
   }
 
-  if (turns.some((turn) => turn.status === "failed")) {
+  if (turns.at(-1)?.status === "failed") {
     return "failed";
   }
 

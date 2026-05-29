@@ -44,6 +44,7 @@ export type ThreadManagerOptions = {
   readonly generateItemId?: IdGenerator;
   readonly clock?: Clock;
   readonly runtimeFactory?: ThreadRuntimeFactory;
+  readonly initialThreads?: readonly ThreadSnapshot[];
 };
 
 export type TurnStartInput = {
@@ -102,6 +103,10 @@ export class ThreadManager {
     this.generateItemId = options.generateItemId ?? createSequence("item");
     this.clock = options.clock ?? Date.now;
     this.runtimeFactory = options.runtimeFactory ?? createDefaultRuntime;
+
+    for (const snapshot of options.initialThreads ?? []) {
+      this.loadThread(snapshot, { emit: false });
+    }
   }
 
   observe(observer: ThreadManagerObserver): () => void {
@@ -118,7 +123,7 @@ export class ThreadManager {
 
   startThread(): ThreadSnapshot {
     const thread: MutableThreadRecord = {
-      id: this.generateThreadId(),
+      id: this.generateUniqueThreadId(),
       status: "idle",
       itemList: new InMemoryItemList({
         generateId: this.generateItemId,
@@ -161,11 +166,50 @@ export class ThreadManager {
     return this.snapshotThread(this.getThread(threadId));
   }
 
+  listThreads(): readonly ThreadSnapshot[] {
+    return [...this.threads.values()].map((thread) => this.snapshotThread(thread));
+  }
+
+  loadThread(
+    snapshot: ThreadSnapshot,
+    options: { readonly emit?: boolean } = {}
+  ): ThreadSnapshot {
+    const thread = this.createThreadRecord(snapshot);
+
+    this.threads.set(thread.id, thread);
+    this.attachItemObserver(thread);
+
+    const loaded = this.snapshotThread(thread);
+
+    if (options.emit ?? true) {
+      this.emit({ type: "thread/started", thread: loaded });
+    }
+
+    return loaded;
+  }
+
+  enqueueTurn(input: TurnStartInput): TurnSnapshot {
+    const thread = this.getThread(input.threadId);
+    const turn = this.createTurn(thread);
+
+    queueMicrotask(() => {
+      void this.runTurn(thread, turn, input);
+    });
+
+    return toTurnSnapshot(turn);
+  }
+
   async startTurn(input: TurnStartInput): Promise<TurnSnapshot> {
     const thread = this.getThread(input.threadId);
+    const turn = this.createTurn(thread);
+
+    return await this.runTurn(thread, turn, input);
+  }
+
+  private createTurn(thread: MutableThreadRecord): MutableTurnRecord {
     const turn: MutableTurnRecord = {
-      id: this.generateTurnId(),
-      runId: this.generateRunId(),
+      id: this.generateUniqueTurnId(thread),
+      runId: this.generateUniqueRunId(thread),
       status: "inProgress",
       itemIds: []
     };
@@ -179,6 +223,79 @@ export class ThreadManager {
       turn: toTurnSnapshot(turn)
     });
 
+    return turn;
+  }
+
+  private createThreadRecord(snapshot?: ThreadSnapshot): MutableThreadRecord {
+    const thread: MutableThreadRecord = {
+      id: snapshot?.id ?? this.generateThreadId(),
+      status: snapshot?.status === "running" ? "idle" : snapshot?.status ?? "idle",
+      itemList: new InMemoryItemList({
+        generateId: createUniqueIdGenerator(
+          this.generateItemId,
+          new Set(snapshot?.items.map((item) => item.id) ?? [])
+        ),
+        clock: this.clock,
+        initialItems: snapshot?.items.map((item) => ({ ...item }))
+      }),
+      turns: snapshot?.turns.map((turn) => ({
+        id: turn.id,
+        runId: turn.runId,
+        status: turn.status === "inProgress" || turn.status === "queued" ? "failed" : turn.status,
+        itemIds: [...turn.itemIds],
+        error: turn.error
+      })) ?? []
+    };
+
+    return thread;
+  }
+
+  private generateUniqueThreadId(): string {
+    return generateUniqueId(this.generateThreadId, new Set(this.threads.keys()));
+  }
+
+  private generateUniqueTurnId(thread: MutableThreadRecord): string {
+    return generateUniqueId(
+      this.generateTurnId,
+      new Set(thread.turns.map((turn) => turn.id))
+    );
+  }
+
+  private generateUniqueRunId(thread: MutableThreadRecord): string {
+    return generateUniqueId(
+      this.generateRunId,
+      new Set(thread.turns.map((turn) => turn.runId))
+    );
+  }
+
+  private attachItemObserver(thread: MutableThreadRecord): void {
+    thread.itemList.observe((item) => {
+      const turn = thread.turns.find((entry) => entry.id === item.turnId);
+
+      if (!turn) {
+        return;
+      }
+
+      turn.itemIds.push(item.id);
+
+      if (item.visibility === "internal") {
+        return;
+      }
+
+      this.emit({
+        type: "item/appended",
+        threadId: thread.id,
+        turnId: item.turnId,
+        item: toProtocolItem(item)
+      });
+    });
+  }
+
+  private async runTurn(
+    thread: MutableThreadRecord,
+    turn: MutableTurnRecord,
+    input: TurnStartInput
+  ): Promise<TurnSnapshot> {
     try {
       const runtime = this.runtimeFactory({
         thread: toThreadRecord(thread),
@@ -323,6 +440,35 @@ function createSequence(prefix: string): IdGenerator {
   let nextId = 0;
 
   return () => `${prefix}-${++nextId}`;
+}
+
+function createUniqueIdGenerator(
+  generateId: IdGenerator,
+  existingIds: ReadonlySet<string>
+): IdGenerator {
+  const usedIds = new Set(existingIds);
+
+  return () => {
+    const id = generateUniqueId(generateId, usedIds);
+    usedIds.add(id);
+
+    return id;
+  };
+}
+
+function generateUniqueId(
+  generateId: IdGenerator,
+  existingIds: ReadonlySet<string>
+): string {
+  for (let attempt = 0; attempt < 10_000; attempt += 1) {
+    const id = generateId();
+
+    if (!existingIds.has(id)) {
+      return id;
+    }
+  }
+
+  throw new Error("Unable to generate a unique id");
 }
 
 function readFailureMessage(payload: unknown): string {

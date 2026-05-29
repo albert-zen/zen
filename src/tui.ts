@@ -3,6 +3,7 @@ import type { Readable, Writable } from "node:stream";
 import { AgentInteractionSession } from "./agent-interaction-session.js";
 import type { AppServerClient } from "./app-server.js";
 import { createDemoAppServer } from "./demo-runtime.js";
+import { createOpenClawAppServer } from "./openclaw-runtime.js";
 import {
   renderTerminalStatus,
   renderTerminalTranscript,
@@ -19,15 +20,32 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
   const session = new AgentInteractionSession({
-    client: options.client ?? createDemoAppServer()
+    client: options.client ?? (await createDefaultClient())
   });
-  let printedRows = 0;
+  const unsubscribeRows = session.observe((event) => {
+    if (event.type !== "rows") {
+      return;
+    }
+
+    const printableRows = event.rows.filter(
+      (row) => row.type !== "assistant-progress"
+    );
+
+    for (const renderedLine of renderTerminalTranscript(printableRows)) {
+      writeLine(output, renderedLine);
+    }
+  });
 
   const rl = readline.createInterface({
     input,
     output,
     terminal: isTty(input) && isTty(output),
     prompt: "zen> "
+  });
+  let closed = false;
+
+  rl.once("close", () => {
+    closed = true;
   });
 
   try {
@@ -39,13 +57,13 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
     if (thread) {
       writeLine(output, renderThreadStarted(thread));
     }
-    rl.prompt();
+    promptIfOpen(rl, closed);
 
     for await (const rawLine of rl) {
       const line = rawLine.trim();
 
       if (line.length === 0) {
-        rl.prompt();
+        promptIfOpen(rl, closed);
         continue;
       }
 
@@ -55,39 +73,34 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
 
       if (line === "/help") {
         writeLine(output, "Commands: /help, /status, /new, /exit");
-        rl.prompt();
+        promptIfOpen(rl, closed);
         continue;
       }
 
       if (line === "/status") {
         writeLine(output, renderTerminalStatus(session.getSnapshot().state));
-        rl.prompt();
+        promptIfOpen(rl, closed);
         continue;
       }
 
       if (line === "/new") {
         const next = await session.newThread();
-        printedRows = 0;
         if (next.thread) {
           writeLine(output, renderThreadStarted(next.thread));
         }
-        rl.prompt();
+        promptIfOpen(rl, closed);
         continue;
       }
 
-      const beforeCount = session.getSnapshot().timelineRows.length;
-      const snapshot = await session.submit(line);
-      const nextRows = snapshot.timelineRows.slice(Math.max(printedRows, beforeCount));
-      const rendered = renderTerminalTranscript(nextRows);
-
-      for (const renderedLine of rendered) {
-        writeLine(output, renderedLine);
+      try {
+        await session.submit(line);
+      } catch (cause) {
+        writeLine(output, `Error: ${cause instanceof Error ? cause.message : String(cause)}`);
       }
-
-      printedRows = snapshot.timelineRows.length;
-      rl.prompt();
+      promptIfOpen(rl, closed);
     }
   } finally {
+    unsubscribeRows();
     session.dispose();
     rl.close();
   }
@@ -97,6 +110,20 @@ function writeLine(output: Writable, line: string): void {
   output.write(`${line}\n`);
 }
 
+function promptIfOpen(rl: readline.Interface, closed: boolean): void {
+  if (!closed) {
+    rl.prompt();
+  }
+}
+
 function isTty(stream: Readable | Writable): boolean {
   return "isTTY" in stream && stream.isTTY === true;
+}
+
+async function createDefaultClient(): Promise<AppServerClient> {
+  if (process.env.ZEN_DEMO === "1") {
+    return createDemoAppServer();
+  }
+
+  return await createOpenClawAppServer({ cwd: process.cwd() });
 }

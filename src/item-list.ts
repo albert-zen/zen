@@ -51,6 +51,7 @@ export type InMemoryItemListOptions = {
   readonly generateId?: IdGenerator;
   readonly clock?: Clock;
   readonly observers?: readonly ItemObserver[];
+  readonly initialItems?: readonly Item[];
 };
 
 export interface ItemList {
@@ -69,6 +70,9 @@ export class InMemoryItemList implements ItemList {
     this.generateId = options.generateId ?? createDefaultIdGenerator();
     this.clock = options.clock ?? Date.now;
     this.observers = [...(options.observers ?? [])];
+    this.items = [...(options.initialItems ?? [])].map(cloneItem);
+    this.nextSeq =
+      this.items.reduce((nextSeq, item) => Math.max(nextSeq, item.seq + 1), 1);
   }
 
   observe(observer: ItemObserver): () => void {

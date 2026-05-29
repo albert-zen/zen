@@ -5,8 +5,10 @@ Date: 2026-05-28
 ## Scope
 
 This slice makes Zen usable from a terminal with a minimal TUI-first product
-path. It does not implement permission approval, durable resume, real transport,
-or a real model provider.
+path. It now uses the OpenClaw model configuration at
+`C:\Users\two-one\.openclaw\openclaw.json`, persists local threads, and exposes
+basic workspace tools. It does not implement permission approval or a network
+transport server.
 
 The implemented path is:
 
@@ -14,6 +16,7 @@ The implemented path is:
 TUI Adapter
   -> AgentInteractionSession
   -> AppServerClient
+  -> OpenClaw model provider + local tools
   -> ThreadManager
   -> AgentLoop
   -> ItemList
@@ -53,6 +56,18 @@ product Module for TUI now and Web/transport later.
     message submission.
 - `src/cli.ts`
   - CLI entry point for the TUI.
+- `src/openclaw-config.ts`
+  - Loads provider, base URL, API key, model ID, and model params from the local
+    OpenClaw config.
+- `src/openai-compatible-model-gateway.ts`
+  - Calls OpenAI-compatible chat completions with streaming deltas and tool
+    calls.
+- `src/local-tool-runtime.ts`
+  - Provides `read_file`, `write_file`, `list_files`, `search_files`, and
+    `shell`.
+- `src/thread-store.ts`
+  - Persists thread snapshots under the local Zen thread directory and supports
+    resume on startup.
 
 ## Run Path
 
@@ -100,6 +115,27 @@ zen> thread: thread-1 | status: idle | turns: 2 | items: 27
 zen>
 ```
 
+Real OpenClaw smoke:
+
+```text
+@'
+Reply with exactly: ZEN_READY
+/status
+/exit
+'@ | npm run tui
+```
+
+Observed output:
+
+```text
+Zen Agent TUI
+Type /help for commands.
+Started thread-1 (idle)
+zen> You: Reply with exactly: ZEN_READY
+Zen: ZEN_READY
+thread: thread-1 | status: idle | turns: 5 | items: 56
+```
+
 ## Verification
 
 ```text
@@ -107,23 +143,24 @@ npm run typecheck
   passed
 
 npm test
-  passed: 17 files, 80 tests
+  passed: 20 files, 84 tests
 
 npm run build
   passed
 
 non-interactive npm run tui smoke
   passed
+
+OpenClaw model smoke
+  passed with configured DashScope-compatible provider
 ```
 
 ## Productization Gaps
 
 Next wave:
 
-- Durable thread store and resume.
-- Real transport between UI clients and App Server.
-- Real model provider adapter.
-- Real tool runtime adapters.
 - Approval long-running interaction.
+- Real transport between UI clients and App Server.
 - Web UI switch from browser-local fake adapter to App Server client.
 - Full-screen TUI rendering if line-oriented TUI becomes insufficient.
+- Better sandbox/permission profiles for local tools.
