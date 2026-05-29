@@ -1,11 +1,11 @@
 # Usable Agent Interface Evidence
 
-Date: 2026-05-28
+Date: 2026-05-29
 
 ## Scope
 
-This slice makes Zen usable from a terminal with a minimal TUI-first product
-path. It now uses the OpenClaw model configuration at
+This slice makes Zen usable from a terminal with a TUI-first product path. It
+now uses the OpenClaw model configuration at
 `C:\Users\two-one\.openclaw\openclaw.json`, persists local threads, and exposes
 basic workspace tools. It does not implement permission approval or a network
 transport server.
@@ -13,7 +13,7 @@ transport server.
 The implemented path is:
 
 ```text
-TUI Adapter
+TTY TUI Adapter or non-interactive line adapter
   -> AgentInteractionSession
   -> AppServerClient
   -> OpenClaw model provider + local tools
@@ -51,9 +51,15 @@ product Module for TUI now and Web/transport later.
     cycle.
 - `src/terminal-transcript.ts`
   - Renders timeline rows into terminal transcript lines.
+- `src/tui-engine.ts`
+  - Provides a small component tree, raw terminal adapter, editor component,
+    synchronized output, cursor marker handling, and line-diff rendering.
+- `src/zen-tui-app.ts`
+  - Binds `AgentInteractionSession` snapshots to the component TUI and supports
+    live transcript rerendering plus `/help`, `/status`, `/new`, and `/exit`.
 - `src/tui.ts`
-  - Provides a line-oriented TUI with `/help`, `/status`, `/new`, `/exit`, and
-    message submission.
+  - Selects the component TUI for interactive TTYs and preserves the
+    line-oriented adapter for pipes and smoke automation.
 - `src/cli.ts`
   - CLI entry point for the TUI.
 - `src/openclaw-config.ts`
@@ -143,12 +149,15 @@ npm run typecheck
   passed
 
 npm test
-  passed: 20 files, 84 tests
+  passed: 22 files, 88 tests
 
 npm run build
   passed
 
 non-interactive npm run tui smoke
+  passed
+
+component TUI virtual-terminal tests
   passed
 
 OpenClaw model smoke
@@ -162,5 +171,6 @@ Next wave:
 - Approval long-running interaction.
 - Real transport between UI clients and App Server.
 - Web UI switch from browser-local fake adapter to App Server client.
-- Full-screen TUI rendering if line-oriented TUI becomes insufficient.
+- Richer TUI controls: interrupt, resume picker, queued-input display, and
+  collapsible tool detail views.
 - Better sandbox/permission profiles for local tools.

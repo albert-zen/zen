@@ -9,6 +9,8 @@ import {
   renderTerminalTranscript,
   renderThreadStarted
 } from "./terminal-transcript.js";
+import { ProcessTerminalDevice } from "./tui-engine.js";
+import { ZenTuiApp } from "./zen-tui-app.js";
 
 export type TuiOptions = {
   readonly client?: AppServerClient;
@@ -19,8 +21,26 @@ export type TuiOptions = {
 export async function runTui(options: TuiOptions = {}): Promise<void> {
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
+  const client = options.client ?? (await createDefaultClient());
+
+  if (isTty(input) && isTty(output)) {
+    await new ZenTuiApp({
+      client,
+      terminal: new ProcessTerminalDevice(
+        input as Readable & { setRawMode?: (mode: boolean) => void; isRaw?: boolean },
+        output as Writable & { columns?: number; rows?: number }
+      )
+    }).run();
+    return;
+  }
+
+  await runLineTui({ client, input, output });
+}
+
+async function runLineTui(options: Required<TuiOptions>): Promise<void> {
+  const { input, output } = options;
   const session = new AgentInteractionSession({
-    client: options.client ?? (await createDefaultClient())
+    client: options.client
   });
   const unsubscribeRows = session.observe((event) => {
     if (event.type !== "rows") {
