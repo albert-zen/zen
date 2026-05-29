@@ -28,6 +28,56 @@ describe("ZenTuiApp", () => {
     await run;
   });
 
+  it("shows slash command suggestions while typing a command prefix", async () => {
+    const terminal = new VirtualTerminalDevice(100, 30);
+    const app = new ZenTuiApp({
+      client: createDemoAppServer(),
+      terminal
+    });
+    const run = app.run();
+
+    await waitForRender();
+    terminal.sendInput("/");
+    await waitForRender();
+
+    expect(terminal.textOutput()).toContain("Commands");
+    expect(terminal.textOutput()).toContain("/status");
+    expect(terminal.textOutput()).toContain("/resume");
+
+    terminal.clearOutput();
+    terminal.sendInput("res");
+    await waitForRender();
+
+    const text = terminal.textOutput();
+    expect(text).toContain("/resume [number|thread-id]");
+    expect(text).not.toContain("/interrupt");
+
+    terminal.sendInput("\u0003");
+    await run;
+  });
+
+  it("uses the slash command registry for help output", async () => {
+    const terminal = new VirtualTerminalDevice(100, 30);
+    const app = new ZenTuiApp({
+      client: createDemoAppServer(),
+      terminal
+    });
+    const run = app.run();
+
+    await waitForRender();
+    terminal.sendInput("/help");
+    terminal.sendInput("\r");
+    await waitForRender();
+
+    expect(terminal.textOutput()).toContain("Notice: Commands");
+    expect(terminal.textOutput()).toContain("/interrupt");
+    expect(terminal.textOutput()).toContain("Cancel the active turn");
+
+    terminal.sendInput("/exit");
+    terminal.sendInput("\r");
+    await run;
+  });
+
   it("streams demo turn rows into the rendered transcript", async () => {
     const terminal = new VirtualTerminalDevice(100, 30);
     const app = new ZenTuiApp({

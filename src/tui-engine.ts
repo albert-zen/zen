@@ -196,17 +196,20 @@ export class TextBlock implements Component {
 }
 
 export type EditorSubmitHandler = (value: string) => void;
+export type EditorChangeHandler = (value: string) => void;
 
 export class EditorComponent implements Component {
   private value = "";
   private cursor = 0;
   onSubmit?: EditorSubmitHandler;
+  onChange?: EditorChangeHandler;
 
   constructor(private readonly placeholder = "Type a message...") {}
 
   setText(value: string): void {
     this.value = value;
     this.cursor = value.length;
+    this.onChange?.(this.value);
   }
 
   getText(): string {
@@ -223,6 +226,7 @@ export class EditorComponent implements Component {
       if (submitted.length > 0) {
         this.value = "";
         this.cursor = 0;
+        this.onChange?.(this.value);
         this.onSubmit?.(submitted);
       }
       return;
@@ -269,6 +273,7 @@ export class EditorComponent implements Component {
   private insert(text: string): void {
     this.value = `${this.value.slice(0, this.cursor)}${text}${this.value.slice(this.cursor)}`;
     this.cursor += text.length;
+    this.onChange?.(this.value);
   }
 
   private deleteBackward(): void {
@@ -277,6 +282,7 @@ export class EditorComponent implements Component {
     }
     this.value = `${this.value.slice(0, this.cursor - 1)}${this.value.slice(this.cursor)}`;
     this.cursor -= 1;
+    this.onChange?.(this.value);
   }
 }
 

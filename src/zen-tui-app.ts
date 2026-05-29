@@ -2,6 +2,11 @@ import { AgentInteractionSession } from "./agent-interaction-session.js";
 import type { AppServerClient } from "./app-server.js";
 import type { ThreadSnapshot } from "./app-server-protocol.js";
 import {
+  renderSlashCommandHelp,
+  slashSuggestions,
+  type SlashCommand
+} from "./slash-commands.js";
+import {
   Container,
   EditorComponent,
   TextBlock,
@@ -27,6 +32,7 @@ export class ZenTuiApp {
   private showToolDetails = false;
   private localNotice?: string;
   private resumeChoices: readonly { readonly id: string; readonly label: string }[] = [];
+  private currentInput = "";
 
   constructor(options: ZenTuiAppOptions) {
     this.session = new AgentInteractionSession({ client: options.client });
@@ -36,6 +42,10 @@ export class ZenTuiApp {
     this.root.addChild(this.transcript);
     this.editor.onSubmit = (value) => {
       void this.handleSubmit(value);
+    };
+    this.editor.onChange = (value) => {
+      this.currentInput = value;
+      this.engine.requestRender();
     };
   }
 
@@ -88,7 +98,7 @@ export class ZenTuiApp {
     }
 
     if (trimmed === "/help") {
-      this.setLocalNotice("Commands: /help, /status, /resume, /resume <n|id>, /interrupt, /tools, /new, /exit");
+      this.setLocalNotice(renderSlashCommandHelp());
       return;
     }
 
@@ -228,6 +238,10 @@ export class ZenTuiApp {
         ? `Working${queuedCount > 0 ? ` | queued ${this.queuedInputs.length}` : ""}`
         : "Ready"
     );
+    const suggestions = slashSuggestions(this.currentInput);
+    if (suggestions.length > 0) {
+      lines.push("", ...renderSlashSuggestions(suggestions));
+    }
     return lines;
   }
 }
@@ -313,4 +327,11 @@ function summarize(value: unknown): string {
     return rendered;
   }
   return `${rendered.slice(0, 77)}...`;
+}
+
+function renderSlashSuggestions(commands: readonly SlashCommand[]): readonly string[] {
+  return [
+    "Commands",
+    ...commands.map((command) => `  ${command.usage.padEnd(28)} ${command.description}`)
+  ];
 }

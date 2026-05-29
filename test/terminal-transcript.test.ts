@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  renderSlashCommandHelp,
   renderTerminalStatus,
   renderTerminalTimelineRow,
   type TimelineRow,
@@ -42,5 +43,13 @@ describe("terminal transcript", () => {
     } as TimelineRow;
 
     expect(renderTerminalTimelineRow(row)).toEqual([expected]);
+  });
+});
+
+describe("slash command help", () => {
+  it("includes interactive TUI commands", () => {
+    expect(renderSlashCommandHelp()).toContain("/resume [number|thread-id]");
+    expect(renderSlashCommandHelp()).toContain("/interrupt");
+    expect(renderSlashCommandHelp()).toContain("/tools");
   });
 });

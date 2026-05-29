@@ -181,7 +181,12 @@ export {
   TextBlock,
   TuiEngine
 } from "./tui-engine.js";
-export type { Component, EditorSubmitHandler, TerminalDevice } from "./tui-engine.js";
+export type {
+  Component,
+  EditorChangeHandler,
+  EditorSubmitHandler,
+  TerminalDevice
+} from "./tui-engine.js";
 export type { ZenTuiAppOptions } from "./zen-tui-app.js";
 export { ZenTuiApp } from "./zen-tui-app.js";
 export {
@@ -190,5 +195,11 @@ export {
   renderTerminalTranscript,
   renderThreadStarted
 } from "./terminal-transcript.js";
+export type { SlashCommand } from "./slash-commands.js";
+export {
+  renderSlashCommandHelp,
+  slashSuggestions,
+  SLASH_COMMANDS
+} from "./slash-commands.js";
 export type { FileThreadStoreOptions, ThreadStore } from "./thread-store.js";
 export { FileThreadStore } from "./thread-store.js";

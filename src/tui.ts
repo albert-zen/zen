@@ -4,6 +4,7 @@ import { AgentInteractionSession } from "./agent-interaction-session.js";
 import type { AppServerClient } from "./app-server.js";
 import { createDemoAppServer } from "./demo-runtime.js";
 import { createOpenClawAppServer } from "./openclaw-runtime.js";
+import { renderSlashCommandHelp } from "./slash-commands.js";
 import {
   renderTerminalStatus,
   renderTerminalTranscript,
@@ -92,7 +93,9 @@ async function runLineTui(options: Required<TuiOptions>): Promise<void> {
       }
 
       if (line === "/help") {
-        writeLine(output, "Commands: /help, /status, /new, /exit");
+        for (const renderedLine of renderSlashCommandHelp().split(/\r?\n/)) {
+          writeLine(output, renderedLine);
+        }
         promptIfOpen(rl, closed);
         continue;
       }
