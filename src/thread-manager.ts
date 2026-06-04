@@ -86,6 +86,10 @@ type MutableTurnRecord = {
   error?: JsonValue;
 };
 
+const STALE_TURN_REPAIR_CODE = "TURN_REPAIRED_ON_STARTUP";
+const STALE_TURN_REPAIR_MESSAGE =
+  "Turn was still in progress when the previous process stopped";
+
 export class ThreadManager {
   private readonly threads = new Map<string, MutableThreadRecord>();
   private readonly observers: ThreadManagerObserver[] = [];
@@ -250,25 +254,29 @@ export class ThreadManager {
   }
 
   private createThreadRecord(snapshot?: ThreadSnapshot): MutableThreadRecord {
+    const existingItemIds = new Set(snapshot?.items.map((item) => item.id) ?? []);
+    const generateItemId = createUniqueIdGenerator(
+      this.generateItemId,
+      existingItemIds
+    );
     const thread: MutableThreadRecord = {
       id: snapshot?.id ?? this.generateThreadId(),
       status: snapshot?.status === "running" ? "idle" : snapshot?.status ?? "idle",
       itemList: new InMemoryItemList({
-        generateId: createUniqueIdGenerator(
-          this.generateItemId,
-          new Set(snapshot?.items.map((item) => item.id) ?? [])
-        ),
+        generateId: generateItemId,
         clock: this.clock,
         initialItems: snapshot?.items.map((item) => ({ ...item }))
       }),
       turns: snapshot?.turns.map((turn) => ({
         id: turn.id,
         runId: turn.runId,
-        status: turn.status === "inProgress" || turn.status === "queued" ? "failed" : turn.status,
+        status: turn.status,
         itemIds: [...turn.itemIds],
         error: turn.error
       })) ?? []
     };
+
+    this.repairStaleTurns(thread);
 
     return thread;
   }
@@ -312,6 +320,43 @@ export class ThreadManager {
         item: toProtocolItem(item)
       });
     });
+  }
+
+  private repairStaleTurns(thread: MutableThreadRecord): void {
+    let repaired = false;
+
+    for (const turn of thread.turns) {
+      if (turn.status !== "inProgress" && turn.status !== "queued") {
+        continue;
+      }
+
+      const previousStatus = turn.status;
+
+      turn.status = "failed";
+      turn.error = {
+        code: STALE_TURN_REPAIR_CODE,
+        message: STALE_TURN_REPAIR_MESSAGE
+      };
+
+      const item = thread.itemList.append({
+        type: "turn.repaired",
+        runId: turn.runId,
+        turnId: turn.id,
+        visibility: "trace",
+        payload: {
+          previousStatus,
+          status: "failed",
+          reason: STALE_TURN_REPAIR_MESSAGE
+        }
+      });
+
+      turn.itemIds.push(item.id);
+      repaired = true;
+    }
+
+    if (repaired) {
+      thread.status = "failed";
+    }
   }
 
   private async runTurn(
