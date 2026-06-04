@@ -36,10 +36,18 @@ export function renderTerminalTimelineRow(
   }
 
   if (row.type === "tool-call") {
+    if (row.toolName === "shell") {
+      return [`Shell: ${readCommand(row.input)}`];
+    }
+
     return [`Tool call ${row.toolName ?? "tool"}: ${stringify(row.input)}`];
   }
 
   if (row.type === "tool-result") {
+    if (row.toolName === "shell") {
+      return [`Shell result: ${stringify(row.content)}`];
+    }
+
     return [`Tool result ${row.toolName ?? "tool"}: ${stringify(row.content)}`];
   }
 
@@ -72,4 +80,16 @@ function stringify(value: unknown): string {
   }
 
   return JSON.stringify(value);
+}
+
+function readCommand(input: unknown): string {
+  if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+    const command = (input as { readonly command?: unknown }).command;
+
+    if (typeof command === "string") {
+      return command;
+    }
+  }
+
+  return stringify(input);
 }

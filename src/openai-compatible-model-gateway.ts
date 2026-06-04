@@ -39,7 +39,7 @@ export class OpenAiCompatibleModelGateway implements ModelGateway {
           {
             role: "system",
             content:
-              "You are Zen, a pragmatic coding agent. Use tools when you need workspace facts or file changes. Return final answers in concise engineering prose."
+              "You are Zen, a pragmatic coding agent. You have one workspace tool: shell, which runs PowerShell in the current repo. Use shell for workspace facts, rg searches, file inspection, edits, and tests. Return final answers in concise engineering prose."
           },
           ...toMessages(context.parts)
         ],

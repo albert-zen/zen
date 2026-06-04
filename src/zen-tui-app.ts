@@ -283,14 +283,10 @@ function renderRow(
     return ["", `Zen`, indent(stringify(row.content))];
   }
   if (row.type === "tool-call") {
-    return options.showToolDetails
-      ? ["", `Tool: ${row.toolName ?? "tool"}`, indent(stringify(row.input))]
-      : [`  Tool: ${row.toolName ?? "tool"} (${summarize(row.input)})`];
+    return renderToolCall(row, options);
   }
   if (row.type === "tool-result") {
-    return options.showToolDetails
-      ? [`  Result: ${row.toolName ?? "tool"}`, indent(stringify(row.content))]
-      : [`  Result: ${row.toolName ?? "tool"} (${summarize(row.content)})`];
+    return renderToolResult(row, options);
   }
   if (row.type === "tool-error") {
     return [`  Tool error: ${row.toolName ?? "tool"} (${row.message ?? "failed"})`];
@@ -302,6 +298,40 @@ function renderRow(
     return [`  Approval resolved: ${row.decision ?? "resolved"}`];
   }
   return [];
+}
+
+function renderToolCall(
+  row: Extract<TimelineRow, { readonly type: "tool-call" }>,
+  options: { readonly showToolDetails: boolean }
+): readonly string[] {
+  if (row.toolName === "shell") {
+    const command = readCommand(row.input);
+
+    return options.showToolDetails
+      ? ["", "Shell", indent(command)]
+      : [`  Shell: ${summarize(command)}`];
+  }
+
+  return options.showToolDetails
+    ? ["", `Tool: ${row.toolName ?? "tool"}`, indent(stringify(row.input))]
+    : [`  Tool: ${row.toolName ?? "tool"} (${summarize(row.input)})`];
+}
+
+function renderToolResult(
+  row: Extract<TimelineRow, { readonly type: "tool-result" }>,
+  options: { readonly showToolDetails: boolean }
+): readonly string[] {
+  if (row.toolName === "shell") {
+    const output = stringify(row.content);
+
+    return options.showToolDetails
+      ? ["  Shell result", indent(output)]
+      : [`  Shell result: ${summarizeShellResult(output)}`];
+  }
+
+  return options.showToolDetails
+    ? [`  Result: ${row.toolName ?? "tool"}`, indent(stringify(row.content))]
+    : [`  Result: ${row.toolName ?? "tool"} (${summarize(row.content)})`];
 }
 
 function stringify(value: unknown): string {
@@ -327,6 +357,33 @@ function summarize(value: unknown): string {
     return rendered;
   }
   return `${rendered.slice(0, 77)}...`;
+}
+
+function summarizeShellResult(output: string): string {
+  const exitCode = output.match(/^exitCode:\s*([^\r\n]+)/m)?.[1]?.trim();
+  const stdout = output
+    .replace(/^exitCode:[^\r\n]*(\r?\n)?/, "")
+    .replace(/^stdout:\s*/m, "")
+    .replace(/^stderr:\s*/m, "stderr: ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const summary = [exitCode ? `exit ${exitCode}` : undefined, stdout || undefined]
+    .filter(Boolean)
+    .join(" | ");
+
+  return summary.length <= 80 ? summary : `${summary.slice(0, 77)}...`;
+}
+
+function readCommand(input: unknown): string {
+  if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+    const command = (input as { readonly command?: unknown }).command;
+
+    if (typeof command === "string") {
+      return command;
+    }
+  }
+
+  return stringify(input);
 }
 
 function renderSlashSuggestions(commands: readonly SlashCommand[]): readonly string[] {

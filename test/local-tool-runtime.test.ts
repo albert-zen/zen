@@ -1,32 +1,36 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { LocalToolRuntime } from "../src/index.js";
+import { LocalToolRuntime, localToolDefinitions } from "../src/index.js";
 
 describe("LocalToolRuntime", () => {
-  it("reads, writes, lists, searches, and runs shell commands in the workspace", async () => {
+  it("exposes shell as the only local workspace tool", () => {
+    expect(localToolDefinitions.map((definition) => definition.function.name)).toEqual([
+      "shell"
+    ]);
+  });
+
+  it("runs shell commands in the workspace and returns command output", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "zen-tools-"));
-    mkdirSync(join(cwd, "src"));
-    writeFileSync(join(cwd, "src", "note.txt"), "hello zen\n", "utf8");
     const runtime = new LocalToolRuntime({ cwd });
 
-    await expect(runTool(runtime, "read_file", { path: "src/note.txt" })).resolves.toContain(
-      "hello zen"
-    );
-    await expect(
-      runTool(runtime, "write_file", { path: "src/out.txt", content: "written" })
-    ).resolves.toBe("wrote src/out.txt");
-    await expect(runTool(runtime, "list_files", { path: "src" })).resolves.toContain(
-      "file note.txt"
-    );
-    await expect(
-      runTool(runtime, "search_files", { pattern: "written", path: "src" })
-    ).resolves.toContain("out.txt");
     await expect(runTool(runtime, "shell", { command: "Write-Output ok" })).resolves.toBe(
-      "ok"
+      "exitCode: 0\nstdout:\nok"
     );
+  });
+
+  it("returns non-zero shell exits as normal tool results with stderr evidence", async () => {
+    const runtime = new LocalToolRuntime({
+      cwd: mkdtempSync(join(tmpdir(), "zen-tools-"))
+    });
+
+    await expect(
+      runTool(runtime, "shell", {
+        command: "Write-Error bad; exit 7"
+      })
+    ).resolves.toContain("exitCode: 7");
   });
 });
 

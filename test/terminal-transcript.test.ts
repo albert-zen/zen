@@ -30,7 +30,12 @@ describe("terminal transcript", () => {
     [{ type: "assistant", content: "hi" }, "Zen: hi"],
     [{ type: "assistant-progress", content: "draft" }, "Zen: draft"],
     [{ type: "tool-call", toolName: "demo", input: { q: "x" } }, 'Tool call demo: {"q":"x"}'],
+    [{ type: "tool-call", toolName: "shell", input: { command: "npm test" } }, "Shell: npm test"],
     [{ type: "tool-result", toolName: "demo", content: "ok" }, "Tool result demo: ok"],
+    [
+      { type: "tool-result", toolName: "shell", content: "exitCode: 0\nstdout:\nok" },
+      "Shell result: exitCode: 0\nstdout:\nok"
+    ],
     [{ type: "tool-error", toolName: "demo", message: "bad" }, "Tool error demo: bad"],
     [{ type: "approval-pending", reason: "Run?" }, "Approval pending: Run?"],
     [{ type: "approval-resolved", decision: "approve" }, "Approval resolved: approve"]
