@@ -6,7 +6,8 @@ import type {
 import type {
   JsonValue,
   ProtocolItem,
-  ThreadSnapshot
+  ThreadSnapshot,
+  TurnSnapshot
 } from "./app-server-protocol.js";
 import {
   applyAppServerNotification,
@@ -23,6 +24,16 @@ export type AgentInteractionSnapshot = {
   readonly state: WebUiState;
   readonly thread?: ThreadSnapshot;
   readonly timelineRows: readonly TimelineRow[];
+  readonly recoverableTurn?: AgentRecoverableTurn;
+};
+
+export type AgentRecoverableTurn = {
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly status: "failed" | "canceled";
+  readonly input?: JsonValue;
+  readonly reason: string;
+  readonly retryAvailable: boolean;
 };
 
 export type AgentThreadListEntry = {
@@ -68,7 +79,8 @@ export class AgentInteractionSession {
             items: this.state.items
           }
         : undefined,
-      timelineRows: this.state.timelineRows
+      timelineRows: this.state.timelineRows,
+      recoverableTurn: findRecoverableTurn(this.state)
     };
   }
 
@@ -158,6 +170,32 @@ export class AgentInteractionSession {
 
     if (!response.ok || response.method !== "turn/start") {
       throw new Error(response.ok ? "Unexpected turn/start response" : response.error.message);
+    }
+
+    await completion;
+
+    return this.getSnapshot();
+  }
+
+  async retryLatestRecoverableTurn(): Promise<AgentInteractionSnapshot> {
+    this.subscribeOnce();
+    const recoverableTurn = this.getSnapshot().recoverableTurn;
+
+    if (!recoverableTurn?.retryAvailable) {
+      throw new Error("No recoverable turn available for retry");
+    }
+
+    const completion = this.waitForNextTurnCompletion(recoverableTurn.threadId);
+    const response = await this.options.client.request({
+      method: "turn/retry",
+      params: {
+        threadId: recoverableTurn.threadId,
+        turnId: recoverableTurn.turnId
+      }
+    });
+
+    if (!response.ok || response.method !== "turn/retry") {
+      throw new Error(response.ok ? "Unexpected turn/retry response" : response.error.message);
     }
 
     await completion;
@@ -256,6 +294,67 @@ function toTimelineRowKey(row: TimelineRow): string {
   return `${row.type}:${row.itemId}`;
 }
 
+function findRecoverableTurn(state: WebUiState): AgentRecoverableTurn | undefined {
+  const currentThread = state.currentThread;
+  const latestTurn = currentThread?.turns.at(-1);
+
+  if (!currentThread || !latestTurn || !isRecoverableTurn(latestTurn)) {
+    return undefined;
+  }
+
+  const input = latestUserInputForTurn(state.items, latestTurn.id);
+
+  return {
+    threadId: currentThread.id,
+    turnId: latestTurn.id,
+    status: latestTurn.status,
+    input,
+    reason: readTurnErrorReason(latestTurn.error),
+    retryAvailable: input !== undefined
+  };
+}
+
+function isRecoverableTurn(
+  turn: TurnSnapshot
+): turn is TurnSnapshot & { readonly status: "failed" | "canceled" } {
+  return turn.status === "failed" || turn.status === "canceled";
+}
+
+function latestUserInputForTurn(
+  items: readonly ProtocolItem[],
+  turnId: string
+): JsonValue | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+
+    if (item?.turnId !== turnId || item.type !== "user.message.completed") {
+      continue;
+    }
+
+    const content = readPayloadField(item.payload, "content");
+
+    if (content !== undefined) {
+      return content;
+    }
+  }
+
+  return undefined;
+}
+
+function readTurnErrorReason(error: JsonValue | undefined): string {
+  if (error === undefined) {
+    return "Turn did not complete";
+  }
+
+  const message = readPayloadField(error, "message");
+
+  if (typeof message === "string" && message.length > 0) {
+    return message;
+  }
+
+  return stringifyJson(error);
+}
+
 function toThreadListEntry(thread: ThreadSnapshot): AgentThreadListEntry {
   return {
     id: thread.id,
@@ -302,6 +401,14 @@ function latestContent(
   return undefined;
 }
 
+function readPayloadField(payload: JsonValue, key: string): JsonValue | undefined {
+  if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
+    return payload[key];
+  }
+
+  return undefined;
+}
+
 function readPayloadContent(payload: JsonValue): string | undefined {
   if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
     const content = payload.content;
@@ -312,4 +419,8 @@ function readPayloadContent(payload: JsonValue): string | undefined {
   }
 
   return undefined;
+}
+
+function stringifyJson(value: JsonValue): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
 }

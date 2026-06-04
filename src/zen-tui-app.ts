@@ -1,5 +1,6 @@
 import {
   AgentInteractionSession,
+  type AgentRecoverableTurn,
   type AgentThreadListEntry
 } from "./agent-interaction-session.js";
 import type { AppServerClient } from "./app-server.js";
@@ -120,6 +121,11 @@ export class ZenTuiApp {
       return;
     }
 
+    if (trimmed === "/retry") {
+      await this.retry();
+      return;
+    }
+
     if (trimmed === "/tools") {
       this.showToolDetails = !this.showToolDetails;
       this.setLocalNotice(`Tool detail ${this.showToolDetails ? "expanded" : "collapsed"}`);
@@ -165,6 +171,7 @@ export class ZenTuiApp {
         await this.session.submit(next);
       }
     } catch (cause) {
+      this.queuedInputs.splice(0);
       this.setLocalNotice(`Error: ${cause instanceof Error ? cause.message : String(cause)}`);
     } finally {
       this.drainingQueue = false;
@@ -177,6 +184,24 @@ export class ZenTuiApp {
       await this.session.interrupt();
       this.queuedInputs.splice(0);
       this.setLocalNotice("Interrupted current turn");
+    } catch (cause) {
+      this.setLocalNotice(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  private async retry(): Promise<void> {
+    const recoverableTurn = this.session.getSnapshot().recoverableTurn;
+
+    if (!recoverableTurn?.retryAvailable) {
+      this.setLocalNotice("No failed or interrupted turn is available to retry");
+      return;
+    }
+
+    this.queuedInputs.splice(0);
+    this.setLocalNotice(`Retrying ${recoverableTurn.status} turn`);
+
+    try {
+      await this.session.retryLatestRecoverableTurn();
     } catch (cause) {
       this.setLocalNotice(cause instanceof Error ? cause.message : String(cause));
     }
@@ -294,6 +319,10 @@ export class ZenTuiApp {
       );
     }
 
+    if (snapshot.recoverableTurn) {
+      lines.push("", renderRecoverableTurn(snapshot.recoverableTurn));
+    }
+
     if (this.localNotice) {
       lines.push("", `Notice: ${this.localNotice}`);
     }
@@ -326,6 +355,14 @@ function renderStatus(state: WebUiState): string {
     return "thread: not started";
   }
   return `thread: ${thread.id} | status: ${thread.status} | turns: ${thread.turns.length} | items: ${state.items.length}`;
+}
+
+function renderRecoverableTurn(recoverableTurn: AgentRecoverableTurn): string {
+  const availability = recoverableTurn.retryAvailable
+    ? "Retry with /retry"
+    : "Retry unavailable";
+
+  return `Recoverable ${recoverableTurn.status} turn: ${recoverableTurn.reason} | ${availability}`;
 }
 
 function renderTranscript(

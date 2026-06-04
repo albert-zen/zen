@@ -1,6 +1,7 @@
 export const kernelEntrypoint = "zen-kernel";
 
 export type {
+  AgentRecoverableTurn,
   AgentInteractionSessionEvent,
   AgentInteractionSessionListener,
   AgentInteractionSessionOptions,
@@ -30,7 +31,9 @@ export type {
   ThreadSnapshot,
   ThreadSnapshotInput,
   ThreadStatus,
+  TurnRetryRequest,
   TurnSnapshot,
+  TurnStartRequest,
   TurnStatus
 } from "./app-server-protocol.js";
 export {
@@ -102,6 +105,7 @@ export type {
   ThreadRuntimeFactory,
   ThreadRuntimeFactoryInput,
   TurnRecord,
+  TurnRetryInput,
   TurnStartInput
 } from "./thread-manager.js";
 export { ThreadManager } from "./thread-manager.js";

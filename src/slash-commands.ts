@@ -26,6 +26,11 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     description: "Cancel the active turn and clear queued input"
   },
   {
+    name: "/retry",
+    usage: "/retry",
+    description: "Retry the latest failed or interrupted turn"
+  },
+  {
     name: "/tools",
     usage: "/tools",
     description: "Toggle expanded tool call details"

@@ -151,6 +151,93 @@ describe("AppServer", () => {
     });
   });
 
+  it("retries a failed turn by appending a new turn with the same user input", async () => {
+    let modelCalls = 0;
+    const notifications: AppServerNotification[] = [];
+    const server = createServer({
+      model: {
+        async *generate() {
+          modelCalls += 1;
+
+          if (modelCalls === 1) {
+            yield { type: "error", error: new Error("transient model failure") };
+            return;
+          }
+
+          yield { type: "message.completed", content: "Recovered response" };
+        }
+      }
+    });
+    server.subscribe((notification) => notifications.push(notification));
+    const start = await server.request({ method: "thread/start" });
+
+    if (!start.ok || start.method !== "thread/start") {
+      throw new Error("thread/start failed");
+    }
+
+    await server.request({
+      method: "turn/start",
+      params: {
+        threadId: start.result.thread.id,
+        input: "please retry me"
+      }
+    });
+    await waitForNotification(
+      notifications,
+      (notification) => notification.type === "turn/failed"
+    );
+
+    const retry = await server.request({
+      method: "turn/retry",
+      params: {
+        threadId: start.result.thread.id,
+        turnId: "turn-1"
+      }
+    });
+    await waitForNotification(
+      notifications,
+      (notification) =>
+        notification.type === "turn/completed" && notification.turn.id === "turn-2"
+    );
+
+    expect(retry).toEqual({
+      method: "turn/retry",
+      ok: true,
+      result: {
+        turn: expect.objectContaining({
+          id: "turn-2",
+          runId: "run-2",
+          status: "inProgress"
+        })
+      }
+    });
+
+    const read = await server.request({
+      method: "thread/read",
+      params: { threadId: start.result.thread.id }
+    });
+
+    if (!read.ok || read.method !== "thread/read") {
+      throw new Error("thread/read failed");
+    }
+
+    expect(read.result.thread.turns.map((turn) => turn.status)).toEqual([
+      "failed",
+      "completed"
+    ]);
+    expect(
+      read.result.thread.items
+        .filter((item) => item.type === "user.message.completed")
+        .map((item) => item.payload)
+    ).toEqual([
+      { content: "please retry me" },
+      { content: "please retry me" }
+    ]);
+    expect(read.result.thread.items.map((item) => item.type)).toContain(
+      "assistant.message.error"
+    );
+  });
+
   it("repairs stale in-progress turns from persisted startup snapshots", async () => {
     const dir = mkdtempSync(join(tmpdir(), "zen-startup-repair-"));
     const path = join(dir, "thread-1.json");

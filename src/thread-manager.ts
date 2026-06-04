@@ -53,6 +53,12 @@ export type TurnStartInput = {
   readonly modelOptions?: ModelOptions;
 };
 
+export type TurnRetryInput = {
+  readonly threadId: string;
+  readonly turnId?: string;
+  readonly modelOptions?: ModelOptions;
+};
+
 export type ThreadRecord = {
   readonly id: string;
   readonly status: ThreadStatus;
@@ -231,6 +237,31 @@ export class ThreadManager {
     active.controller.abort();
 
     return toTurnSnapshot(active.turn);
+  }
+
+  retryTurn(input: TurnRetryInput): TurnSnapshot {
+    const thread = this.getThread(input.threadId);
+    const retrySource = input.turnId
+      ? thread.turns.find((turn) => turn.id === input.turnId)
+      : latestRecoverableTurn(thread.turns);
+
+    if (!retrySource) {
+      throw new Error(
+        input.turnId
+          ? `Unknown turn for retry: ${input.turnId}`
+          : `No recoverable turn for thread: ${thread.id}`
+      );
+    }
+
+    if (!isRecoverableTurnStatus(retrySource.status)) {
+      throw new Error(`Turn is not recoverable: ${retrySource.id}`);
+    }
+
+    return this.enqueueTurn({
+      threadId: thread.id,
+      input: readUserInputForTurn(thread, retrySource),
+      modelOptions: input.modelOptions
+    });
   }
 
   private createTurn(thread: MutableThreadRecord): MutableTurnRecord {
@@ -511,6 +542,78 @@ function toThreadRecord(thread: MutableThreadRecord): ThreadRecord {
 
 function toTurnRecord(turn: MutableTurnRecord): TurnRecord {
   return toTurnSnapshot(turn);
+}
+
+function latestRecoverableTurn(
+  turns: readonly MutableTurnRecord[]
+): MutableTurnRecord | undefined {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+
+    if (turn && isRecoverableTurnStatus(turn.status)) {
+      return turn;
+    }
+  }
+
+  return undefined;
+}
+
+function isRecoverableTurnStatus(status: TurnStatus): boolean {
+  return status === "failed" || status === "canceled";
+}
+
+function readUserInputForTurn(
+  thread: MutableThreadRecord,
+  turn: MutableTurnRecord
+): JsonValue {
+  const userItem = thread.itemList
+    .getItems()
+    .find(
+      (item) =>
+        item.turnId === turn.id &&
+        item.type === "user.message.completed" &&
+        turn.itemIds.includes(item.id)
+    );
+
+  if (!userItem) {
+    throw new Error(`Cannot retry turn without user input: ${turn.id}`);
+  }
+
+  const payload = userItem.payload;
+
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new Error(`Cannot retry turn with invalid user input: ${turn.id}`);
+  }
+
+  if (!("content" in payload) || !isJsonValue(payload.content)) {
+    throw new Error(`Cannot retry turn with non-JSON user input: ${turn.id}`);
+  }
+
+  return payload.content;
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Object.values(value).every(isJsonValue)
+  );
 }
 
 function createAgentLoopOptions(

@@ -240,6 +240,72 @@ describe("ZenTuiApp", () => {
     await run;
   });
 
+  it("shows failed turn recovery and retries it with /retry", async () => {
+    const terminal = new VirtualTerminalDevice(120, 40);
+    const app = new ZenTuiApp({
+      client: createFailThenRecoverAppServer(),
+      terminal
+    });
+    const run = app.run();
+
+    await waitForRender();
+    terminal.sendInput("recover me");
+    terminal.sendInput("\r");
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    let text = terminal.textOutput();
+    expect(text).toContain("Recoverable failed turn: model overloaded");
+    expect(text).toContain("Retry with /retry");
+
+    terminal.clearOutput();
+    terminal.sendInput("/retry");
+    terminal.sendInput("\r");
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    text = terminal.textOutput();
+    expect(text).toContain("Retrying failed turn");
+    expect(text).toContain("turns 2");
+    expect(text).toContain("Recovered after retry");
+
+    terminal.sendInput("/exit");
+    terminal.sendInput("\r");
+    await run;
+  });
+
+  it("retries an interrupted turn with /retry", async () => {
+    const terminal = new VirtualTerminalDevice(120, 40);
+    const app = new ZenTuiApp({
+      client: createInterruptThenRecoverAppServer(),
+      terminal
+    });
+    const run = app.run();
+
+    await waitForRender();
+    terminal.sendInput("interrupt me");
+    terminal.sendInput("\r");
+    await waitForRender();
+    terminal.sendInput("/interrupt");
+    terminal.sendInput("\r");
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    expect(terminal.textOutput()).toContain("Recoverable canceled turn");
+    expect(terminal.textOutput()).toContain("Retry with /retry");
+
+    terminal.clearOutput();
+    terminal.sendInput("/retry");
+    terminal.sendInput("\r");
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    const text = terminal.textOutput();
+    expect(text).toContain("Retrying canceled turn");
+    expect(text).toContain("Recovered interrupted turn");
+    expect(text).toContain("turns 2");
+
+    terminal.sendInput("/exit");
+    terminal.sendInput("\r");
+    await run;
+  });
+
   it("shows and accepts resume choices", async () => {
     const terminal = new VirtualTerminalDevice(100, 30);
     const app = new ZenTuiApp({
@@ -379,6 +445,60 @@ describe("ZenTuiApp", () => {
     await failedRun;
   });
 });
+
+function createFailThenRecoverAppServer(): AppServer {
+  let modelCalls = 0;
+  const model: ModelGateway = {
+    async *generate() {
+      modelCalls += 1;
+
+      if (modelCalls === 1) {
+        yield { type: "error", error: new Error("model overloaded") };
+        return;
+      }
+
+      yield {
+        type: "message.completed",
+        content: "Recovered after retry"
+      };
+    }
+  };
+
+  return new AppServer({
+    threadManagerOptions: {
+      runtimeFactory: () => ({ model })
+    }
+  });
+}
+
+function createInterruptThenRecoverAppServer(): AppServer {
+  let modelCalls = 0;
+  const model: ModelGateway = {
+    async *generate(_context, _options, signal) {
+      modelCalls += 1;
+
+      if (modelCalls === 1) {
+        await delay(1_000, signal);
+        yield {
+          type: "message.completed",
+          content: "Should not complete before interrupt"
+        };
+        return;
+      }
+
+      yield {
+        type: "message.completed",
+        content: "Recovered interrupted turn"
+      };
+    }
+  };
+
+  return new AppServer({
+    threadManagerOptions: {
+      runtimeFactory: () => ({ model })
+    }
+  });
+}
 
 function createSlowAppServer(delayMs: number): AppServer {
   const model: ModelGateway = {
