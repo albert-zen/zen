@@ -8,6 +8,7 @@ import {
   ThreadManager,
   type ThreadManagerEvent,
   type ThreadManagerOptions,
+  type TurnRetryInput,
   type TurnStartInput
 } from "./thread-manager.js";
 import type { ThreadStore } from "./thread-store.js";
@@ -122,6 +123,26 @@ export class AppServer implements AppServerClient {
         result: {
           turn: this.threadManager.interruptTurn(readRequiredString(params, "threadId"))
         }
+      };
+    }
+
+    if (request.method === "turn/retry") {
+      const params = readParams(request.params);
+      const retryInput: TurnRetryInput = {
+        threadId: readRequiredString(params, "threadId"),
+        turnId:
+          typeof params.turnId === "string" && params.turnId.length > 0
+            ? params.turnId
+            : undefined,
+        modelOptions: isJsonObject(params.modelOptions)
+          ? params.modelOptions
+          : undefined
+      };
+
+      return {
+        method: "turn/retry",
+        ok: true,
+        result: { turn: this.threadManager.retryTurn(retryInput) }
       };
     }
 

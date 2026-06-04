@@ -100,6 +100,38 @@ describe("AgentInteractionSession", () => {
       }
     ]);
   });
+
+  it("exposes the latest failed turn as recoverable session state", async () => {
+    const session = new AgentInteractionSession({
+      client: new AppServer({
+        threadManagerOptions: {
+          ...deterministicIds(),
+          runtimeFactory: () => ({
+            model: {
+              async *generate() {
+                yield { type: "error", error: new Error("model timed out") };
+              }
+            } satisfies ModelGateway
+          })
+        }
+      })
+    });
+
+    await session.start();
+
+    await expect(session.submit("retry this later")).rejects.toThrow(
+      "model timed out"
+    );
+
+    expect(session.getSnapshot().recoverableTurn).toEqual({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      status: "failed",
+      input: "retry this later",
+      reason: "model timed out",
+      retryAvailable: true
+    });
+  });
 });
 
 function deterministicIds() {
