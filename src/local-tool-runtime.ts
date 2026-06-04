@@ -1,14 +1,11 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { promisify } from "node:util";
 import type {
   ToolCallPayload,
   ToolExecutionContext,
   ToolRuntime,
   ToolRuntimeEvent
 } from "./tool-runtime.js";
-
-const execFileAsync = promisify(execFile);
 
 export type LocalToolRuntimeOptions = {
   readonly cwd?: string;
@@ -45,43 +42,143 @@ export class LocalToolRuntime implements ToolRuntime {
 
   async *execute(
     call: ToolCallPayload,
-    _context: ToolExecutionContext
+    context: ToolExecutionContext
   ): AsyncIterable<ToolRuntimeEvent> {
     try {
-      yield { type: "output.delta", delta: `running ${call.name}` };
-      yield {
-        type: "result.completed",
-        content: await this.executeCall(call)
-      };
+      yield* this.executeCall(call, context);
     } catch (error) {
       yield { type: "error", error };
     }
   }
 
-  private async executeCall(call: ToolCallPayload): Promise<string> {
+  private async *executeCall(
+    call: ToolCallPayload,
+    context: ToolExecutionContext
+  ): AsyncIterable<ToolRuntimeEvent> {
     const input = readObject(call.input);
 
     if (call.name === "shell") {
-      return await this.runShell(readString(input.command, "command"));
+      yield* this.runShell(readString(input.command, "command"), context);
+      return;
     }
 
     throw new Error(`Unknown tool: ${call.name}`);
   }
 
-  private async runShell(command: string): Promise<string> {
-    const result = await execFileWithOutput(
-      "powershell",
-      ["-NoProfile", "-Command", command],
-      { cwd: this.cwd, timeout: this.shellTimeoutMs, windowsHide: true }
-    );
+  private async *runShell(
+    command: string,
+    context: ToolExecutionContext
+  ): AsyncIterable<ToolRuntimeEvent> {
+    if (context.signal?.aborted) {
+      yield { type: "error", error: new Error("Shell command canceled") };
+      return;
+    }
 
-    return [
-      `exitCode: ${result.exitCode}`,
-      result.stdout ? `stdout:\n${result.stdout.trimEnd()}` : undefined,
-      result.stderr ? `stderr:\n${result.stderr.trimEnd()}` : undefined
-    ]
-      .filter((line): line is string => Boolean(line))
-      .join("\n");
+    const child = spawn("powershell", ["-NoProfile", "-Command", command], {
+      cwd: this.cwd,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const queue: ToolRuntimeEvent[] = [];
+    let wake: (() => void) | undefined;
+    let stdout = "";
+    let stderr = "";
+    let exitCode: number | null = null;
+    let done = false;
+    let spawnError: unknown;
+    let canceled = false;
+    let timedOut = false;
+
+    const wakeConsumer = () => {
+      wake?.();
+      wake = undefined;
+    };
+    const push = (event: ToolRuntimeEvent) => {
+      queue.push(event);
+      wakeConsumer();
+    };
+    const onStdout = (chunk: Buffer | string) => {
+      const text = stringifyOutput(chunk);
+      stdout += text;
+      push({ type: "output.delta", delta: { stream: "stdout", chunk: text } });
+    };
+    const onStderr = (chunk: Buffer | string) => {
+      const text = stringifyOutput(chunk);
+      stderr += text;
+      push({ type: "output.delta", delta: { stream: "stderr", chunk: text } });
+    };
+    const finish = () => {
+      done = true;
+      clearTimeout(timeout);
+      wakeConsumer();
+    };
+    const cancel = () => {
+      canceled = true;
+      terminateChildProcess(child);
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      terminateChildProcess(child);
+    }, this.shellTimeoutMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
+    child.on("error", (error) => {
+      spawnError = error;
+      finish();
+    });
+    child.on("close", (code) => {
+      exitCode = code;
+      finish();
+    });
+    context.signal?.addEventListener("abort", cancel, { once: true });
+
+    try {
+      while (!done || queue.length > 0) {
+        const event = queue.shift();
+
+        if (event) {
+          yield event;
+          continue;
+        }
+
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      }
+    } finally {
+      clearTimeout(timeout);
+      context.signal?.removeEventListener("abort", cancel);
+
+      if (!done) {
+        terminateChildProcess(child);
+      }
+    }
+
+    if (spawnError) {
+      yield { type: "error", error: spawnError };
+      return;
+    }
+
+    if (canceled) {
+      yield { type: "error", error: new Error("Shell command canceled") };
+      return;
+    }
+
+    if (timedOut) {
+      yield {
+        type: "error",
+        error: new Error(`Shell command timed out after ${this.shellTimeoutMs}ms`)
+      };
+      return;
+    }
+
+    yield {
+      type: "result.completed",
+      content: formatShellResult({ exitCode, stdout, stderr })
+    };
   }
 }
 
@@ -91,34 +188,14 @@ type ExecFileResult = {
   readonly stderr: string;
 };
 
-async function execFileWithOutput(
-  file: string,
-  args: readonly string[],
-  options: {
-    readonly cwd: string;
-    readonly timeout: number;
-    readonly windowsHide: boolean;
-  }
-): Promise<ExecFileResult> {
-  try {
-    const result = await execFileAsync(file, [...args], options);
-
-    return {
-      exitCode: 0,
-      stdout: stringifyOutput(result.stdout),
-      stderr: stringifyOutput(result.stderr)
-    };
-  } catch (cause) {
-    if (isExecFileError(cause)) {
-      return {
-        exitCode: typeof cause.code === "number" ? cause.code : null,
-        stdout: stringifyOutput(cause.stdout),
-        stderr: stringifyOutput(cause.stderr)
-      };
-    }
-
-    throw cause;
-  }
+function formatShellResult(result: ExecFileResult): string {
+  return [
+    `exitCode: ${result.exitCode}`,
+    result.stdout ? `stdout:\n${result.stdout.trimEnd()}` : undefined,
+    result.stderr ? `stderr:\n${result.stderr.trimEnd()}` : undefined
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
 }
 
 function readObject(value: unknown): Readonly<Record<string, unknown>> {
@@ -135,12 +212,6 @@ function readString(value: unknown, label: string): string {
   throw new Error(`${label} must be a string`);
 }
 
-function isExecFileError(
-  value: unknown
-): value is Error & { readonly code?: unknown; readonly stdout?: unknown; readonly stderr?: unknown } {
-  return typeof value === "object" && value !== null && "stdout" in value;
-}
-
 function stringifyOutput(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -151,4 +222,22 @@ function stringifyOutput(value: unknown): string {
   }
 
   return value === undefined || value === null ? "" : String(value);
+}
+
+function terminateChildProcess(child: ReturnType<typeof spawn>): void {
+  if (child.killed) {
+    return;
+  }
+
+  if (process.platform === "win32" && child.pid) {
+    execFile(
+      "taskkill",
+      ["/pid", String(child.pid), "/T", "/F"],
+      { windowsHide: true },
+      () => undefined
+    );
+    return;
+  }
+
+  child.kill("SIGTERM");
 }

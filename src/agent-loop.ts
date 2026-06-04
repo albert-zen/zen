@@ -101,7 +101,8 @@ export class AgentLoop {
         appendItem: (item) => this.append(item),
         toolRuntime: this.toolRuntime,
         assistantItem: modelItems.completed,
-        hookRuntime: this.hookRuntime
+        hookRuntime: this.hookRuntime,
+        signal: input.signal
       });
     }
 

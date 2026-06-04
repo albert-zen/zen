@@ -30,6 +30,7 @@ export type ToolRuntimeEvent =
 export type ToolExecutionContext = {
   readonly runId: string;
   readonly turnId: string;
+  readonly signal?: AbortSignal;
   readonly assistantItem: Item;
   readonly startedItem: Item;
 };
@@ -47,6 +48,7 @@ export type AppendToolExecutionItemsInput = {
   readonly toolRuntime: ToolRuntime;
   readonly assistantItem: Item;
   readonly hookRuntime?: HookRuntime;
+  readonly signal?: AbortSignal;
 };
 
 export type ItemAppender = (
@@ -68,6 +70,10 @@ export async function appendToolExecutionItems(
   const errors: Item[] = [];
 
   for (const requestedCall of readToolCalls(input.assistantItem.payload)) {
+    if (input.signal?.aborted) {
+      break;
+    }
+
     const hookDecision = await input.hookRuntime?.beforeToolCall({
       call: requestedCall,
       assistantItem: input.assistantItem
@@ -94,6 +100,7 @@ export async function appendToolExecutionItems(
       for await (const event of input.toolRuntime.execute(call, {
         runId: input.assistantItem.runId,
         turnId: input.assistantItem.turnId,
+        signal: input.signal,
         assistantItem: input.assistantItem,
         startedItem
       })) {
@@ -136,6 +143,10 @@ export async function appendToolExecutionItems(
       }
     } catch (caughtError) {
       errors.push(await appendToolError(appendItem, startedItem, call, caughtError));
+    }
+
+    if (input.signal?.aborted) {
+      break;
     }
   }
 
