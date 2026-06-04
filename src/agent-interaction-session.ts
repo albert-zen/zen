@@ -3,7 +3,11 @@ import type {
   AppServerNotificationListener,
   AppServerSubscription
 } from "./app-server.js";
-import type { JsonValue, ThreadSnapshot } from "./app-server-protocol.js";
+import type {
+  JsonValue,
+  ProtocolItem,
+  ThreadSnapshot
+} from "./app-server-protocol.js";
 import {
   applyAppServerNotification,
   createWebUiState,
@@ -26,6 +30,9 @@ export type AgentThreadListEntry = {
   readonly status: ThreadSnapshot["status"];
   readonly turns: number;
   readonly items: number;
+  readonly updatedAtMs?: number;
+  readonly lastUserMessage?: string;
+  readonly lastAssistantSummary?: string;
 };
 
 export type AgentInteractionSessionEvent =
@@ -99,12 +106,7 @@ export class AgentInteractionSession {
       throw new Error(response.ok ? "Unexpected thread/list response" : response.error.message);
     }
 
-    return response.result.threads.map((thread) => ({
-      id: thread.id,
-      status: thread.status,
-      turns: thread.turns.length,
-      items: thread.items.length
-    }));
+    return response.result.threads.map(toThreadListEntry);
   }
 
   async resumeThread(threadId: string): Promise<AgentInteractionSnapshot> {
@@ -252,4 +254,62 @@ export class AgentInteractionSession {
 
 function toTimelineRowKey(row: TimelineRow): string {
   return `${row.type}:${row.itemId}`;
+}
+
+function toThreadListEntry(thread: ThreadSnapshot): AgentThreadListEntry {
+  return {
+    id: thread.id,
+    status: thread.status,
+    turns: thread.turns.length,
+    items: thread.items.length,
+    updatedAtMs: latestItemTimestamp(thread.items),
+    lastUserMessage: latestContent(thread.items, "user.message.completed"),
+    lastAssistantSummary: latestContent(
+      thread.items,
+      "assistant.message.completed"
+    )
+  };
+}
+
+function latestItemTimestamp(
+  items: readonly ProtocolItem[]
+): number | undefined {
+  return items.reduce<number | undefined>(
+    (latest, item) =>
+      latest === undefined ? item.createdAtMs : Math.max(latest, item.createdAtMs),
+    undefined
+  );
+}
+
+function latestContent(
+  items: readonly ProtocolItem[],
+  type: string
+): string | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+
+    if (item?.type !== type) {
+      continue;
+    }
+
+    const content = readPayloadContent(item.payload);
+
+    if (content) {
+      return content;
+    }
+  }
+
+  return undefined;
+}
+
+function readPayloadContent(payload: JsonValue): string | undefined {
+  if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
+    const content = payload.content;
+
+    if (typeof content === "string") {
+      return content;
+    }
+  }
+
+  return undefined;
 }

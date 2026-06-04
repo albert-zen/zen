@@ -17,8 +17,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   },
   {
     name: "/resume",
-    usage: "/resume [number|thread-id]",
-    description: "List or resume saved threads"
+    usage: "/resume [query|number|thread-id]",
+    description: "Find or resume saved threads"
   },
   {
     name: "/interrupt",

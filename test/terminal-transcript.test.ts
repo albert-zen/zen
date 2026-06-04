@@ -53,7 +53,9 @@ describe("terminal transcript", () => {
 
 describe("slash command help", () => {
   it("includes interactive TUI commands", () => {
-    expect(renderSlashCommandHelp()).toContain("/resume [number|thread-id]");
+    expect(renderSlashCommandHelp()).toContain(
+      "/resume [query|number|thread-id]"
+    );
     expect(renderSlashCommandHelp()).toContain("/interrupt");
     expect(renderSlashCommandHelp()).toContain("/tools");
   });
