@@ -32,7 +32,148 @@ describe("LocalToolRuntime", () => {
       })
     ).resolves.toContain("exitCode: 7");
   });
+
+  it("streams shell stdout and stderr before the command completes", async () => {
+    const runtime = new LocalToolRuntime({
+      cwd: mkdtempSync(join(tmpdir(), "zen-tools-"))
+    });
+    const iterator = runtime
+      .execute(
+        {
+          id: "call-shell",
+          name: "shell",
+          input: {
+            command:
+              "[Console]::Out.WriteLine('first'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 200; [Console]::Error.WriteLine('warn'); [Console]::Error.Flush(); [Console]::Out.WriteLine('second')"
+          }
+        },
+        createContext()
+      )
+      [Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: {
+        type: "output.delta",
+        delta: { stream: "stdout", chunk: expect.stringContaining("first") }
+      }
+    });
+    const nextAfterFirst = iterator.next();
+
+    await expect(
+      Promise.race([nextAfterFirst.then(() => "settled"), delay(50).then(() => "pending")])
+    ).resolves.toBe("pending");
+
+    const remaining = await collectRemaining(iterator, nextAfterFirst);
+
+    expect(
+      remaining
+        .filter((event) => event.type === "output.delta")
+        .map((event) => event.delta)
+    ).toEqual(
+      expect.arrayContaining([
+        { stream: "stderr", chunk: expect.stringContaining("warn") },
+        { stream: "stdout", chunk: expect.stringContaining("second") }
+      ])
+    );
+    expect(remaining.at(-1)).toEqual({
+      type: "result.completed",
+      content: expect.stringContaining("exitCode: 0")
+    });
+  });
+
+  it("cancels a running shell command through the tool execution signal", async () => {
+    const runtime = new LocalToolRuntime({
+      cwd: mkdtempSync(join(tmpdir(), "zen-tools-"))
+    });
+    const controller = new AbortController();
+    const iterator = runtime
+      .execute(
+        {
+          id: "call-shell",
+          name: "shell",
+          input: {
+            command:
+              "[Console]::Out.WriteLine('started'); [Console]::Out.Flush(); Start-Sleep -Seconds 10"
+          }
+        },
+        createContext({ signal: controller.signal })
+      )
+      [Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: {
+        type: "output.delta",
+        delta: { stream: "stdout", chunk: expect.stringContaining("started") }
+      }
+    });
+
+    controller.abort();
+
+    const remaining = await collectRemaining(iterator);
+
+    expect(remaining).toEqual([
+      {
+        type: "error",
+        error: expect.objectContaining({ message: "Shell command canceled" })
+      }
+    ]);
+  });
+
+  it("reports unknown tool names as tool errors", async () => {
+    const runtime = new LocalToolRuntime({
+      cwd: mkdtempSync(join(tmpdir(), "zen-tools-"))
+    });
+
+    const events = await collect(
+      runtime.execute({ id: "call-missing", name: "missing", input: {} }, createContext())
+    );
+
+    expect(events).toEqual([
+      {
+        type: "error",
+        error: expect.objectContaining({ message: "Unknown tool: missing" })
+      }
+    ]);
+  });
 });
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function collectRemaining<T>(
+  iterator: AsyncIterator<T>,
+  pending?: Promise<IteratorResult<T>>
+): Promise<readonly T[]> {
+  const events: T[] = [];
+  const first = await pending;
+
+  if (first && !first.done) {
+    events.push(first.value);
+  }
+
+  while (true) {
+    const next = await iterator.next();
+
+    if (next.done) {
+      return events;
+    }
+
+    events.push(next.value);
+  }
+}
+
+async function collect<T>(events: AsyncIterable<T>): Promise<readonly T[]> {
+  const collected: T[] = [];
+
+  for await (const event of events) {
+    collected.push(event);
+  }
+
+  return collected;
+}
 
 async function runTool(
   runtime: LocalToolRuntime,
@@ -43,28 +184,7 @@ async function runTool(
 
   for await (const event of runtime.execute(
     { id: `call-${name}`, name, input },
-    {
-      runId: "run-1",
-      turnId: "turn-1",
-      assistantItem: {
-        id: "assistant-1",
-        type: "assistant.message.completed",
-        createdAtMs: 1000,
-        seq: 1,
-        runId: "run-1",
-        turnId: "turn-1",
-        payload: {}
-      },
-      startedItem: {
-        id: "tool-1",
-        type: "tool.call.started",
-        createdAtMs: 1000,
-        seq: 2,
-        runId: "run-1",
-        turnId: "turn-1",
-        payload: {}
-      }
-    }
+    createContext()
   )) {
     events.push(event);
   }
@@ -76,4 +196,30 @@ async function runTool(
   }
 
   return result.content;
+}
+
+function createContext(options: { readonly signal?: AbortSignal } = {}) {
+  return {
+    runId: "run-1",
+    turnId: "turn-1",
+    signal: options.signal,
+    assistantItem: {
+      id: "assistant-1",
+      type: "assistant.message.completed",
+      createdAtMs: 1000,
+      seq: 1,
+      runId: "run-1",
+      turnId: "turn-1",
+      payload: {}
+    },
+    startedItem: {
+      id: "tool-1",
+      type: "tool.call.started",
+      createdAtMs: 1000,
+      seq: 2,
+      runId: "run-1",
+      turnId: "turn-1",
+      payload: {}
+    }
+  } as const;
 }

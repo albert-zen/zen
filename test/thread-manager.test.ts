@@ -207,6 +207,69 @@ describe("ThreadManager", () => {
       }
     });
   });
+
+  it("interrupts an active tool execution through the turn abort signal", async () => {
+    const events: ThreadManagerEvent[] = [];
+    const toolStarted = createDeferred<AbortSignal>();
+    const toolAborted = createDeferred<void>();
+    const manager = createManager({
+      model: {
+        async *generate() {
+          yield {
+            type: "message.completed",
+            content: "Calling a long tool.",
+            toolCalls: [{ id: "call-1", name: "fake-tool", input: {} }]
+          };
+        }
+      },
+      toolRuntime: {
+        async *execute(_call, context) {
+          if (!context.signal) {
+            throw new Error("missing tool abort signal");
+          }
+
+          toolStarted.resolve(context.signal);
+          context.signal.addEventListener("abort", () => toolAborted.resolve(), {
+            once: true
+          });
+          yield { type: "output.delta", delta: "started" };
+          await toolAborted.promise;
+          yield { type: "error", error: new Error("fake tool canceled") };
+        }
+      }
+    });
+
+    manager.observe((event) => events.push(event));
+
+    const thread = manager.startThread();
+    const turnPromise = manager.startTurn({
+      threadId: thread.id,
+      input: "Use the tool"
+    });
+    const signal = await toolStarted.promise;
+
+    expect(signal.aborted).toBe(false);
+
+    const interruptSnapshot = manager.interruptTurn(thread.id);
+
+    expect(interruptSnapshot.status).toBe("inProgress");
+    await toolAborted.promise;
+
+    const turn = await turnPromise;
+    const snapshot = manager.readThread(thread.id);
+
+    expect(turn.status).toBe("canceled");
+    expect(snapshot.status).toBe("idle");
+    expect(snapshot.items.map((item) => item.type)).toContain("tool.error");
+    expect(
+      snapshot.items.find((item) => item.type === "tool.error")?.payload
+    ).toEqual(expect.objectContaining({ message: "fake tool canceled" }));
+    expect(events.at(-1)).toEqual({
+      type: "turn/completed",
+      threadId: thread.id,
+      turn
+    });
+  });
 });
 
 function createManager(
@@ -238,4 +301,15 @@ function sequence(prefix: string): () => string {
   let nextId = 0;
 
   return () => `${prefix}-${++nextId}`;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (cause?: unknown) => void;
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+
+  return { promise, resolve, reject };
 }
