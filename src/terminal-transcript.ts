@@ -35,6 +35,10 @@ export function renderTerminalTimelineRow(
     return [`Zen: ${stringify(row.content)}`];
   }
 
+  if (row.type === "shell") {
+    return [renderShellTimelineRow(row)];
+  }
+
   if (row.type === "tool-call") {
     if (row.toolName === "shell") {
       return [`Shell: ${readCommand(row.input)}`];
@@ -92,4 +96,35 @@ function readCommand(input: unknown): string {
   }
 
   return stringify(input);
+}
+
+function renderShellTimelineRow(
+  row: Extract<TimelineRow, { readonly type: "shell" }>
+): string {
+  const status =
+    row.exitCode === undefined
+      ? row.status
+      : `${row.status} (exit ${row.exitCode})`;
+  const details = [
+    summarizeStream("stdout", row.stdout),
+    summarizeStream("stderr", row.stderr),
+    row.error
+  ].filter((entry): entry is string => Boolean(entry));
+
+  return [
+    `Shell ${status}: ${row.command}`,
+    details.length > 0 ? details.join(" | ") : undefined
+  ]
+    .filter((entry): entry is string => Boolean(entry))
+    .join(" | ");
+}
+
+function summarizeStream(label: "stdout" | "stderr", value: string): string | undefined {
+  const rendered = value.replace(/\s+/g, " ").trim();
+
+  return rendered.length > 0 ? `${label}: ${summarize(rendered)}` : undefined;
+}
+
+function summarize(value: string): string {
+  return value.length <= 80 ? value : `${value.slice(0, 77)}...`;
 }

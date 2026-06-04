@@ -349,6 +349,9 @@ function renderRow(
   if (row.type === "assistant" || row.type === "assistant-progress") {
     return ["", `Zen`, indent(stringify(row.content))];
   }
+  if (row.type === "shell") {
+    return renderShellRow(row, options);
+  }
   if (row.type === "tool-call") {
     return renderToolCall(row, options);
   }
@@ -401,6 +404,47 @@ function renderToolResult(
     : [`  Result: ${row.toolName ?? "tool"} (${summarize(row.content)})`];
 }
 
+function renderShellRow(
+  row: Extract<TimelineRow, { readonly type: "shell" }>,
+  options: { readonly showToolDetails: boolean }
+): readonly string[] {
+  const status =
+    row.exitCode === undefined
+      ? row.status
+      : `${row.status} (exit ${row.exitCode})`;
+
+  if (!options.showToolDetails) {
+    const details = [
+      summarizeStream("stdout", row.stdout),
+      summarizeStream("stderr", row.stderr),
+      row.error
+    ].filter((entry): entry is string => Boolean(entry));
+
+    return [
+      [
+        `  Shell ${status}: ${summarize(row.command)}`,
+        details.length > 0 ? details.join(" | ") : undefined
+      ]
+        .filter((entry): entry is string => Boolean(entry))
+        .join(" | ")
+    ];
+  }
+
+  const lines = ["", `Shell ${status}`, indent(row.command)];
+
+  if (row.stdout.trim().length > 0) {
+    lines.push("  stdout", indent(row.stdout.trimEnd()));
+  }
+  if (row.stderr.trim().length > 0) {
+    lines.push("  stderr", indent(row.stderr.trimEnd()));
+  }
+  if (row.error) {
+    lines.push("  error", indent(row.error));
+  }
+
+  return lines;
+}
+
 function stringify(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -424,6 +468,12 @@ function summarize(value: unknown): string {
     return rendered;
   }
   return `${rendered.slice(0, 77)}...`;
+}
+
+function summarizeStream(label: "stdout" | "stderr", value: string): string | undefined {
+  const rendered = value.replace(/\s+/g, " ").trim();
+
+  return rendered.length > 0 ? `${label}: ${summarize(rendered)}` : undefined;
 }
 
 function summarizeShellResult(output: string): string {

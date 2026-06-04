@@ -169,6 +169,7 @@ export type {
   ApprovalResolvedTimelineRow,
   AssistantProgressTimelineRow,
   AssistantTimelineRow,
+  ShellTimelineRow,
   TimelineRow,
   ToolCallTimelineRow,
   ToolErrorTimelineRow,

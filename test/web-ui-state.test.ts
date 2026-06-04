@@ -341,6 +341,249 @@ describe("web ui state projection", () => {
     ]);
   });
 
+  it("preserves approval rows for shell-targeted policy deltas", () => {
+    const state = createWebUiState({
+      id: "thread-1",
+      status: "running",
+      turns: [],
+      items: [
+        item({
+          id: "shell-started",
+          seq: 1,
+          type: "tool.call.started",
+          payload: {
+            toolCallId: "call-1",
+            toolName: "shell",
+            input: { command: "npm test" }
+          }
+        }),
+        item({
+          id: "approval-request-delta",
+          seq: 2,
+          type: "tool.output.delta",
+          targetId: "shell-started",
+          payload: {
+            toolCallId: "call-1",
+            toolName: "shell",
+            delta: {
+              type: "approval.requested",
+              approvalId: "approval-1",
+              toolCallId: "call-1",
+              toolName: "shell",
+              reason: "Run command?"
+            }
+          }
+        }),
+        item({
+          id: "approval-resolved-delta",
+          seq: 3,
+          type: "tool.output.delta",
+          targetId: "shell-started",
+          payload: {
+            toolCallId: "call-1",
+            toolName: "shell",
+            delta: {
+              type: "approval.resolved",
+              approvalId: "approval-1",
+              toolCallId: "call-1",
+              toolName: "shell",
+              decision: "approve"
+            }
+          }
+        })
+      ]
+    });
+
+    expect(state.timelineRows).toEqual([
+      expect.objectContaining({
+        type: "shell",
+        status: "running",
+        command: "npm test"
+      }),
+      expect.objectContaining({
+        type: "approval-resolved",
+        approvalId: "approval-1",
+        decision: "approve"
+      })
+    ]);
+  });
+
+  it("projects shell output deltas into a running shell workbench row", () => {
+    const state = createWebUiState({
+      id: "thread-1",
+      status: "running",
+      turns: [],
+      items: [
+        item({
+          id: "shell-started",
+          seq: 1,
+          type: "tool.call.started",
+          payload: {
+            toolCallId: "call-shell-1",
+            toolName: "shell",
+            input: { command: "npm test" }
+          }
+        }),
+        item({
+          id: "stdout-1",
+          seq: 2,
+          type: "tool.output.delta",
+          targetId: "shell-started",
+          payload: {
+            toolCallId: "call-shell-1",
+            toolName: "shell",
+            delta: { stream: "stdout", chunk: "running tests\n" },
+            index: 0
+          }
+        }),
+        item({
+          id: "stderr-1",
+          seq: 3,
+          type: "tool.output.delta",
+          targetId: "shell-started",
+          payload: {
+            toolCallId: "call-shell-1",
+            toolName: "shell",
+            delta: { stream: "stderr", chunk: "warning\n" },
+            index: 1
+          }
+        })
+      ]
+    });
+
+    expect(state.timelineRows).toEqual([
+      expect.objectContaining({
+        type: "shell",
+        itemId: "shell-started",
+        toolCallId: "call-shell-1",
+        command: "npm test",
+        status: "running",
+        stdout: "running tests\n",
+        stderr: "warning\n"
+      })
+    ]);
+  });
+
+  it("projects completed shell results with parsed exit code and output", () => {
+    const state = createWebUiState({
+      id: "thread-1",
+      status: "idle",
+      turns: [],
+      items: [
+        item({
+          id: "shell-started",
+          seq: 1,
+          type: "tool.call.started",
+          payload: {
+            toolCallId: "call-shell-1",
+            toolName: "shell",
+            input: { command: "npm test" }
+          }
+        }),
+        item({
+          id: "shell-result",
+          seq: 2,
+          type: "tool.result.completed",
+          targetId: "shell-started",
+          payload: {
+            toolCallId: "call-shell-1",
+            toolName: "shell",
+            content: "exitCode: 0\nstdout:\nok\nstderr:\nwarn"
+          }
+        })
+      ]
+    });
+
+    expect(state.timelineRows).toEqual([
+      expect.objectContaining({
+        type: "shell",
+        status: "completed",
+        exitCode: 0,
+        stdout: "ok",
+        stderr: "warn"
+      })
+    ]);
+  });
+
+  it("projects non-zero shell results as failed workbench rows", () => {
+    const state = createWebUiState({
+      id: "thread-1",
+      status: "failed",
+      turns: [],
+      items: [
+        item({
+          id: "shell-started",
+          seq: 1,
+          type: "tool.call.started",
+          payload: {
+            toolCallId: "call-shell-1",
+            toolName: "shell",
+            input: { command: "npm test" }
+          }
+        }),
+        item({
+          id: "shell-result",
+          seq: 2,
+          type: "tool.result.completed",
+          targetId: "shell-started",
+          payload: {
+            toolCallId: "call-shell-1",
+            toolName: "shell",
+            content: "exitCode: 7\nstderr:\nbad"
+          }
+        })
+      ]
+    });
+
+    expect(state.timelineRows).toEqual([
+      expect.objectContaining({
+        type: "shell",
+        status: "failed",
+        exitCode: 7,
+        stderr: "bad"
+      })
+    ]);
+  });
+
+  it("projects canceled shell errors as interrupted workbench rows", () => {
+    const state = createWebUiState({
+      id: "thread-1",
+      status: "idle",
+      turns: [],
+      items: [
+        item({
+          id: "shell-started",
+          seq: 1,
+          type: "tool.call.started",
+          payload: {
+            toolCallId: "call-shell-1",
+            toolName: "shell",
+            input: { command: "npm test" }
+          }
+        }),
+        item({
+          id: "shell-error",
+          seq: 2,
+          type: "tool.error",
+          targetId: "shell-started",
+          payload: {
+            toolCallId: "call-shell-1",
+            toolName: "shell",
+            message: "Shell command canceled"
+          }
+        })
+      ]
+    });
+
+    expect(state.timelineRows).toEqual([
+      expect.objectContaining({
+        type: "shell",
+        status: "interrupted",
+        error: "Shell command canceled"
+      })
+    ]);
+  });
+
   it("updates current thread state from thread and turn lifecycle notifications", () => {
     let state = createWebUiState();
 

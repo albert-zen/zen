@@ -20,6 +20,7 @@ export type TimelineRow =
   | UserTimelineRow
   | AssistantTimelineRow
   | AssistantProgressTimelineRow
+  | ShellTimelineRow
   | ToolCallTimelineRow
   | ToolResultTimelineRow
   | ToolErrorTimelineRow
@@ -57,6 +58,20 @@ export type TraceTimelineRow = {
   readonly seq: number;
   readonly turnId: string;
   readonly event: string;
+};
+
+export type ShellTimelineRow = {
+  readonly type: "shell";
+  readonly itemId: string;
+  readonly seq: number;
+  readonly turnId: string;
+  readonly toolCallId?: string;
+  readonly command: string;
+  readonly status: "running" | "completed" | "failed" | "interrupted";
+  readonly exitCode?: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly error?: string;
 };
 
 export type ToolCallTimelineRow = {
@@ -261,6 +276,7 @@ function compareItems(left: ProtocolItem, right: ProtocolItem): number {
 
 function buildTimelineRows(items: readonly ProtocolItem[]): readonly TimelineRow[] {
   const sortedItems = [...items].sort(compareItems);
+  const shellRows = buildShellRows(sortedItems);
   const assistantCompletedTargets = new Set(
     sortedItems
       .filter((item) => item.type === "assistant.message.completed")
@@ -290,6 +306,16 @@ function buildTimelineRows(items: readonly ProtocolItem[]): readonly TimelineRow
   }
 
   return sortedItems.flatMap((item): TimelineRow[] => {
+    const shellRow = shellRows.get(item.id);
+
+    if (shellRow) {
+      return [shellRow];
+    }
+
+    if (isShellChildItem(item, shellRows)) {
+      return [];
+    }
+
     if (
       item.type === "assistant.message.started" &&
       !assistantCompletedTargets.has(item.id)
@@ -324,6 +350,98 @@ function buildTimelineRows(items: readonly ProtocolItem[]): readonly TimelineRow
 
     return [toTimelineRow(item)];
   });
+}
+
+function buildShellRows(
+  sortedItems: readonly ProtocolItem[]
+): ReadonlyMap<string, ShellTimelineRow> {
+  const rows = new Map<string, ShellTimelineRow>();
+
+  for (const item of sortedItems) {
+    if (item.type !== "tool.call.started" || readStringPayloadField(item.payload, "toolName") !== "shell") {
+      continue;
+    }
+
+    rows.set(item.id, {
+      type: "shell",
+      itemId: item.id,
+      seq: item.seq,
+      turnId: item.turnId,
+      toolCallId: readOptionalStringPayloadField(item.payload, "toolCallId"),
+      command: readCommand(readPayloadField(item.payload, "input")),
+      status: "running",
+      stdout: "",
+      stderr: ""
+    });
+  }
+
+  for (const item of sortedItems) {
+    const targetId = item.targetId;
+
+    if (!targetId) {
+      continue;
+    }
+
+    const existing = rows.get(targetId);
+
+    if (!existing) {
+      continue;
+    }
+
+    if (item.type === "tool.output.delta") {
+      const delta = readShellOutputDelta(item.payload);
+
+      if (!delta) {
+        continue;
+      }
+
+      rows.set(targetId, {
+        ...existing,
+        stdout: delta.stream === "stdout" ? `${existing.stdout}${delta.chunk}` : existing.stdout,
+        stderr: delta.stream === "stderr" ? `${existing.stderr}${delta.chunk}` : existing.stderr
+      });
+    }
+
+    if (item.type === "tool.result.completed") {
+      const result = parseShellResult(readPayloadField(item.payload, "content"));
+
+      rows.set(targetId, {
+        ...existing,
+        status: result.exitCode !== undefined && result.exitCode !== 0 ? "failed" : "completed",
+        exitCode: result.exitCode,
+        stdout: result.stdout ?? existing.stdout,
+        stderr: result.stderr ?? existing.stderr
+      });
+    }
+
+    if (item.type === "tool.error") {
+      const message = readOptionalStringPayloadField(item.payload, "message") ?? "failed";
+
+      rows.set(targetId, {
+        ...existing,
+        status: isInterruptedShellMessage(message) ? "interrupted" : "failed",
+        error: message
+      });
+    }
+  }
+
+  return rows;
+}
+
+function isShellChildItem(
+  item: ProtocolItem,
+  shellRows: ReadonlyMap<string, ShellTimelineRow>
+): boolean {
+  if (readApprovalEventType(item)) {
+    return false;
+  }
+
+  return (
+    Boolean(item.targetId && shellRows.has(item.targetId)) &&
+    (item.type === "tool.output.delta" ||
+      item.type === "tool.result.completed" ||
+      item.type === "tool.error")
+  );
 }
 
 function toTimelineRow(item: ProtocolItem): TimelineRow {
@@ -427,6 +545,78 @@ function readPayloadField(payload: ProtocolItem["payload"], key: string): unknow
   return payload[key];
 }
 
+function readCommand(input: unknown): string {
+  if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+    const command = readPayloadField(input as JsonObject, "command");
+
+    if (typeof command === "string") {
+      return command;
+    }
+  }
+
+  return stringify(input);
+}
+
+function readShellOutputDelta(
+  payload: ProtocolItem["payload"]
+): { readonly stream: "stdout" | "stderr"; readonly chunk: string } | undefined {
+  const delta = readPayloadField(payload, "delta");
+
+  if (typeof delta !== "object" || delta === null || Array.isArray(delta)) {
+    return undefined;
+  }
+
+  const stream = readPayloadField(delta as JsonObject, "stream");
+  const chunk = readPayloadField(delta as JsonObject, "chunk");
+
+  if ((stream !== "stdout" && stream !== "stderr") || typeof chunk !== "string") {
+    return undefined;
+  }
+
+  return { stream, chunk };
+}
+
+function parseShellResult(content: unknown): {
+  readonly exitCode?: number | null;
+  readonly stdout?: string;
+  readonly stderr?: string;
+} {
+  if (typeof content !== "string") {
+    return {};
+  }
+
+  const exitCodeText = content.match(/^exitCode:\s*([^\r\n]+)/m)?.[1]?.trim();
+  const exitCode =
+    exitCodeText === undefined
+      ? undefined
+      : exitCodeText === "null"
+        ? null
+        : Number(exitCodeText);
+
+  return {
+    exitCode: Number.isNaN(exitCode) ? undefined : exitCode,
+    stdout: readShellSection(content, "stdout"),
+    stderr: readShellSection(content, "stderr")
+  };
+}
+
+function readShellSection(content: string, section: "stdout" | "stderr"): string | undefined {
+  const nextSection = section === "stdout" ? "stderr" : undefined;
+  const pattern =
+    nextSection === undefined
+      ? new RegExp(`^${section}:\\n([\\s\\S]*)`, "m")
+      : new RegExp(`^${section}:\\n([\\s\\S]*?)(?=^${nextSection}:\\n)`, "m");
+  const value = content.match(pattern)?.[1];
+
+  return value === undefined ? undefined : value.trimEnd();
+}
+
+function isInterruptedShellMessage(message: string): boolean {
+  return /\b(abort|aborted|cancel|canceled|cancelled|interrupt|interrupted)\b/i.test(
+    message
+  );
+}
+
 function readStringPayloadField(
   payload: ProtocolItem["payload"],
   key: string
@@ -494,4 +684,16 @@ function readApprovalPayload(item: ProtocolItem): ProtocolItem["payload"] {
   }
 
   return item.payload;
+}
+
+function stringify(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value === undefined || value === null) {
+    return "";
+  }
+
+  return JSON.stringify(value);
 }
