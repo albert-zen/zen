@@ -28,14 +28,40 @@ describe("FileThreadStore atomic replacement", () => {
     const store = new FileThreadStore({ dir });
 
     await store.save(threadSnapshot("thread-1", "before"));
+    rename.mockClear();
 
-    rename
-      .mockRejectedValueOnce(withCode("EPERM", "rename-over-existing failed"))
-      .mockRejectedValueOnce(withCode("EACCES", "final replacement failed"));
+    let replacementCall = 0;
+    rename.mockImplementation(async (from, to) => {
+      replacementCall += 1;
+
+      if (replacementCall === 1) {
+        throw withCode("EPERM", "rename-over-existing failed");
+      }
+
+      if (replacementCall === 3) {
+        throw withCode("EACCES", "final replacement failed");
+      }
+
+      return actualFs.rename(from, to);
+    });
 
     await expect(
       store.save(threadSnapshot("thread-1", "after"))
     ).rejects.toThrow("final replacement failed");
+    expect(replacementCall).toBe(4);
+
+    const target = join(dir, "thread-1.json");
+    const calls = rename.mock.calls.map(([from, to]) => [
+      String(from),
+      String(to)
+    ]);
+    const backup = calls[1]?.[1];
+
+    expect(calls).toHaveLength(4);
+    expect(calls[0]).toEqual([expect.stringMatching(/\.tmp$/), target]);
+    expect(calls[1]).toEqual([target, expect.stringMatching(/\.backup\.tmp$/)]);
+    expect(calls[2]).toEqual([calls[0]?.[0], target]);
+    expect(calls[3]).toEqual([backup, target]);
     await expect(store.list()).resolves.toEqual([
       expect.objectContaining({
         id: "thread-1",
