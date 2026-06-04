@@ -36,6 +36,49 @@ describe("terminal transcript", () => {
       { type: "tool-result", toolName: "shell", content: "exitCode: 0\nstdout:\nok" },
       "Shell result: exitCode: 0\nstdout:\nok"
     ],
+    [
+      {
+        type: "shell",
+        command: "npm test",
+        status: "completed",
+        exitCode: 0,
+        stdout: "ok\n",
+        stderr: ""
+      },
+      "Shell completed (exit 0): npm test | stdout: ok"
+    ],
+    [
+      {
+        type: "shell",
+        command: "npm test",
+        status: "running",
+        stdout: "running tests\n",
+        stderr: "warning\n"
+      },
+      "Shell running: npm test | stdout: running tests | stderr: warning"
+    ],
+    [
+      {
+        type: "shell",
+        command: "npm test",
+        status: "failed",
+        exitCode: 7,
+        stdout: "",
+        stderr: "bad\n"
+      },
+      "Shell failed (exit 7): npm test | stderr: bad"
+    ],
+    [
+      {
+        type: "shell",
+        command: "npm test",
+        status: "interrupted",
+        stdout: "",
+        stderr: "",
+        error: "Shell command canceled"
+      },
+      "Shell interrupted: npm test | Shell command canceled"
+    ],
     [{ type: "tool-error", toolName: "demo", message: "bad" }, "Tool error demo: bad"],
     [{ type: "approval-pending", reason: "Run?" }, "Approval pending: Run?"],
     [{ type: "approval-resolved", decision: "approve" }, "Approval resolved: approve"]

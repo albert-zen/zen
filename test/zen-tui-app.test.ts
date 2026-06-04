@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AppServer, createDemoAppServer, ZenTuiApp } from "../src/index.js";
-import type { ModelGateway } from "../src/index.js";
+import type { ModelGateway, ToolRuntime } from "../src/index.js";
 import { VirtualTerminalDevice, waitForRender } from "./virtual-terminal.js";
 
 describe("ZenTuiApp", () => {
@@ -122,6 +122,69 @@ describe("ZenTuiApp", () => {
     await run;
   });
 
+  it("renders collapsed shell rows while a command runs and completes", async () => {
+    const terminal = new VirtualTerminalDevice(100, 30);
+    const app = new ZenTuiApp({
+      client: createShellAppServer(),
+      terminal
+    });
+    const run = app.run();
+
+    await waitForRender();
+    terminal.sendInput("run tests");
+    terminal.sendInput("\r");
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    expect(terminal.textOutput()).toContain("Shell running: npm test");
+    expect(terminal.textOutput()).toContain("stdout: started");
+
+    terminal.clearOutput();
+    await new Promise<void>((resolve) => setTimeout(resolve, 80));
+
+    expect(terminal.textOutput()).toContain("Shell completed (exit 0): npm test");
+    expect(terminal.textOutput()).toContain("stdout: started done");
+
+    terminal.sendInput("/exit");
+    terminal.sendInput("\r");
+    await run;
+  });
+
+  it("renders expanded shell output through the tools toggle", async () => {
+    const terminal = new VirtualTerminalDevice(100, 30);
+    const app = new ZenTuiApp({
+      client: createShellAppServer({
+        stderr: "warn\n"
+      }),
+      terminal
+    });
+    const run = app.run();
+
+    await waitForRender();
+    terminal.sendInput("run tests");
+    terminal.sendInput("\r");
+    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+    terminal.clearOutput();
+
+    terminal.sendInput("/tools");
+    terminal.sendInput("\r");
+    await waitForRender();
+
+    const text = terminal.textOutput();
+    expect(text).toContain("Shell completed (exit 0)");
+    expect(text).toContain("npm test");
+    expect(text).toContain("stdout");
+    expect(text).toContain("started");
+    expect(text).toContain("done");
+    expect(text).toContain("stderr");
+    expect(text).toContain("warn");
+    expect(text).not.toContain("toolCallId");
+    expect(text).not.toContain('"content"');
+
+    terminal.sendInput("/exit");
+    terminal.sendInput("\r");
+    await run;
+  });
+
   it("shows queued input while a turn is running", async () => {
     const terminal = new VirtualTerminalDevice(100, 30);
     const app = new ZenTuiApp({
@@ -212,6 +275,73 @@ function createSlowAppServer(delayMs: number): AppServer {
   return new AppServer({
     threadManagerOptions: {
       runtimeFactory: () => ({ model })
+    }
+  });
+}
+
+function createShellAppServer(
+  options: { readonly stderr?: string } = {}
+): AppServer {
+  let generatedToolCall = false;
+  const model: ModelGateway = {
+    async *generate() {
+      if (!generatedToolCall) {
+        generatedToolCall = true;
+        yield {
+          type: "message.completed",
+          content: "Running tests.",
+          toolCalls: [
+            {
+              id: "call-shell-1",
+              name: "shell",
+              input: { command: "npm test" }
+            }
+          ]
+        };
+        return;
+      }
+
+      yield {
+        type: "message.completed",
+        content: "Done."
+      };
+    }
+  };
+  const toolRuntime: ToolRuntime = {
+    async *execute() {
+      yield {
+        type: "output.delta",
+        delta: { stream: "stdout", chunk: "started\n" }
+      };
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      yield {
+        type: "output.delta",
+        delta: { stream: "stdout", chunk: "done\n" }
+      };
+      if (options.stderr) {
+        yield {
+          type: "output.delta",
+          delta: { stream: "stderr", chunk: options.stderr }
+        };
+      }
+      yield {
+        type: "result.completed",
+        content: [
+          "exitCode: 0",
+          "stdout:",
+          "started",
+          "done",
+          options.stderr ? `stderr:\n${options.stderr.trimEnd()}` : undefined
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n")
+      };
+    }
+  };
+
+  return new AppServer({
+    threadManagerOptions: {
+      runtimeFactory: () => ({ model, toolRuntime })
     }
   });
 }
