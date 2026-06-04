@@ -39,6 +39,16 @@ export {
   toThreadSnapshot
 } from "./app-server-protocol.js";
 export type {
+  AppServerHttpTransport,
+  AppServerHttpTransportOptions,
+  HttpAppServerClientOptions
+} from "./app-server-transport.js";
+export {
+  AppServerTransportError,
+  HttpAppServerClient,
+  serveAppServerHttpTransport
+} from "./app-server-transport.js";
+export type {
   ApprovalBrokerOptions,
   ApprovalDecision as ToolApprovalDecision,
   ApprovalRequest,
