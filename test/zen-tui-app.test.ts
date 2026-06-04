@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { AppServer, createDemoAppServer, ZenTuiApp } from "../src/index.js";
-import type { ModelGateway } from "../src/index.js";
+import {
+  AppServer,
+  createDemoAppServer,
+  ZenTuiApp,
+  type AppServerClient,
+  type AppServerNotificationListener,
+  type AppServerRequestInput,
+  type AppServerResponse,
+  type ModelGateway,
+  type ThreadSnapshot
+} from "../src/index.js";
 import { VirtualTerminalDevice, waitForRender } from "./virtual-terminal.js";
 
 describe("ZenTuiApp", () => {
@@ -49,7 +58,7 @@ describe("ZenTuiApp", () => {
     await waitForRender();
 
     const text = terminal.textOutput();
-    expect(text).toContain("/resume [number|thread-id]");
+    expect(text).toContain("/resume [query|number|thread-id]");
     expect(text).not.toContain("/interrupt");
 
     terminal.sendInput("\u0003");
@@ -196,6 +205,115 @@ describe("ZenTuiApp", () => {
     terminal.sendInput("\r");
     await run;
   });
+
+  it("shows resume metadata and filters choices by query", async () => {
+    const terminal = new VirtualTerminalDevice(120, 40);
+    const app = new ZenTuiApp({
+      client: new AppServer({
+        threadManagerOptions: {
+          initialThreads: [
+            threadWithMessages({
+              id: "parser-thread",
+              user: "Fix parser bug",
+              assistant: "Parser patch is ready",
+              updatedAtMs: 1000
+            }),
+            threadWithMessages({
+              id: "resume-thread",
+              user: "Add resume picker",
+              assistant: "Thread history search is ready",
+              updatedAtMs: 2000
+            })
+          ]
+        }
+      }),
+      terminal
+    });
+    const run = app.run();
+
+    await waitForRender();
+    terminal.clearOutput();
+    terminal.sendInput("/resume picker");
+    terminal.sendInput("\r");
+    await waitForRender();
+
+    const filtered = terminal.textOutput();
+    expect(filtered).toContain("Resume");
+    expect(filtered).toContain("1. resume-thread");
+    expect(filtered).toContain("you: Add resume picker");
+    expect(filtered).toContain("zen: Thread history search is ready");
+    expect(filtered).not.toContain("2. parser-thread");
+
+    terminal.clearOutput();
+    terminal.sendInput("/resume 1");
+    terminal.sendInput("\r");
+    await waitForRender();
+
+    const resumed = terminal.textOutput();
+    expect(resumed).toContain("resume-thread | idle");
+    expect(resumed).toContain("Resumed resume-thread");
+
+    terminal.sendInput("/exit");
+    terminal.sendInput("\r");
+    await run;
+  });
+
+  it("renders helpful resume notices for empty and failed listings", async () => {
+    const emptyTerminal = new VirtualTerminalDevice(100, 30);
+    const emptyApp = new ZenTuiApp({
+      client: new ResumeListClient({
+        listResponse: {
+          method: "thread/list",
+          ok: true,
+          result: { threads: [] }
+        }
+      }),
+      terminal: emptyTerminal
+    });
+    const emptyRun = emptyApp.run();
+
+    await waitForRender();
+    emptyTerminal.sendInput("/resume");
+    emptyTerminal.sendInput("\r");
+    await waitForRender();
+
+    expect(emptyTerminal.textOutput()).toContain(
+      "No saved threads found. Unreadable saved thread files are skipped."
+    );
+
+    emptyTerminal.sendInput("/exit");
+    emptyTerminal.sendInput("\r");
+    await emptyRun;
+
+    const failedTerminal = new VirtualTerminalDevice(100, 30);
+    const failedApp = new ZenTuiApp({
+      client: new ResumeListClient({
+        listResponse: {
+          method: "thread/list",
+          ok: false,
+          error: {
+            code: "REQUEST_FAILED",
+            message: "Could not read saved thread history"
+          }
+        }
+      }),
+      terminal: failedTerminal
+    });
+    const failedRun = failedApp.run();
+
+    await waitForRender();
+    failedTerminal.sendInput("/resume");
+    failedTerminal.sendInput("\r");
+    await waitForRender();
+
+    expect(failedTerminal.textOutput()).toContain(
+      "Could not list saved threads: Could not read saved thread history"
+    );
+
+    failedTerminal.sendInput("/exit");
+    failedTerminal.sendInput("\r");
+    await failedRun;
+  });
 });
 
 function createSlowAppServer(delayMs: number): AppServer {
@@ -214,6 +332,99 @@ function createSlowAppServer(delayMs: number): AppServer {
       runtimeFactory: () => ({ model })
     }
   });
+}
+
+class ResumeListClient implements AppServerClient {
+  private readonly thread: ThreadSnapshot = {
+    id: "current-thread",
+    status: "idle",
+    turns: [],
+    items: []
+  };
+
+  constructor(
+    private readonly options: {
+      readonly listResponse: AppServerResponse;
+    }
+  ) {}
+
+  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    if (request.method === "thread/list") {
+      return this.options.listResponse;
+    }
+
+    if (request.method === "thread/start") {
+      return {
+        method: "thread/start",
+        ok: true,
+        result: { thread: this.thread }
+      };
+    }
+
+    if (request.method === "thread/read") {
+      return {
+        method: "thread/read",
+        ok: true,
+        result: { thread: this.thread }
+      };
+    }
+
+    return {
+      method: request.method,
+      ok: false,
+      error: {
+        code: "UNKNOWN_METHOD",
+        message: `Unknown method: ${request.method}`
+      }
+    };
+  }
+
+  subscribe(_listener: AppServerNotificationListener): () => void {
+    return () => undefined;
+  }
+}
+
+function threadWithMessages(options: {
+  readonly id: string;
+  readonly user: string;
+  readonly assistant: string;
+  readonly updatedAtMs: number;
+}): ThreadSnapshot {
+  const turnId = `${options.id}-turn`;
+  const runId = `${options.id}-run`;
+
+  return {
+    id: options.id,
+    status: "idle",
+    turns: [
+      {
+        id: turnId,
+        runId,
+        status: "completed",
+        itemIds: [`${options.id}-user`, `${options.id}-assistant`]
+      }
+    ],
+    items: [
+      {
+        id: `${options.id}-user`,
+        type: "user.message.completed",
+        createdAtMs: options.updatedAtMs - 1,
+        seq: 1,
+        runId,
+        turnId,
+        payload: { content: options.user }
+      },
+      {
+        id: `${options.id}-assistant`,
+        type: "assistant.message.completed",
+        createdAtMs: options.updatedAtMs,
+        seq: 2,
+        runId,
+        turnId,
+        payload: { content: options.assistant }
+      }
+    ]
+  };
 }
 
 async function delay(delayMs: number, signal: AbortSignal | undefined): Promise<void> {

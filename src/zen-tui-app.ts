@@ -1,4 +1,7 @@
-import { AgentInteractionSession } from "./agent-interaction-session.js";
+import {
+  AgentInteractionSession,
+  type AgentThreadListEntry
+} from "./agent-interaction-session.js";
 import type { AppServerClient } from "./app-server.js";
 import type { ThreadSnapshot } from "./app-server-protocol.js";
 import {
@@ -20,6 +23,11 @@ export type ZenTuiAppOptions = {
   readonly terminal: TerminalDevice;
 };
 
+type ResumeChoice = {
+  readonly id: string;
+  readonly lines: readonly string[];
+};
+
 export class ZenTuiApp {
   private readonly session: AgentInteractionSession;
   private readonly engine: TuiEngine;
@@ -31,7 +39,7 @@ export class ZenTuiApp {
   private closed = false;
   private showToolDetails = false;
   private localNotice?: string;
-  private resumeChoices: readonly { readonly id: string; readonly label: string }[] = [];
+  private resumeChoices: readonly ResumeChoice[] = [];
   private currentInput = "";
 
   constructor(options: ZenTuiAppOptions) {
@@ -124,7 +132,7 @@ export class ZenTuiApp {
     }
 
     if (trimmed.startsWith("/resume ")) {
-      await this.resume(trimmed.slice("/resume ".length).trim());
+      await this.handleResumeArgument(trimmed.slice("/resume ".length).trim());
       return;
     }
 
@@ -174,36 +182,91 @@ export class ZenTuiApp {
     }
   }
 
-  private async showResumeChoices(): Promise<void> {
-    const threads = await this.session.listThreads();
-    this.resumeChoices = threads.map((thread, index) => ({
-      id: thread.id,
-      label: `${index + 1}. ${thread.id} (${thread.status}, ${thread.turns} turns, ${thread.items} items)`
-    }));
+  private async showResumeChoices(
+    query = "",
+    listedThreads?: readonly AgentThreadListEntry[]
+  ): Promise<void> {
+    let threads: readonly AgentThreadListEntry[];
+
+    try {
+      threads = listedThreads ?? (await this.session.listThreads());
+    } catch (cause) {
+      this.resumeChoices = [];
+      this.setLocalNotice(
+        `Could not list saved threads: ${cause instanceof Error ? cause.message : String(cause)}`
+      );
+      return;
+    }
+
+    const normalizedQuery = normalizeSearchText(query);
+    const filtered =
+      normalizedQuery.length === 0
+        ? threads
+        : threads.filter((thread) =>
+            normalizeSearchText(toResumeSearchText(thread)).includes(normalizedQuery)
+          );
+
+    this.resumeChoices = filtered.map(toResumeChoice);
+
+    if (threads.length === 0) {
+      this.setLocalNotice(
+        "No saved threads found. Unreadable saved thread files are skipped."
+      );
+      return;
+    }
+
+    if (this.resumeChoices.length === 0) {
+      this.setLocalNotice(`No saved threads match "${query}"`);
+      return;
+    }
+
     this.setLocalNotice(
-      this.resumeChoices.length > 0
-        ? "Select with /resume <number> or /resume <thread-id>"
-        : "No saved threads"
+      query
+        ? `Filtered by "${query}". Select with /resume <number> or refine the query.`
+        : "Select with /resume <number>, /resume <query>, or /resume <thread-id>"
     );
   }
 
-  private async resume(value: string): Promise<void> {
+  private async handleResumeArgument(value: string): Promise<void> {
     const numeric = Number(value);
-    const selected =
-      Number.isInteger(numeric) && numeric > 0
-        ? this.resumeChoices[numeric - 1]?.id
-        : value;
 
-    if (!selected) {
+    if (Number.isInteger(numeric) && numeric > 0) {
+      await this.resumeSelected(this.resumeChoices[numeric - 1]?.id);
+      return;
+    }
+
+    let threads: readonly AgentThreadListEntry[];
+
+    try {
+      threads = await this.session.listThreads();
+    } catch (cause) {
+      this.setLocalNotice(
+        `Could not list saved threads: ${cause instanceof Error ? cause.message : String(cause)}`
+      );
+      return;
+    }
+
+    const exact = threads.find((thread) => thread.id === value);
+
+    if (exact) {
+      await this.resumeSelected(exact.id);
+      return;
+    }
+
+    await this.showResumeChoices(value, threads);
+  }
+
+  private async resumeSelected(threadId: string | undefined): Promise<void> {
+    if (!threadId) {
       this.setLocalNotice("Unknown resume selection");
       return;
     }
 
     try {
-      await this.session.resumeThread(selected);
+      await this.session.resumeThread(threadId);
       this.resumeChoices = [];
       this.queuedInputs.splice(0);
-      this.setLocalNotice(`Resumed ${selected}`);
+      this.setLocalNotice(`Resumed ${threadId}`);
     } catch (cause) {
       this.setLocalNotice(cause instanceof Error ? cause.message : String(cause));
     }
@@ -224,7 +287,11 @@ export class ZenTuiApp {
 
     if (this.resumeChoices.length > 0) {
       lines.push("", "Resume");
-      lines.push(...this.resumeChoices.map((choice) => `  ${choice.label}`));
+      lines.push(
+        ...this.resumeChoices.flatMap((choice) =>
+          choice.lines.map((line) => `  ${line}`)
+        )
+      );
     }
 
     if (this.localNotice) {
@@ -391,4 +458,47 @@ function renderSlashSuggestions(commands: readonly SlashCommand[]): readonly str
     "Commands",
     ...commands.map((command) => `  ${command.usage.padEnd(28)} ${command.description}`)
   ];
+}
+
+function toResumeChoice(
+  thread: AgentThreadListEntry,
+  index: number
+): ResumeChoice {
+  return {
+    id: thread.id,
+    lines: [
+      `${index + 1}. ${thread.id} | ${thread.status} | ${formatUpdatedAt(thread.updatedAtMs)} | turns ${thread.turns} | items ${thread.items}`,
+      ...optionalResumeLine("you", thread.lastUserMessage),
+      ...optionalResumeLine("zen", thread.lastAssistantSummary)
+    ]
+  };
+}
+
+function optionalResumeLine(
+  label: string,
+  value: string | undefined
+): readonly string[] {
+  return value ? [`${label}: ${summarize(value)}`] : [];
+}
+
+function toResumeSearchText(thread: AgentThreadListEntry): string {
+  return [
+    thread.id,
+    thread.status,
+    thread.lastUserMessage,
+    thread.lastAssistantSummary,
+    thread.updatedAtMs === undefined ? undefined : formatUpdatedAt(thread.updatedAtMs)
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
+}
+
+function normalizeSearchText(value: string): string {
+  return value.toLocaleLowerCase();
+}
+
+function formatUpdatedAt(updatedAtMs: number | undefined): string {
+  return updatedAtMs === undefined
+    ? "updated unknown"
+    : `updated ${new Date(updatedAtMs).toISOString()}`;
 }

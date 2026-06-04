@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   AgentInteractionSession,
+  AppServer,
   createDemoAppServer,
-  renderTerminalTranscript
+  renderTerminalTranscript,
+  type ModelGateway
 } from "../src/index.js";
 
 describe("AgentInteractionSession", () => {
@@ -59,6 +61,45 @@ describe("AgentInteractionSession", () => {
 
     session.dispose();
   });
+
+  it("lists saved threads with metadata derived from protocol snapshots", async () => {
+    const session = new AgentInteractionSession({
+      client: new AppServer({
+        threadManagerOptions: {
+          generateThreadId: sequence("thread"),
+          generateRunId: sequence("run"),
+          generateTurnId: sequence("turn"),
+          generateItemId: sequence("item"),
+          clock: tickingClock(1000, 100),
+          runtimeFactory: () => ({
+            model: {
+              async *generate() {
+                yield {
+                  type: "message.completed",
+                  content: "We added a resume picker summary"
+                };
+              }
+            } satisfies ModelGateway
+          })
+        }
+      })
+    });
+
+    await session.start();
+    await session.submit("Find the previous picker work");
+
+    await expect(session.listThreads()).resolves.toEqual([
+      {
+        id: "thread-1",
+        status: "idle",
+        turns: 1,
+        items: 9,
+        updatedAtMs: 1800,
+        lastUserMessage: "Find the previous picker work",
+        lastAssistantSummary: "We added a resume picker summary"
+      }
+    ]);
+  });
 });
 
 function deterministicIds() {
@@ -75,4 +116,14 @@ function sequence(prefix: string): () => string {
   let nextId = 0;
 
   return () => `${prefix}-${++nextId}`;
+}
+
+function tickingClock(startMs: number, stepMs: number): () => number {
+  let nextMs = startMs;
+
+  return () => {
+    const current = nextMs;
+    nextMs += stepMs;
+    return current;
+  };
 }
