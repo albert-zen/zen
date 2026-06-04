@@ -4,12 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "app-server": "npm run build && node dist/app-server-cli.js",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "tui": "npm run build && node dist/cli.js"
   },
   "bin": {
+    "zen-app-server": "dist/app-server-cli.js",
     "zen": "dist/cli.js"
   },
   "devDependencies": {
