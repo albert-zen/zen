@@ -54,7 +54,7 @@ export class FileThreadStore implements ThreadStore {
   }
 
   async save(thread: ThreadSnapshot): Promise<void> {
-    const write = this.pendingWrite.catch(() => undefined).then(async () => {
+    const write = this.pendingWrite.then(async () => {
       await mkdir(this.dir, { recursive: true });
       const target = join(this.dir, `${safeFileName(thread.id)}.json`);
       const temp = join(
@@ -74,7 +74,7 @@ export class FileThreadStore implements ThreadStore {
         throw cause;
       }
     });
-    this.pendingWrite = write;
+    this.pendingWrite = write.catch(() => undefined);
 
     await write;
   }
@@ -88,15 +88,43 @@ async function replaceFile(temp: string, target: string): Promise<void> {
       throw cause;
     }
 
-    // Some Windows filesystems reject rename-over-existing; store callers are
-    // still serialized through pendingWrite.
-    await unlink(target).catch((unlinkCause: unknown) => {
-      if (!isMissingFile(unlinkCause)) {
-        throw unlinkCause;
-      }
-    });
-    await rename(temp, target);
+    await replaceFileWithBackup(temp, target);
   }
+}
+
+async function replaceFileWithBackup(
+  temp: string,
+  target: string
+): Promise<void> {
+  const backup = `${target}.${randomUUID()}.backup.tmp`;
+
+  // Some Windows filesystems reject rename-over-existing. Moving the previous
+  // target aside lets a failed final replacement restore the last good snapshot
+  // before same-store callers can observe the result.
+  try {
+    await rename(target, backup);
+  } catch (cause) {
+    if (!isMissingFile(cause)) {
+      throw cause;
+    }
+
+    await rename(temp, target);
+    return;
+  }
+
+  try {
+    await rename(temp, target);
+  } catch (cause) {
+    await rename(backup, target).catch((restoreCause: unknown) => {
+      throw new AggregateError(
+        [cause, restoreCause],
+        "Failed to replace thread snapshot and restore previous snapshot"
+      );
+    });
+    throw cause;
+  }
+
+  await unlink(backup).catch(() => undefined);
 }
 
 async function readSnapshotFile(
