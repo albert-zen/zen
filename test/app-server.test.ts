@@ -1,8 +1,14 @@
+import { mkdtempSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
   AppServer,
   type AppServerNotification,
+  createOpenClawAppServer,
+  FileThreadStore,
   type ModelGateway
 } from "../src/index.js";
 
@@ -142,6 +148,114 @@ describe("AppServer", () => {
         code: "REQUEST_FAILED",
         message: "Unknown thread: missing-thread"
       }
+    });
+  });
+
+  it("repairs stale in-progress turns from persisted startup snapshots", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "zen-startup-repair-"));
+    const path = join(dir, "thread-1.json");
+    const store = new FileThreadStore({ dir });
+    const staleThread = {
+      id: "thread-1",
+      status: "running" as const,
+      turns: [
+        {
+          id: "turn-1",
+          runId: "run-1",
+          status: "inProgress" as const,
+          itemIds: ["item-1"]
+        }
+      ],
+      items: [
+        {
+          id: "item-1",
+          type: "turn.started",
+          createdAtMs: 1000,
+          seq: 1,
+          runId: "run-1",
+          turnId: "turn-1",
+          payload: {}
+        }
+      ]
+    };
+
+    await writeFile(
+      path,
+      `${JSON.stringify({ schemaVersion: 1, thread: staleThread }, null, 2)}\n`,
+      "utf8"
+    );
+    await expect(store.list()).resolves.toEqual([staleThread]);
+
+    const server = await createOpenClawAppServer({
+      threadStore: store,
+      appServerOptions: {
+        threadManagerOptions: {
+          generateItemId: sequence("repair-item"),
+          clock: () => 2000
+        }
+      }
+    });
+
+    const list = await server.request({ method: "thread/list" });
+
+    expect(list).toEqual({
+      method: "thread/list",
+      ok: true,
+      result: {
+        threads: [
+          expect.objectContaining({
+            id: "thread-1",
+            status: "failed",
+            turns: [
+              expect.objectContaining({
+                id: "turn-1",
+                status: "failed",
+                itemIds: ["item-1", "repair-item-1"],
+                error: {
+                  code: "TURN_REPAIRED_ON_STARTUP",
+                  message:
+                    "Turn was still in progress when the previous process stopped"
+                }
+              })
+            ],
+            items: [
+              expect.objectContaining({ id: "item-1", type: "turn.started" }),
+              expect.objectContaining({
+                id: "repair-item-1",
+                type: "turn.repaired",
+                createdAtMs: 2000,
+                seq: 2,
+                payload: {
+                  previousStatus: "inProgress",
+                  status: "failed",
+                  reason:
+                    "Turn was still in progress when the previous process stopped"
+                }
+              })
+            ]
+          })
+        ]
+      }
+    });
+    await expect(readFile(path, "utf8").then(JSON.parse)).resolves.toEqual({
+      schemaVersion: 1,
+      thread: expect.objectContaining({
+        id: "thread-1",
+        status: "failed",
+        turns: [
+          expect.objectContaining({
+            id: "turn-1",
+            status: "failed",
+            itemIds: ["item-1", "repair-item-1"]
+          })
+        ],
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            id: "repair-item-1",
+            type: "turn.repaired"
+          })
+        ])
+      })
     });
   });
 });

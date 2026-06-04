@@ -18,7 +18,7 @@ export async function createOpenClawAppServer(
   const threadStore = options.threadStore ?? new FileThreadStore();
   const initialThreads = await threadStore.list();
 
-  return new AppServer({
+  const server = new AppServer({
     ...options.appServerOptions,
     threadStore,
     threadManagerOptions: {
@@ -27,6 +27,10 @@ export async function createOpenClawAppServer(
       runtimeFactory: createOpenClawThreadRuntimeFactory(options)
     }
   });
+
+  await persistLoadedThreads(server, threadStore);
+
+  return server;
 }
 
 export function createOpenClawThreadRuntimeFactory(
@@ -46,4 +50,19 @@ export function createOpenClawThreadRuntimeFactory(
       toolRuntime: new LocalToolRuntime({ cwd: options.cwd })
     };
   };
+}
+
+async function persistLoadedThreads(
+  server: AppServer,
+  threadStore: ThreadStore
+): Promise<void> {
+  const response = await server.request({ method: "thread/list" });
+
+  if (!response.ok || response.method !== "thread/list") {
+    return;
+  }
+
+  await Promise.all(
+    response.result.threads.map((thread) => threadStore.save(thread))
+  );
 }

@@ -1,4 +1,5 @@
 import { mkdtempSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +7,56 @@ import { describe, expect, it } from "vitest";
 import { AppServer, FileThreadStore, type ModelGateway } from "../src/index.js";
 
 describe("FileThreadStore", () => {
+  it("writes new snapshots with an explicit schema version", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "zen-threads-"));
+    const store = new FileThreadStore({ dir });
+
+    await store.save(threadSnapshot("thread-1"));
+
+    await expect(
+      readFile(join(dir, "thread-1.json"), "utf8").then(JSON.parse)
+    ).resolves.toEqual({
+      schemaVersion: 1,
+      thread: expect.objectContaining({ id: "thread-1" })
+    });
+    await expect(store.list()).resolves.toEqual([
+      expect.objectContaining({ id: "thread-1" })
+    ]);
+  });
+
+  it("keeps existing unversioned thread files readable", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "zen-threads-"));
+    const legacyThread = threadSnapshot("legacy-thread");
+
+    await writeFile(
+      join(dir, "legacy-thread.json"),
+      `${JSON.stringify(legacyThread, null, 2)}\n`,
+      "utf8"
+    );
+
+    await expect(new FileThreadStore({ dir }).list()).resolves.toEqual([
+      legacyThread
+    ]);
+  });
+
+  it("skips corrupt thread files when listing other threads", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "zen-threads-"));
+
+    await writeFile(join(dir, "corrupt.json"), "{", "utf8");
+    await writeFile(
+      join(dir, "valid-thread.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        thread: threadSnapshot("valid-thread")
+      })}\n`,
+      "utf8"
+    );
+
+    await expect(new FileThreadStore({ dir }).list()).resolves.toEqual([
+      expect.objectContaining({ id: "valid-thread" })
+    ]);
+  });
+
   it("persists App Server threads and reloads them for resume", async () => {
     const store = new FileThreadStore({
       dir: mkdtempSync(join(tmpdir(), "zen-threads-"))
@@ -135,4 +186,13 @@ function sequence(prefix: string): () => string {
   let nextId = 0;
 
   return () => `${prefix}-${++nextId}`;
+}
+
+function threadSnapshot(id: string) {
+  return {
+    id,
+    status: "idle" as const,
+    turns: [],
+    items: []
+  };
 }
