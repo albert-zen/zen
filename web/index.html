@@ -59,6 +59,17 @@
         background: var(--accent-strong);
       }
 
+      input,
+      select {
+        height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--text);
+        font: inherit;
+        padding: 0 10px;
+      }
+
       button:disabled {
         cursor: not-allowed;
         opacity: 0.55;
@@ -107,7 +118,20 @@
       .status {
         color: var(--muted);
         font-size: 13px;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
+      }
+
+      .connection {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .server-url {
+        width: min(320px, 34vw);
       }
 
       .layout {
@@ -224,6 +248,31 @@
         padding: 10px;
       }
 
+      .shell-box {
+        border-color: #b7c6d3;
+        background: #f8fafc;
+      }
+
+      .tool-label,
+      .tool-output-label {
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .tool-code {
+        margin: 0;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        color: var(--code);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
       .approval {
         display: flex;
         flex-wrap: wrap;
@@ -247,6 +296,22 @@
       }
 
       @media (max-width: 760px) {
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+          height: auto;
+          padding: 12px 16px;
+        }
+
+        .connection {
+          justify-content: flex-start;
+          width: 100%;
+        }
+
+        .server-url {
+          width: 100%;
+        }
+
         .layout {
           grid-template-columns: 1fr;
         }
@@ -274,7 +339,21 @@
           <div class="mark">Z</div>
           <div class="title">Zen Agent</div>
         </div>
-        <button id="new-thread" type="button">New Thread</button>
+        <div class="connection">
+          <select id="runtime-mode" aria-label="Runtime mode">
+            <option value="real">Real transport</option>
+            <option value="demo">Demo mode</option>
+          </select>
+          <input
+            id="server-url"
+            class="server-url"
+            aria-label="App Server URL"
+            value="http://127.0.0.1:3000"
+          />
+          <button id="connect" type="button">Connect</button>
+          <button id="disconnect" type="button">Disconnect</button>
+          <button id="new-thread" type="button">New Thread</button>
+        </div>
       </header>
 
       <div class="layout">
@@ -283,6 +362,7 @@
             <p class="thread-label">Thread</p>
             <div id="thread-id" class="thread-id">not started</div>
             <div class="thread-meta">
+              <div id="connection-status">Real transport | client: disconnected</div>
               <div id="thread-status">status: idle</div>
               <div id="turn-count">turns: 0</div>
               <div id="item-count">items: 0</div>
@@ -298,7 +378,7 @@
               autocomplete="off"
               placeholder="Message Zen"
             ></textarea>
-            <button class="primary" type="submit">Send</button>
+            <button id="send-message" class="primary" type="submit">Send</button>
           </form>
           <section id="timeline" class="timeline" aria-live="polite"></section>
         </main>

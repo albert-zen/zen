@@ -186,6 +186,20 @@ export {
   applyAppServerNotification,
   createWebUiState
 } from "./web-ui-state.js";
+export type {
+  BrowserAppServerTransportClientOptions,
+  WebUiClientListener,
+  WebUiClientOptions,
+  WebUiClientSnapshot,
+  WebUiConnectionState,
+  WebUiConnectionStatus,
+  WebUiEventSource,
+  WebUiRuntimeMode
+} from "./web-ui-client.js";
+export {
+  BrowserAppServerTransportClient,
+  WebUiClient
+} from "./web-ui-client.js";
 export type { TuiOptions } from "./tui.js";
 export { runTui } from "./tui.js";
 export {

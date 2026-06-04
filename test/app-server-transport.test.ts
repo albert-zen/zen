@@ -272,6 +272,47 @@ describe("App Server HTTP transport", () => {
     }
   });
 
+  it("allows static browser clients to call the local transport", async () => {
+    const server = createServer();
+    const transport = await serveAppServerHttpTransport({ appServer: server });
+
+    try {
+      const preflight = await fetch(new URL("/request", transport.url), {
+        method: "OPTIONS",
+        headers: {
+          origin: "http://127.0.0.1:8080",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type"
+        }
+      });
+
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+      expect(preflight.headers.get("access-control-allow-methods")).toContain(
+        "POST"
+      );
+
+      const response = await fetch(new URL("/request", transport.url), {
+        method: "POST",
+        headers: {
+          origin: "http://127.0.0.1:8080",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ method: "thread/start" })
+      });
+
+      expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      await expect(response.json()).resolves.toEqual(
+        expect.objectContaining({
+          method: "thread/start",
+          ok: true
+        })
+      );
+    } finally {
+      await transport.close();
+    }
+  });
+
   it("rejects non-protocol client responses with an explicit transport error", async () => {
     const server = await listenWithPlainTextResponse();
     const client = new HttpAppServerClient({ baseUrl: server.url });
