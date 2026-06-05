@@ -94,13 +94,19 @@ export {
 } from "./dogfood-acceptance.js";
 export type { LocalToolRuntimeOptions } from "./local-tool-runtime.js";
 export { LocalToolRuntime, localToolDefinitions } from "./local-tool-runtime.js";
-export type { OpenClawConfigOptions, OpenClawModelConfig } from "./openclaw-config.js";
-export { loadOpenClawModelConfig } from "./openclaw-config.js";
-export type { OpenClawAppServerOptions } from "./openclaw-runtime.js";
+export type {
+  ModelProviderConfig,
+  ModelProviderConfigOptions
+} from "./model-provider-config.js";
 export {
-  createOpenClawAppServer,
-  createOpenClawThreadRuntimeFactory
-} from "./openclaw-runtime.js";
+  DEFAULT_MODEL_PROVIDER_CONFIG_PATH,
+  loadModelProviderConfig
+} from "./model-provider-config.js";
+export type { ProviderBackedAppServerOptions } from "./provider-runtime.js";
+export {
+  createProviderBackedAppServer,
+  createProviderThreadRuntimeFactory
+} from "./provider-runtime.js";
 export type { OpenAiCompatibleModelGatewayOptions } from "./openai-compatible-model-gateway.js";
 export { OpenAiCompatibleModelGateway } from "./openai-compatible-model-gateway.js";
 export type {

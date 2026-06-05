@@ -5,9 +5,8 @@ Date: 2026-05-29
 ## Scope
 
 This slice makes Zen usable from a terminal with a TUI-first product path. It
-now uses the OpenClaw model configuration at
-`C:\Users\two-one\.openclaw\openclaw.json`, persists local threads, and exposes
-basic workspace tools. It does not implement permission approval or a network
+uses Zen's own OpenAI-compatible model provider configuration, persists local
+threads, and exposes basic workspace tools. It does not implement permission approval or a network
 transport server.
 
 The implemented path is:
@@ -16,7 +15,7 @@ The implemented path is:
 TTY TUI Adapter or non-interactive line adapter
   -> AgentInteractionSession
   -> AppServerClient
-  -> OpenClaw model provider + local tools
+  -> configured model provider + local tools
   -> ThreadManager
   -> AgentLoop
   -> ItemList
@@ -63,9 +62,9 @@ product Module for TUI now and Web/transport later.
     line-oriented adapter for pipes and smoke automation.
 - `src/cli.ts`
   - CLI entry point for the TUI.
-- `src/openclaw-config.ts`
-  - Loads provider, base URL, API key, model ID, and model params from the local
-    OpenClaw config.
+- `src/model-provider-config.ts`
+  - Loads provider, base URL, API key, model ID, and model params from Zen's
+    provider config or `ZEN_*` environment variables.
 - `src/openai-compatible-model-gateway.ts`
   - Calls OpenAI-compatible chat completions with streaming deltas and tool
     calls.
@@ -126,7 +125,7 @@ zen> thread: thread-1 | status: idle | turns: 2 | items: 27
 zen>
 ```
 
-Real OpenClaw smoke:
+Real model provider smoke:
 
 ```text
 @'
@@ -165,7 +164,7 @@ non-interactive npm run tui smoke
 component TUI virtual-terminal tests
   passed, including trace filtering, queued input, interrupt, and resume choices
 
-OpenClaw model smoke
+model provider smoke
   passed with configured DashScope-compatible provider
 ```
 

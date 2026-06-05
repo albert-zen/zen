@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   AppServer,
   type AppServerNotification,
-  createOpenClawAppServer,
+  createProviderBackedAppServer,
   FileThreadStore,
   type ModelGateway
 } from "../src/index.js";
@@ -273,7 +273,7 @@ describe("AppServer", () => {
     );
     await expect(store.list()).resolves.toEqual([staleThread]);
 
-    const server = await createOpenClawAppServer({
+    const server = await createProviderBackedAppServer({
       threadStore: store,
       appServerOptions: {
         threadManagerOptions: {

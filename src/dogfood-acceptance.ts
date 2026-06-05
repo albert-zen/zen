@@ -12,8 +12,8 @@ import {
   HttpAppServerClient,
   serveAppServerHttpTransport
 } from "./app-server-transport.js";
-import { loadOpenClawModelConfig } from "./openclaw-config.js";
-import { createOpenClawAppServer } from "./openclaw-runtime.js";
+import { loadModelProviderConfig } from "./model-provider-config.js";
+import { createProviderBackedAppServer } from "./provider-runtime.js";
 import { FileThreadStore } from "./thread-store.js";
 
 export type DogfoodAcceptanceStatus = "passed" | "failed" | "skipped";
@@ -159,12 +159,12 @@ function readConfigAvailability(
   configPath: string | undefined
 ): { readonly available: true } | { readonly available: false; readonly reason: string } {
   try {
-    loadOpenClawModelConfig(configPath ? { path: configPath } : {});
+    loadModelProviderConfig(configPath ? { path: configPath } : {});
     return { available: true };
   } catch (cause) {
     return {
       available: false,
-      reason: `OpenClaw config unavailable${configPath ? ` at ${configPath}` : ""}: ${readErrorMessage(cause)}`
+      reason: `model provider config unavailable${configPath ? ` at ${configPath}` : ""}: ${readErrorMessage(cause)}`
     };
   }
 }
@@ -365,7 +365,7 @@ async function createScenarioAppServer(input: {
     });
   }
 
-  return await createOpenClawAppServer({
+  return await createProviderBackedAppServer({
     cwd: input.fixturePath,
     config: input.configPath ? { path: input.configPath } : undefined,
     threadStore: new FileThreadStore({
@@ -414,7 +414,7 @@ async function waitForTurnTerminalNotification(
 }
 
 function isProviderUnavailableMessage(message: string): boolean {
-  return /OpenClaw config unavailable|Model request failed: (401|403)|fetch failed|ENOTFOUND|ECONN|UND_ERR|network|credential/i.test(
+  return /model provider config unavailable|Model request failed: (401|403)|fetch failed|ENOTFOUND|ECONN|UND_ERR|network|credential/i.test(
     message
   );
 }

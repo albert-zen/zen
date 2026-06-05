@@ -1,7 +1,7 @@
 # ALB-94 Dogfood Coding-Agent Acceptance Scenario
 
-This scenario proves Zen can run a small coding task through the real
-OpenClaw-configured model, the App Server HTTP transport client, and the
+This scenario proves Zen can run a small coding task through the configured
+OpenAI-compatible model provider, the App Server HTTP transport client, and the
 shell-first `ToolRuntime`.
 
 ## Command
@@ -11,7 +11,7 @@ npm run dogfood:alb-94
 ```
 
 The script builds the TypeScript package, creates a temporary fixture repo, then
-starts a real Zen thread against the configured OpenClaw provider. The model is
+starts a real Zen thread against the configured model provider. The model is
 asked to inspect the fixture, edit `src/greeting.js`, run `npm test`, and return
 a concise final answer.
 
@@ -40,11 +40,25 @@ The transcript records:
 
 ## Configuration
 
-By default the scenario uses `C:\Users\<user>\.openclaw\openclaw.json`, matching
-the OpenClaw runtime factory. Optional overrides:
+By default the scenario uses Zen's own user-level provider config:
+
+```text
+C:\Users\<user>\.zen\model-provider.json
+```
+
+The same values can be supplied with environment variables:
 
 ```powershell
-$env:ALB94_DOGFOOD_CONFIG="C:\path\to\openclaw.json"
+$env:ZEN_MODEL_BASE_URL="https://provider.example/v1"
+$env:ZEN_MODEL_API_KEY="..."
+$env:ZEN_MODEL="model-id"
+$env:ZEN_MODEL_PARAMS='{"temperature":0}'
+```
+
+Optional scenario-specific overrides:
+
+```powershell
+$env:ALB94_DOGFOOD_PROVIDER_CONFIG="C:\path\to\model-provider.json"
 $env:ALB94_DOGFOOD_EVIDENCE="docs\implementation\alb-94-dogfood-acceptance-transcript.md"
 $env:ALB94_DOGFOOD_FIXTURE_ROOT="$env:TEMP\zen-dogfood"
 $env:ALB94_DOGFOOD_TIMEOUT_MS="180000"

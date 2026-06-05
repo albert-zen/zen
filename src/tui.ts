@@ -3,7 +3,7 @@ import type { Readable, Writable } from "node:stream";
 import { AgentInteractionSession } from "./agent-interaction-session.js";
 import type { AppServerClient } from "./app-server.js";
 import { createDemoAppServer } from "./demo-runtime.js";
-import { createOpenClawAppServer } from "./openclaw-runtime.js";
+import { createProviderBackedAppServer } from "./provider-runtime.js";
 import { renderSlashCommandHelp } from "./slash-commands.js";
 import {
   renderTerminalStatus,
@@ -148,5 +148,5 @@ async function createDefaultClient(): Promise<AppServerClient> {
     return createDemoAppServer();
   }
 
-  return await createOpenClawAppServer({ cwd: process.cwd() });
+  return await createProviderBackedAppServer({ cwd: process.cwd() });
 }

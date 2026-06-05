@@ -298,7 +298,7 @@ mark stale in-progress turns without corrupting completed items.
 
 - `ThreadStore`
 - `FileThreadStore`
-- `createOpenClawAppServer`
+- `createProviderBackedAppServer`
 - `ThreadManager` initial thread loading
 
 ## Acceptance Criteria
@@ -560,7 +560,7 @@ reviewable evidence.
 ## What To Build
 
 - Add a documented smoke scenario that can run locally with the configured
-  OpenClaw provider.
+  configured model provider.
 - Prefer a non-destructive fixture repo or temporary workspace.
 - Capture transcript/evidence showing shell calls, edits, tests, and final
   answer.
@@ -569,7 +569,7 @@ reviewable evidence.
 ## Key Interfaces
 
 - TUI or transport client entry point
-- OpenClaw runtime factory
+- provider-backed runtime factory
 - shell-first ToolRuntime
 - evidence artifact under `docs/implementation/`
 

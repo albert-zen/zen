@@ -1,19 +1,22 @@
 import { AppServer, type AppServerOptions } from "./app-server.js";
 import { LocalToolRuntime, localToolDefinitions } from "./local-tool-runtime.js";
-import { loadOpenClawModelConfig, type OpenClawConfigOptions } from "./openclaw-config.js";
+import {
+  loadModelProviderConfig,
+  type ModelProviderConfigOptions
+} from "./model-provider-config.js";
 import { OpenAiCompatibleModelGateway } from "./openai-compatible-model-gateway.js";
 import { FileThreadStore, type ThreadStore } from "./thread-store.js";
 import type { ThreadRuntime, ThreadRuntimeFactory } from "./thread-manager.js";
 
-export type OpenClawAppServerOptions = {
+export type ProviderBackedAppServerOptions = {
   readonly cwd?: string;
-  readonly config?: OpenClawConfigOptions;
+  readonly config?: ModelProviderConfigOptions;
   readonly threadStore?: ThreadStore;
   readonly appServerOptions?: AppServerOptions;
 };
 
-export async function createOpenClawAppServer(
-  options: OpenClawAppServerOptions = {}
+export async function createProviderBackedAppServer(
+  options: ProviderBackedAppServerOptions = {}
 ): Promise<AppServer> {
   const threadStore = options.threadStore ?? new FileThreadStore();
   const initialThreads = await threadStore.list();
@@ -24,7 +27,7 @@ export async function createOpenClawAppServer(
     threadManagerOptions: {
       ...options.appServerOptions?.threadManagerOptions,
       initialThreads,
-      runtimeFactory: createOpenClawThreadRuntimeFactory(options)
+      runtimeFactory: createProviderThreadRuntimeFactory(options)
     }
   });
 
@@ -33,11 +36,11 @@ export async function createOpenClawAppServer(
   return server;
 }
 
-export function createOpenClawThreadRuntimeFactory(
-  options: OpenClawAppServerOptions = {}
+export function createProviderThreadRuntimeFactory(
+  options: ProviderBackedAppServerOptions = {}
 ): ThreadRuntimeFactory {
   return (): ThreadRuntime => {
-    const config = loadOpenClawModelConfig(options.config);
+    const config = loadModelProviderConfig(options.config);
 
     return {
       model: new OpenAiCompatibleModelGateway({

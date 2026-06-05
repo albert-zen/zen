@@ -1,7 +1,7 @@
 import { runDogfoodAcceptanceScenario } from "../../dist/index.js";
 
 const result = await runDogfoodAcceptanceScenario({
-  configPath: process.env.ALB94_DOGFOOD_CONFIG,
+  configPath: process.env.ALB94_DOGFOOD_PROVIDER_CONFIG,
   evidencePath: process.env.ALB94_DOGFOOD_EVIDENCE,
   fixtureRoot: process.env.ALB94_DOGFOOD_FIXTURE_ROOT,
   timeoutMs: readOptionalInteger(process.env.ALB94_DOGFOOD_TIMEOUT_MS)

@@ -15,11 +15,11 @@ import {
 } from "../src/index.js";
 
 describe("dogfood acceptance scenario", () => {
-  it("records a clear skip when OpenClaw credentials are unavailable", async () => {
+  it("records a clear skip when model provider credentials are unavailable", async () => {
     const root = await mkdtemp(join(tmpdir(), "zen-dogfood-"));
     const evidencePath = join(root, "evidence.md");
     const fixtureRoot = join(root, "fixtures");
-    const missingConfigPath = join(root, "missing-openclaw.json");
+    const missingConfigPath = join(root, "missing-model-provider.json");
 
     const result = await runDogfoodAcceptanceScenario({
       configPath: missingConfigPath,
@@ -169,8 +169,8 @@ describe("dogfood acceptance scenario", () => {
     const root = await mkdtemp(join(tmpdir(), "zen-dogfood-"));
     const evidencePath = join(root, "evidence.md");
     const fixtureRoot = join(root, "fixtures");
-    const configPath = join(root, "openclaw.json");
-    writeOpenClawConfig(configPath);
+    const configPath = join(root, "model-provider.json");
+    writeModelProviderConfig(configPath);
 
     const result = await runDogfoodAcceptanceScenario({
       configPath,
@@ -240,24 +240,15 @@ function item(
   };
 }
 
-function writeOpenClawConfig(path: string): void {
+function writeModelProviderConfig(path: string): void {
   writeFileSync(
     path,
     JSON.stringify({
-      agents: {
-        defaults: {
-          model: { primary: "Dogfood/test-model" }
-        }
-      },
-      models: {
-        providers: {
-          Dogfood: {
-            baseUrl: "https://example.test/v1",
-            apiKey: "test-key",
-            models: [{ id: "test-model", name: "Test model" }]
-          }
-        }
-      }
+      providerName: "Dogfood",
+      baseUrl: "https://example.test/v1",
+      apiKey: "test-key",
+      model: "test-model",
+      displayName: "Test model"
     }),
     "utf8"
   );

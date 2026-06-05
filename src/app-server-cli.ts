@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createOpenClawAppServer } from "./openclaw-runtime.js";
+import { createProviderBackedAppServer } from "./provider-runtime.js";
 import { serveAppServerHttpTransport } from "./app-server-transport.js";
 import {
   DEFAULT_APP_SERVER_HOST,
@@ -8,7 +8,7 @@ import {
 
 const host = process.env.ZEN_APP_SERVER_HOST ?? DEFAULT_APP_SERVER_HOST;
 const port = readAppServerPort(process.env.ZEN_APP_SERVER_PORT);
-const server = await createOpenClawAppServer({ cwd: process.cwd() });
+const server = await createProviderBackedAppServer({ cwd: process.cwd() });
 const transport = await serveAppServerHttpTransport({
   appServer: server,
   host,
