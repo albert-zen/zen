@@ -52,6 +52,11 @@ export async function serveAppServerHttpTransport(
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? host}`);
 
+    if (request.method === "OPTIONS") {
+      sendCorsPreflight(response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === REQUEST_PATH) {
       await handleRequest(options.appServer, request, response);
       return;
@@ -256,6 +261,7 @@ function handleEventStream(
   onClose: (response: ServerResponse) => void
 ): AppServerSubscription {
   response.writeHead(200, {
+    ...corsHeaders(),
     "cache-control": "no-cache, no-transform",
     "connection": "keep-alive",
     "content-type": "text/event-stream; charset=utf-8"
@@ -315,9 +321,23 @@ function sendJson(
   value: unknown
 ): void {
   response.writeHead(statusCode, {
+    ...corsHeaders(),
     "content-type": "application/json; charset=utf-8"
   });
   response.end(`${JSON.stringify(value)}\n`);
+}
+
+function sendCorsPreflight(response: ServerResponse): void {
+  response.writeHead(204, corsHeaders());
+  response.end();
+}
+
+function corsHeaders(): Record<string, string> {
+  return {
+    "access-control-allow-headers": "content-type, accept",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-origin": "*"
+  };
 }
 
 function readAppServerResponse(body: string): AppServerResponse {

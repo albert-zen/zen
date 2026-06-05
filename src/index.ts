@@ -51,6 +51,11 @@ export {
   HttpAppServerClient,
   serveAppServerHttpTransport
 } from "./app-server-transport.js";
+export {
+  DEFAULT_APP_SERVER_HOST,
+  DEFAULT_APP_SERVER_PORT,
+  readAppServerPort
+} from "./app-server-config.js";
 export type {
   ApprovalBrokerOptions,
   ApprovalDecision as ToolApprovalDecision,
@@ -186,6 +191,20 @@ export {
   applyAppServerNotification,
   createWebUiState
 } from "./web-ui-state.js";
+export type {
+  BrowserAppServerTransportClientOptions,
+  WebUiClientListener,
+  WebUiClientOptions,
+  WebUiClientSnapshot,
+  WebUiConnectionState,
+  WebUiConnectionStatus,
+  WebUiEventSource,
+  WebUiRuntimeMode
+} from "./web-ui-client.js";
+export {
+  BrowserAppServerTransportClient,
+  WebUiClient
+} from "./web-ui-client.js";
 export type { TuiOptions } from "./tui.js";
 export { runTui } from "./tui.js";
 export {
