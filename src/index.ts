@@ -51,6 +51,11 @@ export {
   HttpAppServerClient,
   serveAppServerHttpTransport
 } from "./app-server-transport.js";
+export {
+  DEFAULT_APP_SERVER_HOST,
+  DEFAULT_APP_SERVER_PORT,
+  readAppServerPort
+} from "./app-server-config.js";
 export type {
   ApprovalBrokerOptions,
   ApprovalDecision as ToolApprovalDecision,

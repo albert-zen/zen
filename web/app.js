@@ -185,6 +185,10 @@ function renderTimelineRow(row) {
 }
 
 function renderRowContent(row) {
+  if (row.type === "shell") {
+    return renderShellRow(row);
+  }
+
   if (row.type === "tool-call") {
     return row.toolName === "shell"
       ? renderShellCommand(row.input)
@@ -245,6 +249,35 @@ function renderRowContent(row) {
   text.className = "row-text";
   text.textContent = stringify(row.content ?? row.event ?? "");
   return text;
+}
+
+function renderShellRow(row) {
+  const box = document.createElement("div");
+  box.className = "tool-box shell-box";
+
+  const label = document.createElement("div");
+  label.className = row.status === "failed" ? "tool-label danger" : "tool-label";
+  label.textContent = `Shell ${row.status}`;
+  box.append(label);
+
+  const command = document.createElement("pre");
+  command.className = "tool-code";
+  command.textContent = row.command;
+  box.append(command);
+
+  if (row.stdout) {
+    box.append(renderOutputBlock("stdout", row.stdout));
+  }
+
+  if (row.stderr) {
+    box.append(renderOutputBlock("stderr", row.stderr, "danger"));
+  }
+
+  if (row.error) {
+    box.append(renderOutputBlock("error", row.error, "danger"));
+  }
+
+  return box;
 }
 
 function renderShellCommand(input) {
