@@ -82,6 +82,16 @@ export {
   createDemoAppServer,
   createDemoThreadRuntime
 } from "./demo-runtime.js";
+export type {
+  DogfoodAcceptanceOptions,
+  DogfoodAcceptanceResult,
+  DogfoodAcceptanceSummary,
+  DogfoodAcceptanceStatus
+} from "./dogfood-acceptance.js";
+export {
+  runDogfoodAcceptanceScenario,
+  summarizeDogfoodAcceptanceThread
+} from "./dogfood-acceptance.js";
 export type { LocalToolRuntimeOptions } from "./local-tool-runtime.js";
 export { LocalToolRuntime, localToolDefinitions } from "./local-tool-runtime.js";
 export type { OpenClawConfigOptions, OpenClawModelConfig } from "./openclaw-config.js";

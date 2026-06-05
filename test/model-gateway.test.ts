@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendModelResponseItems,
   InMemoryItemList,
+  OpenAiCompatibleModelGateway,
   type ModelEvent,
   type ModelGateway
 } from "../src/index.js";
@@ -218,6 +219,101 @@ describe("appendModelResponseItems", () => {
   });
 });
 
+describe("OpenAiCompatibleModelGateway", () => {
+  it("preserves streamed tool call ids when later provider deltas send empty ids", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder();
+            const chunks = [
+              {
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: "functions.shell:0",
+                          function: { name: "shell", arguments: "" }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: "",
+                          function: { arguments: "{\"command\"" }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: "",
+                          function: { arguments: ":\"Write-Output probe\"}" }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ];
+
+            for (const chunk of chunks) {
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+              );
+            }
+
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          }
+        }),
+        { status: 200 }
+      )) as typeof fetch;
+
+    try {
+      const gateway = new OpenAiCompatibleModelGateway({
+        baseUrl: "https://provider.test/v1",
+        apiKey: "test-key",
+        model: "test-model"
+      });
+
+      await expect(collect(gateway.generate({ parts: [] }))).resolves.toEqual([
+        {
+          type: "message.completed",
+          content: "",
+          toolCalls: [
+            {
+              id: "functions.shell:0",
+              name: "shell",
+              input: { command: "Write-Output probe" }
+            }
+          ]
+        }
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 function createItems(): InMemoryItemList {
   return new InMemoryItemList({
     generateId: (() => {
@@ -234,4 +330,14 @@ function fakeModel(events: readonly ModelEvent[]): ModelGateway {
       yield* events;
     }
   };
+}
+
+async function collect<T>(events: AsyncIterable<T>): Promise<readonly T[]> {
+  const collected: T[] = [];
+
+  for await (const event of events) {
+    collected.push(event);
+  }
+
+  return collected;
 }
