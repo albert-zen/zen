@@ -92,6 +92,79 @@ describe("dogfood acceptance scenario", () => {
     });
   });
 
+  it("uses the test command result as validation output when later shell commands succeed", () => {
+    const thread = createThread([
+      item(1, "tool.call.started", {
+        toolCallId: "call-inspect",
+        toolName: "shell",
+        input: { command: "Get-ChildItem; Get-Content package.json" }
+      }),
+      item(2, "tool.result.completed", {
+        toolCallId: "call-inspect",
+        toolName: "shell",
+        content: "exitCode: 0\nstdout:\npackage.json"
+      }),
+      item(3, "tool.call.started", {
+        toolCallId: "call-edit",
+        toolName: "shell",
+        input: {
+          command:
+            "Set-Content -Path src/greeting.js -Value \"export function greet(name) { return `Hello, ${name}!`; }\""
+        }
+      }),
+      item(4, "tool.result.completed", {
+        toolCallId: "call-edit",
+        toolName: "shell",
+        content: "exitCode: 0"
+      }),
+      item(5, "tool.call.started", {
+        toolCallId: "call-test",
+        toolName: "shell",
+        input: { command: "npm test" }
+      }),
+      {
+        ...item(6, "tool.result.completed", {
+          toolCallId: "call-test",
+          toolName: "shell",
+          content: "exitCode: 1\nstderr:\nAssertionError: expected greeting punctuation"
+        }),
+        causeId: "item-5",
+        targetId: "item-5"
+      },
+      item(7, "tool.call.started", {
+        toolCallId: "call-later-edit",
+        toolName: "shell",
+        input: { command: "Set-Content -Path notes.txt -Value done" }
+      }),
+      item(8, "tool.result.completed", {
+        toolCallId: "call-later-edit",
+        toolName: "shell",
+        content: "exitCode: 0"
+      }),
+      item(9, "assistant.message.completed", {
+        content: "The edit was made but validation failed."
+      })
+    ]);
+
+    expect(summarizeDogfoodAcceptanceThread(thread)).toEqual({
+      status: "failed",
+      finalAnswer: "The edit was made but validation failed.",
+      shellCommands: [
+        "Get-ChildItem; Get-Content package.json",
+        "Set-Content -Path src/greeting.js -Value \"export function greet(name) { return `Hello, ${name}!`; }\"",
+        "npm test",
+        "Set-Content -Path notes.txt -Value done"
+      ],
+      shellSteps: {
+        inspect: true,
+        edit: true,
+        test: true
+      },
+      validationOutput:
+        "exitCode: 1\nstderr:\nAssertionError: expected greeting punctuation"
+    });
+  });
+
   it("runs a fixture task through the App Server transport and records passing evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "zen-dogfood-"));
     const evidencePath = join(root, "evidence.md");

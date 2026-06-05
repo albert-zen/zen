@@ -98,13 +98,14 @@ export async function runDogfoodAcceptanceScenario(
 export function summarizeDogfoodAcceptanceThread(
   thread: ThreadSnapshot
 ): DogfoodAcceptanceSummary {
-  const shellCommands = thread.items.flatMap(readShellCommand);
+  const shellCalls = readShellCalls(thread.items);
+  const shellCommands = shellCalls.map((call) => call.command);
   const shellSteps = {
     inspect: shellCommands.some(isInspectCommand),
     edit: shellCommands.some(isEditCommand),
     test: shellCommands.some(isTestCommand)
   };
-  const validationOutput = readValidationOutput(thread.items);
+  const validationOutput = readValidationOutput(thread.items, shellCalls);
   const finalAnswer = readFinalAnswer(thread.items);
   const latestTurn = thread.turns.at(-1);
   const passed =
@@ -418,37 +419,136 @@ function isProviderUnavailableMessage(message: string): boolean {
   );
 }
 
-function readShellCommand(item: ProtocolItem): readonly string[] {
-  if (item.type !== "tool.call.started" || !isRecord(item.payload)) {
-    return [];
-  }
+type ShellCallEvidence = {
+  readonly command: string;
+  readonly startedId: string;
+  readonly startedIndex: number;
+  readonly toolCallId?: string;
+};
 
-  if (item.payload.toolName !== "shell" || !isRecord(item.payload.input)) {
-    return [];
-  }
+function readShellCalls(items: readonly ProtocolItem[]): readonly ShellCallEvidence[] {
+  return items.flatMap((item, startedIndex): readonly ShellCallEvidence[] => {
+    if (item.type !== "tool.call.started" || !isRecord(item.payload)) {
+      return [];
+    }
 
-  return typeof item.payload.input.command === "string"
-    ? [item.payload.input.command]
-    : [];
+    if (item.payload.toolName !== "shell" || !isRecord(item.payload.input)) {
+      return [];
+    }
+
+    const command = item.payload.input.command;
+
+    if (typeof command !== "string") {
+      return [];
+    }
+
+    return [
+      {
+        command,
+        startedId: item.id,
+        startedIndex,
+        toolCallId: readString(item.payload.toolCallId)
+      }
+    ];
+  });
 }
 
-function readValidationOutput(items: readonly ProtocolItem[]): string {
-  let latest = "";
+function readValidationOutput(
+  items: readonly ProtocolItem[],
+  shellCalls: readonly ShellCallEvidence[]
+): string {
+  let latestTestOutput = "";
 
-  for (const item of items) {
-    if (
-      (item.type !== "tool.result.completed" && item.type !== "tool.result") ||
-      !isRecord(item.payload) ||
-      item.payload.toolName !== "shell" ||
-      typeof item.payload.content !== "string"
-    ) {
+  for (const call of shellCalls) {
+    if (!isTestCommand(call.command)) {
       continue;
     }
 
-    latest = item.payload.content;
+    const output = readShellResultForCall(items, shellCalls, call);
+
+    if (output !== undefined) {
+      latestTestOutput = output;
+    }
   }
 
-  return latest;
+  return latestTestOutput;
+}
+
+function readShellResultForCall(
+  items: readonly ProtocolItem[],
+  shellCalls: readonly ShellCallEvidence[],
+  call: ShellCallEvidence
+): string | undefined {
+  const nextCall = shellCalls.find(
+    (candidate) => candidate.startedIndex > call.startedIndex
+  );
+  const endIndex = nextCall?.startedIndex ?? items.length;
+
+  for (
+    let index = call.startedIndex + 1;
+    index < endIndex;
+    index += 1
+  ) {
+    const result = readShellResult(items[index]);
+
+    if (!result) {
+      continue;
+    }
+
+    if (isResultLinkedToCall(result.item, result.payload, call)) {
+      return result.content;
+    }
+  }
+
+  return undefined;
+}
+
+function readShellResult(item: ProtocolItem | undefined):
+  | {
+      readonly item: ProtocolItem;
+      readonly payload: Readonly<Record<string, unknown>>;
+      readonly content: string;
+    }
+  | undefined {
+  if (
+    !item ||
+    (item.type !== "tool.result.completed" && item.type !== "tool.result") ||
+    !isRecord(item.payload) ||
+    item.payload.toolName !== "shell" ||
+    typeof item.payload.content !== "string"
+  ) {
+    return undefined;
+  }
+
+  return {
+    item,
+    payload: item.payload,
+    content: item.payload.content
+  };
+}
+
+function isResultLinkedToCall(
+  item: ProtocolItem,
+  payload: Readonly<Record<string, unknown>>,
+  call: ShellCallEvidence
+): boolean {
+  const resultToolCallId = readString(payload.toolCallId);
+  const hasExplicitLink =
+    resultToolCallId !== undefined ||
+    item.targetId !== undefined ||
+    item.causeId !== undefined;
+
+  if (!hasExplicitLink) {
+    return true;
+  }
+
+  return (
+    (resultToolCallId !== undefined &&
+      call.toolCallId !== undefined &&
+      resultToolCallId === call.toolCallId) ||
+    item.targetId === call.startedId ||
+    item.causeId === call.startedId
+  );
 }
 
 function readFinalAnswer(items: readonly ProtocolItem[]): string {
@@ -483,6 +583,10 @@ function isTestCommand(command: string): boolean {
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function readErrorMessage(cause: unknown): string {
