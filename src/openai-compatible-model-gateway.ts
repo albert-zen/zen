@@ -164,9 +164,13 @@ function mergeToolCalls(
     const current = toolCalls.get(index) ?? { arguments: "" };
 
     toolCalls.set(index, {
-      id: typeof delta.id === "string" ? delta.id : current.id,
+      id:
+        typeof delta.id === "string" && delta.id.length > 0
+          ? delta.id
+          : current.id,
       name:
-        typeof delta.function?.name === "string"
+        typeof delta.function?.name === "string" &&
+        delta.function.name.length > 0
           ? delta.function.name
           : current.name,
       arguments:

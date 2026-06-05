@@ -6,6 +6,7 @@
   "scripts": {
     "app-server": "npm run build && node dist/app-server-cli.js",
     "build": "tsc -p tsconfig.build.json",
+    "dogfood:alb-94": "npm run build && node docs/implementation/alb-94-dogfood-acceptance.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "tui": "npm run build && node dist/cli.js"
