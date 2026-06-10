@@ -17,6 +17,7 @@ export type AgentLoopOptions = {
   readonly toolRuntime?: ToolRuntime;
   readonly contextCompiler?: ContextCompiler;
   readonly hooks?: HookHandlers;
+  readonly systemPrompt?: string;
 };
 
 export type AgentRunInput = {
@@ -38,12 +39,14 @@ export class AgentLoop {
   private readonly toolRuntime?: ToolRuntime;
   private readonly contextCompiler: ContextCompiler;
   private readonly hookRuntime?: HookRuntime;
+  private readonly systemPrompt?: string;
 
   constructor(options: AgentLoopOptions) {
     this.itemList = options.itemList;
     this.model = options.model;
     this.toolRuntime = options.toolRuntime;
     this.contextCompiler = options.contextCompiler ?? new ContextCompiler();
+    this.systemPrompt = options.systemPrompt;
     this.hookRuntime = options.hooks
       ? new HookRuntime({ itemList: options.itemList, hooks: options.hooks })
       : undefined;
@@ -64,6 +67,7 @@ export class AgentLoop {
       visibility: "trace",
       payload: {}
     });
+    await this.ensureSystemPromptItem(input);
     await this.append({
       type: "user.message.completed",
       runId: input.runId,
@@ -137,6 +141,23 @@ export class AgentLoop {
 
     return this.itemList.append(input);
   }
+
+  private async ensureSystemPromptItem(input: AgentRunInput): Promise<void> {
+    if (!this.systemPrompt || hasSystemPromptItem(this.itemList.getItems())) {
+      return;
+    }
+
+    const item = await this.append({
+      type: "system.message.completed",
+      runId: input.runId,
+      turnId: input.turnId,
+      payload: { content: this.systemPrompt }
+    });
+
+    if (!item) {
+      throw new Error("Required item append was blocked: system.message.completed");
+    }
+  }
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -153,5 +174,13 @@ function hasToolCalls(item: Item): boolean {
     payload !== null &&
     Array.isArray((payload as { readonly toolCalls?: unknown }).toolCalls) &&
     (payload as { readonly toolCalls: readonly unknown[] }).toolCalls.length > 0
+  );
+}
+
+function hasSystemPromptItem(items: readonly Item[]): boolean {
+  return items.some(
+    (item) =>
+      item.type === "system.message.completed" &&
+      (item.visibility === undefined || item.visibility === "model")
   );
 }

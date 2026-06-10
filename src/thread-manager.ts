@@ -26,6 +26,7 @@ export type ThreadRuntime = {
   readonly model: ModelGateway;
   readonly toolRuntime?: ToolRuntime;
   readonly contextCompiler?: ContextCompiler;
+  readonly systemPrompt?: string;
 };
 
 export type ThreadRuntimeFactoryInput = {
@@ -624,7 +625,8 @@ function createAgentLoopOptions(
     itemList: thread.itemList,
     model: runtime.model,
     toolRuntime: runtime.toolRuntime,
-    contextCompiler: runtime.contextCompiler
+    contextCompiler: runtime.contextCompiler,
+    systemPrompt: runtime.systemPrompt
   };
 }
 

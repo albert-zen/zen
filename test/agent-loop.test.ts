@@ -10,6 +10,60 @@ import {
 } from "../src/index.js";
 
 describe("AgentLoop", () => {
+  it("records a configured system prompt as a model-visible item once", async () => {
+    const itemList = createItems();
+    const observedContexts: ModelContext[] = [];
+    let modelCalls = 0;
+    const model: ModelGateway = {
+      async *generate(context) {
+        observedContexts.push(context);
+        modelCalls += 1;
+        yield {
+          type: "message.completed",
+          content: modelCalls === 1 ? "First answer" : "Second answer"
+        };
+      }
+    };
+    const agent = new AgentLoop({
+      itemList,
+      model,
+      systemPrompt: "You are Zen."
+    });
+
+    await agent.run({
+      input: "First",
+      runId: "run-1",
+      turnId: "turn-1"
+    });
+    await agent.run({
+      input: "Second",
+      runId: "run-2",
+      turnId: "turn-2"
+    });
+
+    expect(
+      itemList
+        .getItems()
+        .filter((item) => item.type === "system.message.completed")
+    ).toEqual([
+      expect.objectContaining({
+        runId: "run-1",
+        turnId: "turn-1",
+        payload: { content: "You are Zen." }
+      })
+    ]);
+    expect(observedContexts[0]?.parts).toEqual([
+      { type: "message", role: "system", content: "You are Zen." },
+      { type: "message", role: "user", content: "First" }
+    ]);
+    expect(observedContexts[1]?.parts).toEqual([
+      { type: "message", role: "system", content: "You are Zen." },
+      { type: "message", role: "user", content: "First" },
+      { type: "message", role: "assistant", content: "First answer" },
+      { type: "message", role: "user", content: "Second" }
+    ]);
+  });
+
   it("runs a full fake model turn without a tool call through the public API", async () => {
     const itemList = createItems();
     const observedContexts: ModelContext[] = [];

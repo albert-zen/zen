@@ -3,6 +3,29 @@ import { describe, expect, it } from "vitest";
 import { ContextCompiler, type Item } from "../src/index.js";
 
 describe("ContextCompiler", () => {
+  it("compiles completed system messages into model context by seq", () => {
+    const compiler = new ContextCompiler();
+    const context = compiler.compile([
+      item({
+        id: "user-1",
+        seq: 2,
+        type: "user.message.completed",
+        payload: { content: "Hi" }
+      }),
+      item({
+        id: "system-1",
+        seq: 1,
+        type: "system.message.completed",
+        payload: { content: "You are Zen." }
+      })
+    ]);
+
+    expect(context.parts).toEqual([
+      { type: "message", role: "system", content: "You are Zen." },
+      { type: "message", role: "user", content: "Hi" }
+    ]);
+  });
+
   it("compiles completed user and assistant messages into model context by seq", () => {
     const compiler = new ContextCompiler();
     const laterAssistant = item({

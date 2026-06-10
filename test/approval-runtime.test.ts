@@ -257,7 +257,12 @@ describe("PolicyToolRuntime", () => {
 describe("AgentLoop approval boundary", () => {
   it("does not expose policy-specific public options", () => {
     expectTypeOf<keyof AgentLoopOptions>().toEqualTypeOf<
-      "itemList" | "model" | "toolRuntime" | "contextCompiler" | "hooks"
+      | "itemList"
+      | "model"
+      | "toolRuntime"
+      | "contextCompiler"
+      | "hooks"
+      | "systemPrompt"
     >();
 
     expect(

@@ -107,6 +107,7 @@ export {
   createProviderBackedAppServer,
   createProviderThreadRuntimeFactory
 } from "./provider-runtime.js";
+export { DEFAULT_ZEN_SYSTEM_PROMPT } from "./system-prompt.js";
 export type { OpenAiCompatibleModelGatewayOptions } from "./openai-compatible-model-gateway.js";
 export { OpenAiCompatibleModelGateway } from "./openai-compatible-model-gateway.js";
 export type {

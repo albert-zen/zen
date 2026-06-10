@@ -220,6 +220,56 @@ describe("appendModelResponseItems", () => {
 });
 
 describe("OpenAiCompatibleModelGateway", () => {
+  it("sends only compiled context messages without injecting a hidden system prompt", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: unknown[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+            controller.close();
+          }
+        }),
+        { status: 200 }
+      );
+    }) as typeof fetch;
+
+    try {
+      const gateway = new OpenAiCompatibleModelGateway({
+        baseUrl: "https://provider.test/v1",
+        apiKey: "test-key",
+        model: "test-model"
+      });
+
+      await collect(
+        gateway.generate({
+          parts: [
+            { type: "message", role: "system", content: "You are Zen." },
+            { type: "message", role: "user", content: "Hello" }
+          ]
+        })
+      );
+      await collect(gateway.generate({ parts: [] }));
+
+      expect(requests).toEqual([
+        expect.objectContaining({
+          messages: [
+            { role: "system", content: "You are Zen." },
+            { role: "user", content: "Hello" }
+          ]
+        }),
+        expect.objectContaining({
+          messages: []
+        })
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("preserves streamed tool call ids when later provider deltas send empty ids", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () =>

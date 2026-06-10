@@ -1,6 +1,6 @@
 import type { Item } from "./item-list.js";
 
-export type ModelMessageRole = "user" | "assistant";
+export type ModelMessageRole = "system" | "user" | "assistant";
 
 export type ModelMessagePart = {
   readonly type: "message";
@@ -37,6 +37,10 @@ export class ContextCompiler {
 
         if (item.type === "user.message.completed") {
           return [toMessagePart("user", item)];
+        }
+
+        if (item.type === "system.message.completed") {
+          return [toMessagePart("system", item)];
         }
 
         if (item.type === "assistant.message.completed") {

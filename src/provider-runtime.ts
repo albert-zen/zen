@@ -5,6 +5,7 @@ import {
   type ModelProviderConfigOptions
 } from "./model-provider-config.js";
 import { OpenAiCompatibleModelGateway } from "./openai-compatible-model-gateway.js";
+import { DEFAULT_ZEN_SYSTEM_PROMPT } from "./system-prompt.js";
 import { FileThreadStore, type ThreadStore } from "./thread-store.js";
 import type { ThreadRuntime, ThreadRuntimeFactory } from "./thread-manager.js";
 
@@ -50,7 +51,8 @@ export function createProviderThreadRuntimeFactory(
         defaultParams: config.params,
         tools: localToolDefinitions
       }),
-      toolRuntime: new LocalToolRuntime({ cwd: options.cwd })
+      toolRuntime: new LocalToolRuntime({ cwd: options.cwd }),
+      systemPrompt: DEFAULT_ZEN_SYSTEM_PROMPT
     };
   };
 }

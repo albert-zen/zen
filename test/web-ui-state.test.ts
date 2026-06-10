@@ -58,6 +58,47 @@ describe("web ui state projection", () => {
     ]);
   });
 
+  it("keeps system prompt items in state without rendering transcript rows", () => {
+    const state = createWebUiState({
+      id: "thread-1",
+      status: "idle",
+      turns: [
+        {
+          id: "turn-1",
+          runId: "run-1",
+          status: "completed",
+          itemIds: ["system-1", "user-1"]
+        }
+      ],
+      items: [
+        item({
+          id: "system-1",
+          seq: 1,
+          type: "system.message.completed",
+          payload: { content: "You are Zen." }
+        }),
+        item({
+          id: "user-1",
+          seq: 2,
+          type: "user.message.completed",
+          payload: { content: "Hello" }
+        })
+      ]
+    });
+
+    expect(state.items.map((entry) => entry.type)).toEqual([
+      "system.message.completed",
+      "user.message.completed"
+    ]);
+    expect(state.timelineRows).toEqual([
+      expect.objectContaining({
+        type: "user",
+        itemId: "user-1",
+        content: "Hello"
+      })
+    ]);
+  });
+
   it("applies appended item notifications in item sequence order", () => {
     let state = createWebUiState({
       id: "thread-1",

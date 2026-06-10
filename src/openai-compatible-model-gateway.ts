@@ -35,14 +35,7 @@ export class OpenAiCompatibleModelGateway implements ModelGateway {
       },
       body: JSON.stringify({
         model: this.options.model,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are Zen, a pragmatic coding agent. You have one workspace tool: shell, which runs PowerShell in the current repo. Use shell for workspace facts, rg searches, file inspection, edits, and tests. Return final answers in concise engineering prose."
-          },
-          ...toMessages(context.parts)
-        ],
+        messages: toMessages(context.parts),
         tools: this.options.tools,
         tool_choice: this.options.tools?.length ? "auto" : undefined,
         stream: true,

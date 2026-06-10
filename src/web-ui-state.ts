@@ -306,6 +306,10 @@ function buildTimelineRows(items: readonly ProtocolItem[]): readonly TimelineRow
   }
 
   return sortedItems.flatMap((item): TimelineRow[] => {
+    if (item.type === "system.message.completed") {
+      return [];
+    }
+
     const shellRow = shellRows.get(item.id);
 
     if (shellRow) {
