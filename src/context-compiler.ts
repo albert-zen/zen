@@ -28,9 +28,9 @@ export type ModelContext = {
 
 export class ContextCompiler {
   compile(items: readonly Item[]): ModelContext {
-    const parts = [...items]
-      .sort((left, right) => left.seq - right.seq)
-      .flatMap((item): ModelContextPart[] => {
+    const sortedItems = [...items].sort((left, right) => left.seq - right.seq);
+    const systemPart = latestSystemMessagePart(sortedItems);
+    const parts = sortedItems.flatMap((item): ModelContextPart[] => {
         if (!isModelVisible(item)) {
           return [];
         }
@@ -40,7 +40,7 @@ export class ContextCompiler {
         }
 
         if (item.type === "system.message.completed") {
-          return [toMessagePart("system", item)];
+          return [];
         }
 
         if (item.type === "assistant.message.completed") {
@@ -54,8 +54,20 @@ export class ContextCompiler {
         return [];
       });
 
-    return { parts };
+    return { parts: systemPart ? [systemPart, ...parts] : parts };
   }
+}
+
+function latestSystemMessagePart(items: readonly Item[]): ModelMessagePart | undefined {
+  const latest = [...items]
+    .reverse()
+    .find(
+      (item) =>
+        item.type === "system.message.completed" &&
+        isModelVisible(item)
+    );
+
+  return latest ? toMessagePart("system", latest) : undefined;
 }
 
 function toMessagePart(role: ModelMessageRole, item: Item): ModelMessagePart {

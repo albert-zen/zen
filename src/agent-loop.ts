@@ -143,7 +143,10 @@ export class AgentLoop {
   }
 
   private async ensureSystemPromptItem(input: AgentRunInput): Promise<void> {
-    if (!this.systemPrompt || hasSystemPromptItem(this.itemList.getItems())) {
+    if (
+      !this.systemPrompt ||
+      latestSystemPromptContent(this.itemList.getItems()) === this.systemPrompt
+    ) {
       return;
     }
 
@@ -177,10 +180,22 @@ function hasToolCalls(item: Item): boolean {
   );
 }
 
-function hasSystemPromptItem(items: readonly Item[]): boolean {
-  return items.some(
-    (item) =>
-      item.type === "system.message.completed" &&
-      (item.visibility === undefined || item.visibility === "model")
-  );
+function latestSystemPromptContent(items: readonly Item[]): unknown {
+  const latest = [...items]
+    .reverse()
+    .find(
+      (item) =>
+        item.type === "system.message.completed" &&
+        (item.visibility === undefined || item.visibility === "model")
+    );
+
+  return readContent(latest?.payload);
+}
+
+function readContent(payload: unknown): unknown {
+  if (typeof payload === "object" && payload !== null && "content" in payload) {
+    return payload.content;
+  }
+
+  return payload;
 }

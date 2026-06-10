@@ -64,6 +64,103 @@ describe("AgentLoop", () => {
     ]);
   });
 
+  it("appends a new system prompt item when configured prompt changes", async () => {
+    const itemList = createItems();
+    const observedContexts: ModelContext[] = [];
+    const model: ModelGateway = {
+      async *generate(context) {
+        observedContexts.push(context);
+        yield { type: "message.completed", content: "ok" };
+      }
+    };
+
+    await new AgentLoop({
+      itemList,
+      model,
+      systemPrompt: "Initial prompt."
+    }).run({
+      input: "First",
+      runId: "run-1",
+      turnId: "turn-1"
+    });
+    await new AgentLoop({
+      itemList,
+      model,
+      systemPrompt: "Updated prompt."
+    }).run({
+      input: "Second",
+      runId: "run-2",
+      turnId: "turn-2"
+    });
+
+    expect(
+      itemList
+        .getItems()
+        .filter((item) => item.type === "system.message.completed")
+        .map((item) => item.payload)
+    ).toEqual([
+      { content: "Initial prompt." },
+      { content: "Updated prompt." }
+    ]);
+    expect(observedContexts.at(-1)?.parts.at(0)).toEqual({
+      type: "message",
+      role: "system",
+      content: "Updated prompt."
+    });
+  });
+
+  it("places a newly added system prompt before existing resumed conversation context", async () => {
+    const itemList = new InMemoryItemList({
+      generateId: (() => {
+        let nextId = 2;
+        return () => `item-${++nextId}`;
+      })(),
+      clock: () => 1000,
+      initialItems: [
+        {
+          id: "item-1",
+          type: "user.message.completed",
+          createdAtMs: 1000,
+          seq: 1,
+          runId: "run-0",
+          turnId: "turn-0",
+          payload: { content: "Earlier user" }
+        },
+        {
+          id: "item-2",
+          type: "assistant.message.completed",
+          createdAtMs: 1000,
+          seq: 2,
+          runId: "run-0",
+          turnId: "turn-0",
+          payload: { content: "Earlier assistant" }
+        }
+      ]
+    });
+    const observedContexts: ModelContext[] = [];
+    const model = fakeModel(
+      [{ type: "message.completed", content: "Current answer" }],
+      observedContexts
+    );
+
+    await new AgentLoop({
+      itemList,
+      model,
+      systemPrompt: "You are Zen."
+    }).run({
+      input: "Current user",
+      runId: "run-1",
+      turnId: "turn-1"
+    });
+
+    expect(observedContexts[0]?.parts).toEqual([
+      { type: "message", role: "system", content: "You are Zen." },
+      { type: "message", role: "user", content: "Earlier user" },
+      { type: "message", role: "assistant", content: "Earlier assistant" },
+      { type: "message", role: "user", content: "Current user" }
+    ]);
+  });
+
   it("runs a full fake model turn without a tool call through the public API", async () => {
     const itemList = createItems();
     const observedContexts: ModelContext[] = [];

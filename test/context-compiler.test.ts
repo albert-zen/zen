@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ContextCompiler, type Item } from "../src/index.js";
 
 describe("ContextCompiler", () => {
-  it("compiles completed system messages into model context by seq", () => {
+  it("compiles the latest completed system message at the front of model context", () => {
     const compiler = new ContextCompiler();
     const context = compiler.compile([
       item({
@@ -15,6 +15,12 @@ describe("ContextCompiler", () => {
       item({
         id: "system-1",
         seq: 1,
+        type: "system.message.completed",
+        payload: { content: "Old prompt." }
+      }),
+      item({
+        id: "system-2",
+        seq: 3,
         type: "system.message.completed",
         payload: { content: "You are Zen." }
       })
