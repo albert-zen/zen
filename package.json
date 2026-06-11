@@ -11,11 +11,13 @@
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
     "tui": "npm run build && node dist/cli.js",
+    "web": "npm run build && node dist/web-dev-cli.js",
     "web:build": "vite build --config web/vite.config.ts",
     "web:dev": "vite --config web/vite.config.ts --host 127.0.0.1"
   },
   "bin": {
     "zen-app-server": "dist/app-server-cli.js",
+    "zen-web": "dist/web-dev-cli.js",
     "zen": "dist/cli.js"
   },
   "devDependencies": {

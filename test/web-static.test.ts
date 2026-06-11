@@ -2,11 +2,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import {
-  DEFAULT_APP_SERVER_HOST,
-  DEFAULT_APP_SERVER_PORT
-} from "../src/app-server-config.js";
-
 describe("static Web UI shell", () => {
   it("provides a React, Tailwind, and shadcn-style Web UI entry", () => {
     const html = readFileSync(join(process.cwd(), "web", "index.html"), "utf8");
@@ -39,13 +34,12 @@ describe("static Web UI shell", () => {
     expect(workspace).toContain("Demo mode");
   });
 
-  it("defaults to the same local endpoint as the App Server CLI", () => {
+  it("defaults browser transport to the current Web origin", () => {
     const workspace = readFileSync(
       join(process.cwd(), "web", "src", "workspace.tsx"),
       "utf8"
     );
-    const url = `http://${DEFAULT_APP_SERVER_HOST}:${DEFAULT_APP_SERVER_PORT}`;
 
-    expect(workspace).toContain(`const DEFAULT_SERVER_URL = "${url}"`);
+    expect(workspace).toContain("const DEFAULT_SERVER_URL = window.location.origin");
   });
 });

@@ -24,7 +24,7 @@ import { Textarea } from "./components/ui/textarea";
 import { createBrowserDemoAppServer } from "./demo-app-server";
 import { cn } from "./lib/utils";
 
-const DEFAULT_SERVER_URL = "http://127.0.0.1:3000";
+const DEFAULT_SERVER_URL = window.location.origin;
 
 type RuntimeMode = "real" | "demo";
 
