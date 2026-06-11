@@ -7,7 +7,8 @@ import type {
 import type {
   AppServerNotification,
   AppServerResponse,
-  ApprovalDecision
+  ApprovalDecision,
+  ThreadSnapshot
 } from "./app-server-protocol.js";
 import {
   applyAppServerNotification,
@@ -105,6 +106,20 @@ export class WebUiClient {
     this.emit();
   }
 
+  async listThreads(): Promise<readonly ThreadSnapshot[]> {
+    const response = await this.client.request({ method: "thread/list" });
+
+    if (response.ok && response.method === "thread/list") {
+      return response.result.threads;
+    }
+
+    if (!response.ok) {
+      throw new Error(response.error.message);
+    }
+
+    throw new Error(`Expected thread/list response, received ${response.method}`);
+  }
+
   async resumeThread(threadId: string): Promise<void> {
     const response = await this.client.request({
       method: "thread/read",
@@ -142,6 +157,43 @@ export class WebUiClient {
         threadId,
         input: trimmed
       }
+    });
+
+    if (!response.ok) {
+      this.fail(response.error.message);
+      throw new Error(response.error.message);
+    }
+  }
+
+  async interruptThread(): Promise<void> {
+    const threadId = this.state.currentThread?.id;
+
+    if (!threadId) {
+      return;
+    }
+
+    const response = await this.client.request({
+      method: "turn/interrupt",
+      params: { threadId }
+    });
+
+    if (!response.ok) {
+      this.fail(response.error.message);
+      throw new Error(response.error.message);
+    }
+  }
+
+  async retryTurn(turnId?: string): Promise<void> {
+    const threadId = this.state.currentThread?.id;
+
+    if (!threadId) {
+      return;
+    }
+
+    this.setConnection({ status: "running" });
+    const response = await this.client.request({
+      method: "turn/retry",
+      params: { threadId, turnId }
     });
 
     if (!response.ok) {

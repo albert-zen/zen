@@ -8,34 +8,44 @@ import {
 } from "../src/app-server-config.js";
 
 describe("static Web UI shell", () => {
-  it("provides a usable first screen and browser adapter", () => {
+  it("provides a React, Tailwind, and shadcn-style Web UI entry", () => {
     const html = readFileSync(join(process.cwd(), "web", "index.html"), "utf8");
-    const js = readFileSync(join(process.cwd(), "web", "app.js"), "utf8");
+    const workspace = readFileSync(
+      join(process.cwd(), "web", "src", "workspace.tsx"),
+      "utf8"
+    );
+    const styles = readFileSync(join(process.cwd(), "web", "src", "styles.css"), "utf8");
+    const button = readFileSync(
+      join(process.cwd(), "web", "src", "components", "ui", "button.tsx"),
+      "utf8"
+    );
+    const utils = readFileSync(
+      join(process.cwd(), "web", "src", "lib", "utils.ts"),
+      "utf8"
+    );
 
-    expect(html).toContain('<form id="composer"');
-    expect(html).toContain('id="timeline"');
-    expect(html).toContain('id="new-thread"');
-    expect(html).toContain('id="connect"');
-    expect(html).toContain('id="runtime-mode"');
-    expect(html).toContain('Real transport');
-    expect(html).toContain('Demo mode');
-    expect(html).toContain('type="module" src="./app.js"');
-    expect(js).toContain("BrowserAppServerTransportClient");
-    expect(js).toContain("WebUiClient");
-    expect(js).toContain('params.get("mode") === "demo"');
-    expect(js).toContain("createBrowserDemoAppServer");
-    expect(js).toContain("renderTimelineRow");
-    expect(js).toContain("renderShellRow");
-    expect(js).toContain("renderShellCommand");
-    expect(js).toContain("renderShellResult");
+    expect(html).toContain('<div id="root"></div>');
+    expect(html).toContain('type="module" src="/web/src/main.tsx"');
+    expect(styles).toContain('@import "tailwindcss"');
+    expect(button).toContain("class-variance-authority");
+    expect(utils).toContain("tailwind-merge");
+    expect(workspace).toContain("BrowserAppServerTransportClient");
+    expect(workspace).toContain("WebUiClient");
+    expect(workspace).toContain("createBrowserDemoAppServer");
+    expect(workspace).toContain('id="composer"');
+    expect(workspace).toContain('id="timeline"');
+    expect(workspace).toContain('id="runtime-mode"');
+    expect(workspace).toContain("Real transport");
+    expect(workspace).toContain("Demo mode");
   });
 
   it("defaults to the same local endpoint as the App Server CLI", () => {
-    const html = readFileSync(join(process.cwd(), "web", "index.html"), "utf8");
-    const js = readFileSync(join(process.cwd(), "web", "app.js"), "utf8");
+    const workspace = readFileSync(
+      join(process.cwd(), "web", "src", "workspace.tsx"),
+      "utf8"
+    );
     const url = `http://${DEFAULT_APP_SERVER_HOST}:${DEFAULT_APP_SERVER_PORT}`;
 
-    expect(html).toContain(`value="${url}"`);
-    expect(js).toContain(`const DEFAULT_SERVER_URL = "${url}"`);
+    expect(workspace).toContain(`const DEFAULT_SERVER_URL = "${url}"`);
   });
 });

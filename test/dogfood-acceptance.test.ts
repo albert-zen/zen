@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -21,24 +21,28 @@ describe("dogfood acceptance scenario", () => {
     const fixtureRoot = join(root, "fixtures");
     const missingConfigPath = join(root, "missing-model-provider.json");
 
-    const result = await runDogfoodAcceptanceScenario({
-      configPath: missingConfigPath,
-      evidencePath,
-      fixtureRoot,
-      now: () => new Date("2026-06-05T00:00:00.000Z")
-    });
+    try {
+      const result = await runDogfoodAcceptanceScenario({
+        configPath: missingConfigPath,
+        evidencePath,
+        fixtureRoot,
+        now: () => new Date("2026-06-05T00:00:00.000Z")
+      });
 
-    expect(result.status).toBe("skipped");
-    expect(result.fixturePath.startsWith(fixtureRoot)).toBe(true);
-    expect(existsSync(join(result.fixturePath, "package.json"))).toBe(true);
-    expect(await readdir(root)).toEqual(["evidence.md", "fixtures"]);
+      expect(result.status).toBe("skipped");
+      expect(result.fixturePath.startsWith(fixtureRoot)).toBe(true);
+      expect(existsSync(join(result.fixturePath, "package.json"))).toBe(true);
+      expect(await readdir(root)).toEqual(["evidence.md", "fixtures"]);
 
-    const evidence = readFileSync(evidencePath, "utf8");
+      const evidence = readFileSync(evidencePath, "utf8");
 
-    expect(evidence).toContain("Status: skipped");
-    expect(evidence).toContain(missingConfigPath);
-    expect(evidence).toContain("Missing provider credentials are treated as a skip");
-    expect(evidence).not.toContain("Status: passed");
+      expect(evidence).toContain("Status: skipped");
+      expect(evidence).toContain(missingConfigPath);
+      expect(evidence).toContain("Missing provider credentials are treated as a skip");
+      expect(evidence).not.toContain("Status: passed");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("requires shell inspect, edit, and test evidence before marking a thread passed", () => {
@@ -172,40 +176,44 @@ describe("dogfood acceptance scenario", () => {
     const configPath = join(root, "model-provider.json");
     writeModelProviderConfig(configPath);
 
-    const result = await runDogfoodAcceptanceScenario({
-      configPath,
-      evidencePath,
-      fixtureRoot,
-      now: () => new Date("2026-06-05T00:00:00.000Z"),
-      createAppServer: ({ fixturePath }) =>
-        new AppServer({
-          threadManagerOptions: {
-            generateThreadId: sequence("thread"),
-            generateRunId: sequence("run"),
-            generateTurnId: sequence("turn"),
-            generateItemId: sequence("item"),
-            clock: () => 1000,
-            runtimeFactory: () => ({
-              model: createScriptedDogfoodModel(),
-              toolRuntime: new LocalToolRuntime({ cwd: fixturePath })
-            })
-          }
-        })
-    });
+    try {
+      const result = await runDogfoodAcceptanceScenario({
+        configPath,
+        evidencePath,
+        fixtureRoot,
+        now: () => new Date("2026-06-05T00:00:00.000Z"),
+        createAppServer: ({ fixturePath }) =>
+          new AppServer({
+            threadManagerOptions: {
+              generateThreadId: sequence("thread"),
+              generateRunId: sequence("run"),
+              generateTurnId: sequence("turn"),
+              generateItemId: sequence("item"),
+              clock: () => 1000,
+              runtimeFactory: () => ({
+                model: createScriptedDogfoodModel(),
+                toolRuntime: new LocalToolRuntime({ cwd: fixturePath })
+              })
+            }
+          })
+      });
 
-    expect(result.status).toBe("passed");
+      expect(result.status).toBe("passed");
 
-    const evidence = readFileSync(evidencePath, "utf8");
+      const evidence = readFileSync(evidencePath, "utf8");
 
-    expect(evidence).toContain("Status: passed");
-    expect(evidence).toContain("Get-ChildItem");
-    expect(evidence).toContain("Set-Content");
-    expect(evidence).toContain("npm test");
-    expect(evidence).toContain("dogfood fixture passed");
-    expect(readFileSync(join(result.fixturePath, "src", "greeting.js"), "utf8")).toContain(
-      "Hello, ${name}!"
-    );
-  });
+      expect(evidence).toContain("Status: passed");
+      expect(evidence).toContain("Get-ChildItem");
+      expect(evidence).toContain("Set-Content");
+      expect(evidence).toContain("npm test");
+      expect(evidence).toContain("dogfood fixture passed");
+      expect(readFileSync(join(result.fixturePath, "src", "greeting.js"), "utf8")).toContain(
+        "Hello, ${name}!"
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 function createThread(items: readonly ProtocolItem[]): ThreadSnapshot {

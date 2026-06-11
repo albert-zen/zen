@@ -305,7 +305,13 @@ export class ZenTuiApp {
   private renderLines(): readonly string[] {
     const snapshot = this.session.getSnapshot();
     const state = snapshot.state;
-    const lines = ["Zen Agent", renderThreadSummary(snapshot.thread, state), ""];
+    const lines = [
+      "Zen Agent",
+      renderThreadSummary(snapshot.thread, state),
+      "Commands: /new /resume /status /tools /interrupt /retry",
+      "",
+      "Messages"
+    ];
     const rows = state.timelineRows.filter((row) => row.type !== "trace");
 
     lines.push(...renderTranscript(rows, { showToolDetails: this.showToolDetails }));
@@ -346,7 +352,7 @@ function renderThreadSummary(thread: ThreadSnapshot | undefined, state: WebUiSta
   if (!thread) {
     return "No thread";
   }
-  return `${thread.id} | ${state.currentThread?.status ?? thread.status} | turns ${thread.turns.length} | items ${thread.items.length}`;
+  return `Thread ${thread.id} | ${state.currentThread?.status ?? thread.status} | turns ${thread.turns.length} | items ${thread.items.length}`;
 }
 
 function renderStatus(state: WebUiState): string {

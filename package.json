@@ -9,15 +9,32 @@
     "dogfood:alb-94": "npm run build && node docs/implementation/alb-94-dogfood-acceptance.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "tui": "npm run build && node dist/cli.js"
+    "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
+    "tui": "npm run build && node dist/cli.js",
+    "web:build": "vite build --config web/vite.config.ts",
+    "web:dev": "vite --config web/vite.config.ts --host 127.0.0.1"
   },
   "bin": {
     "zen-app-server": "dist/app-server-cli.js",
     "zen": "dist/cli.js"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
     "@types/node": "^25.9.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
+    "vite": "^8.0.16",
     "vitest": "^4.1.7"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.17.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwind-merge": "^3.6.0"
   }
 }
