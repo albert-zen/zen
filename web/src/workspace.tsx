@@ -26,40 +26,39 @@ import { cn } from "./lib/utils";
 
 type RuntimeMode = "real" | "demo";
 
-export function AgentWorkspace(): React.ReactElement {
+export type AgentWorkspaceProps = {
+  readonly createClient?: (
+    mode: RuntimeMode,
+    onSubscriptionStatus: (status: string, error?: unknown) => void
+  ) => WebUiClient;
+  readonly initialMode?: RuntimeMode;
+};
+
+export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElement {
   const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
-  const initialMode: RuntimeMode = params.get("mode") === "demo" ? "demo" : "real";
+  const createClient = props.createClient ?? createWebClient;
+  const initialMode: RuntimeMode = props.initialMode ?? (params.get("mode") === "demo" ? "demo" : "real");
   const [mode, setMode] = React.useState<RuntimeMode>(initialMode);
   const [client, setClient] = React.useState(() =>
-    createWebClient(initialMode, () => undefined)
+    createClient(initialMode, () => undefined)
   );
-  const [snapshot, setSnapshot] = React.useState<WebUiClientSnapshot>(() =>
-    client.getSnapshot()
-  );
+  const snapshot = useWebUiSnapshot(client);
   const [threads, setThreads] = React.useState<readonly ThreadSnapshot[]>([]);
   const [input, setInput] = React.useState("");
   const [showTrace, setShowTrace] = React.useState(false);
   const [streamStatus, setStreamStatus] = React.useState("disconnected");
   const [streamError, setStreamError] = React.useState("");
 
-  React.useEffect(() => client.subscribe(setSnapshot), [client]);
-
   const reconnect = React.useCallback(async () => {
     client.disconnect();
-    const next = createWebClient(mode, (status, error) => {
-      setStreamStatus(status);
-      setStreamError(error ? "event stream failed" : "");
-    });
-    setClient(next);
-    next.subscribe(setSnapshot);
-    await next.connect({ threadId: params.get("thread") ?? undefined });
-    setThreads(await next.listThreads());
-  }, [client, mode, params]);
+    await client.connect({ threadId: params.get("thread") ?? undefined });
+    setThreads(await client.listThreads());
+  }, [client, params]);
 
   React.useEffect(() => {
     void reconnect().catch((cause) => setStreamError(readError(cause)));
-    return () => client.disconnect();
-  }, []);
+    return () => client.dispose();
+  }, [client, reconnect]);
 
   const state = snapshot.state;
   const connection = snapshot.connection;
@@ -92,10 +91,14 @@ export function AgentWorkspace(): React.ReactElement {
   }
 
   function changeMode(nextMode: RuntimeMode): void {
-    const next = new URL(window.location.href);
-    next.searchParams.set("mode", nextMode);
-    next.searchParams.delete("server");
-    window.location.assign(next.toString());
+    if (nextMode === mode) {
+      return;
+    }
+    setMode(nextMode);
+    setClient(createClient(nextMode, (status, error) => {
+      setStreamStatus(status);
+      setStreamError(error ? "event stream failed" : "");
+    }));
   }
 
   return (
@@ -234,6 +237,15 @@ export function AgentWorkspace(): React.ReactElement {
       </main>
     </div>
   );
+}
+
+export function useWebUiSnapshot(client: WebUiClient): WebUiClientSnapshot {
+  const subscribe = React.useCallback(
+    (notify: () => void) => client.subscribe(() => notify()),
+    [client]
+  );
+  const getSnapshot = React.useCallback(() => client.getSnapshot(), [client]);
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 function ThreadButton({
@@ -465,17 +477,18 @@ function rowLabel(row: TimelineRow): string {
   return row.type.replaceAll("-", " ");
 }
 
-function threadTitle(thread: { id: string; items: readonly ThreadSnapshot["items"][number][] }): string {
+function threadTitle(thread: { id: string; items: Iterable<ThreadSnapshot["items"][number]> }): string {
   return summarize(latestContent(thread.items, "user.message.completed") ?? thread.id, 48);
 }
 
-function latestAssistantOrUser(items: readonly ThreadSnapshot["items"][number][]): string | undefined {
+function latestAssistantOrUser(items: Iterable<ThreadSnapshot["items"][number]>): string | undefined {
   return latestContent(items, "assistant.message.completed") ?? latestContent(items, "user.message.completed");
 }
 
-function latestContent(items: readonly ThreadSnapshot["items"][number][], type: string): string | undefined {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
+function latestContent(items: Iterable<ThreadSnapshot["items"][number]>, type: string): string | undefined {
+  const orderedItems = [...items];
+  for (let index = orderedItems.length - 1; index >= 0; index -= 1) {
+    const item = orderedItems[index];
     if (item?.type !== type) {
       continue;
     }

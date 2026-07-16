@@ -3,10 +3,109 @@ import { describe, expect, it } from "vitest";
 import type { ThreadSnapshot } from "../src/app-server-protocol.js";
 import {
   applyAppServerNotification,
-  createWebUiState
+  createWebUiState,
+  InteractionProjection
 } from "../src/web-ui-state.js";
 
 describe("web ui state projection", () => {
+  it("caches snapshots and processes 1k/5k ordered appends with constant work and no sequence copies", () => {
+    const projection = new InteractionProjection({ id: "thread-1", status: "idle", turns: [], items: [] });
+    const baseline = projection.getWork();
+    const initial = projection.getSnapshot();
+    let listenerCalls = 0;
+    projection.subscribe(() => { listenerCalls += 1; });
+
+    for (let seq = 1; seq <= 1000; seq += 1) {
+      projection.apply({
+        type: "item/appended",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: item({ id: `item-${seq}`, seq, type: "user.message.completed", payload: { content: String(seq) } })
+      });
+    }
+    const atOneThousand = projection.getSnapshot();
+    expect(workSince(baseline, projection.getWork())).toEqual({ fastPathOperations: 1000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0, sequenceTraversals: 0, mapClones: 0, indexRebuilds: 0 });
+
+    for (let seq = 1001; seq <= 5000; seq += 1) {
+      projection.apply({
+        type: "item/appended",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: item({ id: `item-${seq}`, seq, type: "user.message.completed", payload: { content: String(seq) } })
+      });
+    }
+    expect(workSince(baseline, projection.getWork())).toEqual({ fastPathOperations: 5000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0, sequenceTraversals: 0, mapClones: 0, indexRebuilds: 0 });
+
+    const snapshot = projection.getSnapshot();
+    expect(initial).not.toBe(snapshot);
+    expect(snapshot.items).toHaveLength(5000);
+    expect(snapshot.timelineRows).toHaveLength(5000);
+    expect(listenerCalls).toBe(5000);
+    expect(atOneThousand.items).toHaveLength(1000);
+    expect(atOneThousand.timelineRows).toHaveLength(1000);
+
+    const unchanged = projection.getSnapshot();
+    projection.apply({
+      type: "item/appended", threadId: "thread-1", turnId: "turn-1",
+      item: item({ id: "item-5000", seq: 5000, type: "user.message.completed", payload: { content: "5000" } })
+    });
+    expect(projection.getSnapshot()).toBe(unchanged);
+    expect(listenerCalls).toBe(5000);
+  });
+
+  it("keeps stable shell slots when approval resolution tombstones a row", () => {
+    let state = createWebUiState({ id: "thread-1", status: "running", turns: [], items: [] });
+    const append = (nextItem: ReturnType<typeof item>) => {
+      state = applyAppServerNotification(state, { type: "item/appended", threadId: "thread-1", turnId: "turn-1", item: nextItem });
+    };
+    append(item({ id: "shell-1", seq: 1, type: "tool.call.started", payload: { toolName: "shell", input: { command: "one" } } }));
+    append(item({ id: "approval-1", seq: 2, type: "approval.requested", payload: { approvalId: "approval-1" } }));
+    append(item({ id: "shell-2", seq: 3, type: "tool.call.started", payload: { toolName: "shell", input: { command: "two" } } }));
+    append(item({ id: "approval-1-resolved", seq: 4, type: "approval.resolved", payload: { approvalId: "approval-1", decision: "approveOnce" } }));
+    append(item({ id: "shell-2-output", seq: 5, type: "tool.output.delta", targetId: "shell-2", payload: { delta: { stream: "stdout", chunk: "two output" } } }));
+
+    expect([...state.timelineRows]).toEqual([
+      expect.objectContaining({ type: "shell", itemId: "shell-1", stdout: "" }),
+      expect.objectContaining({ type: "shell", itemId: "shell-2", stdout: "two output" }),
+      expect.objectContaining({ type: "approval-resolved", itemId: "approval-1-resolved" })
+    ]);
+  });
+
+  it("processes 1k/5k shell and approval facts without rebuilds, copies, or materialization", () => {
+    const projection = new InteractionProjection({ id: "thread-1", status: "running", turns: [], items: [] });
+    const baseline = projection.getWork();
+    let seq = 0;
+    for (let index = 1; index <= 1000; index += 1) {
+      const shellId = `shell-${index}`;
+      const approvalId = `approval-${index}`;
+      for (const nextItem of [
+        item({ id: shellId, seq: ++seq, type: "tool.call.started", payload: { toolName: "shell", input: { command: String(index) } } }),
+        item({ id: approvalId, seq: ++seq, type: "approval.requested", targetId: shellId, payload: { approvalId } }),
+        item({ id: `${approvalId}-resolved`, seq: ++seq, type: "approval.resolved", targetId: shellId, payload: { approvalId, decision: "approveOnce" } }),
+        item({ id: `${shellId}-output`, seq: ++seq, type: "tool.output.delta", targetId: shellId, payload: { delta: { stream: "stdout", chunk: "x" } } }),
+        item({ id: `${shellId}-result`, seq: ++seq, type: "tool.result.completed", targetId: shellId, payload: { content: "exitCode: 0\nstdout:\nx\nstderr:\n" } })
+      ]) {
+        projection.apply({ type: "item/appended", threadId: "thread-1", turnId: "turn-1", item: nextItem });
+      }
+    }
+    expect(workSince(baseline, projection.getWork())).toEqual({ fastPathOperations: 5000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0, sequenceTraversals: 0, mapClones: 0, indexRebuilds: 0 });
+  });
+
+  it("records the actual copies, traversal, map clone, and index rebuild on the slow path", () => {
+    const projection = new InteractionProjection({ id: "thread-1", status: "running", turns: [], items: [] });
+    const baseline = projection.getWork();
+    projection.apply({ type: "item/appended", threadId: "thread-1", turnId: "turn-1", item: item({ id: "second", seq: 2, type: "user.message.completed", payload: { content: "second" } }) });
+    projection.apply({ type: "item/appended", threadId: "thread-1", turnId: "turn-1", item: item({ id: "first", seq: 1, type: "user.message.completed", payload: { content: "first" } }) });
+
+    const work = workSince(baseline, projection.getWork());
+    expect(work.fastPathOperations).toBe(1);
+    expect(work.rebuilds).toBe(1);
+    expect(work.mapClones).toBe(1);
+    expect(work.indexRebuilds).toBe(1);
+    expect(work.sequenceCopies).toBeGreaterThan(0);
+    expect(work.fullMaterializations).toBeGreaterThan(0);
+    expect(work.sequenceTraversals).toBeGreaterThan(0);
+  });
   it("initializes current thread and timeline rows from a snapshot", () => {
     const snapshot: ThreadSnapshot = {
       id: "thread-1",
@@ -42,7 +141,7 @@ describe("web ui state projection", () => {
       status: "idle",
       turns: snapshot.turns
     });
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "user",
         itemId: "item-1",
@@ -90,7 +189,7 @@ describe("web ui state projection", () => {
       "system.message.completed",
       "user.message.completed"
     ]);
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "user",
         itemId: "user-1",
@@ -165,7 +264,7 @@ describe("web ui state projection", () => {
       ]
     });
 
-    expect(state.timelineRows).toEqual(
+    expect([...state.timelineRows]).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: "assistant-progress",
@@ -191,7 +290,7 @@ describe("web ui state projection", () => {
     expect(state.timelineRows.filter((row) => row.type === "assistant-progress")).toEqual(
       []
     );
-    expect(state.timelineRows).toEqual(
+    expect([...state.timelineRows]).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: "assistant",
@@ -243,7 +342,7 @@ describe("web ui state projection", () => {
       ]
     });
 
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "tool-call",
         itemId: "tool-started",
@@ -291,7 +390,7 @@ describe("web ui state projection", () => {
       })
     });
 
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "approval-pending",
         itemId: "approval-requested",
@@ -321,7 +420,7 @@ describe("web ui state projection", () => {
     expect(state.timelineRows.filter((row) => row.type === "approval-pending")).toEqual(
       []
     );
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "approval-resolved",
         itemId: "approval-resolved",
@@ -368,7 +467,7 @@ describe("web ui state projection", () => {
       ]
     });
 
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "approval-resolved",
         itemId: "approval-resolved-delta",
@@ -427,7 +526,7 @@ describe("web ui state projection", () => {
       ]
     });
 
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "shell",
         status: "running",
@@ -484,7 +583,7 @@ describe("web ui state projection", () => {
       ]
     });
 
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "shell",
         itemId: "shell-started",
@@ -527,7 +626,7 @@ describe("web ui state projection", () => {
       ]
     });
 
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "shell",
         status: "completed",
@@ -568,7 +667,7 @@ describe("web ui state projection", () => {
       ]
     });
 
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "shell",
         status: "failed",
@@ -608,7 +707,7 @@ describe("web ui state projection", () => {
       ]
     });
 
-    expect(state.timelineRows).toEqual([
+    expect([...state.timelineRows]).toEqual([
       expect.objectContaining({
         type: "shell",
         status: "interrupted",
@@ -729,7 +828,7 @@ describe("web ui state projection", () => {
     );
 
     expect(state.currentThread?.id).toBe("thread-1");
-    expect(state.timelineRows).toEqual([]);
+    expect([...state.timelineRows]).toEqual([]);
   });
 });
 
@@ -745,5 +844,20 @@ function item(
     turnId: "turn-1",
     payload: {},
     ...overrides
+  };
+}
+
+function workSince(
+  before: ReturnType<InteractionProjection["getWork"]>,
+  after: ReturnType<InteractionProjection["getWork"]>
+): ReturnType<InteractionProjection["getWork"]> {
+  return {
+    fastPathOperations: after.fastPathOperations - before.fastPathOperations,
+    rebuilds: after.rebuilds - before.rebuilds,
+    sequenceCopies: after.sequenceCopies - before.sequenceCopies,
+    fullMaterializations: after.fullMaterializations - before.fullMaterializations,
+    sequenceTraversals: after.sequenceTraversals - before.sequenceTraversals,
+    mapClones: after.mapClones - before.mapClones,
+    indexRebuilds: after.indexRebuilds - before.indexRebuilds
   };
 }

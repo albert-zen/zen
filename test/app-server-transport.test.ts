@@ -383,7 +383,7 @@ describe("App Server HTTP transport", () => {
           items: 0
         }
       ]);
-      expect(resumed.thread).toEqual(start.result.thread);
+      expect({ ...resumed.thread, items: [...(resumed.thread?.items ?? [])] }).toEqual(start.result.thread);
     } finally {
       session.dispose();
       await transport.close();

@@ -8,7 +8,7 @@ export type {
   AgentInteractionSnapshot,
   AgentThreadListEntry
 } from "./agent-interaction-session.js";
-export { AgentInteractionSession } from "./agent-interaction-session.js";
+export { AgentInteractionSession, AgentInteractionSessionDisposedError } from "./agent-interaction-session.js";
 export type {
   AppServerClient,
   AppServerNotificationListener,
@@ -201,10 +201,13 @@ export type {
   ToolErrorTimelineRow,
   ToolResultTimelineRow,
   TraceTimelineRow,
+  InteractionProjectionWork,
+  ReadonlyInteractionSequence,
   UserTimelineRow,
   WebUiState
 } from "./web-ui-state.js";
 export {
+  InteractionProjection,
   applyAppServerNotification,
   createWebUiState
 } from "./web-ui-state.js";
@@ -220,7 +223,8 @@ export type {
 } from "./web-ui-client.js";
 export {
   BrowserAppServerTransportClient,
-  WebUiClient
+  WebUiClient,
+  WebUiLifecycleCanceledError
 } from "./web-ui-client.js";
 export type { TuiOptions } from "./tui.js";
 export { runTui } from "./tui.js";

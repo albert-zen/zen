@@ -10,8 +10,8 @@ import type {
   TurnSnapshot
 } from "./app-server-protocol.js";
 import {
-  applyAppServerNotification,
-  createWebUiState,
+  InteractionProjection,
+  type ReadonlyInteractionSequence,
   type TimelineRow,
   type WebUiState
 } from "./web-ui-state.js";
@@ -20,11 +20,22 @@ export type AgentInteractionSessionOptions = {
   readonly client: AppServerClient;
 };
 
+export class AgentInteractionSessionDisposedError extends Error {
+  constructor() {
+    super("Agent interaction session is disposed");
+    this.name = "AgentInteractionSessionDisposedError";
+  }
+}
+
 export type AgentInteractionSnapshot = {
   readonly state: WebUiState;
-  readonly thread?: ThreadSnapshot;
-  readonly timelineRows: readonly TimelineRow[];
+  readonly thread?: AgentInteractionThread;
+  readonly timelineRows: ReadonlyInteractionSequence<TimelineRow>;
   readonly recoverableTurn?: AgentRecoverableTurn;
+};
+
+export type AgentInteractionThread = Omit<ThreadSnapshot, "items"> & {
+  readonly items: ReadonlyInteractionSequence<ProtocolItem>;
 };
 
 export type AgentRecoverableTurn = {
@@ -61,35 +72,47 @@ export type AgentInteractionSessionListener = (
   event: AgentInteractionSessionEvent
 ) => void;
 
+type CompletionWaiter = {
+  readonly promise: Promise<void>;
+  resolve(): void;
+  reject(cause: Error): void;
+  discard(): void;
+};
+
 export class AgentInteractionSession {
-  private state: WebUiState = createWebUiState();
+  private readonly projection = new InteractionProjection();
   private subscription?: AppServerSubscription;
   private readonly listeners: AgentInteractionSessionListener[] = [];
+  private readonly completionWaiters = new Map<string, Set<CompletionWaiter>>();
+  private disposed = false;
 
   constructor(private readonly options: AgentInteractionSessionOptions) {}
 
   getSnapshot(): AgentInteractionSnapshot {
+    const state = this.projection.getSnapshot();
     return {
-      state: this.state,
-      thread: this.state.currentThread
+      state,
+      thread: state.currentThread
         ? {
-            id: this.state.currentThread.id,
-            status: this.state.currentThread.status,
-            turns: this.state.currentThread.turns,
-            items: this.state.items
+            id: state.currentThread.id,
+            status: state.currentThread.status,
+            turns: state.currentThread.turns,
+            items: state.items
           }
         : undefined,
-      timelineRows: this.state.timelineRows,
-      recoverableTurn: findRecoverableTurn(this.state)
+      timelineRows: state.timelineRows,
+      recoverableTurn: findRecoverableTurn(state)
     };
   }
 
   async start(): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     this.subscribeOnce();
     const list = await this.options.client.request({ method: "thread/list" });
+    this.assertActive();
 
     if (list.ok && list.method === "thread/list" && list.result.threads.length > 0) {
-      this.state = createWebUiState(list.result.threads[0]);
+      this.projection.replaceSnapshot(list.result.threads[0]);
       return this.getSnapshot();
     }
 
@@ -99,20 +122,24 @@ export class AgentInteractionSession {
   }
 
   async newThread(): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     this.subscribeOnce();
     const response = await this.options.client.request({ method: "thread/start" });
+    this.assertActive();
 
     if (!response.ok || response.method !== "thread/start") {
       throw new Error(response.ok ? "Unexpected thread/start response" : response.error.message);
     }
 
-    this.state = createWebUiState(response.result.thread);
+    this.projection.replaceSnapshot(response.result.thread);
 
     return this.getSnapshot();
   }
 
   async listThreads(): Promise<readonly AgentThreadListEntry[]> {
+    this.assertActive();
     const response = await this.options.client.request({ method: "thread/list" });
+    this.assertActive();
 
     if (!response.ok || response.method !== "thread/list") {
       throw new Error(response.ok ? "Unexpected thread/list response" : response.error.message);
@@ -122,6 +149,7 @@ export class AgentInteractionSession {
   }
 
   async resumeThread(threadId: string): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     this.subscribeOnce();
     const response = await this.options.client.request({
       method: "thread/read",
@@ -130,17 +158,20 @@ export class AgentInteractionSession {
       }
     });
 
+    this.assertActive();
     if (!response.ok || response.method !== "thread/read") {
       throw new Error(response.ok ? "Unexpected thread/read response" : response.error.message);
     }
 
-    this.state = createWebUiState(response.result.thread);
-    this.emit({ type: "state", snapshot: this.getSnapshot() });
+    if (this.projection.replaceSnapshot(response.result.thread)) {
+      this.emit({ type: "state", snapshot: this.getSnapshot() });
+    }
 
     return this.getSnapshot();
   }
 
   async interrupt(): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     const currentThread = await this.ensureThread();
     const response = await this.options.client.request({
       method: "turn/interrupt",
@@ -149,6 +180,7 @@ export class AgentInteractionSession {
       }
     });
 
+    this.assertActive();
     if (!response.ok || response.method !== "turn/interrupt") {
       throw new Error(response.ok ? "Unexpected turn/interrupt response" : response.error.message);
     }
@@ -162,34 +194,45 @@ export class AgentInteractionSession {
     readonly turnId: string;
     readonly decision: "approveOnce" | "decline";
   }): Promise<void> {
+    this.assertActive();
     const response = await this.options.client.request({ method: "approval/resolve", params: input });
+    this.assertActive();
     if (!response.ok || response.method !== "approval/resolve") {
       throw new Error(response.ok ? "Unexpected approval/resolve response" : response.error.message);
     }
   }
 
   async submit(input: JsonValue): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     this.subscribeOnce();
     const currentThread = await this.ensureThread();
-    const completion = this.waitForNextTurnCompletion(currentThread.id);
-    const response = await this.options.client.request({
-      method: "turn/start",
-      params: {
-        threadId: currentThread.id,
-        input
-      }
-    });
+    const completion = this.createCompletionWaiter(currentThread.id);
+    try {
+      const response = await this.options.client.request({
+        method: "turn/start",
+        params: {
+          threadId: currentThread.id,
+          input
+        }
+      });
 
-    if (!response.ok || response.method !== "turn/start") {
-      throw new Error(response.ok ? "Unexpected turn/start response" : response.error.message);
+      this.assertActive();
+      if (!response.ok || response.method !== "turn/start") {
+        throw new Error(response.ok ? "Unexpected turn/start response" : response.error.message);
+      }
+    } catch (cause) {
+      completion.discard();
+      throw cause;
     }
 
-    await completion;
+    await completion.promise;
+    this.assertActive();
 
     return this.getSnapshot();
   }
 
   async retryLatestRecoverableTurn(): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     this.subscribeOnce();
     const recoverableTurn = this.getSnapshot().recoverableTurn;
 
@@ -197,25 +240,35 @@ export class AgentInteractionSession {
       throw new Error("No recoverable turn available for retry");
     }
 
-    const completion = this.waitForNextTurnCompletion(recoverableTurn.threadId);
-    const response = await this.options.client.request({
-      method: "turn/retry",
-      params: {
-        threadId: recoverableTurn.threadId,
-        turnId: recoverableTurn.turnId
-      }
-    });
+    const completion = this.createCompletionWaiter(recoverableTurn.threadId);
+    try {
+      const response = await this.options.client.request({
+        method: "turn/retry",
+        params: {
+          threadId: recoverableTurn.threadId,
+          turnId: recoverableTurn.turnId
+        }
+      });
 
-    if (!response.ok || response.method !== "turn/retry") {
-      throw new Error(response.ok ? "Unexpected turn/retry response" : response.error.message);
+      this.assertActive();
+      if (!response.ok || response.method !== "turn/retry") {
+        throw new Error(response.ok ? "Unexpected turn/retry response" : response.error.message);
+      }
+    } catch (cause) {
+      completion.discard();
+      throw cause;
     }
 
-    await completion;
+    await completion.promise;
+    this.assertActive();
 
     return this.getSnapshot();
   }
 
   observe(listener: AgentInteractionSessionListener): () => void {
+    if (this.disposed) {
+      return () => undefined;
+    }
     this.listeners.push(listener);
 
     return () => {
@@ -228,17 +281,29 @@ export class AgentInteractionSession {
   }
 
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
     this.subscription?.();
     this.subscription = undefined;
+    const error = new AgentInteractionSessionDisposedError();
+    this.completionWaiters.forEach((waiters) => {
+      [...waiters].forEach((waiter) => waiter.reject(error));
+    });
+    this.completionWaiters.clear();
     this.listeners.splice(0);
   }
 
   private async ensureThread(): Promise<{ readonly id: string }> {
-    if (this.state.currentThread) {
-      return { id: this.state.currentThread.id };
+    this.assertActive();
+    const currentThread = this.projection.getSnapshot().currentThread;
+    if (currentThread) {
+      return { id: currentThread.id };
     }
 
     const snapshot = await this.newThread();
+    this.assertActive();
 
     if (!snapshot.thread) {
       throw new Error("Thread did not start");
@@ -248,16 +313,21 @@ export class AgentInteractionSession {
   }
 
   private subscribeOnce(): void {
+    this.assertActive();
     if (this.subscription) {
       return;
     }
 
     const listener: AppServerNotificationListener = (notification) => {
-      const previousRows = this.state.timelineRows;
+      if (this.disposed) {
+        return;
+      }
+      const previousRows = this.projection.getSnapshot().timelineRows;
       const previousRowKeys = new Set(previousRows.map(toTimelineRowKey));
-      this.state = applyAppServerNotification(this.state, notification);
+      const changed = this.projection.apply(notification);
+      if (!changed) return;
       const snapshot = this.getSnapshot();
-      const nextRows = this.state.timelineRows.filter(
+      const nextRows = snapshot.timelineRows.filter(
         (row) => !previousRowKeys.has(toTimelineRowKey(row))
       );
 
@@ -266,39 +336,64 @@ export class AgentInteractionSession {
       }
 
       this.emit({ type: "state", snapshot });
+      if (notification.type === "turn/completed" || notification.type === "turn/failed") {
+        const waiters = [...(this.completionWaiters.get(notification.threadId) ?? [])];
+        waiters.forEach((waiter) => notification.type === "turn/failed"
+          ? waiter.reject(new Error(notification.error.message))
+          : waiter.resolve());
+      }
     };
 
     this.subscription = this.options.client.subscribe(listener);
   }
 
-  private waitForNextTurnCompletion(threadId: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const unsubscribe = this.options.client.subscribe((notification) => {
-        if (
-          notification.type !== "turn/completed" &&
-          notification.type !== "turn/failed"
-        ) {
-          return;
-        }
+  getPendingCompletionWaiterCountForTest(): number {
+    return [...this.completionWaiters.values()].reduce((count, waiters) => count + waiters.size, 0);
+  }
 
-        if (notification.threadId !== threadId) {
-          return;
-        }
-
-        unsubscribe();
-
-        if (notification.type === "turn/failed") {
-          reject(new Error(notification.error.message));
-          return;
-        }
-
-        resolve();
-      });
+  private createCompletionWaiter(threadId: string): CompletionWaiter {
+    this.assertActive();
+    let settled = false;
+    let resolvePromise: () => void = () => undefined;
+    let rejectPromise: (cause: Error) => void = () => undefined;
+    const promise = new Promise<void>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
     });
+    const waiters = this.completionWaiters.get(threadId) ?? new Set<CompletionWaiter>();
+    const remove = () => {
+      waiters.delete(waiter);
+      if (waiters.size === 0) this.completionWaiters.delete(threadId);
+    };
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      remove();
+      action();
+    };
+    const waiter: CompletionWaiter = {
+      promise,
+      resolve: () => settle(resolvePromise),
+      reject: (cause) => settle(() => rejectPromise(cause)),
+      discard: () => settle(() => undefined)
+    };
+    promise.catch(() => undefined);
+    waiters.add(waiter);
+    this.completionWaiters.set(threadId, waiters);
+    return waiter;
   }
 
   private emit(event: AgentInteractionSessionEvent): void {
+    if (this.disposed) {
+      return;
+    }
     this.listeners.forEach((listener) => listener(event));
+  }
+
+  private assertActive(): void {
+    if (this.disposed) {
+      throw new AgentInteractionSessionDisposedError();
+    }
   }
 }
 
@@ -333,11 +428,12 @@ function isRecoverableTurn(
 }
 
 function latestUserInputForTurn(
-  items: readonly ProtocolItem[],
+  items: Iterable<ProtocolItem>,
   turnId: string
 ): JsonValue | undefined {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
+  const orderedItems = [...items];
+  for (let index = orderedItems.length - 1; index >= 0; index -= 1) {
+    const item = orderedItems[index];
 
     if (item?.turnId !== turnId || item.type !== "user.message.completed") {
       continue;

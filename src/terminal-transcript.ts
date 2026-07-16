@@ -17,10 +17,10 @@ export function renderTerminalStatus(state: WebUiState): string {
 }
 
 export function renderTerminalTranscript(
-  rows: readonly TimelineRow[],
+  rows: Iterable<TimelineRow>,
   options: { readonly includeTrace?: boolean } = {}
 ): readonly string[] {
-  return rows.flatMap((row) => renderTerminalTimelineRow(row, options));
+  return [...rows].flatMap((row) => renderTerminalTimelineRow(row, options));
 }
 
 export function renderTerminalTimelineRow(

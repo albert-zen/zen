@@ -10,6 +10,7 @@ import {
   BrowserAppServerTransportClient,
   HttpAppServerClient,
   WebUiClient,
+  WebUiLifecycleCanceledError,
   serveAppServerHttpTransport,
   type ModelGateway
 } from "../src/index.js";
@@ -87,7 +88,7 @@ describe("Web UI client", () => {
 
       const snapshot = webUi.getSnapshot();
       expect(snapshot.state.currentThread?.status).toBe("idle");
-      expect(snapshot.state.timelineRows).toEqual(
+      expect([...snapshot.state.timelineRows]).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ type: "user", content: "Hello" }),
           expect.objectContaining({ type: "assistant", content: "Hello" })
@@ -162,6 +163,118 @@ describe("Web UI client", () => {
     expect(client.requests.map((request) => request.method)).toEqual(["thread/read"]);
   });
 
+  it("owns one stream across start, resume, reconnect, disconnect, and disposal", async () => {
+    const client = new RecordingClient();
+    const webUi = new WebUiClient({ client });
+
+    await webUi.connect();
+    await webUi.startThread();
+    await webUi.resumeThread("thread-1");
+    expect(client.activeSubscriptions).toBe(1);
+    expect(client.subscribeCalls).toBe(1);
+
+    await webUi.connect({ threadId: "thread-1" });
+    expect(client.activeSubscriptions).toBe(1);
+    expect(client.subscribeCalls).toBe(2);
+    expect(client.unsubscribeCalls).toBe(1);
+
+    webUi.disconnect();
+    webUi.disconnect();
+    webUi.dispose();
+    expect(client.activeSubscriptions).toBe(0);
+    expect(client.unsubscribeCalls).toBe(2);
+  });
+
+  it("does not publish repeated identical start or resume snapshots", async () => {
+    const client = new RecordingClient();
+    const webUi = new WebUiClient({ client });
+    let listenerCalls = 0;
+    webUi.subscribe(() => { listenerCalls += 1; });
+    await webUi.connect();
+    const connectedSnapshot = webUi.getSnapshot();
+    const connectedCalls = listenerCalls;
+
+    await webUi.startThread();
+    expect(webUi.getSnapshot()).toBe(connectedSnapshot);
+    expect(listenerCalls).toBe(connectedCalls);
+
+    await webUi.resumeThread("thread-1");
+    expect(webUi.getSnapshot()).toBe(connectedSnapshot);
+    expect(listenerCalls).toBe(connectedCalls);
+  });
+
+  it("does not publish duplicate terminal notifications", async () => {
+    const client = new RecordingClient();
+    const webUi = new WebUiClient({ client });
+    let calls = 0;
+    webUi.subscribe(() => { calls += 1; });
+    await webUi.connect();
+    const completed = {
+      type: "turn/completed" as const,
+      threadId: "thread-1",
+      turn: { id: "turn-1", runId: "run-1", status: "completed" as const, itemIds: [] }
+    };
+    client.emit(completed);
+    const snapshot = webUi.getSnapshot();
+    const callsAfterCompletion = calls;
+    client.emit(completed);
+    expect(webUi.getSnapshot()).toBe(snapshot);
+    expect(calls).toBe(callsAfterCompletion);
+  });
+
+  it("keeps stale connect completions from reviving a disconnected or newer lifecycle", async () => {
+    const client = new DeferredConnectClient();
+    const webUi = new WebUiClient({ client });
+
+    const stale = webUi.connect();
+    webUi.disconnect();
+    client.resolveNext();
+    await expect(stale).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
+    expect(webUi.getSnapshot().connection.status).toBe("disconnected");
+    expect(client.activeSubscriptions).toBe(0);
+
+    const first = webUi.connect();
+    const second = webUi.connect({ threadId: "thread-2" });
+    client.resolveNext("thread-1");
+    client.resolveNext("thread-2");
+    await expect(first).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
+    await expect(second).resolves.toBeUndefined();
+    expect(webUi.getSnapshot().connection).toEqual({ mode: "real", status: "connected" });
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe("thread-2");
+    expect(client.activeSubscriptions).toBe(1);
+    webUi.dispose();
+  });
+
+  it("cancels stale public start and resume loads across lifecycle replacement", async () => {
+    const client = new DeferredConnectClient();
+    const webUi = new WebUiClient({ client });
+    const initial = webUi.connect();
+    client.resolveNext("thread-1");
+    await initial;
+
+    const staleStart = webUi.startThread();
+    webUi.disconnect();
+    client.resolveNext("stale-start");
+    await expect(staleStart).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe("thread-1");
+
+    const reconnect = webUi.connect({ threadId: "thread-2" });
+    client.resolveNext("thread-2");
+    await reconnect;
+    const staleResume = webUi.resumeThread("thread-1");
+    const replacement = webUi.connect({ threadId: "thread-3" });
+    client.resolveNext("stale-resume");
+    client.resolveNext("thread-3");
+    await expect(staleResume).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
+    await expect(replacement).resolves.toBeUndefined();
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe("thread-3");
+
+    const staleReplacement = webUi.resumeThread("thread-1");
+    webUi.dispose();
+    client.resolveNext("late-after-dispose");
+    await expect(staleReplacement).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
+  });
+
   it("submits the approval tuple supplied by the pending approval row", async () => {
     const client = new RecordingClient();
     const webUi = new WebUiClient({ client });
@@ -220,6 +333,9 @@ async function waitForStatus(
 
 class RecordingClient implements AppServerClient {
   private listener?: AppServerNotificationListener;
+  activeSubscriptions = 0;
+  subscribeCalls = 0;
+  unsubscribeCalls = 0;
   readonly requests: Parameters<AppServerClient["request"]>[0][] = [];
 
   request(request: Parameters<AppServerClient["request"]>[0]) {
@@ -308,9 +424,13 @@ class RecordingClient implements AppServerClient {
 
   subscribe(listener: AppServerNotificationListener): AppServerSubscription {
     this.listener = listener;
+    this.subscribeCalls += 1;
+    this.activeSubscriptions += 1;
 
     return () => {
       this.listener = undefined;
+      this.activeSubscriptions -= 1;
+      this.unsubscribeCalls += 1;
     };
   }
 
@@ -335,6 +455,35 @@ class RejectOnceApprovalClient implements AppServerClient {
 
   subscribe(_listener: AppServerNotificationListener): AppServerSubscription {
     return () => undefined;
+  }
+}
+class DeferredConnectClient implements AppServerClient {
+  private readonly pending: Array<(threadId: string) => void> = [];
+  activeSubscriptions = 0;
+
+  request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    return new Promise((resolve) => {
+      this.pending.push((threadId) => resolve({
+        method: request.method,
+        ok: true,
+        result: { thread: { id: threadId, status: "idle", turns: [], items: [] } }
+      } as AppServerResponse));
+    });
+  }
+
+  resolveNext(threadId = "thread-1"): void {
+    this.pending.shift()?.(threadId);
+  }
+
+  subscribe(_listener: AppServerNotificationListener): AppServerSubscription {
+    this.activeSubscriptions += 1;
+    let closed = false;
+    return () => {
+      if (!closed) {
+        closed = true;
+        this.activeSubscriptions -= 1;
+      }
+    };
   }
 }
 
