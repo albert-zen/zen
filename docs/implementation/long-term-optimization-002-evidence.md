@@ -105,3 +105,61 @@ Reviewer notes: Re-review `7d09be81505944930fa1b198a959c6d227186328..HEAD`, focu
 Open questions: none
 Known residual risks: A caller whose queued Item observer rejects receives that rejection even though the committed turn retains execution; this is intentional to report observer failure while preserving lifecycle integrity. No issue 001 source was modified.
 Blocker or context escalation details: none
+
+## Codex Review Note
+
+Round: 3
+Issue: long-term-optimization-002 - Derive lifecycle from Items and schedule turns FIFO
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-002`
+Base revision/diff scope: `2ad9e1f1a0b285b8acd1b0fd0c8797745d73a59f..ee64e8003c2f60fa841228a7daa9f208c7a94dd0`
+Standards Review blocking: none
+Standards Review non-blocking: Evidence physical order is incorrect.
+Standards Review missing evidence: none
+Spec Review blocking: none
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local tracker state decision: Rework
+State decision reason: Runtime/spec no findings; evidence physical order is incorrect. Preserve prior append-only text and add a canonical correction ledger before returning to Agent Review.
+
+## Evidence Ledger Correction
+
+Earlier notes were accidentally appended out of chronological physical order.
+
+Canonical logical sequence:
+
+1. Worker Round 1 - commit `7d09be81505944930fa1b198a959c6d227186328`; physical anchor line 3 heading `## Codex Worker Note`, with `Round: 1` at line 5.
+2. Review Round 1 - reviews commit `7d09be81505944930fa1b198a959c6d227186328`; physical anchor line 68 heading `## Codex Review Note`, with `Round: 1` at line 70.
+3. Worker Round 2 - commit `2ad9e1f1a0b285b8acd1b0fd0c8797745d73a59f`; physical anchor line 85 heading `## Codex Worker Note`, with `Round: 2` at line 87.
+4. Review Round 2 - reviews commit `2ad9e1f1a0b285b8acd1b0fd0c8797745d73a59f`; physical anchor line 27 heading `## Codex Review Note`, with `Round: 2` at line 29.
+5. Worker Round 3 - commit `ee64e8003c2f60fa841228a7daa9f208c7a94dd0`; physical anchor line 44 heading `## Codex Worker Note`, with `Round: 3` at line 46.
+6. Review Round 3 - reviews commit `ee64e8003c2f60fa841228a7daa9f208c7a94dd0`; physical anchor line 109 heading `## Codex Review Note`, with `Round: 3` at line 111.
+
+All prior text is intentionally preserved and must not be treated as overwritten by this ledger. This section corrects only the canonical logical reading order.
+
+Canonical current tracker state: `Agent Review`; branch `codex/long-term-optimization-002`; Worker Round `4`; Review Round `3`; evidence path `docs/implementation/long-term-optimization-002-evidence.md`.
+
+## Codex Worker Note
+
+Round: 4
+Issue: long-term-optimization-002 - Derive lifecycle from Items and schedule turns FIFO
+Local tracker state transition: In Progress -> Agent Review
+Branch: `codex/long-term-optimization-002`
+PR URL: not configured; local-branch workflow
+Base revision/diff scope: Evidence-only correction from `ee64e8003c2f60fa841228a7daa9f208c7a94dd0`; changes limited to append-only issue 002 evidence and tracker round/state fields
+Summary of behavior delivered: Appended Review Round 3, a canonical evidence ledger correction, and Worker Round 4 without changing or reordering prior notes.
+Final scope summary: Evidence-order correction and Agent Review handoff only; no source or test changes.
+Changed files/modules: `docs/implementation/long-term-optimization-002-evidence.md`; `docs/implementation/long-term-optimization-tracker.md`
+Tests added/updated: none; runtime/spec passed Review Round 3 and this correction is documentation-only
+Acceptance criteria status: PASS - Review Round 3 records runtime/spec no findings; PASS - incorrect physical order is explicitly disclosed; PASS - canonical Worker 1 -> Review 1 -> Worker 2 -> Review 2 -> Worker 3 -> Review 3 sequence includes immutable line anchors and commit hashes; PASS - prior text remains untouched; PASS - tracker is canonically `Agent Review` at Worker Round 4 / Review Round 3.
+Commands run and results: `git diff --check` passed with line-ending warnings only; read-only evidence heading/order sanity command confirmed the immutable prior physical anchors, appended Review Round 3 -> Evidence Ledger Correction -> Worker Round 4 order, and tracker counters/state.
+Validation log paths: none; command output captured in the worker task
+Required check status or local-check handoff reason: Evidence-only correction; requested documentation checks pass. Runtime/spec gates remain accepted from Review Round 3.
+Evidence links/paths: `docs/implementation/long-term-optimization-002-evidence.md`; `docs/implementation/long-term-optimization-tracker.md`
+Decisions made: Preserved every existing note byte-for-byte and appended a correction ledger rather than cosmetically reordering history.
+Standards notes: Append-only evidence discipline takes precedence over physical presentation order; tracker changes are limited to issue 002 round/state fields.
+Reviewer notes: Verify the appended three-section order and use the ledger as the canonical logical sequence; do not reinterpret prior physical order as chronology.
+Open questions: none
+Known residual risks: none; the disclosed physical ordering remains intentionally preserved
+Blocker or context escalation details: none
