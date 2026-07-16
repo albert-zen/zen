@@ -49,6 +49,8 @@ export type ThreadManagerOptions = {
   readonly clock?: Clock;
   readonly runtimeFactory?: ThreadRuntimeFactory;
   readonly initialThreads?: readonly ThreadSnapshot[];
+  readonly repairOnLoad?: boolean;
+  readonly persistenceObserver?: (threadId: string, item: Item) => void;
   readonly approvalBroker?: ApprovalBroker;
 };
 
@@ -108,6 +110,7 @@ export class ThreadManager {
   private readonly turnTails = new Map<string, Promise<void>>();
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private readonly approvalBroker?: ApprovalBroker;
+  private readonly persistenceObserver?: ThreadManagerOptions["persistenceObserver"];
 
   constructor(options: ThreadManagerOptions = {}) {
     this.generateThreadId = options.generateThreadId ?? createSequence("thread");
@@ -117,10 +120,12 @@ export class ThreadManager {
     this.clock = options.clock ?? Date.now;
     this.runtimeFactory = options.runtimeFactory ?? createDefaultRuntime;
     this.approvalBroker = options.approvalBroker;
+    this.persistenceObserver = options.persistenceObserver;
 
     for (const snapshot of options.initialThreads ?? []) {
       this.loadThread(snapshot, { emit: false });
     }
+    if (options.repairOnLoad ?? true) this.repairLoadedThreads();
   }
 
   observe(observer: ThreadManagerObserver): () => void {
@@ -136,16 +141,29 @@ export class ThreadManager {
   }
 
   startThread(): ThreadSnapshot {
+    const id = this.generateUniqueThreadId();
+    const created: Item = {
+      id: `thread-created:${id}`,
+      type: "thread.created",
+      createdAtMs: 0,
+      seq: 0,
+      runId: id,
+      turnId: id,
+      visibility: "internal",
+      payload: { threadId: id }
+    };
     const thread: ThreadState = {
-      id: this.generateUniqueThreadId(),
+      id,
       itemList: new InMemoryItemList({
-        generateId: createUniqueIdGenerator(this.generateItemId, new Set()),
-        clock: this.clock
+        generateId: createUniqueIdGenerator(this.generateItemId, new Set([created.id])),
+        clock: this.clock,
+        initialItems: [created]
       })
     };
 
     this.threads.set(thread.id, thread);
     this.attachItemObserver(thread);
+    this.persistenceObserver?.(thread.id, created);
 
     const snapshot = this.snapshotThread(thread);
 
@@ -178,6 +196,10 @@ export class ThreadManager {
     }
 
     return loaded;
+  }
+
+  repairLoadedThreads(): void {
+    this.threads.forEach((thread) => this.repairStaleTurns(thread));
   }
 
   enqueueTurn(input: TurnStartInput): TurnSnapshot {
@@ -390,8 +412,6 @@ export class ThreadManager {
       })
     };
 
-    this.repairStaleTurns(thread);
-
     return thread;
   }
 
@@ -423,14 +443,6 @@ export class ThreadManager {
 
   private attachItemObserver(thread: ThreadState): void {
     thread.itemList.observe((item) => {
-      if (item.type === "turn.started") {
-        this.emit({
-          type: "turn/started",
-          threadId: thread.id,
-          turn: this.getTurnSnapshot(thread, item.turnId)
-        });
-      }
-
       if (item.visibility === "internal") {
         return;
       }
@@ -441,6 +453,14 @@ export class ThreadManager {
         turnId: item.turnId,
         item: toProtocolItem(item)
       });
+
+      if (item.type === "turn.started") {
+        this.emit({
+          type: "turn/started",
+          threadId: thread.id,
+          turn: this.getTurnSnapshot(thread, item.turnId)
+        });
+      }
 
       if (item.type === "approval.requested") {
         const approvalId = readStringPayloadField(item.payload, "approvalId");

@@ -1,4 +1,6 @@
-import type {
+import {
+  toProtocolItem,
+  type
   AppServerNotification,
   AppServerRequest,
   AppServerResponse,
@@ -11,7 +13,7 @@ import {
   type TurnRetryInput,
   type TurnStartInput
 } from "./thread-manager.js";
-import type { ThreadStore } from "./thread-store.js";
+import type { ThreadJournal } from "./thread-journal.js";
 import { ApprovalBroker, type ApprovalResolveInput } from "./approval-runtime.js";
 
 export type AppServerRequestInput =
@@ -23,7 +25,7 @@ export type AppServerRequestInput =
 
 export type AppServerOptions = {
   readonly threadManagerOptions?: ThreadManagerOptions;
-  readonly threadStore?: ThreadStore;
+  readonly threadJournal?: ThreadJournal;
   readonly approvalBroker?: ApprovalBroker;
 };
 
@@ -40,23 +42,39 @@ export type AppServerNotificationListener = (
 
 export class AppServer implements AppServerClient {
   private readonly threadManager: ThreadManager;
-  private readonly threadStore?: ThreadStore;
+  private readonly threadJournal?: ThreadJournal;
   private readonly approvalBroker: ApprovalBroker;
+  private readonly listeners: AppServerNotificationListener[] = [];
+  private readonly eventTails = new Map<string, Promise<void>>();
 
   constructor(options: AppServerOptions = {}) {
-    this.threadStore = options.threadStore;
+    this.threadJournal = options.threadJournal;
     this.approvalBroker = options.approvalBroker ?? new ApprovalBroker();
     this.threadManager = new ThreadManager({
       ...options.threadManagerOptions,
+      repairOnLoad: false,
+      persistenceObserver: (threadId, item) => {
+        this.queueEvent({
+          type: "item/appended",
+          threadId,
+          turnId: item.turnId,
+          item: toProtocolItem(item)
+        });
+      },
       approvalBroker: this.approvalBroker
     });
     this.threadManager.observe((event) => {
-      void this.persistEventThread(event);
+      this.queueEvent(event);
     });
+    this.threadManager.repairLoadedThreads();
   }
 
   subscribe(listener: AppServerNotificationListener): AppServerSubscription {
-    return this.threadManager.observe((event) => listener(event));
+    this.listeners.push(listener);
+    return () => {
+      const index = this.listeners.indexOf(listener);
+      if (index >= 0) this.listeners.splice(index, 1);
+    };
   }
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
@@ -78,10 +96,12 @@ export class AppServer implements AppServerClient {
     request: AppServerRequestInput
   ): Promise<AppServerResponse> {
     if (request.method === "thread/start") {
+      const thread = this.threadManager.startThread();
+      await this.settleThread(thread.id);
       return {
         method: "thread/start",
         ok: true,
-        result: { thread: this.threadManager.startThread() }
+        result: { thread: this.threadManager.readThread(thread.id) }
       };
     }
 
@@ -114,21 +134,24 @@ export class AppServer implements AppServerClient {
           : undefined
       };
 
+      const turn = this.threadManager.enqueueTurn(turnInput);
       return {
         method: "turn/start",
         ok: true,
-        result: { turn: this.threadManager.enqueueTurn(turnInput) }
+        result: { turn }
       };
     }
 
     if (request.method === "turn/interrupt") {
       const params = readParams(request.params);
 
+      const turn = this.threadManager.interruptTurn(readRequiredString(params, "threadId"));
+      await this.settleThread(readRequiredString(params, "threadId"));
       return {
         method: "turn/interrupt",
         ok: true,
         result: {
-          turn: this.threadManager.interruptTurn(readRequiredString(params, "threadId"))
+          turn
         }
       };
     }
@@ -146,10 +169,11 @@ export class AppServer implements AppServerClient {
           : undefined
       };
 
+      const turn = this.threadManager.retryTurn(retryInput);
       return {
         method: "turn/retry",
         ok: true,
-        result: { turn: this.threadManager.retryTurn(retryInput) }
+        result: { turn }
       };
     }
 
@@ -180,15 +204,46 @@ export class AppServer implements AppServerClient {
     };
   }
 
-  private async persistEventThread(event: ThreadManagerEvent): Promise<void> {
-    if (!this.threadStore) {
+  async close(): Promise<void> {
+    await Promise.all([...this.eventTails.values()]);
+    await this.threadJournal?.close();
+  }
+
+  private queueEvent(event: ThreadManagerEvent): void {
+    if (!this.threadJournal) {
+      this.publish(event);
       return;
     }
+    const threadId = event.type === "thread/started" ? event.thread.id : event.threadId;
+    const previous = this.eventTails.get(threadId) ?? Promise.resolve();
+    const next = previous.then(() => this.commitAndPublish(event));
+    this.eventTails.set(threadId, next.catch(() => undefined));
+  }
 
-    const threadId =
-      event.type === "thread/started" ? event.thread.id : event.threadId;
+  private async settleThread(threadId: string): Promise<void> {
+    await (this.eventTails.get(threadId) ?? Promise.resolve());
+  }
 
-    await this.threadStore.save(this.threadManager.readThread(threadId));
+  private async commitAndPublish(event: ThreadManagerEvent): Promise<void> {
+    if (this.threadJournal) {
+      const threadId = event.type === "thread/started" ? event.thread.id : event.threadId;
+      if (event.type === "item/appended") {
+        if (event.item.type === "thread.created") {
+          await this.threadJournal.create(threadId, event.item);
+        } else {
+          await this.threadJournal.append(threadId, event.item);
+        }
+      }
+      if (event.type === "thread/started" || event.type === "turn/completed" || event.type === "turn/failed") {
+        await this.threadJournal.flush(threadId);
+      }
+    }
+    this.publish(event);
+  }
+
+  private publish(event: ThreadManagerEvent): void {
+    if (event.type === "item/appended" && event.item.type === "thread.created") return;
+    this.listeners.forEach((listener) => listener(event));
   }
 }
 

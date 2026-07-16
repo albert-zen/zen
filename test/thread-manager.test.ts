@@ -474,8 +474,9 @@ describe("ThreadManager", () => {
       "thread/started",
       "item/appended",
       "item/appended",
+      "item/appended",
       "turn/started",
-      ...snapshot.items.slice(2).map(() => "item/appended"),
+      ...snapshot.items.slice(3).map(() => "item/appended"),
       "turn/completed"
     ]);
     expect(

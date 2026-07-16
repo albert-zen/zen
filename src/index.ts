@@ -252,5 +252,14 @@ export {
   slashSuggestions,
   SLASH_COMMANDS
 } from "./slash-commands.js";
-export type { FileThreadStoreOptions, ThreadStore } from "./thread-store.js";
-export { FileThreadStore } from "./thread-store.js";
+export type {
+  FileThreadJournalOptions,
+  ThreadJournal,
+  ThreadJournalFileSystem,
+  ThreadJournalReplay
+} from "./thread-journal.js";
+export {
+  FileThreadJournal,
+  ThreadJournalCorruptionError,
+  ThreadJournalError
+} from "./thread-journal.js";

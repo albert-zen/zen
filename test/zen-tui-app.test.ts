@@ -14,6 +14,14 @@ import {
 } from "../src/index.js";
 import { VirtualTerminalDevice, waitForRender } from "./virtual-terminal.js";
 
+async function waitForText(terminal: VirtualTerminalDevice, value: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (terminal.textOutput().includes(value)) return;
+    await waitForRender();
+  }
+  throw new Error(`Timed out waiting for terminal text: ${value}`);
+}
+
 describe("ZenTuiApp", () => {
   it("starts a session-backed terminal app and handles slash commands", async () => {
     const terminal = new VirtualTerminalDevice(100, 20);
@@ -23,7 +31,7 @@ describe("ZenTuiApp", () => {
     });
     const run = app.run();
 
-    await waitForRender();
+    await waitForText(terminal, "Zen Agent");
     expect(terminal.textOutput()).toContain("Zen Agent");
     expect(terminal.textOutput()).toContain("thread-1");
 
