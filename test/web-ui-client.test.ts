@@ -10,6 +10,7 @@ import {
   BrowserAppServerTransportClient,
   HttpAppServerClient,
   WebUiClient,
+  WebUiLifecycleCanceledError,
   serveAppServerHttpTransport,
   type ModelGateway
 } from "../src/index.js";
@@ -228,7 +229,7 @@ describe("Web UI client", () => {
     const stale = webUi.connect();
     webUi.disconnect();
     client.resolveNext();
-    await stale;
+    await expect(stale).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
     expect(webUi.getSnapshot().connection.status).toBe("disconnected");
     expect(client.activeSubscriptions).toBe(0);
 
@@ -236,11 +237,42 @@ describe("Web UI client", () => {
     const second = webUi.connect({ threadId: "thread-2" });
     client.resolveNext("thread-1");
     client.resolveNext("thread-2");
-    await Promise.all([first, second]);
+    await expect(first).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
+    await expect(second).resolves.toBeUndefined();
     expect(webUi.getSnapshot().connection).toEqual({ mode: "real", status: "connected" });
     expect(webUi.getSnapshot().state.currentThread?.id).toBe("thread-2");
     expect(client.activeSubscriptions).toBe(1);
     webUi.dispose();
+  });
+
+  it("cancels stale public start and resume loads across lifecycle replacement", async () => {
+    const client = new DeferredConnectClient();
+    const webUi = new WebUiClient({ client });
+    const initial = webUi.connect();
+    client.resolveNext("thread-1");
+    await initial;
+
+    const staleStart = webUi.startThread();
+    webUi.disconnect();
+    client.resolveNext("stale-start");
+    await expect(staleStart).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe("thread-1");
+
+    const reconnect = webUi.connect({ threadId: "thread-2" });
+    client.resolveNext("thread-2");
+    await reconnect;
+    const staleResume = webUi.resumeThread("thread-1");
+    const replacement = webUi.connect({ threadId: "thread-3" });
+    client.resolveNext("stale-resume");
+    client.resolveNext("thread-3");
+    await expect(staleResume).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
+    await expect(replacement).resolves.toBeUndefined();
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe("thread-3");
+
+    const staleReplacement = webUi.resumeThread("thread-1");
+    webUi.dispose();
+    client.resolveNext("late-after-dispose");
+    await expect(staleReplacement).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
   });
 
   it("submits the approval tuple supplied by the pending approval row", async () => {

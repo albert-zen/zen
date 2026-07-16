@@ -24,6 +24,47 @@ Blocker or context escalation details: none
 
 ## Codex Review Note
 
+Round: 4
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-005
+Base revision/diff scope: `80b6a22a0d082838305059de9eb313120b27f6fa..97776d252d10e531fa46f597e284dca2eefefa6c`
+Standards Review blocking: Lifecycle generation did not protect all public async projection-changing WebUiClient operations; AgentInteractionSession disposal left completion waiters unresolved.
+Standards Review non-blocking: none
+Standards Review missing evidence: Deferred start/resume lifecycle races and disposed submit/retry waiter coverage.
+Spec Review blocking: Late start/resume responses could mutate a newer lifecycle; disposed sessions could leave callers hanging or accept later mutation.
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local tracker state decision: Rework
+State decision reason: Accepted bounded lifecycle defects require original-worker repair.
+
+## Codex Worker Note
+
+Round: 5
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Local tracker state transition: Rework -> Agent Review
+Branch: codex/long-term-optimization-005
+PR URL: not configured; local-origin branch only
+Base revision/diff scope: original worker fixes only for Review Round 4: lifecycle-token public thread loads, terminal session disposal, deferred lifecycle/waiter tests, and append-only evidence.
+Summary of behavior delivered: WebUiClient now captures lifecycle generation for every thread projection request, including public start/resume and connect. Superseded requests reject with `WebUiLifecycleCanceledError` and cannot mutate projection/snapshot/listeners. AgentInteractionSession now has terminal disposal with `AgentInteractionSessionDisposedError`, rejects and clears all completion waiters, ignores late notifications, and rejects future public async operations.
+Final scope summary: Review findings only. No persistence, module relocation, UI behavior, dependencies, or issue 004/006+ work.
+Changed files/modules: `src/web-ui-client.ts`; `src/agent-interaction-session.ts`; `src/index.ts`; `test/web-ui-client.test.ts`; `test/agent-interaction-session.test.ts`; evidence.
+Tests added/updated: Deferred start/resume cancellation across disconnect, overlapping reconnect, and client disposal; pending submit/retry waiter disposal rejection; late notification guard; idempotent session dispose and future-operation rejection.
+Acceptance criteria status: Every async thread projection load validates its captured lifecycle generation before mutation; stale operations settle with typed cancellation; session disposal rejects all registered waiters, releases stream/listeners once, prevents late state resurrection, and future async APIs reject immediately.
+Commands run and results: `npx vitest run test/web-ui-client.test.ts test/agent-interaction-session.test.ts test/workspace-lifecycle.test.tsx --no-file-parallelism --maxWorkers=1` passed (19 tests); `npm test -- --no-file-parallelism --maxWorkers=1` passed (32 files, 208 tests); `npm run typecheck` passed; `npm run typecheck:web` passed; `npm run build` passed; `npm run web:build` passed; `git diff --check` passed.
+Validation log paths: none
+Required check status or local-check handoff reason: all current local checks passed; no GitHub remote/PR is configured.
+Evidence links/paths: `docs/implementation/long-term-optimization-005-evidence.md`; `docs/implementation/long-term-optimization-tracker.md`
+Decisions made: Use typed cancellation rather than silent stale-operation no-ops so callers cannot hang or infer success from an ignored request. Session dispose is deliberately terminal; `getSnapshot` remains available for final rendering, while all async commands reject.
+Standards notes: Generation checks occur after awaited transport responses and before projection mutation. The completion waiter map stores reject functions and is drained atomically during idempotent disposal.
+Reviewer notes: Verify no remaining async thread projection path bypasses lifecycle generation and all session public async methods assert active state before and after awaited responses.
+Open questions: none
+Known residual risks: Transport requests themselves cannot be aborted through the current AppServerClient interface; late responses are safely ignored/rejected after lifecycle cancellation or session disposal.
+Blocker or context escalation details: none
+
+## Codex Review Note
+
 Round: 3
 Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
 Reviewer context: fresh

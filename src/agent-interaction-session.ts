@@ -20,6 +20,13 @@ export type AgentInteractionSessionOptions = {
   readonly client: AppServerClient;
 };
 
+export class AgentInteractionSessionDisposedError extends Error {
+  constructor() {
+    super("Agent interaction session is disposed");
+    this.name = "AgentInteractionSessionDisposedError";
+  }
+}
+
 export type AgentInteractionSnapshot = {
   readonly state: WebUiState;
   readonly thread?: AgentInteractionThread;
@@ -70,6 +77,7 @@ export class AgentInteractionSession {
   private subscription?: AppServerSubscription;
   private readonly listeners: AgentInteractionSessionListener[] = [];
   private readonly completionWaiters = new Map<string, Array<{ resolve: () => void; reject: (cause: Error) => void }>>();
+  private disposed = false;
 
   constructor(private readonly options: AgentInteractionSessionOptions) {}
 
@@ -91,8 +99,10 @@ export class AgentInteractionSession {
   }
 
   async start(): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     this.subscribeOnce();
     const list = await this.options.client.request({ method: "thread/list" });
+    this.assertActive();
 
     if (list.ok && list.method === "thread/list" && list.result.threads.length > 0) {
       this.projection.replaceSnapshot(list.result.threads[0]);
@@ -105,8 +115,10 @@ export class AgentInteractionSession {
   }
 
   async newThread(): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     this.subscribeOnce();
     const response = await this.options.client.request({ method: "thread/start" });
+    this.assertActive();
 
     if (!response.ok || response.method !== "thread/start") {
       throw new Error(response.ok ? "Unexpected thread/start response" : response.error.message);
@@ -118,7 +130,9 @@ export class AgentInteractionSession {
   }
 
   async listThreads(): Promise<readonly AgentThreadListEntry[]> {
+    this.assertActive();
     const response = await this.options.client.request({ method: "thread/list" });
+    this.assertActive();
 
     if (!response.ok || response.method !== "thread/list") {
       throw new Error(response.ok ? "Unexpected thread/list response" : response.error.message);
@@ -128,6 +142,7 @@ export class AgentInteractionSession {
   }
 
   async resumeThread(threadId: string): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     this.subscribeOnce();
     const response = await this.options.client.request({
       method: "thread/read",
@@ -136,6 +151,7 @@ export class AgentInteractionSession {
       }
     });
 
+    this.assertActive();
     if (!response.ok || response.method !== "thread/read") {
       throw new Error(response.ok ? "Unexpected thread/read response" : response.error.message);
     }
@@ -148,6 +164,7 @@ export class AgentInteractionSession {
   }
 
   async interrupt(): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     const currentThread = await this.ensureThread();
     const response = await this.options.client.request({
       method: "turn/interrupt",
@@ -156,6 +173,7 @@ export class AgentInteractionSession {
       }
     });
 
+    this.assertActive();
     if (!response.ok || response.method !== "turn/interrupt") {
       throw new Error(response.ok ? "Unexpected turn/interrupt response" : response.error.message);
     }
@@ -169,13 +187,16 @@ export class AgentInteractionSession {
     readonly turnId: string;
     readonly decision: "approveOnce" | "decline";
   }): Promise<void> {
+    this.assertActive();
     const response = await this.options.client.request({ method: "approval/resolve", params: input });
+    this.assertActive();
     if (!response.ok || response.method !== "approval/resolve") {
       throw new Error(response.ok ? "Unexpected approval/resolve response" : response.error.message);
     }
   }
 
   async submit(input: JsonValue): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     this.subscribeOnce();
     const currentThread = await this.ensureThread();
     const completion = this.waitForNextTurnCompletion(currentThread.id);
@@ -187,16 +208,19 @@ export class AgentInteractionSession {
       }
     });
 
+    this.assertActive();
     if (!response.ok || response.method !== "turn/start") {
       throw new Error(response.ok ? "Unexpected turn/start response" : response.error.message);
     }
 
     await completion;
+    this.assertActive();
 
     return this.getSnapshot();
   }
 
   async retryLatestRecoverableTurn(): Promise<AgentInteractionSnapshot> {
+    this.assertActive();
     this.subscribeOnce();
     const recoverableTurn = this.getSnapshot().recoverableTurn;
 
@@ -213,16 +237,21 @@ export class AgentInteractionSession {
       }
     });
 
+    this.assertActive();
     if (!response.ok || response.method !== "turn/retry") {
       throw new Error(response.ok ? "Unexpected turn/retry response" : response.error.message);
     }
 
     await completion;
+    this.assertActive();
 
     return this.getSnapshot();
   }
 
   observe(listener: AgentInteractionSessionListener): () => void {
+    if (this.disposed) {
+      return () => undefined;
+    }
     this.listeners.push(listener);
 
     return () => {
@@ -235,18 +264,29 @@ export class AgentInteractionSession {
   }
 
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
     this.subscription?.();
     this.subscription = undefined;
+    const error = new AgentInteractionSessionDisposedError();
+    this.completionWaiters.forEach((waiters) => {
+      waiters.forEach((waiter) => waiter.reject(error));
+    });
+    this.completionWaiters.clear();
     this.listeners.splice(0);
   }
 
   private async ensureThread(): Promise<{ readonly id: string }> {
+    this.assertActive();
     const currentThread = this.projection.getSnapshot().currentThread;
     if (currentThread) {
       return { id: currentThread.id };
     }
 
     const snapshot = await this.newThread();
+    this.assertActive();
 
     if (!snapshot.thread) {
       throw new Error("Thread did not start");
@@ -256,11 +296,15 @@ export class AgentInteractionSession {
   }
 
   private subscribeOnce(): void {
+    this.assertActive();
     if (this.subscription) {
       return;
     }
 
     const listener: AppServerNotificationListener = (notification) => {
+      if (this.disposed) {
+        return;
+      }
       const previousRows = this.projection.getSnapshot().timelineRows;
       const previousRowKeys = new Set(previousRows.map(toTimelineRowKey));
       const changed = this.projection.apply(notification);
@@ -288,6 +332,7 @@ export class AgentInteractionSession {
   }
 
   private waitForNextTurnCompletion(threadId: string): Promise<void> {
+    this.assertActive();
     return new Promise((resolve, reject) => {
       const waiters = this.completionWaiters.get(threadId) ?? [];
       waiters.push({ resolve, reject });
@@ -296,7 +341,16 @@ export class AgentInteractionSession {
   }
 
   private emit(event: AgentInteractionSessionEvent): void {
+    if (this.disposed) {
+      return;
+    }
     this.listeners.forEach((listener) => listener(event));
+  }
+
+  private assertActive(): void {
+    if (this.disposed) {
+      throw new AgentInteractionSessionDisposedError();
+    }
   }
 }
 

@@ -42,6 +42,13 @@ export type WebUiClientOptions = {
 
 export type WebUiClientListener = (snapshot: WebUiClientSnapshot) => void;
 
+export class WebUiLifecycleCanceledError extends Error {
+  constructor() {
+    super("Web UI lifecycle operation was superseded");
+    this.name = "WebUiLifecycleCanceledError";
+  }
+}
+
 export class WebUiClient {
   private readonly client: AppServerClient;
   private readonly listeners = new Set<WebUiClientListener>();
@@ -82,11 +89,11 @@ export class WebUiClient {
     });
 
     try {
-      const response = await this.client.request(options.threadId
-        ? { method: "thread/read", params: { threadId: options.threadId } }
-        : { method: "thread/start" });
-      const thread = readThreadResponse(response, options.threadId ? "thread/read" : "thread/start");
-      if (generation !== this.lifecycleGeneration) return;
+      const thread = await this.requestThread(
+        generation,
+        options.threadId ? { method: "thread/read", params: { threadId: options.threadId } } : { method: "thread/start" },
+        options.threadId ? "thread/read" : "thread/start"
+      );
       const projectionChanged = this.projection.replaceSnapshot(thread);
       const connectionChanged = this.updateConnection({ status: "connected" });
       if (projectionChanged || connectionChanged) this.refreshSnapshot();
@@ -108,8 +115,7 @@ export class WebUiClient {
   }
 
   async startThread(): Promise<void> {
-    const response = await this.client.request({ method: "thread/start" });
-    const thread = readThreadResponse(response, "thread/start");
+    const thread = await this.requestThread(this.lifecycleGeneration, { method: "thread/start" }, "thread/start");
     if (this.projection.replaceSnapshot(thread)) {
       this.refreshSnapshot();
     }
@@ -130,11 +136,11 @@ export class WebUiClient {
   }
 
   async resumeThread(threadId: string): Promise<void> {
-    const response = await this.client.request({
-      method: "thread/read",
-      params: { threadId }
-    });
-    const thread = readThreadResponse(response, "thread/read");
+    const thread = await this.requestThread(
+      this.lifecycleGeneration,
+      { method: "thread/read", params: { threadId } },
+      "thread/read"
+    );
     if (this.projection.replaceSnapshot(thread)) {
       this.refreshSnapshot();
     }
@@ -271,6 +277,18 @@ export class WebUiClient {
 
   private emit(): void {
     this.listeners.forEach((listener) => listener(this.snapshot));
+  }
+
+  private async requestThread(
+    generation: number,
+    request: AppServerRequestInput,
+    method: "thread/start" | "thread/read"
+  ): Promise<ThreadSnapshot> {
+    const response = await this.client.request(request);
+    if (generation !== this.lifecycleGeneration) {
+      throw new WebUiLifecycleCanceledError();
+    }
+    return readThreadResponse(response, method);
   }
 
   private refreshSnapshot(): void {
