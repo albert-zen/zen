@@ -4,7 +4,7 @@ import type {
   JsonObject,
   ProtocolItem,
   ThreadSnapshot
-} from "./app-server-protocol.js";
+} from "../product/index.js";
 
 export type WebUiState = {
   readonly currentThread?: {

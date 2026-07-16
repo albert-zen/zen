@@ -2,19 +2,14 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import type { AppServerClient } from "./app-server.js";
-import type {
-  AppServerNotification,
-  ProtocolItem,
-  ThreadSnapshot
-} from "./app-server-protocol.js";
+import type { AppServerClient, AppServerNotification, ProtocolItem, ThreadSnapshot } from "../src/product/index.js";
 import {
   HttpAppServerClient,
-  serveAppServerHttpTransport
-} from "./app-server-transport.js";
-import { loadModelProviderConfig } from "./model-provider-config.js";
-import { createProviderBackedAppServer } from "./provider-runtime.js";
-import { FileThreadJournal } from "./thread-journal.js";
+  serveAppServerHttpTransport,
+  loadModelProviderConfig,
+  createProviderBackedAppServer,
+  FileThreadJournal
+} from "../src/adapters/node/index.js";
 
 export type DogfoodAcceptanceStatus = "passed" | "failed" | "skipped";
 

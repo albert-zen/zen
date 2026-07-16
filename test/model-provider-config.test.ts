@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { loadModelProviderConfig } from "../src/index.js";
+import { loadModelProviderConfig } from "./test-exports.js";
 
 describe("model provider config", () => {
   it("loads a Zen-owned OpenAI-compatible model provider config", () => {

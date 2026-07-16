@@ -10,8 +10,8 @@ import type {
   AppServerRequestInput,
   AppServerResponse,
   AppServerSubscription
-} from "../src/index.js";
-import { WebUiClient } from "../src/index.js";
+} from "./test-exports.js";
+import { WebUiClient } from "./test-exports.js";
 import { AgentWorkspace } from "../web/src/workspace.tsx";
 
 describe("AgentWorkspace lifecycle", () => {
@@ -69,7 +69,7 @@ class WorkspaceTransport implements AppServerClient {
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
     if (request.method === "thread/list") {
-      return { method: "thread/list", ok: true, result: { threads: [] } };
+      return { method: "thread/list", ok: true, result: { threads: [], persistenceFailures: [] } };
     }
     if (request.method === "thread/start" || request.method === "thread/read") {
       return {

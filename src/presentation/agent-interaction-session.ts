@@ -2,13 +2,13 @@ import type {
   AppServerClient,
   AppServerNotificationListener,
   AppServerSubscription
-} from "./app-server.js";
+} from "../product/index.js";
 import type {
   JsonValue,
   ProtocolItem,
   ThreadSnapshot,
   TurnSnapshot
-} from "./app-server-protocol.js";
+} from "../product/index.js";
 import {
   InteractionProjection,
   type ReadonlyInteractionSequence,

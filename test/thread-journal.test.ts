@@ -3,8 +3,8 @@ import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FileThreadJournal, ThreadJournalCorruptionError, ThreadJournalError, type ThreadJournalFileSystem } from "../src/index.js";
-import type { Item } from "../src/item-list.js";
+import { FileThreadJournal, ThreadJournalCorruptionError, ThreadJournalError, type ThreadJournalFileSystem } from "./test-exports.js";
+import type { Item } from "../src/kernel/item-list.js";
 
 describe("FileThreadJournal", () => {
   it("durably creates and replays a versioned Item journal", async () => {

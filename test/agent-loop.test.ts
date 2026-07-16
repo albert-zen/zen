@@ -7,7 +7,7 @@ import {
   type ModelEvent,
   type ModelGateway,
   type ToolRuntime
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("AgentLoop", () => {
   it("records a configured system prompt as a model-visible item once", async () => {

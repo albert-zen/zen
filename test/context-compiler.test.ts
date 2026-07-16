@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ContextCompiler, type Item } from "../src/index.js";
+import { ContextCompiler, type Item } from "./test-exports.js";
 
 describe("ContextCompiler", () => {
   it("compiles the latest completed system message at the front of model context", () => {

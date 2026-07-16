@@ -4,7 +4,7 @@ import {
   ItemRetentionPolicy,
   type Item,
   type RetentionClass
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("ItemRetentionPolicy", () => {
   it("keeps completed semantic items in default retention", () => {

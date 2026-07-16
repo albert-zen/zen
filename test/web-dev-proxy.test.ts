@@ -11,8 +11,8 @@ import {
   type AppServerClient,
   serveAppServerHttpTransport,
   type ModelGateway
-} from "../src/index.js";
-import { publishAppServerClientHandoff } from "../src/app-server-config.js";
+} from "./test-exports.js";
+import { publishAppServerClientHandoff } from "../src/adapters/node/app-server-config.js";
 
 describe("Web development App Server proxy", () => {
   it("keeps the capability out of DEBUG=vite:config subprocess output", async () => {

@@ -7,7 +7,7 @@ import {
   type AppServerNotification,
   type ModelGateway,
   type ToolRuntime
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("approval resolution and interrupt ordering", () => {
   it("rejects a stale resolution when interrupt consumes the pending approval and continues FIFO", async () => {

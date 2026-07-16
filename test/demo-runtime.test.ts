@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createDemoAppServer } from "../src/index.js";
+import { createDemoAppServer } from "./test-exports.js";
 
 describe("demo runtime", () => {
   it("runs a normal turn through the App Server item path", async () => {

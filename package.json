@@ -3,22 +3,50 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/kernel/index.d.ts",
+      "default": "./dist/kernel/index.js"
+    },
+    "./product": {
+      "types": "./dist/product/index.d.ts",
+      "default": "./dist/product/index.js"
+    },
+    "./node": {
+      "types": "./dist/adapters/node/index.d.ts",
+      "default": "./dist/adapters/node/index.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation/index.d.ts",
+      "default": "./dist/presentation/index.js"
+    },
+    "./tui": {
+      "types": "./dist/tui/index.d.ts",
+      "default": "./dist/tui/index.js"
+    }
+  },
+  "imports": {
+    "#zen/node": "./src/adapters/node/index.ts",
+    "#zen/product": "./src/product/index.ts",
+    "#zen/presentation": "./src/presentation/index.ts"
+  },
   "scripts": {
-    "app-server": "npm run build && node dist/app-server-cli.js",
+    "app-server": "npm run build && node dist/adapters/node/app-server-cli.js",
     "build": "tsc -p tsconfig.build.json",
-    "dogfood:alb-94": "npm run build && node docs/implementation/alb-94-dogfood-acceptance.mjs",
+    "build:acceptance": "tsc -p tsconfig.acceptance.json",
+    "dogfood:alb-94": "npm run build && npm run build:acceptance && node docs/implementation/alb-94-dogfood-acceptance.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
-    "tui": "npm run build && node dist/cli.js",
-    "web": "npm run build && node dist/web-dev-cli.js",
+    "tui": "npm run build && node dist/tui/cli.js",
+    "web": "npm run build && node dist/adapters/node/web-dev-cli.js",
     "web:build": "vite build --config web/vite.config.ts",
     "web:dev": "vite --config web/vite.config.ts --host 127.0.0.1"
   },
   "bin": {
-    "zen-app-server": "dist/app-server-cli.js",
-    "zen-web": "dist/web-dev-cli.js",
-    "zen": "dist/cli.js"
+    "zen-app-server": "dist/adapters/node/app-server-cli.js",
+    "zen-web": "dist/adapters/node/web-dev-cli.js",
+    "zen": "dist/tui/cli.js"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.0",

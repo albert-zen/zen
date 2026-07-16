@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { InMemoryItemList, ItemObserverError, type Item } from "../src/index.js";
+import { InMemoryItemList, ItemObserverError, type Item } from "./test-exports.js";
 
 describe("InMemoryItemList", () => {
   it("appends items in order with monotonic sequence numbers", () => {

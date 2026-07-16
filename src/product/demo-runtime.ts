@@ -1,12 +1,11 @@
 import { AppServer, type AppServerOptions } from "./app-server.js";
-import type { ModelContext } from "./context-compiler.js";
-import type { ModelEvent, ModelGateway } from "./model-gateway.js";
+import type { ModelContext, ModelEvent, ModelGateway } from "../kernel/index.js";
 import type {
   ThreadRuntime,
   ThreadRuntimeFactory,
   ToolRuntime
 } from "./thread-manager.js";
-import type { ToolRuntimeEvent } from "./tool-runtime.js";
+import type { ToolRuntimeEvent } from "../kernel/index.js";
 
 export type DemoAppServerOptions = {
   readonly appServerOptions?: AppServerOptions;

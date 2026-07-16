@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { EditorComponent, TextBlock, TuiEngine } from "../src/index.js";
+import { EditorComponent, TextBlock, TuiEngine } from "./test-exports.js";
 import { VirtualTerminalDevice, waitForRender } from "./virtual-terminal.js";
 
 describe("TuiEngine", () => {

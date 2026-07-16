@@ -3,13 +3,13 @@ import type {
   AppServerNotificationListener,
   AppServerSubscription,
   AppServerRequestInput
-} from "../../src/app-server";
+} from "#zen/product";
 import type {
   AppServerResponse,
   ProtocolItem,
   ThreadSnapshot,
   TurnSnapshot
-} from "../../src/app-server-protocol";
+} from "#zen/product";
 
 export function createBrowserDemoAppServer(): AppServerClient {
   let activeThreadId: string | undefined;

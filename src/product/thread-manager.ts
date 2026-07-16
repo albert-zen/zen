@@ -9,17 +9,15 @@ import {
   toProtocolItem,
   toThreadSnapshot
 } from "./app-server-protocol.js";
-import { AgentLoop, type AgentLoopOptions } from "./agent-loop.js";
-import { type ContextCompiler } from "./context-compiler.js";
+import { AgentLoop, type AgentLoopOptions, type ContextCompiler } from "../kernel/index.js";
 import {
   InMemoryItemList,
   type Clock,
   type IdGenerator,
   type Item,
   type ItemAppendInput
-} from "./item-list.js";
-import { type ModelGateway, type ModelOptions } from "./model-gateway.js";
-import { type ToolRuntime } from "./tool-runtime.js";
+} from "../kernel/index.js";
+import { type ModelGateway, type ModelOptions, type ToolRuntime } from "../kernel/index.js";
 import { type ApprovalBroker } from "./approval-runtime.js";
 
 export type { ModelGateway, ModelOptions, ToolRuntime };

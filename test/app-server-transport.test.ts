@@ -10,7 +10,7 @@ import {
   serveAppServerHttpTransport,
   type ModelGateway,
   type ToolRuntime
-} from "../src/index.js";
+} from "./test-exports.js";
 
 const TEST_CAPABILITY = "test-capability-0123456789-abcdef-0123456789";
 

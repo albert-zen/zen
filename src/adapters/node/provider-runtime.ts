@@ -1,14 +1,20 @@
-import { AppServer, type AppServerOptions } from "./app-server.js";
+import {
+  AppServer,
+  DEFAULT_ZEN_SYSTEM_PROMPT,
+  toThreadSnapshot,
+  type AppServerOptions,
+  type ThreadJournal,
+  type ThreadPersistenceFailure,
+  type ThreadRuntime,
+  type ThreadRuntimeFactory
+} from "../../product/index.js";
 import { LocalToolRuntime, localToolDefinitions } from "./local-tool-runtime.js";
 import {
   loadModelProviderConfig,
   type ModelProviderConfigOptions
 } from "./model-provider-config.js";
 import { OpenAiCompatibleModelGateway } from "./openai-compatible-model-gateway.js";
-import { DEFAULT_ZEN_SYSTEM_PROMPT } from "./system-prompt.js";
-import { FileThreadJournal, type ThreadJournal } from "./thread-journal.js";
-import { toThreadSnapshot, type ThreadPersistenceFailure } from "./app-server-protocol.js";
-import type { ThreadRuntime, ThreadRuntimeFactory } from "./thread-manager.js";
+import { FileThreadJournal } from "./file-thread-journal.js";
 
 export type ProviderBackedAppServerOptions = {
   readonly cwd?: string;

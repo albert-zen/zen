@@ -1,4 +1,4 @@
-import { runDogfoodAcceptanceScenario } from "../../dist/index.js";
+import { runDogfoodAcceptanceScenario } from "../../dist/acceptance/acceptance/dogfood-acceptance.js";
 
 const result = await runDogfoodAcceptanceScenario({
   configPath: process.env.ALB94_DOGFOOD_PROVIDER_CONFIG,

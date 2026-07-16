@@ -3,13 +3,13 @@ import type {
   AppServerNotificationListener,
   AppServerRequestInput,
   AppServerSubscription
-} from "./app-server.js";
+} from "../product/index.js";
 import type {
   AppServerNotification,
   AppServerResponse,
   ApprovalDecision,
   ThreadSnapshot
-} from "./app-server-protocol.js";
+} from "../product/index.js";
 import {
   InteractionProjection,
   type WebUiState

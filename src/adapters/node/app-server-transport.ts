@@ -8,11 +8,11 @@ import type {
   AppServerNotificationListener,
   AppServerRequestInput,
   AppServerSubscription
-} from "./app-server.js";
+} from "../../product/index.js";
 import type {
   AppServerNotification,
   AppServerResponse
-} from "./app-server-protocol.js";
+} from "../../product/index.js";
 import { assertLoopbackBindAllowed } from "./app-server-config.js";
 
 export type AppServerHttpTransportOptions = {

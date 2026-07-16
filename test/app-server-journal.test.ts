@@ -11,8 +11,8 @@ import {
   type AppServerNotification,
   type ThreadJournal,
   type ThreadJournalReplay
-} from "../src/index.js";
-import type { Item } from "../src/item-list.js";
+} from "./test-exports.js";
+import type { Item } from "../src/kernel/item-list.js";
 
 describe("AppServer journal commits", () => {
   it("publishes terminal lifecycle only after that thread flushes", async () => {

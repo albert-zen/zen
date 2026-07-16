@@ -10,7 +10,7 @@ import {
   createProviderBackedAppServer,
   FileThreadJournal,
   type ModelGateway
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("AppServer", () => {
   it("dispatches thread/start and thread/read through the public request API", async () => {

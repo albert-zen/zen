@@ -1,8 +1,8 @@
 import type {
   ModelContext,
   ModelContextPart
-} from "./context-compiler.js";
-import type { ModelEvent, ModelGateway, ModelOptions } from "./model-gateway.js";
+} from "../../kernel/index.js";
+import type { ModelEvent, ModelGateway, ModelOptions } from "../../kernel/index.js";
 
 type ToolDefinition = Readonly<Record<string, unknown>>;
 

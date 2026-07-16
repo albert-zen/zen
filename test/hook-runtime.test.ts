@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { HookRuntime, InMemoryItemList, type Item } from "../src/index.js";
+import { HookRuntime, InMemoryItemList, type Item } from "./test-exports.js";
 
 describe("HookRuntime", () => {
   it("lets a hook observe an item before it is appended", async () => {

@@ -5,17 +5,17 @@ import {
   InMemoryItemList,
   appendToolExecutionItems,
   type AgentLoopOptions
-} from "../src/index.js";
+} from "./test-exports.js";
 import {
   ApprovalBroker,
   PolicyToolRuntime,
   type PolicyRuntime
-} from "../src/approval-runtime.js";
+} from "../src/product/approval-runtime.js";
 import type {
   ToolCallPayload,
   ToolExecutionContext,
   ToolRuntime
-} from "../src/tool-runtime.js";
+} from "../src/kernel/tool-runtime.js";
 
 describe("PolicyToolRuntime", () => {
   it("delegates allowed tool calls to the wrapped runtime", async () => {

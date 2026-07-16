@@ -13,7 +13,7 @@ import {
   renderTerminalTranscript,
   type ModelGateway,
   type ThreadSnapshot
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("AgentInteractionSession", () => {
   it("discards a submit waiter when turn/start rejects", async () => {
