@@ -185,7 +185,10 @@ export function AgentWorkspace(): React.ReactElement {
                     key={`${row.type}:${row.itemId}`}
                     row={row}
                     onResolve={(approval, decision) =>
-                      void client.resolveApproval(approval, decision).catch((cause) => setStreamError(readError(cause)))
+                      client.resolveApproval(approval, decision).catch((cause) => {
+                        setStreamError(readError(cause));
+                        throw cause;
+                      })
                     }
                   />
                 ))
@@ -325,7 +328,7 @@ function TimelineMessage({
   onResolve: (
     approval: { readonly approvalId: string; readonly threadId: string; readonly turnId: string },
     decision: "approveOnce" | "decline"
-  ) => void;
+  ) => Promise<void>;
 }): React.ReactElement {
   const side = row.type === "user" ? "end" : "start";
   const isAssistant = row.type === "assistant" || row.type === "assistant-progress";
@@ -356,14 +359,16 @@ function RowContent({
   onResolve: (
     approval: { readonly approvalId: string; readonly threadId: string; readonly turnId: string },
     decision: "approveOnce" | "decline"
-  ) => void;
+  ) => Promise<void>;
 }): React.ReactElement {
   const [resolving, setResolving] = React.useState(false);
   if (row.type === "approval-pending") {
     const approval = { approvalId: row.approvalId, threadId: row.threadId, turnId: row.turnId };
     const resolve = (decision: "approveOnce" | "decline") => {
       setResolving(true);
-      onResolve(approval, decision);
+      void onResolve(approval, decision).catch(() => {
+        setResolving(false);
+      });
     };
     return (
       <div className="grid gap-3">

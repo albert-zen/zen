@@ -64,3 +64,44 @@ Reviewer notes: Round 1 accepted findings addressed; ready for a fresh review.
 Open questions: none
 Known residual risks: none known for the accepted findings.
 Blocker or context escalation details: Root cause was the dogfood scripted model repeating shell calls after an unapproved LocalToolRuntime produced a tool error and no model-visible tool result. The base suite passed under the same command; the repaired branch now passes normally.
+
+## Codex Review Note
+
+Round: 2
+Issue: long-term-optimization-003 Ship auditable shell approval end to end
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-003
+Base revision/diff scope: 9f6664e..b6f96ca; Round 2 review of accepted Round 1 fixes
+Standards Review blocking: Deterministic resolve-versus-interrupt FIFO coverage was missing.
+Standards Review non-blocking: Workspace approval controls remained disabled after a rejected resolve request.
+Standards Review missing evidence: Both broker-consume ordering cases and retry behavior after a rejected UI action.
+Spec Review blocking: The two linearizable approval/interrupt interleavings and FIFO continuation were not proven.
+Spec Review non-blocking: none
+Spec Review missing evidence: Public behavior test coverage for the accepted race and UI retry cases.
+Local tracker state decision: Rework
+State decision reason: Manager accepted the race and retry-state findings; proxy transient was deferred to issue 007.
+
+## Codex Worker Note
+
+Round: 3
+Issue: long-term-optimization-003 Ship auditable shell approval end to end
+Local tracker state transition: Rework -> Agent Review
+Branch: codex/long-term-optimization-003
+PR URL: not configured
+Base revision/diff scope: b6f96ca; only accepted Round 2 race coverage and workspace retry-state findings
+Summary of behavior delivered: Added deterministic AppServer tests for interrupt-first stale resolution and approve-first interrupted shell execution, both with broker cleanup and same-thread FIFO continuation. Restored workspace approval control retry after a rejected resolve request while preserving surfaced errors.
+Final scope summary: Accepted Round 2 findings only. Proxy infrastructure was not changed and remains deferred to issue 007.
+Changed files/modules: test/approval-race.test.ts; test/web-ui-client.test.ts; web/src/workspace.tsx; docs/implementation/long-term-optimization-003-evidence.md; docs/implementation/long-term-optimization-tracker.md.
+Tests added/updated: Deferred-barrier AppServer race tests for both linearization orders; Web client reject-then-retry action test.
+Acceptance criteria status: Interrupt-first stale resolution/no shell/FIFO continuation: complete. Approve-first shell start/abort/FIFO continuation: complete. Broker empty after both interleavings: complete. Workspace resolve retry after rejection: complete. Deferred proxy item: unchanged, issue 007.
+Commands run and results: Focused approval/AppServer/Web/TUI tests passed (4 files, 24 tests). npm run typecheck passed. npm run typecheck:web passed. npm run web:build passed. git diff --check passed. Serialized npm test -- --maxWorkers=1 passed (31 files, 195 tests, 53.72s).
+Validation log paths: none
+Required check status or local-check handoff reason: All requested Round 2 validation completed. Web build rerun because workspace production wiring changed.
+Evidence links/paths: docs/implementation/long-term-optimization-003-evidence.md
+Decisions made: The tests use deferred promises and notification barriers only; no sleeps. Interrupt-first consumes the broker entry before stale resolution; approve-first observes shell start before abort.
+Standards notes: The workspace handler restores only local in-flight state on rejection, leaving the connection error surfaced by the parent action.
+Reviewer notes: Round 2 accepted findings addressed; ready for fresh review.
+Open questions: none
+Known residual risks: none known for the accepted findings.
+Blocker or context escalation details: none

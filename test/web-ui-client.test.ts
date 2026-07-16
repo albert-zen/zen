@@ -4,6 +4,8 @@ import {
   AppServer,
   type AppServerClient,
   type AppServerNotificationListener,
+  type AppServerRequestInput,
+  type AppServerResponse,
   type AppServerSubscription,
   BrowserAppServerTransportClient,
   HttpAppServerClient,
@@ -179,6 +181,20 @@ describe("Web UI client", () => {
       }
     });
   });
+
+  it("allows the same approval action to be retried after a protocol rejection", async () => {
+    const client = new RejectOnceApprovalClient();
+    const webUi = new WebUiClient({ client });
+    const approval = { approvalId: "approval-7", threadId: "thread-4", turnId: "turn-9" };
+
+    await expect(webUi.resolveApproval(approval, "approveOnce")).rejects.toThrow("stale approval");
+    await expect(webUi.resolveApproval(approval, "approveOnce")).resolves.toBeUndefined();
+
+    expect(client.requests).toEqual([
+      { method: "approval/resolve", params: { ...approval, decision: "approveOnce" } },
+      { method: "approval/resolve", params: { ...approval, decision: "approveOnce" } }
+    ]);
+  });
 });
 
 function sequence(prefix: string): () => string {
@@ -300,6 +316,25 @@ class RecordingClient implements AppServerClient {
 
   emit(notification: Parameters<AppServerNotificationListener>[0]): void {
     this.listener?.(notification);
+  }
+}
+
+class RejectOnceApprovalClient implements AppServerClient {
+  readonly requests: AppServerRequestInput[] = [];
+  private attempts = 0;
+
+  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    this.requests.push(request);
+    this.attempts += 1;
+    if (this.attempts === 1) {
+      return { method: "approval/resolve", ok: false, error: { code: "STALE", message: "stale approval" } };
+    }
+    const params = request.params as { readonly approvalId: string; readonly decision: "approveOnce" | "decline" };
+    return { method: "approval/resolve", ok: true, result: { approvalId: params.approvalId, decision: params.decision } };
+  }
+
+  subscribe(_listener: AppServerNotificationListener): AppServerSubscription {
+    return () => undefined;
   }
 }
 
