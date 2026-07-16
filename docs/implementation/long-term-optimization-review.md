@@ -229,3 +229,42 @@ Residual risk: the required full suite has one non-reproducible Web proxy
 subprocess failure in the recorded run; the focused rerun passed. No source
 change was made because the failure did not reproduce and no merge regression
 was identified.
+
+## Wave 3 Issue-005 Integration Record
+
+Integrated exact reviewed issue-005 head
+`8654cf10b2bc0b7a884ca5105a4a8487740f4dfc` from
+`codex/long-term-optimization-005` into canonical
+`codex/long-term-optimization` with no-fast-forward merge commit
+`989d56b2b464a74e2f166d37eb305082972c871d` (parents
+`5d7636ed14e3f741d1daf23267e250ba846da7ba` and
+`8654cf10b2bc0b7a884ca5105a4a8487740f4dfc`). The only merge conflict was the
+canonical tracker. The resolution retains 004 as Integrated, marks 005 as
+Integrated at its exact reviewed head, completes Wave 3, and makes 006 Ready.
+
+The merge auto-combined `src/index.ts`: 004 ThreadJournal/protocol/provider/
+AppServer exports and 005 projection/client exports are all retained. 004
+persistence coverage and 005 incremental projection, lifecycle, jsdom,
+lockfile, and test changes are retained. Core typechecking then found one
+test-fixture contract mismatch: the 005 deferred session client omitted 004's
+required `thread/list.result.persistenceFailures`. The focused test-only commit
+`6b1ea5c1e87c713f16a2cd54d6e236d0a135d5f7` supplies `[]`; it makes no
+production behavior change. This is the verified integrated code revision.
+
+| Command | Exit | Result |
+| --- | ---: | --- |
+| `npm install` | 0 | Workspace synchronized for reviewed jsdom lockfile dependency; 116 packages added, audit reported 0 vulnerabilities. |
+| Initial `npm test` | 0 | 32 files passed; 218/218 tests passed. |
+| Initial `npm run typecheck` | 1 | Found the missing `persistenceFailures` test-fixture field described above. |
+| `npm test -- test/agent-interaction-session.test.ts` | 0 | Focused integration contract test: 1 file, 10/10 tests passed. |
+| Final `npm test` (single serialized run) | 0 | 32 files passed; 218/218 tests passed. |
+| Final `npm run typecheck` | 0 | Core `tsc --noEmit` passed. |
+| `npm run typecheck:web` | 0 | Web `tsc -p web/tsconfig.json --noEmit` passed. |
+| `npm run build` | 0 | Node declaration/JavaScript build passed. |
+| `npm run web:build` | 0 | Vite production build passed; 1,750 modules transformed. |
+| `git diff --check` | 0 | No working-tree whitespace errors. |
+
+The known Web development proxy `ECONNREFUSED` did not occur during the final
+serialized run, so its targeted recovery path was not needed. Infrastructure
+redesign remains deferred to issue 007. No GitHub handoff runs because this
+repository remains in local-branch mode without a canonical remote.

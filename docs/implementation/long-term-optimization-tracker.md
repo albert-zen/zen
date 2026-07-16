@@ -157,7 +157,7 @@ required worker return, readiness, and review fields from
 | --- | --- | --- | --- | --- | --- |
 | Wave 1 | Complete | STRICT PASS | STRICT PASS | `47304b2168cb8048fe7e57fad596d509a726afe2` | `docs/implementation/long-term-optimization-review.md` |
 | Wave 2 | Integrated | STRICT PASS | STRICT PASS | `674dcd29fdc01cf261d90501fd45ef63023ed8ac` | `docs/implementation/long-term-optimization-review.md` |
-| Wave 3 | Complete | STRICT PASS | STRICT PASS | pending integration gate record | `docs/implementation/long-term-optimization-review.md` |
+| Wave 3 | Complete | STRICT PASS | STRICT PASS | `6b1ea5c1e87c713f16a2cd54d6e236d0a135d5f7` | `docs/implementation/long-term-optimization-review.md` |
 
 ## Final Completion Gate
 
