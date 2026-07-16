@@ -188,3 +188,20 @@ State decision reason: The fresh corrective reviewer verified substantive
 commit bodies, durable exact-head evidence, append-only correction ledgers,
 identical old/new mapped trees, and a clean canonical branch. Both Wave 1
 review axes now pass.
+
+## Wave 2 Integration Record
+
+Integrated exact reviewed issue-003 head `bc0a83de948e520cce63f6c4f85947e44ecbff8f`
+on canonical branch `codex/long-term-optimization` with merge commit
+`674dcd29fdc01cf261d90501fd45ef63023ed8ac` (parents
+`de54364c600ac97882ca53837269cfe2e3426348` and
+`bc0a83de948e520cce63f6c4f85947e44ecbff8f`). No conflicts occurred.
+
+| Gate | Result |
+| --- | --- |
+| `npm test -- --maxWorkers=1` | PASS; 31 files, 195 tests |
+| `npm run typecheck` | PASS |
+| `npm run typecheck:web` | PASS |
+| `npm run build` | PASS |
+| `npm run web:build` | PASS; 1,750 modules transformed |
+| `git diff --check` | PASS |
