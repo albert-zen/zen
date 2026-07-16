@@ -111,20 +111,23 @@ export class AgentLoop {
     }
 
     throwIfAborted(input.signal);
-    await this.append({
-      type: "turn.completed",
-      runId: input.runId,
-      turnId: input.turnId,
-      visibility: "trace",
-      payload: { status: "completed" }
-    });
-    await this.append({
-      type: "run.completed",
-      runId: input.runId,
-      turnId: input.turnId,
-      visibility: "trace",
-      payload: { status: "completed" }
-    });
+
+    if (!hasTurnFailure(this.itemList.getItems(), input.turnId)) {
+      await this.append({
+        type: "turn.completed",
+        runId: input.runId,
+        turnId: input.turnId,
+        visibility: "trace",
+        payload: { status: "completed" }
+      });
+      await this.append({
+        type: "run.completed",
+        runId: input.runId,
+        turnId: input.turnId,
+        visibility: "trace",
+        payload: { status: "completed" }
+      });
+    }
 
     const items = this.itemList.getItems();
 
@@ -177,6 +180,14 @@ function hasToolCalls(item: Item): boolean {
     payload !== null &&
     Array.isArray((payload as { readonly toolCalls?: unknown }).toolCalls) &&
     (payload as { readonly toolCalls: readonly unknown[] }).toolCalls.length > 0
+  );
+}
+
+function hasTurnFailure(items: readonly Item[], turnId: string): boolean {
+  return items.some(
+    (item) =>
+      item.turnId === turnId &&
+      (item.type === "assistant.message.error" || item.type === "tool.error")
   );
 }
 

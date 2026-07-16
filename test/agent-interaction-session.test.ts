@@ -93,8 +93,8 @@ describe("AgentInteractionSession", () => {
         id: "thread-1",
         status: "idle",
         turns: 1,
-        items: 9,
-        updatedAtMs: 1800,
+        items: 10,
+        updatedAtMs: 1900,
         lastUserMessage: "Find the previous picker work",
         lastAssistantSummary: "We added a resume picker summary"
       }
