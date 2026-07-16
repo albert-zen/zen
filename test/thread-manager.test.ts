@@ -104,6 +104,152 @@ describe("ThreadManager", () => {
     });
   });
 
+  it("reserves FIFO order before publishing queued items to reentrant observers", async () => {
+    const executionOrder: string[] = [];
+    const manager = new ThreadManager({
+      generateThreadId: sequence("thread"),
+      generateRunId: sequence("run"),
+      generateTurnId: sequence("turn"),
+      generateItemId: sequence("item"),
+      clock: () => 1000,
+      runtimeFactory: ({ turn }) => ({
+        model: {
+          async *generate() {
+            executionOrder.push(turn.id);
+            yield { type: "message.completed", content: turn.id };
+          }
+        }
+      })
+    });
+    const thread = manager.startThread();
+    let nestedTurnId: string | undefined;
+
+    manager.observe((event) => {
+      if (
+        nestedTurnId === undefined &&
+        event.type === "item/appended" &&
+        event.item.type === "turn.queued"
+      ) {
+        nestedTurnId = "reserving";
+        nestedTurnId = manager.enqueueTurn({
+          threadId: thread.id,
+          input: "nested"
+        }).id;
+      }
+    });
+
+    const outer = manager.enqueueTurn({
+      threadId: thread.id,
+      input: "outer"
+    });
+
+    await waitForCondition(
+      () =>
+        manager.readThread(thread.id).turns.length === 2 &&
+        manager
+          .readThread(thread.id)
+          .turns.every((turn) => turn.status === "completed")
+    );
+
+    expect({ outer: outer.id, nested: nestedTurnId, executionOrder }).toEqual({
+      outer: "turn-1",
+      nested: "turn-2",
+      executionOrder: ["turn-1", "turn-2"]
+    });
+  });
+
+  it("executes a committed queued item after observer rejection and continues FIFO", async () => {
+    const executionOrder: string[] = [];
+    const manager = new ThreadManager({
+      generateThreadId: sequence("thread"),
+      generateRunId: sequence("run"),
+      generateTurnId: sequence("turn"),
+      generateItemId: sequence("item"),
+      clock: () => 1000,
+      runtimeFactory: ({ turn }) => ({
+        model: {
+          async *generate() {
+            executionOrder.push(turn.id);
+            yield { type: "message.completed", content: turn.id };
+          }
+        }
+      })
+    });
+    const thread = manager.startThread();
+    let rejectQueue = true;
+
+    manager.observe((event) => {
+      if (
+        rejectQueue &&
+        event.type === "item/appended" &&
+        event.item.type === "turn.queued"
+      ) {
+        rejectQueue = false;
+        throw new Error("queue observer rejected");
+      }
+    });
+
+    expect(() =>
+      manager.enqueueTurn({ threadId: thread.id, input: "committed first" })
+    ).toThrow("item observer failed");
+
+    const second = manager.enqueueTurn({
+      threadId: thread.id,
+      input: "second"
+    });
+
+    await waitForCondition(
+      () =>
+        manager.readThread(thread.id).turns.length === 2 &&
+        manager
+          .readThread(thread.id)
+          .turns.every((turn) => turn.status === "completed")
+    );
+
+    expect({ second: second.id, executionOrder }).toEqual({
+      second: "turn-2",
+      executionOrder: ["turn-1", "turn-2"]
+    });
+  });
+
+  it("keeps turn, run, and item ids unique when generators collide", async () => {
+    const manager = new ThreadManager({
+      generateThreadId: sequence("thread"),
+      generateRunId: collidingSequence("run"),
+      generateTurnId: collidingSequence("turn"),
+      generateItemId: collidingSequence("item"),
+      clock: () => 1000,
+      runtimeFactory: () => ({
+        model: {
+          async *generate() {
+            yield { type: "message.completed", content: "completed" };
+          }
+        }
+      })
+    });
+    const thread = manager.startThread();
+
+    await Promise.all([
+      manager.startTurn({ threadId: thread.id, input: "first" }),
+      manager.startTurn({ threadId: thread.id, input: "second" })
+    ]);
+
+    const snapshot = manager.readThread(thread.id);
+    const itemIds = snapshot.items.map((item) => item.id);
+
+    expect({
+      turnIds: snapshot.turns.map((turn) => turn.id),
+      runIds: snapshot.turns.map((turn) => turn.runId),
+      itemIdCount: itemIds.length,
+      uniqueItemIdCount: new Set(itemIds).size
+    }).toEqual({
+      turnIds: ["turn-1", "turn-2"],
+      runIds: ["run-1", "run-2"],
+      itemIdCount: 20,
+      uniqueItemIdCount: 20
+    });
+  });
+
   it("runs turns from different threads concurrently", async () => {
     const release = createDeferred<void>();
     const started: string[] = [];
@@ -557,6 +703,56 @@ describe("ThreadManager", () => {
     );
   });
 
+  it("reports terminal observer rejection without appending a conflicting terminal item", async () => {
+    const manager = createManager();
+    let rejectTerminal = true;
+
+    manager.observe((event) => {
+      if (
+        rejectTerminal &&
+        event.type === "item/appended" &&
+        event.item.type === "turn.completed"
+      ) {
+        rejectTerminal = false;
+        throw new Error("terminal observer rejected");
+      }
+    });
+
+    const thread = manager.startThread();
+    const first = manager.startTurn({
+      threadId: thread.id,
+      input: "commit completion"
+    });
+    const second = manager.startTurn({
+      threadId: thread.id,
+      input: "continue after rejection"
+    });
+
+    await expect(first).rejects.toThrow("item observer failed");
+    await expect(second).resolves.toEqual(
+      expect.objectContaining({ status: "completed" })
+    );
+
+    const snapshot = manager.readThread(thread.id);
+    const terminalTypes = snapshot.items
+      .filter((item) =>
+        ["turn.completed", "turn.failed", "turn.canceled", "turn.repaired"].includes(
+          item.type
+        )
+      )
+      .map((item) => item.type);
+
+    expect({
+      threadStatus: snapshot.status,
+      turnStatuses: snapshot.turns.map((turn) => turn.status),
+      terminalTypes
+    }).toEqual({
+      threadStatus: "idle",
+      turnStatuses: ["completed", "completed"],
+      terminalTypes: ["turn.completed", "turn.completed"]
+    });
+  });
+
   it("enqueues retries at the tail with the original user input", async () => {
     const secondRelease = createDeferred<void>();
     const secondStarted = createDeferred<void>();
@@ -736,6 +932,12 @@ function sequence(prefix: string): () => string {
   let nextId = 0;
 
   return () => `${prefix}-${++nextId}`;
+}
+
+function collidingSequence(prefix: string): () => string {
+  let callCount = 0;
+
+  return () => `${prefix}-${Math.floor(callCount++ / 2) + 1}`;
 }
 
 function createDeferred<T>() {

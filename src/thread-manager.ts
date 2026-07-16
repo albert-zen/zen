@@ -15,7 +15,8 @@ import {
   InMemoryItemList,
   type Clock,
   type IdGenerator,
-  type Item
+  type Item,
+  type ItemAppendInput
 } from "./item-list.js";
 import { type ModelGateway, type ModelOptions } from "./model-gateway.js";
 import { type ToolRuntime } from "./tool-runtime.js";
@@ -133,7 +134,7 @@ export class ThreadManager {
     const thread: ThreadState = {
       id: this.generateUniqueThreadId(),
       itemList: new InMemoryItemList({
-        generateId: this.generateItemId,
+        generateId: createUniqueIdGenerator(this.generateItemId, new Set()),
         clock: this.clock
       })
     };
@@ -229,18 +230,6 @@ export class ThreadManager {
     readonly completion: Promise<TurnSnapshot>;
   } {
     const thread = this.getThread(input.threadId);
-    const turn = this.appendQueuedTurn(thread, input.input);
-
-    return {
-      turn,
-      completion: this.scheduleTurn(thread, turn.id, input)
-    };
-  }
-
-  private appendQueuedTurn(
-    thread: ThreadState,
-    input: JsonValue
-  ): TurnSnapshot {
     const current = this.snapshotThread(thread);
     const turnId = generateUniqueId(
       this.generateTurnId,
@@ -250,7 +239,22 @@ export class ThreadManager {
       this.generateRunId,
       new Set(current.turns.map((turn) => turn.runId))
     );
+    const completion = this.scheduleTurn(thread, turnId, input);
 
+    this.appendQueuedTurn(thread, turnId, runId, input.input);
+
+    return {
+      turn: this.getTurnSnapshot(thread, turnId),
+      completion
+    };
+  }
+
+  private appendQueuedTurn(
+    thread: ThreadState,
+    turnId: string,
+    runId: string,
+    input: JsonValue
+  ): void {
     thread.itemList.append({
       type: "turn.queued",
       runId,
@@ -258,8 +262,6 @@ export class ThreadManager {
       visibility: "trace",
       payload: { input }
     });
-
-    return this.getTurnSnapshot(thread, turnId);
   }
 
   private scheduleTurn(
@@ -344,6 +346,10 @@ export class ThreadManager {
       });
     } catch (cause) {
       const turn = this.getTurnSnapshot(thread, turnId);
+
+      if (isTerminalTurnStatus(turn.status)) {
+        throw cause;
+      }
 
       if (controller.signal.aborted) {
         return this.cancelTurn(thread, turn);
@@ -474,7 +480,7 @@ export class ThreadManager {
     turn: TurnSnapshot,
     error: AppServerError
   ): TurnSnapshot {
-    thread.itemList.append({
+    const terminal = this.appendTerminalItem(thread, turn, {
       type: "turn.failed",
       runId: turn.runId,
       turnId: turn.id,
@@ -485,16 +491,18 @@ export class ThreadManager {
       }
     });
 
-    const failed = this.getTurnSnapshot(thread, turn.id);
+    if (!terminal.appended) {
+      return terminal.turn;
+    }
 
     this.emit({
       type: "turn/failed",
       threadId: thread.id,
-      turn: failed,
+      turn: terminal.turn,
       error
     });
 
-    return failed;
+    return terminal.turn;
   }
 
   private cancelTurn(
@@ -503,7 +511,7 @@ export class ThreadManager {
   ): TurnSnapshot {
     const error = { code: "TURN_INTERRUPTED", message: "Turn interrupted" };
 
-    thread.itemList.append({
+    const terminal = this.appendTerminalItem(thread, turn, {
       type: "turn.canceled",
       runId: turn.runId,
       turnId: turn.id,
@@ -511,15 +519,36 @@ export class ThreadManager {
       payload: { status: "canceled", error }
     });
 
-    const canceled = this.getTurnSnapshot(thread, turn.id);
+    if (!terminal.appended) {
+      return terminal.turn;
+    }
 
     this.emit({
       type: "turn/completed",
       threadId: thread.id,
-      turn: canceled
+      turn: terminal.turn
     });
 
-    return canceled;
+    return terminal.turn;
+  }
+
+  private appendTerminalItem(
+    thread: ThreadState,
+    turn: TurnSnapshot,
+    item: ItemAppendInput
+  ): { readonly turn: TurnSnapshot; readonly appended: boolean } {
+    const current = this.getTurnSnapshot(thread, turn.id);
+
+    if (isTerminalTurnStatus(current.status)) {
+      return { turn: current, appended: false };
+    }
+
+    thread.itemList.append(item);
+
+    return {
+      turn: this.getTurnSnapshot(thread, turn.id),
+      appended: true
+    };
   }
 }
 
@@ -553,6 +582,12 @@ function latestRecoverableTurn(
 
 function isRecoverableTurnStatus(status: TurnStatus): boolean {
   return status === "failed" || status === "canceled";
+}
+
+function isTerminalTurnStatus(status: TurnStatus): boolean {
+  return (
+    status === "completed" || status === "failed" || status === "canceled"
+  );
 }
 
 function readUserInputForTurn(
