@@ -226,3 +226,20 @@ Reviewer notes: Verify the persistent sequence’s old-snapshot semantics, seque
 Open questions: none
 Known residual risks: Iterating a long sequence materializes its version chain for the caller; this intentionally moves read/render work out of the ordered append mutation path. Slow replacement/rebuild remains O(n) by design.
 Blocker or context escalation details: none
+
+## Codex Review Note
+
+Round: 6
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-005
+Base revision/diff scope: `80b6a22a0d082838305059de9eb313120b27f6fa..2ad672cd2070539132557f84eeb07cbcba91fe21`
+Standards Review blocking: none
+Standards Review non-blocking: none
+Standards Review missing evidence: none; implementation ordering and rejection sink statically cover the two low-value missing-evidence notes.
+Spec Review blocking: none
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local tracker state decision: Complete
+State decision reason: STRICT PASS; no blocking or material non-blocking findings remain, and the manager ends the loop.
