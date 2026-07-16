@@ -107,7 +107,7 @@ export class FileThreadJournal implements ThreadJournal {
       throw cause;
     }
 
-    return await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl")).map((entry) => this.replayFile(entry.name)));
+    return await Promise.all(entries.filter((entry) => entry.isFile()).map((entry) => this.replayFile(entry.name)));
   }
 
   async close(): Promise<void> {

@@ -113,6 +113,8 @@ export class ThreadManager {
   private readonly approvalBroker?: ApprovalBroker;
   private readonly persistenceObserver?: ThreadManagerOptions["persistenceObserver"];
   private readonly persistenceFailuresByThread = new Map<string, import("./app-server-protocol.js").ThreadPersistenceFailure>();
+  private readonly persistenceFailures: readonly import("./app-server-protocol.js").ThreadPersistenceFailure[];
+  private closing = false;
 
   constructor(options: ThreadManagerOptions = {}) {
     this.generateThreadId = options.generateThreadId ?? createSequence("thread");
@@ -123,7 +125,8 @@ export class ThreadManager {
     this.runtimeFactory = options.runtimeFactory ?? createDefaultRuntime;
     this.approvalBroker = options.approvalBroker;
     this.persistenceObserver = options.persistenceObserver;
-    for (const failure of options.persistenceFailures ?? []) {
+    this.persistenceFailures = [...(options.persistenceFailures ?? [])];
+    for (const failure of this.persistenceFailures) {
       if (failure.threadId) this.persistenceFailuresByThread.set(failure.threadId, failure);
     }
 
@@ -204,7 +207,7 @@ export class ThreadManager {
   }
 
   listPersistenceFailures(): readonly import("./app-server-protocol.js").ThreadPersistenceFailure[] {
-    return [...this.persistenceFailuresByThread.values()];
+    return this.persistenceFailures;
   }
 
   persistenceFailure(threadId: string): import("./app-server-protocol.js").ThreadPersistenceFailure | undefined {
@@ -213,6 +216,25 @@ export class ThreadManager {
 
   repairLoadedThreads(): void {
     this.threads.forEach((thread) => this.repairStaleTurns(thread));
+  }
+
+  async shutdown(): Promise<void> {
+    this.closing = true;
+    for (const pending of this.approvalBroker?.listPending() ?? []) {
+      this.approvalBroker?.declineTurn(
+        pending.request.threadId,
+        pending.request.turnId,
+        "Server closing"
+      );
+    }
+    for (const thread of this.threads.values()) {
+      const active = this.activeTurns.get(thread.id);
+      for (const turn of this.snapshotThread(thread).turns) {
+        if (turn.status === "queued") this.cancelTurn(thread, turn);
+      }
+      if (active) active.controller.abort();
+    }
+    await Promise.all([...this.turnTails.values()]);
   }
 
   enqueueTurn(input: TurnStartInput): TurnSnapshot {
@@ -271,6 +293,7 @@ export class ThreadManager {
     readonly turn: TurnSnapshot;
     readonly completion: Promise<TurnSnapshot>;
   } {
+    if (this.closing) throw new Error("Thread manager is closing");
     const thread = this.getThread(input.threadId);
     const current = this.snapshotThread(thread);
     const turnId = generateUniqueId(
@@ -333,6 +356,12 @@ export class ThreadManager {
     turnId: string,
     input: TurnStartInput
   ): Promise<TurnSnapshot> {
+    const existing = this.getTurnSnapshot(thread, turnId);
+    if (this.closing) {
+      return isTerminalTurnStatus(existing.status)
+        ? existing
+        : this.cancelTurn(thread, existing);
+    }
     const controller = new AbortController();
 
     this.activeTurns.set(thread.id, { turnId, controller });

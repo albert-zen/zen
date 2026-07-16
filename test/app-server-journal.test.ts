@@ -1,10 +1,11 @@
 import { mkdtempSync } from "node:fs";
-import { appendFile } from "node:fs/promises";
+import { appendFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   AppServer,
+  ApprovalBroker,
   FileThreadJournal,
   createProviderBackedAppServer,
   type AppServerNotification,
@@ -67,12 +68,51 @@ describe("AppServer journal commits", () => {
     await journal.create("valid", createdItem("valid"));
     await journal.close();
     await appendFile(pathFor(dir, "corrupt"), `${JSON.stringify({ version: 1, item: createdItem("corrupt") })}\nnot-json\n`, "utf8");
+    await writeFile(join(dir, "legacy.json"), "{}", "utf8");
     const server = await createProviderBackedAppServer({ threadJournal: new FileThreadJournal({ dir }) });
-    await expect(server.request({ method: "thread/list" })).resolves.toMatchObject({
-      ok: true,
-      result: { threads: [expect.objectContaining({ id: "valid" })], persistenceFailures: [expect.objectContaining({ code: "THREAD_JOURNAL_CORRUPTION", threadId: "corrupt", recordNumber: 2 })] }
-    });
+    const listed = await server.request({ method: "thread/list" });
+    if (!listed.ok || listed.method !== "thread/list") throw new Error("thread list failed");
+    expect(listed.result.threads).toEqual([expect.objectContaining({ id: "valid" })]);
+    expect(listed.result.persistenceFailures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "THREAD_JOURNAL_CORRUPTION", threadId: "corrupt", recordNumber: 2 }),
+      expect.objectContaining({ code: "THREAD_JOURNAL_CORRUPTION", path: expect.stringContaining("legacy.json") })
+    ]));
     await expect(server.request({ method: "thread/read", params: { threadId: "corrupt" } })).resolves.toMatchObject({ ok: false, error: { code: "THREAD_JOURNAL_CORRUPTION" } });
+  });
+
+  it("closes behind active producers and rejects new work", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "zen-close-barrier-"));
+    const lateItem = deferred<void>();
+    const modelStarted = deferred<void>();
+    const journal = new FileThreadJournal({ dir });
+    const broker = new ApprovalBroker();
+    const server = new AppServer({
+      threadJournal: journal,
+      approvalBroker: broker,
+      threadManagerOptions: {
+        generateThreadId: sequence("thread"), generateRunId: sequence("run"), generateTurnId: sequence("turn"), generateItemId: sequence("item"), clock: () => 1000,
+        runtimeFactory: () => ({ model: { async *generate() { modelStarted.resolve(); await lateItem.promise; yield { type: "text.delta", text: "late" }; } } })
+      }
+    });
+    const notifications: AppServerNotification[] = [];
+    server.subscribe((notification) => notifications.push(notification));
+    const started = await server.request({ method: "thread/start" });
+    if (!started.ok || started.method !== "thread/start") throw new Error("thread start failed");
+    await server.request({ method: "turn/start", params: { threadId: started.result.thread.id, input: "go" } });
+    await modelStarted.promise;
+    broker.request({ id: "pending", threadId: started.result.thread.id, runId: "run-1", turnId: "turn-1", startedItemId: "item-6", call: { id: "call-1", name: "test", input: {} } });
+    const closing = server.close();
+    await expect(server.request({ method: "thread/start" })).resolves.toMatchObject({ ok: false, error: { code: "SERVER_CLOSING" } });
+    lateItem.resolve();
+    await closing;
+    expect(broker.listPending()).toEqual([]);
+    expect(notifications.some((notification) => notification.type === "turn/completed")).toBe(true);
+    const [replay] = await journal.replay();
+    expect(replay).toMatchObject({ type: "success", threadId: "thread-1" });
+    if (replay?.type !== "success") throw new Error("thread did not replay");
+    expect(replay.items.some((item) => item.type === "assistant.message.delta" && typeof item.payload === "object" && item.payload !== null && "delta" in item.payload && item.payload.delta === "late")).toBe(true);
+    expect(replay.items.some((item) => item.type === "turn.canceled")).toBe(true);
+    await expect(server.request({ method: "thread/read", params: { threadId: "thread-1" } })).resolves.toMatchObject({ ok: false, error: { code: "SERVER_CLOSING" } });
   });
 });
 

@@ -26,6 +26,47 @@ Blocker or context escalation details: none
 
 ## Codex Review Note
 
+Round: 2
+Issue: long-term-optimization-004 Replace snapshot rewrites with durable append-only ThreadJournal
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-004
+Base revision/diff scope: a4d0fbcede189d0af56669b46f336ca4b78f35d0 -> e40dd493ce5e1d40e1fdc100e2862e5d34ad2fcf
+Standards Review blocking: AppServer close could snapshot event tails while active turns still emitted Items, allowing journal close before producers quiesced.
+Standards Review non-blocking: none
+Standards Review missing evidence: deterministic active-turn shutdown and rejection of new requests while closing.
+Spec Review blocking: ThreadManager filtered replay failures without thread ids from the public result.
+Spec Review non-blocking: none
+Spec Review missing evidence: invalid/undecodable filename outcome retained with valid replay.
+Local tracker state decision: Rework
+State decision reason: Both accepted findings are material shutdown and corruption-observability requirements.
+
+## Codex Worker Note
+
+Round: 3
+Issue: long-term-optimization-004 Replace snapshot rewrites with durable append-only ThreadJournal
+Local tracker state transition: Rework -> Agent Review
+Branch: codex/long-term-optimization-004
+PR URL: not configured
+Base revision/diff scope: e40dd493ce5e1d40e1fdc100e2862e5d34ad2fcf; accepted Round 2 shutdown barrier and complete replay-failure propagation only
+Summary of behavior delivered: AppServer atomically enters closing state, rejects all new requests, invokes ThreadManager producer shutdown, then drains persistence tails and closes the journal. ThreadManager cancels queued work, declines pending approvals, aborts active turns, and waits for its final turn tails before persistence shutdown. Replay now reports every file failure, including invalid filenames without a thread id.
+Final scope summary: Rework findings for issue 004 only. No UI feature implementation, projection work, module moves, dependency/gate work, or issue 005+ work.
+Changed files/modules: src/app-server.ts; src/thread-manager.ts; src/thread-journal.ts; test/app-server-journal.test.ts; this evidence/tracker
+Tests added/updated: test/app-server-journal.test.ts adds deterministic active-turn close race with a late model delta, persisted cancellation/replay verification, no post-close request acceptance, and broker pending cleanup. The replay test now retains an invalid legacy filename alongside a valid journal and an interior-corrupt journal.
+Acceptance criteria status: All original 004 criteria remain complete. Round 2 finding 1 complete: close establishes a producer barrier before persistence tails/journal close, cancels work and approvals, and rejects requests while closing/closed. Finding 2 complete: thread/list retains every replay failure with path/context and optional threadId while valid threads remain available.
+Commands run and results: npx vitest run test/app-server-journal.test.ts test/thread-journal.test.ts test/app-server.test.ts passed (17 tests); npm test passed (31 files, 201 tests); npm run typecheck passed; npm run typecheck:web passed; npm run build passed; git diff --check passed.
+Validation log paths: none
+Required check status or local-check handoff reason: Required local gates passed. No GitHub remote/check handoff is configured.
+Evidence links/paths: docs/implementation/long-term-optimization-004-evidence.md; docs/implementation/long-term-optimization-tracker.md
+Decisions made: close waits on ThreadManager's producer lifecycle before taking the persistence-tail barrier; malformed non-journal files are explicit replay failures rather than ignored compatibility artifacts.
+Standards notes: Shutdown preserves Item-first terminalization and concentrates cancellation/quiescence in ThreadManager. Persistence completion is sequenced after producers stop, eliminating write-after-close races.
+Reviewer notes: Ready for a new fresh-context reviewer; no self-review performed.
+Open questions: none
+Known residual risks: If a provider ignores AbortSignal forever, shutdown waits for that producer by design; production model/tool adapters must honor cancellation. Journal filenames can be long for unusually long thread IDs; compaction is outside issue 004.
+Blocker or context escalation details: none
+
+## Codex Review Note
+
 Round: 1
 Issue: long-term-optimization-004 Replace snapshot rewrites with durable append-only ThreadJournal
 Reviewer context: fresh

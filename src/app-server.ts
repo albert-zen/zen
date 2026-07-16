@@ -50,6 +50,8 @@ export class AppServer implements AppServerClient {
   private readonly eventTails = new Map<string, Promise<void>>();
   private readonly eventOperations = new Map<string, Promise<void>>();
   private readonly eventFailures = new Map<string, unknown>();
+  private lifecycle: "open" | "closing" | "closed" = "open";
+  private closePromise?: Promise<void>;
 
   constructor(options: AppServerOptions = {}) {
     this.threadJournal = options.threadJournal;
@@ -83,6 +85,13 @@ export class AppServer implements AppServerClient {
   }
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    if (this.lifecycle !== "open") {
+      return {
+        method: request.method,
+        ok: false,
+        error: { code: "SERVER_CLOSING", message: "App Server is closing or closed" }
+      };
+    }
     try {
       return await this.dispatch(request);
     } catch (cause) {
@@ -215,8 +224,20 @@ export class AppServer implements AppServerClient {
   }
 
   async close(): Promise<void> {
-    await Promise.all([...this.eventTails.values()]);
-    await this.threadJournal?.close();
+    if (this.closePromise) return await this.closePromise;
+    this.lifecycle = "closing";
+    this.closePromise = this.closeAfterProducerBarrier();
+    return await this.closePromise;
+  }
+
+  private async closeAfterProducerBarrier(): Promise<void> {
+    try {
+      await this.threadManager.shutdown();
+      await Promise.all([...this.eventTails.values()]);
+      await this.threadJournal?.close();
+    } finally {
+      this.lifecycle = "closed";
+    }
   }
 
   private queueEvent(event: ThreadManagerEvent): void {
