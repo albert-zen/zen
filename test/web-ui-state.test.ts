@@ -23,7 +23,7 @@ describe("web ui state projection", () => {
       });
     }
     const atOneThousand = projection.getSnapshot();
-    expect(projection.getWork()).toEqual({ fastPathOperations: 1000, rebuilds: 0, sequenceCopies: 0 });
+    expect(projection.getWork()).toEqual({ fastPathOperations: 1000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0 });
 
     for (let seq = 1001; seq <= 5000; seq += 1) {
       projection.apply({
@@ -33,6 +33,7 @@ describe("web ui state projection", () => {
         item: item({ id: `item-${seq}`, seq, type: "user.message.completed", payload: { content: String(seq) } })
       });
     }
+    expect(projection.getWork()).toEqual({ fastPathOperations: 5000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0 });
 
     const snapshot = projection.getSnapshot();
     expect(initial).not.toBe(snapshot);
@@ -41,7 +42,6 @@ describe("web ui state projection", () => {
     expect(listenerCalls).toBe(5000);
     expect(atOneThousand.items).toHaveLength(1000);
     expect(atOneThousand.timelineRows).toHaveLength(1000);
-    expect(projection.getWork()).toEqual({ fastPathOperations: 5000, rebuilds: 0, sequenceCopies: 0 });
 
     const unchanged = projection.getSnapshot();
     projection.apply({
@@ -50,6 +50,43 @@ describe("web ui state projection", () => {
     });
     expect(projection.getSnapshot()).toBe(unchanged);
     expect(listenerCalls).toBe(5000);
+  });
+
+  it("keeps stable shell slots when approval resolution tombstones a row", () => {
+    let state = createWebUiState({ id: "thread-1", status: "running", turns: [], items: [] });
+    const append = (nextItem: ReturnType<typeof item>) => {
+      state = applyAppServerNotification(state, { type: "item/appended", threadId: "thread-1", turnId: "turn-1", item: nextItem });
+    };
+    append(item({ id: "shell-1", seq: 1, type: "tool.call.started", payload: { toolName: "shell", input: { command: "one" } } }));
+    append(item({ id: "approval-1", seq: 2, type: "approval.requested", payload: { approvalId: "approval-1" } }));
+    append(item({ id: "shell-2", seq: 3, type: "tool.call.started", payload: { toolName: "shell", input: { command: "two" } } }));
+    append(item({ id: "approval-1-resolved", seq: 4, type: "approval.resolved", payload: { approvalId: "approval-1", decision: "approveOnce" } }));
+    append(item({ id: "shell-2-output", seq: 5, type: "tool.output.delta", targetId: "shell-2", payload: { delta: { stream: "stdout", chunk: "two output" } } }));
+
+    expect([...state.timelineRows]).toEqual([
+      expect.objectContaining({ type: "shell", itemId: "shell-1", stdout: "" }),
+      expect.objectContaining({ type: "shell", itemId: "shell-2", stdout: "two output" }),
+      expect.objectContaining({ type: "approval-resolved", itemId: "approval-1-resolved" })
+    ]);
+  });
+
+  it("processes 1k/5k shell and approval facts without rebuilds, copies, or materialization", () => {
+    const projection = new InteractionProjection({ id: "thread-1", status: "running", turns: [], items: [] });
+    let seq = 0;
+    for (let index = 1; index <= 1000; index += 1) {
+      const shellId = `shell-${index}`;
+      const approvalId = `approval-${index}`;
+      for (const nextItem of [
+        item({ id: shellId, seq: ++seq, type: "tool.call.started", payload: { toolName: "shell", input: { command: String(index) } } }),
+        item({ id: approvalId, seq: ++seq, type: "approval.requested", targetId: shellId, payload: { approvalId } }),
+        item({ id: `${approvalId}-resolved`, seq: ++seq, type: "approval.resolved", targetId: shellId, payload: { approvalId, decision: "approveOnce" } }),
+        item({ id: `${shellId}-output`, seq: ++seq, type: "tool.output.delta", targetId: shellId, payload: { delta: { stream: "stdout", chunk: "x" } } }),
+        item({ id: `${shellId}-result`, seq: ++seq, type: "tool.result.completed", targetId: shellId, payload: { content: "exitCode: 0\nstdout:\nx\nstderr:\n" } })
+      ]) {
+        projection.apply({ type: "item/appended", threadId: "thread-1", turnId: "turn-1", item: nextItem });
+      }
+    }
+    expect(projection.getWork()).toEqual({ fastPathOperations: 5000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0 });
   });
   it("initializes current thread and timeline rows from a snapshot", () => {
     const snapshot: ThreadSnapshot = {

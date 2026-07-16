@@ -26,12 +26,21 @@ import { cn } from "./lib/utils";
 
 type RuntimeMode = "real" | "demo";
 
-export function AgentWorkspace(): React.ReactElement {
+export type AgentWorkspaceProps = {
+  readonly createClient?: (
+    mode: RuntimeMode,
+    onSubscriptionStatus: (status: string, error?: unknown) => void
+  ) => WebUiClient;
+  readonly initialMode?: RuntimeMode;
+};
+
+export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElement {
   const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
-  const initialMode: RuntimeMode = params.get("mode") === "demo" ? "demo" : "real";
+  const createClient = props.createClient ?? createWebClient;
+  const initialMode: RuntimeMode = props.initialMode ?? (params.get("mode") === "demo" ? "demo" : "real");
   const [mode, setMode] = React.useState<RuntimeMode>(initialMode);
-  const [client] = React.useState(() =>
-    createWebClient(initialMode, () => undefined)
+  const [client, setClient] = React.useState(() =>
+    createClient(initialMode, () => undefined)
   );
   const snapshot = useWebUiSnapshot(client);
   const [threads, setThreads] = React.useState<readonly ThreadSnapshot[]>([]);
@@ -49,7 +58,7 @@ export function AgentWorkspace(): React.ReactElement {
   React.useEffect(() => {
     void reconnect().catch((cause) => setStreamError(readError(cause)));
     return () => client.dispose();
-  }, []);
+  }, [client, reconnect]);
 
   const state = snapshot.state;
   const connection = snapshot.connection;
@@ -82,10 +91,14 @@ export function AgentWorkspace(): React.ReactElement {
   }
 
   function changeMode(nextMode: RuntimeMode): void {
-    const next = new URL(window.location.href);
-    next.searchParams.set("mode", nextMode);
-    next.searchParams.delete("server");
-    window.location.assign(next.toString());
+    if (nextMode === mode) {
+      return;
+    }
+    setMode(nextMode);
+    setClient(createClient(nextMode, (status, error) => {
+      setStreamStatus(status);
+      setStreamError(error ? "event stream failed" : "");
+    }));
   }
 
   return (

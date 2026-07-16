@@ -24,6 +24,47 @@ Blocker or context escalation details: none
 
 ## Codex Review Note
 
+Round: 2
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-005
+Base revision/diff scope: `80b6a22a0d082838305059de9eb313120b27f6fa..a23450144638e00bb2ef0f2b16e66396ae1e8bf1`
+Standards Review blocking: Tombstone filtering invalidated visible row indexes; shell/approval fast paths still materialized or cloned projection data.
+Standards Review non-blocking: Synthetic lifecycle probe did not prove production workspace lifecycle behavior.
+Standards Review missing evidence: Stable-slot tombstone regression, shell/approval-heavy deterministic work evidence, and actual workspace StrictMode coverage.
+Spec Review blocking: A shell output after an intervening approval tombstone could patch the wrong row; mode switches navigated away rather than explicitly owning replacement cleanup.
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local tracker state decision: Rework
+State decision reason: Accepted bounded implementation findings require original-worker repair.
+
+## Codex Worker Note
+
+Round: 3
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Local tracker state transition: Rework -> Agent Review
+Branch: codex/long-term-optimization-005
+PR URL: not configured; local-origin branch only
+Base revision/diff scope: original worker fixes only for Review Round 2: stable physical row slots, shell/approval fast-path work accounting, production AgentWorkspace injection/replacement lifecycle, focused regressions, and append-only evidence.
+Summary of behavior delivered: Replaced visible-row indexes with stable physical sequence slots and a current-generation slot-to-row map. Shell patches now resolve the target row directly without sequence materialization; approval tombstones do not shift later shell slots. AgentWorkspace now supports a narrow client factory seam and replaces clients in-app on mode changes, with effect cleanup disposing old streams/listeners.
+Final scope summary: Review findings only. No persistence, module relocation, unrelated UI work, or issue 004/006+ changes.
+Changed files/modules: `src/web-ui-state.ts`; `web/src/workspace.tsx`; `test/web-ui-state.test.ts`; `test/workspace-lifecycle.test.tsx`; `tsconfig.json`; `vitest.config.ts`; evidence.
+Tests added/updated: Approval-between-two-shell-rows stable-slot regression; 5k shell/approval ordered-path work regression asserting zero rebuilds/copies/materializations; actual AgentWorkspace jsdom/StrictMode initial-connect, reconnect, mode-switch, and unmount stream-ownership test.
+Acceptance criteria status: Stable slots preserve correct shell patches after tombstones; internal maps mutate only for the current projection generation while snapshots remain versioned; shell/approval ordered fast path has 5,000 operations with zero rebuilds, sequence copies, and full materializations; production workspace performs explicit client replacement rather than navigation and releases prior ownership under StrictMode/mode/unmount.
+Commands run and results: `npx vitest run test/web-ui-state.test.ts test/web-ui-client.test.ts test/agent-interaction-session.test.ts test/workspace-lifecycle.test.tsx --no-file-parallelism --maxWorkers=1` passed (33 tests); `npm test -- --no-file-parallelism --maxWorkers=1` passed (32 files, 203 tests); `npm run typecheck` passed; `npm run typecheck:web` passed; `npm run build` passed; `npm run web:build` passed; `git diff --check` passed.
+Validation log paths: none
+Required check status or local-check handoff reason: all current local checks passed; no GitHub remote/PR is configured.
+Evidence links/paths: `docs/implementation/long-term-optimization-005-evidence.md`; `docs/implementation/long-term-optimization-tracker.md`
+Decisions made: Stable physical slots are retained by the persistent sequence and rows are tombstoned logically. The projection’s mutable current-generation maps are not exposed in snapshots. Added only the existing jsdom harness and Vite test include needed to mount the actual workspace.
+Standards notes: Ordered mutation is constant work and immutable snapshots retain old version chains. Read-side iteration may materialize by design; projection work counters distinguish that from fast-path mutation.
+Reviewer notes: Verify stable-slot behavior, all fast-path work counters, and actual workspace client ownership across React StrictMode lifecycle transitions.
+Open questions: none
+Known residual risks: Iterating long versioned sequences remains linear read work; deterministic counters demonstrate no full read/materialization during ordered mutation. Slow replacements remain intentionally O(n).
+Blocker or context escalation details: none
+
+## Codex Review Note
+
 Round: 1
 Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
 Reviewer context: fresh

@@ -12,8 +12,9 @@ import type {
   AppServerSubscription
 } from "../src/index.js";
 import { WebUiClient } from "../src/index.js";
+import { AgentWorkspace } from "../web/src/workspace.tsx";
 
-describe("workspace external-store lifecycle", () => {
+describe("AgentWorkspace lifecycle", () => {
   let root: Root | undefined;
   let container: HTMLDivElement | undefined;
 
@@ -24,52 +25,52 @@ describe("workspace external-store lifecycle", () => {
     container = undefined;
   });
 
-  it("keeps one stream through StrictMode reconnect, mode switch, and unmount", async () => {
-    const firstTransport = new LifecycleClient();
-    const secondTransport = new LifecycleClient();
-    const first = new WebUiClient({ client: firstTransport, mode: "real" });
-    const second = new WebUiClient({ client: secondTransport, mode: "demo" });
+  it("owns one stream through StrictMode initial connect, reconnect, mode switch, and unmount", async () => {
+    const clients: Array<{ readonly mode: "real" | "demo"; readonly transport: WorkspaceTransport }> = [];
+    const createClient = (mode: "real" | "demo") => {
+      const transport = new WorkspaceTransport();
+      clients.push({ mode, transport });
+      return new WebUiClient({ client: transport, mode });
+    };
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
 
     await act(async () => {
-      root?.render(React.createElement(React.StrictMode, undefined, React.createElement(Probe, { client: first })));
+      root?.render(React.createElement(React.StrictMode, undefined, React.createElement(AgentWorkspace, { createClient, initialMode: "real" })));
     });
-    expect(firstTransport.activeSubscriptions).toBe(1);
+    expect(activeStreams(clients)).toBe(1);
 
     await act(async () => {
-      await first.connect();
+      (container?.querySelector("#connect") as HTMLButtonElement).click();
     });
-    expect(firstTransport.activeSubscriptions).toBe(1);
+    expect(activeStreams(clients)).toBe(1);
 
     await act(async () => {
-      root?.render(React.createElement(React.StrictMode, undefined, React.createElement(Probe, { client: second })));
+      const mode = container?.querySelector("#runtime-mode") as HTMLSelectElement;
+      mode.value = "demo";
+      mode.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(firstTransport.activeSubscriptions).toBe(0);
-    expect(secondTransport.activeSubscriptions).toBe(1);
+    expect(activeStreams(clients.filter((entry) => entry.mode === "real"))).toBe(0);
+    expect(activeStreams(clients.filter((entry) => entry.mode === "demo"))).toBe(1);
 
     await act(async () => root?.unmount());
     root = undefined;
-    expect(secondTransport.activeSubscriptions).toBe(0);
+    expect(activeStreams(clients)).toBe(0);
   });
 });
 
-function Probe({ client }: { readonly client: WebUiClient }): React.ReactElement {
-  const subscribe = React.useCallback((notify: () => void) => client.subscribe(() => notify()), [client]);
-  const getSnapshot = React.useCallback(() => client.getSnapshot(), [client]);
-  React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  React.useEffect(() => {
-    void client.connect();
-    return () => client.dispose();
-  }, [client]);
-  return React.createElement("div");
+function activeStreams(clients: readonly { readonly transport: WorkspaceTransport }[]): number {
+  return clients.reduce((total, entry) => total + entry.transport.activeSubscriptions, 0);
 }
 
-class LifecycleClient implements AppServerClient {
+class WorkspaceTransport implements AppServerClient {
   activeSubscriptions = 0;
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    if (request.method === "thread/list") {
+      return { method: "thread/list", ok: true, result: { threads: [] } };
+    }
     if (request.method === "thread/start" || request.method === "thread/read") {
       return {
         method: request.method,

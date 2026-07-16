@@ -28,7 +28,7 @@ export type ReadonlyInteractionSequence<T> = Iterable<T> & {
 };
 
 type SequenceOperation<T> =
-  | { readonly type: "append"; readonly value: T }
+  | { readonly type: "append"; readonly slot: number; readonly value: T }
   | { readonly type: "replace"; readonly slot: number; readonly value: T }
   | { readonly type: "remove"; readonly slot: number };
 
@@ -38,29 +38,30 @@ class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
     private readonly base: readonly T[],
     private readonly parent: InteractionSequence<T> | undefined,
     private readonly operation: SequenceOperation<T> | undefined,
+    private readonly metrics: SequenceMetrics,
     readonly slots: number,
     readonly length: number
   ) {}
 
-  static empty<T>(): InteractionSequence<T> {
-    return new InteractionSequence([], undefined, undefined, 0, 0);
+  static empty<T>(metrics: SequenceMetrics): InteractionSequence<T> {
+    return new InteractionSequence([], undefined, undefined, metrics, 0, 0);
   }
 
-  static from<T>(values: Iterable<T>): InteractionSequence<T> {
+  static from<T>(values: Iterable<T>, metrics: SequenceMetrics): InteractionSequence<T> {
     const base = [...values];
-    return new InteractionSequence(base, undefined, undefined, base.length, base.length);
+    return new InteractionSequence(base, undefined, undefined, metrics, base.length, base.length);
   }
 
   append(value: T): InteractionSequence<T> {
-    return new InteractionSequence(this.base, this, { type: "append", value }, this.slots + 1, this.length + 1);
+    return new InteractionSequence(this.base, this, { type: "append", slot: this.slots, value }, this.metrics, this.slots + 1, this.length + 1);
   }
 
   replace(slot: number, value: T): InteractionSequence<T> {
-    return new InteractionSequence(this.base, this, { type: "replace", slot, value }, this.slots, this.length);
+    return new InteractionSequence(this.base, this, { type: "replace", slot, value }, this.metrics, this.slots, this.length);
   }
 
   remove(slot: number): InteractionSequence<T> {
-    return new InteractionSequence(this.base, this, { type: "remove", slot }, this.slots, this.length - 1);
+    return new InteractionSequence(this.base, this, { type: "remove", slot }, this.metrics, this.slots, this.length - 1);
   }
 
   at(index: number): T | undefined {
@@ -92,6 +93,7 @@ class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
   }
 
   private materialize(): T[] {
+    this.metrics.fullMaterializations += 1;
     const operations: SequenceOperation<T>[] = [];
     let cursor: InteractionSequence<T> | undefined = this;
     while (cursor?.parent) {
@@ -107,6 +109,8 @@ class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
     return slots.filter((value): value is T => value !== undefined);
   }
 }
+
+type SequenceMetrics = { fullMaterializations: number };
 
 export type TimelineRow =
   | UserTimelineRow
@@ -222,6 +226,7 @@ export type InteractionProjectionWork = {
   readonly fastPathOperations: number;
   readonly rebuilds: number;
   readonly sequenceCopies: number;
+  readonly fullMaterializations: number;
 };
 
 /**
@@ -230,11 +235,13 @@ export type InteractionProjectionWork = {
  * take the deterministic rebuild path.
  */
 export class InteractionProjection {
+  private readonly sequenceMetrics: SequenceMetrics = { fullMaterializations: 0 };
   private readonly listeners = new Set<InteractionProjectionListener>();
   private itemsById = new Map<string, ProtocolItem>();
-  private orderedItems = InteractionSequence.empty<ProtocolItem>();
-  private rows = InteractionSequence.empty<TimelineRow>();
-  private rowIndexByKey = new Map<string, number>();
+  private orderedItems = InteractionSequence.empty<ProtocolItem>(this.sequenceMetrics);
+  private rows = InteractionSequence.empty<TimelineRow>(this.sequenceMetrics);
+  private rowSlotByKey = new Map<string, number>();
+  private currentRowsBySlot = new Map<number, TimelineRow>();
   private shellRowKeyByTarget = new Map<string, string>();
   private assistantStarted = new Set<string>();
   private assistantProgress = new Map<string, string>();
@@ -243,8 +250,8 @@ export class InteractionProjection {
   private fastPathOperations = 0;
   private rebuilds = 0;
   private snapshot: WebUiState = {
-    items: InteractionSequence.empty<ProtocolItem>(),
-    timelineRows: InteractionSequence.empty<TimelineRow>()
+    items: InteractionSequence.empty<ProtocolItem>(this.sequenceMetrics),
+    timelineRows: InteractionSequence.empty<TimelineRow>(this.sequenceMetrics)
   };
 
   constructor(snapshot?: ThreadSnapshot) {
@@ -267,12 +274,13 @@ export class InteractionProjection {
     return {
       fastPathOperations: this.fastPathOperations,
       rebuilds: this.rebuilds,
-      sequenceCopies: 0
+      sequenceCopies: 0,
+      fullMaterializations: this.sequenceMetrics.fullMaterializations
     };
   }
 
   replaceSnapshot(snapshot: ThreadSnapshot, notify = true): boolean {
-    const next = createStateFromSnapshot(snapshot);
+    const next = createStateFromSnapshot(snapshot, this.sequenceMetrics);
     if (sameState(this.snapshot, next)) {
       return false;
     }
@@ -318,7 +326,7 @@ export class InteractionProjection {
   private rebuildWithItem(item: ProtocolItem): boolean {
     const items = new Map(this.itemsById);
     items.set(item.id, item);
-    const next = createStateFromParts(this.snapshot.currentThread, [...items.values()]);
+    const next = createStateFromParts(this.snapshot.currentThread, [...items.values()], this.sequenceMetrics);
     this.resetIndexes(next);
     this.rebuilds += 1;
     this.publish(next);
@@ -359,7 +367,7 @@ export class InteractionProjection {
       this.upsertRow(key, { type: "shell", itemId: item.id, seq: item.seq, turnId: item.turnId, toolCallId: readOptionalStringPayloadField(item.payload, "toolCallId"), command: readCommand(readPayloadField(item.payload, "input")), status: "running", stdout: "", stderr: "" });
       return;
     }
-    if (item.targetId && this.shellRowKeyByTarget.has(item.targetId) && isShellChildItem(item, new Map([...this.shellRowKeyByTarget.keys()].map((id) => [id, {} as ShellTimelineRow])))) {
+    if (item.targetId && this.shellRowKeyByTarget.has(item.targetId) && isShellChildType(item)) {
       this.updateShellRow(item);
       return;
     }
@@ -379,9 +387,9 @@ export class InteractionProjection {
 
   private updateShellRow(item: ProtocolItem): void {
     const key = this.shellRowKeyByTarget.get(item.targetId as string);
-    const index = key === undefined ? undefined : this.rowIndexByKey.get(key);
-    if (key === undefined || index === undefined) return;
-    const current = this.rows.at(index) as ShellTimelineRow;
+    const slot = key === undefined ? undefined : this.rowSlotByKey.get(key);
+    const current = slot === undefined ? undefined : this.currentRowsBySlot.get(slot) as ShellTimelineRow | undefined;
+    if (key === undefined || slot === undefined || !current) return;
     let next = current;
     if (item.type === "tool.output.delta") {
       const delta = readShellOutputDelta(item.payload);
@@ -397,20 +405,24 @@ export class InteractionProjection {
   }
 
   private upsertRow(key: string, row: TimelineRow): void {
-    const index = this.rowIndexByKey.get(key);
-    if (index === undefined) {
-      this.rowIndexByKey.set(key, this.rows.slots);
+    const slot = this.rowSlotByKey.get(key);
+    if (slot === undefined) {
+      const nextSlot = this.rows.slots;
+      this.rowSlotByKey.set(key, nextSlot);
+      this.currentRowsBySlot.set(nextSlot, row);
       this.rows = this.rows.append(row);
       return;
     }
-    this.rows = this.rows.replace(index, row);
+    this.currentRowsBySlot.set(slot, row);
+    this.rows = this.rows.replace(slot, row);
   }
 
   private removeRow(key: string): void {
-    const index = this.rowIndexByKey.get(key);
-    if (index === undefined) return;
-    this.rows = this.rows.remove(index);
-    this.rowIndexByKey.delete(key);
+    const slot = this.rowSlotByKey.get(key);
+    if (slot === undefined) return;
+    this.rows = this.rows.remove(slot);
+    this.currentRowsBySlot.delete(slot);
+    this.rowSlotByKey.delete(key);
   }
 
   private nextSnapshot(): WebUiState {
@@ -420,14 +432,16 @@ export class InteractionProjection {
   private resetIndexes(state: WebUiState): void {
     this.snapshot = state;
     this.itemsById = new Map(state.items.map((item) => [item.id, item]));
-    this.orderedItems = InteractionSequence.from(state.items);
-    this.rows = InteractionSequence.from(state.timelineRows);
-    this.rowIndexByKey = new Map([...this.rows].map((row, index) => [rowKey(row), index]));
+    this.orderedItems = InteractionSequence.from(state.items, this.sequenceMetrics);
+    this.rows = InteractionSequence.from(state.timelineRows, this.sequenceMetrics);
+    this.rowSlotByKey = new Map([...this.rows].map((row, index) => [rowKey(row), index]));
+    this.currentRowsBySlot = new Map([...this.rows].map((row, index) => [index, row]));
     this.shellRowKeyByTarget = new Map(this.rows.filter((row): row is ShellTimelineRow => row.type === "shell").map((row) => [row.itemId, rowKey(row)]));
     this.assistantStarted = new Set(state.items.filter((item) => item.type === "assistant.message.started").map((item) => item.id));
     this.assistantProgress = new Map(this.rows.filter((row): row is AssistantProgressTimelineRow => row.type === "assistant-progress").map((row) => [row.itemId, row.content]));
     this.approvalRowKeyById = new Map(this.rows.filter((row): row is ApprovalPendingTimelineRow => row.type === "approval-pending").map((row) => [row.approvalId, rowKey(row)]));
     this.lastSeq = state.items.at(-1)?.seq ?? -Infinity;
+    this.sequenceMetrics.fullMaterializations = 0;
   }
 
   private publish(snapshot: WebUiState, notify = true): void {
@@ -466,22 +480,24 @@ function isTurnNotification(
   return notification.type === "turn/started" || notification.type === "turn/completed" || notification.type === "turn/failed";
 }
 
-function createStateFromSnapshot(snapshot: ThreadSnapshot): WebUiState {
+function createStateFromSnapshot(snapshot: ThreadSnapshot, metrics: SequenceMetrics): WebUiState {
   return createStateFromParts(
     { id: snapshot.id, status: snapshot.status, turns: snapshot.turns.map(cloneTurn) },
-    snapshot.items
+    snapshot.items,
+    metrics
   );
 }
 
 function createStateFromParts(
   currentThread: WebUiState["currentThread"],
-  items: readonly ProtocolItem[]
+  items: readonly ProtocolItem[],
+  metrics: SequenceMetrics
 ): WebUiState {
   const sortedItems = [...items].sort(compareItems);
   return {
     currentThread,
-    items: InteractionSequence.from(sortedItems),
-    timelineRows: InteractionSequence.from(buildTimelineRows(sortedItems))
+    items: InteractionSequence.from(sortedItems, metrics),
+    timelineRows: InteractionSequence.from(buildTimelineRows(sortedItems), metrics)
   };
 }
 
@@ -759,6 +775,14 @@ function isShellChildItem(
     (item.type === "tool.output.delta" ||
       item.type === "tool.result.completed" ||
       item.type === "tool.error")
+  );
+}
+
+function isShellChildType(item: ProtocolItem): boolean {
+  return !readApprovalEventType(item) && (
+    item.type === "tool.output.delta" ||
+    item.type === "tool.result.completed" ||
+    item.type === "tool.error"
   );
 }
 
