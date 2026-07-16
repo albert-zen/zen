@@ -163,3 +163,20 @@ Reviewer notes: Verify the appended three-section order and use the ledger as th
 Open questions: none
 Known residual risks: none; the disclosed physical ordering remains intentionally preserved
 Blocker or context escalation details: none
+
+## Codex Review Note
+
+Round: 4
+Issue: long-term-optimization-002 - Derive lifecycle from Items and schedule turns FIFO
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-002`
+Base revision/diff scope: `05477f7b54829a10d9fd79e18ca9e5247f1bd418..f33336c401d210a6fd79738ddeca409998da69bb`
+Standards Review blocking: none
+Standards Review non-blocking: none
+Standards Review missing evidence: none
+Spec Review blocking: none
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local tracker state decision: Agent Review
+State decision reason: STRICT PASS. Reviewer verified correction ledger/tracker, Round 4 docs-only scope, 39/39 targeted and 166/166 full tests, and no concealed unresolved finding. Integration is manager-owned, so tracker remains Agent Review.
