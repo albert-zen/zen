@@ -23,3 +23,44 @@ Reviewer notes: Fresh reviewer should verify full-suite behavior and resolve-vs-
 Open questions: none
 Known residual risks: Complete npm test could not be observed to completion because the process remained live without output; this requires review environment diagnosis. The focused suite does not independently cover the Web component click rendering path or TUI command dispatch.
 Blocker or context escalation details: the required full-suite run was terminated at its 60-second bound with no emitted results.
+
+## Codex Review Note
+
+Round: 1
+Issue: long-term-optimization-003 Ship auditable shell approval end to end
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-003
+Base revision/diff scope: de54364c600ac97882ca53837269cfe2e3426348..9f6664e; issue 003 implementation and evidence
+Standards Review blocking: Full npm test hang was unresolved and not demonstrated against the base revision.
+Standards Review non-blocking: none
+Standards Review missing evidence: Public behavioral coverage for Web approval controls and TUI approval commands was missing.
+Spec Review blocking: The hanging full suite blocked completion-gate acceptance.
+Spec Review non-blocking: none
+Spec Review missing evidence: Deterministic Web click/submission-state and TUI command-dispatch evidence.
+Local tracker state decision: Rework
+State decision reason: Both findings were accepted as material by the issue owner.
+
+## Codex Worker Note
+
+Round: 2
+Issue: long-term-optimization-003 Ship auditable shell approval end to end
+Local tracker state transition: Rework -> Agent Review
+Branch: codex/long-term-optimization-003
+PR URL: not configured
+Base revision/diff scope: 9f6664e; only accepted review findings: full-suite completion and Web/TUI approval interaction tests
+Summary of behavior delivered: Fixed the dogfood real-shell fixture to explicitly resolve AppServer approval notifications; added WebUiClient exact-tuple submission coverage and virtual-terminal TUI approve/decline command dispatch coverage.
+Final scope summary: Accepted 003 review findings only. No unrelated product or test-infrastructure work.
+Changed files/modules: test/dogfood-acceptance.test.ts; test/web-ui-client.test.ts; test/zen-tui-app.test.ts; docs/implementation/long-term-optimization-003-evidence.md.
+Tests added/updated: Dogfood fixture injects and resolves the server broker; WebUiClient exact tuple submission assertion; virtual terminal /approve and /decline tuple dispatch assertion.
+Acceptance criteria status: Full suite completion: complete. Web approval submission exact tuple: complete. TUI explicit command tuple dispatch: complete. Original approval acceptance remains complete.
+Commands run and results: Base de54364 npm test passed (29 files, 189 tests, 22.14s). Current dogfood test passed (4 tests). Current focused dogfood/Web/TUI tests passed (3 files, 24 tests). Current npm test passed (30 files, 192 tests, 18.68s). npm run typecheck and git diff --check passed.
+Validation log paths: none
+Required check status or local-check handoff reason: Required npm test now completes normally. Typecheck and diff check rerun because tests changed; builds not rerun because no production build wiring changed.
+Evidence links/paths: docs/implementation/long-term-optimization-003-evidence.md
+Decisions made: The dogfood harness explicitly supplies approvals through AppServer notifications rather than weakening LocalToolRuntime. This keeps real-shell approval mandatory and makes the test user-decision behavior explicit.
+Standards notes: The repair preserves the item-first approval lifecycle and tests user-facing command/client paths without source-string assertions.
+Reviewer notes: Round 1 accepted findings addressed; ready for a fresh review.
+Open questions: none
+Known residual risks: none known for the accepted findings.
+Blocker or context escalation details: Root cause was the dogfood scripted model repeating shell calls after an unapproved LocalToolRuntime produced a tool error and no model-visible tool result. The base suite passed under the same command; the repaired branch now passes normally.

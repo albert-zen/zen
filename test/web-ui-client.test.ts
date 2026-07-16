@@ -159,6 +159,26 @@ describe("Web UI client", () => {
     );
     expect(client.requests.map((request) => request.method)).toEqual(["thread/read"]);
   });
+
+  it("submits the approval tuple supplied by the pending approval row", async () => {
+    const client = new RecordingClient();
+    const webUi = new WebUiClient({ client });
+
+    await webUi.resolveApproval(
+      { approvalId: "approval-7", threadId: "thread-4", turnId: "turn-9" },
+      "decline"
+    );
+
+    expect(client.requests.at(-1)).toEqual({
+      method: "approval/resolve",
+      params: {
+        approvalId: "approval-7",
+        threadId: "thread-4",
+        turnId: "turn-9",
+        decision: "decline"
+      }
+    });
+  });
 });
 
 function sequence(prefix: string): () => string {
@@ -241,6 +261,21 @@ class RecordingClient implements AppServerClient {
             status: "inProgress",
             itemIds: []
           }
+        }
+      } as const);
+    }
+
+    if (request.method === "approval/resolve") {
+      const params = request.params as {
+        readonly approvalId: string;
+        readonly decision: "approveOnce" | "decline";
+      };
+      return Promise.resolve({
+        method: "approval/resolve",
+        ok: true,
+        result: {
+          approvalId: params.approvalId,
+          decision: params.decision
         }
       } as const);
     }

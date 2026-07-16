@@ -38,6 +38,30 @@ describe("ZenTuiApp", () => {
     await run;
   });
 
+  it("dispatches approval commands with the exact pending row tuple", async () => {
+    const terminal = new VirtualTerminalDevice(100, 30);
+    const client = new ApprovalCommandClient();
+    const app = new ZenTuiApp({ client, terminal });
+    const run = app.run();
+
+    await waitForRender();
+    terminal.sendInput("/approve approval-1");
+    terminal.sendInput("\r");
+    await waitForRender();
+    terminal.sendInput("/decline approval-1");
+    terminal.sendInput("\r");
+    await waitForRender();
+
+    expect(client.approvalRequests).toEqual([
+      { approvalId: "approval-1", threadId: "thread-1", turnId: "turn-1", decision: "approveOnce" },
+      { approvalId: "approval-1", threadId: "thread-1", turnId: "turn-1", decision: "decline" }
+    ]);
+
+    terminal.sendInput("/exit");
+    terminal.sendInput("\r");
+    await run;
+  });
+
   it("shows slash command suggestions while typing a command prefix", async () => {
     const terminal = new VirtualTerminalDevice(100, 30);
     const app = new ZenTuiApp({
@@ -516,6 +540,65 @@ function createSlowAppServer(delayMs: number): AppServer {
       runtimeFactory: () => ({ model })
     }
   });
+}
+
+class ApprovalCommandClient implements AppServerClient {
+  readonly approvalRequests: Array<{
+    readonly approvalId: string;
+    readonly threadId: string;
+    readonly turnId: string;
+    readonly decision: "approveOnce" | "decline";
+  }> = [];
+
+  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    if (request.method === "thread/list") {
+      return { method: "thread/list", ok: true, result: { threads: [approvalThread()] } };
+    }
+    if (request.method === "approval/resolve") {
+      const params = request.params as {
+        readonly approvalId: string;
+        readonly threadId: string;
+        readonly turnId: string;
+        readonly decision: "approveOnce" | "decline";
+      };
+      this.approvalRequests.push(params);
+      return {
+        method: "approval/resolve",
+        ok: true,
+        result: { approvalId: params.approvalId, decision: params.decision }
+      };
+    }
+    return { method: request.method, ok: false, error: { code: "UNKNOWN_METHOD", message: "Unknown method" } };
+  }
+
+  subscribe(_listener: AppServerNotificationListener): () => void {
+    return () => undefined;
+  }
+}
+
+function approvalThread(): ThreadSnapshot {
+  return {
+    id: "thread-1",
+    status: "running",
+    turns: [{ id: "turn-1", runId: "run-1", status: "inProgress", itemIds: ["approval-item"] }],
+    items: [{
+      id: "approval-item",
+      type: "approval.requested",
+      createdAtMs: 1000,
+      seq: 1,
+      runId: "run-1",
+      turnId: "turn-1",
+      payload: {
+        approvalId: "approval-1",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        runId: "run-1",
+        toolCallId: "tool-1",
+        toolName: "shell",
+        reason: "Run command?"
+      }
+    }]
+  };
 }
 
 class ResumeListClient implements AppServerClient {
