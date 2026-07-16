@@ -24,21 +24,14 @@ import { Textarea } from "./components/ui/textarea";
 import { createBrowserDemoAppServer } from "./demo-app-server";
 import { cn } from "./lib/utils";
 
-const DEFAULT_SERVER_URL = window.location.origin;
-
 type RuntimeMode = "real" | "demo";
 
 export function AgentWorkspace(): React.ReactElement {
   const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
   const initialMode: RuntimeMode = params.get("mode") === "demo" ? "demo" : "real";
   const [mode, setMode] = React.useState<RuntimeMode>(initialMode);
-  const [serverUrl, setServerUrl] = React.useState(
-    params.get("server") ??
-      window.localStorage.getItem("zen-app-server-url") ??
-      DEFAULT_SERVER_URL
-  );
   const [client, setClient] = React.useState(() =>
-    createWebClient(initialMode, serverUrl, () => undefined)
+    createWebClient(initialMode, () => undefined)
   );
   const [snapshot, setSnapshot] = React.useState<WebUiClientSnapshot>(() =>
     client.getSnapshot()
@@ -53,7 +46,7 @@ export function AgentWorkspace(): React.ReactElement {
 
   const reconnect = React.useCallback(async () => {
     client.disconnect();
-    const next = createWebClient(mode, serverUrl, (status, error) => {
+    const next = createWebClient(mode, (status, error) => {
       setStreamStatus(status);
       setStreamError(error ? "event stream failed" : "");
     });
@@ -61,7 +54,7 @@ export function AgentWorkspace(): React.ReactElement {
     next.subscribe(setSnapshot);
     await next.connect({ threadId: params.get("thread") ?? undefined });
     setThreads(await next.listThreads());
-  }, [client, mode, params, serverUrl]);
+  }, [client, mode, params]);
 
   React.useEffect(() => {
     void reconnect().catch((cause) => setStreamError(readError(cause)));
@@ -101,11 +94,7 @@ export function AgentWorkspace(): React.ReactElement {
   function changeMode(nextMode: RuntimeMode): void {
     const next = new URL(window.location.href);
     next.searchParams.set("mode", nextMode);
-    if (nextMode === "real") {
-      next.searchParams.set("server", serverUrl);
-    } else {
-      next.searchParams.delete("server");
-    }
+    next.searchParams.delete("server");
     window.location.assign(next.toString());
   }
 
@@ -149,15 +138,10 @@ export function AgentWorkspace(): React.ReactElement {
         <RuntimePanel
           connection={connection}
           mode={mode}
-          serverUrl={serverUrl}
           streamStatus={streamStatus}
           streamError={streamError}
           showTrace={showTrace}
           onModeChange={changeMode}
-          onServerUrlChange={(value) => {
-            setServerUrl(value);
-            window.localStorage.setItem("zen-app-server-url", value);
-          }}
           onConnect={() => void reconnect()}
           onDisconnect={() => client.disconnect()}
           onToggleTrace={() => setShowTrace((value) => !value)}
@@ -278,12 +262,10 @@ function ThreadButton({
 function RuntimePanel(props: {
   connection: WebUiConnectionState;
   mode: RuntimeMode;
-  serverUrl: string;
   streamStatus: string;
   streamError: string;
   showTrace: boolean;
   onModeChange: (mode: RuntimeMode) => void;
-  onServerUrlChange: (value: string) => void;
   onConnect: () => void;
   onDisconnect: () => void;
   onToggleTrace: () => void;
@@ -313,14 +295,6 @@ function RuntimePanel(props: {
               Connect
             </Button>
           </div>
-          <input
-            id="server-url"
-            aria-label="App Server URL"
-            value={props.serverUrl}
-            disabled={props.mode === "demo"}
-            onChange={(event) => props.onServerUrlChange(event.target.value)}
-            className="h-9 min-w-0 rounded-md border border-zinc-700 bg-zinc-800 px-2 text-sm"
-          />
           <div className="grid grid-cols-2 gap-2">
             <Button id="disconnect" type="button" onClick={props.onDisconnect}>
               Disconnect
@@ -417,7 +391,6 @@ function CodeBlock({ value }: { value: string }): React.ReactElement {
 
 function createWebClient(
   mode: RuntimeMode,
-  serverUrl: string,
   onSubscriptionStatus: (status: string, error?: unknown) => void
 ): WebUiClient {
   return new WebUiClient({
@@ -426,7 +399,6 @@ function createWebClient(
       mode === "demo"
         ? createBrowserDemoAppServer()
         : new BrowserAppServerTransportClient({
-            baseUrl: serverUrl,
             onSubscriptionStatus
           })
   });

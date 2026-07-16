@@ -1,5 +1,7 @@
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { ProxyOptions } from "vite";
 
 import type {
   AppServerClient,
@@ -11,20 +13,25 @@ import type {
   AppServerNotification,
   AppServerResponse
 } from "./app-server-protocol.js";
+import { assertLoopbackBindAllowed } from "./app-server-config.js";
 
 export type AppServerHttpTransportOptions = {
+  readonly allowRemoteBind?: boolean;
   readonly appServer: AppServerClient;
+  readonly capability?: string;
   readonly host?: string;
   readonly port?: number;
 };
 
 export type AppServerHttpTransport = {
+  readonly capability: string;
   readonly url: string;
   close(): Promise<void>;
 };
 
 export type HttpAppServerClientOptions = {
   readonly baseUrl: string | URL;
+  readonly capability: string;
   readonly onSubscriptionError?: (error: AppServerTransportError) => void;
 };
 
@@ -42,18 +49,104 @@ export class AppServerTransportError extends Error {
 const REQUEST_PATH = "/request";
 const EVENTS_PATH = "/events";
 const MAX_REQUEST_BODY_BYTES = 1_000_000;
+const MIN_CAPABILITY_BYTES = 32;
+
+export function createAppServerHttpProxy(
+  target: string,
+  capability: string
+): Record<string, ProxyOptions> {
+  return {
+    [REQUEST_PATH]: createAuthenticatedProxyOptions(target, capability),
+    [EVENTS_PATH]: createAuthenticatedProxyOptions(target, capability)
+  };
+}
+
+function createAuthenticatedProxyOptions(
+  target: string,
+  capability: string
+): ProxyOptions {
+  const authorization = `Bearer ${capability}`;
+
+  return {
+    target,
+    changeOrigin: true,
+    bypass: rejectUntrustedProxyRequest,
+    configure(proxy) {
+      proxy.on("proxyReq", (proxyRequest) => {
+        proxyRequest.setHeader("authorization", authorization);
+      });
+    }
+  };
+}
+
+function rejectUntrustedProxyRequest(
+  request: IncomingMessage,
+  response: ServerResponse | undefined
+): string | undefined {
+  if (isTrustedSameOriginRequest(request)) {
+    return undefined;
+  }
+
+  response?.writeHead(403, {
+    "content-type": "application/json; charset=utf-8"
+  });
+  response?.end(`${JSON.stringify({ error: "Forbidden proxy request" })}\n`);
+
+  // Vite stops before proxying when bypass returns a path after ending the response.
+  return request.url ?? "/";
+}
+
+function isTrustedSameOriginRequest(request: IncomingMessage): boolean {
+  if (request.method === "OPTIONS") {
+    return false;
+  }
+
+  const fetchSite = request.headers["sec-fetch-site"];
+
+  if (fetchSite !== undefined && fetchSite !== "same-origin") {
+    return false;
+  }
+
+  const origin = request.headers.origin;
+
+  if (origin === undefined) {
+    return fetchSite === "same-origin";
+  }
+
+  if (typeof origin !== "string" || !request.headers.host) {
+    return false;
+  }
+
+  try {
+    const encrypted = "encrypted" in request.socket && request.socket.encrypted;
+    const expectedOrigin = `${encrypted ? "https" : "http"}://${request.headers.host}`;
+    return new URL(origin).origin === expectedOrigin;
+  } catch {
+    return false;
+  }
+}
 
 export async function serveAppServerHttpTransport(
   options: AppServerHttpTransportOptions
 ): Promise<AppServerHttpTransport> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 0;
+  assertLoopbackBindAllowed(
+    host,
+    options.allowRemoteBind ?? false,
+    "Non-loopback App Server"
+  );
+  const capability = resolveCapability(options.capability);
+  const capabilityDigest = digestCapability(capability);
   const eventStreams = new Map<ServerResponse, AppServerSubscription>();
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? host}`);
 
-    if (request.method === "OPTIONS") {
-      sendCorsPreflight(response);
+    if (
+      (url.pathname === REQUEST_PATH || url.pathname === EVENTS_PATH) &&
+      !hasCapability(request, capabilityDigest)
+    ) {
+      sendUnauthorized(response);
       return;
     }
 
@@ -101,7 +194,8 @@ export async function serveAppServerHttpTransport(
   const address = server.address() as AddressInfo;
 
   return {
-    url: `http://${address.address}:${address.port}`,
+    capability,
+    url: `http://${formatUrlHost(address.address)}:${address.port}`,
     async close() {
       for (const [streamResponse, unsubscribe] of eventStreams) {
         unsubscribe();
@@ -123,12 +217,64 @@ export async function serveAppServerHttpTransport(
   };
 }
 
+function formatUrlHost(host: string): string {
+  return host.includes(":") ? `[${host}]` : host;
+}
+
+function resolveCapability(provided: string | undefined): string {
+  if (provided === undefined) {
+    return randomBytes(MIN_CAPABILITY_BYTES).toString("base64url");
+  }
+
+  if (
+    Buffer.byteLength(provided, "utf8") < MIN_CAPABILITY_BYTES ||
+    /[\u0000-\u0020\u007f]/u.test(provided)
+  ) {
+    throw new Error(
+      "App Server capability must be at least 32 bytes without whitespace or control characters"
+    );
+  }
+
+  return provided;
+}
+
+function hasCapability(
+  request: IncomingMessage,
+  expectedDigest: Buffer
+): boolean {
+  const authorization = request.headers.authorization;
+
+  if (!authorization?.startsWith("Bearer ")) {
+    return false;
+  }
+
+  const candidateDigest = digestCapability(authorization.slice("Bearer ".length));
+  return timingSafeEqual(candidateDigest, expectedDigest);
+}
+
+function digestCapability(capability: string): Buffer {
+  return createHash("sha256").update(capability, "utf8").digest();
+}
+
+function sendUnauthorized(response: ServerResponse): void {
+  sendJson(response, 401, {
+    method: "transport/request",
+    ok: false,
+    error: {
+      code: "UNAUTHORIZED",
+      message: "App Server capability is missing or invalid"
+    }
+  });
+}
+
 export class HttpAppServerClient implements AppServerClient {
+  private readonly authorization: string;
   private readonly baseUrl: URL;
   private readonly onSubscriptionError?: (error: AppServerTransportError) => void;
   private readonly pendingSubscriptionConnections = new Set<Promise<void>>();
 
   constructor(options: HttpAppServerClientOptions) {
+    this.authorization = `Bearer ${options.capability}`;
     this.baseUrl = new URL(options.baseUrl);
     this.onSubscriptionError = options.onSubscriptionError;
   }
@@ -140,6 +286,7 @@ export class HttpAppServerClient implements AppServerClient {
       method: "POST",
       headers: {
         "accept": "application/json",
+        "authorization": this.authorization,
         "content-type": "application/json"
       },
       body: JSON.stringify(request)
@@ -181,7 +328,10 @@ export class HttpAppServerClient implements AppServerClient {
   ): Promise<void> {
     try {
       const response = await fetch(new URL(EVENTS_PATH, this.baseUrl), {
-        headers: { accept: "text/event-stream" },
+        headers: {
+          accept: "text/event-stream",
+          authorization: this.authorization
+        },
         signal
       });
 
@@ -243,13 +393,13 @@ async function handleRequest(
     const result = await appServer.request(parsed.value as AppServerRequestInput);
 
     sendJson(response, 200, result);
-  } catch (cause) {
+  } catch {
     sendJson(response, 500, {
       method: "transport/request",
       ok: false,
       error: {
         code: "UPSTREAM_REQUEST_FAILED",
-        message: readErrorMessage(cause)
+        message: "App Server request failed"
       }
     });
   }
@@ -261,7 +411,6 @@ function handleEventStream(
   onClose: (response: ServerResponse) => void
 ): AppServerSubscription {
   response.writeHead(200, {
-    ...corsHeaders(),
     "cache-control": "no-cache, no-transform",
     "connection": "keep-alive",
     "content-type": "text/event-stream; charset=utf-8"
@@ -321,23 +470,9 @@ function sendJson(
   value: unknown
 ): void {
   response.writeHead(statusCode, {
-    ...corsHeaders(),
     "content-type": "application/json; charset=utf-8"
   });
   response.end(`${JSON.stringify(value)}\n`);
-}
-
-function sendCorsPreflight(response: ServerResponse): void {
-  response.writeHead(204, corsHeaders());
-  response.end();
-}
-
-function corsHeaders(): Record<string, string> {
-  return {
-    "access-control-allow-headers": "content-type, accept",
-    "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-allow-origin": "*"
-  };
 }
 
 function readAppServerResponse(body: string): AppServerResponse {

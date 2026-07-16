@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AgentInteractionSession,
   AppServer,
+  type AppServerClient,
   type AppServerNotification,
   type AppServerResponse,
   HttpAppServerClient,
@@ -11,11 +12,144 @@ import {
   type ToolRuntime
 } from "../src/index.js";
 
+const TEST_CAPABILITY = "test-capability-0123456789-abcdef-0123456789";
+
 describe("App Server HTTP transport", () => {
+  it("rejects requests without a matching capability before dispatch", async () => {
+    const server = createServer();
+    const transport = await serveAppServerHttpTransport({
+      appServer: server,
+      capability: TEST_CAPABILITY
+    });
+
+    try {
+      for (const authorization of [
+        undefined,
+        "Bearer mismatched-capability-0123456789-abcdef"
+      ]) {
+        const unauthorized = await fetch(new URL("/request", transport.url), {
+          method: "POST",
+          headers: {
+            ...(authorization ? { authorization } : {}),
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({ method: "thread/start" })
+        });
+        const unauthorizedBody = await unauthorized.text();
+
+        expect(unauthorized.status).toBe(401);
+        expect(JSON.parse(unauthorizedBody)).toEqual({
+          method: "transport/request",
+          ok: false,
+          error: {
+            code: "UNAUTHORIZED",
+            message: "App Server capability is missing or invalid"
+          }
+        });
+        expect(unauthorizedBody).not.toContain(TEST_CAPABILITY);
+      }
+
+      const authorized = await fetch(new URL("/request", transport.url), {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TEST_CAPABILITY}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ method: "thread/list" })
+      });
+
+      await expect(authorized.json()).resolves.toEqual({
+        method: "thread/list",
+        ok: true,
+        result: { threads: [] }
+      });
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it("generates independent 256-bit capabilities by default", async () => {
+    const first = await serveAppServerHttpTransport({ appServer: createServer() });
+    const second = await serveAppServerHttpTransport({ appServer: createServer() });
+
+    try {
+      expect(Buffer.from(first.capability, "base64url")).toHaveLength(32);
+      expect(Buffer.from(second.capability, "base64url")).toHaveLength(32);
+      expect(first.capability).not.toBe(second.capability);
+    } finally {
+      await first.close();
+      await second.close();
+    }
+  });
+
+  it("rejects short, whitespace, and control-character provided capabilities", async () => {
+    const capabilities = [
+      "too-short",
+      "provided capability 0123456789 abcdef 0123456789",
+      "provided-capability-0123456789\u0000abcdef-0123456789"
+    ];
+
+    for (const capability of capabilities) {
+      let rejection: unknown;
+
+      try {
+        await serveAppServerHttpTransport({
+          appServer: createServer(),
+          capability
+        });
+      } catch (cause) {
+        rejection = cause;
+      }
+
+      expect(rejection).toEqual(
+        new Error(
+          "App Server capability must be at least 32 bytes without whitespace or control characters"
+        )
+      );
+      expect(String(rejection)).not.toContain(capability);
+    }
+  });
+
+  it("rejects event streams without a matching capability before subscribing", async () => {
+    const server = createServer();
+    const transport = await serveAppServerHttpTransport({
+      appServer: server,
+      capability: TEST_CAPABILITY
+    });
+
+    try {
+      for (const authorization of [
+        undefined,
+        "Bearer mismatched-capability-0123456789-abcdef"
+      ]) {
+        const response = await fetch(new URL("/events", transport.url), {
+          headers: authorization ? { authorization } : undefined
+        });
+
+        expect(response.status).toBe(401);
+        const body = await response.text();
+        expect(JSON.parse(body)).toEqual({
+          method: "transport/request",
+          ok: false,
+          error: {
+            code: "UNAUTHORIZED",
+            message: "App Server capability is missing or invalid"
+          }
+        });
+        expect(body).not.toContain(TEST_CAPABILITY);
+      }
+    } finally {
+      await transport.close();
+    }
+  });
+
   it("lets a client start, list, and read threads through transport", async () => {
     const server = createServer();
     const transport = await serveAppServerHttpTransport({ appServer: server });
-    const client = new HttpAppServerClient({ baseUrl: transport.url });
+    const client = new HttpAppServerClient({
+      baseUrl: transport.url,
+      capability: transport.capability
+    });
 
     try {
       const start = await client.request({ method: "thread/start" });
@@ -69,7 +203,10 @@ describe("App Server HTTP transport", () => {
       }
     });
     const transport = await serveAppServerHttpTransport({ appServer: server });
-    const client = new HttpAppServerClient({ baseUrl: transport.url });
+    const client = new HttpAppServerClient({
+      baseUrl: transport.url,
+      capability: transport.capability
+    });
     const unsubscribe = client.subscribe((notification) => {
       notifications.push(notification);
     });
@@ -149,7 +286,10 @@ describe("App Server HTTP transport", () => {
       }
     });
     const transport = await serveAppServerHttpTransport({ appServer: server });
-    const client = new HttpAppServerClient({ baseUrl: transport.url });
+    const client = new HttpAppServerClient({
+      baseUrl: transport.url,
+      capability: transport.capability
+    });
     const unsubscribe = client.subscribe((notification) => {
       notifications.push(notification);
     });
@@ -218,7 +358,10 @@ describe("App Server HTTP transport", () => {
   it("lets an AppServerClient consumer resume a listed thread through transport", async () => {
     const server = createServer();
     const transport = await serveAppServerHttpTransport({ appServer: server });
-    const client = new HttpAppServerClient({ baseUrl: transport.url });
+    const client = new HttpAppServerClient({
+      baseUrl: transport.url,
+      capability: transport.capability
+    });
     const session = new AgentInteractionSession({ client });
 
     try {
@@ -253,7 +396,10 @@ describe("App Server HTTP transport", () => {
     try {
       const response = await fetch(new URL("/request", transport.url), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          authorization: `Bearer ${transport.capability}`,
+          "content-type": "application/json"
+        },
         body: "{"
       });
       const body = (await response.json()) as AppServerResponse;
@@ -272,7 +418,7 @@ describe("App Server HTTP transport", () => {
     }
   });
 
-  it("allows static browser clients to call the local transport", async () => {
+  it("does not authorize cross-origin browser requests or emit CORS headers", async () => {
     const server = createServer();
     const transport = await serveAppServerHttpTransport({ appServer: server });
 
@@ -286,11 +432,9 @@ describe("App Server HTTP transport", () => {
         }
       });
 
-      expect(preflight.status).toBe(204);
-      expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
-      expect(preflight.headers.get("access-control-allow-methods")).toContain(
-        "POST"
-      );
+      expect(preflight.status).toBe(401);
+      expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+      expect(preflight.headers.get("access-control-allow-methods")).toBeNull();
 
       const response = await fetch(new URL("/request", transport.url), {
         method: "POST",
@@ -301,11 +445,13 @@ describe("App Server HTTP transport", () => {
         body: JSON.stringify({ method: "thread/start" })
       });
 
-      expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      expect(response.status).toBe(401);
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
       await expect(response.json()).resolves.toEqual(
         expect.objectContaining({
-          method: "thread/start",
-          ok: true
+          method: "transport/request",
+          ok: false,
+          error: expect.objectContaining({ code: "UNAUTHORIZED" })
         })
       );
     } finally {
@@ -313,9 +459,87 @@ describe("App Server HTTP transport", () => {
     }
   });
 
+  it("requires explicit opt-in before binding beyond loopback", async () => {
+    const server = createServer();
+    let unexpectedTransport:
+      | Awaited<ReturnType<typeof serveAppServerHttpTransport>>
+      | undefined;
+    let rejection: unknown;
+
+    try {
+      unexpectedTransport = await serveAppServerHttpTransport({
+        appServer: server,
+        host: "0.0.0.0"
+      });
+    } catch (cause) {
+      rejection = cause;
+    } finally {
+      await unexpectedTransport?.close();
+    }
+
+    expect(rejection).toEqual(
+      new Error("Non-loopback App Server binding requires explicit opt-in")
+    );
+
+    const optedIn = await serveAppServerHttpTransport({
+      appServer: server,
+      host: "0.0.0.0",
+      allowRemoteBind: true
+    });
+
+    try {
+      expect(new URL(optedIn.url).hostname).toBe("0.0.0.0");
+    } finally {
+      await optedIn.close();
+    }
+  });
+
+  it("redacts the capability from protocol error bodies", async () => {
+    const appServer = {
+      async request() {
+        throw new Error(`upstream failure included ${TEST_CAPABILITY}`);
+      },
+      subscribe() {
+        return () => undefined;
+      }
+    } satisfies AppServerClient;
+    const transport = await serveAppServerHttpTransport({
+      appServer,
+      capability: TEST_CAPABILITY
+    });
+
+    try {
+      const response = await fetch(new URL("/request", transport.url), {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TEST_CAPABILITY}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ method: "thread/list" })
+      });
+      const body = await response.text();
+
+      expect(response.status).toBe(500);
+      expect(body).not.toContain(TEST_CAPABILITY);
+      expect(JSON.parse(body)).toEqual({
+        method: "transport/request",
+        ok: false,
+        error: {
+          code: "UPSTREAM_REQUEST_FAILED",
+          message: "App Server request failed"
+        }
+      });
+    } finally {
+      await transport.close();
+    }
+  });
+
   it("rejects non-protocol client responses with an explicit transport error", async () => {
     const server = await listenWithPlainTextResponse();
-    const client = new HttpAppServerClient({ baseUrl: server.url });
+    const client = new HttpAppServerClient({
+      baseUrl: server.url,
+      capability: TEST_CAPABILITY
+    });
 
     try {
       await expect(client.request({ method: "thread/list" })).rejects.toMatchObject({
