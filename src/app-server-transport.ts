@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { ProxyOptions } from "vite";
 
 import type {
   AppServerClient,
@@ -53,22 +54,27 @@ const MIN_CAPABILITY_BYTES = 32;
 export function createAppServerHttpProxy(
   target: string,
   capability: string
-) {
-  const headers = { authorization: `Bearer ${capability}` };
-  const bypass = rejectUntrustedProxyRequest;
+): Record<string, ProxyOptions> {
+  return {
+    [REQUEST_PATH]: createAuthenticatedProxyOptions(target, capability),
+    [EVENTS_PATH]: createAuthenticatedProxyOptions(target, capability)
+  };
+}
+
+function createAuthenticatedProxyOptions(
+  target: string,
+  capability: string
+): ProxyOptions {
+  const authorization = `Bearer ${capability}`;
 
   return {
-    [REQUEST_PATH]: {
-      target,
-      changeOrigin: true as const,
-      headers,
-      bypass
-    },
-    [EVENTS_PATH]: {
-      target,
-      changeOrigin: true as const,
-      headers,
-      bypass
+    target,
+    changeOrigin: true,
+    bypass: rejectUntrustedProxyRequest,
+    configure(proxy) {
+      proxy.on("proxyReq", (proxyRequest) => {
+        proxyRequest.setHeader("authorization", authorization);
+      });
     }
   };
 }

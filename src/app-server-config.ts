@@ -142,20 +142,10 @@ export async function consumeAppServerClientHandoff(
 export async function cleanupPublishedAppServerClientHandoff(
   published: PublishedAppServerClientHandoff
 ): Promise<void> {
+  const cleanupPath = `${published.path}.${process.pid}.${randomUUID()}.cleaning`;
+
   try {
-    const before = await lstat(published.path);
-    const contents = await readFile(published.path, "utf8");
-    const after = await lstat(published.path);
-
-    if (
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      readOwnershipMarker(contents) !== published.ownershipMarker
-    ) {
-      return;
-    }
-
-    await rm(published.path);
+    await rename(published.path, cleanupPath);
   } catch (cause) {
     if (isFileNotFound(cause)) {
       return;
@@ -163,6 +153,48 @@ export async function cleanupPublishedAppServerClientHandoff(
 
     throw cause;
   }
+
+  let isOwned: boolean;
+
+  try {
+    const before = await lstat(cleanupPath);
+    const contents = await readFile(cleanupPath, "utf8");
+    const after = await lstat(cleanupPath);
+
+    isOwned =
+      before.dev === after.dev &&
+      before.ino === after.ino &&
+      readOwnershipMarker(contents) === published.ownershipMarker;
+  } catch (cause) {
+    await restoreClaimedHandoff(cleanupPath, published.path);
+    throw cause;
+  }
+
+  if (isOwned) {
+    await rm(cleanupPath);
+    return;
+  }
+
+  await restoreClaimedHandoff(cleanupPath, published.path);
+}
+
+async function restoreClaimedHandoff(
+  claimedPath: string,
+  publicPath: string
+): Promise<void> {
+  try {
+    await link(claimedPath, publicPath);
+  } catch (cause) {
+    if (isFileExists(cause)) {
+      return;
+    }
+
+    throw cause;
+  }
+
+  // The exclusive public hard link now owns the same inode; remove only the
+  // private cleanup name. If publicPath exists, both objects remain untouched.
+  await rm(claimedPath);
 }
 
 function readOwnershipMarker(contents: string): string | undefined {
@@ -190,6 +222,15 @@ function isFileNotFound(cause: unknown): boolean {
     cause !== null &&
     "code" in cause &&
     cause.code === "ENOENT"
+  );
+}
+
+function isFileExists(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    cause.code === "EEXIST"
   );
 }
 

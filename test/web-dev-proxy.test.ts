@@ -1,5 +1,6 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import type { AddressInfo } from "node:net";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +15,40 @@ import {
 import { publishAppServerClientHandoff } from "../src/app-server-config.js";
 
 describe("Web development App Server proxy", () => {
+  it("keeps the capability out of DEBUG=vite:config subprocess output", async () => {
+    const appServer = new AppServer({
+      threadManagerOptions: {
+        generateThreadId: () => "debug-thread",
+        generateRunId: () => "debug-run",
+        generateTurnId: () => "debug-turn",
+        generateItemId: () => "debug-item",
+        clock: () => 1000,
+        runtimeFactory: () => ({
+          model: {
+            async *generate() {
+              yield { type: "message.completed", content: "unused" };
+            }
+          } satisfies ModelGateway
+        })
+      }
+    });
+    const proxy = await startDebugProxySubprocess(appServer);
+
+    try {
+      const response = await waitForProxyRequest(proxy.browserOrigin);
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual(
+        expect.objectContaining({ method: "thread/start", ok: true })
+      );
+    } finally {
+      await proxy.close();
+    }
+
+    expect(proxy.output()).toContain("vite:config");
+    expect(proxy.output()).not.toContain(proxy.capability);
+  }, 30_000);
+
   it("injects the capability for same-origin requests and event streams", async () => {
     const appServer = new AppServer({
       threadManagerOptions: {
@@ -200,6 +235,122 @@ describe("Web development App Server proxy", () => {
     }
   });
 });
+
+async function startDebugProxySubprocess(appServer: AppServerClient): Promise<{
+  readonly browserOrigin: string;
+  readonly capability: string;
+  output(): string;
+  close(): Promise<void>;
+}> {
+  const transport = await serveAppServerHttpTransport({ appServer });
+  const root = await mkdtemp(join(tmpdir(), "zen-web-debug-proxy-"));
+  const published = await publishAppServerClientHandoff(root, {
+    baseUrl: transport.url,
+    capability: transport.capability
+  });
+  const port = await reservePort();
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    DEBUG: "vite:config",
+    ZEN_APP_SERVER_CAPABILITY_HANDOFF: published.path
+  };
+  delete env.ZEN_APP_SERVER_CAPABILITY;
+  let output = "";
+  const child = spawn(
+    process.execPath,
+    [
+      join(process.cwd(), "node_modules", "vite", "bin", "vite.js"),
+      "--config",
+      "web/vite.config.ts",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--strictPort"
+    ],
+    {
+      cwd: process.cwd(),
+      env,
+      stdio: "pipe"
+    }
+  );
+  child.stdout?.on("data", (chunk) => {
+    output += String(chunk);
+  });
+  child.stderr?.on("data", (chunk) => {
+    output += String(chunk);
+  });
+
+  return {
+    browserOrigin: `http://127.0.0.1:${port}`,
+    capability: transport.capability,
+    output: () => output,
+    async close() {
+      if (child.exitCode === null) {
+        child.kill();
+        await waitForChildExit(child);
+      }
+      await transport.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  };
+}
+
+async function reservePort(): Promise<number> {
+  const server = createNetServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const port = (server.address() as AddressInfo).port;
+  await new Promise<void>((resolve, reject) => {
+    server.close((cause) => (cause ? reject(cause) : resolve()));
+  });
+  return port;
+}
+
+async function waitForProxyRequest(browserOrigin: string): Promise<Response> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      return await fetch(new URL("/request", browserOrigin), {
+        method: "POST",
+        headers: {
+          origin: browserOrigin,
+          "sec-fetch-site": "same-origin",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ method: "thread/start" })
+      });
+    } catch (cause) {
+      lastError = cause;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  throw lastError ?? new Error("Timed out waiting for debug Vite proxy");
+}
+
+async function waitForChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error("Timed out waiting for Vite subprocess exit")),
+      5_000
+    );
+    child.once("exit", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
+}
 
 async function startProxy(appServer: AppServerClient): Promise<{
   readonly browserOrigin: string;

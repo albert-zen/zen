@@ -1,5 +1,13 @@
 import { execFile, fork, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -63,6 +71,46 @@ describe("standalone App Server CLI", () => {
         child.kill();
       }
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes an unclaimed owned handoff on graceful shutdown", async () => {
+    const cli = await startGeneratedCapabilityCli("unclaimed-cleanup");
+
+    try {
+      cli.child.send({ type: "shutdown" });
+      await waitForExit(cli.child);
+
+      expect(cli.child.exitCode).toBe(0);
+      await expect(readFile(cli.handoffPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT"
+      });
+      expect(await readdir(cli.handoffDirectory)).toEqual([]);
+      expect(cli.output()).not.toContain(cli.capability);
+    } finally {
+      await cli.close();
+    }
+  });
+
+  it("does not delete a handoff atomically claimed as shutdown starts", async () => {
+    const cli = await startGeneratedCapabilityCli("claim-shutdown-race");
+    const claimedPath = `${cli.handoffPath}.test-claim`;
+
+    try {
+      await rename(cli.handoffPath, claimedPath);
+      cli.child.send({ type: "shutdown" });
+      await waitForExit(cli.child);
+
+      expect(cli.child.exitCode).toBe(0);
+      await expect(readFile(claimedPath, "utf8")).resolves.toContain(
+        cli.ownershipMarker
+      );
+      await expect(readFile(cli.handoffPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT"
+      });
+      expect(cli.output()).not.toContain(cli.capability);
+    } finally {
+      await cli.close();
     }
   });
 
@@ -172,6 +220,92 @@ describe("standalone App Server CLI", () => {
     }
   }, 30_000);
 });
+
+async function startGeneratedCapabilityCli(label: string): Promise<{
+  readonly child: ChildProcess;
+  readonly handoffDirectory: string;
+  readonly handoffPath: string;
+  readonly capability: string;
+  readonly ownershipMarker: string;
+  output(): string;
+  close(): Promise<void>;
+}> {
+  const root = await mkdtemp(join(tmpdir(), `zen-app-server-cli-${label}-`));
+  const handoffDirectory = join(root, "handoff");
+  const configPath = join(root, "model-provider.json");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ZEN_APP_SERVER_CAPABILITY_DIR: handoffDirectory,
+    ZEN_APP_SERVER_PORT: "0",
+    ZEN_MODEL_PROVIDER_CONFIG: configPath
+  };
+  delete env.ZEN_APP_SERVER_CAPABILITY;
+  delete env.ZEN_APP_SERVER_CAPABILITY_HANDOFF;
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      providerName: "Test",
+      baseUrl: "https://example.test/v1",
+      apiKey: "test-key",
+      model: "test-model"
+    }),
+    "utf8"
+  );
+  await mkdir(handoffDirectory);
+  const child = fork(join(process.cwd(), "dist", "app-server-cli.js"), [], {
+    cwd: process.cwd(),
+    env,
+    silent: true
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+
+  try {
+    await waitForOutput(child, () =>
+      stdout.includes("Zen App Server listening at ")
+    );
+    const match = /Zen App Server capability handoff: (.+)\r?\n/u.exec(stdout);
+    const handoffPath = match?.[1]?.trim();
+
+    if (!handoffPath) {
+      throw new Error(`CLI did not print a handoff path: ${stdout}`);
+    }
+
+    const published = JSON.parse(await readFile(handoffPath, "utf8")) as {
+      readonly capability: string;
+      readonly ownershipMarker: string;
+    };
+
+    return {
+      child,
+      handoffDirectory,
+      handoffPath,
+      capability: published.capability,
+      ownershipMarker: published.ownershipMarker,
+      output: () => `${stdout}\n${stderr}`,
+      async close() {
+        if (child.exitCode === null) {
+          child.kill();
+          await waitForExit(child).catch(() => undefined);
+        }
+        await rm(root, { recursive: true, force: true });
+      }
+    };
+  } catch (cause) {
+    if (child.exitCode === null) {
+      child.kill();
+      await waitForExit(child).catch(() => undefined);
+    }
+    await rm(root, { recursive: true, force: true });
+    throw cause;
+  }
+}
 
 async function waitForOutput(
   child: ChildProcess,
