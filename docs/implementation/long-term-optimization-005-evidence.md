@@ -24,6 +24,47 @@ Blocker or context escalation details: none
 
 ## Codex Review Note
 
+Round: 5
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-005
+Base revision/diff scope: `80b6a22a0d082838305059de9eb313120b27f6fa..f11d13a5fc57840a0444196603cbe5ebed482ac5`
+Standards Review blocking: Pre-request completion waiters were orphaned when turn/start or turn/retry failed before awaiting completion.
+Standards Review non-blocking: none
+Standards Review missing evidence: Submit/retry request failure and request-failure-versus-dispose waiter cleanup coverage.
+Spec Review blocking: A rejected/protocol-error turn request could retain a waiter or create an unhandled rejection during a disposal race.
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local tracker state decision: Rework
+State decision reason: Accepted bounded waiter-lifecycle defect requires original-worker repair.
+
+## Codex Worker Note
+
+Round: 6
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Local tracker state transition: Rework -> Agent Review
+Branch: codex/long-term-optimization-005
+PR URL: not configured; local-origin branch only
+Base revision/diff scope: original worker fixes only for Review Round 5: idempotent completion waiter handles, request-failure cleanup, narrow waiter count seam, focused disposal/race tests, and append-only evidence.
+Summary of behavior delivered: Completion waiter registration remains before turn/start and turn/retry, but callers now use an idempotent handle that removes itself from the per-thread set on resolve, reject, or discard. Request and protocol failures discard the handle before propagating the original error. The handle has an internal rejection observer so dispose races cannot create unhandled rejections.
+Final scope summary: Review findings only. No persistence, UI, module relocation, dependencies, or issue 004/006+ work.
+Changed files/modules: `src/agent-interaction-session.ts`; `test/agent-interaction-session.test.ts`; evidence.
+Tests added/updated: Deterministic submit request rejection cleanup; retry request rejection cleanup; deferred request-failure-versus-dispose interleaving with exactly-one operation settlement, zero pending waiter count, and idempotent disposal.
+Acceptance criteria status: Immediate terminal notifications remain protected by pre-request registration; request failures atomically discard waiters; disposal races settle/remove a handle once; successful pending requests still reject with SessionDisposedError on dispose; pending waiter count returns to zero in all tested failure paths.
+Commands run and results: `npx vitest run test/agent-interaction-session.test.ts test/web-ui-client.test.ts test/workspace-lifecycle.test.tsx --no-file-parallelism --maxWorkers=1` passed (22 tests); `npm test -- --no-file-parallelism --maxWorkers=1` passed (32 files, 211 tests); `npm run typecheck` passed; `npm run typecheck:web` passed; `npm run build` passed; `npm run web:build` passed; `git diff --check` passed.
+Validation log paths: none
+Required check status or local-check handoff reason: all current local checks passed; no GitHub remote/PR is configured.
+Evidence links/paths: `docs/implementation/long-term-optimization-005-evidence.md`; `docs/implementation/long-term-optimization-tracker.md`
+Decisions made: Retained pre-request waiter registration to preserve immediate terminal notification correctness. A narrow `getPendingCompletionWaiterCountForTest()` seam verifies cleanup without exposing waiter contents or session internals.
+Standards notes: Waiter handles own idempotent settle/remove behavior; the session map is no longer managed by independent response, notification, and disposal code paths.
+Reviewer notes: Verify protocol-error failure follows the same catch/discard path as thrown request failures and that no handle can remain after any terminal path.
+Open questions: none
+Known residual risks: A discarded request-failure handle intentionally leaves its detached promise unresolved; it has no retained references and its rejection observer protects any disposal race. This avoids fabricating a completion error after the request error has already been selected as the operation result.
+Blocker or context escalation details: none
+
+## Codex Review Note
+
 Round: 4
 Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
 Reviewer context: fresh

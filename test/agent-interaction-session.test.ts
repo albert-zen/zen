@@ -16,6 +16,54 @@ import {
 } from "../src/index.js";
 
 describe("AgentInteractionSession", () => {
+  it("discards a submit waiter when turn/start rejects", async () => {
+    const client = new DeferredSessionClient(threadSnapshot(), { turnFailure: new Error("submit request failed") });
+    const session = new AgentInteractionSession({ client });
+    await session.start();
+
+    await expect(session.submit("request failure")).rejects.toThrow("submit request failed");
+    expect(session.getPendingCompletionWaiterCountForTest()).toBe(0);
+    session.dispose();
+    session.dispose();
+  });
+
+  it("discards a retry waiter when turn/retry rejects", async () => {
+    const client = new DeferredSessionClient(recoverableThreadSnapshot(), { turnFailure: new Error("retry request failed") });
+    const session = new AgentInteractionSession({ client });
+    await session.start();
+
+    await expect(session.retryLatestRecoverableTurn()).rejects.toThrow("retry request failed");
+    expect(session.getPendingCompletionWaiterCountForTest()).toBe(0);
+    session.dispose();
+  });
+
+  it("settles a request failure once when disposal races its registered waiter", async () => {
+    const client = new DeferredSessionClient(threadSnapshot(), { deferTurnFailure: true });
+    const session = new AgentInteractionSession({ client });
+    await session.start();
+    const pending = session.submit("race");
+    await client.waitForTurnRequest();
+    let settlements = 0;
+    const observed = pending.then(
+      () => new Error("unexpected success"),
+      (cause) => {
+        settlements += 1;
+        return cause;
+      }
+    );
+
+    session.dispose();
+    client.rejectTurnRequest(new Error("raced request failure"));
+
+    const result = await observed;
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toBe("raced request failure");
+    expect(settlements).toBe(1);
+    expect(session.getPendingCompletionWaiterCountForTest()).toBe(0);
+    session.dispose();
+    expect(client.unsubscribeCalls).toBe(1);
+  });
+
   it("rejects pending submit waiters and future async operations after idempotent disposal", async () => {
     const client = new DeferredSessionClient(threadSnapshot());
     const session = new AgentInteractionSession({ client });
@@ -244,7 +292,12 @@ class DeferredSessionClient implements AppServerClient {
   unsubscribeCalls = 0;
   turnRequests = 0;
 
-  constructor(private readonly thread: ThreadSnapshot) {}
+  private pendingTurnReject?: (cause: Error) => void;
+
+  constructor(
+    private readonly thread: ThreadSnapshot,
+    private readonly options: { readonly turnFailure?: Error; readonly deferTurnFailure?: boolean } = {}
+  ) {}
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
     if (request.method === "thread/list") {
@@ -252,6 +305,14 @@ class DeferredSessionClient implements AppServerClient {
     }
     if (request.method === "turn/start" || request.method === "turn/retry") {
       this.turnRequests += 1;
+      if (this.options.deferTurnFailure) {
+        return new Promise((_, reject) => {
+          this.pendingTurnReject = reject;
+        });
+      }
+      if (this.options.turnFailure) {
+        throw this.options.turnFailure;
+      }
       return {
         method: request.method,
         ok: true,
@@ -282,5 +343,10 @@ class DeferredSessionClient implements AppServerClient {
       await Promise.resolve();
     }
     throw new Error("Timed out waiting for turn request");
+  }
+
+  rejectTurnRequest(cause: Error): void {
+    this.pendingTurnReject?.(cause);
+    this.pendingTurnReject = undefined;
   }
 }

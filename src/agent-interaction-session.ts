@@ -72,11 +72,18 @@ export type AgentInteractionSessionListener = (
   event: AgentInteractionSessionEvent
 ) => void;
 
+type CompletionWaiter = {
+  readonly promise: Promise<void>;
+  resolve(): void;
+  reject(cause: Error): void;
+  discard(): void;
+};
+
 export class AgentInteractionSession {
   private readonly projection = new InteractionProjection();
   private subscription?: AppServerSubscription;
   private readonly listeners: AgentInteractionSessionListener[] = [];
-  private readonly completionWaiters = new Map<string, Array<{ resolve: () => void; reject: (cause: Error) => void }>>();
+  private readonly completionWaiters = new Map<string, Set<CompletionWaiter>>();
   private disposed = false;
 
   constructor(private readonly options: AgentInteractionSessionOptions) {}
@@ -199,21 +206,26 @@ export class AgentInteractionSession {
     this.assertActive();
     this.subscribeOnce();
     const currentThread = await this.ensureThread();
-    const completion = this.waitForNextTurnCompletion(currentThread.id);
-    const response = await this.options.client.request({
-      method: "turn/start",
-      params: {
-        threadId: currentThread.id,
-        input
-      }
-    });
+    const completion = this.createCompletionWaiter(currentThread.id);
+    try {
+      const response = await this.options.client.request({
+        method: "turn/start",
+        params: {
+          threadId: currentThread.id,
+          input
+        }
+      });
 
-    this.assertActive();
-    if (!response.ok || response.method !== "turn/start") {
-      throw new Error(response.ok ? "Unexpected turn/start response" : response.error.message);
+      this.assertActive();
+      if (!response.ok || response.method !== "turn/start") {
+        throw new Error(response.ok ? "Unexpected turn/start response" : response.error.message);
+      }
+    } catch (cause) {
+      completion.discard();
+      throw cause;
     }
 
-    await completion;
+    await completion.promise;
     this.assertActive();
 
     return this.getSnapshot();
@@ -228,21 +240,26 @@ export class AgentInteractionSession {
       throw new Error("No recoverable turn available for retry");
     }
 
-    const completion = this.waitForNextTurnCompletion(recoverableTurn.threadId);
-    const response = await this.options.client.request({
-      method: "turn/retry",
-      params: {
-        threadId: recoverableTurn.threadId,
-        turnId: recoverableTurn.turnId
-      }
-    });
+    const completion = this.createCompletionWaiter(recoverableTurn.threadId);
+    try {
+      const response = await this.options.client.request({
+        method: "turn/retry",
+        params: {
+          threadId: recoverableTurn.threadId,
+          turnId: recoverableTurn.turnId
+        }
+      });
 
-    this.assertActive();
-    if (!response.ok || response.method !== "turn/retry") {
-      throw new Error(response.ok ? "Unexpected turn/retry response" : response.error.message);
+      this.assertActive();
+      if (!response.ok || response.method !== "turn/retry") {
+        throw new Error(response.ok ? "Unexpected turn/retry response" : response.error.message);
+      }
+    } catch (cause) {
+      completion.discard();
+      throw cause;
     }
 
-    await completion;
+    await completion.promise;
     this.assertActive();
 
     return this.getSnapshot();
@@ -272,7 +289,7 @@ export class AgentInteractionSession {
     this.subscription = undefined;
     const error = new AgentInteractionSessionDisposedError();
     this.completionWaiters.forEach((waiters) => {
-      waiters.forEach((waiter) => waiter.reject(error));
+      [...waiters].forEach((waiter) => waiter.reject(error));
     });
     this.completionWaiters.clear();
     this.listeners.splice(0);
@@ -320,8 +337,7 @@ export class AgentInteractionSession {
 
       this.emit({ type: "state", snapshot });
       if (notification.type === "turn/completed" || notification.type === "turn/failed") {
-        const waiters = this.completionWaiters.get(notification.threadId) ?? [];
-        this.completionWaiters.delete(notification.threadId);
+        const waiters = [...(this.completionWaiters.get(notification.threadId) ?? [])];
         waiters.forEach((waiter) => notification.type === "turn/failed"
           ? waiter.reject(new Error(notification.error.message))
           : waiter.resolve());
@@ -331,13 +347,40 @@ export class AgentInteractionSession {
     this.subscription = this.options.client.subscribe(listener);
   }
 
-  private waitForNextTurnCompletion(threadId: string): Promise<void> {
+  getPendingCompletionWaiterCountForTest(): number {
+    return [...this.completionWaiters.values()].reduce((count, waiters) => count + waiters.size, 0);
+  }
+
+  private createCompletionWaiter(threadId: string): CompletionWaiter {
     this.assertActive();
-    return new Promise((resolve, reject) => {
-      const waiters = this.completionWaiters.get(threadId) ?? [];
-      waiters.push({ resolve, reject });
-      this.completionWaiters.set(threadId, waiters);
+    let settled = false;
+    let resolvePromise: () => void = () => undefined;
+    let rejectPromise: (cause: Error) => void = () => undefined;
+    const promise = new Promise<void>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
     });
+    const waiters = this.completionWaiters.get(threadId) ?? new Set<CompletionWaiter>();
+    const remove = () => {
+      waiters.delete(waiter);
+      if (waiters.size === 0) this.completionWaiters.delete(threadId);
+    };
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      remove();
+      action();
+    };
+    const waiter: CompletionWaiter = {
+      promise,
+      resolve: () => settle(resolvePromise),
+      reject: (cause) => settle(() => rejectPromise(cause)),
+      discard: () => settle(() => undefined)
+    };
+    promise.catch(() => undefined);
+    waiters.add(waiter);
+    this.completionWaiters.set(threadId, waiters);
+    return waiter;
   }
 
   private emit(event: AgentInteractionSessionEvent): void {
