@@ -301,7 +301,11 @@ class DeferredSessionClient implements AppServerClient {
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
     if (request.method === "thread/list") {
-      return { method: "thread/list", ok: true, result: { threads: [this.thread] } } as AppServerResponse;
+      return {
+        method: "thread/list",
+        ok: true,
+        result: { threads: [this.thread], persistenceFailures: [] }
+      } as AppServerResponse;
     }
     if (request.method === "turn/start" || request.method === "turn/retry") {
       this.turnRequests += 1;
