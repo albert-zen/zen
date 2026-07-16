@@ -26,6 +26,23 @@ Blocker or context escalation details: none
 
 ## Codex Review Note
 
+Round: 2
+Issue: long-term-optimization-006 Enforce deep module groups and explicit entrypoints
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-006 @ b0e01fecf0a6e4ed3f768fb65d22ae6c4a44c530`
+Base revision/diff scope: `00a87a5fa1a6ac1751e459b046455785647b2e79..b0e01fecf0a6e4ed3f768fb65d22ae6c4a44c530`
+Standards Review blocking: none
+Standards Review non-blocking: none
+Standards Review missing evidence: none
+Spec Review blocking: none
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local tracker state decision: Complete
+State decision reason: STRICT PASS. No blocking, no material non-blocking, and no missing architecture evidence. The unrelated TUI timing flake is deferred to 007; isolated acceptance output is accepted because production declarations are clean.
+
+## Codex Review Note
+
 Round: 1
 Issue: long-term-optimization-006 Enforce deep module groups and explicit entrypoints
 Reviewer context: fresh
