@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
 import { createServer as createViteServer } from "vite";
 
 import {
@@ -27,28 +29,21 @@ const transport = await serveAppServerHttpTransport({
   port: 0
 });
 const proxy = createAppServerHttpProxy(transport.url, transport.capability);
-const previousCapability = process.env.ZEN_APP_SERVER_CAPABILITY;
-process.env.ZEN_APP_SERVER_CAPABILITY = transport.capability;
 let vite: Awaited<ReturnType<typeof createViteServer>> | undefined;
 
 try {
-  try {
-    vite = await createViteServer({
-      configFile: "web/vite.config.ts",
-      server: {
-        host,
-        port,
-        strictPort: false,
-        proxy
-      }
-    });
-  } finally {
-    if (previousCapability === undefined) {
-      delete process.env.ZEN_APP_SERVER_CAPABILITY;
-    } else {
-      process.env.ZEN_APP_SERVER_CAPABILITY = previousCapability;
+  vite = await createViteServer({
+    configFile: false,
+    root: process.cwd(),
+    plugins: [react(), tailwindcss()],
+    server: {
+      cors: false,
+      host,
+      port,
+      strictPort: false,
+      proxy
     }
-  }
+  });
 
   await vite.listen();
   vite.printUrls();

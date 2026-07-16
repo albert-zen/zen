@@ -18,7 +18,6 @@ describe("Web UI client", () => {
     let eventUrl: string | undefined;
     const eventSource = new RecordingEventSource();
     const client = new BrowserAppServerTransportClient({
-      baseUrl: "https://cross-origin.invalid",
       fetch: (async (input, init) => {
         requests.push({ input, init });
         return new Response(

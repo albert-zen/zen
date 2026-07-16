@@ -1,58 +1,74 @@
 #!/usr/bin/env node
-import { rm } from "node:fs/promises";
-
 import { createProviderBackedAppServer } from "./provider-runtime.js";
 import { serveAppServerHttpTransport } from "./app-server-transport.js";
 import {
+  cleanupPublishedAppServerClientHandoff,
   DEFAULT_APP_SERVER_HOST,
+  publishAppServerClientHandoff,
   readAppServerPort,
+  readAppServerCredentialMode,
   readRemoteBindOptIn,
-  writeAppServerClientHandoff
+  type PublishedAppServerClientHandoff
 } from "./app-server-config.js";
 
 const host = process.env.ZEN_APP_SERVER_HOST ?? DEFAULT_APP_SERVER_HOST;
 const port = readAppServerPort(process.env.ZEN_APP_SERVER_PORT);
-const providedCapability = process.env.ZEN_APP_SERVER_CAPABILITY;
-const handoffPath = process.env.ZEN_APP_SERVER_CAPABILITY_FILE;
+const credentialMode = readAppServerCredentialMode(process.env);
 const allowRemoteBind = readRemoteBindOptIn(
   process.env.ZEN_APP_SERVER_ALLOW_REMOTE,
   "ZEN_APP_SERVER_ALLOW_REMOTE"
 );
 
-if (!providedCapability && !handoffPath) {
-  throw new Error(
-    "Set ZEN_APP_SERVER_CAPABILITY or ZEN_APP_SERVER_CAPABILITY_FILE for capability handoff"
-  );
-}
-
 const server = await createProviderBackedAppServer({ cwd: process.cwd() });
 const transport = await serveAppServerHttpTransport({
   allowRemoteBind,
   appServer: server,
-  capability: providedCapability,
+  capability:
+    credentialMode.type === "provided" ? credentialMode.capability : undefined,
   host,
   port
 });
+let publishedHandoff: PublishedAppServerClientHandoff | undefined;
 
 try {
-  if (handoffPath) {
-    await writeAppServerClientHandoff(handoffPath, {
-      baseUrl: transport.url,
-      capability: transport.capability
-    });
+  if (credentialMode.type === "handoff") {
+    publishedHandoff = await publishAppServerClientHandoff(
+      credentialMode.directory,
+      {
+        baseUrl: transport.url,
+        capability: transport.capability
+      }
+    );
+    console.log(`Zen App Server capability handoff: ${publishedHandoff.path}`);
   }
 
   console.log(`Zen App Server listening at ${transport.url}`);
 
   await new Promise<void>((resolve) => {
-    const shutdown = () => resolve();
+    const shutdown = () => {
+      process.off("SIGINT", shutdown);
+      process.off("SIGTERM", shutdown);
+      process.off("message", shutdownFromParent);
+      resolve();
+    };
+    const shutdownFromParent = (message: unknown) => {
+      if (
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        message.type === "shutdown"
+      ) {
+        shutdown();
+      }
+    };
 
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
+    process.on("message", shutdownFromParent);
   });
 } finally {
-  if (handoffPath) {
-    await rm(handoffPath, { force: true });
+  if (publishedHandoff) {
+    await cleanupPublishedAppServerClientHandoff(publishedHandoff);
   }
 
   await transport.close();

@@ -82,6 +82,34 @@ describe("App Server HTTP transport", () => {
     }
   });
 
+  it("rejects short, whitespace, and control-character provided capabilities", async () => {
+    const capabilities = [
+      "too-short",
+      "provided capability 0123456789 abcdef 0123456789",
+      "provided-capability-0123456789\u0000abcdef-0123456789"
+    ];
+
+    for (const capability of capabilities) {
+      let rejection: unknown;
+
+      try {
+        await serveAppServerHttpTransport({
+          appServer: createServer(),
+          capability
+        });
+      } catch (cause) {
+        rejection = cause;
+      }
+
+      expect(rejection).toEqual(
+        new Error(
+          "App Server capability must be at least 32 bytes without whitespace or control characters"
+        )
+      );
+      expect(String(rejection)).not.toContain(capability);
+    }
+  });
+
   it("rejects event streams without a matching capability before subscribing", async () => {
     const server = createServer();
     const transport = await serveAppServerHttpTransport({

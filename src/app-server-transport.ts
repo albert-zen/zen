@@ -55,19 +55,69 @@ export function createAppServerHttpProxy(
   capability: string
 ) {
   const headers = { authorization: `Bearer ${capability}` };
+  const bypass = rejectUntrustedProxyRequest;
 
   return {
     [REQUEST_PATH]: {
       target,
       changeOrigin: true as const,
-      headers
+      headers,
+      bypass
     },
     [EVENTS_PATH]: {
       target,
       changeOrigin: true as const,
-      headers
+      headers,
+      bypass
     }
   };
+}
+
+function rejectUntrustedProxyRequest(
+  request: IncomingMessage,
+  response: ServerResponse | undefined
+): string | undefined {
+  if (isTrustedSameOriginRequest(request)) {
+    return undefined;
+  }
+
+  response?.writeHead(403, {
+    "content-type": "application/json; charset=utf-8"
+  });
+  response?.end(`${JSON.stringify({ error: "Forbidden proxy request" })}\n`);
+
+  // Vite stops before proxying when bypass returns a path after ending the response.
+  return request.url ?? "/";
+}
+
+function isTrustedSameOriginRequest(request: IncomingMessage): boolean {
+  if (request.method === "OPTIONS") {
+    return false;
+  }
+
+  const fetchSite = request.headers["sec-fetch-site"];
+
+  if (fetchSite !== undefined && fetchSite !== "same-origin") {
+    return false;
+  }
+
+  const origin = request.headers.origin;
+
+  if (origin === undefined) {
+    return fetchSite === "same-origin";
+  }
+
+  if (typeof origin !== "string" || !request.headers.host) {
+    return false;
+  }
+
+  try {
+    const encrypted = "encrypted" in request.socket && request.socket.encrypted;
+    const expectedOrigin = `${encrypted ? "https" : "http"}://${request.headers.host}`;
+    return new URL(origin).origin === expectedOrigin;
+  } catch {
+    return false;
+  }
 }
 
 export async function serveAppServerHttpTransport(

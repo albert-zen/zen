@@ -34,12 +34,16 @@ describe("static Web UI shell", () => {
     expect(workspace).toContain("Demo mode");
   });
 
-  it("defaults browser transport to the current Web origin", () => {
+  it("does not expose direct App Server configuration to browser code", () => {
     const workspace = readFileSync(
       join(process.cwd(), "web", "src", "workspace.tsx"),
       "utf8"
     );
 
-    expect(workspace).toContain("const DEFAULT_SERVER_URL = window.location.origin");
+    expect(workspace).not.toContain("DEFAULT_SERVER_URL");
+    expect(workspace).not.toContain("zen-app-server-url");
+    expect(workspace).not.toContain('params.get("server")');
+    expect(workspace).not.toContain('id="server-url"');
+    expect(workspace).not.toContain("baseUrl:");
   });
 });

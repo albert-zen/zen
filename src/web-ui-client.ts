@@ -279,7 +279,6 @@ export class WebUiClient {
 }
 
 export type BrowserAppServerTransportClientOptions = {
-  readonly baseUrl: string | URL;
   readonly fetch?: typeof fetch;
   readonly createEventSource?: (
     url: string

@@ -1,16 +1,17 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createServer as createViteServer } from "vite";
+import { createLogger, createServer as createViteServer } from "vite";
 
 import {
   AppServer,
+  type AppServerClient,
   serveAppServerHttpTransport,
   type ModelGateway
 } from "../src/index.js";
-import { writeAppServerClientHandoff } from "../src/app-server-config.js";
+import { publishAppServerClientHandoff } from "../src/app-server-config.js";
 
 describe("Web development App Server proxy", () => {
   it("injects the capability for same-origin requests and event streams", async () => {
@@ -30,44 +31,27 @@ describe("Web development App Server proxy", () => {
         })
       }
     });
-    const transport = await serveAppServerHttpTransport({ appServer });
-    const root = await mkdtemp(join(tmpdir(), "zen-web-proxy-"));
-    const handoffPath = join(root, "app-server-client.json");
-    const previousCapability = process.env.ZEN_APP_SERVER_CAPABILITY;
-    const previousHandoffPath = process.env.ZEN_APP_SERVER_CAPABILITY_FILE;
-    let vite: Awaited<ReturnType<typeof createViteServer>> | undefined;
+    const proxy = await startProxy(appServer);
 
     try {
-      await writeAppServerClientHandoff(handoffPath, {
-        baseUrl: transport.url,
-        capability: transport.capability
-      });
-      delete process.env.ZEN_APP_SERVER_CAPABILITY;
-      process.env.ZEN_APP_SERVER_CAPABILITY_FILE = handoffPath;
-      vite = await createViteServer({
-        configFile: "web/vite.config.ts",
-        logLevel: "silent",
-        server: {
-          host: "127.0.0.1",
-          port: 0,
-          strictPort: true
+      const eventResponse = await fetch(new URL("/events", proxy.browserOrigin), {
+        headers: {
+          origin: proxy.browserOrigin,
+          "sec-fetch-site": "same-origin"
         }
       });
-      restoreEnvironment(
-        previousCapability,
-        previousHandoffPath
-      );
-      await vite.listen();
-      const address = vite.httpServer?.address() as AddressInfo;
-      const browserOrigin = `http://127.0.0.1:${address.port}`;
-      const eventResponse = await fetch(new URL("/events", browserOrigin));
 
       expect(eventResponse.status).toBe(200);
+      expect(eventResponse.headers.get("access-control-allow-origin")).toBeNull();
 
       const notificationPromise = readSseNotification(eventResponse);
-      const requestResponse = await fetch(new URL("/request", browserOrigin), {
+      const requestResponse = await fetch(new URL("/request", proxy.browserOrigin), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          origin: proxy.browserOrigin,
+          "sec-fetch-site": "same-origin",
+          "content-type": "application/json"
+        },
         body: JSON.stringify({ method: "thread/start" })
       });
 
@@ -81,14 +65,200 @@ describe("Web development App Server proxy", () => {
           thread: expect.objectContaining({ id: "thread-1" })
         })
       );
+      expect(proxy.logs.length).toBeGreaterThan(0);
+      expect(proxy.logs.join("\n")).not.toContain(proxy.capability);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it("rejects foreign, cross-site, and preflight traffic before App Server dispatch", async () => {
+    let requestCount = 0;
+    let subscriptionCount = 0;
+    const appServer = {
+      async request() {
+        requestCount += 1;
+        throw new Error("request reached App Server");
+      },
+      subscribe() {
+        subscriptionCount += 1;
+        return () => undefined;
+      }
+    } satisfies AppServerClient;
+    const proxy = await startProxy(appServer);
+
+    try {
+      const cases: readonly {
+        readonly path: string;
+        readonly init: RequestInit;
+      }[] = [
+        {
+          path: "/request",
+          init: {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ method: "thread/start" })
+          }
+        },
+        {
+          path: "/request",
+          init: {
+            method: "POST",
+            headers: {
+              origin: "https://foreign.example",
+              "sec-fetch-site": "same-origin",
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({ method: "thread/start" })
+          }
+        },
+        {
+          path: "/events",
+          init: {}
+        },
+        {
+          path: "/request",
+          init: {
+            method: "POST",
+            headers: {
+              origin: proxy.browserOrigin,
+              "sec-fetch-site": "cross-site",
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({ method: "thread/start" })
+          }
+        },
+        {
+          path: "/request",
+          init: {
+            method: "OPTIONS",
+            headers: {
+              origin: proxy.browserOrigin,
+              "sec-fetch-site": "same-origin",
+              "access-control-request-method": "POST"
+            }
+          }
+        },
+        {
+          path: "/events",
+          init: {
+            headers: {
+              origin: "https://foreign.example",
+              "sec-fetch-site": "cross-site"
+            }
+          }
+        }
+      ];
+
+      for (const testCase of cases) {
+        const response = await fetch(
+          new URL(testCase.path, proxy.browserOrigin),
+          testCase.init
+        );
+
+        expect(response.status).toBe(403);
+        expect(response.headers.get("access-control-allow-origin")).toBeNull();
+        await expect(response.json()).resolves.toEqual({
+          error: "Forbidden proxy request"
+        });
+      }
+
+      expect(requestCount).toBe(0);
+      expect(subscriptionCount).toBe(0);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it("rejects conflicting external proxy credential modes without claiming the handoff", async () => {
+    const root = await mkdtemp(join(tmpdir(), "zen-web-proxy-modes-"));
+    const published = await publishAppServerClientHandoff(root, {
+      baseUrl: "http://127.0.0.1:3000",
+      capability: "handoff-capability-0123456789-abcdef-0123456789"
+    });
+    const previousCapability = process.env.ZEN_APP_SERVER_CAPABILITY;
+    const previousHandoffPath = process.env.ZEN_APP_SERVER_CAPABILITY_HANDOFF;
+    process.env.ZEN_APP_SERVER_CAPABILITY =
+      "provided-capability-0123456789-abcdef-0123456789";
+    process.env.ZEN_APP_SERVER_CAPABILITY_HANDOFF = published.path;
+
+    try {
+      await expect(
+        createViteServer({
+          configFile: "web/vite.config.ts",
+          logLevel: "silent"
+        })
+      ).rejects.toThrow(
+        "Set exactly one of ZEN_APP_SERVER_CAPABILITY or ZEN_APP_SERVER_CAPABILITY_HANDOFF"
+      );
+      await expect(readFile(published.path, "utf8")).resolves.toContain(
+        published.ownershipMarker
+      );
     } finally {
       restoreEnvironment(previousCapability, previousHandoffPath);
-      await vite?.close();
-      await transport.close();
       await rm(root, { recursive: true, force: true });
     }
   });
 });
+
+async function startProxy(appServer: AppServerClient): Promise<{
+  readonly browserOrigin: string;
+  readonly capability: string;
+  readonly logs: readonly string[];
+  close(): Promise<void>;
+}> {
+  const transport = await serveAppServerHttpTransport({ appServer });
+  const root = await mkdtemp(join(tmpdir(), "zen-web-proxy-"));
+  const previousCapability = process.env.ZEN_APP_SERVER_CAPABILITY;
+  const previousHandoffPath = process.env.ZEN_APP_SERVER_CAPABILITY_HANDOFF;
+  const logs: string[] = [];
+  const logger = createLogger("info", { allowClearScreen: false });
+  logger.info = (message) => logs.push(message);
+  logger.warn = (message) => logs.push(message);
+  logger.warnOnce = (message) => logs.push(message);
+  logger.error = (message) => logs.push(message);
+  logger.clearScreen = () => undefined;
+  let vite: Awaited<ReturnType<typeof createViteServer>> | undefined;
+
+  try {
+    const published = await publishAppServerClientHandoff(root, {
+      baseUrl: transport.url,
+      capability: transport.capability
+    });
+    delete process.env.ZEN_APP_SERVER_CAPABILITY;
+    process.env.ZEN_APP_SERVER_CAPABILITY_HANDOFF = published.path;
+    vite = await createViteServer({
+      configFile: "web/vite.config.ts",
+      customLogger: logger,
+      server: {
+        host: "127.0.0.1",
+        port: 0,
+        strictPort: true
+      }
+    });
+    restoreEnvironment(previousCapability, previousHandoffPath);
+    await vite.listen();
+    vite.printUrls();
+    const address = vite.httpServer?.address() as AddressInfo;
+
+    return {
+      browserOrigin: `http://127.0.0.1:${address.port}`,
+      capability: transport.capability,
+      logs,
+      async close() {
+        await vite?.close();
+        await transport.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    };
+  } catch (cause) {
+    restoreEnvironment(previousCapability, previousHandoffPath);
+    await vite?.close();
+    await transport.close();
+    await rm(root, { recursive: true, force: true });
+    throw cause;
+  }
+}
 
 function restoreEnvironment(
   capability: string | undefined,
@@ -101,9 +271,9 @@ function restoreEnvironment(
   }
 
   if (handoffPath === undefined) {
-    delete process.env.ZEN_APP_SERVER_CAPABILITY_FILE;
+    delete process.env.ZEN_APP_SERVER_CAPABILITY_HANDOFF;
   } else {
-    process.env.ZEN_APP_SERVER_CAPABILITY_FILE = handoffPath;
+    process.env.ZEN_APP_SERVER_CAPABILITY_HANDOFF = handoffPath;
   }
 }
 

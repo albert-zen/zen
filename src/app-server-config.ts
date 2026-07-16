@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { randomBytes, randomUUID } from "node:crypto";
+import { link, lstat, open, readFile, rename, rm } from "node:fs/promises";
 import { isIP } from "node:net";
+import { join } from "node:path";
 
 export const DEFAULT_APP_SERVER_HOST = "127.0.0.1";
 export const DEFAULT_APP_SERVER_PORT = 3000;
@@ -9,6 +10,15 @@ export type AppServerClientHandoff = {
   readonly baseUrl: string;
   readonly capability: string;
 };
+
+export type PublishedAppServerClientHandoff = {
+  readonly ownershipMarker: string;
+  readonly path: string;
+};
+
+export type AppServerCredentialMode =
+  | { readonly type: "provided"; readonly capability: string }
+  | { readonly type: "handoff"; readonly directory: string };
 
 export function readAppServerPort(value: string | undefined): number {
   if (!value) {
@@ -39,6 +49,29 @@ export function readRemoteBindOptIn(
   throw new Error(`${variableName} must be one of: 0, 1, false, true`);
 }
 
+export function readAppServerCredentialMode(
+  env: Readonly<Record<string, string | undefined>>
+): AppServerCredentialMode {
+  const capability = env.ZEN_APP_SERVER_CAPABILITY;
+  const directory = env.ZEN_APP_SERVER_CAPABILITY_DIR;
+
+  if (Boolean(capability) === Boolean(directory)) {
+    throw new Error(
+      "Set exactly one of ZEN_APP_SERVER_CAPABILITY or ZEN_APP_SERVER_CAPABILITY_DIR"
+    );
+  }
+
+  if (capability) {
+    return { type: "provided", capability };
+  }
+
+  if (directory) {
+    return { type: "handoff", directory };
+  }
+
+  throw new Error("App Server credential mode is invalid");
+}
+
 export function assertLoopbackBindAllowed(
   host: string,
   allowRemoteBind: boolean,
@@ -63,15 +96,34 @@ function isLoopbackHost(host: string): boolean {
   return normalized.startsWith("::ffff:127.");
 }
 
-export async function writeAppServerClientHandoff(
-  path: string,
+export async function publishAppServerClientHandoff(
+  directory: string,
   handoff: AppServerClientHandoff
-): Promise<void> {
-  await writeFile(path, `${JSON.stringify(handoff)}\n`, {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600
-  });
+): Promise<PublishedAppServerClientHandoff> {
+  const ownershipMarker = randomBytes(32).toString("base64url");
+  const filename = `zen-app-server-${randomUUID()}.json`;
+  const path = join(directory, filename);
+  const temporaryPath = join(directory, `.${filename}.${randomUUID()}.tmp`);
+  const file = await open(temporaryPath, "wx", 0o600);
+
+  try {
+    try {
+      await file.writeFile(
+        `${JSON.stringify({ ...handoff, ownershipMarker })}\n`,
+        "utf8"
+      );
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+
+    // A hard link publishes the already-flushed inode without an overwrite window.
+    await link(temporaryPath, path);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+
+  return { ownershipMarker, path };
 }
 
 export async function consumeAppServerClientHandoff(
@@ -81,22 +133,82 @@ export async function consumeAppServerClientHandoff(
   await rename(path, claimedPath);
 
   try {
-    const value = JSON.parse(await readFile(claimedPath, "utf8")) as unknown;
-
-    if (
-      typeof value !== "object" ||
-      value === null ||
-      !("baseUrl" in value) ||
-      typeof value.baseUrl !== "string" ||
-      !("capability" in value) ||
-      typeof value.capability !== "string"
-    ) {
-      throw new Error("App Server client handoff is invalid");
-    }
-
-    new URL(value.baseUrl);
-    return { baseUrl: value.baseUrl, capability: value.capability };
+    return readAppServerClientHandoff(await readFile(claimedPath, "utf8"));
   } finally {
     await rm(claimedPath, { force: true });
   }
+}
+
+export async function cleanupPublishedAppServerClientHandoff(
+  published: PublishedAppServerClientHandoff
+): Promise<void> {
+  try {
+    const before = await lstat(published.path);
+    const contents = await readFile(published.path, "utf8");
+    const after = await lstat(published.path);
+
+    if (
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      readOwnershipMarker(contents) !== published.ownershipMarker
+    ) {
+      return;
+    }
+
+    await rm(published.path);
+  } catch (cause) {
+    if (isFileNotFound(cause)) {
+      return;
+    }
+
+    throw cause;
+  }
+}
+
+function readOwnershipMarker(contents: string): string | undefined {
+  try {
+    const value = JSON.parse(contents) as unknown;
+
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "ownershipMarker" in value &&
+      typeof value.ownershipMarker === "string"
+    ) {
+      return value.ownershipMarker;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function isFileNotFound(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    cause.code === "ENOENT"
+  );
+}
+
+function readAppServerClientHandoff(contents: string): AppServerClientHandoff {
+  const value = JSON.parse(contents) as unknown;
+
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("baseUrl" in value) ||
+    typeof value.baseUrl !== "string" ||
+    !("capability" in value) ||
+    typeof value.capability !== "string" ||
+    !("ownershipMarker" in value) ||
+    typeof value.ownershipMarker !== "string"
+  ) {
+    throw new Error("App Server client handoff is invalid");
+  }
+
+  new URL(value.baseUrl);
+  return { baseUrl: value.baseUrl, capability: value.capability };
 }

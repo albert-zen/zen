@@ -24,7 +24,7 @@ integration. Workers implement one issue only.
 
 | Issue | State | Dependencies | Branch | Worker Round | Review Round | Last Evidence Path |
 | --- | --- | --- | --- | ---: | ---: | --- |
-| long-term-optimization-001 | Agent Review | none | `codex/long-term-optimization-001` | 1 | 0 | `docs/implementation/long-term-optimization-001-evidence.md` |
+| long-term-optimization-001 | Agent Review | none | `codex/long-term-optimization-001` | 2 | 1 | `docs/implementation/long-term-optimization-001-evidence.md` |
 | long-term-optimization-002 | Ready | none | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-002-evidence.md` |
 | long-term-optimization-003 | Backlog | 001, 002 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-003-evidence.md` |
 | long-term-optimization-004 | Backlog | 002, 003 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-004-evidence.md` |

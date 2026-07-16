@@ -22,6 +22,7 @@ export default defineConfig(async ({ command }) => {
       }
     },
     server: {
+      cors: false,
       host: "127.0.0.1",
       port: 4174,
       strictPort: false,
@@ -32,19 +33,18 @@ export default defineConfig(async ({ command }) => {
 
 async function readAuthenticatedProxy() {
   const capability = process.env.ZEN_APP_SERVER_CAPABILITY;
+  const handoffPath = process.env.ZEN_APP_SERVER_CAPABILITY_HANDOFF;
 
-  if (capability) {
-    return createAppServerHttpProxy(defaultProxyTarget, capability);
+  if (Boolean(capability) === Boolean(handoffPath)) {
+    throw new Error(
+      "Set exactly one of ZEN_APP_SERVER_CAPABILITY or ZEN_APP_SERVER_CAPABILITY_HANDOFF for the trusted Web proxy"
+    );
   }
-
-  const handoffPath = process.env.ZEN_APP_SERVER_CAPABILITY_FILE;
 
   if (handoffPath) {
     const handoff = await consumeAppServerClientHandoff(handoffPath);
     return createAppServerHttpProxy(handoff.baseUrl, handoff.capability);
   }
 
-  throw new Error(
-    "Set ZEN_APP_SERVER_CAPABILITY or ZEN_APP_SERVER_CAPABILITY_FILE for the trusted Web proxy"
-  );
+  return createAppServerHttpProxy(defaultProxyTarget, capability as string);
 }
