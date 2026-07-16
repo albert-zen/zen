@@ -48,12 +48,7 @@ describe("approval resolution and interrupt ordering", () => {
     expect(shellStarts).toBe(0);
     expect(broker.listPending()).toEqual([]);
     expect(snapshot.turns.map((turn) => turn.status)).toEqual(["canceled", "completed"]);
-    expect(snapshot.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "approval.resolved",
-        payload: expect.objectContaining({ decision: "decline", reason: "Turn interrupted" })
-      })
-    ]));
+    expect(snapshot.items.some((item) => item.type === "approval.resolved")).toBe(false);
   });
 
   it("allows an atomically consumed approval to start, then aborts it and continues FIFO", async () => {

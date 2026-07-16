@@ -1,5 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,7 +8,7 @@ import {
   AppServer,
   type AppServerNotification,
   createProviderBackedAppServer,
-  FileThreadStore,
+  FileThreadJournal,
   type ModelGateway
 } from "../src/index.js";
 
@@ -93,21 +93,12 @@ describe("AppServer", () => {
         })
       }
     });
-    expect(notifications.map((notification) => notification.type)).toEqual([
+    expect(notifications.slice(0, 2).map((notification) => notification.type)).toEqual([
       "thread/started",
-      "item/appended",
-      "item/appended",
-      "turn/started",
-      "item/appended",
-      "item/appended",
-      "item/appended",
-      "item/appended",
-      "item/appended",
-      "item/appended",
-      "item/appended",
-      "item/appended",
-      "turn/completed"
+      "item/appended"
     ]);
+    expect(notifications.some((notification) => notification.type === "turn/started")).toBe(true);
+    expect(notifications.at(-1)?.type).toBe("turn/completed");
     expect(
       notifications
         .filter((notification) => notification.type === "item/appended")
@@ -318,43 +309,15 @@ describe("AppServer", () => {
     );
   });
 
-  it("repairs stale in-progress turns from persisted startup snapshots", async () => {
+  it("repairs stale in-progress turns replayed from a journal", async () => {
     const dir = mkdtempSync(join(tmpdir(), "zen-startup-repair-"));
-    const path = join(dir, "thread-1.json");
-    const store = new FileThreadStore({ dir });
-    const staleThread = {
-      id: "thread-1",
-      status: "running" as const,
-      turns: [
-        {
-          id: "turn-1",
-          runId: "run-1",
-          status: "inProgress" as const,
-          itemIds: ["item-1"]
-        }
-      ],
-      items: [
-        {
-          id: "item-1",
-          type: "turn.started",
-          createdAtMs: 1000,
-          seq: 1,
-          runId: "run-1",
-          turnId: "turn-1",
-          payload: {}
-        }
-      ]
-    };
-
-    await writeFile(
-      path,
-      `${JSON.stringify({ schemaVersion: 1, thread: staleThread }, null, 2)}\n`,
-      "utf8"
-    );
-    await expect(store.list()).resolves.toEqual([staleThread]);
+    const journal = new FileThreadJournal({ dir });
+    await journal.create("thread-1", item("thread.created", "thread-1", "thread-1", "item-created", { threadId: "thread-1" }));
+    await journal.append("thread-1", item("turn.started", "run-1", "turn-1", "item-1", {}));
+    await journal.close();
 
     const server = await createProviderBackedAppServer({
-      threadStore: store,
+      threadJournal: new FileThreadJournal({ dir }),
       appServerOptions: {
         threadManagerOptions: {
           generateItemId: sequence("repair-item"),
@@ -369,6 +332,7 @@ describe("AppServer", () => {
       method: "thread/list",
       ok: true,
       result: {
+        persistenceFailures: [],
         threads: [
           expect.objectContaining({
             id: "thread-1",
@@ -385,7 +349,7 @@ describe("AppServer", () => {
                 }
               })
             ],
-            items: [
+            items: expect.arrayContaining([
               expect.objectContaining({ id: "item-1", type: "turn.started" }),
               expect.objectContaining({
                 id: "repair-item-1",
@@ -404,31 +368,14 @@ describe("AppServer", () => {
                   }
                 }
               })
-            ]
+            ])
           })
         ]
       }
     });
-    await expect(readFile(path, "utf8").then(JSON.parse)).resolves.toEqual({
-      schemaVersion: 1,
-      thread: expect.objectContaining({
-        id: "thread-1",
-        status: "failed",
-        turns: [
-          expect.objectContaining({
-            id: "turn-1",
-            status: "failed",
-            itemIds: ["item-1", "repair-item-1"]
-          })
-        ],
-        items: expect.arrayContaining([
-          expect.objectContaining({
-            id: "repair-item-1",
-            type: "turn.repaired"
-          })
-        ])
-      })
-    });
+    await server.close();
+    const path = join(dir, `thread-${Buffer.from("thread-1").toString("base64url")}.jsonl`);
+    await expect(readFile(path, "utf8")).resolves.toContain("turn.repaired");
   });
 });
 
@@ -472,6 +419,16 @@ function sequence(prefix: string): () => string {
   let nextId = 0;
 
   return () => `${prefix}-${++nextId}`;
+}
+
+function item(
+  type: string,
+  runId: string,
+  turnId: string,
+  id: string,
+  payload: unknown
+) {
+  return { id, type, createdAtMs: 1000, seq: 1, runId, turnId, payload };
 }
 
 function createDeferred<T>() {

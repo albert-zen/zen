@@ -49,6 +49,9 @@ export type ThreadManagerOptions = {
   readonly clock?: Clock;
   readonly runtimeFactory?: ThreadRuntimeFactory;
   readonly initialThreads?: readonly ThreadSnapshot[];
+  readonly repairOnLoad?: boolean;
+  readonly persistenceObserver?: (threadId: string, item: Item) => void;
+  readonly persistenceFailures?: readonly import("./app-server-protocol.js").ThreadPersistenceFailure[];
   readonly approvalBroker?: ApprovalBroker;
 };
 
@@ -108,6 +111,10 @@ export class ThreadManager {
   private readonly turnTails = new Map<string, Promise<void>>();
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private readonly approvalBroker?: ApprovalBroker;
+  private readonly persistenceObserver?: ThreadManagerOptions["persistenceObserver"];
+  private readonly persistenceFailuresByThread = new Map<string, import("./app-server-protocol.js").ThreadPersistenceFailure>();
+  private readonly persistenceFailures: readonly import("./app-server-protocol.js").ThreadPersistenceFailure[];
+  private closing = false;
 
   constructor(options: ThreadManagerOptions = {}) {
     this.generateThreadId = options.generateThreadId ?? createSequence("thread");
@@ -117,10 +124,16 @@ export class ThreadManager {
     this.clock = options.clock ?? Date.now;
     this.runtimeFactory = options.runtimeFactory ?? createDefaultRuntime;
     this.approvalBroker = options.approvalBroker;
+    this.persistenceObserver = options.persistenceObserver;
+    this.persistenceFailures = [...(options.persistenceFailures ?? [])];
+    for (const failure of this.persistenceFailures) {
+      if (failure.threadId) this.persistenceFailuresByThread.set(failure.threadId, failure);
+    }
 
     for (const snapshot of options.initialThreads ?? []) {
       this.loadThread(snapshot, { emit: false });
     }
+    if (options.repairOnLoad ?? true) this.repairLoadedThreads();
   }
 
   observe(observer: ThreadManagerObserver): () => void {
@@ -136,16 +149,29 @@ export class ThreadManager {
   }
 
   startThread(): ThreadSnapshot {
+    const id = this.generateUniqueThreadId();
+    const created: Item = {
+      id: `thread-created:${id}`,
+      type: "thread.created",
+      createdAtMs: 0,
+      seq: 0,
+      runId: id,
+      turnId: id,
+      visibility: "internal",
+      payload: { threadId: id }
+    };
     const thread: ThreadState = {
-      id: this.generateUniqueThreadId(),
+      id,
       itemList: new InMemoryItemList({
-        generateId: createUniqueIdGenerator(this.generateItemId, new Set()),
-        clock: this.clock
+        generateId: createUniqueIdGenerator(this.generateItemId, new Set([created.id])),
+        clock: this.clock,
+        initialItems: [created]
       })
     };
 
     this.threads.set(thread.id, thread);
     this.attachItemObserver(thread);
+    this.persistenceObserver?.(thread.id, created);
 
     const snapshot = this.snapshotThread(thread);
 
@@ -178,6 +204,37 @@ export class ThreadManager {
     }
 
     return loaded;
+  }
+
+  listPersistenceFailures(): readonly import("./app-server-protocol.js").ThreadPersistenceFailure[] {
+    return this.persistenceFailures;
+  }
+
+  persistenceFailure(threadId: string): import("./app-server-protocol.js").ThreadPersistenceFailure | undefined {
+    return this.persistenceFailuresByThread.get(threadId);
+  }
+
+  repairLoadedThreads(): void {
+    this.threads.forEach((thread) => this.repairStaleTurns(thread));
+  }
+
+  async shutdown(): Promise<void> {
+    this.closing = true;
+    for (const pending of this.approvalBroker?.listPending() ?? []) {
+      this.approvalBroker?.declineTurn(
+        pending.request.threadId,
+        pending.request.turnId,
+        "Server closing"
+      );
+    }
+    for (const thread of this.threads.values()) {
+      const active = this.activeTurns.get(thread.id);
+      for (const turn of this.snapshotThread(thread).turns) {
+        if (turn.status === "queued") this.cancelTurn(thread, turn);
+      }
+      if (active) active.controller.abort();
+    }
+    await Promise.all([...this.turnTails.values()]);
   }
 
   enqueueTurn(input: TurnStartInput): TurnSnapshot {
@@ -236,6 +293,7 @@ export class ThreadManager {
     readonly turn: TurnSnapshot;
     readonly completion: Promise<TurnSnapshot>;
   } {
+    if (this.closing) throw new Error("Thread manager is closing");
     const thread = this.getThread(input.threadId);
     const current = this.snapshotThread(thread);
     const turnId = generateUniqueId(
@@ -298,6 +356,12 @@ export class ThreadManager {
     turnId: string,
     input: TurnStartInput
   ): Promise<TurnSnapshot> {
+    const existing = this.getTurnSnapshot(thread, turnId);
+    if (this.closing) {
+      return isTerminalTurnStatus(existing.status)
+        ? existing
+        : this.cancelTurn(thread, existing);
+    }
     const controller = new AbortController();
 
     this.activeTurns.set(thread.id, { turnId, controller });
@@ -390,8 +454,6 @@ export class ThreadManager {
       })
     };
 
-    this.repairStaleTurns(thread);
-
     return thread;
   }
 
@@ -423,14 +485,6 @@ export class ThreadManager {
 
   private attachItemObserver(thread: ThreadState): void {
     thread.itemList.observe((item) => {
-      if (item.type === "turn.started") {
-        this.emit({
-          type: "turn/started",
-          threadId: thread.id,
-          turn: this.getTurnSnapshot(thread, item.turnId)
-        });
-      }
-
       if (item.visibility === "internal") {
         return;
       }
@@ -441,6 +495,14 @@ export class ThreadManager {
         turnId: item.turnId,
         item: toProtocolItem(item)
       });
+
+      if (item.type === "turn.started") {
+        this.emit({
+          type: "turn/started",
+          threadId: thread.id,
+          turn: this.getTurnSnapshot(thread, item.turnId)
+        });
+      }
 
       if (item.type === "approval.requested") {
         const approvalId = readStringPayloadField(item.payload, "approvalId");

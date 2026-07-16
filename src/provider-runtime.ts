@@ -6,33 +6,41 @@ import {
 } from "./model-provider-config.js";
 import { OpenAiCompatibleModelGateway } from "./openai-compatible-model-gateway.js";
 import { DEFAULT_ZEN_SYSTEM_PROMPT } from "./system-prompt.js";
-import { FileThreadStore, type ThreadStore } from "./thread-store.js";
+import { FileThreadJournal, type ThreadJournal } from "./thread-journal.js";
+import { toThreadSnapshot, type ThreadPersistenceFailure } from "./app-server-protocol.js";
 import type { ThreadRuntime, ThreadRuntimeFactory } from "./thread-manager.js";
 
 export type ProviderBackedAppServerOptions = {
   readonly cwd?: string;
   readonly config?: ModelProviderConfigOptions;
-  readonly threadStore?: ThreadStore;
+  readonly threadJournal?: ThreadJournal;
   readonly appServerOptions?: AppServerOptions;
 };
 
 export async function createProviderBackedAppServer(
   options: ProviderBackedAppServerOptions = {}
 ): Promise<AppServer> {
-  const threadStore = options.threadStore ?? new FileThreadStore();
-  const initialThreads = await threadStore.list();
+  const threadJournal = options.threadJournal ?? new FileThreadJournal();
+  const replay = await threadJournal.replay();
+  const initialThreads = replay.filter((result): result is Extract<typeof result, { type: "success" }> => result.type === "success").map((result) => toThreadSnapshot({ threadId: result.threadId, items: result.items }));
+  const persistenceFailures = replay.flatMap((result): readonly ThreadPersistenceFailure[] => result.type === "failure" ? [{
+    code: "THREAD_JOURNAL_CORRUPTION",
+    message: result.error.message,
+    path: result.path,
+    recordNumber: result.error.recordNumber,
+    threadId: result.threadId
+  }] : []);
 
   const server = new AppServer({
     ...options.appServerOptions,
-    threadStore,
+    threadJournal,
+    persistenceFailures,
     threadManagerOptions: {
       ...options.appServerOptions?.threadManagerOptions,
       initialThreads,
       runtimeFactory: createProviderThreadRuntimeFactory(options)
     }
   });
-
-  await persistLoadedThreads(server, threadStore);
 
   return server;
 }
@@ -55,19 +63,4 @@ export function createProviderThreadRuntimeFactory(
       systemPrompt: DEFAULT_ZEN_SYSTEM_PROMPT
     };
   };
-}
-
-async function persistLoadedThreads(
-  server: AppServer,
-  threadStore: ThreadStore
-): Promise<void> {
-  const response = await server.request({ method: "thread/list" });
-
-  if (!response.ok || response.method !== "thread/list") {
-    return;
-  }
-
-  await Promise.all(
-    response.result.threads.map((thread) => threadStore.save(thread))
-  );
 }

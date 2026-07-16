@@ -38,6 +38,14 @@ export type ThreadSnapshot = {
   readonly items: readonly ProtocolItem[];
 };
 
+export type ThreadPersistenceFailure = {
+  readonly code: "THREAD_JOURNAL_CORRUPTION";
+  readonly message: string;
+  readonly path: string;
+  readonly recordNumber: number;
+  readonly threadId?: string;
+};
+
 export type ThreadStartRequest = {
   readonly method: "thread/start";
   readonly params?: {
@@ -122,7 +130,10 @@ export type AppServerResponse =
   | {
       readonly method: "thread/list";
       readonly ok: true;
-      readonly result: { readonly threads: readonly ThreadSnapshot[] };
+      readonly result: {
+        readonly threads: readonly ThreadSnapshot[];
+        readonly persistenceFailures: readonly ThreadPersistenceFailure[];
+      };
     }
   | {
       readonly method: "turn/start";

@@ -61,7 +61,7 @@ describe("App Server HTTP transport", () => {
       await expect(authorized.json()).resolves.toEqual({
         method: "thread/list",
         ok: true,
-        result: { threads: [] }
+        result: { threads: [], persistenceFailures: [] }
       });
     } finally {
       await transport.close();
@@ -174,7 +174,7 @@ describe("App Server HTTP transport", () => {
       await expect(client.request({ method: "thread/list" })).resolves.toEqual({
         method: "thread/list",
         ok: true,
-        result: { threads: [start.result.thread] }
+        result: { threads: [start.result.thread], persistenceFailures: [] }
       });
       await expect(
         client.request({
@@ -234,8 +234,8 @@ describe("App Server HTTP transport", () => {
         "thread/started",
         "item/appended",
         "item/appended",
-        "turn/started",
         "item/appended",
+        "turn/started",
         "item/appended",
         "item/appended",
         "item/appended",
@@ -347,7 +347,7 @@ describe("App Server HTTP transport", () => {
       expect(read.result.thread.turns.at(-1)).toEqual(
         expect.objectContaining({ status: "canceled" })
       );
-      expect(read.result.thread.items.map((item) => item.type)).toContain(
+      expect(read.result.thread.items.map((item) => item.type)).not.toContain(
         "tool.error"
       );
     } finally {

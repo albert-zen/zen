@@ -14,7 +14,7 @@ import {
 } from "./app-server-transport.js";
 import { loadModelProviderConfig } from "./model-provider-config.js";
 import { createProviderBackedAppServer } from "./provider-runtime.js";
-import { FileThreadStore } from "./thread-store.js";
+import { FileThreadJournal } from "./thread-journal.js";
 
 export type DogfoodAcceptanceStatus = "passed" | "failed" | "skipped";
 
@@ -371,7 +371,7 @@ async function createScenarioAppServer(input: {
   return await createProviderBackedAppServer({
     cwd: input.fixturePath,
     config: input.configPath ? { path: input.configPath } : undefined,
-    threadStore: new FileThreadStore({
+    threadJournal: new FileThreadJournal({
       dir: join(input.fixturePath, ".zen", "threads")
     })
   });
