@@ -4,7 +4,8 @@ import {
   AppServerNotification,
   AppServerRequest,
   AppServerResponse,
-  JsonValue
+  JsonValue,
+  ThreadPersistenceFailure
 } from "./app-server-protocol.js";
 import {
   ThreadManager,
@@ -27,6 +28,7 @@ export type AppServerOptions = {
   readonly threadManagerOptions?: ThreadManagerOptions;
   readonly threadJournal?: ThreadJournal;
   readonly approvalBroker?: ApprovalBroker;
+  readonly persistenceFailures?: readonly ThreadPersistenceFailure[];
 };
 
 export type AppServerSubscription = () => void;
@@ -46,6 +48,8 @@ export class AppServer implements AppServerClient {
   private readonly approvalBroker: ApprovalBroker;
   private readonly listeners: AppServerNotificationListener[] = [];
   private readonly eventTails = new Map<string, Promise<void>>();
+  private readonly eventOperations = new Map<string, Promise<void>>();
+  private readonly eventFailures = new Map<string, unknown>();
 
   constructor(options: AppServerOptions = {}) {
     this.threadJournal = options.threadJournal;
@@ -53,6 +57,7 @@ export class AppServer implements AppServerClient {
     this.threadManager = new ThreadManager({
       ...options.threadManagerOptions,
       repairOnLoad: false,
+      persistenceFailures: options.persistenceFailures,
       persistenceObserver: (threadId, item) => {
         this.queueEvent({
           type: "item/appended",
@@ -84,10 +89,7 @@ export class AppServer implements AppServerClient {
       return {
         method: request.method,
         ok: false,
-        error: {
-          code: "REQUEST_FAILED",
-          message: readErrorMessage(cause)
-        }
+        error: toRequestError(cause)
       };
     }
   }
@@ -108,6 +110,9 @@ export class AppServer implements AppServerClient {
     if (request.method === "thread/read") {
       const params = readParams(request.params);
       const threadId = readRequiredString(params, "threadId");
+      const persistenceFailure = this.threadManager.persistenceFailure(threadId);
+      if (persistenceFailure) throw new KnownThreadJournalCorruptionError(persistenceFailure);
+      await this.settleThread(threadId);
 
       return {
         method: "thread/read",
@@ -120,7 +125,10 @@ export class AppServer implements AppServerClient {
       return {
         method: "thread/list",
         ok: true,
-        result: { threads: this.threadManager.listThreads() }
+        result: {
+          threads: this.threadManager.listThreads(),
+          persistenceFailures: this.threadManager.listPersistenceFailures()
+        }
       };
     }
 
@@ -135,6 +143,7 @@ export class AppServer implements AppServerClient {
       };
 
       const turn = this.threadManager.enqueueTurn(turnInput);
+      await this.settleThread(turnInput.threadId);
       return {
         method: "turn/start",
         ok: true,
@@ -170,6 +179,7 @@ export class AppServer implements AppServerClient {
       };
 
       const turn = this.threadManager.retryTurn(retryInput);
+      await this.settleThread(retryInput.threadId);
       return {
         method: "turn/retry",
         ok: true,
@@ -216,12 +226,23 @@ export class AppServer implements AppServerClient {
     }
     const threadId = event.type === "thread/started" ? event.thread.id : event.threadId;
     const previous = this.eventTails.get(threadId) ?? Promise.resolve();
-    const next = previous.then(() => this.commitAndPublish(event));
+    const next = previous.then(async () => {
+      const failure = this.eventFailures.get(threadId);
+      if (failure) throw failure;
+      try {
+        await this.commitAndPublish(event);
+      } catch (cause) {
+        const failure = new ThreadPersistenceOperationError(threadId, cause);
+        this.eventFailures.set(threadId, failure);
+        throw failure;
+      }
+    });
+    this.eventOperations.set(threadId, next);
     this.eventTails.set(threadId, next.catch(() => undefined));
   }
 
   private async settleThread(threadId: string): Promise<void> {
-    await (this.eventTails.get(threadId) ?? Promise.resolve());
+    await (this.eventOperations.get(threadId) ?? Promise.resolve());
   }
 
   private async commitAndPublish(event: ThreadManagerEvent): Promise<void> {
@@ -313,4 +334,34 @@ function isJsonObject(value: unknown): value is Readonly<Record<string, JsonValu
 
 function readErrorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+class KnownThreadJournalCorruptionError extends Error {
+  constructor(readonly failure: ThreadPersistenceFailure) {
+    super(failure.message);
+  }
+}
+
+class ThreadPersistenceOperationError extends Error {
+  constructor(readonly threadId: string, cause: unknown) {
+    super(readErrorMessage(cause), { cause });
+  }
+}
+
+function toRequestError(cause: unknown): import("./app-server-protocol.js").AppServerError {
+  if (cause instanceof KnownThreadJournalCorruptionError) {
+    return {
+      code: cause.failure.code,
+      message: cause.failure.message,
+      details: {
+        path: cause.failure.path,
+        recordNumber: cause.failure.recordNumber,
+        threadId: cause.failure.threadId ?? null
+      }
+    };
+  }
+  if (cause instanceof ThreadPersistenceOperationError || (cause instanceof Error && cause.name === "ThreadJournalError")) {
+    return { code: "PERSISTENCE_FAILURE", message: cause.message };
+  }
+  return { code: "REQUEST_FAILED", message: readErrorMessage(cause) };
 }

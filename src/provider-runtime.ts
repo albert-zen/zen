@@ -7,7 +7,7 @@ import {
 import { OpenAiCompatibleModelGateway } from "./openai-compatible-model-gateway.js";
 import { DEFAULT_ZEN_SYSTEM_PROMPT } from "./system-prompt.js";
 import { FileThreadJournal, type ThreadJournal } from "./thread-journal.js";
-import { toThreadSnapshot } from "./app-server-protocol.js";
+import { toThreadSnapshot, type ThreadPersistenceFailure } from "./app-server-protocol.js";
 import type { ThreadRuntime, ThreadRuntimeFactory } from "./thread-manager.js";
 
 export type ProviderBackedAppServerOptions = {
@@ -23,10 +23,18 @@ export async function createProviderBackedAppServer(
   const threadJournal = options.threadJournal ?? new FileThreadJournal();
   const replay = await threadJournal.replay();
   const initialThreads = replay.filter((result): result is Extract<typeof result, { type: "success" }> => result.type === "success").map((result) => toThreadSnapshot({ threadId: result.threadId, items: result.items }));
+  const persistenceFailures = replay.flatMap((result): readonly ThreadPersistenceFailure[] => result.type === "failure" ? [{
+    code: "THREAD_JOURNAL_CORRUPTION",
+    message: result.error.message,
+    path: result.path,
+    recordNumber: result.error.recordNumber,
+    threadId: result.threadId
+  }] : []);
 
   const server = new AppServer({
     ...options.appServerOptions,
     threadJournal,
+    persistenceFailures,
     threadManagerOptions: {
       ...options.appServerOptions?.threadManagerOptions,
       initialThreads,

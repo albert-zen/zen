@@ -61,7 +61,7 @@ describe("App Server HTTP transport", () => {
       await expect(authorized.json()).resolves.toEqual({
         method: "thread/list",
         ok: true,
-        result: { threads: [] }
+        result: { threads: [], persistenceFailures: [] }
       });
     } finally {
       await transport.close();
@@ -174,7 +174,7 @@ describe("App Server HTTP transport", () => {
       await expect(client.request({ method: "thread/list" })).resolves.toEqual({
         method: "thread/list",
         ok: true,
-        result: { threads: [start.result.thread] }
+        result: { threads: [start.result.thread], persistenceFailures: [] }
       });
       await expect(
         client.request({

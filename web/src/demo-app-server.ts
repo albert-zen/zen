@@ -44,7 +44,10 @@ export function createBrowserDemoAppServer(): AppServerClient {
         return {
           method: "thread/list",
           ok: true,
-          result: { threads: [...threadsById.keys()].map((id) => snapshot(id)) }
+          result: {
+            threads: [...threadsById.keys()].map((id) => snapshot(id)),
+            persistenceFailures: []
+          }
         };
       }
 

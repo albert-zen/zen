@@ -332,6 +332,7 @@ describe("AppServer", () => {
       method: "thread/list",
       ok: true,
       result: {
+        persistenceFailures: [],
         threads: [
           expect.objectContaining({
             id: "thread-1",

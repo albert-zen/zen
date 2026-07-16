@@ -427,7 +427,7 @@ describe("ZenTuiApp", () => {
         listResponse: {
           method: "thread/list",
           ok: true,
-          result: { threads: [] }
+          result: { threads: [], persistenceFailures: [] }
         }
       }),
       terminal: emptyTerminal
@@ -560,7 +560,7 @@ class ApprovalCommandClient implements AppServerClient {
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
     if (request.method === "thread/list") {
-      return { method: "thread/list", ok: true, result: { threads: [approvalThread()] } };
+      return { method: "thread/list", ok: true, result: { threads: [approvalThread()], persistenceFailures: [] } };
     }
     if (request.method === "approval/resolve") {
       const params = request.params as {

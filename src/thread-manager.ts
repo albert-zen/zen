@@ -51,6 +51,7 @@ export type ThreadManagerOptions = {
   readonly initialThreads?: readonly ThreadSnapshot[];
   readonly repairOnLoad?: boolean;
   readonly persistenceObserver?: (threadId: string, item: Item) => void;
+  readonly persistenceFailures?: readonly import("./app-server-protocol.js").ThreadPersistenceFailure[];
   readonly approvalBroker?: ApprovalBroker;
 };
 
@@ -111,6 +112,7 @@ export class ThreadManager {
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private readonly approvalBroker?: ApprovalBroker;
   private readonly persistenceObserver?: ThreadManagerOptions["persistenceObserver"];
+  private readonly persistenceFailuresByThread = new Map<string, import("./app-server-protocol.js").ThreadPersistenceFailure>();
 
   constructor(options: ThreadManagerOptions = {}) {
     this.generateThreadId = options.generateThreadId ?? createSequence("thread");
@@ -121,6 +123,9 @@ export class ThreadManager {
     this.runtimeFactory = options.runtimeFactory ?? createDefaultRuntime;
     this.approvalBroker = options.approvalBroker;
     this.persistenceObserver = options.persistenceObserver;
+    for (const failure of options.persistenceFailures ?? []) {
+      if (failure.threadId) this.persistenceFailuresByThread.set(failure.threadId, failure);
+    }
 
     for (const snapshot of options.initialThreads ?? []) {
       this.loadThread(snapshot, { emit: false });
@@ -196,6 +201,14 @@ export class ThreadManager {
     }
 
     return loaded;
+  }
+
+  listPersistenceFailures(): readonly import("./app-server-protocol.js").ThreadPersistenceFailure[] {
+    return [...this.persistenceFailuresByThread.values()];
+  }
+
+  persistenceFailure(threadId: string): import("./app-server-protocol.js").ThreadPersistenceFailure | undefined {
+    return this.persistenceFailuresByThread.get(threadId);
   }
 
   repairLoadedThreads(): void {

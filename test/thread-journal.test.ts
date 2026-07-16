@@ -86,6 +86,16 @@ describe("FileThreadJournal", () => {
     expect(lines).toHaveLength(501);
     expect(Buffer.byteLength(text)).toBeLessThan(500 * 300);
   });
+
+  it("replays exact multibyte content after injected short writes", async () => {
+    const dir = tempDir();
+    const journal = new FileThreadJournal({ dir, fileSystem: shortWriteFileSystem() });
+    await journal.create("unicode", created("unicode"));
+    await journal.append("unicode", item("assistant.message.completed", "unicode", 2, { content: "你好, durable journal" }));
+    await journal.close();
+    const [result] = await new FileThreadJournal({ dir }).replay();
+    expect(result).toMatchObject({ type: "success", threadId: "unicode", items: [expect.anything(), expect.objectContaining({ payload: { content: "你好, durable journal" } })] });
+  });
 });
 
 function created(threadId: string): Item { return item("thread.created", threadId, 1, { threadId }); }
@@ -96,11 +106,15 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 async function waitFor(predicate: () => boolean): Promise<void> { for (let index = 0; index < 100; index += 1) { if (predicate()) return; await new Promise((resolve) => setTimeout(resolve, 1)); } throw new Error("timed out"); }
 function slowFileSystem(threadId: string, barrier: ReturnType<typeof deferred<void>>, started: () => void): ThreadJournalFileSystem {
   const fs = actualFileSystem();
-  return { ...fs, async open(path, flags) { const handle = await fs.open(path, flags); if (path.endsWith(`thread-${Buffer.from(threadId).toString("base64url")}.jsonl`) && flags === "wx") return { write: async (buffer, position, encoding) => { started(); await barrier.promise; return await handle.write(buffer, position, encoding); }, sync: () => handle.sync(), close: () => handle.close(), truncate: (length) => handle.truncate(length) }; return handle; } };
+  return { ...fs, async open(path, flags) { const handle = await fs.open(path, flags); if (path.endsWith(`thread-${Buffer.from(threadId).toString("base64url")}.jsonl`) && flags === "wx") return { write: async (buffer: Buffer, position?: number | null) => { started(); await barrier.promise; return await handle.write(buffer, position); }, sync: () => handle.sync(), close: () => handle.close(), truncate: (length) => handle.truncate(length) }; return handle; } };
 }
 function failingFileSystem(threadId: string): ThreadJournalFileSystem {
   const fs = actualFileSystem();
   return { ...fs, async open(path, flags) { if (path.endsWith(`thread-${Buffer.from(threadId).toString("base64url")}.jsonl`)) throw new Error("injected write failure"); return await fs.open(path, flags); } };
+}
+function shortWriteFileSystem(): ThreadJournalFileSystem {
+  const fs = actualFileSystem();
+  return { ...fs, async open(path, flags) { const handle = await fs.open(path, flags); if (flags === "wx" || flags === "a") return { write: async (buffer: Buffer, position?: number | null) => await handle.write(buffer.subarray(0, Math.min(2, buffer.byteLength)), position), sync: () => handle.sync(), close: () => handle.close(), truncate: (length) => handle.truncate(length) }; return handle; } };
 }
 function actualFileSystem(): ThreadJournalFileSystem {
   return {

@@ -7,7 +7,7 @@ const JOURNAL_VERSION = 1;
 
 export type ThreadJournalReplay =
   | { readonly type: "success"; readonly threadId: string; readonly path: string; readonly items: readonly Item[] }
-  | { readonly type: "failure"; readonly path: string; readonly error: ThreadJournalCorruptionError };
+  | { readonly type: "failure"; readonly path: string; readonly threadId?: string; readonly error: ThreadJournalCorruptionError };
 
 export interface ThreadJournal {
   create(threadId: string, item: Item): Promise<void>;
@@ -36,7 +36,7 @@ export class ThreadJournalCorruptionError extends Error {
 }
 
 type FileHandle = {
-  write(buffer: string, position?: number | null, encoding?: BufferEncoding): Promise<{ bytesWritten: number }>;
+  write(buffer: Buffer, position?: number | null): Promise<{ bytesWritten: number }>;
   sync(): Promise<void>;
   close(): Promise<void>;
   truncate(len?: number): Promise<void>;
@@ -159,7 +159,7 @@ export class FileThreadJournal implements ThreadJournal {
       if (!isCreatedForThread(items[0], threadId)) throw new ThreadJournalCorruptionError(path, 1, "thread.created does not match filename thread id");
       return { type: "success", threadId, path, items };
     } catch (cause) {
-      return { type: "failure", path, error: cause instanceof ThreadJournalCorruptionError ? cause : new ThreadJournalCorruptionError(path, 0, readMessage(cause)) };
+      return { type: "failure", path, threadId, error: cause instanceof ThreadJournalCorruptionError ? cause : new ThreadJournalCorruptionError(path, 0, readMessage(cause)) };
     }
   }
 
@@ -173,7 +173,7 @@ export class FileThreadJournal implements ThreadJournal {
 
 const nodeFileSystem: ThreadJournalFileSystem = { mkdir, readdir, readFile, open };
 
-function encodeRecord(item: Item): string { return `${JSON.stringify({ version: JOURNAL_VERSION, item })}\n`; }
+function encodeRecord(item: Item): Buffer { return Buffer.from(`${JSON.stringify({ version: JOURNAL_VERSION, item })}\n`, "utf8"); }
 function decodeRecord(line: string, path: string, recordNumber: number): Item {
   let value: unknown;
   try { value = JSON.parse(line); } catch { throw new ThreadJournalCorruptionError(path, recordNumber, "invalid JSON"); }
@@ -188,6 +188,6 @@ function isItem(value: unknown): value is Item { return isRecord(value) && typeo
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function fileNameFor(threadId: string): string { if (threadId.length === 0) throw new Error("Thread id must not be empty"); return `thread-${Buffer.from(threadId, "utf8").toString("base64url")}.jsonl`; }
 function decodeFileName(name: string): string | undefined { const match = /^thread-([A-Za-z0-9_-]+)\.jsonl$/.exec(name); if (!match) return undefined; const id = Buffer.from(match[1], "base64url").toString("utf8"); return id.length > 0 && fileNameFor(id) === name ? id : undefined; }
-async function writeAll(handle: FileHandle, line: string): Promise<void> { let offset = 0; while (offset < line.length) { const { bytesWritten } = await handle.write(line.slice(offset), null, "utf8"); if (bytesWritten <= 0) throw new Error("File write accepted zero bytes"); offset += bytesWritten; } }
+async function writeAll(handle: FileHandle, line: Buffer): Promise<void> { let offset = 0; while (offset < line.byteLength) { const { bytesWritten } = await handle.write(line.subarray(offset), null); if (bytesWritten <= 0) throw new Error("File write accepted zero bytes"); offset += bytesWritten; } }
 function isMissing(cause: unknown): boolean { return isRecord(cause) && cause.code === "ENOENT"; }
 function readMessage(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }
