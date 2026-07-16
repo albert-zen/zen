@@ -105,3 +105,20 @@ Reviewer notes: Review the full branch from exact base 05477f7b54829a10d9fd79e18
 Open questions: none
 Known residual risks: Filesystem mode enforcement remains platform-dependent. When a mismatched claimed artifact cannot be restored because a concurrent replacement already occupies the public path, cleanup deliberately retains the first object at its unique .cleaning path so neither object is lost; this exceptional collision can require operator cleanup. Canonical browser automation remains assigned to issue 007.
 Blocker or context escalation details: none; no Round 3 scope expansion was required
+
+## Codex Review Note
+
+Round: 3
+Issue: long-term-optimization-001: Secure capability-based local transport
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-001 at 819e9e151c7add2dad00215556f7b4a3c1852588
+Base revision/diff scope: 05477f7b54829a10d9fd79e18ca9e5247f1bd418..819e9e151c7add2dad00215556f7b4a3c1852588
+Standards Review blocking: none
+Standards Review non-blocking: none
+Standards Review missing evidence: none
+Spec Review blocking: none
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local tracker state decision: Agent Review
+State decision reason: STRICT PASS. Independent verification passed 7 targeted files/41 tests, both typechecks, both builds, and a clean bundle secret scan; the recorded full suite passed 29 files/174 tests. The reviewer verified proxy closure injection, DEBUG=vite:config redaction, the browser no-secret path, mutually exclusive credential modes, atomic publication/claim/cleanup, CLI shutdown races, loopback/remote documentation, and conforming commit subjects. Issue 001 remains in Agent Review for manager-owned integration.
