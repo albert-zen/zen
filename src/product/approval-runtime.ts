@@ -3,7 +3,7 @@ import type {
   ToolExecutionContext,
   ToolRuntime,
   ToolRuntimeEvent
-} from "./tool-runtime.js";
+} from "../kernel/index.js";
 
 export type PolicyDecision =
   | { readonly type: "allow"; readonly reason?: string }

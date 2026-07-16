@@ -1,4 +1,4 @@
-import type { Item } from "./item-list.js";
+import type { Item } from "../kernel/index.js";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];

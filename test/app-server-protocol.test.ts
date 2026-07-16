@@ -8,7 +8,7 @@ import {
   type AppServerRequest,
   type AppServerResponse,
   type Item
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("app server protocol", () => {
   it("projects items into JSON-safe cloned protocol items", () => {

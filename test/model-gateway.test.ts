@@ -6,7 +6,7 @@ import {
   OpenAiCompatibleModelGateway,
   type ModelEvent,
   type ModelGateway
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("appendModelResponseItems", () => {
   it("appends streamed text deltas as trace items targeting the assistant response", async () => {

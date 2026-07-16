@@ -2,8 +2,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-import { consumeAppServerClientHandoff } from "../src/app-server-config.js";
-import { createAppServerHttpProxy } from "../src/app-server-transport.js";
+import { consumeAppServerClientHandoff, createAppServerHttpProxy } from "../src/adapters/node/index.js";
 
 const defaultProxyTarget = process.env.ZEN_APP_SERVER_URL ?? "http://127.0.0.1:3000";
 
@@ -14,6 +13,12 @@ export default defineConfig(async ({ command }) => {
   return {
     root: process.cwd(),
     plugins: [react(), tailwindcss()],
+    resolve: {
+      alias: {
+        "@zen/product": new URL("../src/product/index.ts", import.meta.url).pathname,
+        "@zen/presentation": new URL("../src/presentation/index.ts", import.meta.url).pathname
+      }
+    },
     build: {
       outDir: "web-dist",
       emptyOutDir: true,

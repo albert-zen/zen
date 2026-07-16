@@ -1,5 +1,5 @@
-import type { ThreadSnapshot } from "./app-server-protocol.js";
-import type { TimelineRow, WebUiState } from "./web-ui-state.js";
+import type { ThreadSnapshot } from "../product/index.js";
+import type { TimelineRow, WebUiState } from "../presentation/index.js";
 
 export function renderTerminalStatus(state: WebUiState): string {
   const thread = state.currentThread;

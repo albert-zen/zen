@@ -4,13 +4,13 @@ import {
   ApprovalBroker,
   ToolApprovalDeniedError,
   toToolApprovalRequest
-} from "./approval-runtime.js";
+} from "../../product/index.js";
 import type {
   ToolCallPayload,
   ToolExecutionContext,
   ToolRuntime,
   ToolRuntimeEvent
-} from "./tool-runtime.js";
+} from "../../kernel/index.js";
 
 export type LocalToolRuntimeOptions = {
   readonly cwd?: string;

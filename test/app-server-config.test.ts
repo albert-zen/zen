@@ -71,7 +71,7 @@ import {
   readAppServerCredentialMode,
   readAppServerPort,
   readRemoteBindOptIn
-} from "../src/app-server-config.js";
+} from "../src/adapters/node/app-server-config.js";
 
 describe("App Server defaults", () => {
   it("uses the Web UI default URL as the CLI default endpoint", () => {

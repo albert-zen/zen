@@ -15,11 +15,11 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   consumeAppServerClientHandoff
-} from "../src/app-server-config.js";
+} from "../src/adapters/node/app-server-config.js";
 import {
   HttpAppServerClient,
   type AppServerNotification
-} from "../src/index.js";
+} from "./test-exports.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -40,7 +40,7 @@ describe("standalone App Server CLI", () => {
     const root = await mkdtemp(join(tmpdir(), "zen-app-server-cli-modes-"));
     const providedCapability =
       "provided-capability-0123456789-abcdef-0123456789";
-    const child = fork(join(process.cwd(), "dist", "app-server-cli.js"), [], {
+    const child = fork(join(process.cwd(), "dist", "adapters", "node", "app-server-cli.js"), [], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -138,7 +138,7 @@ describe("standalone App Server CLI", () => {
     );
     await mkdir(handoffDirectory);
 
-    const child = fork(join(process.cwd(), "dist", "app-server-cli.js"), [], {
+    const child = fork(join(process.cwd(), "dist", "adapters", "node", "app-server-cli.js"), [], {
       cwd: process.cwd(),
       env,
       silent: true
@@ -252,7 +252,7 @@ async function startGeneratedCapabilityCli(label: string): Promise<{
     "utf8"
   );
   await mkdir(handoffDirectory);
-  const child = fork(join(process.cwd(), "dist", "app-server-cli.js"), [], {
+  const child = fork(join(process.cwd(), "dist", "adapters", "node", "app-server-cli.js"), [], {
     cwd: process.cwd(),
     env,
     silent: true

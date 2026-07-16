@@ -11,7 +11,7 @@ import {
   type ModelGateway,
   type ThreadSnapshot,
   type ToolRuntime
-} from "../src/index.js";
+} from "./test-exports.js";
 import { VirtualTerminalDevice, waitForRender } from "./virtual-terminal.js";
 
 async function waitForText(terminal: VirtualTerminalDevice, value: string): Promise<void> {

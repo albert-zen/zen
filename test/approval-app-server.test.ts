@@ -5,7 +5,7 @@ import {
   PolicyToolRuntime,
   type AppServerNotification,
   type ModelGateway
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("AppServer approval flow", () => {
   it("rejects a mismatched tuple, then records direct approval facts before a declined tool error", async () => {

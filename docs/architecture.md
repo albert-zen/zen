@@ -266,6 +266,41 @@ For a future resume flow, the outer runtime can load persisted items and seed a 
 
 ## System Map
 
+## Module Groups And Entry Points
+
+The package has five explicit module groups. The package root is the kernel
+only; product and edge integrations use named subpaths rather than reaching
+into another group's source files.
+
+```text
+zen-kernel (.)          -> src/kernel/index.ts
+zen-kernel/product      -> src/product/index.ts
+zen-kernel/node         -> src/adapters/node/index.ts
+zen-kernel/presentation -> src/presentation/index.ts
+zen-kernel/tui          -> src/tui/index.ts
+```
+
+```text
+kernel <- product <- adapters/node
+   ^        ^
+   |        +--- presentation <- tui
+   +-------------------------^
+```
+
+- `kernel` contains ItemList/retention, AgentLoop, context/hooks, neutral
+  model/tool contracts, conversion helpers, and abort-aware iteration only.
+- `product` owns thread/AppServer/approval behavior, demo runtime, prompt, and
+  the ThreadJournal port and replay/error contracts.
+- `adapters/node` owns filesystem journaling, shell/provider/configuration,
+  HTTP/proxy transport, and Node process composition.
+- `presentation` owns the interaction projection, browser transport/client,
+  and interaction session shared by Web and terminal consumers.
+- `tui` owns terminal rendering and commands. It consumes public group APIs.
+
+The dogfood executable is an `acceptance/` artifact built by
+`tsconfig.acceptance.json`; it is deliberately excluded from production
+declarations.
+
 ```text
 CLI / SDK / UI
   -> AgentRuntime

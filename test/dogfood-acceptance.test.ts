@@ -6,14 +6,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   runDogfoodAcceptanceScenario,
-  summarizeDogfoodAcceptanceThread,
+  summarizeDogfoodAcceptanceThread
+} from "../acceptance/dogfood-acceptance.js";
+import {
   AppServer,
   ApprovalBroker,
   LocalToolRuntime,
   type ModelContext,
   type ProtocolItem,
   type ThreadSnapshot
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("dogfood acceptance scenario", () => {
   it("records a clear skip when model provider credentials are unavailable", async () => {

@@ -6,7 +6,7 @@ import {
   renderTerminalTimelineRow,
   type TimelineRow,
   type WebUiState
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("terminal transcript", () => {
   it("renders status from projected state", () => {

@@ -13,7 +13,7 @@ import {
   WebUiLifecycleCanceledError,
   serveAppServerHttpTransport,
   type ModelGateway
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("Web UI client", () => {
   it("uses same-origin browser routes without receiving a capability", async () => {

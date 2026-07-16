@@ -2,9 +2,8 @@ import {
   AgentInteractionSession,
   type AgentRecoverableTurn,
   type AgentThreadListEntry
-} from "./agent-interaction-session.js";
-import type { AppServerClient } from "./app-server.js";
-import type { ThreadSnapshot } from "./app-server-protocol.js";
+} from "../presentation/index.js";
+import type { AppServerClient, ThreadSnapshot } from "../product/index.js";
 import {
   renderSlashCommandHelp,
   slashSuggestions,
@@ -17,7 +16,7 @@ import {
   TuiEngine,
   type TerminalDevice
 } from "./tui-engine.js";
-import type { TimelineRow, WebUiState } from "./web-ui-state.js";
+import type { TimelineRow, WebUiState } from "../presentation/index.js";
 
 export type ZenTuiAppOptions = {
   readonly client: AppServerClient;

@@ -5,7 +5,7 @@ import {
   HookRuntime,
   InMemoryItemList,
   type ToolRuntime
-} from "../src/index.js";
+} from "./test-exports.js";
 
 describe("appendToolExecutionItems", () => {
   it("executes assistant-requested fake tools and appends start and completed result items", async () => {

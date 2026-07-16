@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { ApprovalBroker, LocalToolRuntime, localToolDefinitions } from "../src/index.js";
+import { LocalToolRuntime, localToolDefinitions } from "./test-exports.js";
+import { ApprovalBroker } from "./test-exports.js";
 
 describe("LocalToolRuntime", () => {
   it("exposes shell as the only local workspace tool", () => {

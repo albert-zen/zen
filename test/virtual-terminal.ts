@@ -1,4 +1,4 @@
-import type { TerminalDevice } from "../src/index.js";
+import type { TerminalDevice } from "./test-exports.js";
 
 export class VirtualTerminalDevice implements TerminalDevice {
   private inputHandler?: (data: string) => void;

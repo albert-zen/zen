@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { ThreadSnapshot } from "../src/app-server-protocol.js";
+import type { ThreadSnapshot } from "../src/product/app-server-protocol.js";
 import {
   applyAppServerNotification,
   createWebUiState,
   InteractionProjection
-} from "../src/web-ui-state.js";
+} from "../src/presentation/web-ui-state.js";
 
 describe("web ui state projection", () => {
   it("caches snapshots and processes 1k/5k ordered appends with constant work and no sequence copies", () => {

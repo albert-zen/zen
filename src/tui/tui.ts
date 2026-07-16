@@ -1,9 +1,8 @@
 import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
-import { AgentInteractionSession } from "./agent-interaction-session.js";
-import type { AppServerClient } from "./app-server.js";
-import { createDemoAppServer } from "./demo-runtime.js";
-import { createProviderBackedAppServer } from "./provider-runtime.js";
+import { AgentInteractionSession } from "../presentation/index.js";
+import type { AppServerClient } from "../product/index.js";
+import { createDemoAppServer } from "../product/index.js";
 import { renderSlashCommandHelp } from "./slash-commands.js";
 import {
   renderTerminalStatus,
@@ -144,9 +143,5 @@ function isTty(stream: Readable | Writable): boolean {
 }
 
 async function createDefaultClient(): Promise<AppServerClient> {
-  if (process.env.ZEN_DEMO === "1") {
-    return createDemoAppServer();
-  }
-
-  return await createProviderBackedAppServer({ cwd: process.cwd() });
+  return createDemoAppServer();
 }
