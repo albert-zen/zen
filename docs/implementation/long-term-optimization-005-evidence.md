@@ -21,3 +21,44 @@ Reviewer notes: Review ordered append indexes and snapshot identity, one-stream 
 Open questions: none
 Known residual risks: Snapshot arrays are copied to preserve immutable snapshots, so the regression proves bounded notifications and avoids full projection rebuilds rather than measuring wall-clock time. React lifecycle is type/build validated; this repository has no browser DOM test harness.
 Blocker or context escalation details: none
+
+## Codex Review Note
+
+Round: 1
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-005
+Base revision/diff scope: `80b6a22a0d082838305059de9eb313120b27f6fa..c90dca077475fad93774d4e7dc3ec894375cb314`
+Standards Review blocking: Ordered fast-path snapshots copied all items and rows, violating the required O(1) amortized projection update.
+Standards Review non-blocking: React lifecycle coverage and stale connection race coverage were missing.
+Standards Review missing evidence: deterministic copy/work evidence at 1k/5k and actual React StrictMode lifecycle evidence.
+Spec Review blocking: Duplicate terminal notifications could publish snapshots; session replace no-ops could emit; stale async connects were not lifecycle-safe.
+Spec Review non-blocking: none
+Spec Review missing evidence: concurrent connect/disconnect and overlapping reconnect tests.
+Local tracker state decision: Rework
+State decision reason: Accepted bounded findings require original-worker fixes before renewed Agent Review handoff.
+
+## Codex Worker Note
+
+Round: 2
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Local tracker state transition: Rework -> Agent Review
+Branch: codex/long-term-optimization-005
+PR URL: not configured; local-origin branch only
+Base revision/diff scope: original worker fixes only for Review Round 1; persistent projection sequence, duplicate/no-op emission, client lifecycle generation, React lifecycle test harness, focused tests, and this append-only evidence update.
+Summary of behavior delivered: Replaced fast-path snapshot array copies with immutable versioned append/replace/remove sequence views. Ordered projection updates allocate a single sequence version node per affected collection; old snapshots retain prior version roots. Added lifecycle generation checks so stale connects cannot revive a disconnected/newer client, and suppressed duplicate terminal/no-op publication.
+Final scope summary: Review findings only. No persistence, module relocation, dependency/gate work beyond the smallest jsdom test harness, or issue 004/006+ work.
+Changed files/modules: `src/web-ui-state.ts`; `src/web-ui-client.ts`; `src/agent-interaction-session.ts`; `src/terminal-transcript.ts`; `src/zen-tui-app.ts`; `src/index.ts`; `web/src/workspace.tsx`; focused tests; `package.json`; `package-lock.json`; evidence.
+Tests added/updated: 1k/5k deterministic sequence-copy/work test; duplicate terminal snapshot/listener test; stale connect/disconnect and overlapping reconnect test; session replaceSnapshot no-op test; actual jsdom React StrictMode reconnect/mode-switch/unmount lifecycle test; adjusted session/TUI consumers to read immutable sequences.
+Acceptance criteria status: Ordered appends and affected row patches are O(1) version-node updates with zero sequence copies; replacement/out-of-order remains deterministic rebuild; completed assistant/tool and shell/approval behavior remains covered; duplicate irrelevant/terminal notifications do not publish; session no-op replacement does not emit; client lifecycle races are generation-safe; React uses one external-store subscription and releases streams on StrictMode/mode/unmount; Web and TUI use the shared sequence projection.
+Commands run and results: `npx vitest run test/web-ui-state.test.ts test/web-ui-client.test.ts test/agent-interaction-session.test.ts test/zen-tui-app.test.ts test/workspace-lifecycle.test.ts --no-file-parallelism --maxWorkers=1` passed (46 tests); `npm test -- --no-file-parallelism --maxWorkers=1` passed (32 files, 201 tests); `npm run typecheck` passed; `npm run typecheck:web` passed; `npm run build` passed; `npm run web:build` passed; `git diff --check` passed.
+Validation log paths: none
+Required check status or local-check handoff reason: all current local checks passed; no GitHub remote/PR is configured.
+Evidence links/paths: `docs/implementation/long-term-optimization-005-evidence.md`; `docs/implementation/long-term-optimization-tracker.md`
+Decisions made: Used a persistent operation-chain sequence rather than mutable arrays or a broad diagnostics surface. Its narrow `getWork()` seam proves 1k/5k fast-path work is exactly N and copies are zero. Added jsdom only to exercise the required real React lifecycle.
+Standards notes: Public snapshots expose read-only sequence views, so consumers cannot observe later mutations through old snapshots. Materialization is deferred to iteration/rendering; fast projection mutation remains constant work.
+Reviewer notes: Verify the persistent sequence’s old-snapshot semantics, sequence consumer migration, generation-token stale connect behavior, and StrictMode cleanup assertions.
+Open questions: none
+Known residual risks: Iterating a long sequence materializes its version chain for the caller; this intentionally moves read/render work out of the ordered append mutation path. Slow replacement/rebuild remains O(n) by design.
+Blocker or context escalation details: none

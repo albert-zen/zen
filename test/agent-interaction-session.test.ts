@@ -9,6 +9,20 @@ import {
 } from "../src/index.js";
 
 describe("AgentInteractionSession", () => {
+  it("does not emit when a resumed snapshot is unchanged", async () => {
+    const session = new AgentInteractionSession({
+      client: createDemoAppServer({ appServerOptions: { threadManagerOptions: deterministicIds() } })
+    });
+    const started = await session.start();
+    let calls = 0;
+    session.observe(() => { calls += 1; });
+
+    await session.resumeThread(started.thread?.id ?? "missing");
+
+    expect(calls).toBe(0);
+    session.dispose();
+  });
+
   it("starts a thread and submits turns through an App Server client", async () => {
     const session = new AgentInteractionSession({
       client: createDemoAppServer({
@@ -26,7 +40,7 @@ describe("AgentInteractionSession", () => {
     expect(submitted.thread).toEqual(
       expect.objectContaining({ id: "thread-1", status: "idle" })
     );
-    expect(submitted.timelineRows).toEqual(
+    expect([...submitted.timelineRows]).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "user", content: "hello from tui" }),
         expect.objectContaining({

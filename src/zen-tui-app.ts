@@ -374,7 +374,10 @@ export class ZenTuiApp {
   }
 }
 
-function renderThreadSummary(thread: ThreadSnapshot | undefined, state: WebUiState): string {
+function renderThreadSummary(
+  thread: Pick<ThreadSnapshot, "id" | "status" | "turns"> & { readonly items: { readonly length: number } } | undefined,
+  state: WebUiState
+): string {
   if (!thread) {
     return "No thread";
   }

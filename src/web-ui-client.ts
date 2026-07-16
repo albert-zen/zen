@@ -49,6 +49,7 @@ export class WebUiClient {
   private readonly projection = new InteractionProjection();
   private connection: WebUiConnectionState;
   private snapshot: WebUiClientSnapshot;
+  private lifecycleGeneration = 0;
 
   constructor(options: WebUiClientOptions) {
     this.client = options.client;
@@ -73,26 +74,30 @@ export class WebUiClient {
   }
 
   async connect(options: { readonly threadId?: string } = {}): Promise<void> {
+    const generation = ++this.lifecycleGeneration;
     this.disconnectFromServerOnly();
     this.setConnection({ status: "connecting" });
     this.unsubscribeFromServer = this.client.subscribe((notification) => {
-      this.applyNotification(notification);
+      if (generation === this.lifecycleGeneration) this.applyNotification(notification);
     });
 
     try {
-      if (options.threadId) {
-        await this.resumeThread(options.threadId);
-      } else {
-        await this.startThread();
-      }
-      this.setConnection({ status: "connected" });
+      const response = await this.client.request(options.threadId
+        ? { method: "thread/read", params: { threadId: options.threadId } }
+        : { method: "thread/start" });
+      const thread = readThreadResponse(response, options.threadId ? "thread/read" : "thread/start");
+      if (generation !== this.lifecycleGeneration) return;
+      const projectionChanged = this.projection.replaceSnapshot(thread);
+      const connectionChanged = this.updateConnection({ status: "connected" });
+      if (projectionChanged || connectionChanged) this.refreshSnapshot();
     } catch (cause) {
-      this.fail(cause);
+      if (generation === this.lifecycleGeneration) this.fail(cause);
       throw cause;
     }
   }
 
   disconnect(): void {
+    this.lifecycleGeneration += 1;
     this.disconnectFromServerOnly();
     this.setConnection({ status: "disconnected" });
   }
@@ -222,24 +227,14 @@ export class WebUiClient {
 
   private applyNotification(notification: AppServerNotification): void {
     const projectionChanged = this.projection.apply(notification);
-
-    if (notification.type === "turn/started") {
-      this.connection = { ...this.connection, status: "running", message: undefined };
-    }
-
-    if (notification.type === "turn/completed") {
-      this.connection = { ...this.connection, status: "connected", message: undefined };
-    }
-
-    if (notification.type === "turn/failed") {
-      this.connection = {
-        ...this.connection,
-        status: "failed",
-        message: notification.error.message
-      };
-    }
-
-    if (projectionChanged || notification.type === "turn/started" || notification.type === "turn/completed" || notification.type === "turn/failed") this.refreshSnapshot();
+    const connectionChanged = notification.type === "turn/started"
+      ? this.updateConnection({ status: "running", message: undefined })
+      : notification.type === "turn/completed"
+        ? this.updateConnection({ status: "connected", message: undefined })
+        : notification.type === "turn/failed"
+          ? this.updateConnection({ status: "failed", message: notification.error.message })
+          : false;
+    if (projectionChanged || connectionChanged) this.refreshSnapshot();
   }
 
   private fail(cause: unknown): void {
@@ -252,13 +247,19 @@ export class WebUiClient {
   private setConnection(
     next: Omit<WebUiConnectionState, "mode"> & Partial<Pick<WebUiConnectionState, "mode">>
   ): void {
-    const nextConnection = {
+    if (this.updateConnection(next)) this.refreshSnapshot();
+  }
+
+  private updateConnection(
+    next: Omit<WebUiConnectionState, "mode"> & Partial<Pick<WebUiConnectionState, "mode">>
+  ): boolean {
+    const nextConnection: WebUiConnectionState = {
       mode: this.connection.mode,
       ...next
     };
-    if (sameConnection(this.connection, nextConnection)) return;
+    if (sameConnection(this.connection, nextConnection)) return false;
     this.connection = nextConnection;
-    this.refreshSnapshot();
+    return true;
   }
 
   private disconnectFromServerOnly(): void {

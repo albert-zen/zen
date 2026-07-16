@@ -13,6 +13,7 @@ import {
 import {
   BrowserAppServerTransportClient,
   WebUiClient,
+  type WebUiClientSnapshot,
   type WebUiConnectionState
 } from "../../src/web-ui-client";
 import type { ThreadSnapshot } from "../../src/app-server-protocol";
@@ -32,12 +33,7 @@ export function AgentWorkspace(): React.ReactElement {
   const [client] = React.useState(() =>
     createWebClient(initialMode, () => undefined)
   );
-  const subscribeToClient = React.useCallback(
-    (notify: () => void) => client.subscribe(() => notify()),
-    [client]
-  );
-  const getClientSnapshot = React.useCallback(() => client.getSnapshot(), [client]);
-  const snapshot = React.useSyncExternalStore(subscribeToClient, getClientSnapshot, getClientSnapshot);
+  const snapshot = useWebUiSnapshot(client);
   const [threads, setThreads] = React.useState<readonly ThreadSnapshot[]>([]);
   const [input, setInput] = React.useState("");
   const [showTrace, setShowTrace] = React.useState(false);
@@ -228,6 +224,15 @@ export function AgentWorkspace(): React.ReactElement {
       </main>
     </div>
   );
+}
+
+export function useWebUiSnapshot(client: WebUiClient): WebUiClientSnapshot {
+  const subscribe = React.useCallback(
+    (notify: () => void) => client.subscribe(() => notify()),
+    [client]
+  );
+  const getSnapshot = React.useCallback(() => client.getSnapshot(), [client]);
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 function ThreadButton({
@@ -459,17 +464,18 @@ function rowLabel(row: TimelineRow): string {
   return row.type.replaceAll("-", " ");
 }
 
-function threadTitle(thread: { id: string; items: readonly ThreadSnapshot["items"][number][] }): string {
+function threadTitle(thread: { id: string; items: Iterable<ThreadSnapshot["items"][number]> }): string {
   return summarize(latestContent(thread.items, "user.message.completed") ?? thread.id, 48);
 }
 
-function latestAssistantOrUser(items: readonly ThreadSnapshot["items"][number][]): string | undefined {
+function latestAssistantOrUser(items: Iterable<ThreadSnapshot["items"][number]>): string | undefined {
   return latestContent(items, "assistant.message.completed") ?? latestContent(items, "user.message.completed");
 }
 
-function latestContent(items: readonly ThreadSnapshot["items"][number][], type: string): string | undefined {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
+function latestContent(items: Iterable<ThreadSnapshot["items"][number]>, type: string): string | undefined {
+  const orderedItems = [...items];
+  for (let index = orderedItems.length - 1; index >= 0; index -= 1) {
+    const item = orderedItems[index];
     if (item?.type !== type) {
       continue;
     }

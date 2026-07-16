@@ -87,7 +87,7 @@ describe("Web UI client", () => {
 
       const snapshot = webUi.getSnapshot();
       expect(snapshot.state.currentThread?.status).toBe("idle");
-      expect(snapshot.state.timelineRows).toEqual(
+      expect([...snapshot.state.timelineRows]).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ type: "user", content: "Hello" }),
           expect.objectContaining({ type: "assistant", content: "Hello" })
@@ -182,6 +182,47 @@ describe("Web UI client", () => {
     webUi.dispose();
     expect(client.activeSubscriptions).toBe(0);
     expect(client.unsubscribeCalls).toBe(2);
+  });
+
+  it("does not publish duplicate terminal notifications", async () => {
+    const client = new RecordingClient();
+    const webUi = new WebUiClient({ client });
+    let calls = 0;
+    webUi.subscribe(() => { calls += 1; });
+    await webUi.connect();
+    const completed = {
+      type: "turn/completed" as const,
+      threadId: "thread-1",
+      turn: { id: "turn-1", runId: "run-1", status: "completed" as const, itemIds: [] }
+    };
+    client.emit(completed);
+    const snapshot = webUi.getSnapshot();
+    const callsAfterCompletion = calls;
+    client.emit(completed);
+    expect(webUi.getSnapshot()).toBe(snapshot);
+    expect(calls).toBe(callsAfterCompletion);
+  });
+
+  it("keeps stale connect completions from reviving a disconnected or newer lifecycle", async () => {
+    const client = new DeferredConnectClient();
+    const webUi = new WebUiClient({ client });
+
+    const stale = webUi.connect();
+    webUi.disconnect();
+    client.resolveNext();
+    await stale;
+    expect(webUi.getSnapshot().connection.status).toBe("disconnected");
+    expect(client.activeSubscriptions).toBe(0);
+
+    const first = webUi.connect();
+    const second = webUi.connect({ threadId: "thread-2" });
+    client.resolveNext("thread-1");
+    client.resolveNext("thread-2");
+    await Promise.all([first, second]);
+    expect(webUi.getSnapshot().connection).toEqual({ mode: "real", status: "connected" });
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe("thread-2");
+    expect(client.activeSubscriptions).toBe(1);
+    webUi.dispose();
   });
 
   it("submits the approval tuple supplied by the pending approval row", async () => {
@@ -364,6 +405,35 @@ class RejectOnceApprovalClient implements AppServerClient {
 
   subscribe(_listener: AppServerNotificationListener): AppServerSubscription {
     return () => undefined;
+  }
+}
+class DeferredConnectClient implements AppServerClient {
+  private readonly pending: Array<(threadId: string) => void> = [];
+  activeSubscriptions = 0;
+
+  request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    return new Promise((resolve) => {
+      this.pending.push((threadId) => resolve({
+        method: request.method,
+        ok: true,
+        result: { thread: { id: threadId, status: "idle", turns: [], items: [] } }
+      } as AppServerResponse));
+    });
+  }
+
+  resolveNext(threadId = "thread-1"): void {
+    this.pending.shift()?.(threadId);
+  }
+
+  subscribe(_listener: AppServerNotificationListener): AppServerSubscription {
+    this.activeSubscriptions += 1;
+    let closed = false;
+    return () => {
+      if (!closed) {
+        closed = true;
+        this.activeSubscriptions -= 1;
+      }
+    };
   }
 }
 

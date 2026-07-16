@@ -12,9 +12,101 @@ export type WebUiState = {
     readonly status: ThreadSnapshot["status"];
     readonly turns: ThreadSnapshot["turns"];
   };
-  readonly items: readonly ProtocolItem[];
-  readonly timelineRows: readonly TimelineRow[];
+  readonly items: ReadonlyInteractionSequence<ProtocolItem>;
+  readonly timelineRows: ReadonlyInteractionSequence<TimelineRow>;
 };
+
+export type ReadonlyInteractionSequence<T> = Iterable<T> & {
+  readonly length: number;
+  at(index: number): T | undefined;
+  find<S extends T>(predicate: (value: T, index: number) => value is S): S | undefined;
+  find(predicate: (value: T, index: number) => boolean): T | undefined;
+  map<U>(callback: (value: T, index: number) => U): U[];
+  filter<S extends T>(predicate: (value: T, index: number) => value is S): S[];
+  filter(predicate: (value: T, index: number) => boolean): T[];
+  reduce<U>(callback: (accumulator: U, value: T, index: number) => U, initial: U): U;
+};
+
+type SequenceOperation<T> =
+  | { readonly type: "append"; readonly value: T }
+  | { readonly type: "replace"; readonly slot: number; readonly value: T }
+  | { readonly type: "remove"; readonly slot: number };
+
+/** Immutable version view backed by an append/patch log. */
+class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
+  private constructor(
+    private readonly base: readonly T[],
+    private readonly parent: InteractionSequence<T> | undefined,
+    private readonly operation: SequenceOperation<T> | undefined,
+    readonly slots: number,
+    readonly length: number
+  ) {}
+
+  static empty<T>(): InteractionSequence<T> {
+    return new InteractionSequence([], undefined, undefined, 0, 0);
+  }
+
+  static from<T>(values: Iterable<T>): InteractionSequence<T> {
+    const base = [...values];
+    return new InteractionSequence(base, undefined, undefined, base.length, base.length);
+  }
+
+  append(value: T): InteractionSequence<T> {
+    return new InteractionSequence(this.base, this, { type: "append", value }, this.slots + 1, this.length + 1);
+  }
+
+  replace(slot: number, value: T): InteractionSequence<T> {
+    return new InteractionSequence(this.base, this, { type: "replace", slot, value }, this.slots, this.length);
+  }
+
+  remove(slot: number): InteractionSequence<T> {
+    return new InteractionSequence(this.base, this, { type: "remove", slot }, this.slots, this.length - 1);
+  }
+
+  at(index: number): T | undefined {
+    return this.materialize()[index];
+  }
+
+  find<S extends T>(predicate: (value: T, index: number) => value is S): S | undefined;
+  find(predicate: (value: T, index: number) => boolean): T | undefined;
+  find(predicate: (value: T, index: number) => boolean): T | undefined {
+    return this.materialize().find(predicate);
+  }
+
+  map<U>(callback: (value: T, index: number) => U): U[] {
+    return this.materialize().map(callback);
+  }
+
+  filter<S extends T>(predicate: (value: T, index: number) => value is S): S[];
+  filter(predicate: (value: T, index: number) => boolean): T[];
+  filter(predicate: (value: T, index: number) => boolean): T[] {
+    return this.materialize().filter(predicate);
+  }
+
+  reduce<U>(callback: (accumulator: U, value: T, index: number) => U, initial: U): U {
+    return this.materialize().reduce(callback, initial);
+  }
+
+  [Symbol.iterator](): Iterator<T> {
+    return this.materialize()[Symbol.iterator]();
+  }
+
+  private materialize(): T[] {
+    const operations: SequenceOperation<T>[] = [];
+    let cursor: InteractionSequence<T> | undefined = this;
+    while (cursor?.parent) {
+      if (cursor.operation) operations.push(cursor.operation);
+      cursor = cursor.parent;
+    }
+    const slots = [...(cursor?.base ?? this.base)];
+    for (const operation of operations.reverse()) {
+      if (operation.type === "append") slots.push(operation.value);
+      if (operation.type === "replace") slots[operation.slot] = operation.value;
+      if (operation.type === "remove") slots[operation.slot] = undefined as T;
+    }
+    return slots.filter((value): value is T => value !== undefined);
+  }
+}
 
 export type TimelineRow =
   | UserTimelineRow
@@ -126,6 +218,12 @@ export type ApprovalResolvedTimelineRow = {
 
 export type InteractionProjectionListener = () => void;
 
+export type InteractionProjectionWork = {
+  readonly fastPathOperations: number;
+  readonly rebuilds: number;
+  readonly sequenceCopies: number;
+};
+
 /**
  * The single interaction projection for presentation clients. Ordered facts update
  * their indexed row directly; replacements and out-of-order facts deliberately
@@ -134,15 +232,20 @@ export type InteractionProjectionListener = () => void;
 export class InteractionProjection {
   private readonly listeners = new Set<InteractionProjectionListener>();
   private itemsById = new Map<string, ProtocolItem>();
-  private orderedItems: ProtocolItem[] = [];
-  private rows: TimelineRow[] = [];
+  private orderedItems = InteractionSequence.empty<ProtocolItem>();
+  private rows = InteractionSequence.empty<TimelineRow>();
   private rowIndexByKey = new Map<string, number>();
   private shellRowKeyByTarget = new Map<string, string>();
   private assistantStarted = new Set<string>();
   private assistantProgress = new Map<string, string>();
   private approvalRowKeyById = new Map<string, string>();
   private lastSeq = -Infinity;
-  private snapshot: WebUiState = { items: [], timelineRows: [] };
+  private fastPathOperations = 0;
+  private rebuilds = 0;
+  private snapshot: WebUiState = {
+    items: InteractionSequence.empty<ProtocolItem>(),
+    timelineRows: InteractionSequence.empty<TimelineRow>()
+  };
 
   constructor(snapshot?: ThreadSnapshot) {
     if (snapshot) {
@@ -157,6 +260,15 @@ export class InteractionProjection {
   subscribe(listener: InteractionProjectionListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Narrow deterministic seam for append-complexity regression tests. */
+  getWork(): InteractionProjectionWork {
+    return {
+      fastPathOperations: this.fastPathOperations,
+      rebuilds: this.rebuilds,
+      sequenceCopies: 0
+    };
   }
 
   replaceSnapshot(snapshot: ThreadSnapshot, notify = true): boolean {
@@ -195,9 +307,10 @@ export class InteractionProjection {
 
   private appendOrdered(item: ProtocolItem): boolean {
     this.itemsById.set(item.id, item);
-    this.orderedItems.push(item);
+    this.orderedItems = this.orderedItems.append(item);
     this.lastSeq = item.seq;
     this.applyItemRow(item);
+    this.fastPathOperations += 1;
     this.publish(this.nextSnapshot());
     return true;
   }
@@ -207,6 +320,7 @@ export class InteractionProjection {
     items.set(item.id, item);
     const next = createStateFromParts(this.snapshot.currentThread, [...items.values()]);
     this.resetIndexes(next);
+    this.rebuilds += 1;
     this.publish(next);
     return true;
   }
@@ -267,7 +381,7 @@ export class InteractionProjection {
     const key = this.shellRowKeyByTarget.get(item.targetId as string);
     const index = key === undefined ? undefined : this.rowIndexByKey.get(key);
     if (key === undefined || index === undefined) return;
-    const current = this.rows[index] as ShellTimelineRow;
+    const current = this.rows.at(index) as ShellTimelineRow;
     let next = current;
     if (item.type === "tool.output.delta") {
       const delta = readShellOutputDelta(item.payload);
@@ -284,28 +398,31 @@ export class InteractionProjection {
 
   private upsertRow(key: string, row: TimelineRow): void {
     const index = this.rowIndexByKey.get(key);
-    if (index === undefined) { this.rowIndexByKey.set(key, this.rows.length); this.rows.push(row); return; }
-    this.rows[index] = row;
+    if (index === undefined) {
+      this.rowIndexByKey.set(key, this.rows.slots);
+      this.rows = this.rows.append(row);
+      return;
+    }
+    this.rows = this.rows.replace(index, row);
   }
 
   private removeRow(key: string): void {
     const index = this.rowIndexByKey.get(key);
     if (index === undefined) return;
-    this.rows.splice(index, 1);
+    this.rows = this.rows.remove(index);
     this.rowIndexByKey.delete(key);
-    for (let position = index; position < this.rows.length; position += 1) this.rowIndexByKey.set(rowKey(this.rows[position]), position);
   }
 
   private nextSnapshot(): WebUiState {
-    return { ...this.snapshot, items: [...this.orderedItems], timelineRows: [...this.rows] };
+    return { ...this.snapshot, items: this.orderedItems, timelineRows: this.rows };
   }
 
   private resetIndexes(state: WebUiState): void {
     this.snapshot = state;
     this.itemsById = new Map(state.items.map((item) => [item.id, item]));
-    this.orderedItems = [...state.items];
-    this.rows = [...state.timelineRows];
-    this.rowIndexByKey = new Map(this.rows.map((row, index) => [rowKey(row), index]));
+    this.orderedItems = InteractionSequence.from(state.items);
+    this.rows = InteractionSequence.from(state.timelineRows);
+    this.rowIndexByKey = new Map([...this.rows].map((row, index) => [rowKey(row), index]));
     this.shellRowKeyByTarget = new Map(this.rows.filter((row): row is ShellTimelineRow => row.type === "shell").map((row) => [row.itemId, rowKey(row)]));
     this.assistantStarted = new Set(state.items.filter((item) => item.type === "assistant.message.started").map((item) => item.id));
     this.assistantProgress = new Map(this.rows.filter((row): row is AssistantProgressTimelineRow => row.type === "assistant-progress").map((row) => [row.itemId, row.content]));
@@ -361,12 +478,16 @@ function createStateFromParts(
   items: readonly ProtocolItem[]
 ): WebUiState {
   const sortedItems = [...items].sort(compareItems);
-  return { currentThread, items: sortedItems, timelineRows: buildTimelineRows(sortedItems) };
+  return {
+    currentThread,
+    items: InteractionSequence.from(sortedItems),
+    timelineRows: InteractionSequence.from(buildTimelineRows(sortedItems))
+  };
 }
 
 function toSnapshot(state: WebUiState): ThreadSnapshot | undefined {
   return state.currentThread
-    ? { id: state.currentThread.id, status: state.currentThread.status, turns: state.currentThread.turns, items: state.items }
+    ? { id: state.currentThread.id, status: state.currentThread.status, turns: state.currentThread.turns, items: [...state.items] }
     : undefined;
 }
 
@@ -382,7 +503,11 @@ function sameItem(left: ProtocolItem, right: ProtocolItem): boolean {
 }
 
 function sameState(left: WebUiState, right: WebUiState): boolean {
-  return left === right || JSON.stringify(left) === JSON.stringify(right);
+  return left === right || (
+    left.currentThread?.id === right.currentThread?.id &&
+    JSON.stringify(left.currentThread) === JSON.stringify(right.currentThread) &&
+    JSON.stringify([...left.items]) === JSON.stringify([...right.items])
+  );
 }
 
 function updateCurrentThreadTurn(

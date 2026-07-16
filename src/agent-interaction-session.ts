@@ -11,6 +11,7 @@ import type {
 } from "./app-server-protocol.js";
 import {
   InteractionProjection,
+  type ReadonlyInteractionSequence,
   type TimelineRow,
   type WebUiState
 } from "./web-ui-state.js";
@@ -21,9 +22,13 @@ export type AgentInteractionSessionOptions = {
 
 export type AgentInteractionSnapshot = {
   readonly state: WebUiState;
-  readonly thread?: ThreadSnapshot;
-  readonly timelineRows: readonly TimelineRow[];
+  readonly thread?: AgentInteractionThread;
+  readonly timelineRows: ReadonlyInteractionSequence<TimelineRow>;
   readonly recoverableTurn?: AgentRecoverableTurn;
+};
+
+export type AgentInteractionThread = Omit<ThreadSnapshot, "items"> & {
+  readonly items: ReadonlyInteractionSequence<ProtocolItem>;
 };
 
 export type AgentRecoverableTurn = {
@@ -135,8 +140,9 @@ export class AgentInteractionSession {
       throw new Error(response.ok ? "Unexpected thread/read response" : response.error.message);
     }
 
-    this.projection.replaceSnapshot(response.result.thread);
-    this.emit({ type: "state", snapshot: this.getSnapshot() });
+    if (this.projection.replaceSnapshot(response.result.thread)) {
+      this.emit({ type: "state", snapshot: this.getSnapshot() });
+    }
 
     return this.getSnapshot();
   }
@@ -325,11 +331,12 @@ function isRecoverableTurn(
 }
 
 function latestUserInputForTurn(
-  items: readonly ProtocolItem[],
+  items: Iterable<ProtocolItem>,
   turnId: string
 ): JsonValue | undefined {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
+  const orderedItems = [...items];
+  for (let index = orderedItems.length - 1; index >= 0; index -= 1) {
+    const item = orderedItems[index];
 
     if (item?.turnId !== turnId || item.type !== "user.message.completed") {
       continue;

@@ -201,6 +201,8 @@ export type {
   ToolErrorTimelineRow,
   ToolResultTimelineRow,
   TraceTimelineRow,
+  InteractionProjectionWork,
+  ReadonlyInteractionSequence,
   UserTimelineRow,
   WebUiState
 } from "./web-ui-state.js";
