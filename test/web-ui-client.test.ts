@@ -5,6 +5,7 @@ import {
   type AppServerClient,
   type AppServerNotificationListener,
   type AppServerSubscription,
+  BrowserAppServerTransportClient,
   HttpAppServerClient,
   WebUiClient,
   serveAppServerHttpTransport,
@@ -12,6 +13,43 @@ import {
 } from "../src/index.js";
 
 describe("Web UI client", () => {
+  it("uses same-origin browser routes without receiving a capability", async () => {
+    const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    let eventUrl: string | undefined;
+    const eventSource = new RecordingEventSource();
+    const client = new BrowserAppServerTransportClient({
+      baseUrl: "https://cross-origin.invalid",
+      fetch: (async (input, init) => {
+        requests.push({ input, init });
+        return new Response(
+          JSON.stringify({
+            method: "thread/list",
+            ok: true,
+            result: { threads: [] }
+          }),
+          { status: 200 }
+        );
+      }) as typeof fetch,
+      createEventSource: (url) => {
+        eventUrl = url;
+        return eventSource;
+      }
+    });
+
+    await client.request({ method: "thread/list" });
+    const unsubscribe = client.subscribe(() => undefined);
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.input).toBe("/request");
+    expect(requests[0]?.init?.headers).toEqual({
+      accept: "application/json",
+      "content-type": "application/json"
+    });
+    expect(eventUrl).toBe("/events");
+
+    unsubscribe();
+  });
+
   it("connects through real transport and projects streamed turn notifications", async () => {
     const server = new AppServer({
       threadManagerOptions: {
@@ -32,7 +70,10 @@ describe("Web UI client", () => {
       }
     });
     const transport = await serveAppServerHttpTransport({ appServer: server });
-    const client = new HttpAppServerClient({ baseUrl: transport.url });
+    const client = new HttpAppServerClient({
+      baseUrl: transport.url,
+      capability: transport.capability
+    });
     const webUi = new WebUiClient({ client });
 
     try {
@@ -226,4 +267,13 @@ class RecordingClient implements AppServerClient {
   emit(notification: Parameters<AppServerNotificationListener>[0]): void {
     this.listener?.(notification);
   }
+}
+
+class RecordingEventSource {
+  onopen: ((event: Event) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+
+  addEventListener(): void {}
+
+  close(): void {}
 }

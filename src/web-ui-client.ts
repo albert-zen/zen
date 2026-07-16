@@ -301,13 +301,11 @@ export type WebUiEventSource = {
 };
 
 export class BrowserAppServerTransportClient implements AppServerClient {
-  private readonly baseUrl: URL;
   private readonly fetchImpl: typeof fetch;
   private readonly createEventSource: (url: string) => WebUiEventSource;
   private readonly onSubscriptionStatus?: BrowserAppServerTransportClientOptions["onSubscriptionStatus"];
 
   constructor(options: BrowserAppServerTransportClientOptions) {
-    this.baseUrl = new URL(options.baseUrl);
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.createEventSource =
       options.createEventSource ??
@@ -316,7 +314,7 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   }
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
-    const response = await this.fetchImpl(new URL("/request", this.baseUrl), {
+    const response = await this.fetchImpl("/request", {
       method: "POST",
       headers: {
         accept: "application/json",
@@ -335,7 +333,7 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   }
 
   subscribe(listener: AppServerNotificationListener): AppServerSubscription {
-    const events = this.createEventSource(new URL("/events", this.baseUrl).toString());
+    const events = this.createEventSource("/events");
 
     events.onopen = () => {
       this.onSubscriptionStatus?.("connected");

@@ -267,7 +267,10 @@ async function executeDogfoodScenario(input: {
       host: "127.0.0.1",
       port: 0
     });
-    const client = new HttpAppServerClient({ baseUrl: transport.url });
+    const client = new HttpAppServerClient({
+      baseUrl: transport.url,
+      capability: transport.capability
+    });
     unsubscribe = client.subscribe((notification) => {
       notifications.push(notification);
     });
