@@ -49,6 +49,7 @@ class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
 
   static from<T>(values: Iterable<T>, metrics: SequenceMetrics): InteractionSequence<T> {
     const base = [...values];
+    metrics.sequenceCopies += 1;
     return new InteractionSequence(base, undefined, undefined, metrics, base.length, base.length);
   }
 
@@ -94,12 +95,15 @@ class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
 
   private materialize(): T[] {
     this.metrics.fullMaterializations += 1;
+    this.metrics.sequenceTraversals += 1;
     const operations: SequenceOperation<T>[] = [];
     let cursor: InteractionSequence<T> | undefined = this;
     while (cursor?.parent) {
+      this.metrics.sequenceTraversals += 1;
       if (cursor.operation) operations.push(cursor.operation);
       cursor = cursor.parent;
     }
+    this.metrics.sequenceCopies += 1;
     const slots = [...(cursor?.base ?? this.base)];
     for (const operation of operations.reverse()) {
       if (operation.type === "append") slots.push(operation.value);
@@ -110,7 +114,11 @@ class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
   }
 }
 
-type SequenceMetrics = { fullMaterializations: number };
+type SequenceMetrics = {
+  fullMaterializations: number;
+  sequenceCopies: number;
+  sequenceTraversals: number;
+};
 
 export type TimelineRow =
   | UserTimelineRow
@@ -227,6 +235,9 @@ export type InteractionProjectionWork = {
   readonly rebuilds: number;
   readonly sequenceCopies: number;
   readonly fullMaterializations: number;
+  readonly sequenceTraversals: number;
+  readonly mapClones: number;
+  readonly indexRebuilds: number;
 };
 
 /**
@@ -235,7 +246,11 @@ export type InteractionProjectionWork = {
  * take the deterministic rebuild path.
  */
 export class InteractionProjection {
-  private readonly sequenceMetrics: SequenceMetrics = { fullMaterializations: 0 };
+  private readonly sequenceMetrics: SequenceMetrics = {
+    fullMaterializations: 0,
+    sequenceCopies: 0,
+    sequenceTraversals: 0
+  };
   private readonly listeners = new Set<InteractionProjectionListener>();
   private itemsById = new Map<string, ProtocolItem>();
   private orderedItems = InteractionSequence.empty<ProtocolItem>(this.sequenceMetrics);
@@ -249,6 +264,8 @@ export class InteractionProjection {
   private lastSeq = -Infinity;
   private fastPathOperations = 0;
   private rebuilds = 0;
+  private mapClones = 0;
+  private indexRebuilds = 0;
   private snapshot: WebUiState = {
     items: InteractionSequence.empty<ProtocolItem>(this.sequenceMetrics),
     timelineRows: InteractionSequence.empty<TimelineRow>(this.sequenceMetrics)
@@ -274,8 +291,11 @@ export class InteractionProjection {
     return {
       fastPathOperations: this.fastPathOperations,
       rebuilds: this.rebuilds,
-      sequenceCopies: 0,
-      fullMaterializations: this.sequenceMetrics.fullMaterializations
+      sequenceCopies: this.sequenceMetrics.sequenceCopies,
+      fullMaterializations: this.sequenceMetrics.fullMaterializations,
+      sequenceTraversals: this.sequenceMetrics.sequenceTraversals,
+      mapClones: this.mapClones,
+      indexRebuilds: this.indexRebuilds
     };
   }
 
@@ -325,6 +345,7 @@ export class InteractionProjection {
 
   private rebuildWithItem(item: ProtocolItem): boolean {
     const items = new Map(this.itemsById);
+    this.mapClones += 1;
     items.set(item.id, item);
     const next = createStateFromParts(this.snapshot.currentThread, [...items.values()], this.sequenceMetrics);
     this.resetIndexes(next);
@@ -430,6 +451,7 @@ export class InteractionProjection {
   }
 
   private resetIndexes(state: WebUiState): void {
+    this.indexRebuilds += 1;
     this.snapshot = state;
     this.itemsById = new Map(state.items.map((item) => [item.id, item]));
     this.orderedItems = InteractionSequence.from(state.items, this.sequenceMetrics);
@@ -441,7 +463,6 @@ export class InteractionProjection {
     this.assistantProgress = new Map(this.rows.filter((row): row is AssistantProgressTimelineRow => row.type === "assistant-progress").map((row) => [row.itemId, row.content]));
     this.approvalRowKeyById = new Map(this.rows.filter((row): row is ApprovalPendingTimelineRow => row.type === "approval-pending").map((row) => [row.approvalId, rowKey(row)]));
     this.lastSeq = state.items.at(-1)?.seq ?? -Infinity;
-    this.sequenceMetrics.fullMaterializations = 0;
   }
 
   private publish(snapshot: WebUiState, notify = true): void {

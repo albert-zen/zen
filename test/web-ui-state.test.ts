@@ -10,6 +10,7 @@ import {
 describe("web ui state projection", () => {
   it("caches snapshots and processes 1k/5k ordered appends with constant work and no sequence copies", () => {
     const projection = new InteractionProjection({ id: "thread-1", status: "idle", turns: [], items: [] });
+    const baseline = projection.getWork();
     const initial = projection.getSnapshot();
     let listenerCalls = 0;
     projection.subscribe(() => { listenerCalls += 1; });
@@ -23,7 +24,7 @@ describe("web ui state projection", () => {
       });
     }
     const atOneThousand = projection.getSnapshot();
-    expect(projection.getWork()).toEqual({ fastPathOperations: 1000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0 });
+    expect(workSince(baseline, projection.getWork())).toEqual({ fastPathOperations: 1000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0, sequenceTraversals: 0, mapClones: 0, indexRebuilds: 0 });
 
     for (let seq = 1001; seq <= 5000; seq += 1) {
       projection.apply({
@@ -33,7 +34,7 @@ describe("web ui state projection", () => {
         item: item({ id: `item-${seq}`, seq, type: "user.message.completed", payload: { content: String(seq) } })
       });
     }
-    expect(projection.getWork()).toEqual({ fastPathOperations: 5000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0 });
+    expect(workSince(baseline, projection.getWork())).toEqual({ fastPathOperations: 5000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0, sequenceTraversals: 0, mapClones: 0, indexRebuilds: 0 });
 
     const snapshot = projection.getSnapshot();
     expect(initial).not.toBe(snapshot);
@@ -72,6 +73,7 @@ describe("web ui state projection", () => {
 
   it("processes 1k/5k shell and approval facts without rebuilds, copies, or materialization", () => {
     const projection = new InteractionProjection({ id: "thread-1", status: "running", turns: [], items: [] });
+    const baseline = projection.getWork();
     let seq = 0;
     for (let index = 1; index <= 1000; index += 1) {
       const shellId = `shell-${index}`;
@@ -86,7 +88,23 @@ describe("web ui state projection", () => {
         projection.apply({ type: "item/appended", threadId: "thread-1", turnId: "turn-1", item: nextItem });
       }
     }
-    expect(projection.getWork()).toEqual({ fastPathOperations: 5000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0 });
+    expect(workSince(baseline, projection.getWork())).toEqual({ fastPathOperations: 5000, rebuilds: 0, sequenceCopies: 0, fullMaterializations: 0, sequenceTraversals: 0, mapClones: 0, indexRebuilds: 0 });
+  });
+
+  it("records the actual copies, traversal, map clone, and index rebuild on the slow path", () => {
+    const projection = new InteractionProjection({ id: "thread-1", status: "running", turns: [], items: [] });
+    const baseline = projection.getWork();
+    projection.apply({ type: "item/appended", threadId: "thread-1", turnId: "turn-1", item: item({ id: "second", seq: 2, type: "user.message.completed", payload: { content: "second" } }) });
+    projection.apply({ type: "item/appended", threadId: "thread-1", turnId: "turn-1", item: item({ id: "first", seq: 1, type: "user.message.completed", payload: { content: "first" } }) });
+
+    const work = workSince(baseline, projection.getWork());
+    expect(work.fastPathOperations).toBe(1);
+    expect(work.rebuilds).toBe(1);
+    expect(work.mapClones).toBe(1);
+    expect(work.indexRebuilds).toBe(1);
+    expect(work.sequenceCopies).toBeGreaterThan(0);
+    expect(work.fullMaterializations).toBeGreaterThan(0);
+    expect(work.sequenceTraversals).toBeGreaterThan(0);
   });
   it("initializes current thread and timeline rows from a snapshot", () => {
     const snapshot: ThreadSnapshot = {
@@ -826,5 +844,20 @@ function item(
     turnId: "turn-1",
     payload: {},
     ...overrides
+  };
+}
+
+function workSince(
+  before: ReturnType<InteractionProjection["getWork"]>,
+  after: ReturnType<InteractionProjection["getWork"]>
+): ReturnType<InteractionProjection["getWork"]> {
+  return {
+    fastPathOperations: after.fastPathOperations - before.fastPathOperations,
+    rebuilds: after.rebuilds - before.rebuilds,
+    sequenceCopies: after.sequenceCopies - before.sequenceCopies,
+    fullMaterializations: after.fullMaterializations - before.fullMaterializations,
+    sequenceTraversals: after.sequenceTraversals - before.sequenceTraversals,
+    mapClones: after.mapClones - before.mapClones,
+    indexRebuilds: after.indexRebuilds - before.indexRebuilds
   };
 }

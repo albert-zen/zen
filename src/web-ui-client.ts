@@ -110,8 +110,9 @@ export class WebUiClient {
   async startThread(): Promise<void> {
     const response = await this.client.request({ method: "thread/start" });
     const thread = readThreadResponse(response, "thread/start");
-    this.projection.replaceSnapshot(thread);
-    this.refreshSnapshot();
+    if (this.projection.replaceSnapshot(thread)) {
+      this.refreshSnapshot();
+    }
   }
 
   async listThreads(): Promise<readonly ThreadSnapshot[]> {
@@ -134,8 +135,9 @@ export class WebUiClient {
       params: { threadId }
     });
     const thread = readThreadResponse(response, "thread/read");
-    this.projection.replaceSnapshot(thread);
-    this.refreshSnapshot();
+    if (this.projection.replaceSnapshot(thread)) {
+      this.refreshSnapshot();
+    }
   }
 
   async submitMessage(input: string): Promise<void> {

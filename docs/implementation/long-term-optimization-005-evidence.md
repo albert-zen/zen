@@ -24,6 +24,47 @@ Blocker or context escalation details: none
 
 ## Codex Review Note
 
+Round: 3
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-005
+Base revision/diff scope: `80b6a22a0d082838305059de9eb313120b27f6fa..741397f66b857aa97e5412be877232db871619d7`
+Standards Review blocking: WebUiClient start/resume ignored projection no-op results and diagnostic copy evidence was hard-coded rather than attached to expensive operations.
+Standards Review non-blocking: none
+Standards Review missing evidence: Repeated start/resume identity/listener test and a slow-path counter test proving instrumentation is live.
+Spec Review blocking: Identical start/resume snapshots could notify external-store listeners; 1k/5k performance evidence could not establish actual copy/rebuild behavior.
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local tracker state decision: Rework
+State decision reason: Accepted bounded defects require original-worker repair.
+
+## Codex Worker Note
+
+Round: 4
+Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
+Local tracker state transition: Rework -> Agent Review
+Branch: codex/long-term-optimization-005
+PR URL: not configured; local-origin branch only
+Base revision/diff scope: original worker fixes only for Review Round 3: WebUiClient no-op publication guard, live projection work instrumentation, focused counter/no-op regressions, and append-only evidence.
+Summary of behavior delivered: `startThread` and `resumeThread` now refresh only when `InteractionProjection.replaceSnapshot()` changes state. Projection work counters now increment at actual sequence creation/materialization/traversal, slow map clone, and index reset sites; no work field is hard-coded.
+Final scope summary: Review findings only. No persistence, module relocation, dependencies, UI behavior, or issue 004/006+ work.
+Changed files/modules: `src/web-ui-client.ts`; `src/web-ui-state.ts`; `test/web-ui-client.test.ts`; `test/web-ui-state.test.ts`; evidence.
+Tests added/updated: Public repeated identical start/resume snapshot identity and listener-count test; slow-path out-of-order item counter regression proving nonzero sequence copy/materialization/traversal, map clone, and index rebuild; existing 1k/5k ordered shell/approval regression now asserts counter deltas from a baseline.
+Acceptance criteria status: Identical start/resume responses retain WebUiClient snapshot identity and listener count; ordered 1k/5k shell/approval path reports linear 1,000/5,000 fast operations with zero materialization, sequence copy, map clone, rebuild, and index reset deltas; slow path reports nonzero actual expensive-work counters.
+Commands run and results: `npx vitest run test/web-ui-state.test.ts test/web-ui-client.test.ts test/agent-interaction-session.test.ts test/workspace-lifecycle.test.tsx --no-file-parallelism --maxWorkers=1` passed (35 tests); `npm test -- --no-file-parallelism --maxWorkers=1` passed (32 files, 205 tests); `npm run typecheck` passed; `npm run typecheck:web` passed; `npm run build` passed; `npm run web:build` passed; `git diff --check` passed.
+Validation log paths: none
+Required check status or local-check handoff reason: all current local checks passed; no GitHub remote/PR is configured.
+Evidence links/paths: `docs/implementation/long-term-optimization-005-evidence.md`; `docs/implementation/long-term-optimization-tracker.md`
+Decisions made: Counters are cumulative, so fast-path tests compare a construction baseline against work performed by the ordered input. This records initialization/reset work honestly while proving the ordered delta is zero for expensive operations.
+Standards notes: The narrow public `getWork()` seam exposes only deterministic aggregate counters needed for performance regression tests; it does not expose mutable indexes or sequence internals.
+Reviewer notes: Verify no-op client publication and that every costly sequence/map/index path increments its corresponding counter.
+Open questions: none
+Known residual risks: Counter values measure structural work, not elapsed time. Read-side iteration remains intentionally linear and is now recorded as materialization/traversal work.
+Blocker or context escalation details: none
+
+## Codex Review Note
+
 Round: 2
 Issue: long-term-optimization-005 Make interaction projection incremental and client lifecycle single-owner
 Reviewer context: fresh

@@ -184,6 +184,24 @@ describe("Web UI client", () => {
     expect(client.unsubscribeCalls).toBe(2);
   });
 
+  it("does not publish repeated identical start or resume snapshots", async () => {
+    const client = new RecordingClient();
+    const webUi = new WebUiClient({ client });
+    let listenerCalls = 0;
+    webUi.subscribe(() => { listenerCalls += 1; });
+    await webUi.connect();
+    const connectedSnapshot = webUi.getSnapshot();
+    const connectedCalls = listenerCalls;
+
+    await webUi.startThread();
+    expect(webUi.getSnapshot()).toBe(connectedSnapshot);
+    expect(listenerCalls).toBe(connectedCalls);
+
+    await webUi.resumeThread("thread-1");
+    expect(webUi.getSnapshot()).toBe(connectedSnapshot);
+    expect(listenerCalls).toBe(connectedCalls);
+  });
+
   it("does not publish duplicate terminal notifications", async () => {
     const client = new RecordingClient();
     const webUi = new WebUiClient({ client });
