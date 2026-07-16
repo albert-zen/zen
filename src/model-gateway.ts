@@ -1,5 +1,9 @@
 import type { ModelContext } from "./context-compiler.js";
 import type { Item, ItemAppendInput, ItemList } from "./item-list.js";
+import {
+  consumeAbortableAsyncIterator,
+  isAsyncIteratorAbortedError
+} from "./abortable-async-iterator.js";
 
 export type ModelOptions = Readonly<Record<string, unknown>>;
 
@@ -86,7 +90,10 @@ export async function appendModelResponseItems(
   let deltaIndex = 0;
 
   try {
-    for await (const event of input.model.generate(input.context, input.options, input.signal)) {
+    await consumeAbortableAsyncIterator(
+      input.model.generate(input.context, input.options, input.signal),
+      input.signal,
+      async (event) => {
       if (event.type === "text.delta") {
         await appendItem({
           type: "assistant.message.delta",
@@ -124,10 +131,12 @@ export async function appendModelResponseItems(
           assistantStarted,
           event.error
         );
-        break;
+        return false;
       }
-    }
+      }
+    );
   } catch (caughtError) {
+    if (isAsyncIteratorAbortedError(caughtError)) throw caughtError;
     error = await appendAssistantError(
       appendItem,
       input,

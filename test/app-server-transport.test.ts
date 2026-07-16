@@ -347,7 +347,7 @@ describe("App Server HTTP transport", () => {
       expect(read.result.thread.turns.at(-1)).toEqual(
         expect.objectContaining({ status: "canceled" })
       );
-      expect(read.result.thread.items.map((item) => item.type)).toContain(
+      expect(read.result.thread.items.map((item) => item.type)).not.toContain(
         "tool.error"
       );
     } finally {

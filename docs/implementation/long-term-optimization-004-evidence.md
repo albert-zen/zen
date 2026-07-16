@@ -26,6 +26,47 @@ Blocker or context escalation details: none
 
 ## Codex Review Note
 
+Round: 3
+Issue: long-term-optimization-004 Replace snapshot rewrites with durable append-only ThreadJournal
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-004
+Base revision/diff scope: e40dd493ce5e1d40e1fdc100e2862e5d34ad2fcf -> bfd58e79161987bebf8cd9030b8c6b3c7793b3c9
+Standards Review blocking: Shutdown still waited on non-cooperative model/tool async iterator next calls, so the producer barrier was not cancellation-bounded.
+Standards Review non-blocking: none
+Standards Review missing evidence: deterministic non-cooperative model and tool iterator shutdown cases.
+Spec Review blocking: Late iterator values could be appended after abort, violating the shutdown terminal/cancellation boundary.
+Spec Review non-blocking: none
+Spec Review missing evidence: no late Item/write/notification after releasing a pending iterator after close or interrupt.
+Local tracker state decision: Rework
+State decision reason: The two findings are one material abort-consumption boundary defect.
+
+## Codex Worker Note
+
+Round: 4
+Issue: long-term-optimization-004 Replace snapshot rewrites with durable append-only ThreadJournal
+Local tracker state transition: Rework -> Agent Review
+Branch: codex/long-term-optimization-004
+PR URL: not configured
+Base revision/diff scope: bfd58e79161987bebf8cd9030b8c6b3c7793b3c9; accepted Round 3 abort-aware iterator boundary, focused tests, and append-only evidence/tracker only
+Summary of behavior delivered: Added the shared abortable async-iterator consumption boundary used by model-gateway and tool-runtime. It races next() against AbortSignal, abandons pending or later values after abort, and invokes iterator return best-effort without awaiting non-cooperative cleanup. Abort reaches ThreadManager promptly, which emits exactly one durable canceled terminal Item before journal close.
+Final scope summary: Rework findings for issue 004 only. No UI feature implementation, projection work, module moves, dependency/gate work, or issue 005+ work.
+Changed files/modules: src/abortable-async-iterator.ts; src/model-gateway.ts; src/tool-runtime.ts; test/app-server-journal.test.ts; abort lifecycle expectations in test/thread-manager.test.ts, test/approval-race.test.ts, and test/app-server-transport.test.ts; this evidence/tracker
+Tests added/updated: test/app-server-journal.test.ts now uses deterministic model and tool iterators whose pending next() and return() never resolve before shutdown. It proves close/interrupt settle without release; later release produces no Item, write, or notification; cancellation persists and replay excludes late delta/output. Existing interruption assertions now require canceled terminalization without post-abort tool/approval events.
+Acceptance criteria status: All original 004 criteria remain complete. Round 3 finding 1 complete: both model and tool consumption share an abort-aware next boundary and do not await non-cooperative return cleanup. Finding 2 complete: close/interrupt terminalize promptly, preserve pre-abort facts plus one canceled terminal record, and reject all later iterator values without writes or notifications.
+Commands run and results: npx vitest run test/app-server-journal.test.ts test/model-gateway.test.ts test/tool-runtime.test.ts test/thread-journal.test.ts passed (24 tests); npm test passed (31 files, 202 tests); npm run typecheck passed; npm run typecheck:web passed; npm run build passed; git diff --check passed.
+Validation log paths: none
+Required check status or local-check handoff reason: Required local gates passed. No GitHub remote/check handoff is configured.
+Evidence links/paths: docs/implementation/long-term-optimization-004-evidence.md; docs/implementation/long-term-optimization-tracker.md
+Decisions made: Abort is a control-flow boundary, not a tool/model error fact: model/tool loops rethrow the shared abort sentinel so ThreadManager alone records the canceled terminal lifecycle Item.
+Standards notes: The async-iterator module centralizes the non-obvious cancellation rule and prevents it from drifting between model and tool adapters. Item-first lifecycle ownership remains in ThreadManager.
+Reviewer notes: Ready for a new fresh-context reviewer; no self-review performed.
+Open questions: none
+Known residual risks: Best-effort iterator return cleanup can leave an external adapter resource running after the server has safely detached; adapter implementations should honor AbortSignal and iterator return for resource reclamation. Journal filename length and compaction remain outside issue 004.
+Blocker or context escalation details: none
+
+## Codex Review Note
+
 Round: 2
 Issue: long-term-optimization-004 Replace snapshot rewrites with durable append-only ThreadJournal
 Reviewer context: fresh

@@ -1,5 +1,9 @@
 import type { HookRuntime } from "./hook-runtime.js";
 import type { Item, ItemAppendInput, ItemList } from "./item-list.js";
+import {
+  consumeAbortableAsyncIterator,
+  isAsyncIteratorAbortedError
+} from "./abortable-async-iterator.js";
 
 export type ToolCallPayload = {
   readonly id: string;
@@ -124,14 +128,17 @@ export async function appendToolExecutionItems(
     started.push(startedItem);
 
     try {
-      for await (const event of input.toolRuntime.execute(call, {
-        threadId: input.threadId ?? "",
-        runId: input.assistantItem.runId,
-        turnId: input.assistantItem.turnId,
-        signal: input.signal,
-        assistantItem: input.assistantItem,
-        startedItem
-      })) {
+      await consumeAbortableAsyncIterator(
+        input.toolRuntime.execute(call, {
+          threadId: input.threadId ?? "",
+          runId: input.assistantItem.runId,
+          turnId: input.assistantItem.turnId,
+          signal: input.signal,
+          assistantItem: input.assistantItem,
+          startedItem
+        }),
+        input.signal,
+        async (event) => {
         if (event.type === "approval.requested") {
           await appendRequired(appendItem, {
             type: "approval.requested",
@@ -194,10 +201,12 @@ export async function appendToolExecutionItems(
 
         if (event.type === "error") {
           errors.push(await appendToolError(appendItem, startedItem, call, event.error));
-          break;
+          return false;
         }
-      }
+        }
+      );
     } catch (caughtError) {
+      if (isAsyncIteratorAbortedError(caughtError)) throw caughtError;
       errors.push(await appendToolError(appendItem, startedItem, call, caughtError));
     }
 

@@ -1,5 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { appendFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -80,10 +80,9 @@ describe("AppServer journal commits", () => {
     await expect(server.request({ method: "thread/read", params: { threadId: "corrupt" } })).resolves.toMatchObject({ ok: false, error: { code: "THREAD_JOURNAL_CORRUPTION" } });
   });
 
-  it("closes behind active producers and rejects new work", async () => {
+  it("closes an abort-insensitive model iterator without persisting its late value", async () => {
     const dir = mkdtempSync(join(tmpdir(), "zen-close-barrier-"));
-    const lateItem = deferred<void>();
-    const modelStarted = deferred<void>();
+    const pending = pendingIterator<{ readonly type: "text.delta"; readonly text: string }>();
     const journal = new FileThreadJournal({ dir });
     const broker = new ApprovalBroker();
     const server = new AppServer({
@@ -91,7 +90,7 @@ describe("AppServer journal commits", () => {
       approvalBroker: broker,
       threadManagerOptions: {
         generateThreadId: sequence("thread"), generateRunId: sequence("run"), generateTurnId: sequence("turn"), generateItemId: sequence("item"), clock: () => 1000,
-        runtimeFactory: () => ({ model: { async *generate() { modelStarted.resolve(); await lateItem.promise; yield { type: "text.delta", text: "late" }; } } })
+        runtimeFactory: () => ({ model: { generate: () => pending.iterable } })
       }
     });
     const notifications: AppServerNotification[] = [];
@@ -99,20 +98,59 @@ describe("AppServer journal commits", () => {
     const started = await server.request({ method: "thread/start" });
     if (!started.ok || started.method !== "thread/start") throw new Error("thread start failed");
     await server.request({ method: "turn/start", params: { threadId: started.result.thread.id, input: "go" } });
-    await modelStarted.promise;
+    await pending.nextStarted.promise;
     broker.request({ id: "pending", threadId: started.result.thread.id, runId: "run-1", turnId: "turn-1", startedItemId: "item-6", call: { id: "call-1", name: "test", input: {} } });
     const closing = server.close();
     await expect(server.request({ method: "thread/start" })).resolves.toMatchObject({ ok: false, error: { code: "SERVER_CLOSING" } });
-    lateItem.resolve();
     await closing;
+    await pending.returnCalled.promise;
     expect(broker.listPending()).toEqual([]);
     expect(notifications.some((notification) => notification.type === "turn/completed")).toBe(true);
+    const notificationCount = notifications.length;
+    const path = pathFor(dir, "thread-1");
+    const beforeLateRelease = await readFile(path, "utf8");
+    pending.release({ value: { type: "text.delta", text: "late" }, done: false });
+    await Promise.resolve();
+    expect(await readFile(path, "utf8")).toBe(beforeLateRelease);
+    expect(notifications).toHaveLength(notificationCount);
     const [replay] = await journal.replay();
     expect(replay).toMatchObject({ type: "success", threadId: "thread-1" });
     if (replay?.type !== "success") throw new Error("thread did not replay");
-    expect(replay.items.some((item) => item.type === "assistant.message.delta" && typeof item.payload === "object" && item.payload !== null && "delta" in item.payload && item.payload.delta === "late")).toBe(true);
+    expect(replay.items.some((item) => item.type === "assistant.message.delta")).toBe(false);
     expect(replay.items.some((item) => item.type === "turn.canceled")).toBe(true);
     await expect(server.request({ method: "thread/read", params: { threadId: "thread-1" } })).resolves.toMatchObject({ ok: false, error: { code: "SERVER_CLOSING" } });
+  });
+
+  it("interrupts an abort-insensitive tool iterator without accepting its late value", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "zen-tool-interrupt-"));
+    const pending = pendingIterator<{ readonly type: "output.delta"; readonly delta: string }>();
+    const journal = new FileThreadJournal({ dir });
+    const server = new AppServer({
+      threadJournal: journal,
+      threadManagerOptions: {
+        generateThreadId: sequence("thread"), generateRunId: sequence("run"), generateTurnId: sequence("turn"), generateItemId: sequence("item"), clock: () => 1000,
+        runtimeFactory: () => ({
+          model: { async *generate() { yield { type: "message.completed", content: "tool", toolCalls: [{ id: "call-1", name: "test" }] }; } },
+          toolRuntime: { execute: () => pending.iterable }
+        })
+      }
+    });
+    const started = await server.request({ method: "thread/start" });
+    if (!started.ok || started.method !== "thread/start") throw new Error("thread start failed");
+    await server.request({ method: "turn/start", params: { threadId: started.result.thread.id, input: "go" } });
+    await pending.nextStarted.promise;
+    await expect(server.request({ method: "turn/interrupt", params: { threadId: started.result.thread.id } })).resolves.toMatchObject({ ok: true });
+    await pending.returnCalled.promise;
+    const path = pathFor(dir, "thread-1");
+    const beforeLateRelease = await readFile(path, "utf8");
+    pending.release({ value: { type: "output.delta", delta: "late" }, done: false });
+    await Promise.resolve();
+    expect(await readFile(path, "utf8")).toBe(beforeLateRelease);
+    await server.close();
+    const [replay] = await journal.replay();
+    if (replay?.type !== "success") throw new Error("thread did not replay");
+    expect(replay.items.some((item) => item.type === "tool.output.delta")).toBe(false);
+    expect(replay.items.some((item) => item.type === "turn.canceled")).toBe(true);
   });
 });
 
@@ -146,4 +184,22 @@ function pathFor(dir: string, threadId: string): string { return join(dir, `thre
 
 function sequence(prefix: string): () => string { let value = 0; return () => `${prefix}-${++value}`; }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((innerResolve) => { resolve = innerResolve; }); return { promise, resolve }; }
+function pendingIterator<T>() {
+  const nextStarted = deferred<void>();
+  const returnCalled = deferred<void>();
+  const next = deferred<IteratorResult<T>>();
+  return {
+    nextStarted,
+    returnCalled,
+    release: next.resolve,
+    iterable: {
+      [Symbol.asyncIterator](): AsyncIterator<T> {
+        return {
+          next: () => { nextStarted.resolve(); return next.promise; },
+          return: () => { returnCalled.resolve(); return new Promise<IteratorResult<T>>(() => undefined); }
+        };
+      }
+    }
+  };
+}
 async function waitFor(predicate: () => boolean): Promise<void> { for (let index = 0; index < 100; index += 1) { if (predicate()) return; await new Promise((resolve) => setTimeout(resolve, 1)); } throw new Error("timed out"); }

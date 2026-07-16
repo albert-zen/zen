@@ -587,7 +587,7 @@ describe("ThreadManager", () => {
 
     expect(turn.status).toBe("canceled");
     expect(snapshot.status).toBe("idle");
-    expect(snapshot.items.map((item) => item.type)).toContain("tool.error");
+    expect(snapshot.items.map((item) => item.type)).not.toContain("tool.error");
     expect(snapshot.items.map((item) => item.type)).toContain("turn.canceled");
     expect(snapshot.items.map((item) => item.type)).not.toContain(
       "turn.completed"
@@ -598,9 +598,6 @@ describe("ThreadManager", () => {
         "error"
       )
     );
-    expect(
-      snapshot.items.find((item) => item.type === "tool.error")?.payload
-    ).toEqual(expect.objectContaining({ message: "fake tool canceled" }));
     expect(events.at(-1)).toEqual({
       type: "turn/completed",
       threadId: thread.id,
