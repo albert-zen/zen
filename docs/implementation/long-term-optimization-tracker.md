@@ -151,6 +151,12 @@ required worker return, readiness, and review fields from
 - [ ] Wave 4: 006 implemented, reviewed through the strict loop, and integrated.
 - [ ] Wave 5: 007 implemented, reviewed through the strict loop, and integrated.
 
+## Wave Review Register
+
+| Wave | Local Review State | Standards | Spec | Verified Code Revision | Review Evidence |
+| --- | --- | --- | --- | --- | --- |
+| Wave 1 | Agent Review | Rework addressed; fresh review pending | STRICT PASS | `47304b2168cb8048fe7e57fad596d509a726afe2` | `docs/implementation/long-term-optimization-review.md` |
+
 ## Final Completion Gate
 
 - [ ] All seven issues satisfy their acceptance criteria.

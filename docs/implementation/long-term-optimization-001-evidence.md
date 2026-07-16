@@ -122,3 +122,21 @@ Spec Review non-blocking: none
 Spec Review missing evidence: none
 Local tracker state decision: Agent Review
 State decision reason: STRICT PASS. Independent verification passed 7 targeted files/41 tests, both typechecks, both builds, and a clean bundle secret scan; the recorded full suite passed 29 files/174 tests. The reviewer verified proxy closure injection, DEBUG=vite:config redaction, the browser no-secret path, mutually exclusive credential modes, atomic publication/claim/cleanup, CLI shutdown races, loopback/remote documentation, and conforming commit subjects. Issue 001 remains in Agent Review for manager-owned integration.
+
+## Canonical History Correction Ledger
+
+The Wave 1 Standards review found that two canonical commits had empty bodies.
+The manager authorized a local-only rewrite of
+`codex/long-term-optimization`; prior append-only notes remain unchanged and
+their old hash references resolve through this ledger:
+
+| Prior local hash | Canonical hash | Disposition |
+| --- | --- | --- |
+| `65ac805b8e9acccbab3e44fa33e3c61ba78b6d71` | `e05045d6acf5a198470b882c57349baff81f2d7e` | Same tree, author, committer metadata, and subject; added standards-compliant Why/What/Evidence body. |
+| `819e9e151c7add2dad00215556f7b4a3c1852588` | `8d8f962c2b40767449dade032865c6ffc9f34a44` | Same tree, author, committer metadata, and subject; added standards-compliant Why/What/Evidence body. |
+| `a84f6872eb2cf41e1020ee8de3f88ea05c5d2fc3` | `99a2a7cd184f0d13d4a5d0e673b41888024c9945` | Descendant hash changed only because its parent was rewritten; tree, metadata, and message are unchanged. |
+
+The original local issue branch remains available as historical reviewed
+evidence. The canonical integrated ancestry and full Wave 1 mapping are
+recorded in
+`docs/implementation/long-term-optimization-review.md`.
