@@ -8,6 +8,7 @@ import {
   runDogfoodAcceptanceScenario,
   summarizeDogfoodAcceptanceThread,
   AppServer,
+  ApprovalBroker,
   LocalToolRuntime,
   type ModelContext,
   type ProtocolItem,
@@ -182,20 +183,40 @@ describe("dogfood acceptance scenario", () => {
         evidencePath,
         fixtureRoot,
         now: () => new Date("2026-06-05T00:00:00.000Z"),
-        createAppServer: ({ fixturePath }) =>
-          new AppServer({
+        createAppServer: ({ fixturePath }) => {
+          const approvalBroker = new ApprovalBroker();
+          const server = new AppServer({
+            approvalBroker,
             threadManagerOptions: {
               generateThreadId: sequence("thread"),
               generateRunId: sequence("run"),
               generateTurnId: sequence("turn"),
               generateItemId: sequence("item"),
               clock: () => 1000,
-              runtimeFactory: () => ({
+              runtimeFactory: ({ approvalBroker: runtimeBroker }) => ({
                 model: createScriptedDogfoodModel(),
-                toolRuntime: new LocalToolRuntime({ cwd: fixturePath })
+                toolRuntime: new LocalToolRuntime({
+                  cwd: fixturePath,
+                  approvalBroker: runtimeBroker
+                })
               })
             }
-          })
+          });
+          server.subscribe((notification) => {
+            if (notification.type === "approval/requested") {
+              void server.request({
+                method: "approval/resolve",
+                params: {
+                  approvalId: notification.approvalId,
+                  threadId: notification.threadId,
+                  turnId: notification.turnId,
+                  decision: "approveOnce"
+                }
+              });
+            }
+          });
+          return server;
+        }
       });
 
       expect(result.status).toBe("passed");

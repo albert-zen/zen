@@ -81,7 +81,7 @@ describe("terminal transcript", () => {
     ],
     [{ type: "tool-error", toolName: "demo", message: "bad" }, "Tool error demo: bad"],
     [{ type: "approval-pending", reason: "Run?" }, "Approval pending: Run?"],
-    [{ type: "approval-resolved", decision: "approve" }, "Approval resolved: approve"]
+    [{ type: "approval-resolved", decision: "approveOnce" }, "Approval resolved: approveOnce"]
   ] as const)("renders a %s row", (partial, expected) => {
     const row = {
       itemId: "item-1",

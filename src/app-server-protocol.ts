@@ -6,7 +6,7 @@ export type JsonObject = { readonly [key: string]: JsonValue };
 
 export type ThreadStatus = "idle" | "running" | "failed";
 export type TurnStatus = "queued" | "inProgress" | "completed" | "failed" | "canceled";
-export type ApprovalDecision = "approve" | "approveForSession" | "decline" | "cancel";
+export type ApprovalDecision = "approveOnce" | "decline";
 
 export type ProtocolItem = {
   readonly id: string;

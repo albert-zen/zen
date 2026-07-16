@@ -12,6 +12,7 @@ import {
   type TurnStartInput
 } from "./thread-manager.js";
 import type { ThreadStore } from "./thread-store.js";
+import { ApprovalBroker, type ApprovalResolveInput } from "./approval-runtime.js";
 
 export type AppServerRequestInput =
   | AppServerRequest
@@ -23,6 +24,7 @@ export type AppServerRequestInput =
 export type AppServerOptions = {
   readonly threadManagerOptions?: ThreadManagerOptions;
   readonly threadStore?: ThreadStore;
+  readonly approvalBroker?: ApprovalBroker;
 };
 
 export type AppServerSubscription = () => void;
@@ -39,10 +41,15 @@ export type AppServerNotificationListener = (
 export class AppServer implements AppServerClient {
   private readonly threadManager: ThreadManager;
   private readonly threadStore?: ThreadStore;
+  private readonly approvalBroker: ApprovalBroker;
 
   constructor(options: AppServerOptions = {}) {
     this.threadStore = options.threadStore;
-    this.threadManager = new ThreadManager(options.threadManagerOptions);
+    this.approvalBroker = options.approvalBroker ?? new ApprovalBroker();
+    this.threadManager = new ThreadManager({
+      ...options.threadManagerOptions,
+      approvalBroker: this.approvalBroker
+    });
     this.threadManager.observe((event) => {
       void this.persistEventThread(event);
     });
@@ -147,13 +154,19 @@ export class AppServer implements AppServerClient {
     }
 
     if (request.method === "approval/resolve") {
+      const params = readParams(request.params);
+      const decision = readRequiredApprovalDecision(params, "decision");
+      const input: ApprovalResolveInput = {
+        approvalId: readRequiredString(params, "approvalId"),
+        threadId: readRequiredString(params, "threadId"),
+        turnId: readRequiredString(params, "turnId"),
+        decision: { type: decision }
+      };
+      this.approvalBroker.resolve(input);
       return {
         method: "approval/resolve",
-        ok: false,
-        error: {
-          code: "UNSUPPORTED_METHOD",
-          message: "approval/resolve is not wired to an ApprovalBroker yet"
-        }
+        ok: true,
+        result: { approvalId: input.approvalId, decision }
       };
     }
 
@@ -177,6 +190,15 @@ export class AppServer implements AppServerClient {
 
     await this.threadStore.save(this.threadManager.readThread(threadId));
   }
+}
+
+function readRequiredApprovalDecision(
+  params: Readonly<Record<string, unknown>>,
+  key: string
+): "approveOnce" | "decline" {
+  const value = readRequiredString(params, key);
+  if (value === "approveOnce" || value === "decline") return value;
+  throw new Error(`${key} must be approveOnce or decline`);
 }
 
 function readParams(params: unknown): Readonly<Record<string, unknown>> {

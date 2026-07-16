@@ -126,6 +126,16 @@ export class ZenTuiApp {
       return;
     }
 
+    if (trimmed.startsWith("/approve ")) {
+      await this.resolveApproval(trimmed.slice("/approve ".length).trim(), "approveOnce");
+      return;
+    }
+
+    if (trimmed.startsWith("/decline ")) {
+      await this.resolveApproval(trimmed.slice("/decline ".length).trim(), "decline");
+      return;
+    }
+
     if (trimmed === "/tools") {
       this.showToolDetails = !this.showToolDetails;
       this.setLocalNotice(`Tool detail ${this.showToolDetails ? "expanded" : "collapsed"}`);
@@ -202,6 +212,22 @@ export class ZenTuiApp {
 
     try {
       await this.session.retryLatestRecoverableTurn();
+    } catch (cause) {
+      this.setLocalNotice(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  private async resolveApproval(approvalId: string, decision: "approveOnce" | "decline"): Promise<void> {
+    const pending = this.session.getSnapshot().timelineRows.find(
+      (row) => row.type === "approval-pending" && row.approvalId === approvalId
+    );
+    if (!pending || pending.type !== "approval-pending") {
+      this.setLocalNotice(`Unknown pending approval: ${approvalId}`);
+      return;
+    }
+    try {
+      await this.session.resolveApproval({ approvalId, threadId: pending.threadId, turnId: pending.turnId, decision });
+      this.setLocalNotice(`${decision === "approveOnce" ? "Approved" : "Declined"} ${approvalId}`);
     } catch (cause) {
       this.setLocalNotice(cause instanceof Error ? cause.message : String(cause));
     }
@@ -308,7 +334,7 @@ export class ZenTuiApp {
     const lines = [
       "Zen Agent",
       renderThreadSummary(snapshot.thread, state),
-      "Commands: /new /resume /status /tools /interrupt /retry",
+      "Commands: /new /resume /status /tools /interrupt /retry /approve <approvalId> /decline <approvalId>",
       "",
       "Messages"
     ];
@@ -405,7 +431,7 @@ function renderRow(
     return [`  Tool error: ${row.toolName ?? "tool"} (${row.message ?? "failed"})`];
   }
   if (row.type === "approval-pending") {
-    return [`  Approval pending: ${row.reason ?? row.approvalId ?? "approval requested"}`];
+    return [`  Approval pending: ${row.reason ?? row.approvalId}`, `  /approve ${row.approvalId} | /decline ${row.approvalId}`];
   }
   if (row.type === "approval-resolved") {
     return [`  Approval resolved: ${row.decision ?? "resolved"}`];

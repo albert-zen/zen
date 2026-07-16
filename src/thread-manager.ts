@@ -20,6 +20,7 @@ import {
 } from "./item-list.js";
 import { type ModelGateway, type ModelOptions } from "./model-gateway.js";
 import { type ToolRuntime } from "./tool-runtime.js";
+import { type ApprovalBroker } from "./approval-runtime.js";
 
 export type { ModelGateway, ModelOptions, ToolRuntime };
 
@@ -33,6 +34,7 @@ export type ThreadRuntime = {
 export type ThreadRuntimeFactoryInput = {
   readonly thread: ThreadRecord;
   readonly turn: TurnRecord;
+  readonly approvalBroker?: ApprovalBroker;
 };
 
 export type ThreadRuntimeFactory = (
@@ -47,6 +49,7 @@ export type ThreadManagerOptions = {
   readonly clock?: Clock;
   readonly runtimeFactory?: ThreadRuntimeFactory;
   readonly initialThreads?: readonly ThreadSnapshot[];
+  readonly approvalBroker?: ApprovalBroker;
 };
 
 export type TurnStartInput = {
@@ -104,6 +107,7 @@ export class ThreadManager {
   private readonly runtimeFactory: ThreadRuntimeFactory;
   private readonly turnTails = new Map<string, Promise<void>>();
   private readonly activeTurns = new Map<string, ActiveTurn>();
+  private readonly approvalBroker?: ApprovalBroker;
 
   constructor(options: ThreadManagerOptions = {}) {
     this.generateThreadId = options.generateThreadId ?? createSequence("thread");
@@ -112,6 +116,7 @@ export class ThreadManager {
     this.generateItemId = options.generateItemId ?? createSequence("item");
     this.clock = options.clock ?? Date.now;
     this.runtimeFactory = options.runtimeFactory ?? createDefaultRuntime;
+    this.approvalBroker = options.approvalBroker;
 
     for (const snapshot of options.initialThreads ?? []) {
       this.loadThread(snapshot, { emit: false });
@@ -194,6 +199,8 @@ export class ThreadManager {
       throw new Error(`No active turn for thread: ${threadId}`);
     }
 
+    // Resolve before aborting so the waiting tool emits its audit resolution and error.
+    this.approvalBroker?.declineTurn(threadId, active.turnId, "Turn interrupted");
     active.controller.abort();
 
     return this.getTurnSnapshot(this.getThread(threadId), active.turnId);
@@ -299,10 +306,12 @@ export class ThreadManager {
       const turn = this.getTurnSnapshot(thread, turnId);
       const runtime = this.runtimeFactory({
         thread: toThreadRecord(thread),
-        turn
+        turn,
+        approvalBroker: this.approvalBroker
       });
       const loop = new AgentLoop(createAgentLoopOptions(thread, runtime));
       const result = await loop.run({
+        threadId: thread.id,
         input: input.input,
         runId: turn.runId,
         turnId: turn.id,
@@ -432,6 +441,16 @@ export class ThreadManager {
         turnId: item.turnId,
         item: toProtocolItem(item)
       });
+
+      if (item.type === "approval.requested") {
+        const approvalId = readStringPayloadField(item.payload, "approvalId");
+        if (approvalId) this.emit({ type: "approval/requested", threadId: thread.id, turnId: item.turnId, approvalId, item: toProtocolItem(item) });
+      }
+      if (item.type === "approval.resolved") {
+        const approvalId = readStringPayloadField(item.payload, "approvalId");
+        const decision = readApprovalDecision(item.payload);
+        if (approvalId && decision) this.emit({ type: "approval/resolved", threadId: thread.id, turnId: item.turnId, approvalId, decision, item: toProtocolItem(item) });
+      }
     });
   }
 
@@ -550,6 +569,17 @@ export class ThreadManager {
       appended: true
     };
   }
+}
+
+function readStringPayloadField(payload: unknown, key: string): string | undefined {
+  if (typeof payload !== "object" || payload === null || !(key in payload)) return undefined;
+  const value = (payload as Readonly<Record<string, unknown>>)[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readApprovalDecision(payload: unknown): "approveOnce" | "decline" | undefined {
+  const decision = readStringPayloadField(payload, "decision");
+  return decision === "approveOnce" || decision === "decline" ? decision : undefined;
 }
 
 function toThreadRecord(thread: ThreadState): ThreadRecord {

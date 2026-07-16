@@ -40,7 +40,7 @@ export async function createProviderBackedAppServer(
 export function createProviderThreadRuntimeFactory(
   options: ProviderBackedAppServerOptions = {}
 ): ThreadRuntimeFactory {
-  return (): ThreadRuntime => {
+  return ({ approvalBroker }): ThreadRuntime => {
     const config = loadModelProviderConfig(options.config);
 
     return {
@@ -51,7 +51,7 @@ export function createProviderThreadRuntimeFactory(
         defaultParams: config.params,
         tools: localToolDefinitions
       }),
-      toolRuntime: new LocalToolRuntime({ cwd: options.cwd }),
+      toolRuntime: new LocalToolRuntime({ cwd: options.cwd, approvalBroker }),
       systemPrompt: DEFAULT_ZEN_SYSTEM_PROMPT
     };
   };

@@ -21,6 +21,7 @@ export type AgentLoopOptions = {
 };
 
 export type AgentRunInput = {
+  readonly threadId?: string;
   readonly input: unknown;
   readonly runId: string;
   readonly turnId: string;
@@ -102,6 +103,7 @@ export class AgentLoop {
 
       await appendToolExecutionItems({
         itemList: this.itemList,
+        threadId: input.threadId,
         appendItem: (item) => this.append(item),
         toolRuntime: this.toolRuntime,
         assistantItem: modelItems.completed,

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { LocalToolRuntime, localToolDefinitions } from "../src/index.js";
+import { ApprovalBroker, LocalToolRuntime, localToolDefinitions } from "../src/index.js";
 
 describe("LocalToolRuntime", () => {
   it("exposes shell as the only local workspace tool", () => {
@@ -14,29 +14,25 @@ describe("LocalToolRuntime", () => {
 
   it("runs shell commands in the workspace and returns command output", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "zen-tools-"));
-    const runtime = new LocalToolRuntime({ cwd });
+    const { runtime, broker } = createApprovedRuntime(cwd);
 
-    await expect(runTool(runtime, "shell", { command: "Write-Output ok" })).resolves.toBe(
+    await expect(runTool(runtime, broker, "shell", { command: "Write-Output ok" })).resolves.toBe(
       "exitCode: 0\nstdout:\nok"
     );
   });
 
   it("returns non-zero shell exits as normal tool results with stderr evidence", async () => {
-    const runtime = new LocalToolRuntime({
-      cwd: mkdtempSync(join(tmpdir(), "zen-tools-"))
-    });
+    const { runtime, broker } = createApprovedRuntime(mkdtempSync(join(tmpdir(), "zen-tools-")));
 
     await expect(
-      runTool(runtime, "shell", {
+      runTool(runtime, broker, "shell", {
         command: "Write-Error bad; exit 7"
       })
     ).resolves.toContain("exitCode: 7");
   });
 
   it("streams shell stdout and stderr before the command completes", async () => {
-    const runtime = new LocalToolRuntime({
-      cwd: mkdtempSync(join(tmpdir(), "zen-tools-"))
-    });
+    const { runtime, broker } = createApprovedRuntime(mkdtempSync(join(tmpdir(), "zen-tools-")));
     const iterator = runtime
       .execute(
         {
@@ -51,6 +47,13 @@ describe("LocalToolRuntime", () => {
       )
       [Symbol.asyncIterator]();
 
+    const requested = await iterator.next();
+    expect(requested).toEqual({ done: false, value: expect.objectContaining({ type: "approval.requested" }) });
+    resolvePending(broker);
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: expect.objectContaining({ type: "approval.resolved" })
+    });
     await expect(iterator.next()).resolves.toEqual({
       done: false,
       value: {
@@ -83,9 +86,7 @@ describe("LocalToolRuntime", () => {
   });
 
   it("cancels a running shell command through the tool execution signal", async () => {
-    const runtime = new LocalToolRuntime({
-      cwd: mkdtempSync(join(tmpdir(), "zen-tools-"))
-    });
+    const { runtime, broker } = createApprovedRuntime(mkdtempSync(join(tmpdir(), "zen-tools-")));
     const controller = new AbortController();
     const iterator = runtime
       .execute(
@@ -101,6 +102,9 @@ describe("LocalToolRuntime", () => {
       )
       [Symbol.asyncIterator]();
 
+    await iterator.next();
+    resolvePending(broker);
+    await iterator.next();
     await expect(iterator.next()).resolves.toEqual({
       done: false,
       value: {
@@ -177,15 +181,16 @@ async function collect<T>(events: AsyncIterable<T>): Promise<readonly T[]> {
 
 async function runTool(
   runtime: LocalToolRuntime,
+  broker: ApprovalBroker,
   name: string,
   input: unknown
 ): Promise<unknown> {
   const events = [];
 
-  for await (const event of runtime.execute(
-    { id: `call-${name}`, name, input },
-    createContext()
-  )) {
+  const iterator = runtime.execute({ id: `call-${name}`, name, input }, createContext())[Symbol.asyncIterator]();
+  const first = await iterator.next();
+  if (!first.done && first.value.type === "approval.requested") resolvePending(broker);
+  for await (const event of { [Symbol.asyncIterator]: () => iterator }) {
     events.push(event);
   }
 
@@ -222,4 +227,16 @@ function createContext(options: { readonly signal?: AbortSignal } = {}) {
       payload: {}
     }
   } as const;
+}
+
+function createApprovedRuntime(cwd: string): { readonly runtime: LocalToolRuntime; readonly broker: ApprovalBroker } {
+  const broker = new ApprovalBroker();
+  const runtime = new LocalToolRuntime({ cwd, approvalBroker: broker });
+  return { runtime, broker };
+}
+
+function resolvePending(broker: ApprovalBroker): void {
+  const pending = broker.listPending()[0]?.request;
+  if (!pending) throw new Error("Expected a pending approval");
+  broker.resolve({ approvalId: pending.id, threadId: pending.threadId, turnId: pending.turnId, decision: { type: "approveOnce" } });
 }

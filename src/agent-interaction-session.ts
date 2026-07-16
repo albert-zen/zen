@@ -156,6 +156,18 @@ export class AgentInteractionSession {
     return this.getSnapshot();
   }
 
+  async resolveApproval(input: {
+    readonly approvalId: string;
+    readonly threadId: string;
+    readonly turnId: string;
+    readonly decision: "approveOnce" | "decline";
+  }): Promise<void> {
+    const response = await this.options.client.request({ method: "approval/resolve", params: input });
+    if (!response.ok || response.method !== "approval/resolve") {
+      throw new Error(response.ok ? "Unexpected approval/resolve response" : response.error.message);
+    }
+  }
+
   async submit(input: JsonValue): Promise<AgentInteractionSnapshot> {
     this.subscribeOnce();
     const currentThread = await this.ensureThread();
