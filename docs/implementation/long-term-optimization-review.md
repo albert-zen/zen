@@ -205,3 +205,27 @@ on canonical branch `codex/long-term-optimization` with merge commit
 | `npm run build` | PASS |
 | `npm run web:build` | PASS; 1,750 modules transformed |
 | `git diff --check` | PASS |
+
+## Wave 3 Issue-004 Integration Record
+
+Integrated reviewed issue-004 head `0a27953e64f8913a4e5362618ee7f0122fe2c712`
+from `codex/long-term-optimization-004` into canonical
+`codex/long-term-optimization` with merge commit
+`d238643224039f5f1447364cfa178536bea0de93`. The merge was `--no-ff` and had
+no conflicts. Canonical issues 001-003 were preserved. Issue 004 is now
+`Integrated`; issue 005 remains in `Agent Review`, so Wave 3 is not complete.
+
+| Gate | Result |
+| --- | --- |
+| `npm test` (single serialized run) | INCOMPLETE; 30/31 files and 201/202 tests passed; `test/web-dev-proxy.test.ts` DEBUG subprocess case failed with transient `ECONNREFUSED` on `127.0.0.1:53931` |
+| `npx vitest run test/web-dev-proxy.test.ts --reporter=verbose` | PASS; 1 file, 4/4 tests |
+| `npm run typecheck` | PASS |
+| `npm run typecheck:web` | PASS |
+| `npm run build` | PASS |
+| `npm run web:build` | PASS; 1,750 modules transformed |
+| `git diff --check` | PASS |
+
+Residual risk: the required full suite has one non-reproducible Web proxy
+subprocess failure in the recorded run; the focused rerun passed. No source
+change was made because the failure did not reproduce and no merge regression
+was identified.
