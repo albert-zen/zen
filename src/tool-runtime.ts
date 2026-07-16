@@ -12,6 +12,29 @@ export type ToolOutputDeltaEvent = {
   readonly delta: unknown;
 };
 
+export type ToolApprovalRequestedEvent = {
+  readonly type: "approval.requested";
+  readonly request: {
+    readonly id: string;
+    readonly threadId: string;
+    readonly turnId: string;
+    readonly runId: string;
+    readonly toolCallId: string;
+    readonly toolName: string;
+    readonly input?: unknown;
+    readonly reason?: string;
+  };
+};
+
+export type ToolApprovalResolvedEvent = {
+  readonly type: "approval.resolved";
+  readonly request: ToolApprovalRequestedEvent["request"];
+  readonly decision: {
+    readonly type: "approveOnce" | "decline";
+    readonly reason?: string;
+  };
+};
+
 export type ToolResultCompletedEvent = {
   readonly type: "result.completed";
   readonly content: unknown;
@@ -24,10 +47,13 @@ export type ToolErrorEvent = {
 
 export type ToolRuntimeEvent =
   | ToolOutputDeltaEvent
+  | ToolApprovalRequestedEvent
+  | ToolApprovalResolvedEvent
   | ToolResultCompletedEvent
   | ToolErrorEvent;
 
 export type ToolExecutionContext = {
+  readonly threadId?: string;
   readonly runId: string;
   readonly turnId: string;
   readonly signal?: AbortSignal;
@@ -44,6 +70,7 @@ export interface ToolRuntime {
 
 export type AppendToolExecutionItemsInput = {
   readonly itemList: ItemList;
+  readonly threadId?: string;
   readonly appendItem?: ItemAppender;
   readonly toolRuntime: ToolRuntime;
   readonly assistantItem: Item;
@@ -98,12 +125,41 @@ export async function appendToolExecutionItems(
 
     try {
       for await (const event of input.toolRuntime.execute(call, {
+        threadId: input.threadId ?? "",
         runId: input.assistantItem.runId,
         turnId: input.assistantItem.turnId,
         signal: input.signal,
         assistantItem: input.assistantItem,
         startedItem
       })) {
+        if (event.type === "approval.requested") {
+          await appendRequired(appendItem, {
+            type: "approval.requested",
+            runId: input.assistantItem.runId,
+            turnId: input.assistantItem.turnId,
+            causeId: startedItem.id,
+            targetId: startedItem.id,
+            visibility: "trace",
+            payload: approvalRequestPayload(event.request)
+          });
+        }
+
+        if (event.type === "approval.resolved") {
+          await appendRequired(appendItem, {
+            type: "approval.resolved",
+            runId: input.assistantItem.runId,
+            turnId: input.assistantItem.turnId,
+            causeId: startedItem.id,
+            targetId: startedItem.id,
+            visibility: "trace",
+            payload: {
+              ...approvalRequestPayload(event.request),
+              decision: event.decision.type,
+              ...(event.decision.reason === undefined ? {} : { reason: event.decision.reason })
+            }
+          });
+        }
+
         if (event.type === "output.delta") {
           await appendItem({
             type: "tool.output.delta",
@@ -151,6 +207,21 @@ export async function appendToolExecutionItems(
   }
 
   return { started, completed, errors };
+}
+
+function approvalRequestPayload(
+  request: ToolApprovalRequestedEvent["request"]
+): Readonly<Record<string, unknown>> {
+  return {
+    approvalId: request.id,
+    threadId: request.threadId,
+    turnId: request.turnId,
+    runId: request.runId,
+    toolCallId: request.toolCallId,
+    toolName: request.toolName,
+    ...(request.input === undefined ? {} : { input: request.input }),
+    ...(request.reason === undefined ? {} : { reason: request.reason })
+  };
 }
 
 function appendToolError(

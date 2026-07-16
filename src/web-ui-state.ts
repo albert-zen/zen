@@ -109,7 +109,8 @@ export type ApprovalPendingTimelineRow = {
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
-  readonly approvalId?: string;
+  readonly approvalId: string;
+  readonly threadId: string;
   readonly toolCallId?: string;
   readonly reason?: string;
 };
@@ -513,7 +514,8 @@ function toTimelineRow(item: ProtocolItem): TimelineRow {
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      approvalId: readOptionalStringPayloadField(approvalPayload, "approvalId"),
+      approvalId: readStringPayloadField(approvalPayload, "approvalId"),
+      threadId: readStringPayloadField(approvalPayload, "threadId") || item.turnId,
       toolCallId: readOptionalStringPayloadField(approvalPayload, "toolCallId"),
       reason: readOptionalStringPayloadField(approvalPayload, "reason")
     };
@@ -645,10 +647,7 @@ function readApprovalDecision(
   const value = readStringPayloadField(payload, "decision");
 
   if (
-    value === "approve" ||
-    value === "approveForSession" ||
-    value === "decline" ||
-    value === "cancel"
+    value === "approveOnce" || value === "decline"
   ) {
     return value;
   }
@@ -677,16 +676,6 @@ function readApprovalEventType(
 }
 
 function readApprovalPayload(item: ProtocolItem): ProtocolItem["payload"] {
-  const delta = readPayloadField(item.payload, "delta");
-
-  if (typeof delta === "object" && delta !== null && !Array.isArray(delta)) {
-    const type = readPayloadField(delta as JsonObject, "type");
-
-    if (type === "approval.requested" || type === "approval.resolved") {
-      return delta as JsonObject;
-    }
-  }
-
   return item.payload;
 }
 

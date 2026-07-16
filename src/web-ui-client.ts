@@ -203,23 +203,12 @@ export class WebUiClient {
   }
 
   async resolveApproval(
-    approvalId: string | undefined,
+    approval: { readonly approvalId: string; readonly threadId: string; readonly turnId: string },
     decision: ApprovalDecision
   ): Promise<void> {
-    if (!approvalId) {
-      return;
-    }
-
-    const threadId = this.state.currentThread?.id;
-    const turnId = this.state.currentThread?.turns.at(-1)?.id;
-
-    if (!threadId || !turnId) {
-      throw new Error("Cannot resolve approval without an active thread and turn");
-    }
-
     const response = await this.client.request({
       method: "approval/resolve",
-      params: { threadId, turnId, approvalId, decision }
+      params: { ...approval, decision }
     });
 
     if (!response.ok) {

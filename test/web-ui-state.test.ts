@@ -306,14 +306,14 @@ describe("web ui state projection", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       approvalId: "approval-1",
-      decision: "approve",
+      decision: "approveOnce",
       item: item({
         id: "approval-resolved",
         seq: 2,
         type: "approval.resolved",
         payload: {
           approvalId: "approval-1",
-          decision: "approve"
+          decision: "approveOnce"
         }
       })
     });
@@ -326,12 +326,12 @@ describe("web ui state projection", () => {
         type: "approval-resolved",
         itemId: "approval-resolved",
         approvalId: "approval-1",
-        decision: "approve"
+        decision: "approveOnce"
       })
     ]);
   });
 
-  it("projects approval trace deltas emitted by policy tool runtime", () => {
+  it("projects first-class approval Items emitted by policy tool runtime", () => {
     const state = createWebUiState({
       id: "thread-1",
       status: "running",
@@ -340,33 +340,29 @@ describe("web ui state projection", () => {
         item({
           id: "approval-request-delta",
           seq: 1,
-          type: "tool.output.delta",
+          type: "approval.requested",
           payload: {
+            approvalId: "approval-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            runId: "run-1",
             toolCallId: "call-1",
             toolName: "shell",
-            delta: {
-              type: "approval.requested",
-              approvalId: "approval-1",
-              toolCallId: "call-1",
-              toolName: "shell",
-              reason: "Run command?"
-            }
+            reason: "Run command?"
           }
         }),
         item({
           id: "approval-resolved-delta",
           seq: 2,
-          type: "tool.output.delta",
+          type: "approval.resolved",
           payload: {
+            approvalId: "approval-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            runId: "run-1",
             toolCallId: "call-1",
             toolName: "shell",
-            delta: {
-              type: "approval.resolved",
-              approvalId: "approval-1",
-              toolCallId: "call-1",
-              toolName: "shell",
-              decision: "decline"
-            }
+            decision: "decline"
           }
         })
       ]
@@ -382,7 +378,7 @@ describe("web ui state projection", () => {
     ]);
   });
 
-  it("preserves approval rows for shell-targeted policy deltas", () => {
+  it("preserves approval rows for shell-targeted first-class Items", () => {
     const state = createWebUiState({
       id: "thread-1",
       status: "running",
@@ -401,35 +397,31 @@ describe("web ui state projection", () => {
         item({
           id: "approval-request-delta",
           seq: 2,
-          type: "tool.output.delta",
+          type: "approval.requested",
           targetId: "shell-started",
           payload: {
+            approvalId: "approval-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            runId: "run-1",
             toolCallId: "call-1",
             toolName: "shell",
-            delta: {
-              type: "approval.requested",
-              approvalId: "approval-1",
-              toolCallId: "call-1",
-              toolName: "shell",
-              reason: "Run command?"
-            }
+            reason: "Run command?"
           }
         }),
         item({
           id: "approval-resolved-delta",
           seq: 3,
-          type: "tool.output.delta",
+          type: "approval.resolved",
           targetId: "shell-started",
           payload: {
+            approvalId: "approval-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            runId: "run-1",
             toolCallId: "call-1",
             toolName: "shell",
-            delta: {
-              type: "approval.resolved",
-              approvalId: "approval-1",
-              toolCallId: "call-1",
-              toolName: "shell",
-              decision: "approve"
-            }
+            decision: "approveOnce"
           }
         })
       ]
@@ -444,7 +436,7 @@ describe("web ui state projection", () => {
       expect.objectContaining({
         type: "approval-resolved",
         approvalId: "approval-1",
-        decision: "approve"
+        decision: "approveOnce"
       })
     ]);
   });

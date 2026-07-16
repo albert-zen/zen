@@ -119,12 +119,15 @@ describe("PolicyToolRuntime", () => {
     await expect(iterator.next()).resolves.toEqual({
       done: false,
       value: {
-        type: "output.delta",
-        delta: {
-          type: "approval.requested",
-          approvalId: "approval-1",
+        type: "approval.requested",
+        request: {
+          id: "approval-1",
+          threadId: "",
+          turnId: "turn-1",
+          runId: "run-1",
           toolCallId: "call-weather-1",
           toolName: "weather",
+          input: { city: "Shanghai" },
           reason: "outside workspace"
         }
       }
@@ -146,19 +149,27 @@ describe("PolicyToolRuntime", () => {
 
     broker.resolve({
       approvalId: "approval-1",
-      decision: { type: "approve", reason: "user accepted" }
+      threadId: "",
+      turnId: "turn-1",
+      decision: { type: "approveOnce", reason: "user accepted" }
     });
 
     await expect(nextEvent).resolves.toEqual({
       done: false,
       value: {
-        type: "output.delta",
-        delta: {
-          type: "approval.resolved",
-          approvalId: "approval-1",
+        type: "approval.resolved",
+        request: {
+          id: "approval-1",
+          threadId: "",
+          turnId: "turn-1",
+          runId: "run-1",
           toolCallId: "call-weather-1",
           toolName: "weather",
-          decision: "approve",
+          input: { city: "Shanghai" },
+          reason: "outside workspace"
+        },
+        decision: {
+          type: "approveOnce",
           reason: "user accepted"
         }
       }
@@ -205,6 +216,8 @@ describe("PolicyToolRuntime", () => {
     await waitForPendingApproval(broker, "approval-1");
     broker.resolve({
       approvalId: "approval-1",
+      threadId: "",
+      turnId: "turn-1",
       decision: { type: "decline", reason: "user declined" }
     });
 
@@ -216,34 +229,32 @@ describe("PolicyToolRuntime", () => {
     expect(items.getItems().map((item) => item.type)).toEqual([
       "assistant.message.completed",
       "tool.call.started",
-      "tool.output.delta",
-      "tool.output.delta",
+      "approval.requested",
+      "approval.resolved",
       "tool.error"
     ]);
     expect(
       items
         .getItems()
-        .filter((item) => item.type === "tool.output.delta")
+        .filter((item) => item.type === "approval.requested" || item.type === "approval.resolved")
         .map((item) => item.payload)
     ).toEqual([
       expect.objectContaining({
-        delta: {
-          type: "approval.requested",
-          approvalId: "approval-1",
-          toolCallId: "call-weather-1",
-          toolName: "weather",
-          reason: "network access"
-        }
+        approvalId: "approval-1",
+        threadId: "",
+        turnId: "turn-1",
+        toolCallId: "call-weather-1",
+        toolName: "weather",
+        reason: "network access"
       }),
       expect.objectContaining({
-        delta: {
-          type: "approval.resolved",
-          approvalId: "approval-1",
-          toolCallId: "call-weather-1",
-          toolName: "weather",
-          decision: "decline",
-          reason: "user declined"
-        }
+        approvalId: "approval-1",
+        threadId: "",
+        turnId: "turn-1",
+        toolCallId: "call-weather-1",
+        toolName: "weather",
+        decision: "decline",
+        reason: "user declined"
       })
     ]);
     expect(result.errors[0]?.payload).toEqual(

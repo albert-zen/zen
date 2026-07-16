@@ -31,6 +31,16 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     description: "Retry the latest failed or interrupted turn"
   },
   {
+    name: "/approve",
+    usage: "/approve <approvalId>",
+    description: "Approve one pending shell request"
+  },
+  {
+    name: "/decline",
+    usage: "/decline <approvalId>",
+    description: "Decline one pending shell request"
+  },
+  {
     name: "/tools",
     usage: "/tools",
     description: "Toggle expanded tool call details"

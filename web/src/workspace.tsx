@@ -180,7 +180,15 @@ export function AgentWorkspace(): React.ReactElement {
           <div id="timeline" className="overflow-auto px-6 py-8 max-md:px-4">
             <div className="mx-auto grid w-full max-w-5xl gap-5">
               {rows.length > 0 ? (
-                rows.map((row) => <TimelineMessage key={`${row.type}:${row.itemId}`} row={row} />)
+                rows.map((row) => (
+                  <TimelineMessage
+                    key={`${row.type}:${row.itemId}`}
+                    row={row}
+                    onResolve={(approval, decision) =>
+                      void client.resolveApproval(approval, decision).catch((cause) => setStreamError(readError(cause)))
+                    }
+                  />
+                ))
               ) : (
                 <div className="grid min-h-[calc(100vh-220px)] place-items-center text-center text-zinc-400">
                   <div>
@@ -309,7 +317,16 @@ function RuntimePanel(props: {
   );
 }
 
-function TimelineMessage({ row }: { row: TimelineRow }): React.ReactElement {
+function TimelineMessage({
+  row,
+  onResolve
+}: {
+  row: TimelineRow;
+  onResolve: (
+    approval: { readonly approvalId: string; readonly threadId: string; readonly turnId: string },
+    decision: "approveOnce" | "decline"
+  ) => void;
+}): React.ReactElement {
   const side = row.type === "user" ? "end" : "start";
   const isAssistant = row.type === "assistant" || row.type === "assistant-progress";
   return (
@@ -322,7 +339,7 @@ function TimelineMessage({ row }: { row: TimelineRow }): React.ReactElement {
           isAssistant && "border-transparent bg-transparent px-0"
         )}
       >
-        <RowContent row={row} />
+        <RowContent row={row} onResolve={onResolve} />
         <div className="mt-2 font-mono text-[11px] text-zinc-500">
           #{row.seq} {row.itemId}
         </div>
@@ -331,7 +348,33 @@ function TimelineMessage({ row }: { row: TimelineRow }): React.ReactElement {
   );
 }
 
-function RowContent({ row }: { row: TimelineRow }): React.ReactElement {
+function RowContent({
+  row,
+  onResolve
+}: {
+  row: TimelineRow;
+  onResolve: (
+    approval: { readonly approvalId: string; readonly threadId: string; readonly turnId: string },
+    decision: "approveOnce" | "decline"
+  ) => void;
+}): React.ReactElement {
+  const [resolving, setResolving] = React.useState(false);
+  if (row.type === "approval-pending") {
+    const approval = { approvalId: row.approvalId, threadId: row.threadId, turnId: row.turnId };
+    const resolve = (decision: "approveOnce" | "decline") => {
+      setResolving(true);
+      onResolve(approval, decision);
+    };
+    return (
+      <div className="grid gap-3">
+        <div>{row.reason ?? "Shell command requires approval"}</div>
+        <div className="flex gap-2">
+          <Button type="button" variant="primary" disabled={resolving} onClick={() => resolve("approveOnce")}>Approve</Button>
+          <Button type="button" variant="subtle" disabled={resolving} onClick={() => resolve("decline")}>Decline</Button>
+        </div>
+      </div>
+    );
+  }
   if (row.type === "shell") {
     return (
       <div>

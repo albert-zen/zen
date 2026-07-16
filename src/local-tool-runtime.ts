@@ -1,5 +1,10 @@
 import { execFile, spawn } from "node:child_process";
 import { resolve } from "node:path";
+import {
+  ApprovalBroker,
+  ToolApprovalDeniedError,
+  toToolApprovalRequest
+} from "./approval-runtime.js";
 import type {
   ToolCallPayload,
   ToolExecutionContext,
@@ -10,6 +15,8 @@ import type {
 export type LocalToolRuntimeOptions = {
   readonly cwd?: string;
   readonly shellTimeoutMs?: number;
+  /** Required for real shell execution; injected by AppServer's provider runtime. */
+  readonly approvalBroker?: ApprovalBroker;
 };
 
 export const localToolDefinitions = [
@@ -34,10 +41,12 @@ export const localToolDefinitions = [
 export class LocalToolRuntime implements ToolRuntime {
   private readonly cwd: string;
   private readonly shellTimeoutMs: number;
+  private readonly approvalBroker?: ApprovalBroker;
 
   constructor(options: LocalToolRuntimeOptions = {}) {
     this.cwd = resolve(options.cwd ?? process.cwd());
     this.shellTimeoutMs = options.shellTimeoutMs ?? 30_000;
+    this.approvalBroker = options.approvalBroker;
   }
 
   async *execute(
@@ -58,7 +67,27 @@ export class LocalToolRuntime implements ToolRuntime {
     const input = readObject(call.input);
 
     if (call.name === "shell") {
-      yield* this.runShell(readString(input.command, "command"), context);
+      const command = readString(input.command, "command");
+      const broker = this.approvalBroker;
+      if (!broker) {
+        throw new Error("LocalToolRuntime requires an ApprovalBroker before shell execution");
+      }
+      const pending = broker.request({
+        threadId: context.threadId ?? "",
+        call,
+        runId: context.runId,
+        turnId: context.turnId,
+        startedItemId: context.startedItem.id,
+        reason: "Shell commands require explicit approval"
+      });
+      yield { type: "approval.requested", request: toToolApprovalRequest(pending.request) };
+      const decision = await pending.decision;
+      yield { type: "approval.resolved", request: toToolApprovalRequest(pending.request), decision };
+      if (decision.type === "decline") {
+        yield { type: "error", error: new ToolApprovalDeniedError(decision.reason ?? "approval declined") };
+        return;
+      }
+      yield* this.runShell(command, context);
       return;
     }
 
