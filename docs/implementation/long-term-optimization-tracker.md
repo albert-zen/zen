@@ -18,7 +18,7 @@ integration. Workers implement one issue only.
 
 | Backlog | Ready | In Progress | Agent Review | Rework | Integrated | Complete | Blocked |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 006<br>007 | 004<br>005 | - | - | - | 003 | 001<br>002 | - |
+| 006<br>007 | 004 | - | 005 | - | 003 | 001<br>002 | - |
 
 ## Issue Register
 
@@ -28,7 +28,7 @@ integration. Workers implement one issue only.
 | long-term-optimization-002 | Complete | none | `codex/long-term-optimization-002` | 4 | 4 | `docs/implementation/long-term-optimization-002-evidence.md` |
 | long-term-optimization-003 | Integrated | 001, 002 | `codex/long-term-optimization-003 @ bc0a83de948e520cce63f6c4f85947e44ecbff8f` | 3 | 3 | `docs/implementation/long-term-optimization-003-evidence.md` |
 | long-term-optimization-004 | Ready | 002, 003 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-004-evidence.md` |
-| long-term-optimization-005 | Ready | 002, 003 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-005-evidence.md` |
+| long-term-optimization-005 | Agent Review | 002, 003 | `codex/long-term-optimization-005 @ pending` | 1 | 0 | `docs/implementation/long-term-optimization-005-evidence.md` |
 | long-term-optimization-006 | Backlog | 001-005 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-006-evidence.md` |
 | long-term-optimization-007 | Backlog | 006 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-007-evidence.md` |
 

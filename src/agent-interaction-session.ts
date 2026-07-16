@@ -10,8 +10,7 @@ import type {
   TurnSnapshot
 } from "./app-server-protocol.js";
 import {
-  applyAppServerNotification,
-  createWebUiState,
+  InteractionProjection,
   type TimelineRow,
   type WebUiState
 } from "./web-ui-state.js";
@@ -62,25 +61,27 @@ export type AgentInteractionSessionListener = (
 ) => void;
 
 export class AgentInteractionSession {
-  private state: WebUiState = createWebUiState();
+  private readonly projection = new InteractionProjection();
   private subscription?: AppServerSubscription;
   private readonly listeners: AgentInteractionSessionListener[] = [];
+  private readonly completionWaiters = new Map<string, Array<{ resolve: () => void; reject: (cause: Error) => void }>>();
 
   constructor(private readonly options: AgentInteractionSessionOptions) {}
 
   getSnapshot(): AgentInteractionSnapshot {
+    const state = this.projection.getSnapshot();
     return {
-      state: this.state,
-      thread: this.state.currentThread
+      state,
+      thread: state.currentThread
         ? {
-            id: this.state.currentThread.id,
-            status: this.state.currentThread.status,
-            turns: this.state.currentThread.turns,
-            items: this.state.items
+            id: state.currentThread.id,
+            status: state.currentThread.status,
+            turns: state.currentThread.turns,
+            items: state.items
           }
         : undefined,
-      timelineRows: this.state.timelineRows,
-      recoverableTurn: findRecoverableTurn(this.state)
+      timelineRows: state.timelineRows,
+      recoverableTurn: findRecoverableTurn(state)
     };
   }
 
@@ -89,7 +90,7 @@ export class AgentInteractionSession {
     const list = await this.options.client.request({ method: "thread/list" });
 
     if (list.ok && list.method === "thread/list" && list.result.threads.length > 0) {
-      this.state = createWebUiState(list.result.threads[0]);
+      this.projection.replaceSnapshot(list.result.threads[0]);
       return this.getSnapshot();
     }
 
@@ -106,7 +107,7 @@ export class AgentInteractionSession {
       throw new Error(response.ok ? "Unexpected thread/start response" : response.error.message);
     }
 
-    this.state = createWebUiState(response.result.thread);
+    this.projection.replaceSnapshot(response.result.thread);
 
     return this.getSnapshot();
   }
@@ -134,7 +135,7 @@ export class AgentInteractionSession {
       throw new Error(response.ok ? "Unexpected thread/read response" : response.error.message);
     }
 
-    this.state = createWebUiState(response.result.thread);
+    this.projection.replaceSnapshot(response.result.thread);
     this.emit({ type: "state", snapshot: this.getSnapshot() });
 
     return this.getSnapshot();
@@ -234,8 +235,9 @@ export class AgentInteractionSession {
   }
 
   private async ensureThread(): Promise<{ readonly id: string }> {
-    if (this.state.currentThread) {
-      return { id: this.state.currentThread.id };
+    const currentThread = this.projection.getSnapshot().currentThread;
+    if (currentThread) {
+      return { id: currentThread.id };
     }
 
     const snapshot = await this.newThread();
@@ -253,11 +255,12 @@ export class AgentInteractionSession {
     }
 
     const listener: AppServerNotificationListener = (notification) => {
-      const previousRows = this.state.timelineRows;
+      const previousRows = this.projection.getSnapshot().timelineRows;
       const previousRowKeys = new Set(previousRows.map(toTimelineRowKey));
-      this.state = applyAppServerNotification(this.state, notification);
+      const changed = this.projection.apply(notification);
+      if (!changed) return;
       const snapshot = this.getSnapshot();
-      const nextRows = this.state.timelineRows.filter(
+      const nextRows = snapshot.timelineRows.filter(
         (row) => !previousRowKeys.has(toTimelineRowKey(row))
       );
 
@@ -266,6 +269,13 @@ export class AgentInteractionSession {
       }
 
       this.emit({ type: "state", snapshot });
+      if (notification.type === "turn/completed" || notification.type === "turn/failed") {
+        const waiters = this.completionWaiters.get(notification.threadId) ?? [];
+        this.completionWaiters.delete(notification.threadId);
+        waiters.forEach((waiter) => notification.type === "turn/failed"
+          ? waiter.reject(new Error(notification.error.message))
+          : waiter.resolve());
+      }
     };
 
     this.subscription = this.options.client.subscribe(listener);
@@ -273,27 +283,9 @@ export class AgentInteractionSession {
 
   private waitForNextTurnCompletion(threadId: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const unsubscribe = this.options.client.subscribe((notification) => {
-        if (
-          notification.type !== "turn/completed" &&
-          notification.type !== "turn/failed"
-        ) {
-          return;
-        }
-
-        if (notification.threadId !== threadId) {
-          return;
-        }
-
-        unsubscribe();
-
-        if (notification.type === "turn/failed") {
-          reject(new Error(notification.error.message));
-          return;
-        }
-
-        resolve();
-      });
+      const waiters = this.completionWaiters.get(threadId) ?? [];
+      waiters.push({ resolve, reject });
+      this.completionWaiters.set(threadId, waiters);
     });
   }
 

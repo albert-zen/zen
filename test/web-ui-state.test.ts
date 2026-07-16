@@ -3,10 +3,40 @@ import { describe, expect, it } from "vitest";
 import type { ThreadSnapshot } from "../src/app-server-protocol.js";
 import {
   applyAppServerNotification,
-  createWebUiState
+  createWebUiState,
+  InteractionProjection
 } from "../src/web-ui-state.js";
 
 describe("web ui state projection", () => {
+  it("caches snapshots, ignores no-op facts, and processes 1k/5k ordered appends with one listener call each", () => {
+    const projection = new InteractionProjection({ id: "thread-1", status: "idle", turns: [], items: [] });
+    const initial = projection.getSnapshot();
+    let listenerCalls = 0;
+    projection.subscribe(() => { listenerCalls += 1; });
+
+    for (let seq = 1; seq <= 5000; seq += 1) {
+      projection.apply({
+        type: "item/appended",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: item({ id: `item-${seq}`, seq, type: "user.message.completed", payload: { content: String(seq) } })
+      });
+    }
+
+    const snapshot = projection.getSnapshot();
+    expect(initial).not.toBe(snapshot);
+    expect(snapshot.items).toHaveLength(5000);
+    expect(snapshot.timelineRows).toHaveLength(5000);
+    expect(listenerCalls).toBe(5000);
+
+    const unchanged = projection.getSnapshot();
+    projection.apply({
+      type: "item/appended", threadId: "thread-1", turnId: "turn-1",
+      item: item({ id: "item-5000", seq: 5000, type: "user.message.completed", payload: { content: "5000" } })
+    });
+    expect(projection.getSnapshot()).toBe(unchanged);
+    expect(listenerCalls).toBe(5000);
+  });
   it("initializes current thread and timeline rows from a snapshot", () => {
     const snapshot: ThreadSnapshot = {
       id: "thread-1",

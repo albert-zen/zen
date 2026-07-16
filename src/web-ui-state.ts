@@ -124,77 +124,265 @@ export type ApprovalResolvedTimelineRow = {
   readonly decision?: ApprovalDecision;
 };
 
-export function createWebUiState(snapshot?: ThreadSnapshot): WebUiState {
-  if (!snapshot) {
-    return {
-      items: [],
-      timelineRows: []
-    };
+export type InteractionProjectionListener = () => void;
+
+/**
+ * The single interaction projection for presentation clients. Ordered facts update
+ * their indexed row directly; replacements and out-of-order facts deliberately
+ * take the deterministic rebuild path.
+ */
+export class InteractionProjection {
+  private readonly listeners = new Set<InteractionProjectionListener>();
+  private itemsById = new Map<string, ProtocolItem>();
+  private orderedItems: ProtocolItem[] = [];
+  private rows: TimelineRow[] = [];
+  private rowIndexByKey = new Map<string, number>();
+  private shellRowKeyByTarget = new Map<string, string>();
+  private assistantStarted = new Set<string>();
+  private assistantProgress = new Map<string, string>();
+  private approvalRowKeyById = new Map<string, string>();
+  private lastSeq = -Infinity;
+  private snapshot: WebUiState = { items: [], timelineRows: [] };
+
+  constructor(snapshot?: ThreadSnapshot) {
+    if (snapshot) {
+      this.replaceSnapshot(snapshot, false);
+    }
   }
 
-  return {
-    currentThread: {
-      id: snapshot.id,
-      status: snapshot.status,
-      turns: snapshot.turns.map((turn) => ({
-        ...turn,
-        itemIds: [...turn.itemIds]
-      }))
-    },
-    items: [...snapshot.items].sort(compareItems),
-    timelineRows: buildTimelineRows(snapshot.items)
-  };
+  getSnapshot(): WebUiState {
+    return this.snapshot;
+  }
+
+  subscribe(listener: InteractionProjectionListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  replaceSnapshot(snapshot: ThreadSnapshot, notify = true): boolean {
+    const next = createStateFromSnapshot(snapshot);
+    if (sameState(this.snapshot, next)) {
+      return false;
+    }
+    this.resetIndexes(next);
+    this.publish(next, notify);
+    return true;
+  }
+
+  apply(notification: AppServerNotification): boolean {
+    if (notification.type === "thread/started") {
+      return this.replaceSnapshot(notification.thread);
+    }
+
+    if (isTurnNotification(notification)) {
+      if (!isForCurrentThread(this.snapshot, notification.threadId)) return false;
+      return this.updateTurn(notification.threadId, notification.turn);
+    }
+
+    const item = notification.type === "item/appended" || notification.type === "approval/requested"
+      ? notification.item
+      : notification.type === "approval/resolved" ? notification.item : undefined;
+    const threadId = "threadId" in notification ? notification.threadId : undefined;
+    if (!item || !threadId || !isForCurrentThread(this.snapshot, threadId)) return false;
+
+    const existing = this.itemsById.get(item.id);
+    if (existing && sameItem(existing, item)) return false;
+    if (existing || item.seq <= this.lastSeq) {
+      return this.rebuildWithItem(item);
+    }
+    return this.appendOrdered(item);
+  }
+
+  private appendOrdered(item: ProtocolItem): boolean {
+    this.itemsById.set(item.id, item);
+    this.orderedItems.push(item);
+    this.lastSeq = item.seq;
+    this.applyItemRow(item);
+    this.publish(this.nextSnapshot());
+    return true;
+  }
+
+  private rebuildWithItem(item: ProtocolItem): boolean {
+    const items = new Map(this.itemsById);
+    items.set(item.id, item);
+    const next = createStateFromParts(this.snapshot.currentThread, [...items.values()]);
+    this.resetIndexes(next);
+    this.publish(next);
+    return true;
+  }
+
+  private updateTurn(threadId: string, turn: ThreadSnapshot["turns"][number]): boolean {
+    const current = this.snapshot.currentThread ?? { id: threadId, status: "idle" as const, turns: [] };
+    const index = current.turns.findIndex((entry) => entry.id === turn.id);
+    const turns = index < 0
+      ? [...current.turns, cloneTurn(turn)]
+      : current.turns.map((entry, position) => position === index ? cloneTurn(turn) : entry);
+    const next = { ...this.snapshot, currentThread: { id: current.id, status: deriveThreadStatus(turns), turns } };
+    if (sameState(this.snapshot, next)) return false;
+    this.publish(next);
+    return true;
+  }
+
+  private applyItemRow(item: ProtocolItem): void {
+    if (item.type === "assistant.message.started") {
+      this.assistantStarted.add(item.id);
+      return;
+    }
+    if (item.type === "assistant.message.delta" && item.targetId && this.assistantStarted.has(item.targetId)) {
+      const content = `${this.assistantProgress.get(item.targetId) ?? ""}${readStringPayloadField(item.payload, "delta")}`;
+      this.assistantProgress.set(item.targetId, content);
+      const started = this.itemsById.get(item.targetId);
+      if (started) this.upsertRow(`assistant:${item.targetId}`, { type: "assistant-progress", itemId: item.targetId, seq: started.seq, turnId: started.turnId, content });
+      return;
+    }
+    if (item.type === "assistant.message.completed" && item.targetId) {
+      this.removeRow(`assistant:${item.targetId}`);
+      this.assistantProgress.delete(item.targetId);
+    }
+    if (item.type === "tool.call.started" && readStringPayloadField(item.payload, "toolName") === "shell") {
+      const key = `shell:${item.id}`;
+      this.shellRowKeyByTarget.set(item.id, key);
+      this.upsertRow(key, { type: "shell", itemId: item.id, seq: item.seq, turnId: item.turnId, toolCallId: readOptionalStringPayloadField(item.payload, "toolCallId"), command: readCommand(readPayloadField(item.payload, "input")), status: "running", stdout: "", stderr: "" });
+      return;
+    }
+    if (item.targetId && this.shellRowKeyByTarget.has(item.targetId) && isShellChildItem(item, new Map([...this.shellRowKeyByTarget.keys()].map((id) => [id, {} as ShellTimelineRow])))) {
+      this.updateShellRow(item);
+      return;
+    }
+    const approvalType = readApprovalEventType(item);
+    if (approvalType === "approval.requested") {
+      const approvalId = readStringPayloadField(readApprovalPayload(item), "approvalId");
+      const key = `approval:${approvalId}`;
+      this.approvalRowKeyById.set(approvalId, key);
+      this.upsertRow(key, toTimelineRow(item));
+      return;
+    }
+    if (approvalType === "approval.resolved") {
+      this.removeRow(this.approvalRowKeyById.get(readStringPayloadField(readApprovalPayload(item), "approvalId")) ?? "");
+    }
+    if (item.type !== "system.message.completed" && item.type !== "assistant.message.delta") this.upsertRow(`item:${item.id}`, toTimelineRow(item));
+  }
+
+  private updateShellRow(item: ProtocolItem): void {
+    const key = this.shellRowKeyByTarget.get(item.targetId as string);
+    const index = key === undefined ? undefined : this.rowIndexByKey.get(key);
+    if (key === undefined || index === undefined) return;
+    const current = this.rows[index] as ShellTimelineRow;
+    let next = current;
+    if (item.type === "tool.output.delta") {
+      const delta = readShellOutputDelta(item.payload);
+      if (delta) next = { ...current, stdout: delta.stream === "stdout" ? current.stdout + delta.chunk : current.stdout, stderr: delta.stream === "stderr" ? current.stderr + delta.chunk : current.stderr };
+    } else if (item.type === "tool.result.completed") {
+      const result = parseShellResult(readPayloadField(item.payload, "content"));
+      next = { ...current, status: result.exitCode !== undefined && result.exitCode !== 0 ? "failed" : "completed", exitCode: result.exitCode, stdout: result.stdout ?? current.stdout, stderr: result.stderr ?? current.stderr };
+    } else if (item.type === "tool.error") {
+      const error = readOptionalStringPayloadField(item.payload, "message") ?? "failed";
+      next = { ...current, status: isInterruptedShellMessage(error) ? "interrupted" : "failed", error };
+    }
+    this.upsertRow(key, next);
+  }
+
+  private upsertRow(key: string, row: TimelineRow): void {
+    const index = this.rowIndexByKey.get(key);
+    if (index === undefined) { this.rowIndexByKey.set(key, this.rows.length); this.rows.push(row); return; }
+    this.rows[index] = row;
+  }
+
+  private removeRow(key: string): void {
+    const index = this.rowIndexByKey.get(key);
+    if (index === undefined) return;
+    this.rows.splice(index, 1);
+    this.rowIndexByKey.delete(key);
+    for (let position = index; position < this.rows.length; position += 1) this.rowIndexByKey.set(rowKey(this.rows[position]), position);
+  }
+
+  private nextSnapshot(): WebUiState {
+    return { ...this.snapshot, items: [...this.orderedItems], timelineRows: [...this.rows] };
+  }
+
+  private resetIndexes(state: WebUiState): void {
+    this.snapshot = state;
+    this.itemsById = new Map(state.items.map((item) => [item.id, item]));
+    this.orderedItems = [...state.items];
+    this.rows = [...state.timelineRows];
+    this.rowIndexByKey = new Map(this.rows.map((row, index) => [rowKey(row), index]));
+    this.shellRowKeyByTarget = new Map(this.rows.filter((row): row is ShellTimelineRow => row.type === "shell").map((row) => [row.itemId, rowKey(row)]));
+    this.assistantStarted = new Set(state.items.filter((item) => item.type === "assistant.message.started").map((item) => item.id));
+    this.assistantProgress = new Map(this.rows.filter((row): row is AssistantProgressTimelineRow => row.type === "assistant-progress").map((row) => [row.itemId, row.content]));
+    this.approvalRowKeyById = new Map(this.rows.filter((row): row is ApprovalPendingTimelineRow => row.type === "approval-pending").map((row) => [row.approvalId, rowKey(row)]));
+    this.lastSeq = state.items.at(-1)?.seq ?? -Infinity;
+  }
+
+  private publish(snapshot: WebUiState, notify = true): void {
+    this.snapshot = snapshot;
+    if (notify) this.listeners.forEach((listener) => listener());
+  }
+}
+
+const projections = new WeakMap<WebUiState, InteractionProjection>();
+
+export function createWebUiState(snapshot?: ThreadSnapshot): WebUiState {
+  const projection = new InteractionProjection(snapshot);
+  const state = projection.getSnapshot();
+  projections.set(state, projection);
+  return state;
 }
 
 export function applyAppServerNotification(
   state: WebUiState,
   notification: AppServerNotification
 ): WebUiState {
-  if (notification.type === "thread/started") {
-    return createWebUiState(notification.thread);
-  }
-
-  if (notification.type === "item/appended") {
-    if (!isForCurrentThread(state, notification.threadId)) {
-      return state;
-    }
-
-    return rebuildFromItems(state, appendOrReplaceItem(state.items, notification.item));
-  }
-
-  if (notification.type === "approval/requested") {
-    if (!isForCurrentThread(state, notification.threadId)) {
-      return state;
-    }
-
-    return rebuildFromItems(state, appendOrReplaceItem(state.items, notification.item));
-  }
-
-  if (notification.type === "approval/resolved" && notification.item) {
-    if (!isForCurrentThread(state, notification.threadId)) {
-      return state;
-    }
-
-    return rebuildFromItems(state, appendOrReplaceItem(state.items, notification.item));
-  }
-
-  if (
-    notification.type === "turn/started" ||
-    notification.type === "turn/completed" ||
-    notification.type === "turn/failed"
-  ) {
-    if (!isForCurrentThread(state, notification.threadId)) {
-      return state;
-    }
-
-    return updateCurrentThreadTurn(state, notification.threadId, notification.turn);
-  }
-
-  return state;
+  const projection = projections.get(state) ?? new InteractionProjection(toSnapshot(state));
+  projection.apply(notification);
+  const next = projection.getSnapshot();
+  projections.set(next, projection);
+  return next;
 }
 
 function isForCurrentThread(state: WebUiState, threadId: string): boolean {
   return !state.currentThread || state.currentThread.id === threadId;
+}
+
+function isTurnNotification(
+  notification: AppServerNotification
+): notification is Extract<AppServerNotification, { readonly type: "turn/started" | "turn/completed" | "turn/failed" }> {
+  return notification.type === "turn/started" || notification.type === "turn/completed" || notification.type === "turn/failed";
+}
+
+function createStateFromSnapshot(snapshot: ThreadSnapshot): WebUiState {
+  return createStateFromParts(
+    { id: snapshot.id, status: snapshot.status, turns: snapshot.turns.map(cloneTurn) },
+    snapshot.items
+  );
+}
+
+function createStateFromParts(
+  currentThread: WebUiState["currentThread"],
+  items: readonly ProtocolItem[]
+): WebUiState {
+  const sortedItems = [...items].sort(compareItems);
+  return { currentThread, items: sortedItems, timelineRows: buildTimelineRows(sortedItems) };
+}
+
+function toSnapshot(state: WebUiState): ThreadSnapshot | undefined {
+  return state.currentThread
+    ? { id: state.currentThread.id, status: state.currentThread.status, turns: state.currentThread.turns, items: state.items }
+    : undefined;
+}
+
+function rowKey(row: TimelineRow): string {
+  if (row.type === "assistant-progress") return `assistant:${row.itemId}`;
+  if (row.type === "shell") return `shell:${row.itemId}`;
+  if (row.type === "approval-pending") return `approval:${row.approvalId}`;
+  return `item:${row.itemId}`;
+}
+
+function sameItem(left: ProtocolItem, right: ProtocolItem): boolean {
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
+}
+
+function sameState(left: WebUiState, right: WebUiState): boolean {
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
 }
 
 function updateCurrentThreadTurn(

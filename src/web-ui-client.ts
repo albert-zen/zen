@@ -11,8 +11,7 @@ import type {
   ThreadSnapshot
 } from "./app-server-protocol.js";
 import {
-  applyAppServerNotification,
-  createWebUiState,
+  InteractionProjection,
   type WebUiState
 } from "./web-ui-state.js";
 
@@ -47,8 +46,9 @@ export class WebUiClient {
   private readonly client: AppServerClient;
   private readonly listeners = new Set<WebUiClientListener>();
   private unsubscribeFromServer?: AppServerSubscription;
-  private state = createWebUiState();
+  private readonly projection = new InteractionProjection();
   private connection: WebUiConnectionState;
+  private snapshot: WebUiClientSnapshot;
 
   constructor(options: WebUiClientOptions) {
     this.client = options.client;
@@ -56,13 +56,11 @@ export class WebUiClient {
       status: "disconnected",
       mode: options.mode ?? "real"
     };
+    this.snapshot = { connection: this.connection, state: this.projection.getSnapshot() };
   }
 
   getSnapshot(): WebUiClientSnapshot {
-    return {
-      connection: { ...this.connection },
-      state: this.state
-    };
+    return this.snapshot;
   }
 
   subscribe(listener: WebUiClientListener): AppServerSubscription {
@@ -99,11 +97,16 @@ export class WebUiClient {
     this.setConnection({ status: "disconnected" });
   }
 
+  dispose(): void {
+    this.disconnect();
+    this.listeners.clear();
+  }
+
   async startThread(): Promise<void> {
     const response = await this.client.request({ method: "thread/start" });
     const thread = readThreadResponse(response, "thread/start");
-    this.state = createWebUiState(thread);
-    this.emit();
+    this.projection.replaceSnapshot(thread);
+    this.refreshSnapshot();
   }
 
   async listThreads(): Promise<readonly ThreadSnapshot[]> {
@@ -126,8 +129,8 @@ export class WebUiClient {
       params: { threadId }
     });
     const thread = readThreadResponse(response, "thread/read");
-    this.state = createWebUiState(thread);
-    this.emit();
+    this.projection.replaceSnapshot(thread);
+    this.refreshSnapshot();
   }
 
   async submitMessage(input: string): Promise<void> {
@@ -137,13 +140,13 @@ export class WebUiClient {
       return;
     }
 
-    const thread = this.state.currentThread;
+    const thread = this.projection.getSnapshot().currentThread;
 
     if (!thread) {
       await this.startThread();
     }
 
-    const threadId = this.state.currentThread?.id;
+    const threadId = this.projection.getSnapshot().currentThread?.id;
 
     if (!threadId) {
       throw new Error("Web UI has no current thread after thread/start");
@@ -166,7 +169,7 @@ export class WebUiClient {
   }
 
   async interruptThread(): Promise<void> {
-    const threadId = this.state.currentThread?.id;
+    const threadId = this.projection.getSnapshot().currentThread?.id;
 
     if (!threadId) {
       return;
@@ -184,7 +187,7 @@ export class WebUiClient {
   }
 
   async retryTurn(turnId?: string): Promise<void> {
-    const threadId = this.state.currentThread?.id;
+    const threadId = this.projection.getSnapshot().currentThread?.id;
 
     if (!threadId) {
       return;
@@ -218,7 +221,7 @@ export class WebUiClient {
   }
 
   private applyNotification(notification: AppServerNotification): void {
-    this.state = applyAppServerNotification(this.state, notification);
+    const projectionChanged = this.projection.apply(notification);
 
     if (notification.type === "turn/started") {
       this.connection = { ...this.connection, status: "running", message: undefined };
@@ -236,7 +239,7 @@ export class WebUiClient {
       };
     }
 
-    this.emit();
+    if (projectionChanged || notification.type === "turn/started" || notification.type === "turn/completed" || notification.type === "turn/failed") this.refreshSnapshot();
   }
 
   private fail(cause: unknown): void {
@@ -249,11 +252,13 @@ export class WebUiClient {
   private setConnection(
     next: Omit<WebUiConnectionState, "mode"> & Partial<Pick<WebUiConnectionState, "mode">>
   ): void {
-    this.connection = {
+    const nextConnection = {
       mode: this.connection.mode,
       ...next
     };
-    this.emit();
+    if (sameConnection(this.connection, nextConnection)) return;
+    this.connection = nextConnection;
+    this.refreshSnapshot();
   }
 
   private disconnectFromServerOnly(): void {
@@ -262,8 +267,12 @@ export class WebUiClient {
   }
 
   private emit(): void {
-    const snapshot = this.getSnapshot();
-    this.listeners.forEach((listener) => listener(snapshot));
+    this.listeners.forEach((listener) => listener(this.snapshot));
+  }
+
+  private refreshSnapshot(): void {
+    this.snapshot = { connection: this.connection, state: this.projection.getSnapshot() };
+    this.emit();
   }
 }
 
@@ -357,4 +366,8 @@ function readThreadResponse(
 
 function readErrorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+function sameConnection(left: WebUiConnectionState, right: WebUiConnectionState): boolean {
+  return left.status === right.status && left.mode === right.mode && left.message === right.message;
 }

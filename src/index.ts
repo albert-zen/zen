@@ -205,6 +205,7 @@ export type {
   WebUiState
 } from "./web-ui-state.js";
 export {
+  InteractionProjection,
   applyAppServerNotification,
   createWebUiState
 } from "./web-ui-state.js";

@@ -13,7 +13,6 @@ import {
 import {
   BrowserAppServerTransportClient,
   WebUiClient,
-  type WebUiClientSnapshot,
   type WebUiConnectionState
 } from "../../src/web-ui-client";
 import type { ThreadSnapshot } from "../../src/app-server-protocol";
@@ -30,35 +29,30 @@ export function AgentWorkspace(): React.ReactElement {
   const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
   const initialMode: RuntimeMode = params.get("mode") === "demo" ? "demo" : "real";
   const [mode, setMode] = React.useState<RuntimeMode>(initialMode);
-  const [client, setClient] = React.useState(() =>
+  const [client] = React.useState(() =>
     createWebClient(initialMode, () => undefined)
   );
-  const [snapshot, setSnapshot] = React.useState<WebUiClientSnapshot>(() =>
-    client.getSnapshot()
+  const subscribeToClient = React.useCallback(
+    (notify: () => void) => client.subscribe(() => notify()),
+    [client]
   );
+  const getClientSnapshot = React.useCallback(() => client.getSnapshot(), [client]);
+  const snapshot = React.useSyncExternalStore(subscribeToClient, getClientSnapshot, getClientSnapshot);
   const [threads, setThreads] = React.useState<readonly ThreadSnapshot[]>([]);
   const [input, setInput] = React.useState("");
   const [showTrace, setShowTrace] = React.useState(false);
   const [streamStatus, setStreamStatus] = React.useState("disconnected");
   const [streamError, setStreamError] = React.useState("");
 
-  React.useEffect(() => client.subscribe(setSnapshot), [client]);
-
   const reconnect = React.useCallback(async () => {
     client.disconnect();
-    const next = createWebClient(mode, (status, error) => {
-      setStreamStatus(status);
-      setStreamError(error ? "event stream failed" : "");
-    });
-    setClient(next);
-    next.subscribe(setSnapshot);
-    await next.connect({ threadId: params.get("thread") ?? undefined });
-    setThreads(await next.listThreads());
-  }, [client, mode, params]);
+    await client.connect({ threadId: params.get("thread") ?? undefined });
+    setThreads(await client.listThreads());
+  }, [client, params]);
 
   React.useEffect(() => {
     void reconnect().catch((cause) => setStreamError(readError(cause)));
-    return () => client.disconnect();
+    return () => client.dispose();
   }, []);
 
   const state = snapshot.state;

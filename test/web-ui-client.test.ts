@@ -162,6 +162,28 @@ describe("Web UI client", () => {
     expect(client.requests.map((request) => request.method)).toEqual(["thread/read"]);
   });
 
+  it("owns one stream across start, resume, reconnect, disconnect, and disposal", async () => {
+    const client = new RecordingClient();
+    const webUi = new WebUiClient({ client });
+
+    await webUi.connect();
+    await webUi.startThread();
+    await webUi.resumeThread("thread-1");
+    expect(client.activeSubscriptions).toBe(1);
+    expect(client.subscribeCalls).toBe(1);
+
+    await webUi.connect({ threadId: "thread-1" });
+    expect(client.activeSubscriptions).toBe(1);
+    expect(client.subscribeCalls).toBe(2);
+    expect(client.unsubscribeCalls).toBe(1);
+
+    webUi.disconnect();
+    webUi.disconnect();
+    webUi.dispose();
+    expect(client.activeSubscriptions).toBe(0);
+    expect(client.unsubscribeCalls).toBe(2);
+  });
+
   it("submits the approval tuple supplied by the pending approval row", async () => {
     const client = new RecordingClient();
     const webUi = new WebUiClient({ client });
@@ -220,6 +242,9 @@ async function waitForStatus(
 
 class RecordingClient implements AppServerClient {
   private listener?: AppServerNotificationListener;
+  activeSubscriptions = 0;
+  subscribeCalls = 0;
+  unsubscribeCalls = 0;
   readonly requests: Parameters<AppServerClient["request"]>[0][] = [];
 
   request(request: Parameters<AppServerClient["request"]>[0]) {
@@ -308,9 +333,13 @@ class RecordingClient implements AppServerClient {
 
   subscribe(listener: AppServerNotificationListener): AppServerSubscription {
     this.listener = listener;
+    this.subscribeCalls += 1;
+    this.activeSubscriptions += 1;
 
     return () => {
       this.listener = undefined;
+      this.activeSubscriptions -= 1;
+      this.unsubscribeCalls += 1;
     };
   }
 
