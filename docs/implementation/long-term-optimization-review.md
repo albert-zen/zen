@@ -153,3 +153,16 @@ Known residual risks: local-only history rewrite requires consumers of old
 hashes to use the mapping ledger; browser automation remains deferred to issue
 007
 Blocker or context escalation details: none
+
+## Evidence Publication Ledger
+
+Verified code revision:
+`47304b2168cb8048fe7e57fad596d509a726afe2`
+
+Primary evidence-only commit:
+`c01883a3fcb82c15cce1c4d45166f6510e80b1fd`
+
+The primary evidence commit is the direct child of the verified code revision
+and changes only the three durable documentation artifacts named in the Worker
+Note. This append-only ledger is a docs-only successor because a commit cannot
+contain its own final object ID.
