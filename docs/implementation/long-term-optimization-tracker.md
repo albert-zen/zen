@@ -18,7 +18,7 @@ integration. Workers implement one issue only.
 
 | Backlog | Ready | In Progress | Agent Review | Rework | Integrated | Complete | Blocked |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 007 | - | - | - | - | 003<br>004<br>005 | 001<br>002<br>006 | - |
+| - | 007 | - | - | - | 003<br>004<br>005<br>006 | 001<br>002 | - |
 
 ## Issue Register
 
@@ -29,8 +29,8 @@ integration. Workers implement one issue only.
 | long-term-optimization-003 | Integrated | 001, 002 | `codex/long-term-optimization-003 @ bc0a83de948e520cce63f6c4f85947e44ecbff8f` | 3 | 3 | `docs/implementation/long-term-optimization-003-evidence.md` |
 | long-term-optimization-004 | Integrated | 002, 003 | `codex/long-term-optimization-004 @ 0a27953e64f8913a4e5362618ee7f0122fe2c712` | 4 | 4 | `docs/implementation/long-term-optimization-004-evidence.md` |
 | long-term-optimization-005 | Integrated | 002, 003 | `codex/long-term-optimization-005 @ 8654cf10b2bc0b7a884ca5105a4a8487740f4dfc` | 6 | 6 | `docs/implementation/long-term-optimization-005-evidence.md` |
-| long-term-optimization-006 | Complete | 001-005 | `codex/long-term-optimization-006 @ b0e01fecf0a6e4ed3f768fb65d22ae6c4a44c530` | 2 | 2 | `docs/implementation/long-term-optimization-006-evidence.md` |
-| long-term-optimization-007 | Backlog | 006 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-007-evidence.md` |
+| long-term-optimization-006 | Integrated | 001-005 | `codex/long-term-optimization-006 @ b62873bd3aa216f56d870c072f651ab2dbcd074a` | 2 | 2 | `docs/implementation/long-term-optimization-006-evidence.md` |
+| long-term-optimization-007 | Ready | 006 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-007-evidence.md` |
 
 ## State Transitions
 
@@ -148,7 +148,7 @@ required worker return, readiness, and review fields from
       passes.
 - [x] Wave 3: 004 and 005 integrated, then full current gates plus new targeted
       checks pass.
-- [ ] Wave 4: 006 implemented, reviewed through the strict loop, and integrated.
+- [x] Wave 4: 006 implemented, reviewed through the strict loop, and integrated.
 - [ ] Wave 5: 007 implemented, reviewed through the strict loop, and integrated.
 
 ## Wave Review Register
@@ -158,6 +158,7 @@ required worker return, readiness, and review fields from
 | Wave 1 | Complete | STRICT PASS | STRICT PASS | `47304b2168cb8048fe7e57fad596d509a726afe2` | `docs/implementation/long-term-optimization-review.md` |
 | Wave 2 | Integrated | STRICT PASS | STRICT PASS | `674dcd29fdc01cf261d90501fd45ef63023ed8ac` | `docs/implementation/long-term-optimization-review.md` |
 | Wave 3 | Complete | STRICT PASS | STRICT PASS | `6b1ea5c1e87c713f16a2cd54d6e236d0a135d5f7` | `docs/implementation/long-term-optimization-review.md` |
+| Wave 4 | Complete | STRICT PASS | STRICT PASS | `0fd30da99ac2ad0f506e456ec66cecd2eb736313` | `docs/implementation/long-term-optimization-review.md` |
 
 ## Final Completion Gate
 

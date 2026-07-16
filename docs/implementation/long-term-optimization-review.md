@@ -268,3 +268,36 @@ The known Web development proxy `ECONNREFUSED` did not occur during the final
 serialized run, so its targeted recovery path was not needed. Infrastructure
 redesign remains deferred to issue 007. No GitHub handoff runs because this
 repository remains in local-branch mode without a canonical remote.
+
+## Wave 4 Issue-006 Integration Record
+
+Integrated exact reviewed issue-006 head
+`b62873bd3aa216f56d870c072f651ab2dbcd074a` from
+`codex/long-term-optimization-006` into canonical
+`codex/long-term-optimization` with no-fast-forward merge commit
+`0fd30da99ac2ad0f506e456ec66cecd2eb736313` (parents
+`00a87a5fa1a6ac1751e459b046455785647b2e79` and
+`b62873bd3aa216f56d870c072f651ab2dbcd074a`). No conflicts occurred; all
+001-005 behavior and evidence remain in the first parent, and the reviewed
+006 topology is present in the second parent. The package-lock bin-path sync
+was committed separately as `1b19823`.
+
+| Gate | Exit | Result |
+| --- | ---: | --- |
+| `npm install --package-lock-only --ignore-scripts` | 0 | Up to date; 0 vulnerabilities; bin paths synchronized in separate commit |
+| `npm test -- --maxWorkers=1` | 0 | 33 files passed; 222/222 tests passed |
+| `npm run typecheck` | 0 | Core TypeScript check passed |
+| `npm run typecheck:web` | 0 | Web TypeScript check passed |
+| `npm run build` | 0 | Production Node declaration/JavaScript build passed |
+| `npm run build:acceptance` | 0 | Acceptance build passed |
+| `npm run web:build` | 0 | Vite production build passed; 1,752 modules transformed |
+| Package root/subpath runtime smoke | 0 | `zen-kernel`, `/product`, `/node`, `/presentation`, `/tui` imported successfully |
+| Package declaration smoke | 0 | Five published declaration entrypoints present |
+| Noninteractive CLI smoke | 0 | `dist/tui/cli.js` handled `/help` and `/exit` |
+| `git diff --check` | 0 | Passed |
+
+The unchanged TUI timing flake did not recur in this integration run; no test
+redesign was made. Provider-backed live behavior remains environment-dependent,
+and browser automation plus release-quality aggregate gates remain deferred to
+007. Canonical status after integration: 006 `Integrated`, Wave 4 `Complete`,
+007 `Ready`.
