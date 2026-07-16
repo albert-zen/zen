@@ -146,3 +146,20 @@ Reviewer notes: Ready for a new fresh-context reviewer; no self-review performed
 Open questions: none
 Known residual risks: Journal filenames can be long for unusually long thread IDs; compaction is outside issue 004.
 Blocker or context escalation details: none
+
+## Codex Review Note
+
+Round: 4
+Issue: long-term-optimization-004 Replace snapshot rewrites with durable append-only ThreadJournal
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: codex/long-term-optimization-004 @ c6884dc8efe2edcfaf493855f828e388c472d8a6
+Base revision/diff scope: bfd58e79161987bebf8cd9030b8c6b3c7793b3c9 -> c6884dc8efe2edcfaf493855f828e388c472d8a6
+Standards Review blocking: none
+Standards Review non-blocking: none
+Standards Review missing evidence: none
+Spec Review blocking: none
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local tracker state decision: Complete
+State decision reason: STRICT PASS. Static inspection proves pending-next rejection handling; manager declines an additional low-value test round.
