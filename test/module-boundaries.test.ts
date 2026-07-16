@@ -44,19 +44,45 @@ describe("module boundaries", () => {
     }
   });
 
-  it("keeps acceptance outside production declarations and Web source on aliases", () => {
+  it("keeps acceptance outside production declarations and Web imports on approved aliases", () => {
     const build = JSON.parse(readFileSync(resolve(root, "tsconfig.build.json"), "utf8")) as { exclude: string[] };
     expect(build.exclude).toContain("acceptance/**/*.ts");
-    for (const sourceFile of [resolve(root, "web/src/demo-app-server.ts"), resolve(root, "web/src/workspace.tsx")]) {
-      for (const specifier of importsOf(sourceFile)) {
-        expect(specifier).not.toMatch(/^\.\.\/\.\.\/src/u);
-      }
-    }
+    assertWebImports(webBrowserSourceFiles(), "browser");
+    assertWebImports([resolve(root, "web/vite.config.ts")], "vite");
+  });
+
+  it("rejects a direct adapter implementation import from Web code", () => {
+    expect(() => assertWebSpecifiers(["../src/adapters/node/app-server-transport.js"], "browser"))
+      .toThrow("must not reference a physical src path");
   });
 });
 
 function sourceFiles(): readonly string[] {
   return groups.flatMap((group) => ts.sys.readDirectory(resolve(root, "src", group), [".ts"], undefined, ["**/*.ts"]));
+}
+
+function webBrowserSourceFiles(): readonly string[] {
+  return ts.sys.readDirectory(resolve(root, "web/src"), [".ts", ".tsx"], undefined, ["**/*.ts", "**/*.tsx"]);
+}
+
+function assertWebImports(paths: readonly string[], kind: "browser" | "vite"): void {
+  for (const path of paths) assertWebSpecifiers(importsOf(path), kind);
+}
+
+function assertWebSpecifiers(specifiers: readonly string[], kind: "browser" | "vite"): void {
+  for (const specifier of specifiers) {
+    if (specifier.includes("/src/") || specifier.startsWith("../src/")) {
+      throw new Error(`Web ${kind} import must not reference a physical src path: ${specifier}`);
+    }
+    if (specifier.startsWith("#zen/")) {
+      const allowedAliases = kind === "browser"
+        ? ["#zen/product", "#zen/presentation"]
+        : ["#zen/node"];
+      if (!allowedAliases.includes(specifier)) {
+        throw new Error(`Web ${kind} import uses an unapproved Zen alias: ${specifier}`);
+      }
+    }
+  }
 }
 
 function importsOf(path: string): readonly string[] {

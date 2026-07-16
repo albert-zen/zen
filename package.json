@@ -25,6 +25,11 @@
       "default": "./dist/tui/index.js"
     }
   },
+  "imports": {
+    "#zen/node": "./src/adapters/node/index.ts",
+    "#zen/product": "./src/product/index.ts",
+    "#zen/presentation": "./src/presentation/index.ts"
+  },
   "scripts": {
     "app-server": "npm run build && node dist/adapters/node/app-server-cli.js",
     "build": "tsc -p tsconfig.build.json",

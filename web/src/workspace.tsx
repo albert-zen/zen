@@ -15,9 +15,9 @@ import {
   WebUiClient,
   type WebUiClientSnapshot,
   type WebUiConnectionState
-} from "@zen/presentation";
-import type { ThreadSnapshot } from "@zen/product";
-import type { TimelineRow, WebUiState } from "@zen/presentation";
+} from "#zen/presentation";
+import type { ThreadSnapshot } from "#zen/product";
+import type { TimelineRow, WebUiState } from "#zen/presentation";
 import { Button } from "./components/ui/button";
 import { Card } from "./components/ui/card";
 import { Textarea } from "./components/ui/textarea";

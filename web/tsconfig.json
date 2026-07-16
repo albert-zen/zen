@@ -9,8 +9,9 @@
     "baseUrl": "..",
     "ignoreDeprecations": "6.0",
     "paths": {
-      "@zen/product": ["src/product/index.ts"],
-      "@zen/presentation": ["src/presentation/index.ts"]
+      "#zen/node": ["src/adapters/node/index.ts"],
+      "#zen/product": ["src/product/index.ts"],
+      "#zen/presentation": ["src/presentation/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
