@@ -155,7 +155,7 @@ required worker return, readiness, and review fields from
 
 | Wave | Local Review State | Standards | Spec | Verified Code Revision | Review Evidence |
 | --- | --- | --- | --- | --- | --- |
-| Wave 1 | Agent Review | Rework addressed; fresh review pending | STRICT PASS | `47304b2168cb8048fe7e57fad596d509a726afe2` | `docs/implementation/long-term-optimization-review.md` |
+| Wave 1 | Complete | STRICT PASS | STRICT PASS | `47304b2168cb8048fe7e57fad596d509a726afe2` | `docs/implementation/long-term-optimization-review.md` |
 
 ## Final Completion Gate
 

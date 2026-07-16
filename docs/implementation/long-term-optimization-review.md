@@ -166,3 +166,25 @@ The primary evidence commit is the direct child of the verified code revision
 and changes only the three durable documentation artifacts named in the Worker
 Note. This append-only ledger is a docs-only successor because a commit cannot
 contain its own final object ID.
+
+## Codex Review Note
+
+Round: 2
+Review scope: Wave 1 corrective Standards review
+Reviewer context: fresh
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization` at
+`f35bc7935e89d4b202f32e293508049672406218`
+Base revision/diff scope:
+`47304b2168cb8048fe7e57fad596d509a726afe2..f35bc7935e89d4b202f32e293508049672406218`
+Standards Review blocking: none - STRICT PASS
+Standards Review non-blocking: none
+Standards Review missing evidence: none
+Spec Review blocking: none - prior STRICT PASS remains authoritative
+Spec Review non-blocking: none
+Spec Review missing evidence: none
+Local review state decision: Complete
+State decision reason: The fresh corrective reviewer verified substantive
+commit bodies, durable exact-head evidence, append-only correction ledgers,
+identical old/new mapped trees, and a clean canonical branch. Both Wave 1
+review axes now pass.
