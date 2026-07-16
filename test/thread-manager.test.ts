@@ -753,6 +753,184 @@ describe("ThreadManager", () => {
     });
   });
 
+  it("reports failed terminal observer rejection and continues the queued turn", async () => {
+    const executionOrder: string[] = [];
+    const manager = new ThreadManager({
+      generateThreadId: sequence("thread"),
+      generateRunId: sequence("run"),
+      generateTurnId: sequence("turn"),
+      generateItemId: sequence("item"),
+      clock: () => 1000,
+      runtimeFactory: ({ turn }) => ({
+        model: {
+          async *generate() {
+            executionOrder.push(turn.id);
+
+            if (turn.id === "turn-1") {
+              yield { type: "error", error: new Error("model failed") };
+              return;
+            }
+
+            yield { type: "message.completed", content: turn.id };
+          }
+        }
+      })
+    });
+    const thread = manager.startThread();
+
+    manager.observe((event) => {
+      if (
+        event.type === "item/appended" &&
+        event.item.type === "turn.failed"
+      ) {
+        throw new Error("failed terminal observer rejected");
+      }
+    });
+
+    const first = manager.startTurn({ threadId: thread.id, input: "fail" });
+    const second = manager.startTurn({
+      threadId: thread.id,
+      input: "continue"
+    });
+
+    await expect(first).rejects.toThrow("item observer failed");
+    await expect(second).resolves.toEqual(
+      expect.objectContaining({ id: "turn-2", status: "completed" })
+    );
+
+    const snapshot = manager.readThread(thread.id);
+    const lifecycle = snapshot.items
+      .filter((item) => item.type.startsWith("turn."))
+      .map((item) => `${item.turnId}:${item.type}`);
+    const firstTerminalTypes = snapshot.items
+      .filter(
+        (item) =>
+          item.turnId === "turn-1" &&
+          [
+            "turn.completed",
+            "turn.failed",
+            "turn.canceled",
+            "turn.repaired"
+          ].includes(item.type)
+      )
+      .map((item) => item.type);
+
+    expect({
+      executionOrder,
+      statuses: snapshot.turns.map((turn) => turn.status),
+      firstTerminalTypes
+    }).toEqual({
+      executionOrder: ["turn-1", "turn-2"],
+      statuses: ["failed", "completed"],
+      firstTerminalTypes: ["turn.failed"]
+    });
+    expect(lifecycle.indexOf("turn-1:turn.failed")).toBeLessThan(
+      lifecycle.indexOf("turn-2:turn.started")
+    );
+    expect(() => manager.interruptTurn(thread.id)).toThrow(
+      `No active turn for thread: ${thread.id}`
+    );
+  });
+
+  it("reports canceled terminal observer rejection and continues the queued turn", async () => {
+    const firstStarted = createDeferred<void>();
+    const executionOrder: string[] = [];
+    const manager = new ThreadManager({
+      generateThreadId: sequence("thread"),
+      generateRunId: sequence("run"),
+      generateTurnId: sequence("turn"),
+      generateItemId: sequence("item"),
+      clock: () => 1000,
+      runtimeFactory: ({ turn }) => ({
+        model: {
+          async *generate(_context, _options, signal) {
+            executionOrder.push(turn.id);
+
+            if (turn.id === "turn-1") {
+              if (!signal) {
+                throw new Error("missing model abort signal");
+              }
+
+              const aborted = createDeferred<void>();
+
+              firstStarted.resolve();
+              signal.addEventListener("abort", () => aborted.resolve(), {
+                once: true
+              });
+              await aborted.promise;
+              throw new Error("model canceled");
+            }
+
+            yield { type: "message.completed", content: turn.id };
+          }
+        }
+      })
+    });
+    const thread = manager.startThread();
+
+    manager.observe((event) => {
+      if (
+        event.type === "item/appended" &&
+        event.item.type === "turn.canceled"
+      ) {
+        throw new Error("canceled terminal observer rejected");
+      }
+    });
+
+    const first = manager.startTurn({ threadId: thread.id, input: "cancel" });
+
+    await firstStarted.promise;
+
+    const second = manager.startTurn({
+      threadId: thread.id,
+      input: "continue"
+    });
+    const interrupted = manager.interruptTurn(thread.id);
+
+    await expect(first).rejects.toThrow("item observer failed");
+    await expect(second).resolves.toEqual(
+      expect.objectContaining({ id: "turn-2", status: "completed" })
+    );
+
+    const snapshot = manager.readThread(thread.id);
+    const lifecycle = snapshot.items
+      .filter((item) => item.type.startsWith("turn."))
+      .map((item) => `${item.turnId}:${item.type}`);
+    const firstTerminalTypes = snapshot.items
+      .filter(
+        (item) =>
+          item.turnId === "turn-1" &&
+          [
+            "turn.completed",
+            "turn.failed",
+            "turn.canceled",
+            "turn.repaired"
+          ].includes(item.type)
+      )
+      .map((item) => item.type);
+
+    expect({
+      interrupted,
+      executionOrder,
+      statuses: snapshot.turns.map((turn) => turn.status),
+      firstTerminalTypes
+    }).toEqual({
+      interrupted: expect.objectContaining({
+        id: "turn-1",
+        status: "inProgress"
+      }),
+      executionOrder: ["turn-1", "turn-2"],
+      statuses: ["canceled", "completed"],
+      firstTerminalTypes: ["turn.canceled"]
+    });
+    expect(lifecycle.indexOf("turn-1:turn.canceled")).toBeLessThan(
+      lifecycle.indexOf("turn-2:turn.started")
+    );
+    expect(() => manager.interruptTurn(thread.id)).toThrow(
+      `No active turn for thread: ${thread.id}`
+    );
+  });
+
   it("enqueues retries at the tail with the original user input", async () => {
     const secondRelease = createDeferred<void>();
     const secondStarted = createDeferred<void>();
