@@ -199,8 +199,6 @@ export type ProtocolItemOptions = {
 
 export type ThreadSnapshotInput = {
   readonly threadId: string;
-  readonly status: ThreadStatus;
-  readonly turns: readonly TurnSnapshot[];
   readonly items: readonly Item[];
 };
 
@@ -236,22 +234,114 @@ export function toThreadSnapshot(
   input: ThreadSnapshotInput,
   options: ProtocolItemOptions = {}
 ): ThreadSnapshot {
+  const turns = projectTurns(input.items);
+
   return {
     id: input.threadId,
-    status: input.status,
-    turns: input.turns.map(cloneTurnSnapshot),
+    status: projectThreadStatus(turns),
+    turns,
     items: filterProtocolItems(input.items, options)
   };
 }
 
-function cloneTurnSnapshot(turn: TurnSnapshot): TurnSnapshot {
-  return {
-    id: turn.id,
-    runId: turn.runId,
-    status: turn.status,
-    itemIds: [...turn.itemIds],
-    error: turn.error === undefined ? undefined : toJsonValue(turn.error)
-  };
+type MutableTurnProjection = {
+  readonly id: string;
+  readonly runId: string;
+  status: TurnStatus;
+  readonly itemIds: string[];
+  error?: JsonValue;
+};
+
+function projectTurns(items: readonly Item[]): readonly TurnSnapshot[] {
+  const turns = new Map<string, MutableTurnProjection>();
+
+  for (const item of items) {
+    const status = lifecycleStatus(item.type);
+
+    if (!status) {
+      continue;
+    }
+
+    const turn = turns.get(item.turnId) ?? {
+      id: item.turnId,
+      runId: item.runId,
+      status,
+      itemIds: []
+    };
+
+    turn.status = status;
+    turn.error = lifecycleError(item, status);
+    turns.set(item.turnId, turn);
+  }
+
+  for (const item of items) {
+    turns.get(item.turnId)?.itemIds.push(item.id);
+  }
+
+  return [...turns.values()].map((turn) =>
+    omitUndefined({
+      id: turn.id,
+      runId: turn.runId,
+      status: turn.status,
+      itemIds: [...turn.itemIds],
+      error: turn.error
+    }) as TurnSnapshot
+  );
+}
+
+function lifecycleStatus(type: string): TurnStatus | undefined {
+  if (type === "turn.queued") {
+    return "queued";
+  }
+
+  if (type === "turn.started") {
+    return "inProgress";
+  }
+
+  if (type === "turn.completed") {
+    return "completed";
+  }
+
+  if (type === "turn.failed" || type === "turn.repaired") {
+    return "failed";
+  }
+
+  if (type === "turn.canceled") {
+    return "canceled";
+  }
+
+  return undefined;
+}
+
+function lifecycleError(
+  item: Item,
+  status: TurnStatus
+): JsonValue | undefined {
+  if (status !== "failed" && status !== "canceled") {
+    return undefined;
+  }
+
+  if (
+    typeof item.payload === "object" &&
+    item.payload !== null &&
+    "error" in item.payload
+  ) {
+    return toJsonValue(item.payload.error);
+  }
+
+  return undefined;
+}
+
+function projectThreadStatus(turns: readonly TurnSnapshot[]): ThreadStatus {
+  if (
+    turns.some(
+      (turn) => turn.status === "queued" || turn.status === "inProgress"
+    )
+  ) {
+    return "running";
+  }
+
+  return turns.at(-1)?.status === "failed" ? "failed" : "idle";
 }
 
 function toJsonObject(value: Readonly<Record<string, unknown>>): JsonObject {

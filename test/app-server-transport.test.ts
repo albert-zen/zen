@@ -232,8 +232,9 @@ describe("App Server HTTP transport", () => {
 
       expect(notifications.map((notification) => notification.type)).toEqual([
         "thread/started",
-        "turn/started",
         "item/appended",
+        "item/appended",
+        "turn/started",
         "item/appended",
         "item/appended",
         "item/appended",
@@ -250,7 +251,7 @@ describe("App Server HTTP transport", () => {
         notifications
           .filter((notification) => notification.type === "item/appended")
           .map((notification) => notification.item.seq)
-      ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     } finally {
       unsubscribe();
       await transport.close();

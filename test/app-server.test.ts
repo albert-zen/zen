@@ -88,14 +88,16 @@ describe("AppServer", () => {
         turn: expect.objectContaining({
           id: "turn-1",
           runId: "run-1",
-          status: "inProgress"
+          status: "queued",
+          itemIds: ["item-1"]
         })
       }
     });
     expect(notifications.map((notification) => notification.type)).toEqual([
       "thread/started",
-      "turn/started",
       "item/appended",
+      "item/appended",
+      "turn/started",
       "item/appended",
       "item/appended",
       "item/appended",
@@ -111,6 +113,7 @@ describe("AppServer", () => {
         .filter((notification) => notification.type === "item/appended")
         .map((notification) => notification.item.type)
     ).toEqual([
+      "turn.queued",
       "run.started",
       "turn.started",
       "user.message.completed",
@@ -121,6 +124,82 @@ describe("AppServer", () => {
       "turn.completed",
       "run.completed"
     ]);
+  });
+
+  it("serializes immediate same-thread turn/start requests FIFO", async () => {
+    const releases = [createDeferred<void>(), createDeferred<void>()];
+    const executionOrder: number[] = [];
+    const notifications: AppServerNotification[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const server = createServer({
+      model: {
+        async *generate() {
+          const callIndex = executionOrder.length;
+          const release = releases[callIndex];
+
+          if (!release) {
+            throw new Error("missing model release gate");
+          }
+
+          executionOrder.push(callIndex + 1);
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+
+          try {
+            await release.promise;
+            yield { type: "message.completed", content: callIndex + 1 };
+          } finally {
+            active -= 1;
+          }
+        }
+      }
+    });
+    server.subscribe((notification) => notifications.push(notification));
+    const start = await server.request({ method: "thread/start" });
+
+    if (!start.ok || start.method !== "thread/start") {
+      throw new Error("thread/start failed");
+    }
+
+    const first = server.request({
+      method: "turn/start",
+      params: { threadId: start.result.thread.id, input: "first" }
+    });
+    const second = server.request({
+      method: "turn/start",
+      params: { threadId: start.result.thread.id, input: "second" }
+    });
+
+    const queued = await Promise.all([first, second]);
+
+    await waitForCondition(() => executionOrder.length >= 1);
+    await Promise.resolve();
+    await Promise.resolve();
+    const orderBeforeFirstCompletes = [...executionOrder];
+
+    releases[0]?.resolve();
+    await waitForCondition(() => executionOrder.length === 2);
+    releases[1]?.resolve();
+    await waitForCondition(
+      () =>
+        notifications.filter(
+          (notification) => notification.type === "turn/completed"
+        ).length === 2
+    );
+
+    expect(
+      queued.map((response) =>
+        response.ok && response.method === "turn/start"
+          ? response.result.turn.status
+          : "failed"
+      )
+    ).toEqual(["queued", "queued"]);
+    expect({ executionOrder, maxActive, orderBeforeFirstCompletes }).toEqual({
+      executionOrder: [1, 2],
+      maxActive: 1,
+      orderBeforeFirstCompletes: [1]
+    });
   });
 
   it("returns typed errors for unknown and invalid requests", async () => {
@@ -207,7 +286,8 @@ describe("AppServer", () => {
         turn: expect.objectContaining({
           id: "turn-2",
           runId: "run-2",
-          status: "inProgress"
+          status: "queued",
+          itemIds: ["item-10"]
         })
       }
     });
@@ -316,7 +396,12 @@ describe("AppServer", () => {
                   previousStatus: "inProgress",
                   status: "failed",
                   reason:
-                    "Turn was still in progress when the previous process stopped"
+                    "Turn was still in progress when the previous process stopped",
+                  error: {
+                    code: "TURN_REPAIRED_ON_STARTUP",
+                    message:
+                      "Turn was still in progress when the previous process stopped"
+                  }
                 }
               })
             ]
@@ -387,4 +472,27 @@ function sequence(prefix: string): () => string {
   let nextId = 0;
 
   return () => `${prefix}-${++nextId}`;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (cause?: unknown) => void;
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+
+  return { promise, resolve, reject };
+}
+
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+
+  throw new Error("Timed out waiting for condition");
 }

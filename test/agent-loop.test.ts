@@ -198,6 +198,32 @@ describe("AgentLoop", () => {
     ]);
   });
 
+  it("does not append completed lifecycle facts after a model error", async () => {
+    const itemList = createItems();
+    const agent = new AgentLoop({
+      itemList,
+      model: fakeModel([
+        { type: "error", error: new Error("model execution failed") }
+      ])
+    });
+
+    const result = await agent.run({
+      input: "Fail this turn",
+      runId: "run-1",
+      turnId: "turn-1"
+    });
+
+    expect(result.items.map((item) => item.type)).toEqual([
+      "run.started",
+      "turn.started",
+      "user.message.completed",
+      "model.request.started",
+      "assistant.message.started",
+      "assistant.message.error",
+      "model.request.completed"
+    ]);
+  });
+
   it("executes one fake tool call and exposes the result to a follow-up model step", async () => {
     const itemList = createItems();
     const observedContexts: ModelContext[] = [];

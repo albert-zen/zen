@@ -18,14 +18,14 @@ integration. Workers implement one issue only.
 
 | Backlog | Ready | In Progress | Agent Review | Rework | Integrated | Complete | Blocked |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 003<br>004<br>005<br>006<br>007 | 002 | - | - | - | 001 | - | - |
+| 003<br>004<br>005<br>006<br>007 | - | - | - | - | 001<br>002 | - | - |
 
 ## Issue Register
 
 | Issue | State | Dependencies | Branch | Worker Round | Review Round | Last Evidence Path |
 | --- | --- | --- | --- | ---: | ---: | --- |
 | long-term-optimization-001 | Integrated | none | `codex/long-term-optimization-001` | 3 | 3 | `docs/implementation/long-term-optimization-001-evidence.md` |
-| long-term-optimization-002 | Ready | none | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-002-evidence.md` |
+| long-term-optimization-002 | Integrated | none | `codex/long-term-optimization-002` | 4 | 4 | `docs/implementation/long-term-optimization-002-evidence.md` |
 | long-term-optimization-003 | Backlog | 001, 002 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-003-evidence.md` |
 | long-term-optimization-004 | Backlog | 002, 003 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-004-evidence.md` |
 | long-term-optimization-005 | Backlog | 002, 003 | unassigned | 0 | 0 | `docs/implementation/long-term-optimization-005-evidence.md` |

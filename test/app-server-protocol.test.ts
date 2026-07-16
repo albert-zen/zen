@@ -69,22 +69,26 @@ describe("app server protocol", () => {
     ).toEqual(["visible", "internal"]);
   });
 
-  it("builds thread snapshots with cloned turns and filtered items", () => {
-    const turns = [
-      {
-        id: "turn-1",
-        runId: "run-1",
-        status: "completed" as const,
-        itemIds: ["item-1"]
-      }
-    ];
+  it("derives thread and turn lifecycle projections from items", () => {
     const snapshot = toThreadSnapshot({
       threadId: "thread-1",
-      status: "idle",
-      turns,
       items: [
-        item({ id: "item-1", seq: 1, payload: { content: "visible" } }),
-        item({ id: "item-2", seq: 2, visibility: "internal" })
+        item({
+          id: "item-1",
+          seq: 1,
+          type: "turn.queued",
+          visibility: "trace",
+          payload: { input: "hello" }
+        }),
+        item({ id: "item-2", seq: 2, payload: { content: "visible" } }),
+        item({
+          id: "item-3",
+          seq: 3,
+          type: "turn.completed",
+          visibility: "trace",
+          payload: { status: "completed" }
+        }),
+        item({ id: "item-4", seq: 4, visibility: "internal" })
       ]
     });
 
@@ -96,21 +100,28 @@ describe("app server protocol", () => {
           id: "turn-1",
           runId: "run-1",
           status: "completed",
-          itemIds: ["item-1"]
+          itemIds: ["item-1", "item-2", "item-3", "item-4"]
         }
       ],
       items: [
+        expect.objectContaining({ id: "item-1", type: "turn.queued" }),
         expect.objectContaining({
-          id: "item-1",
+          id: "item-2",
           payload: { content: "visible" }
-        })
+        }),
+        expect.objectContaining({ id: "item-3", type: "turn.completed" })
       ]
     });
 
     (snapshot.turns[0]?.itemIds as string[]).push("mutated");
 
-    expect(snapshot.turns[0]?.itemIds).toEqual(["item-1", "mutated"]);
-    expect(turns[0]?.itemIds).toEqual(["item-1"]);
+    expect(snapshot.turns[0]?.itemIds).toEqual([
+      "item-1",
+      "item-2",
+      "item-3",
+      "item-4",
+      "mutated"
+    ]);
   });
 
   it("exposes typed request, response, and notification discriminants", () => {

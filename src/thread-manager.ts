@@ -15,7 +15,8 @@ import {
   InMemoryItemList,
   type Clock,
   type IdGenerator,
-  type Item
+  type Item,
+  type ItemAppendInput
 } from "./item-list.js";
 import { type ModelGateway, type ModelOptions } from "./model-gateway.js";
 import { type ToolRuntime } from "./tool-runtime.js";
@@ -78,19 +79,14 @@ export type TurnRecord = {
 export type ThreadManagerEvent = AppServerNotification;
 export type ThreadManagerObserver = (event: ThreadManagerEvent) => void;
 
-type MutableThreadRecord = {
+type ThreadState = {
   readonly id: string;
-  status: ThreadStatus;
   readonly itemList: InMemoryItemList;
-  readonly turns: MutableTurnRecord[];
 };
 
-type MutableTurnRecord = {
-  readonly id: string;
-  readonly runId: string;
-  status: TurnStatus;
-  itemIds: string[];
-  error?: JsonValue;
+type ActiveTurn = {
+  readonly turnId: string;
+  readonly controller: AbortController;
 };
 
 const STALE_TURN_REPAIR_CODE = "TURN_REPAIRED_ON_STARTUP";
@@ -98,7 +94,7 @@ const STALE_TURN_REPAIR_MESSAGE =
   "Turn was still in progress when the previous process stopped";
 
 export class ThreadManager {
-  private readonly threads = new Map<string, MutableThreadRecord>();
+  private readonly threads = new Map<string, ThreadState>();
   private readonly observers: ThreadManagerObserver[] = [];
   private readonly generateThreadId: IdGenerator;
   private readonly generateRunId: IdGenerator;
@@ -106,14 +102,8 @@ export class ThreadManager {
   private readonly generateItemId: IdGenerator;
   private readonly clock: Clock;
   private readonly runtimeFactory: ThreadRuntimeFactory;
-  private readonly activeTurns = new Map<
-    string,
-    {
-      readonly thread: MutableThreadRecord;
-      readonly turn: MutableTurnRecord;
-      readonly controller: AbortController;
-    }
-  >();
+  private readonly turnTails = new Map<string, Promise<void>>();
+  private readonly activeTurns = new Map<string, ActiveTurn>();
 
   constructor(options: ThreadManagerOptions = {}) {
     this.generateThreadId = options.generateThreadId ?? createSequence("thread");
@@ -141,38 +131,16 @@ export class ThreadManager {
   }
 
   startThread(): ThreadSnapshot {
-    const thread: MutableThreadRecord = {
+    const thread: ThreadState = {
       id: this.generateUniqueThreadId(),
-      status: "idle",
       itemList: new InMemoryItemList({
-        generateId: this.generateItemId,
+        generateId: createUniqueIdGenerator(this.generateItemId, new Set()),
         clock: this.clock
-      }),
-      turns: []
+      })
     };
 
-    thread.itemList.observe((item) => {
-      const turn = thread.turns.find((entry) => entry.id === item.turnId);
-
-      if (!turn) {
-        return;
-      }
-
-      turn.itemIds.push(item.id);
-
-      if (item.visibility === "internal") {
-        return;
-      }
-
-      this.emit({
-        type: "item/appended",
-        threadId: thread.id,
-        turnId: item.turnId,
-        item: toProtocolItem(item)
-      });
-    });
-
     this.threads.set(thread.id, thread);
+    this.attachItemObserver(thread);
 
     const snapshot = this.snapshotThread(thread);
 
@@ -193,7 +161,7 @@ export class ThreadManager {
     snapshot: ThreadSnapshot,
     options: { readonly emit?: boolean } = {}
   ): ThreadSnapshot {
-    const thread = this.createThreadRecord(snapshot);
+    const thread = this.createThreadState(snapshot);
 
     this.threads.set(thread.id, thread);
     this.attachItemObserver(thread);
@@ -208,28 +176,19 @@ export class ThreadManager {
   }
 
   enqueueTurn(input: TurnStartInput): TurnSnapshot {
-    const thread = this.getThread(input.threadId);
-    const turn = this.createTurn(thread);
+    const { turn, completion } = this.queueTurn(input);
 
-    queueMicrotask(() => {
-      void this.runTurn(thread, turn, input);
-    });
+    void completion;
 
-    return toTurnSnapshot(turn);
+    return turn;
   }
 
   async startTurn(input: TurnStartInput): Promise<TurnSnapshot> {
-    const thread = this.getThread(input.threadId);
-    const turn = this.createTurn(thread);
-
-    return await this.runTurn(thread, turn, input);
+    return await this.queueTurn(input).completion;
   }
 
   interruptTurn(threadId: string): TurnSnapshot {
-    const thread = this.getThread(threadId);
-    const active = [...this.activeTurns.values()]
-      .filter((entry) => entry.thread.id === threadId)
-      .at(-1);
+    const active = this.activeTurns.get(threadId);
 
     if (!active) {
       throw new Error(`No active turn for thread: ${threadId}`);
@@ -237,14 +196,15 @@ export class ThreadManager {
 
     active.controller.abort();
 
-    return toTurnSnapshot(active.turn);
+    return this.getTurnSnapshot(this.getThread(threadId), active.turnId);
   }
 
   retryTurn(input: TurnRetryInput): TurnSnapshot {
     const thread = this.getThread(input.threadId);
+    const turns = this.snapshotThread(thread).turns;
     const retrySource = input.turnId
-      ? thread.turns.find((turn) => turn.id === input.turnId)
-      : latestRecoverableTurn(thread.turns);
+      ? turns.find((turn) => turn.id === input.turnId)
+      : latestRecoverableTurn(turns);
 
     if (!retrySource) {
       throw new Error(
@@ -265,47 +225,160 @@ export class ThreadManager {
     });
   }
 
-  private createTurn(thread: MutableThreadRecord): MutableTurnRecord {
-    const turn: MutableTurnRecord = {
-      id: this.generateUniqueTurnId(thread),
-      runId: this.generateUniqueRunId(thread),
-      status: "inProgress",
-      itemIds: []
+  private queueTurn(input: TurnStartInput): {
+    readonly turn: TurnSnapshot;
+    readonly completion: Promise<TurnSnapshot>;
+  } {
+    const thread = this.getThread(input.threadId);
+    const current = this.snapshotThread(thread);
+    const turnId = generateUniqueId(
+      this.generateTurnId,
+      new Set(current.turns.map((turn) => turn.id))
+    );
+    const runId = generateUniqueId(
+      this.generateRunId,
+      new Set(current.turns.map((turn) => turn.runId))
+    );
+    const completion = this.scheduleTurn(thread, turnId, input);
+
+    this.appendQueuedTurn(thread, turnId, runId, input.input);
+
+    return {
+      turn: this.getTurnSnapshot(thread, turnId),
+      completion
     };
-
-    thread.turns.push(turn);
-    thread.status = "running";
-
-    this.emit({
-      type: "turn/started",
-      threadId: thread.id,
-      turn: toTurnSnapshot(turn)
-    });
-
-    return turn;
   }
 
-  private createThreadRecord(snapshot?: ThreadSnapshot): MutableThreadRecord {
-    const existingItemIds = new Set(snapshot?.items.map((item) => item.id) ?? []);
-    const generateItemId = createUniqueIdGenerator(
-      this.generateItemId,
-      existingItemIds
+  private appendQueuedTurn(
+    thread: ThreadState,
+    turnId: string,
+    runId: string,
+    input: JsonValue
+  ): void {
+    thread.itemList.append({
+      type: "turn.queued",
+      runId,
+      turnId,
+      visibility: "trace",
+      payload: { input }
+    });
+  }
+
+  private scheduleTurn(
+    thread: ThreadState,
+    turnId: string,
+    input: TurnStartInput
+  ): Promise<TurnSnapshot> {
+    const previous = this.turnTails.get(thread.id) ?? Promise.resolve();
+    const result = previous.then(() => this.runTurn(thread, turnId, input));
+    const tail = result.then(
+      () => undefined,
+      () => undefined
     );
-    const thread: MutableThreadRecord = {
-      id: snapshot?.id ?? this.generateThreadId(),
-      status: snapshot?.status === "running" ? "idle" : snapshot?.status ?? "idle",
-      itemList: new InMemoryItemList({
-        generateId: generateItemId,
-        clock: this.clock,
-        initialItems: snapshot?.items.map((item) => ({ ...item }))
-      }),
-      turns: snapshot?.turns.map((turn) => ({
-        id: turn.id,
+
+    this.turnTails.set(thread.id, tail);
+    void tail.finally(() => {
+      if (this.turnTails.get(thread.id) === tail) {
+        this.turnTails.delete(thread.id);
+      }
+    });
+
+    return result;
+  }
+
+  private async runTurn(
+    thread: ThreadState,
+    turnId: string,
+    input: TurnStartInput
+  ): Promise<TurnSnapshot> {
+    const controller = new AbortController();
+
+    this.activeTurns.set(thread.id, { turnId, controller });
+
+    try {
+      const turn = this.getTurnSnapshot(thread, turnId);
+      const runtime = this.runtimeFactory({
+        thread: toThreadRecord(thread),
+        turn
+      });
+      const loop = new AgentLoop(createAgentLoopOptions(thread, runtime));
+      const result = await loop.run({
+        input: input.input,
         runId: turn.runId,
-        status: turn.status,
-        itemIds: [...turn.itemIds],
-        error: turn.error
-      })) ?? []
+        turnId: turn.id,
+        modelOptions: input.modelOptions,
+        signal: controller.signal
+      });
+
+      const terminal = this.getTurnSnapshot(thread, turn.id);
+
+      if (terminal.status === "completed") {
+        this.emit({
+          type: "turn/completed",
+          threadId: thread.id,
+          turn: terminal
+        });
+
+        return terminal;
+      }
+
+      if (controller.signal.aborted) {
+        return this.cancelTurn(thread, turn);
+      }
+
+      const failureItem = result.items.find(
+        (item) =>
+          item.turnId === turn.id &&
+          (item.type === "assistant.message.error" || item.type === "tool.error")
+      );
+
+      if (failureItem) {
+        return this.failTurn(thread, turn, {
+          code: "TURN_FAILED",
+          message: readFailureMessage(failureItem.payload),
+          details: toProtocolItem(failureItem).payload
+        });
+      }
+
+      return this.failTurn(thread, turn, {
+        code: "TURN_FAILED",
+        message: "Turn ended without a terminal lifecycle item"
+      });
+    } catch (cause) {
+      const turn = this.getTurnSnapshot(thread, turnId);
+
+      if (isTerminalTurnStatus(turn.status)) {
+        throw cause;
+      }
+
+      if (controller.signal.aborted) {
+        return this.cancelTurn(thread, turn);
+      }
+
+      return this.failTurn(thread, turn, {
+        code: "TURN_FAILED",
+        message: readErrorMessage(cause),
+        details: serializeError(cause)
+      });
+    } finally {
+      if (this.activeTurns.get(thread.id)?.turnId === turnId) {
+        this.activeTurns.delete(thread.id);
+      }
+    }
+  }
+
+  private createThreadState(snapshot: ThreadSnapshot): ThreadState {
+    const existingItemIds = new Set(snapshot.items.map((item) => item.id));
+    const thread: ThreadState = {
+      id: snapshot.id,
+      itemList: new InMemoryItemList({
+        generateId: createUniqueIdGenerator(
+          this.generateItemId,
+          existingItemIds
+        ),
+        clock: this.clock,
+        initialItems: snapshot.items.map((item) => ({ ...item }))
+      })
     };
 
     this.repairStaleTurns(thread);
@@ -313,33 +386,41 @@ export class ThreadManager {
     return thread;
   }
 
-  private generateUniqueThreadId(): string {
-    return generateUniqueId(this.generateThreadId, new Set(this.threads.keys()));
-  }
+  private repairStaleTurns(thread: ThreadState): void {
+    const error = {
+      code: STALE_TURN_REPAIR_CODE,
+      message: STALE_TURN_REPAIR_MESSAGE
+    };
 
-  private generateUniqueTurnId(thread: MutableThreadRecord): string {
-    return generateUniqueId(
-      this.generateTurnId,
-      new Set(thread.turns.map((turn) => turn.id))
-    );
-  }
-
-  private generateUniqueRunId(thread: MutableThreadRecord): string {
-    return generateUniqueId(
-      this.generateRunId,
-      new Set(thread.turns.map((turn) => turn.runId))
-    );
-  }
-
-  private attachItemObserver(thread: MutableThreadRecord): void {
-    thread.itemList.observe((item) => {
-      const turn = thread.turns.find((entry) => entry.id === item.turnId);
-
-      if (!turn) {
-        return;
+    for (const turn of this.snapshotThread(thread).turns) {
+      if (turn.status !== "inProgress" && turn.status !== "queued") {
+        continue;
       }
 
-      turn.itemIds.push(item.id);
+      thread.itemList.append({
+        type: "turn.repaired",
+        runId: turn.runId,
+        turnId: turn.id,
+        visibility: "trace",
+        payload: {
+          previousStatus: turn.status,
+          status: "failed",
+          reason: STALE_TURN_REPAIR_MESSAGE,
+          error
+        }
+      });
+    }
+  }
+
+  private attachItemObserver(thread: ThreadState): void {
+    thread.itemList.observe((item) => {
+      if (item.type === "turn.started") {
+        this.emit({
+          type: "turn/started",
+          threadId: thread.id,
+          turn: this.getTurnSnapshot(thread, item.turnId)
+        });
+      }
 
       if (item.visibility === "internal") {
         return;
@@ -354,120 +435,29 @@ export class ThreadManager {
     });
   }
 
-  private repairStaleTurns(thread: MutableThreadRecord): void {
-    let repaired = false;
-
-    for (const turn of thread.turns) {
-      if (turn.status !== "inProgress" && turn.status !== "queued") {
-        continue;
-      }
-
-      const previousStatus = turn.status;
-
-      turn.status = "failed";
-      turn.error = {
-        code: STALE_TURN_REPAIR_CODE,
-        message: STALE_TURN_REPAIR_MESSAGE
-      };
-
-      const item = thread.itemList.append({
-        type: "turn.repaired",
-        runId: turn.runId,
-        turnId: turn.id,
-        visibility: "trace",
-        payload: {
-          previousStatus,
-          status: "failed",
-          reason: STALE_TURN_REPAIR_MESSAGE
-        }
-      });
-
-      turn.itemIds.push(item.id);
-      repaired = true;
-    }
-
-    if (repaired) {
-      thread.status = "failed";
-    }
-  }
-
-  private async runTurn(
-    thread: MutableThreadRecord,
-    turn: MutableTurnRecord,
-    input: TurnStartInput
-  ): Promise<TurnSnapshot> {
-    const controller = new AbortController();
-    this.activeTurns.set(turn.id, { thread, turn, controller });
-
-    try {
-      const runtime = this.runtimeFactory({
-        thread: toThreadRecord(thread),
-        turn: toTurnRecord(turn)
-      });
-      const loop = new AgentLoop(createAgentLoopOptions(thread, runtime));
-      const result = await loop.run({
-        input: input.input,
-        runId: turn.runId,
-        turnId: turn.id,
-        modelOptions: input.modelOptions,
-        signal: controller.signal
-      });
-      if (controller.signal.aborted) {
-        return this.cancelTurn(thread, turn);
-      }
-      const failureItem = result.items.find(
-        (item) =>
-          item.turnId === turn.id &&
-          (item.type === "assistant.message.error" || item.type === "tool.error")
-      );
-
-      if (failureItem) {
-        if (controller.signal.aborted) {
-          return this.cancelTurn(thread, turn);
-        }
-        return this.failTurn(thread, turn, {
-          code: "TURN_FAILED",
-          message: readFailureMessage(failureItem.payload),
-          details: toProtocolItem(failureItem).payload
-        });
-      }
-
-      turn.status = "completed";
-      thread.status = "idle";
-
-      const snapshot = toTurnSnapshot(turn);
-
-      this.emit({
-        type: "turn/completed",
-        threadId: thread.id,
-        turn: snapshot
-      });
-
-      return snapshot;
-    } catch (cause) {
-      if (controller.signal.aborted) {
-        return this.cancelTurn(thread, turn);
-      }
-      return this.failTurn(thread, turn, {
-        code: "TURN_FAILED",
-        message: readErrorMessage(cause),
-        details: serializeError(cause)
-      });
-    } finally {
-      this.activeTurns.delete(turn.id);
-    }
-  }
-
-  private snapshotThread(thread: MutableThreadRecord): ThreadSnapshot {
+  private snapshotThread(thread: ThreadState): ThreadSnapshot {
     return toThreadSnapshot({
       threadId: thread.id,
-      status: thread.status,
-      turns: thread.turns.map(toTurnSnapshot),
       items: thread.itemList.getItems()
     });
   }
 
-  private getThread(threadId: string): MutableThreadRecord {
+  private getTurnSnapshot(
+    thread: ThreadState,
+    turnId: string
+  ): TurnSnapshot {
+    const turn = this.snapshotThread(thread).turns.find(
+      (entry) => entry.id === turnId
+    );
+
+    if (!turn) {
+      throw new Error(`Unknown turn: ${turnId}`);
+    }
+
+    return turn;
+  }
+
+  private getThread(threadId: string): ThreadState {
     const thread = this.threads.get(threadId);
 
     if (!thread) {
@@ -477,77 +467,108 @@ export class ThreadManager {
     return thread;
   }
 
+  private generateUniqueThreadId(): string {
+    return generateUniqueId(this.generateThreadId, new Set(this.threads.keys()));
+  }
+
   private emit(event: ThreadManagerEvent): void {
     this.observers.forEach((observer) => observer(event));
   }
 
   private failTurn(
-    thread: MutableThreadRecord,
-    turn: MutableTurnRecord,
+    thread: ThreadState,
+    turn: TurnSnapshot,
     error: AppServerError
   ): TurnSnapshot {
-    turn.status = "failed";
-    turn.error = error.details ?? { code: error.code, message: error.message };
-    thread.status = "failed";
+    const terminal = this.appendTerminalItem(thread, turn, {
+      type: "turn.failed",
+      runId: turn.runId,
+      turnId: turn.id,
+      visibility: "trace",
+      payload: {
+        status: "failed",
+        error: error.details ?? { code: error.code, message: error.message }
+      }
+    });
 
-    const snapshot = toTurnSnapshot(turn);
+    if (!terminal.appended) {
+      return terminal.turn;
+    }
 
     this.emit({
       type: "turn/failed",
       threadId: thread.id,
-      turn: snapshot,
+      turn: terminal.turn,
       error
     });
 
-    return snapshot;
+    return terminal.turn;
   }
 
   private cancelTurn(
-    thread: MutableThreadRecord,
-    turn: MutableTurnRecord
+    thread: ThreadState,
+    turn: TurnSnapshot
   ): TurnSnapshot {
-    turn.status = "canceled";
-    turn.error = { code: "TURN_INTERRUPTED", message: "Turn interrupted" };
-    thread.status = "idle";
+    const error = { code: "TURN_INTERRUPTED", message: "Turn interrupted" };
 
-    const snapshot = toTurnSnapshot(turn);
+    const terminal = this.appendTerminalItem(thread, turn, {
+      type: "turn.canceled",
+      runId: turn.runId,
+      turnId: turn.id,
+      visibility: "trace",
+      payload: { status: "canceled", error }
+    });
+
+    if (!terminal.appended) {
+      return terminal.turn;
+    }
 
     this.emit({
       type: "turn/completed",
       threadId: thread.id,
-      turn: snapshot
+      turn: terminal.turn
     });
 
-    return snapshot;
+    return terminal.turn;
+  }
+
+  private appendTerminalItem(
+    thread: ThreadState,
+    turn: TurnSnapshot,
+    item: ItemAppendInput
+  ): { readonly turn: TurnSnapshot; readonly appended: boolean } {
+    const current = this.getTurnSnapshot(thread, turn.id);
+
+    if (isTerminalTurnStatus(current.status)) {
+      return { turn: current, appended: false };
+    }
+
+    thread.itemList.append(item);
+
+    return {
+      turn: this.getTurnSnapshot(thread, turn.id),
+      appended: true
+    };
   }
 }
 
-function toTurnSnapshot(turn: MutableTurnRecord): TurnSnapshot {
-  return {
-    id: turn.id,
-    runId: turn.runId,
-    status: turn.status,
-    itemIds: [...turn.itemIds],
-    error: turn.error
-  };
-}
+function toThreadRecord(thread: ThreadState): ThreadRecord {
+  const snapshot = toThreadSnapshot({
+    threadId: thread.id,
+    items: thread.itemList.getItems()
+  });
 
-function toThreadRecord(thread: MutableThreadRecord): ThreadRecord {
   return {
-    id: thread.id,
-    status: thread.status,
-    turns: thread.turns.map(toTurnSnapshot),
+    id: snapshot.id,
+    status: snapshot.status,
+    turns: snapshot.turns,
     items: thread.itemList.getItems()
   };
 }
 
-function toTurnRecord(turn: MutableTurnRecord): TurnRecord {
-  return toTurnSnapshot(turn);
-}
-
 function latestRecoverableTurn(
-  turns: readonly MutableTurnRecord[]
-): MutableTurnRecord | undefined {
+  turns: readonly TurnSnapshot[]
+): TurnSnapshot | undefined {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
 
@@ -563,34 +584,40 @@ function isRecoverableTurnStatus(status: TurnStatus): boolean {
   return status === "failed" || status === "canceled";
 }
 
+function isTerminalTurnStatus(status: TurnStatus): boolean {
+  return (
+    status === "completed" || status === "failed" || status === "canceled"
+  );
+}
+
 function readUserInputForTurn(
-  thread: MutableThreadRecord,
-  turn: MutableTurnRecord
+  thread: ThreadState,
+  turn: TurnSnapshot
 ): JsonValue {
-  const userItem = thread.itemList
-    .getItems()
-    .find(
-      (item) =>
-        item.turnId === turn.id &&
-        item.type === "user.message.completed" &&
-        turn.itemIds.includes(item.id)
-    );
+  const items = thread.itemList.getItems();
+  const userItem = items.find(
+    (item) => item.turnId === turn.id && item.type === "user.message.completed"
+  );
+  const queuedItem = items.find(
+    (item) => item.turnId === turn.id && item.type === "turn.queued"
+  );
+  const input = userItem
+    ? readObjectProperty(userItem.payload, "content")
+    : readObjectProperty(queuedItem?.payload, "input");
 
-  if (!userItem) {
-    throw new Error(`Cannot retry turn without user input: ${turn.id}`);
+  if (!isJsonValue(input)) {
+    throw new Error(`Cannot retry turn without JSON user input: ${turn.id}`);
   }
 
-  const payload = userItem.payload;
+  return input;
+}
 
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-    throw new Error(`Cannot retry turn with invalid user input: ${turn.id}`);
+function readObjectProperty(payload: unknown, key: string): unknown {
+  if (typeof payload === "object" && payload !== null && key in payload) {
+    return payload[key as keyof typeof payload];
   }
 
-  if (!("content" in payload) || !isJsonValue(payload.content)) {
-    throw new Error(`Cannot retry turn with non-JSON user input: ${turn.id}`);
-  }
-
-  return payload.content;
+  return undefined;
 }
 
 function isJsonValue(value: unknown): value is JsonValue {
@@ -618,7 +645,7 @@ function isJsonValue(value: unknown): value is JsonValue {
 }
 
 function createAgentLoopOptions(
-  thread: MutableThreadRecord,
+  thread: ThreadState,
   runtime: ThreadRuntime
 ): AgentLoopOptions {
   return {
@@ -657,6 +684,7 @@ function createUniqueIdGenerator(
 
   return () => {
     const id = generateUniqueId(generateId, usedIds);
+
     usedIds.add(id);
 
     return id;
@@ -683,9 +711,9 @@ function readFailureMessage(payload: unknown): string {
     typeof payload === "object" &&
     payload !== null &&
     "message" in payload &&
-    typeof (payload as { readonly message?: unknown }).message === "string"
+    typeof payload.message === "string"
   ) {
-    return (payload as { readonly message: string }).message;
+    return payload.message;
   }
 
   return "Turn failed";
