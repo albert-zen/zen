@@ -65,6 +65,26 @@ Blocker or context escalation details: none.
 
 ## Codex Review Note
 
+Round: 7 integration-gate correction
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: canonical integration gate at merge `776ccedf` failed after the prior STRICT PASS.
+Reviewer edits: none
+Reviewed revision: `3fb9ee5487b2debc9aed969bbd4c00cb11a80141`
+Finding: P1. Supervisor cleanup mixed many independent WMI `inspect` and `list` snapshots and compared opaque creation strings. This produced temporal ancestry false refusals (`predates ancestry parent` and `failed exact identity validation`) in the real failing-launcher test, despite zero residual processes.
+Local tracker state decision: Rework
+State decision reason: manager accepted the reproducible integration failure; previous strict-pass claims remain historical and superseded for the integration gate.
+
+## Codex Worker Note
+
+Round: 12
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Complete -> Rework
+Summary of behavior delivered: supervisor cleanup now uses one coherent snapshot for each discovery/validation pass and exactly one fresh snapshot immediately before an individual kill. Win32 process creation identity is normalized at the query boundary to UTC ticks and ISO UTC text; custom test entries retain compatible fallback identity handling. Spawn registration waits conditionally for the marker-bearing WMI identity rather than accepting a transient incoherent observation.
+Validation: direct real supervisor suite passed 5 consecutive repetitions, each 17 tests, in 6.88s, 6.92s, 6.95s, 7.06s, and 7.11s; zero residual process scan remains required after final gates.
+Acceptance criteria status: Rework pending fresh review and final full gates.
+
+## Codex Review Note
+
 Round: 7
 Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
 Reviewer context: fresh Review Round 7 strict review accepted by manager
@@ -403,3 +423,65 @@ Review result: STRICT PASS; no reasonable findings.
 Validation reviewed: focused process/runtime/supervisor/TUI suite: 53 tests passed; format, lint, TypeScript typechecks, `git diff --check`, and online `npm audit --include=dev` passed with `found 0 vulnerabilities`; attributable Win32 Node/Vite/Vitest/Playwright/Chromium process scan reported zero matches. This review relies on the already-recorded exact-head full check: 260 unit tests and 2 E2E tests passed.
 Local tracker state decision: Complete
 State decision reason: manager accepted the strict pass. Wave 5 integration remains a separate, not-yet-completed step.
+
+## Codex Review Note
+
+Round: 8 and 9
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Integration correction: canonical integration gate `776ccedf` exposed supervisor ancestry instability; subsequent Review 8 required local root attestation, and Review 9 required handle-bound Windows termination, canonical tokens, and wrapper/schema hardening.
+Reviewer edits: none
+Local tracker state decision: Rework
+State decision reason: accepted P1 findings remain pending fresh review.
+
+## Codex Worker Note
+
+Round: 14 and 15
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Summary: local tool roots now attest identity over their owned stdout pipe before executing base64-decoded approved script text. Windows default terminators verify the expected composite identity against a held Process object and WMI before calling `Kill()`; recursive taskkill and Stop-Process paths remain absent. Canonical creation tokens are required by E2E ownership validation.
+Acceptance criteria status: Round 15 validation pending current exact gate and fresh review.
+
+## Codex Worker Note
+
+Round: 15 correction
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Prior validation correction: `a37a7043ef4ececd1bc89773cbeae1c03ad96c29` passed its recorded gate with 262 unit tests, 2 Playwright E2E tests, online development-dependency audit reporting `found 0 vulnerabilities`, and zero attributable process-scan matches. That revision did not yet contain the required real default-terminator coverage; this note preserves that pending record rather than rewriting it.
+Integration/review history correction: canonical integration revision `776ccedf` failed on incoherent supervisor identity snapshots. Review Round 8 then required direct local-root stdout attestation to prevent initial PID reuse capture; Worker Round 14 delivered that protocol. Review Round 9 required handle-bound Windows termination, canonical token validation, attestation schema validation, and safe command wrapping; Worker Round 15 delivered those changes. The tracker remains Rework pending a fresh reviewer; this does not mark Wave 5 integrated.
+Final implementation revision: `cf187fc90b566c3c6221f6d7d4d168e4ec2ad026` (`fix: normalize owned process creation tokens`). Windows process creation identity is now Unix epoch milliseconds as a decimal string at the PowerShell attestation, CIM process listing, and held `System.Diagnostics.Process` verification boundaries. E2E manifest schema is version 4. Exact identity comparison remains strict after normalization; executable comparison is case-insensitive on Windows, while parent PID, command line, and marker checks remain exact. Mismatch diagnostics name only failed identity fields and the held process object is disposed in `finally`.
+Tests added/updated: two real Windows default-terminator tests each spawn and own one uniquely marked long-lived Node child. The local path refuses wrong creation token, command line, parent PID, and executable before the exact held-handle kill. The E2E path refuses wrong token, marker, and command line before its exact held-handle kill. Both use only the direct child handle as failure fallback. Supervisor token assertions now mutate `creationToken`, and synthetic ancestry fixtures use canonical tokens.
+Commands run and results: focused local runtime, owned-process cleanup, and E2E supervisor suites passed 34 tests. The exact `npm run check` on `cf187fc90b566c3c6221f6d7d4d168e4ec2ad026` passed in 301.4 seconds: format, lint, both typechecks, builds, 34 test files/264 unit tests, kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; an independent Win32 `zen-local`/`zen-e2e` marker/path scan reported zero matches and killed nothing.
+Acceptance criteria status: complete for Worker Round 15, pending fresh review. No `taskkill /T`, `Stop-Process`, broad Node kill, threshold reduction, source exclusion, or coverage-ignore pragma was added.
+
+## Codex Review Note
+
+Round: 10
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewed branch and revision: `codex/long-term-optimization-007 @ 9dd9202ed7440826f805375fecc34a645da38164`
+Reviewer proposal: add a separate owner-marker field to generic local `OwnedProcessIdentity` values.
+Manager decision: rejected as unreasonable. The directly spawned local root attests its unique marker inside the exact command line; descendants are generic exact operating-system identities owned through the recorded temporal ancestry chain. An ignored additional object property cannot represent a different live process and would not strengthen the process identity contract.
+Reviewer edits: none.
+Local tracker state decision: Rework pending the fresh Round 11 review.
+
+## Codex Review Note
+
+Round: 11
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewed branch and revision: `codex/long-term-optimization-007 @ 9dd9202ed7440826f805375fecc34a645da38164`
+Review result: STRICT PASS from a fresh clean-context review; no concrete reproducible findings.
+Reviewer edits: none.
+Validation reviewed: focused ownership tests, formatting, lint, TypeScript typechecks, and an attributable Win32 process scan with zero matches.
+Local marker model confirmed: the attested local root marker is part of its exact command line, while generic descendants are owned only through exact composite identities and temporal ancestry, not through a redundant mutable marker property.
+Local tracker state decision: Complete.
+State decision reason: manager accepted the strict pass. Wave 5 remains not integrated until a separate canonical follow-up merge and gate.
+
+## Codex Worker Note
+
+Round: 15 terminal correction
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Branch: `codex/long-term-optimization-007`
+Exact Round 15 code/test revision: `cf187fc90b566c3c6221f6d7d4d168e4ec2ad026`.
+Exact reviewed documentation revision: `9dd9202ed7440826f805375fecc34a645da38164`.
+Validation record: the exact full gate at `cf187fc90b566c3c6221f6d7d4d168e4ec2ad026` passed 264 unit tests and 2 Playwright E2E tests. Coverage was kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, and presentation 92.18/80.31/94.11/93.01. Online development-dependency audit reported `found 0 vulnerabilities`; the final attributable `zen-local`/`zen-e2e` Win32 process scan reported zero matches.
+Final scope status: Worker Round 15 is complete and issue 007 is Complete after Review Round 11. Wave 5 integration remains a separate pending canonical follow-up.

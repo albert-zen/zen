@@ -4,6 +4,7 @@ export type OwnedProcessIdentity = {
   readonly pid: number;
   readonly parentPid: number;
   readonly createdAt: string;
+  readonly creationToken: string;
   readonly executable: string | null;
   readonly commandLine: string | null;
 };
@@ -13,6 +14,11 @@ export type OwnedProcessOperations = {
   readonly list?: () => Promise<readonly OwnedProcessIdentity[]>;
   readonly terminate?: (identity: OwnedProcessIdentity) => Promise<void>;
   readonly maxPasses?: number;
+};
+export type OwnedProcessRootExpectation = {
+  readonly pid: number;
+  readonly marker: string;
+  readonly executable: string;
 };
 
 export class OwnedProcessCleanupError extends Error {
@@ -30,15 +36,24 @@ export class OwnedProcessTree {
   private readonly ancestry = new Map<string, Candidate>();
 
   constructor(
-    private readonly rootPid: number,
+    private readonly expectation: OwnedProcessRootExpectation,
     private readonly operations: OwnedProcessOperations = {}
   ) {}
 
-  async captureRoot(): Promise<boolean> {
-    const root = (await this.list()).find((candidate) => candidate.pid === this.rootPid);
-    if (!root) {
+  captureAttested(root: OwnedProcessIdentity): boolean {
+    if (
+      !Number.isSafeInteger(root.pid) ||
+      !Number.isSafeInteger(root.parentPid) ||
+      !root.createdAt ||
+      Number.isNaN(Date.parse(root.createdAt)) ||
+      !/^\d+$/.test(root.creationToken) ||
+      !root.executable ||
+      !root.commandLine ||
+      root.pid !== this.expectation.pid ||
+      !sameExecutable(root.executable, this.expectation.executable) ||
+      !root.commandLine?.includes(this.expectation.marker)
+    )
       return false;
-    }
     this.root = root;
     this.ancestry.set(candidateKey(root), { identity: root, chain: [root] });
     return true;
@@ -53,7 +68,7 @@ export class OwnedProcessTree {
     const root = this.root;
     if (!root) {
       throw new OwnedProcessCleanupError(
-        `Refusing cleanup: root PID ${this.rootPid} was not captured before it exited`
+        `Refusing cleanup: root PID ${this.expectation.pid} was not captured before it exited`
       );
     }
     const terminated: number[] = [];
@@ -61,12 +76,6 @@ export class OwnedProcessTree {
 
     for (let pass = 0; pass < (this.operations.maxPasses ?? 32); pass += 1) {
       const snapshot = await this.list();
-      const rootCurrent = snapshot.find((candidate) => candidate.pid === root.pid);
-      if (rootCurrent && !sameIdentity(root, rootCurrent)) {
-        throw new OwnedProcessCleanupError(
-          `Refusing cleanup: root PID ${root.pid} no longer has its recorded identity`
-        );
-      }
       this.discoverDescendants(snapshot);
 
       const live = this.liveAncestryCandidates(snapshot);
@@ -80,7 +89,7 @@ export class OwnedProcessTree {
 
       const candidate = live.sort((left, right) => right.chain.length - left.chain.length)[0];
       const currentProcesses = await this.list();
-      const current = currentProcesses.find((process) => process.pid === candidate.identity.pid);
+      const current = currentProcesses.find((process) => sameIdentity(candidate.identity, process));
       if (!sameIdentity(candidate.identity, current)) {
         throw new OwnedProcessCleanupError(
           `Refusing cleanup: PID ${candidate.identity.pid} no longer has its recorded identity`
@@ -102,20 +111,10 @@ export class OwnedProcessTree {
 
   private discoverDescendants(processes: readonly OwnedProcessIdentity[]): void {
     const byParent = new Map<number, OwnedProcessIdentity[]>();
-    const byPid = new Map(processes.map((process) => [process.pid, process]));
     for (const process of processes) {
       const children = byParent.get(process.parentPid) ?? [];
       children.push(process);
       byParent.set(process.parentPid, children);
-    }
-
-    for (const candidate of this.ancestry.values()) {
-      const current = byPid.get(candidate.identity.pid);
-      if (current && !sameIdentity(candidate.identity, current)) {
-        throw new OwnedProcessCleanupError(
-          `Refusing cleanup: ancestry PID ${candidate.identity.pid} was reused`
-        );
-      }
     }
 
     const pending = [...this.ancestry.values()];
@@ -123,20 +122,12 @@ export class OwnedProcessTree {
       const parent = pending.pop();
       if (!parent) continue;
       for (const child of byParent.get(parent.identity.pid) ?? []) {
-        if (!createdAfter(child, parent.identity)) {
-          throw new OwnedProcessCleanupError(
-            `Refusing cleanup: PID ${child.pid} predates ancestry parent ${parent.identity.pid}`
-          );
-        }
-        const existing = [...this.ancestry.values()].find(
-          (candidate) => candidate.identity.pid === child.pid
-        );
+        if (!createdAfter(child, parent.identity)) continue;
+        const holder = processes.find((process) => process.pid === parent.identity.pid);
+        if (holder && !sameIdentity(holder, parent.identity) && !createdBefore(child, holder))
+          continue;
+        const existing = this.ancestry.get(candidateKey(child));
         if (existing) {
-          if (!sameIdentity(existing.identity, child)) {
-            throw new OwnedProcessCleanupError(
-              `Refusing cleanup: ancestry PID ${child.pid} was reused`
-            );
-          }
           continue;
         }
         const discovered = { identity: child, chain: [...parent.chain, child] };
@@ -149,13 +140,8 @@ export class OwnedProcessTree {
   private liveAncestryCandidates(processes: readonly OwnedProcessIdentity[]): Candidate[] {
     const live: Candidate[] = [];
     for (const candidate of this.ancestry.values()) {
-      const current = processes.find((process) => process.pid === candidate.identity.pid);
+      const current = processes.find((process) => sameIdentity(candidate.identity, process));
       if (!current) continue;
-      if (!sameIdentity(candidate.identity, current)) {
-        throw new OwnedProcessCleanupError(
-          `Refusing cleanup: ancestry PID ${candidate.identity.pid} was reused`
-        );
-      }
       if (!hasRecordedChain(candidate.chain, current, processes)) {
         throw new OwnedProcessCleanupError(
           `Refusing cleanup: retained PID ${candidate.identity.pid} parent chain changed`
@@ -186,18 +172,15 @@ function hasRecordedChain(
   processes: readonly OwnedProcessIdentity[]
 ): boolean {
   if (!current || !sameIdentity(recorded.at(-1), current)) return false;
-  const byPid = new Map(processes.map((process) => [process.pid, process]));
   let cursor = current;
   for (let index = recorded.length - 1; index >= 0; index -= 1) {
     const expected = recorded[index];
     if (!sameIdentity(expected, cursor)) return false;
     if (index > 0) {
-      const parent = byPid.get(cursor.parentPid);
-      if (!parent) {
-        // A recorded ancestor may already have exited. It is still safe only while no
-        // PID in the remaining recorded chain has been reused by another process.
-        return recorded.slice(0, index).every((ancestor) => !byPid.has(ancestor.pid));
-      }
+      const parent = recorded[index - 1];
+      if (cursor.parentPid !== parent.pid || !createdAfter(cursor, parent)) return false;
+      const holder = processes.find((process) => process.pid === parent.pid);
+      if (holder && !sameIdentity(holder, parent) && !createdBefore(cursor, holder)) return false;
       cursor = parent;
     }
   }
@@ -205,11 +188,15 @@ function hasRecordedChain(
 }
 
 function createdAfter(child: OwnedProcessIdentity, parent: OwnedProcessIdentity): boolean {
-  return child.createdAt >= parent.createdAt;
+  return BigInt(child.creationToken) >= BigInt(parent.creationToken);
+}
+
+function createdBefore(child: OwnedProcessIdentity, parent: OwnedProcessIdentity): boolean {
+  return BigInt(child.creationToken) < BigInt(parent.creationToken);
 }
 
 function candidateKey(identity: OwnedProcessIdentity): string {
-  return `${identity.pid}:${identity.createdAt}`;
+  return `${identity.pid}:${identity.creationToken}:${identity.executable}:${identity.commandLine}`;
 }
 
 function sameIdentity(
@@ -221,10 +208,14 @@ function sameIdentity(
     actual &&
     expected.pid === actual.pid &&
     expected.parentPid === actual.parentPid &&
-    expected.createdAt === actual.createdAt &&
-    expected.executable === actual.executable &&
+    expected.creationToken === actual.creationToken &&
+    sameExecutable(expected.executable, actual.executable) &&
     expected.commandLine === actual.commandLine
   );
+}
+
+function sameExecutable(left: string | null, right: string | null): boolean {
+  return (left ?? '').toLowerCase() === (right ?? '').toLowerCase();
 }
 
 async function listWindowsProcesses(): Promise<readonly OwnedProcessIdentity[]> {
@@ -233,7 +224,7 @@ async function listWindowsProcesses(): Promise<readonly OwnedProcessIdentity[]> 
     '-NoProfile',
     '-NonInteractive',
     '-Command',
-    'Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate; executable = $_.ExecutablePath; commandLine = $_.CommandLine } } | ConvertTo-Json -Compress',
+    'Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = ([DateTimeOffset]$_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds().ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } } | ConvertTo-Json -Compress',
   ]);
   if (!output) return [];
   const parsed = JSON.parse(output) as OwnedProcessIdentity | readonly OwnedProcessIdentity[];
@@ -242,21 +233,34 @@ async function listWindowsProcesses(): Promise<readonly OwnedProcessIdentity[]> 
 
 async function terminateWindowsProcess(identity: OwnedProcessIdentity): Promise<void> {
   if (process.platform === 'win32') {
-    await execFileText('powershell.exe', [
+    const expected = Buffer.from(JSON.stringify(identity), 'utf8').toString('base64');
+    await execFileStrict('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `Stop-Process -Id ${identity.pid} -Force -ErrorAction Stop`,
+      `$e=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${expected}'))|ConvertFrom-Json;$p=[Diagnostics.Process]::GetProcessById($e.pid);try{$token=([DateTimeOffset]$p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds().ToString();$exe=$p.MainModule.FileName;$w=Get-CimInstance Win32_Process -Filter "ProcessId=$($e.pid)";$bad=@();if($token -ne $e.creationToken){$bad+='creationToken'};if($exe -ine $e.executable){$bad+='executable'};if($w.ParentProcessId -ne $e.parentPid){$bad+='parentPid'};if($w.CommandLine -ne $e.commandLine){$bad+='commandLine'};if($bad.Count){throw ('owned identity mismatch: '+($bad -join ','))};$p.Kill()}finally{$p.Dispose()}`,
     ]);
     return;
   }
   process.kill(identity.pid, 'SIGTERM');
 }
 
+/** Internal test seam; deliberately not re-exported by package entrypoints. */
+export const ownedProcessTesting = { terminateWindowsProcess, listWindowsProcesses };
+
 function execFileText(command: string, args: readonly string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(command, args, (error, stdout) => {
       if (error?.code === 1) return resolve('');
+      if (error) return reject(error);
+      resolve(stdout.trim());
+    });
+  });
+}
+
+function execFileStrict(command: string, args: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, (error, stdout) => {
       if (error) return reject(error);
       resolve(stdout.trim());
     });

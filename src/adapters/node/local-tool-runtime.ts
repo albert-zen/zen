@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { OwnedProcessTree } from './owned-process-cleanup.js';
+import { OwnedProcessTree, type OwnedProcessIdentity } from './owned-process-cleanup.js';
 import {
   ApprovalBroker,
   ToolApprovalDeniedError,
@@ -127,6 +128,8 @@ export class LocalToolRuntime implements ToolRuntime {
     let terminationRequested = false;
     let cleanupRequiresCapturedOwnership = false;
     const rootCapture: { task?: Promise<boolean> } = {};
+    let bootstrapBuffer = '';
+    let resolveBootstrap: ((captured: boolean) => void) | undefined;
     let cleanupTask: Promise<void> | undefined;
     let cleanupFailure: unknown;
 
@@ -140,6 +143,33 @@ export class LocalToolRuntime implements ToolRuntime {
     };
     const onStdout = (chunk: Buffer | string) => {
       const text = stringifyOutput(chunk);
+      if (resolveBootstrap) {
+        bootstrapBuffer += text;
+        const newline = bootstrapBuffer.indexOf('\n');
+        if (newline < 0) return;
+        const frame = bootstrapBuffer.slice(0, newline).trim();
+        const remainder = bootstrapBuffer.slice(newline + 1);
+        const resolve = resolveBootstrap;
+        resolveBootstrap = undefined;
+        try {
+          const encoded = frame.startsWith('__ZEN_OWNER__:') ? frame.slice(14) : '';
+          const identity = readAttestedIdentity(
+            JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')),
+            ownerMarker,
+            child.pid ?? 0,
+            powershellPath
+          );
+          resolve(
+            identity !== undefined && (processHolder.ownership?.captureAttested(identity) ?? false)
+          );
+        } catch {
+          resolve(false);
+        }
+        if (!remainder) return;
+        stdout += remainder;
+        push({ type: 'output.delta', delta: { stream: 'stdout', chunk: remainder } });
+        return;
+      }
       stdout += text;
       push({ type: 'output.delta', delta: { stream: 'stdout', chunk: text } });
     };
@@ -162,6 +192,7 @@ export class LocalToolRuntime implements ToolRuntime {
           processHolder.child?.kill('SIGTERM');
           return;
         }
+        if (cleanupRequiresCapturedOwnership) processHolder.child?.kill('SIGTERM');
         const captured = await rootCapture.task;
         if (!captured) {
           if (cleanupRequiresCapturedOwnership) {
@@ -186,15 +217,25 @@ export class LocalToolRuntime implements ToolRuntime {
 
     // Register cancellation before spawn; the holder safely no-ops until ownership is captured.
     context.signal?.addEventListener('abort', cancel, { once: true });
-    const child = spawn('powershell', ['-NoProfile', '-Command', command], {
+    const ownerMarker = `zen-local-${randomUUID()}`;
+    const powershellPath = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+    const encodedCommand = Buffer.from(command, 'utf8').toString('base64');
+    const wrappedCommand = `$m='${ownerMarker}';$c='${encodedCommand}';$p=[Diagnostics.Process]::GetCurrentProcess();$parentPid=(Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId;$o=[ordered]@{marker=$m;pid=$PID;parentPid=$parentPid;createdAt=$p.StartTime.ToUniversalTime().ToString('o');creationToken=([DateTimeOffset]$p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds().ToString();executable=$p.MainModule.FileName;commandLine=[Environment]::CommandLine};[Console]::Out.WriteLine('__ZEN_OWNER__:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($o|ConvertTo-Json -Compress))));[Console]::Out.Flush();$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($c));& ([ScriptBlock]::Create($s))`;
+    const child = spawn(powershellPath, ['-NoProfile', '-Command', wrappedCommand], {
       cwd: this.cwd,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const ownership = new OwnedProcessTree(child.pid ?? 0);
+    const ownership = new OwnedProcessTree({
+      pid: child.pid ?? 0,
+      marker: ownerMarker,
+      executable: powershellPath,
+    });
     processHolder.child = child;
     processHolder.ownership = ownership;
-    rootCapture.task = ownership.captureRoot();
+    rootCapture.task = new Promise<boolean>((resolve) => {
+      resolveBootstrap = resolve;
+    });
     rootCapture.task.catch((error: unknown) => {
       cleanupFailure ??= error;
       if (terminationRequested) finish();
@@ -218,6 +259,8 @@ export class LocalToolRuntime implements ToolRuntime {
     });
     child.on('close', (code) => {
       exitCode = code;
+      resolveBootstrap?.(false);
+      resolveBootstrap = undefined;
       finish();
       startCleanup(false).catch(() => undefined);
     });
@@ -352,4 +395,45 @@ function stringifyOutput(value: unknown): string {
   }
 
   return value === undefined || value === null ? '' : String(value);
+}
+
+function readAttestedIdentity(
+  value: unknown,
+  marker: string,
+  pid: number,
+  executable: string
+): OwnedProcessIdentity | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const integer = (key: string) =>
+    typeof record[key] === 'number' && Number.isSafeInteger(record[key]) ? record[key] : undefined;
+  const text = (key: string) =>
+    typeof record[key] === 'string' && record[key] ? record[key] : undefined;
+  const attestedPid = integer('pid');
+  const parentPid = integer('parentPid');
+  const createdAt = text('createdAt');
+  const creationToken = text('creationToken');
+  const frameExecutable = text('executable');
+  const commandLine = text('commandLine');
+  if (
+    record.marker !== marker ||
+    attestedPid !== pid ||
+    parentPid === undefined ||
+    !createdAt ||
+    Number.isNaN(Date.parse(createdAt)) ||
+    !creationToken ||
+    !/^\d+$/.test(creationToken) ||
+    !frameExecutable ||
+    !commandLine?.includes(marker) ||
+    frameExecutable.toLowerCase() !== executable.toLowerCase()
+  )
+    return undefined;
+  return {
+    pid: attestedPid,
+    parentPid,
+    createdAt,
+    creationToken,
+    executable: frameExecutable,
+    commandLine,
+  };
 }
