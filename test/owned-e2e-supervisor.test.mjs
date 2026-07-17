@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -446,6 +446,67 @@ describe('owned E2E supervisor', () => {
     }
   });
 
+  it('ignores an in-progress event and rejects terminal clear after a late completed event', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const ledger = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      const before = await ledger.read();
+      await writeFile(
+        path.join(manifestPath, 'entry-00000000-0000-0000-0000-000000000001.tmp'),
+        '{"partial":true}',
+        'utf8'
+      );
+      expect((await ledger.read()).revision).toBe(before.revision);
+      await ledger.upsert(marker, ownedEntry({ marker, pid: 930 }));
+      await expect(ledger.clear(marker, before.revision)).rejects.toThrow(
+        'Ownership ledger changed before terminal clear'
+      );
+    });
+  });
+
+  it('keeps event records minimal and bounded across many entries', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const ledger = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      for (let index = 0; index < 12; index += 1)
+        await ledger.upsert(marker, ownedEntry({ marker, pid: 940 + index }));
+      const names = (await readdir(manifestPath)).filter(
+        (name) => name.endsWith('.json') && name !== 'run.json'
+      );
+      const events = await Promise.all(
+        names.map((name) => readFile(path.join(manifestPath, name), 'utf8'))
+      );
+      for (const event of events) {
+        const parsed = JSON.parse(event);
+        expect(Object.keys(parsed).sort()).toEqual(['entry', 'marker', 'runId', 'version']);
+        expect(event).not.toContain('"entries"');
+        expect(event).not.toContain('"revision"');
+        expect(event.length).toBeLessThan(1_000);
+      }
+    });
+  });
+
+  it('makes parallel stale cleaners idempotent without touching a live separate run', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'zen-e2e-supervisor-'));
+    const root = path.join(directory, 'runs');
+    const dead = leaseOwner(950);
+    const live = leaseOwner(951);
+    try {
+      const stale = await ownedE2eSupervisorTesting.createRunStore(root, 'zen-e2e-dead-run', {
+        captureLeaseOwner: async () => dead,
+      });
+      const retained = await ownedE2eSupervisorTesting.createRunStore(root, 'zen-e2e-live-run', {
+        captureLeaseOwner: async () => live,
+      });
+      await Promise.all([
+        ownedE2eSupervisorTesting.reclaimStaleRuns(root, async () => [live]),
+        ownedE2eSupervisorTesting.reclaimStaleRuns(root, async () => [live]),
+      ]);
+      await expect(readdir(stale.runDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readdir(retained.runDirectory)).resolves.toContain('run.json');
+    } finally {
+      await removeOwnedTestDirectory(directory, undefined, { list: async () => [] });
+    }
+  });
+
   it('retains a paused writer during clear, then clears after release and revision revalidation', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entered = deferred();
@@ -882,27 +943,6 @@ async function withManifest(run) {
   } finally {
     await removeOwnedTestDirectory(directory, marker);
   }
-}
-
-async function withLeasedManifest({ owner, owners }, run) {
-  const directory = await mkdtemp(path.join(tmpdir(), 'zen-e2e-supervisor-'));
-  const manifestPath = path.join(directory, 'owned-processes.json');
-  const marker = `zen-e2e-test-${path.basename(directory)}`;
-  const store = testStore(manifestPath, owner, owners);
-  try {
-    await store.initialize(marker);
-    await run({ directory, manifestPath, marker, store });
-  } finally {
-    await removeOwnedTestDirectory(directory, marker, { list: async () => [] });
-  }
-}
-
-function testStore(manifestPath, owner, owners, hooks = {}) {
-  return ownedE2eSupervisorTesting.createManifestStore(manifestPath, {
-    ...hooks,
-    captureLeaseOwner: async () => owner,
-    listLeaseOwners: async () => owners(),
-  });
 }
 
 function leaseOwner(pid) {

@@ -538,6 +538,10 @@ function createManifestStore(runDirectory, hooks = {}) {
       const temporary = path.join(runDirectory, `entry-${eventId}.tmp`);
       const final = path.join(runDirectory, `entry-${eventId}.json`);
       const release = await acquireWriterLease(runDirectory, current, captureLeaseOwner);
+      await hooks.afterWriterLease?.({
+        current,
+        leasePath: writerLeasePath(runDirectory, eventId),
+      });
       try {
         await fs.access(tombstonePath(runDirectory));
         throw new Error(`Refusing to append to terminal run ${current.runId}`);
@@ -573,6 +577,8 @@ function createManifestStore(runDirectory, hooks = {}) {
         'wx'
       );
       try {
+        await hooks.afterTombstone?.({ current });
+        await hooks.beforeClearSnapshot?.({ current });
         await assertNoActiveWriterLeases(runDirectory, current, await listLeaseOwners());
         const refreshed = await this.read();
         if (refreshed.revision !== expectedRevision)
@@ -958,28 +964,6 @@ async function removeCreatingDirectory(directory) {
   }
 }
 
-async function readCreatingOwner(directory, parsed) {
-  let metadata;
-  try {
-    metadata = JSON.parse(await readRegularFile(creatingMetadataPath(directory)));
-  } catch (cause) {
-    if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) throw cause;
-    metadata = JSON.parse(await readRegularFile(generationMetadataPath(directory)));
-  }
-  if (
-    metadata?.version !== manifestVersion ||
-    metadata.marker !== parsed.marker ||
-    metadata.runId !== parsed.runId ||
-    !isLeaseOwner(metadata.owner) ||
-    metadata.owner.pid !== parsed.pid ||
-    creationToken(metadata.owner) !== parsed.creationToken ||
-    ownerFingerprint(metadata.owner) !== parsed.fingerprint
-  ) {
-    throw new Error(`Invalid incomplete ownership run ${path.basename(directory)}`);
-  }
-  return metadata.owner;
-}
-
 async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
   await assertConfinedLedgerRoot(ledgerRoot, { create: true });
   const children = await fs.readdir(ledgerRoot, { withFileTypes: true });
@@ -997,8 +981,8 @@ async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
     const runDirectory = path.join(ledgerRoot, candidate.name);
     if (candidate.creating) {
       try {
-        const owner = await readCreatingOwner(runDirectory, candidate.creating);
-        if (snapshot.some((process) => exactLeaseOwner(owner, process))) continue;
+        if (snapshot.some((process) => matchesEncodedCreator(process, candidate.creating)))
+          continue;
         await removeCreatingDirectory(runDirectory);
       } catch {
         // Incomplete metadata is retained as evidence; it cannot affect another run.
@@ -1027,9 +1011,23 @@ async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
     try {
       await removeRunDirectory(runDirectory, metadata);
     } catch (cause) {
-      if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) throw cause;
+      if (!(
+        cause &&
+        typeof cause === 'object' &&
+        (cause.code === 'ENOENT' || cause.code === 'EPERM')
+      ))
+        throw cause;
     }
   }
+}
+
+function matchesEncodedCreator(candidate, encoded) {
+  return Boolean(
+    isLeaseOwner(candidate) &&
+    candidate.pid === encoded.pid &&
+    creationToken(candidate) === encoded.creationToken &&
+    ownerFingerprint(leaseOwnerRecord(candidate)) === encoded.fingerprint
+  );
 }
 
 /** Internal test seam; intentionally kept inside the supervisor script. */
