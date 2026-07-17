@@ -867,3 +867,15 @@ Reviewer edits: none.
 Review evidence: the reviewer independently confirmed that the Threads sidebar preview and timeline completion are two legitimate views of the same persisted assistant result. Scoping the duplicate assertion to `#timeline` preserves the strict exact-count guarantee of one and does not hide a production duplicate. Both E2E workflows passed `2/2`; targeted formatting, lint, and diff gates passed.
 Local tracker state decision: Complete / Ready for Integration.
 State decision reason: the fresh reviewer accepted the exact E2E locator correction without findings. Wave 5 remains unintegrated pending the separate canonical integration step.
+
+## Codex Worker Note
+
+Round: 32
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Worker role: final canonical integration closeout
+Local tracker state transition: Complete -> Integrated
+Canonical integration revision: `5a3feb946b140323edc048edc8b0593e5f680da2` (`Merge branch 'codex/long-term-optimization-007' into codex/long-term-optimization`), with final source closeout `bf795d40a3669d925eb95933b484290709099e0c`, reviewed test-only fix `54dd2c5799c203b4de4c092cac4dcb3126143d46`, and Review Round 27 STRICT PASS.
+Integration evidence: the canonical definitive full check at `bed0f88a57132e15105643237f4f6dc160c8f622` had already passed format, lint, core and Web typechecks, `34/34` Vitest files and `299/299` tests, core/acceptance/Web builds, and all three coverage groups. Coverage was kernel `89.45` statements / `81.71` branches / `93.75` functions / `89.91` lines, product `91.23` / `80.74` / `97.14` / `91.30`, and presentation `92.31` / `80.53` / `94.38` / `93.33`. Its sole failure was the full-page E2E locator false positive later classified by Review Round 26 and corrected only in `e2e/web-workflow.spec.ts`; no production code or preceding-gate surface changed.
+Tail-gate validation: on merge revision `5a3feb946b140323edc048edc8b0593e5f680da2`, complete `npm run e2e` passed `2/2` with the reconnect workflow in `4.8s`, decline workflow in `801ms`, Playwright total `7.8s`, and command wall time `19.830s`. `npm audit --include=dev --registry=https://registry.npmjs.org` then passed in `1.438s` with exit code `0` and `found 0 vulnerabilities`. `git diff --check`, cached diff check, and the pre-documentation worktree status were clean.
+Hygiene: the exact pre-run census found zero canonical command-line Node/Chromium processes and captured `1438` allowlisted OS-temp directories as baseline. The post-run census found zero canonical command-line processes, zero owner-marker processes, zero new allowlisted-prefix directories, and zero new paths with live command-line references. No process was terminated and no temporary directory was deleted; all historical or ownership-ambiguous paths remained untouched.
+Final decision: ISSUE-007 is Integrated and Wave 5 is complete/integrated. The combined canonical evidence closes the previously failing E2E tail without repeating already-passing full-check gates.
