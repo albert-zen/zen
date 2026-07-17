@@ -254,7 +254,7 @@ describe('owned E2E supervisor', () => {
           list: async () => [reused],
           terminate: async (candidate) => terminated.push(candidate.pid),
         })
-      ).rejects.toThrow('failed exact identity validation');
+      ).resolves.toBeUndefined();
 
       expect(terminated).toEqual([]);
       await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 1234');

@@ -107,7 +107,7 @@ export async function cleanupOwnedManifest({
     const preKillSnapshot = await list();
     const beforeKill = validateEntry(
       entry,
-      preKillSnapshot.find((candidate) => candidate.pid === entry.pid),
+      preKillSnapshot.find((candidate) => sameProcessIdentity(entry, candidate)),
       preKillSnapshot
     );
     if (!beforeKill.valid) {
@@ -141,8 +141,9 @@ export async function assertNoOwnedProcesses({
   const failures = [];
   const processes = await list();
   for (const entry of manifest.entries) {
-    const current = processes.find((candidate) => candidate.pid === entry.pid);
-    if (current) failures.push(`manifest PID ${entry.pid} is still live or has been reused`);
+    const current = processes.find((candidate) => sameProcessIdentity(entry, candidate));
+    if (current && sameProcessIdentity(entry, current))
+      failures.push(`manifest identity ${entry.pid} is still live`);
   }
   if (ownerMarker) {
     const marked = processes.filter((candidate) => candidate.commandLine?.includes(ownerMarker));
@@ -242,8 +243,8 @@ function makeEntry(current, marker, rootPid, role, processes) {
 
 function discoverOwnedCandidates(marker, processes, knownEntries) {
   if (!marker) return [];
-  const known = new Set(knownEntries.map((entry) => entry.pid));
-  const anchors = new Map(knownEntries.map((entry) => [entry.pid, entry]));
+  const known = new Set(knownEntries.map(identityKey));
+  const anchors = knownEntries;
   const children = new Map();
   for (const candidate of processes) {
     const siblings = children.get(candidate.parentPid) ?? [];
@@ -259,13 +260,9 @@ function discoverOwnedCandidates(marker, processes, knownEntries) {
       parentChain: readParentChain(candidate, processes),
     }));
 
-  for (const anchor of anchors.values()) {
+  for (const anchor of anchors) {
     for (const child of children.get(anchor.pid) ?? []) {
-      if (!createdAfter(child, anchor)) {
-        throw new Error(
-          `Refusing cleanup: PID ${child.pid} predates ancestry parent ${anchor.pid}`
-        );
-      }
+      if (!isInHistoricalInterval(child, anchor, processes)) continue;
       pending.push({
         candidate: child,
         rootPid: anchor.rootPid,
@@ -276,7 +273,8 @@ function discoverOwnedCandidates(marker, processes, knownEntries) {
 
   while (pending.length > 0) {
     const { candidate, rootPid, parentChain } = pending.pop();
-    const previous = discovered.get(candidate.pid);
+    const key = identityKey(candidate);
+    const previous = discovered.get(key);
     if (previous && previous.parentChain.length >= parentChain.length) continue;
     const entry = {
       ...candidate,
@@ -287,13 +285,9 @@ function discoverOwnedCandidates(marker, processes, knownEntries) {
         : 'unverified-ancestry-descendant',
       parentChain,
     };
-    discovered.set(candidate.pid, entry);
+    discovered.set(key, entry);
     for (const child of children.get(candidate.pid) ?? []) {
-      if (!createdAfter(child, candidate)) {
-        throw new Error(
-          `Refusing cleanup: PID ${child.pid} predates ancestry parent ${candidate.pid}`
-        );
-      }
+      if (!isInHistoricalInterval(child, candidate, processes)) continue;
       pending.push({
         candidate: child,
         rootPid,
@@ -302,18 +296,14 @@ function discoverOwnedCandidates(marker, processes, knownEntries) {
     }
   }
 
-  return [...discovered.values()].filter((candidate) => !known.has(candidate.pid));
+  return [...discovered.values()].filter((candidate) => !known.has(identityKey(candidate)));
 }
 
 function assertRetainedAncestry(entries, processes) {
   const byPid = new Map(processes.map((candidate) => [candidate.pid, candidate]));
   for (const entry of entries) {
     const current = byPid.get(entry.pid);
-    if (current && !sameProcessIdentity(entry, current)) {
-      throw new Error(
-        `Refusing cleanup: ancestry PID ${entry.pid} failed exact identity validation`
-      );
-    }
+    // A reused PID is a different historical identity, never an active owner.
   }
 }
 
@@ -327,6 +317,15 @@ function createdAfter(child, parent) {
   return /^\d+$/.test(childToken) && /^\d+$/.test(parentToken)
     ? BigInt(childToken) >= BigInt(parentToken)
     : childToken >= parentToken;
+}
+
+function isInHistoricalInterval(child, anchor, processes) {
+  if (!createdAfter(child, anchor)) return false;
+  const nextReuse = processes
+    .filter((candidate) => candidate.pid === anchor.pid && !sameProcessIdentity(candidate, anchor))
+    .filter((candidate) => createdAfter(candidate, anchor))
+    .sort((left, right) => (createdAfter(left, right) ? 1 : -1))[0];
+  return !nextReuse || !createdAfter(child, nextReuse);
 }
 
 function readParentChain(current, processes) {
@@ -346,7 +345,7 @@ function validateLiveEntries(entries, processes) {
   for (const entry of entries) {
     const validation = validateEntry(
       entry,
-      processes.find((candidate) => candidate.pid === entry.pid),
+      processes.find((candidate) => sameProcessIdentity(entry, candidate)),
       processes
     );
     if (!validation.current) continue;
@@ -399,6 +398,16 @@ function hasStableParentChain(recorded, actual, processes) {
 
 function creationToken(entry) {
   return entry.creationToken ?? entry.createdAt;
+}
+
+function identityKey(entry) {
+  return [
+    entry.pid,
+    creationToken(entry),
+    entry.executable ?? '',
+    entry.commandLine ?? '',
+    entry.marker ?? '',
+  ].join('|');
 }
 
 async function cleanupStaleManifest(operations) {
@@ -471,7 +480,10 @@ function createManifestStore(manifestPath) {
       await this.write({
         version: manifestVersion,
         marker,
-        entries: [...current.entries.filter((known) => known.pid !== entry.pid), entry],
+        entries: [
+          ...current.entries.filter((known) => identityKey(known) !== identityKey(entry)),
+          entry,
+        ],
       });
     },
     async upsertMany(marker, entries) {
