@@ -445,8 +445,10 @@ function identityKey(entry) {
 }
 
 async function cleanupStaleManifest(operations) {
-  const snapshot = await createManifestStore(operations.manifestPath).read();
+  const manifest = createManifestStore(operations.manifestPath);
+  const snapshot = await manifest.read();
   if (snapshot.entries.length > 0) await cleanupOwnedManifest(operations);
+  await manifest.reclaimStaleGenerations({ list: operations.list });
 }
 
 export function installCleanupHandlers(
@@ -498,7 +500,8 @@ function createManifestStore(manifestPath, hooks = {}) {
         if (
           parsed?.version !== manifestVersion ||
           typeof parsed.marker !== 'string' ||
-          typeof parsed.runId !== 'string'
+          typeof parsed.runId !== 'string' ||
+          !isRunId(parsed.runId)
         )
           return emptyManifest();
         const events = await readLedgerEvents(
@@ -521,12 +524,17 @@ function createManifestStore(manifestPath, hooks = {}) {
       }
     },
     async initialize(marker) {
-      await fs.rm(ledgerRoot, { force: true, recursive: true });
       const runId = randomUUID();
-      await fs.mkdir(ledgerGenerationDirectory(ledgerRoot, runId), { recursive: true });
+      const generationDirectory = ledgerGenerationDirectory(ledgerRoot, runId);
+      const generation = { version: manifestVersion, marker, runId, closed: false };
+      await fs.mkdir(generationDirectory, { recursive: true });
+      await fs.writeFile(
+        generationMetadataPath(generationDirectory),
+        `${JSON.stringify(generation, null, 2)}\n`
+      );
       await fs.writeFile(
         manifestPath,
-        `${JSON.stringify({ ...emptyManifest(marker), runId, closed: false }, null, 2)}\n`
+        `${JSON.stringify({ ...emptyManifest(marker), ...generation }, null, 2)}\n`
       );
     },
     async upsert(marker, entry) {
@@ -555,10 +563,49 @@ function createManifestStore(manifestPath, hooks = {}) {
         manifestPath,
         `${JSON.stringify({ ...emptyManifest(marker), runId: current.runId, closed: true }, null, 2)}\n`
       );
-      await fs.rm(ledgerGenerationDirectory(ledgerRoot, current.runId), {
+      const generationDirectory = ledgerGenerationDirectory(ledgerRoot, current.runId);
+      await fs.writeFile(
+        generationMetadataPath(generationDirectory),
+        `${JSON.stringify(
+          { version: manifestVersion, marker, runId: current.runId, closed: true },
+          null,
+          2
+        )}\n`
+      );
+      await fs.rm(generationDirectory, {
         force: true,
         recursive: true,
       });
+    },
+    async reclaimStaleGenerations({ list = () => listProcesses(process.platform) } = {}) {
+      let names;
+      try {
+        names = await fs.readdir(ledgerRoot, { withFileTypes: true });
+      } catch (cause) {
+        if (cause && typeof cause === 'object' && cause.code === 'ENOENT') return;
+        throw cause;
+      }
+      const current = await this.read();
+      const processes = await list();
+      for (const item of names) {
+        if (!item.isDirectory() || !isRunId(item.name) || item.name === current.runId) continue;
+        const generationDirectory = ledgerGenerationDirectory(ledgerRoot, item.name);
+        const generation = await readGenerationMetadata(generationDirectory);
+        if (!generation) continue;
+        const events = await readLedgerEvents(generationDirectory, generation);
+        const liveIdentity = events.some((event) =>
+          processes.some((candidate) => sameProcessIdentity(event.entry, candidate))
+        );
+        const liveMarker = processes.some((candidate) =>
+          candidate.commandLine?.includes(generation.marker)
+        );
+        if (liveIdentity || liveMarker) {
+          throw new Error(
+            `Refusing to reclaim active ownership ledger generation ${generation.runId}`
+          );
+        }
+        await fs.rm(generationDirectory, { force: true, recursive: true });
+      }
     },
   };
 }
@@ -569,6 +616,31 @@ function emptyManifest(marker) {
 
 function ledgerGenerationDirectory(ledgerRoot, runId) {
   return path.join(ledgerRoot, runId);
+}
+
+function generationMetadataPath(generationDirectory) {
+  return path.join(generationDirectory, 'run.json');
+}
+
+function isRunId(value) {
+  return /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
+}
+
+async function readGenerationMetadata(generationDirectory) {
+  try {
+    const parsed = JSON.parse(
+      await fs.readFile(generationMetadataPath(generationDirectory), 'utf8')
+    );
+    return parsed?.version === manifestVersion &&
+      typeof parsed.marker === 'string' &&
+      typeof parsed.runId === 'string' &&
+      isRunId(parsed.runId)
+      ? parsed
+      : undefined;
+  } catch (cause) {
+    if (cause && typeof cause === 'object' && cause.code === 'ENOENT') return undefined;
+    throw cause;
+  }
 }
 
 async function readLedgerEvents(ledgerDirectory, metadata) {
@@ -603,6 +675,7 @@ async function readLedgerEvents(ledgerDirectory, metadata) {
 export const ownedE2eSupervisorTesting = {
   createManifestStore,
   ledgerGenerationDirectory,
+  generationMetadataPath,
   listProcesses,
 };
 

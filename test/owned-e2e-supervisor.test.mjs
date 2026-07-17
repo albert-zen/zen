@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -378,7 +378,7 @@ describe('owned E2E supervisor', () => {
             snapshot.runId
           )
         )
-      ).toHaveLength(18);
+      ).toHaveLength(19);
     });
   }, 15_000);
 
@@ -472,6 +472,60 @@ describe('owned E2E supervisor', () => {
       expect(after.runId).not.toBe(first.runId);
       expect(after.runId).toBe(next.runId);
       expect(after.entries).toEqual([]);
+    });
+  });
+
+  it('allows a paused old-generation writer to finish without contaminating a new run', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const entered = deferred();
+      const release = deferred();
+      const writer = ownedE2eSupervisorTesting.createManifestStore(manifestPath, {
+        beforeAppendRename: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      });
+      const controller = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      const append = writer.upsert(marker, ownedEntry({ marker, pid: 403, parentPid: 1 }));
+
+      await entered.promise;
+      const old = await controller.read();
+      await controller.initialize(marker);
+      const next = await controller.read();
+      release.resolve();
+      await expect(append).resolves.toBeUndefined();
+
+      const oldDirectory = ownedE2eSupervisorTesting.ledgerGenerationDirectory(
+        `${manifestPath}.ledger`,
+        old.runId
+      );
+      expect((await readdir(oldDirectory)).filter((name) => name.endsWith('.json'))).toHaveLength(
+        2
+      );
+      expect((await controller.read()).runId).toBe(next.runId);
+      expect((await controller.read()).entries).toEqual([]);
+    });
+  });
+
+  it('reclaims only verified unowned crash generations and leaves unrelated paths alone', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const controller = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      const stale = ownedEntry({ marker, pid: 404, parentPid: 1 });
+      await controller.upsert(marker, stale);
+      const first = await controller.read();
+      const root = `${manifestPath}.ledger`;
+      const staleDirectory = ownedE2eSupervisorTesting.ledgerGenerationDirectory(root, first.runId);
+      await controller.initialize(marker);
+      await mkdir(path.join(root, 'foreign-directory'));
+
+      await expect(
+        controller.reclaimStaleGenerations({ list: async () => [stale] })
+      ).rejects.toThrow('Refusing to reclaim active ownership ledger generation');
+      await expect(readdir(staleDirectory)).resolves.toContain('run.json');
+
+      await controller.reclaimStaleGenerations({ list: async () => [] });
+      await expect(readdir(staleDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readdir(path.join(root, 'foreign-directory'))).resolves.toEqual([]);
     });
   });
 
