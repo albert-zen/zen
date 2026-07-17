@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
-const manifestVersion = 4;
+const manifestVersion = 5;
 const defaultManifestPath = path.resolve(process.cwd(), '.zen-e2e-owned-processes.json');
 
 export function createRunMarker() {
@@ -72,6 +72,7 @@ export async function cleanupOwnedManifest({
   list = () => listProcesses(platform),
   terminate = (entry, current) => terminateProcess(entry, platform, current),
   maxPasses = 32,
+  retainLedger = false,
 }) {
   const manifest = createManifestStore(manifestPath);
   let stableZeroScans = 0;
@@ -91,9 +92,14 @@ export async function cleanupOwnedManifest({
     if (validation.live.length === 0) {
       // A second zero scan closes the root-exit window before the manifest is cleared.
       await assertNoOwnedProcesses({ manifestPath, marker: snapshot.marker, list });
+      const afterScan = await manifest.read();
+      if (afterScan.revision !== snapshot.revision) {
+        stableZeroScans = 0;
+        continue;
+      }
       stableZeroScans += 1;
       if (stableZeroScans >= 2) {
-        await manifest.write(emptyManifest(snapshot.marker));
+        if (!retainLedger) await manifest.clear(snapshot.marker, afterScan.revision);
         return;
       }
       continue;
@@ -171,7 +177,7 @@ export async function runOwnedCommand({
 }) {
   await cleanupStaleManifest({ manifestPath, platform, inspect, list, terminate });
   const manifest = createManifestStore(manifestPath);
-  await manifest.write(emptyManifest(marker));
+  await manifest.initialize(marker);
 
   let child;
   let registration;
@@ -182,9 +188,33 @@ export async function runOwnedCommand({
     cleanupTask = (async () => {
       try {
         await registration;
-      } catch {
-        // Registration retained the live, unverified identity for safe diagnosis.
-        return;
+      } catch (registrationCause) {
+        const cleanupFailures = [];
+        try {
+          await stopDirectChild(child);
+        } catch (cause) {
+          cleanupFailures.push(cause);
+        }
+        try {
+          await cleanupOwnedManifest({
+            manifestPath,
+            platform,
+            inspect,
+            list,
+            terminate,
+            retainLedger: true,
+          });
+        } catch (cause) {
+          cleanupFailures.push(cause);
+        }
+        if (cleanupFailures.length > 0) {
+          throw new AggregateError(
+            [registrationCause, ...cleanupFailures],
+            'Owned E2E registration and cleanup both failed',
+            { cause: registrationCause }
+          );
+        }
+        throw registrationCause;
       }
       await cleanupOwnedManifest({ manifestPath, platform, inspect, list, terminate });
     })();
@@ -222,6 +252,7 @@ export async function runOwnedCommand({
     try {
       await cleanup();
     } catch (cleanupCause) {
+      if (cleanupCause === cause || cleanupCause instanceof AggregateError) throw cleanupCause;
       throw new AggregateError([cause, cleanupCause], 'Owned E2E command and cleanup both failed', {
         cause: cleanupCause,
       });
@@ -230,6 +261,12 @@ export async function runOwnedCommand({
   } finally {
     handlers.dispose();
   }
+}
+
+async function stopDirectChild(child) {
+  if ((child.exitCode !== null && child.exitCode !== undefined) || typeof child.kill !== 'function')
+    return;
+  if (!child.kill('SIGTERM')) throw new Error(`Failed to stop direct owned child PID ${child.pid}`);
 }
 
 function makeEntry(current, marker, rootPid, role, processes) {
@@ -453,45 +490,101 @@ export function installCleanupHandlers(
 }
 
 function createManifestStore(manifestPath) {
+  const ledgerDirectory = `${manifestPath}.ledger`;
   return {
     async read() {
       try {
         const parsed = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-        return parsed?.version === manifestVersion && Array.isArray(parsed.entries)
-          ? parsed
-          : emptyManifest();
+        if (parsed?.version !== manifestVersion || typeof parsed.marker !== 'string')
+          return emptyManifest();
+        const events = await readLedgerEvents(ledgerDirectory, parsed);
+        const folded = new Map();
+        for (const event of events) folded.set(identityKey(event.entry), event.entry);
+        return {
+          ...parsed,
+          entries: [...folded.values()],
+          revision: events
+            .map((event) => event.name)
+            .sort()
+            .join(','),
+        };
       } catch (cause) {
         if (cause && typeof cause === 'object' && cause.code === 'ENOENT') return emptyManifest();
         throw cause;
       }
     },
-    async write(value) {
-      const temporary = `${manifestPath}.${process.pid}.${randomUUID()}.tmp`;
-      await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`);
-      await fs.rename(temporary, manifestPath);
+    async initialize(marker) {
+      await fs.rm(ledgerDirectory, { force: true, recursive: true });
+      await fs.mkdir(ledgerDirectory, { recursive: true });
+      await fs.writeFile(
+        manifestPath,
+        `${JSON.stringify({ ...emptyManifest(marker), runId: randomUUID(), closed: false }, null, 2)}\n`
+      );
     },
     async upsert(marker, entry) {
       const current = await this.read();
       if (current.marker && current.marker !== marker)
         throw new Error('Manifest belongs to another run');
-      await this.write({
-        version: manifestVersion,
-        marker,
-        entries: [
-          ...current.entries.filter((known) => identityKey(known) !== identityKey(entry)),
-          entry,
-        ],
-      });
+      if (!current.runId) throw new Error('Ownership ledger was not initialized');
+      if (current.closed) throw new Error('Ownership ledger is already closed');
+      const event = { version: manifestVersion, runId: current.runId, marker, entry };
+      const eventId = randomUUID();
+      const temporary = path.join(ledgerDirectory, `entry-${eventId}.tmp`);
+      const final = path.join(ledgerDirectory, `entry-${eventId}.json`);
+      await fs.writeFile(temporary, `${JSON.stringify(event)}\n`);
+      await fs.rename(temporary, final);
     },
     async upsertMany(marker, entries) {
       for (const entry of entries) await this.upsert(marker, entry);
+    },
+    async clear(marker, expectedRevision) {
+      const current = await this.read();
+      if (current.marker !== marker || current.revision !== expectedRevision)
+        throw new Error('Ownership ledger changed before terminal clear');
+      await fs.writeFile(
+        manifestPath,
+        `${JSON.stringify({ ...emptyManifest(marker), runId: current.runId, closed: true }, null, 2)}\n`
+      );
+      await fs.rm(ledgerDirectory, { force: true, recursive: true });
+      await fs.mkdir(ledgerDirectory, { recursive: true });
     },
   };
 }
 
 function emptyManifest(marker) {
-  return { version: manifestVersion, marker, entries: [] };
+  return { version: manifestVersion, marker, entries: [], revision: '' };
 }
+
+async function readLedgerEvents(ledgerDirectory, metadata) {
+  let names;
+  try {
+    names = await fs.readdir(ledgerDirectory);
+  } catch (cause) {
+    if (cause && typeof cause === 'object' && cause.code === 'ENOENT') return [];
+    throw cause;
+  }
+  const completeNames = names.filter((name) => /^entry-[0-9a-f-]+\.json$/i.test(name));
+  const events = await Promise.all(
+    completeNames.map(async (name) => {
+      try {
+        const event = JSON.parse(await fs.readFile(path.join(ledgerDirectory, name), 'utf8'));
+        return event?.version === manifestVersion &&
+          event.runId === metadata.runId &&
+          event.marker === metadata.marker &&
+          event.entry
+          ? { name, entry: event.entry }
+          : undefined;
+      } catch (cause) {
+        if (cause && typeof cause === 'object' && cause.code === 'ENOENT') return undefined;
+        throw cause;
+      }
+    })
+  );
+  return events.filter(Boolean);
+}
+
+/** Internal test seam; intentionally kept inside the supervisor script. */
+export const ownedE2eSupervisorTesting = { createManifestStore };
 
 function waitForChild(child) {
   return new Promise((resolve, reject) => {

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -15,6 +15,7 @@ import {
   cleanupOwnedManifest,
   installCleanupHandlers,
   isOwnedProcess,
+  ownedE2eSupervisorTesting,
   registerSpawnedProcess,
   runOwnedCommand,
   terminateRegisteredProcess,
@@ -50,7 +51,7 @@ describe('owned E2E supervisor', () => {
 
       expect(terminated.map((entry) => entry.pid)).toEqual([leaf.pid, root.pid]);
       expect(terminated.every((entry) => entry.commandLine.includes(marker))).toBe(true);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+      await expect(readLedger(manifestPath)).resolves.toContain('"entries":[]');
     });
   });
 
@@ -74,7 +75,7 @@ describe('owned E2E supervisor', () => {
       });
 
       expect(terminated).toEqual([root.pid, late.pid]);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+      await expect(readLedger(manifestPath)).resolves.toContain('"entries":[]');
     });
   });
 
@@ -113,7 +114,7 @@ describe('owned E2E supervisor', () => {
       ).rejects.toThrow('exact owner identity');
 
       expect(terminated).toEqual([leaf.pid]);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 82');
+      await expect(readLedger(manifestPath)).resolves.toContain('"pid":82');
     });
   });
 
@@ -144,7 +145,7 @@ describe('owned E2E supervisor', () => {
         })
       ).rejects.toThrow('did not reach quiescence after 3 passes');
 
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries":');
+      await expect(readLedger(manifestPath)).resolves.toContain('"entries":');
     });
   });
 
@@ -170,7 +171,7 @@ describe('owned E2E supervisor', () => {
       ).rejects.toThrow('lacks owner marker');
 
       expect(child.kill).not.toHaveBeenCalled();
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 55');
+      await expect(readLedger(manifestPath)).resolves.toContain('"pid":55');
 
       const terminated = [];
       await expect(
@@ -182,7 +183,7 @@ describe('owned E2E supervisor', () => {
         })
       ).rejects.toThrow('exact owner identity');
       expect(terminated).toEqual([]);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('unverified-unowned-test');
+      await expect(readLedger(manifestPath)).resolves.toContain('unverified-unowned-test');
     });
   });
 
@@ -211,7 +212,7 @@ describe('owned E2E supervisor', () => {
       });
 
       expect(terminated).toEqual([child.pid]);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+      await expect(readLedger(manifestPath)).resolves.toContain('"entries":[]');
     });
   });
 
@@ -236,10 +237,8 @@ describe('owned E2E supervisor', () => {
       ).rejects.toThrow('exact owner identity');
 
       expect(terminated).toEqual([]);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain(
-        'unverified-ancestry-descendant'
-      );
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 121');
+      await expect(readLedger(manifestPath)).resolves.toContain('unverified-ancestry-descendant');
+      await expect(readLedger(manifestPath)).resolves.toContain('"pid":121');
     });
   });
 
@@ -264,7 +263,7 @@ describe('owned E2E supervisor', () => {
       ).resolves.toBeUndefined();
 
       expect(terminated).toEqual([]);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+      await expect(readLedger(manifestPath)).resolves.toContain('"entries":[]');
     });
   });
 
@@ -320,7 +319,7 @@ describe('owned E2E supervisor', () => {
         })
       ).rejects.toThrow('exact owner identity');
 
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 11');
+      await expect(readLedger(manifestPath)).resolves.toContain('"pid":11');
     });
   });
 
@@ -339,6 +338,71 @@ describe('owned E2E supervisor', () => {
     });
   });
 
+  it('folds concurrent cross-process ledger events without losing identities', async () => {
+    await withManifest(async ({ directory, manifestPath, marker }) => {
+      const writer = path.join(directory, 'ledger-writer.mjs');
+      const supervisorUrl = pathToFileURL(path.resolve('scripts/owned-e2e-supervisor.mjs')).href;
+      await writeFile(
+        writer,
+        [
+          `import { ownedE2eSupervisorTesting } from '${supervisorUrl}';`,
+          'const [manifestPath, marker, index] = process.argv.slice(2);',
+          'await ownedE2eSupervisorTesting.createManifestStore(manifestPath).upsert(marker, {',
+          '  pid: 9000 + Number(index), parentPid: 1, createdAt: "2026-07-17T12:00:00.000Z",',
+          '  creationToken: String(1784300000000 + Number(index)), executable: "C:\\\\node.exe",',
+          '  commandLine: `node --title=${marker} ledger-${index}`, marker, rootPid: 9000 + Number(index),',
+          '  role: "concurrent-test", parentChain: []',
+          '});',
+        ].join('\n'),
+        'utf8'
+      );
+
+      await Promise.all(
+        Array.from({ length: 16 }, (_, index) =>
+          waitForExit(spawn(process.execPath, [writer, manifestPath, marker, String(index)]))
+        )
+      );
+
+      const ledger = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      const snapshot = await ledger.read();
+      expect(snapshot.entries).toHaveLength(16);
+      await Promise.all([
+        ledger.upsert(marker, snapshot.entries[0]),
+        ledger.upsert(marker, snapshot.entries[0]),
+      ]);
+      expect((await ledger.read()).entries).toHaveLength(16);
+      expect(await readdir(`${manifestPath}.ledger`)).toHaveLength(18);
+    });
+  }, 15_000);
+
+  it('ignores an in-progress ledger event and observes a late complete event before clearing', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const ledgerDirectory = `${manifestPath}.ledger`;
+      await writeFile(
+        path.join(ledgerDirectory, 'entry-interrupted.tmp'),
+        '{"partial":true}',
+        'utf8'
+      );
+      const ledger = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      expect((await ledger.read()).entries).toEqual([]);
+
+      const late = ownedEntry({ marker, pid: 333, parentPid: 1, parentChain: [] });
+      let lists = 0;
+      await cleanupOwnedManifest({
+        manifestPath,
+        list: async () => {
+          lists += 1;
+          if (lists === 2) await ledger.upsert(marker, late);
+          return [];
+        },
+      });
+
+      expect(lists).toBeGreaterThan(4);
+      expect((await ledger.read()).entries).toEqual([]);
+      expect(await readdir(ledgerDirectory)).toEqual([]);
+    });
+  });
+
   it('keeps its manifest until both records and the independent marker scan are clear', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entry = ownedEntry({ marker });
@@ -354,11 +418,11 @@ describe('owned E2E supervisor', () => {
       };
 
       await expect(cleanupOwnedManifest(operations)).rejects.toThrow('did not reach quiescence');
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 1234');
+      await expect(readLedger(manifestPath)).resolves.toContain('"pid":1234');
 
       orphanLive = false;
       await cleanupOwnedManifest(operations);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+      await expect(readLedger(manifestPath)).resolves.toContain('"entries":[]');
     });
   });
 
@@ -408,7 +472,7 @@ describe('owned E2E supervisor', () => {
       });
 
       expect(result.exitCode).toBe(1);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+      await expect(readLedger(manifestPath)).resolves.toContain('"entries":[]');
       await expect(assertNoOwnedProcesses({ manifestPath })).resolves.toBeUndefined();
     });
   }, 15_000);
@@ -440,7 +504,72 @@ describe('owned E2E supervisor', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+      await expect(readLedger(manifestPath)).resolves.toContain('"entries":[]');
+    });
+  });
+
+  it('stops the exact direct root and retains unverified ledger evidence on registration failure', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const identity = {
+        ...ownedEntry({ marker, pid: 777, parentPid: 1, parentChain: [] }),
+        commandLine: 'node unmarked-root',
+      };
+      const processes = new Map([[identity.pid, identity]]);
+      const child = new EventEmitter();
+      child.pid = identity.pid;
+      child.exitCode = null;
+      child.kill = vi.fn(() => {
+        child.exitCode = 143;
+        processes.delete(identity.pid);
+        child.emit('exit', 143, 'SIGTERM');
+        return true;
+      });
+
+      await expect(
+        runOwnedCommand({
+          command: process.execPath,
+          args: ['--unmarked-root'],
+          marker,
+          manifestPath,
+          stdio: 'ignore',
+          spawnCommand: () => child,
+          inspect: async () => identity,
+          list: async () => [...processes.values()],
+        })
+      ).rejects.toThrow('lacks owner marker');
+
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(processes.size).toBe(0);
+      await expect(readLedger(manifestPath)).resolves.toContain('unverified-runner-root');
+    });
+  });
+
+  it('aggregates registration and direct-child cleanup failures without clearing evidence', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const identity = {
+        ...ownedEntry({ marker, pid: 778, parentPid: 1, parentChain: [] }),
+        commandLine: 'node unmarked-root',
+      };
+      const child = new EventEmitter();
+      child.pid = identity.pid;
+      child.exitCode = null;
+      child.kill = vi.fn(() => false);
+
+      await expect(
+        runOwnedCommand({
+          command: process.execPath,
+          args: ['--unmarked-root'],
+          marker,
+          manifestPath,
+          stdio: 'ignore',
+          spawnCommand: () => child,
+          inspect: async () => identity,
+          list: async () => [],
+        })
+      ).rejects.toThrow('registration and cleanup both failed');
+
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      await expect(readLedger(manifestPath)).resolves.toContain('unverified-runner-root');
     });
   });
 
@@ -510,7 +639,7 @@ describe('owned E2E supervisor', () => {
       expect(child.kill).not.toHaveBeenCalled();
       await new Promise(setImmediate);
       expect(exitCodes).toEqual([143]);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+      await expect(readLedger(manifestPath)).resolves.toContain('"entries":[]');
     });
   });
 
@@ -587,14 +716,42 @@ async function withManifest(run) {
   const manifestPath = path.join(directory, 'owned-processes.json');
   const marker = `zen-e2e-test-${path.basename(directory)}`;
   try {
+    await ownedE2eSupervisorTesting.createManifestStore(manifestPath).initialize(marker);
     await run({ directory, manifestPath, marker });
   } finally {
-    await rm(directory, { force: true, recursive: true });
+    await removeOwnedTestDirectory(directory);
   }
 }
 
+async function removeOwnedTestDirectory(directory) {
+  const root = path.resolve(tmpdir());
+  const resolved = path.resolve(directory);
+  if (
+    path.dirname(resolved) !== root ||
+    !path.basename(resolved).startsWith('zen-e2e-supervisor-')
+  ) {
+    throw new Error(`Refusing to remove unexpected test directory ${resolved}`);
+  }
+  await rm(resolved, { force: true, recursive: true });
+}
+
+function waitForExit(child) {
+  return new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code) =>
+      code === 0 ? resolve() : reject(new Error(`writer exited ${code}`))
+    );
+  });
+}
+
 async function writeManifest(manifestPath, marker, entries) {
-  await writeFile(manifestPath, `${JSON.stringify({ version: 4, marker, entries }, null, 2)}\n`);
+  const ledger = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+  await ledger.initialize(marker);
+  await ledger.upsertMany(marker, entries);
+}
+
+async function readLedger(manifestPath) {
+  return JSON.stringify(await ownedE2eSupervisorTesting.createManifestStore(manifestPath).read());
 }
 
 function ownedEntry({
