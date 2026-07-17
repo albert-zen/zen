@@ -45,8 +45,10 @@ export class OwnedProcessTree {
       !Number.isSafeInteger(root.pid) ||
       !Number.isSafeInteger(root.parentPid) ||
       !root.createdAt ||
+      Number.isNaN(Date.parse(root.createdAt)) ||
       !/^\d+$/.test(root.creationToken) ||
       !root.executable ||
+      !root.commandLine ||
       root.pid !== this.expectation.pid ||
       !sameExecutable(root.executable, this.expectation.executable) ||
       !root.commandLine?.includes(this.expectation.marker)
@@ -222,7 +224,7 @@ async function listWindowsProcesses(): Promise<readonly OwnedProcessIdentity[]> 
     '-NoProfile',
     '-NonInteractive',
     '-Command',
-    'Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = $_.CreationDate.ToUniversalTime().Ticks.ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } } | ConvertTo-Json -Compress',
+    'Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = ([DateTimeOffset]$_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds().ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } } | ConvertTo-Json -Compress',
   ]);
   if (!output) return [];
   const parsed = JSON.parse(output) as OwnedProcessIdentity | readonly OwnedProcessIdentity[];
@@ -232,21 +234,33 @@ async function listWindowsProcesses(): Promise<readonly OwnedProcessIdentity[]> 
 async function terminateWindowsProcess(identity: OwnedProcessIdentity): Promise<void> {
   if (process.platform === 'win32') {
     const expected = Buffer.from(JSON.stringify(identity), 'utf8').toString('base64');
-    await execFileText('powershell.exe', [
+    await execFileStrict('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `$e=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${expected}'))|ConvertFrom-Json;$p=[Diagnostics.Process]::GetProcessById($e.pid);$ticks=$p.StartTime.ToUniversalTime().Ticks.ToString();$exe=$p.MainModule.FileName;$w=Get-CimInstance Win32_Process -Filter "ProcessId=$($e.pid)";if($ticks -ne $e.creationToken -or $exe -ine $e.executable -or $w.ParentProcessId -ne $e.parentPid -or $w.CommandLine -ne $e.commandLine){throw 'owned identity mismatch'};$p.Kill();$p.Dispose()`,
+      `$e=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${expected}'))|ConvertFrom-Json;$p=[Diagnostics.Process]::GetProcessById($e.pid);try{$token=([DateTimeOffset]$p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds().ToString();$exe=$p.MainModule.FileName;$w=Get-CimInstance Win32_Process -Filter "ProcessId=$($e.pid)";$bad=@();if($token -ne $e.creationToken){$bad+='creationToken'};if($exe -ine $e.executable){$bad+='executable'};if($w.ParentProcessId -ne $e.parentPid){$bad+='parentPid'};if($w.CommandLine -ne $e.commandLine){$bad+='commandLine'};if($bad.Count){throw ('owned identity mismatch: '+($bad -join ','))};$p.Kill()}finally{$p.Dispose()}`,
     ]);
     return;
   }
   process.kill(identity.pid, 'SIGTERM');
 }
 
+/** Internal test seam; deliberately not re-exported by package entrypoints. */
+export const ownedProcessTesting = { terminateWindowsProcess, listWindowsProcesses };
+
 function execFileText(command: string, args: readonly string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(command, args, (error, stdout) => {
       if (error?.code === 1) return resolve('');
+      if (error) return reject(error);
+      resolve(stdout.trim());
+    });
+  });
+}
+
+function execFileStrict(command: string, args: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, (error, stdout) => {
       if (error) return reject(error);
       resolve(stdout.trim());
     });

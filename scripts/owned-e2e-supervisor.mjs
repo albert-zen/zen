@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
-const manifestVersion = 3;
+const manifestVersion = 4;
 const defaultManifestPath = path.resolve(process.cwd(), '.zen-e2e-owned-processes.json');
 
 export function createRunMarker() {
@@ -505,11 +505,11 @@ async function terminateProcess(entry, platform, current) {
     throw new Error(`Refusing to terminate unverified PID ${entry.pid}`);
   if (platform === 'win32') {
     const expected = Buffer.from(JSON.stringify(entry), 'utf8').toString('base64');
-    await execFileText('powershell.exe', [
+    await execFileStrict('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `$e=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${expected}'))|ConvertFrom-Json;$p=[Diagnostics.Process]::GetProcessById($e.pid);$ticks=$p.StartTime.ToUniversalTime().Ticks.ToString();$exe=$p.MainModule.FileName;$w=Get-CimInstance Win32_Process -Filter "ProcessId=$($e.pid)";if($ticks -ne $e.creationToken -or $exe -ine $e.executable -or $w.ParentProcessId -ne $e.parentPid -or $w.CommandLine -ne $e.commandLine -or $w.CommandLine -notlike ('*'+$e.marker+'*')){throw 'owned identity mismatch'};$p.Kill();$p.Dispose()`,
+      `$e=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${expected}'))|ConvertFrom-Json;$p=[Diagnostics.Process]::GetProcessById($e.pid);try{$token=([DateTimeOffset]$p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds().ToString();$exe=$p.MainModule.FileName;$w=Get-CimInstance Win32_Process -Filter "ProcessId=$($e.pid)";$bad=@();if($token -ne $e.creationToken){$bad+='creationToken'};if($exe -ine $e.executable){$bad+='executable'};if($w.ParentProcessId -ne $e.parentPid){$bad+='parentPid'};if($w.CommandLine -ne $e.commandLine){$bad+='commandLine'};if($w.CommandLine -notlike ('*'+$e.marker+'*')){$bad+='marker'};if($bad.Count){throw ('owned identity mismatch: '+($bad -join ','))};$p.Kill()}finally{$p.Dispose()}`,
     ]);
     return;
   }
@@ -523,7 +523,7 @@ async function inspectProcess(pid, platform) {
 async function listProcesses(platform) {
   if (platform === 'win32') {
     const output = await powershellJson(
-      'Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = $_.CreationDate.ToUniversalTime().Ticks.ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } } | ConvertTo-Json -Compress'
+      'Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = ([DateTimeOffset]$_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds().ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } } | ConvertTo-Json -Compress'
     );
     if (!output) return [];
     const parsed = JSON.parse(output);
@@ -554,6 +554,15 @@ function execFileText(command, args) {
   return new Promise((resolve, reject) => {
     execFile(command, args, (error, stdout) => {
       if (error?.code === 1) return resolve('');
+      if (error) return reject(error);
+      resolve(stdout.trim());
+    });
+  });
+}
+
+function execFileStrict(command, args) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, (error, stdout) => {
       if (error) return reject(error);
       resolve(stdout.trim());
     });

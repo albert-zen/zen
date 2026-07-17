@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,6 +17,7 @@ import {
   isOwnedProcess,
   registerSpawnedProcess,
   runOwnedCommand,
+  terminateRegisteredProcess,
 } from '../scripts/owned-e2e-supervisor.mjs';
 
 describe('owned E2E supervisor', () => {
@@ -26,7 +29,7 @@ describe('owned E2E supervisor', () => {
         pid: 11,
         parentPid: 10,
         rootPid: 10,
-        parentChain: [{ pid: 10, createdAt: root.createdAt }],
+        parentChain: [{ pid: 10, creationToken: root.creationToken }],
       });
       const processes = new Map([
         [root.pid, root],
@@ -83,7 +86,7 @@ describe('owned E2E supervisor', () => {
         pid: 81,
         parentPid: root.pid,
         rootPid: root.pid,
-        parentChain: [{ pid: root.pid, createdAt: root.createdAt }],
+        parentChain: [{ pid: root.pid, creationToken: root.creationToken }],
       });
       const unmarked = {
         ...ownedEntry({ marker, pid: 82, parentPid: root.pid, rootPid: root.pid }),
@@ -191,7 +194,7 @@ describe('owned E2E supervisor', () => {
         pid: 11,
         parentPid: 10,
         rootPid: 10,
-        parentChain: [{ pid: root.pid, createdAt: root.createdAt }],
+        parentChain: [{ pid: root.pid, creationToken: root.creationToken }],
       });
       const processes = new Map([[child.pid, child]]);
       const terminated = [];
@@ -296,7 +299,7 @@ describe('owned E2E supervisor', () => {
           pid: 11,
           parentPid: root.pid,
           rootPid: root.pid,
-          parentChain: [{ pid: root.pid, createdAt: root.createdAt }],
+          parentChain: [{ pid: root.pid, creationToken: root.creationToken }],
         }),
         commandLine: 'node unrelated-worker',
       };
@@ -515,9 +518,43 @@ describe('owned E2E supervisor', () => {
     const entry = ownedEntry({ marker: 'zen-e2e-test-marker' });
     expect(isOwnedProcess(entry, entry)).toBe(true);
     expect(isOwnedProcess(entry, { ...entry, commandLine: 'node unrelated' })).toBe(false);
-    expect(isOwnedProcess(entry, { ...entry, createdAt: 'reused' })).toBe(false);
+    expect(isOwnedProcess(entry, { ...entry, creationToken: '1784300000001' })).toBe(false);
     expect(isOwnedProcess(entry, { ...entry, parentPid: 999 })).toBe(false);
   });
+
+  it('uses the default E2E handle terminator only for an exact marked identity', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const child = spawn(
+        process.execPath,
+        [`--title=${marker}`, '-e', 'setInterval(() => {}, 1000)'],
+        {
+          stdio: 'ignore',
+        }
+      );
+      try {
+        const entry = await registerSpawnedProcess({
+          child,
+          marker,
+          rootPid: child.pid,
+          role: 'default-terminator-test',
+          manifestPath,
+        });
+        for (const invalid of [
+          { ...entry, creationToken: `${BigInt(entry.creationToken) + 1n}` },
+          { ...entry, marker: `${marker}-wrong` },
+          { ...entry, commandLine: `${entry.commandLine} altered` },
+        ]) {
+          await expect(terminateRegisteredProcess(invalid)).rejects.toThrow();
+          expect(child.exitCode).toBeNull();
+        }
+        const exited = once(child, 'exit');
+        await terminateRegisteredProcess(entry);
+        await exited;
+      } finally {
+        if (child.exitCode === null) child.kill('SIGTERM');
+      }
+    });
+  }, 15_000);
 
   it('closes every fixture resource after a shutdown failure', async () => {
     const closed = [];
@@ -557,7 +594,7 @@ async function withManifest(run) {
 }
 
 async function writeManifest(manifestPath, marker, entries) {
-  await writeFile(manifestPath, `${JSON.stringify({ version: 3, marker, entries }, null, 2)}\n`);
+  await writeFile(manifestPath, `${JSON.stringify({ version: 4, marker, entries }, null, 2)}\n`);
 }
 
 function ownedEntry({
@@ -572,7 +609,8 @@ function ownedEntry({
     parentPid,
     rootPid: rootPid ?? pid,
     marker,
-    createdAt: '20260717120000.000000+000',
+    createdAt: '2026-07-17T12:00:00.000Z',
+    creationToken: '1784300000000',
     executable: 'C:\\node.exe',
     commandLine: `node --title=${marker} worker`,
     role: 'test',

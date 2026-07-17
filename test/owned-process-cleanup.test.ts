@@ -1,7 +1,10 @@
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { describe, expect, it } from 'vitest';
 
 import {
   OwnedProcessTree,
+  ownedProcessTesting,
   type OwnedProcessIdentity,
 } from '../src/adapters/node/owned-process-cleanup.js';
 
@@ -160,14 +163,54 @@ describe('OwnedProcessTree', () => {
     await expect(Promise.all([first, second])).rejects.toThrow('termination provider failed');
     expect(terminateCalls).toBe(1);
   });
+
+  it('uses the default Windows handle terminator only for an exact live identity', async () => {
+    if (process.platform !== 'win32') return;
+    const marker = `zen-local-terminator-${Date.now()}`;
+    const child = spawn(
+      process.execPath,
+      [`--title=${marker}`, '-e', 'setInterval(() => {}, 1000)'],
+      {
+        stdio: 'ignore',
+      }
+    );
+    try {
+      const identity = await waitForIdentity(child.pid ?? 0);
+      for (const invalid of [
+        { ...identity, creationToken: `${BigInt(identity.creationToken) + 1n}` },
+        { ...identity, commandLine: `${identity.commandLine} altered` },
+        { ...identity, parentPid: identity.parentPid + 1 },
+        { ...identity, executable: `${identity.executable}.wrong` },
+      ]) {
+        await expect(ownedProcessTesting.terminateWindowsProcess(invalid)).rejects.toThrow();
+        expect(child.exitCode).toBeNull();
+      }
+      const exited = once(child, 'exit');
+      await ownedProcessTesting.terminateWindowsProcess(identity);
+      await exited;
+    } finally {
+      if (child.exitCode === null) child.kill('SIGTERM');
+    }
+  }, 15_000);
 });
+
+async function waitForIdentity(pid: number): Promise<OwnedProcessIdentity> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const identity = (await ownedProcessTesting.listWindowsProcesses()).find(
+      (candidate) => candidate.pid === pid
+    );
+    if (identity) return identity;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Missing test child identity ${pid}`);
+}
 
 function processIdentity(pid: number, parentPid: number, label: string): OwnedProcessIdentity {
   return {
     pid,
     parentPid,
-    createdAt: `20260717120000.${pid}+000`,
-    creationToken: String(638000000000000000 + pid),
+    createdAt: new Date(1784300000000 + pid).toISOString(),
+    creationToken: String(1784300000000 + pid),
     executable: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     commandLine: `powershell -Command ${label} zen-test-${pid}`,
   };
