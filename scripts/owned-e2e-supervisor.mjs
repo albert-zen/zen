@@ -538,20 +538,12 @@ function createManifestStore(runDirectory, hooks = {}) {
       const temporary = path.join(runDirectory, `entry-${eventId}.tmp`);
       const final = path.join(runDirectory, `entry-${eventId}.json`);
       const release = await acquireWriterLease(runDirectory, current, captureLeaseOwner);
-      await hooks.afterWriterLease?.({
-        current,
-        leasePath: writerLeasePath(runDirectory, eventId),
-      });
       try {
+        await hooks.afterWriterLease?.({ current });
         await fs.access(tombstonePath(runDirectory));
         throw new Error(`Refusing to append to terminal run ${current.runId}`);
       } catch (cause) {
-        if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) {
-          await release();
-          throw cause;
-        }
-      }
-      try {
+        if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) throw cause;
         await writeRegularFile(
           temporary,
           `${JSON.stringify({ version: manifestVersion, marker, runId: current.runId, entry })}\n`,
@@ -576,6 +568,7 @@ function createManifestStore(runDirectory, hooks = {}) {
         `${JSON.stringify({ version: manifestVersion, marker, runId: current.runId })}\n`,
         'wx'
       );
+      let committed = false;
       try {
         await hooks.afterTombstone?.({ current });
         await hooks.beforeClearSnapshot?.({ current });
@@ -583,9 +576,10 @@ function createManifestStore(runDirectory, hooks = {}) {
         const refreshed = await this.read();
         if (refreshed.revision !== expectedRevision)
           throw new Error('Ownership ledger changed before terminal clear');
-        await removeRunDirectory(runDirectory, current);
+        committed = true;
+        await removeRunDirectory(runDirectory, current, hooks);
       } catch (cause) {
-        await fs.rm(tombstonePath(runDirectory), { force: true });
+        if (!committed) await fs.rm(tombstonePath(runDirectory), { force: true });
         throw cause;
       }
     },
@@ -624,7 +618,10 @@ function runDirectoryPath(ledgerRoot, marker, runId) {
 }
 
 function ownerFingerprint(owner) {
-  return createHash('sha256').update(JSON.stringify(owner)).digest('hex').slice(0, 24);
+  return createHash('sha256')
+    .update(JSON.stringify(leaseOwnerRecord(owner)))
+    .digest('hex')
+    .slice(0, 24);
 }
 
 function creatingDirectoryPath(ledgerRoot, marker, runId, owner) {
@@ -935,19 +932,28 @@ async function writeRegularFile(filePath, contents, flag) {
     throw new Error(`Refusing non-regular ownership ledger file ${path.basename(filePath)}`);
 }
 
-async function removeRunDirectory(runDirectory, metadata) {
+async function removeRunDirectory(runDirectory, metadata, hooks = {}) {
   await assertConfinedRunDirectory(runDirectory);
   if (metadata.runId !== parseRunDirectoryName(path.basename(runDirectory))?.runId)
     throw new Error('Ownership run metadata no longer matches its directory');
   const names = await fs.readdir(runDirectory);
   await assertKnownRunChildren(runDirectory, names);
-  for (const name of names) await fs.rm(path.join(runDirectory, name), { force: true });
+  const ordered = [
+    ...names.filter((name) => /^entry-|^writer-/.test(name)),
+    ...names.filter((name) => name === 'tombstone.json'),
+    ...names.filter((name) => name === 'run.json'),
+  ];
+  for (let index = 0; index < ordered.length; index += 1) {
+    await fs.rm(path.join(runDirectory, ordered[index]), { force: true });
+    await hooks.afterChildDeletion?.({ name: ordered[index], index });
+  }
   await assertConfinedRunDirectory(runDirectory);
   await fs.rmdir(runDirectory);
 }
 
 async function removeCreatingDirectory(directory) {
   try {
+    await assertConfinedCreatingDirectory(directory);
     const names = await fs.readdir(directory);
     for (const name of names) {
       if (name !== 'creator.json' && name !== 'run.json')
@@ -958,10 +964,25 @@ async function removeCreatingDirectory(directory) {
         throw new Error(`Refusing incomplete run with non-regular child ${name}`);
       await fs.rm(file, { force: true });
     }
+    await assertConfinedCreatingDirectory(directory);
     await fs.rmdir(directory);
   } catch (cause) {
     if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) throw cause;
   }
+}
+
+async function assertConfinedCreatingDirectory(directory) {
+  const root = path.dirname(directory);
+  await assertConfinedLedgerRoot(root);
+  if (path.dirname(directory) !== root || !parseCreatingDirectoryName(path.basename(directory)))
+    throw new Error('Incomplete ownership run escapes its ledger root');
+  const stats = await fs.lstat(directory);
+  if (!stats.isDirectory() || stats.isSymbolicLink())
+    throw new Error(`Incomplete ownership run ${path.basename(directory)} is not a real directory`);
+  if ((await fs.realpath(directory)) !== directory)
+    throw new Error(
+      `Incomplete ownership run ${path.basename(directory)} resolves outside its expected path`
+    );
 }
 
 async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
@@ -981,6 +1002,7 @@ async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
     const runDirectory = path.join(ledgerRoot, candidate.name);
     if (candidate.creating) {
       try {
+        await assertConfinedCreatingDirectory(runDirectory);
         if (snapshot.some((process) => matchesEncodedCreator(process, candidate.creating)))
           continue;
         await removeCreatingDirectory(runDirectory);
