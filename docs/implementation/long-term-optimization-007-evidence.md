@@ -531,3 +531,25 @@ Summary of behavior delivered: every initialization now creates a fresh run ID a
 Tests added/updated: focused supervisor tests now cover the paused writer after terminal clear, old-generation writer after next initialization, generation-specific temporary-event reads, and teardown refusal for both an exact directory and exact marker reference. Teardown validates the exact temporary root/prefix, independently lists Win32 processes immediately before deletion, refuses live references without killing them, and deletes only when the scan is empty. The focused suite passed 26 tests; the real launcher/child/grandchild test passed 10 serial repetitions.
 Commands run and results: exact `npm run check` passed in 374.1 seconds: format, lint, both typechecks, builds, 34 test files/271 unit tests; kernel coverage 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; attributable `zen-local`/`zen-e2e` process scan found zero matches and the owned supervisor temporary-residue scan found zero directories.
 Acceptance criteria status: complete for Worker Round 17, pending fresh review. No lock, rename retry, broad process kill, recursive taskkill, or coverage weakening was added.
+
+## Codex Review Note
+
+Round: 13
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewed branch and revision: `codex/long-term-optimization-007 @ dddf4e6f54824ef2044c5d1b7bacc61a3e1e29dd`
+Review result: Rework.
+Standards Review blocking: initialization recursively removed the whole ledger root. A writer paused in an older generation could resume after a newer initialization removed its generation, producing `ENOENT` despite the immutable-generation ownership contract.
+Reviewer edits: none.
+Local tracker state decision: Rework.
+
+## Codex Worker Note
+
+Round: 18
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `16f9cfb250c715ff07d3e38dd6dee1e24ca8ab62` (`fix: retain active owned ledger generations`).
+Summary of behavior delivered: initialization now creates a new immutable run-ID generation without deleting the ledger root or older generations. Each generation has validated `run.json` metadata. Stale reclamation is explicit and generation-scoped: it folds that generation's exact event identities, checks the marker and identities against a process snapshot, refuses active generations, removes only proven unowned generations, and leaves unrecognized paths untouched. The existing clear path retains its closed-metadata and exact-generation-only removal behavior, so a clear-vs-paused-writer still cannot produce a post-clear event.
+Tests added/updated: focused supervisor coverage now includes the accepted interleaving where an old writer pauses after creating its temporary event, a new initialization creates another generation, and the old writer resumes successfully into its own generation without contaminating the new run. It also covers crash-leftover generation reclamation, active-generation refusal, and preservation of unrelated ledger-root paths. The focused suite passed 28 tests; the real launcher/child/grandchild path passed 10 serial repetitions.
+Commands run and results: exact `npm run check` passed in 377.2 seconds: format, lint, both typechecks, builds, 34 test files/273 unit tests; kernel coverage 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; final attributable `zen-local`/`zen-e2e` process scan found zero matches and the supervisor temporary-residue scan found zero directories.
+Acceptance criteria status: complete for Worker Round 18, pending fresh review. Issue 007 remains Rework; no retry, lock, broad deletion, broad process kill, recursive taskkill, or coverage weakening was added.
