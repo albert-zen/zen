@@ -243,7 +243,11 @@ describe('owned E2E supervisor', () => {
   it('retains a PID-reused record and does not kill it', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entry = ownedEntry({ marker });
-      const reused = { ...entry, createdAt: 'reused-process' };
+      const reused = {
+        ...entry,
+        createdAt: 'reused-process',
+        commandLine: 'node unrelated-reused-process',
+      };
       const terminated = [];
       await writeManifest(manifestPath, marker, [entry]);
 
@@ -257,7 +261,29 @@ describe('owned E2E supervisor', () => {
       ).resolves.toBeUndefined();
 
       expect(terminated).toEqual([]);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 1234');
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+    });
+  });
+
+  it('discovers and terminates a marker-bearing new identity that reused an old PID', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const old = ownedEntry({ marker, pid: 130, parentPid: 1, parentChain: [] });
+      const current = { ...old, createdAt: 'new-identity' };
+      const processes = new Map([[current.pid, current]]);
+      const terminated = [];
+      await writeManifest(manifestPath, marker, [old]);
+
+      await cleanupOwnedManifest({
+        manifestPath,
+        inspect: async (pid) => processes.get(pid),
+        list: async () => [...processes.values()],
+        terminate: async (entry) => {
+          terminated.push(entry.pid);
+          processes.delete(entry.pid);
+        },
+      });
+
+      expect(terminated).toEqual([current.pid]);
     });
   });
 

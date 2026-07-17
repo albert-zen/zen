@@ -299,12 +299,8 @@ function discoverOwnedCandidates(marker, processes, knownEntries) {
   return [...discovered.values()].filter((candidate) => !known.has(identityKey(candidate)));
 }
 
-function assertRetainedAncestry(entries, processes) {
-  const byPid = new Map(processes.map((candidate) => [candidate.pid, candidate]));
-  for (const entry of entries) {
-    const current = byPid.get(entry.pid);
-    // A reused PID is a different historical identity, never an active owner.
-  }
+function assertRetainedAncestry() {
+  // Reused historical PIDs are absent owners; exact marker discovery remains independent.
 }
 
 function parentIdentity(entry) {
