@@ -30,6 +30,18 @@ describe('LocalToolRuntime', () => {
     ).resolves.toContain('exitCode: 7');
   });
 
+  it('preserves comments, quotes, multiline blocks, and marker-like user output', async () => {
+    const { runtime, broker } = createApprovedRuntime(mkdtempSync(join(tmpdir(), 'zen-tools-')));
+    const result = await runTool(runtime, broker, 'shell', {
+      command:
+        'Write-Output ok # trailing comment\n& { Write-Output "{ quoted zen-local-marker-like }" }',
+    });
+
+    expect(result).toContain('ok');
+    expect(result).toContain('{ quoted zen-local-marker-like }');
+    expect(result).not.toContain('__ZEN_OWNER__:');
+  });
+
   it('streams shell stdout and stderr before the command completes', async () => {
     const { runtime, broker } = createApprovedRuntime(mkdtempSync(join(tmpdir(), 'zen-tools-')));
     const execution = runtime.execute(

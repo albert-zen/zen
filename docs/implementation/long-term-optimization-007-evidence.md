@@ -423,3 +423,20 @@ Review result: STRICT PASS; no reasonable findings.
 Validation reviewed: focused process/runtime/supervisor/TUI suite: 53 tests passed; format, lint, TypeScript typechecks, `git diff --check`, and online `npm audit --include=dev` passed with `found 0 vulnerabilities`; attributable Win32 Node/Vite/Vitest/Playwright/Chromium process scan reported zero matches. This review relies on the already-recorded exact-head full check: 260 unit tests and 2 E2E tests passed.
 Local tracker state decision: Complete
 State decision reason: manager accepted the strict pass. Wave 5 integration remains a separate, not-yet-completed step.
+
+## Codex Review Note
+
+Round: 8 and 9
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Integration correction: canonical integration gate `776ccedf` exposed supervisor ancestry instability; subsequent Review 8 required local root attestation, and Review 9 required handle-bound Windows termination, canonical tokens, and wrapper/schema hardening.
+Reviewer edits: none
+Local tracker state decision: Rework
+State decision reason: accepted P1 findings remain pending fresh review.
+
+## Codex Worker Note
+
+Round: 14 and 15
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Summary: local tool roots now attest identity over their owned stdout pipe before executing base64-decoded approved script text. Windows default terminators verify the expected composite identity against a held Process object and WMI before calling `Kill()`; recursive taskkill and Stop-Process paths remain absent. Canonical creation tokens are required by E2E ownership validation.
+Acceptance criteria status: Round 15 validation pending current exact gate and fresh review.
