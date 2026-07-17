@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -517,13 +517,6 @@ function createManifestStore(runDirectory, hooks = {}) {
   const listLeaseOwners = hooks.listLeaseOwners ?? (() => listProcesses(process.platform));
   return {
     runDirectory,
-    // Internal test convenience. Production creates a store once and passes its exact
-    // directory to descendants; this never updates shared metadata.
-    async initialize(marker) {
-      const next = await createRunStore(path.dirname(runDirectory), marker, hooks);
-      runDirectory = next.runDirectory;
-      this.runDirectory = runDirectory;
-    },
     async read() {
       const metadata = await readRunMetadata(runDirectory);
       const events = await readLedgerEvents(runDirectory, metadata);
@@ -546,7 +539,20 @@ function createManifestStore(runDirectory, hooks = {}) {
       const final = path.join(runDirectory, `entry-${eventId}.json`);
       const release = await acquireWriterLease(runDirectory, current, captureLeaseOwner);
       try {
-        await writeRegularFile(temporary, `${JSON.stringify({ ...current, entry })}\n`, 'wx');
+        await fs.access(tombstonePath(runDirectory));
+        throw new Error(`Refusing to append to terminal run ${current.runId}`);
+      } catch (cause) {
+        if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) {
+          await release();
+          throw cause;
+        }
+      }
+      try {
+        await writeRegularFile(
+          temporary,
+          `${JSON.stringify({ version: manifestVersion, marker, runId: current.runId, entry })}\n`,
+          'wx'
+        );
         await hooks.beforeAppendRename?.({ current, temporary, final });
         await fs.rename(temporary, final);
       } finally {
@@ -561,11 +567,21 @@ function createManifestStore(runDirectory, hooks = {}) {
       const current = await this.read();
       if (current.marker !== marker || current.revision !== expectedRevision)
         throw new Error('Ownership ledger changed before terminal clear');
-      await assertNoActiveWriterLeases(runDirectory, current, await listLeaseOwners());
-      const refreshed = await this.read();
-      if (refreshed.revision !== expectedRevision)
-        throw new Error('Ownership ledger changed before terminal clear');
-      await removeRunDirectory(runDirectory, current);
+      await writeRegularFile(
+        tombstonePath(runDirectory),
+        `${JSON.stringify({ version: manifestVersion, marker, runId: current.runId })}\n`,
+        'wx'
+      );
+      try {
+        await assertNoActiveWriterLeases(runDirectory, current, await listLeaseOwners());
+        const refreshed = await this.read();
+        if (refreshed.revision !== expectedRevision)
+          throw new Error('Ownership ledger changed before terminal clear');
+        await removeRunDirectory(runDirectory, current);
+      } catch (cause) {
+        await fs.rm(tombstonePath(runDirectory), { force: true });
+        throw cause;
+      }
     },
     async reclaimStaleGenerations({ list = () => listProcesses(process.platform) } = {}) {
       await reclaimStaleRuns(path.dirname(runDirectory), list);
@@ -580,20 +596,18 @@ async function createRunStore(ledgerRoot, marker, hooks = {}) {
     throw new Error('Cannot initialize run without exact supervisor identity');
   const runId = randomUUID();
   const runDirectory = runDirectoryPath(ledgerRoot, marker, runId);
-  const temporary = path.join(ledgerRoot, `.creating-${randomUUID()}`);
+  const ownerRecord = leaseOwnerRecord(owner);
+  const temporary = creatingDirectoryPath(ledgerRoot, marker, runId, ownerRecord);
   const metadata = { version: manifestVersion, marker, runId, owner: leaseOwnerRecord(owner) };
   await fs.mkdir(temporary);
   try {
-    await fs.writeFile(
-      generationMetadataPath(temporary),
-      `${JSON.stringify(metadata, null, 2)}\n`,
-      {
-        flag: 'wx',
-      }
-    );
+    await fs.writeFile(creatingMetadataPath(temporary), `${JSON.stringify(metadata, null, 2)}\n`, {
+      flag: 'wx',
+    });
+    await fs.rename(creatingMetadataPath(temporary), generationMetadataPath(temporary));
     await fs.rename(temporary, runDirectory);
   } catch (cause) {
-    await fs.rm(temporary, { force: true, recursive: true });
+    await removeCreatingDirectory(temporary);
     throw cause;
   }
   return createManifestStore(runDirectory, hooks);
@@ -603,13 +617,34 @@ function runDirectoryPath(ledgerRoot, marker, runId) {
   return path.join(ledgerRoot, `run-${runId}-${encodeURIComponent(marker)}`);
 }
 
-function ledgerGenerationDirectory(rootOrRunDirectory, runId) {
-  if (
-    rootOrRunDirectory.endsWith('.ledger') &&
-    parseRunDirectoryName(path.basename(rootOrRunDirectory.slice(0, -7)))
-  )
-    return rootOrRunDirectory.slice(0, -7);
-  return path.join(rootOrRunDirectory, `run-${runId}-missing-marker`);
+function ownerFingerprint(owner) {
+  return createHash('sha256').update(JSON.stringify(owner)).digest('hex').slice(0, 24);
+}
+
+function creatingDirectoryPath(ledgerRoot, marker, runId, owner) {
+  return path.join(
+    ledgerRoot,
+    `creating-${runId}-${owner.pid}-${owner.creationToken}-${ownerFingerprint(owner)}-${encodeURIComponent(marker)}`
+  );
+}
+
+function parseCreatingDirectoryName(name) {
+  const match = /^creating-([0-9a-f-]+)-(\d+)-(\d+)-([0-9a-f]{24})-(.+)$/i.exec(name);
+  if (!match || !isRunId(match[1])) return undefined;
+  try {
+    const marker = decodeURIComponent(match[5]);
+    return marker
+      ? {
+          runId: match[1],
+          marker,
+          pid: Number(match[2]),
+          creationToken: match[3],
+          fingerprint: match[4],
+        }
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseRunDirectoryName(name) {
@@ -651,6 +686,14 @@ async function assertConfinedLedgerRoot(ledgerRoot, { create = false } = {}) {
 
 function generationMetadataPath(generationDirectory) {
   return path.join(generationDirectory, 'run.json');
+}
+
+function creatingMetadataPath(directory) {
+  return path.join(directory, 'creator.json');
+}
+
+function tombstonePath(directory) {
+  return path.join(directory, 'tombstone.json');
 }
 
 function writerLeasePath(generationDirectory, leaseId) {
@@ -897,18 +940,74 @@ async function removeRunDirectory(runDirectory, metadata) {
   await fs.rmdir(runDirectory);
 }
 
-async function reclaimStaleRuns(ledgerRoot, list) {
+async function removeCreatingDirectory(directory) {
+  try {
+    const names = await fs.readdir(directory);
+    for (const name of names) {
+      if (name !== 'creator.json' && name !== 'run.json')
+        throw new Error(`Refusing incomplete run with unknown child ${name}`);
+      const file = path.join(directory, name);
+      const stats = await fs.lstat(file);
+      if (!stats.isFile() || stats.isSymbolicLink())
+        throw new Error(`Refusing incomplete run with non-regular child ${name}`);
+      await fs.rm(file, { force: true });
+    }
+    await fs.rmdir(directory);
+  } catch (cause) {
+    if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) throw cause;
+  }
+}
+
+async function readCreatingOwner(directory, parsed) {
+  let metadata;
+  try {
+    metadata = JSON.parse(await readRegularFile(creatingMetadataPath(directory)));
+  } catch (cause) {
+    if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) throw cause;
+    metadata = JSON.parse(await readRegularFile(generationMetadataPath(directory)));
+  }
+  if (
+    metadata?.version !== manifestVersion ||
+    metadata.marker !== parsed.marker ||
+    metadata.runId !== parsed.runId ||
+    !isLeaseOwner(metadata.owner) ||
+    metadata.owner.pid !== parsed.pid ||
+    creationToken(metadata.owner) !== parsed.creationToken ||
+    ownerFingerprint(metadata.owner) !== parsed.fingerprint
+  ) {
+    throw new Error(`Invalid incomplete ownership run ${path.basename(directory)}`);
+  }
+  return metadata.owner;
+}
+
+async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
   await assertConfinedLedgerRoot(ledgerRoot, { create: true });
-  const snapshot = await list();
   const children = await fs.readdir(ledgerRoot, { withFileTypes: true });
-  for (const child of children) {
-    const parsedName = parseRunDirectoryName(child.name);
-    if (!parsedName) continue;
-    const runDirectory = path.join(ledgerRoot, child.name);
+  const candidates = children
+    .filter((child) => child.isDirectory())
+    .map((child) => ({
+      name: child.name,
+      run: parseRunDirectoryName(child.name),
+      creating: parseCreatingDirectoryName(child.name),
+    }))
+    .filter((candidate) => candidate.run || candidate.creating);
+  await hooks.afterEnumerate?.(candidates);
+  const snapshot = await list();
+  for (const candidate of candidates) {
+    const runDirectory = path.join(ledgerRoot, candidate.name);
+    if (candidate.creating) {
+      try {
+        const owner = await readCreatingOwner(runDirectory, candidate.creating);
+        if (snapshot.some((process) => exactLeaseOwner(owner, process))) continue;
+        await removeCreatingDirectory(runDirectory);
+      } catch {
+        // Incomplete metadata is retained as evidence; it cannot affect another run.
+      }
+      continue;
+    }
     let metadata;
     let events;
     try {
-      if (!child.isDirectory()) continue;
       metadata = await readRunMetadata(runDirectory);
       events = await readLedgerEvents(runDirectory, metadata);
       await assertNoActiveWriterLeases(runDirectory, metadata, snapshot);
@@ -938,7 +1037,6 @@ export const ownedE2eSupervisorTesting = {
   createManifestStore,
   createRunStore,
   runDirectoryPath,
-  ledgerGenerationDirectory,
   generationMetadataPath,
   listProcesses,
   manifestVersion,
