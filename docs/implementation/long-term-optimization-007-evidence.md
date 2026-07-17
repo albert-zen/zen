@@ -795,3 +795,15 @@ Reviewer edits: none.
 Validation evidence: web client tests passed `23/23`; main and web typechecks, targeted lint, Prettier, and `git diff --check` passed. Independent attributable Win32 process and owned temporary-directory scans both reported zero.
 Local tracker state decision: Complete / Ready for Integration.
 State decision reason: the exact reviewed implementation passed the fresh final review with no remaining findings. Wave 5 remains unintegrated pending the separate canonical integration step.
+
+## Codex Worker Note
+
+Round: 30
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Worker role: final canonical integration attempt
+Local tracker state transition: Complete -> Complete (integration gate did not complete; not Integrated)
+Canonical branch and merge revision: `codex/long-term-optimization @ 993075ca10e67a3b22874249c0aee6690c1dd835` (`Merge branch 'codex/long-term-optimization-007' into codex/long-term-optimization`), with source closeout `01e79f180f381ce82e738ad9da27a1d54835798c`.
+Integration result: source merged cleanly with `git merge --no-ff --no-edit`; no evidence or tracker conflict occurred. The sole canonical `npm run check` invocation started at `2026-07-17T21:11:00Z` and the command runner reached its 600-second execution ceiling at `604.4` seconds without returning an exit status or buffered gate output. It is therefore not a passing release gate. The unit/integration Vitest phase was observed live, but completed gate list, test count, coverage values, and per-gate durations cannot be asserted from this interrupted invocation.
+Audit: the separate `npm audit --include=dev --registry=https://registry.npmjs.org` completed after the timeout in `1.472` seconds with exit code `0` and `found 0 vulnerabilities`.
+Hygiene: pre-gate exact runtime scan found zero Node/Chromium processes whose command line contained the canonical workspace. The timed-out runner temporarily left exact attributable worker PID `17172` and marker-owned PIDs `3032`, `20396`, and `19968` under `C:\Users\two-one\AppData\Local\Temp\zen-e2e-supervisor-1rU5Qo`; the repository supervisor removed that exact directory and all four PIDs exited naturally. A follow-up Vitest fork worker PID `3928` had no owner marker or manifest and was not terminated; a second read-only scan 35 seconds later found zero canonical command-line or owner-marker runtime processes. No process was killed. Twenty-four newly created `zen-journal-*` and `zen-tool-interrupt-*` temporary directories were not individually attributable to a safely reclaimable repository ownership record, so no temporary directory was deleted. Earlier similarly named directories were also retained.
+Tracker and Wave decision: ISSUE-007 remains `Complete`; it is not `Integrated`, and Wave 5 remains unchecked/unintegrated pending one natural, complete canonical release-gate result. This note preserves the failure diagnosis without rewriting prior evidence.
