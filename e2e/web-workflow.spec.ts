@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 
+import { findOwnedProcesses } from '../scripts/owned-e2e-supervisor.mjs';
 import { startFixtureServer } from './fixture-server.mjs';
 
 let fixture: Awaited<ReturnType<typeof startFixtureServer>>;
@@ -22,6 +23,13 @@ test('uses the same-origin proxy for streamed approval, reconnect, and thread re
   });
 
   await page.goto(`${fixture.origin}/web/`);
+  const ownerMarker = process.env.ZEN_E2E_RUN_MARKER;
+  if (ownerMarker) {
+    const owned = await findOwnedProcesses(ownerMarker);
+    expect(
+      owned.some((candidate) => candidate.commandLine.includes(`--zen-e2e-owner=${ownerMarker}`))
+    ).toBe(true);
+  }
   await expect(page.getByPlaceholder('Message Zen')).toBeEnabled();
   await page.getByPlaceholder('Message Zen').fill('approve the fixture command');
   await page.getByRole('button', { name: 'Send' }).click();

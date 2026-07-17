@@ -2,10 +2,8 @@ import { createServer as createViteServer } from 'vite';
 
 import { serveAppServerHttpTransport } from '../dist/adapters/node/app-server-transport.js';
 import { AppServer, PolicyToolRuntime } from '../dist/product/index.js';
-import { registerCurrentOwnedProcess } from '../scripts/owned-e2e-supervisor.mjs';
 
 export async function startFixtureServer() {
-  await registerCurrentOwnedProcess({ role: 'fixture-worker' });
   const progress = new ProgressGate();
   const executedCommands = [];
   const nextThreadId = sequence('thread-e2e');

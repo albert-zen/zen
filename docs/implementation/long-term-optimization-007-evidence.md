@@ -63,6 +63,23 @@ Open questions: none.
 Known residual risks: POSIX process-group cleanup is implemented but validated here on Windows only. The local-path origin prevents GitHub PR/check handoff until a canonical remote is configured.
 Blocker or context escalation details: none.
 
+## Codex Review Note
+
+Round: 2
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: user-supplied Review Round 2 after Worker Round 5
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-007`
+Base revision/diff scope: `27accbb`; deterministic formatting proof and process-cleanup safety redesign.
+Standards Review blocking: The prior disposable-clone formatting claim was contradictory because four tracked blobs (`web/index.html`, `tsconfig.json`, `tsconfig.build.json`, and `tsconfig.acceptance.json`) still required an exact committed-blob and `core.autocrlf=true` clone verification. Windows cleanup still allowed `taskkill /T`, and manifest cleanup was not individually leaf-first revalidated.
+Standards Review non-blocking: none.
+Standards Review missing evidence: exact-head clean-clone format result, independently scanned post-run Windows process result, and full online audit.
+Spec Review blocking: Ownership records must include parent chains and exact marker/creation identity for every killable candidate; unverified live records must remain retained and fail safely. Actual Chromium marker propagation and missing-manifest orphan detection require behavioral proof.
+Spec Review non-blocking: none.
+Spec Review missing evidence: targeted supervisor cases for leaf-first individual kills, marker-required registration, root-exited marked descendants, PID reuse, unmarked descendants, independent orphan scan, and manifest-clear ordering.
+Local tracker state decision: Rework
+State decision reason: user accepted all Round 2 blocking findings and retained the same implementation owner until fresh review.
+
 ## Codex Worker Note
 
 Round: 5

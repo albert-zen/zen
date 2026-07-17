@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -10,29 +9,84 @@ import { describe, expect, it } from 'vitest';
 
 import { closeFixtureResources } from '../e2e/fixture-server.mjs';
 import {
+  assertNoOwnedProcesses,
   cleanupOwnedManifest,
   isOwnedProcess,
-  registerCurrentOwnedProcess,
+  registerSpawnedProcess,
   runOwnedCommand,
 } from '../scripts/owned-e2e-supervisor.mjs';
 
 describe('owned E2E supervisor', () => {
-  it('terminates a verified root and its persisted discovered child tree', async () => {
+  it('kills exact verified identities leaf-first without recursive tree termination', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
-      const root = ownedEntry({ marker, pid: 10, parentPid: 1 });
+      const root = ownedEntry({ marker, pid: 10, parentPid: 1, parentChain: [] });
+      const leaf = ownedEntry({
+        marker,
+        pid: 11,
+        parentPid: 10,
+        rootPid: 10,
+        parentChain: [{ pid: 10, createdAt: root.createdAt }],
+      });
+      const processes = new Map([
+        [root.pid, root],
+        [leaf.pid, leaf],
+      ]);
+      const terminated = [];
+      await writeManifest(manifestPath, marker, [root, leaf]);
+
+      await cleanupOwnedManifest({
+        manifestPath,
+        inspect: async (pid) => processes.get(pid),
+        list: async () => [...processes.values()],
+        terminate: async (entry) => {
+          terminated.push(entry);
+          processes.delete(entry.pid);
+        },
+      });
+
+      expect(terminated.map((entry) => entry.pid)).toEqual([leaf.pid, root.pid]);
+      expect(terminated.every((entry) => entry.commandLine.includes(marker))).toBe(true);
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+    });
+  });
+
+  it('requires a visible owner marker before registering a spawned child', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const child = spawn(
+        process.execPath,
+        ['--title=unowned-child', '-e', 'setInterval(() => {}, 1000)'],
+        {
+          stdio: 'ignore',
+        }
+      );
+
+      await expect(
+        registerSpawnedProcess({
+          child,
+          marker,
+          rootPid: process.pid,
+          role: 'unowned-test',
+          manifestPath,
+        })
+      ).rejects.toThrow('lacks owner marker');
+
+      await expect(readFile(manifestPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('cleans a marked descendant after its recorded root has exited', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const root = ownedEntry({ marker, pid: 10, parentPid: 1, parentChain: [] });
       const child = ownedEntry({
         marker,
         pid: 11,
         parentPid: 10,
         rootPid: 10,
-        requiresMarker: false,
+        parentChain: [{ pid: root.pid, createdAt: root.createdAt }],
       });
-      const processes = new Map([
-        [root.pid, root],
-        [child.pid, child],
-      ]);
-      await writeManifest(manifestPath, marker, [root]);
+      const processes = new Map([[child.pid, child]]);
       const terminated = [];
+      await writeManifest(manifestPath, marker, [root, child]);
 
       await cleanupOwnedManifest({
         manifestPath,
@@ -40,59 +94,92 @@ describe('owned E2E supervisor', () => {
         list: async () => [...processes.values()],
         terminate: async (entry) => {
           terminated.push(entry.pid);
-          processes.clear();
+          processes.delete(entry.pid);
         },
       });
 
-      expect(terminated).toEqual([root.pid]);
+      expect(terminated).toEqual([child.pid]);
       await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
     });
   });
 
-  it('keeps stale or PID-reused entries and refuses termination when identity verification fails', async () => {
+  it('retains a PID-reused record and does not kill it', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entry = ownedEntry({ marker });
-      await writeManifest(manifestPath, marker, [entry]);
+      const reused = { ...entry, createdAt: 'reused-process' };
       const terminated = [];
+      await writeManifest(manifestPath, marker, [entry]);
 
       await expect(
         cleanupOwnedManifest({
           manifestPath,
-          inspect: async () => ({ ...entry, createdAt: 'reused-process' }),
-          list: async () => [],
+          inspect: async () => reused,
+          list: async () => [reused],
           terminate: async (candidate) => terminated.push(candidate.pid),
         })
-      ).rejects.toThrow('unverified');
+      ).rejects.toThrow('exact owner identity');
 
       expect(terminated).toEqual([]);
       await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 1234');
     });
   });
 
-  it('fails safely when a root exits with an unmarked live fixture descendant', async () => {
+  it('retains an unmarked live descendant and does not kill it', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
-      const root = ownedEntry({ marker, pid: 10, parentPid: 1 });
-      const fixture = ownedEntry({
-        marker,
-        pid: 11,
-        parentPid: 10,
-        rootPid: 10,
-        requiresMarker: false,
-      });
-      await writeManifest(manifestPath, marker, [root, fixture]);
+      const entry = ownedEntry({ marker });
+      const unmarked = { ...entry, commandLine: 'node unrelated-worker' };
+      await writeManifest(manifestPath, marker, [entry]);
 
       await expect(
         cleanupOwnedManifest({
           manifestPath,
-          inspect: async (pid) => (pid === fixture.pid ? fixture : undefined),
-          list: async () => [],
+          inspect: async () => unmarked,
+          list: async () => [unmarked],
           terminate: async () => {
-            throw new Error('must not terminate an unmarked descendant');
+            throw new Error('unmarked process must not be terminated');
           },
         })
-      ).rejects.toThrow('unverified child entries remain');
+      ).rejects.toThrow('exact owner identity');
 
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 11');
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 1234');
+    });
+  });
+
+  it('finds a marked orphan missing from the manifest with its independent process scan', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      await writeManifest(manifestPath, marker, []);
+      const orphan = ownedEntry({ marker, pid: 44, parentPid: 1, parentChain: [] });
+
+      await expect(
+        assertNoOwnedProcesses({
+          manifestPath,
+          inspect: async () => undefined,
+          list: async () => [orphan],
+        })
+      ).rejects.toThrow('independent marker scan found 1 owned process');
+    });
+  });
+
+  it('keeps its manifest until both records and the independent marker scan are clear', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const entry = ownedEntry({ marker });
+      const orphan = ownedEntry({ marker, pid: 44, parentPid: 1, parentChain: [] });
+      const processes = new Map([[entry.pid, entry]]);
+      let orphanLive = true;
+      await writeManifest(manifestPath, marker, [entry]);
+      const operations = {
+        manifestPath,
+        inspect: async (pid) => processes.get(pid),
+        list: async () => [...processes.values(), ...(orphanLive ? [orphan] : [])],
+        terminate: async (candidate) => processes.delete(candidate.pid),
+      };
+
+      await expect(cleanupOwnedManifest(operations)).rejects.toThrow('independent marker scan');
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 1234');
+
+      orphanLive = false;
+      await cleanupOwnedManifest(operations);
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
     });
   });
 
@@ -111,6 +198,7 @@ describe('owned E2E supervisor', () => {
           'const rootPid = Number(process.env.ZEN_E2E_ROOT_PID);',
           "const grandchild = spawn(process.execPath, [`--title=${marker}-grandchild`, '-e', 'setInterval(() => {}, 1000)'], { env: process.env, stdio: 'ignore' });",
           "await registerSpawnedProcess({ child: grandchild, marker, rootPid, role: 'failing-launcher-grandchild' });",
+          "process.send?.('ready');",
           'setInterval(() => {}, 1000);',
         ].join('\n'),
         'utf8'
@@ -119,11 +207,14 @@ describe('owned E2E supervisor', () => {
         helper,
         [
           "import { spawn } from 'node:child_process';",
+          "import { once } from 'node:events';",
           "import process from 'node:process';",
           `import { registerSpawnedProcess } from '${supervisorUrl}';`,
+          'const [childHelper] = process.argv.slice(2);',
           'const marker = process.env.ZEN_E2E_RUN_MARKER;',
-          `const child = spawn(process.execPath, [\`--title=\${marker}-child\`, ${JSON.stringify(childHelper)}], { env: { ...process.env, ZEN_E2E_ROOT_PID: String(process.pid) }, stdio: 'ignore' });`,
+          "const child = spawn(process.execPath, [`--title=${marker}-child`, childHelper], { env: { ...process.env, ZEN_E2E_ROOT_PID: String(process.pid) }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });",
           "await registerSpawnedProcess({ child, marker, rootPid: process.pid, role: 'failing-launcher-child' });",
+          "await once(child, 'message');",
           'process.exit(1);',
         ].join('\n'),
         'utf8'
@@ -131,7 +222,7 @@ describe('owned E2E supervisor', () => {
 
       const result = await runOwnedCommand({
         command: process.execPath,
-        args: [`--title=${marker}-launcher`, helper],
+        args: [`--title=${marker}-launcher`, helper, childHelper],
         marker,
         manifestPath,
         stdio: 'ignore',
@@ -139,10 +230,11 @@ describe('owned E2E supervisor', () => {
 
       expect(result.exitCode).toBe(1);
       await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+      await expect(assertNoOwnedProcesses({ manifestPath })).resolves.toBeUndefined();
     });
   }, 15_000);
 
-  it('cleans its manifest after a normally completed marked child with no owned process left', async () => {
+  it('cleans its manifest after a normal marked command', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const result = await runOwnedCommand({
         command: process.execPath,
@@ -157,7 +249,7 @@ describe('owned E2E supervisor', () => {
     });
   });
 
-  it('installs signal cleanup before spawn and terminates the direct live child safely', async () => {
+  it('handles SIGTERM with the installed cleanup handler and leaves no owned process', async () => {
     await withManifest(async ({ directory, manifestPath, marker }) => {
       const runner = path.join(directory, 'signal-runner.mjs');
       const supervisorUrl = pathToFileURL(path.resolve('scripts/owned-e2e-supervisor.mjs')).href;
@@ -172,26 +264,13 @@ describe('owned E2E supervisor', () => {
         ].join('\n'),
         'utf8'
       );
-      const child = spawn(process.execPath, [runner, manifestPath, marker], { stdio: 'ignore' });
-      await once(child, 'exit');
 
+      const child = spawn(process.execPath, [runner, manifestPath, marker], { stdio: 'ignore' });
+      await onceExit(child);
       await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+      await expect(assertNoOwnedProcesses({ manifestPath })).resolves.toBeUndefined();
     });
   }, 15_000);
-
-  it('records the fixture worker identity in the active manifest', async () => {
-    await withManifest(async ({ manifestPath, marker }) => {
-      const entry = await registerCurrentOwnedProcess({
-        role: 'fixture-worker-test',
-        marker,
-        rootPid: process.pid,
-        manifestPath,
-      });
-
-      expect(entry?.role).toBe('fixture-worker-test');
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('fixture-worker-test');
-    });
-  });
 
   it('requires exact creation, command, parent, executable, and marker identity', () => {
     const entry = ownedEntry({ marker: 'zen-e2e-test-marker' });
@@ -203,7 +282,6 @@ describe('owned E2E supervisor', () => {
 
   it('closes every fixture resource after a shutdown failure', async () => {
     const closed = [];
-
     await expect(
       closeFixtureResources({
         vite: {
@@ -224,7 +302,6 @@ describe('owned E2E supervisor', () => {
         },
       })
     ).rejects.toThrow('Failed to close deterministic E2E fixture resources');
-
     expect(closed).toEqual(['vite', 'transport', 'app-server']);
   });
 });
@@ -241,7 +318,14 @@ async function withManifest(run) {
 }
 
 async function writeManifest(manifestPath, marker, entries) {
-  await writeFile(manifestPath, `${JSON.stringify({ version: 2, marker, entries }, null, 2)}\n`);
+  await writeFile(manifestPath, `${JSON.stringify({ version: 3, marker, entries }, null, 2)}\n`);
+}
+
+function onceExit(child) {
+  return new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', resolve);
+  });
 }
 
 function ownedEntry({
@@ -249,7 +333,7 @@ function ownedEntry({
   pid = 1234,
   parentPid = 100,
   rootPid,
-  requiresMarker = true,
+  parentChain = [],
 }) {
   return {
     pid,
@@ -260,6 +344,6 @@ function ownedEntry({
     executable: 'C:\\node.exe',
     commandLine: `node --title=${marker} worker`,
     role: 'test',
-    requiresMarker,
+    parentChain,
   };
 }

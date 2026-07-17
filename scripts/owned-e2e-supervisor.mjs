@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
-const manifestVersion = 2;
+const manifestVersion = 3;
 const defaultManifestPath = path.resolve(process.cwd(), '.zen-e2e-owned-processes.json');
 
 export function createRunMarker() {
@@ -12,26 +12,23 @@ export function createRunMarker() {
 }
 
 export function isOwnedProcess(entry, current) {
-  if (!current || current.pid !== entry.pid || current.createdAt !== entry.createdAt) return false;
-  if (entry.parentPid !== undefined && current.parentPid !== entry.parentPid) return false;
-  if (entry.executable && current.executable !== entry.executable) return false;
-  if (entry.commandLine && current.commandLine !== entry.commandLine) return false;
-  return !entry.requiresMarker || current.commandLine.includes(entry.marker);
+  return Boolean(
+    current &&
+    current.pid === entry.pid &&
+    current.createdAt === entry.createdAt &&
+    current.parentPid === entry.parentPid &&
+    current.executable === entry.executable &&
+    current.commandLine === entry.commandLine &&
+    typeof current.commandLine === 'string' &&
+    current.commandLine.includes(entry.marker)
+  );
 }
 
-export async function registerCurrentOwnedProcess({
-  role,
-  marker = process.env.ZEN_E2E_RUN_MARKER,
-  manifestPath = process.env.ZEN_E2E_MANIFEST_PATH ?? defaultManifestPath,
-  rootPid = readRootPid(process.env.ZEN_E2E_ROOT_PID),
-  platform = process.platform,
-}) {
-  if (!marker || !rootPid) return undefined;
-  const identity = await inspectProcess(process.pid, platform);
-  if (!identity) throw new Error(`Unable to identify current owned ${role} process`);
-  const entry = toEntry(identity, { marker, rootPid, role, requiresMarker: false });
-  await createManifestStore(manifestPath).upsert(marker, entry);
-  return entry;
+export async function findOwnedProcesses(
+  marker,
+  { platform = process.platform, list = () => listProcesses(platform) } = {}
+) {
+  return (await list()).filter((candidate) => candidate.commandLine?.includes(marker));
 }
 
 export async function registerSpawnedProcess({
@@ -42,17 +39,16 @@ export async function registerSpawnedProcess({
   manifestPath = process.env.ZEN_E2E_MANIFEST_PATH ?? defaultManifestPath,
   platform = process.platform,
   inspect = (pid) => inspectProcess(pid, platform),
+  list = () => listProcesses(platform),
 }) {
-  const identity = await inspect(child.pid);
-  if (!identity) {
+  const current = await inspect(child.pid);
+  if (!current || !current.commandLine?.includes(marker)) {
     await terminateLiveChild(child);
-    throw new Error(`Unable to register spawned ${role} process ${child.pid}`);
+    throw new Error(
+      `Refusing to register spawned ${role}: its command line lacks owner marker ${marker}`
+    );
   }
-  const entry = toEntry(identity, { marker, rootPid, role, requiresMarker: true });
-  if (!identity.commandLine.includes(marker)) {
-    await terminateLiveChild(child);
-    throw new Error(`Spawned ${role} process ${child.pid} is missing its ownership marker`);
-  }
+  const entry = makeEntry(current, marker, rootPid, role, await list());
   await createManifestStore(manifestPath).upsert(marker, entry);
   return entry;
 }
@@ -62,64 +58,54 @@ export async function cleanupOwnedManifest({
   platform = process.platform,
   inspect = (pid) => inspectProcess(pid, platform),
   list = () => listProcesses(platform),
-  terminate = (entry) => terminateProcessTree(entry, platform),
+  terminate = (entry) => terminateProcess(entry, platform, inspect),
 }) {
   const manifest = createManifestStore(manifestPath);
+  const initial = await manifest.read();
+  const processes = await list();
+  const discovered = discoverMarkedProcesses(initial.marker, processes, initial.entries);
+  if (discovered.length > 0) await manifest.upsertMany(initial.marker, discovered);
+
   const snapshot = await manifest.read();
+  const validation = await validateLiveEntries(snapshot.entries, inspect, list);
+  if (validation.invalid.length > 0) {
+    throw new Error(`Refusing cleanup: ${validation.invalid.join('; ')}`);
+  }
+
+  for (const entry of validation.live.sort(
+    (left, right) => right.parentChain.length - left.parentChain.length
+  )) {
+    const beforeKill = await validateEntry(entry, await inspect(entry.pid), await list());
+    if (!beforeKill.valid) {
+      throw new Error(`Refusing cleanup: ${beforeKill.reason}`);
+    }
+    await terminate(entry);
+  }
+
+  // This independently scans Win32_Process/ps by marker before the manifest can be cleared.
+  await assertNoOwnedProcesses({ manifestPath, marker: snapshot.marker, inspect, list });
+  await manifest.write(emptyManifest(snapshot.marker));
+}
+
+export async function assertNoOwnedProcesses({
+  manifestPath = defaultManifestPath,
+  marker,
+  inspect = (pid) => inspectProcess(pid, process.platform),
+  list = () => listProcesses(process.platform),
+} = {}) {
+  const manifest = await createManifestStore(manifestPath).read();
+  const ownerMarker = marker ?? manifest.marker;
   const failures = [];
-
-  for (const rootPid of unique(snapshot.entries.map((entry) => entry.rootPid))) {
-    const entries = snapshot.entries.filter((entry) => entry.rootPid === rootPid);
-    const root = entries.find((entry) => entry.pid === rootPid);
-    const rootCurrent = root ? await inspect(root.pid) : undefined;
-
-    if (!root || !isOwnedProcess(root, rootCurrent)) {
-      const live = await findLiveEntries(entries, inspect);
-      const unsafe = [];
-      for (const entry of live) {
-        if (!entry.requiresMarker || !isOwnedProcess(entry, await inspect(entry.pid))) {
-          unsafe.push(entry);
-        }
-      }
-      if (unsafe.length > 0) {
-        failures.push(
-          `Owned root ${rootPid} is absent or unverified while ${unsafe.length} unverified child entries remain`
-        );
-        continue;
-      }
-      for (const entry of topLevelEntries(live)) await terminate(entry);
-      continue;
-    }
-
-    const discovered = await collectOwnedTree(root, await list());
-    if (discovered.length > 0) {
-      await manifest.upsertMany(snapshot.marker, discovered);
-      entries.push(...discovered.filter((entry) => !entries.some((known) => known.pid === entry.pid)));
-    }
-
-    // Windows taskkill /T is only reached after this exact root identity and marker check.
-    await terminate(root);
-    const live = await findLiveEntries(entries, inspect);
-    if (live.length > 0) {
-      failures.push(`Owned root ${rootPid} still has ${live.length} live verified process entries`);
-    }
-  }
-
-  const latest = await manifest.read();
-  const survivors = [];
-  for (const entry of latest.entries) {
+  for (const entry of manifest.entries) {
     const current = await inspect(entry.pid);
-    if (!current) continue;
-    if (!isOwnedProcess(entry, current)) {
-      failures.push(`Process ${entry.pid} no longer matches its recorded ownership identity`);
-    }
-    survivors.push(entry);
+    if (current) failures.push(`manifest PID ${entry.pid} is still live or has been reused`);
   }
-
-  if (failures.length > 0 || survivors.length > 0) {
-    throw new Error([...failures, `Manifest retains ${survivors.length} live or unverified entry(ies)`].join('; '));
+  if (ownerMarker) {
+    const marked = await findOwnedProcesses(ownerMarker, { list });
+    if (marked.length > 0)
+      failures.push(`independent marker scan found ${marked.length} owned process(es)`);
   }
-  await manifest.write(emptyManifest(latest.marker));
+  if (failures.length > 0) throw new Error(failures.join('; '));
 }
 
 export async function runOwnedCommand({
@@ -133,56 +119,46 @@ export async function runOwnedCommand({
   spawnCommand = spawn,
   inspect = (pid) => inspectProcess(pid, platform),
   list = () => listProcesses(platform),
-  terminate = (entry) => terminateProcessTree(entry, platform),
+  terminate = (entry) => terminateProcess(entry, platform, inspect),
 }) {
-  const manifest = createManifestStore(manifestPath);
   await cleanupStaleManifest({ manifestPath, platform, inspect, list, terminate });
+  const manifest = createManifestStore(manifestPath);
   await manifest.write(emptyManifest(marker));
 
   let child;
   let rootEntry;
-  let childResult;
   let cleanupStarted = false;
   const cleanup = async () => {
     if (cleanupStarted) return;
     cleanupStarted = true;
     if (rootEntry) {
       await cleanupOwnedManifest({ manifestPath, platform, inspect, list, terminate });
-      return;
+    } else if (child) {
+      await terminateLiveChild(child);
+      await assertNoOwnedProcesses({ manifestPath, marker, inspect, list });
     }
-    if (child) await terminateLiveChild(child);
   };
   const handlers = installCleanupHandlers(cleanup);
 
   try {
     child = spawnCommand(command, args, {
       cwd,
-      detached: platform !== 'win32',
-      env: {
-        ...process.env,
-        ZEN_E2E_MANIFEST_PATH: manifestPath,
-        ZEN_E2E_ROOT_PID: String(child?.pid ?? ''),
-        ZEN_E2E_RUN_MARKER: marker,
-      },
+      detached: false,
+      env: { ...process.env, ZEN_E2E_MANIFEST_PATH: manifestPath, ZEN_E2E_RUN_MARKER: marker },
       stdio,
     });
-    // spawn options are evaluated before child exists; establish root relation immediately afterward.
-    childResult = waitForChild(child);
-    const identity = await inspect(child.pid);
-    if (!identity) {
-      if (child.exitCode === null) await terminateLiveChild(child);
-      return { ...(await childResult), marker };
-    }
-    rootEntry = toEntry(identity, {
-      marker,
-      rootPid: child.pid,
-      role: 'runner-root',
-      requiresMarker: true,
-    });
-    if (!identity.commandLine.includes(marker)) {
+    const childResult = waitForChild(child);
+    const current = await inspect(child.pid);
+    if (!current || !current.commandLine?.includes(marker)) {
+      const completed = await completedChildResult(childResult);
+      if (completed) {
+        await cleanup();
+        return { ...completed, marker };
+      }
       await terminateLiveChild(child);
-      throw new Error(`Owned runner child ${child.pid} is missing its command marker`);
+      throw new Error(`Spawned runner child ${child.pid} did not expose its owner marker`);
     }
+    rootEntry = makeEntry(current, marker, child.pid, 'runner-root', await list());
     await manifest.upsert(marker, rootEntry);
     const result = await childResult;
     await cleanup();
@@ -201,18 +177,81 @@ export async function runOwnedCommand({
   }
 }
 
-export async function assertNoOwnedProcesses(manifestPath = defaultManifestPath) {
-  const manifest = await createManifestStore(manifestPath).read();
-  if (manifest.entries.length > 0) {
-    throw new Error(`Zen E2E manifest retains ${manifest.entries.length} owned process entry(ies)`);
+function makeEntry(current, marker, rootPid, role, processes) {
+  return {
+    ...current,
+    marker,
+    rootPid,
+    role,
+    parentChain: readParentChain(current, processes),
+  };
+}
+
+function discoverMarkedProcesses(marker, processes, knownEntries) {
+  if (!marker) return [];
+  const known = new Set(knownEntries.map((entry) => entry.pid));
+  return processes
+    .filter((candidate) => candidate.commandLine?.includes(marker) && !known.has(candidate.pid))
+    .map((candidate) =>
+      makeEntry(candidate, marker, candidate.pid, 'independent-marker-scan', processes)
+    );
+}
+
+function readParentChain(current, processes) {
+  const byPid = new Map(processes.map((candidate) => [candidate.pid, candidate]));
+  const chain = [];
+  let parent = byPid.get(current.parentPid);
+  while (parent) {
+    chain.push({ pid: parent.pid, createdAt: parent.createdAt });
+    parent = byPid.get(parent.parentPid);
   }
+  return chain;
+}
+
+async function validateLiveEntries(entries, inspect, list) {
+  const live = [];
+  const invalid = [];
+  for (const entry of entries) {
+    const validation = await validateEntry(entry, await inspect(entry.pid), await list());
+    if (!validation.current) continue;
+    if (!validation.valid) invalid.push(validation.reason);
+    else live.push(entry);
+  }
+  return { live, invalid };
+}
+
+async function validateEntry(entry, current, processes) {
+  if (!current) return { current: false, valid: true };
+  if (!isOwnedProcess(entry, current)) {
+    return {
+      current: true,
+      valid: false,
+      reason: `PID ${entry.pid} failed exact owner identity validation`,
+    };
+  }
+  if (!hasStableParentChain(entry.parentChain, readParentChain(current, processes), processes)) {
+    return { current: true, valid: false, reason: `PID ${entry.pid} parent chain changed` };
+  }
+  return { current: true, valid: true };
+}
+
+function hasStableParentChain(recorded, actual, processes) {
+  if (actual.length > recorded.length) return false;
+  for (let index = 0; index < actual.length; index += 1) {
+    if (
+      actual[index].pid !== recorded[index]?.pid ||
+      actual[index].createdAt !== recorded[index]?.createdAt
+    ) {
+      return false;
+    }
+  }
+  const byPid = new Map(processes.map((candidate) => [candidate.pid, candidate]));
+  return recorded.slice(actual.length).every((parent) => !byPid.has(parent.pid));
 }
 
 async function cleanupStaleManifest(operations) {
-  const manifest = createManifestStore(operations.manifestPath);
-  const snapshot = await manifest.read();
-  if (snapshot.entries.length === 0) return;
-  await cleanupOwnedManifest(operations);
+  const snapshot = await createManifestStore(operations.manifestPath).read();
+  if (snapshot.entries.length > 0) await cleanupOwnedManifest(operations);
 }
 
 function installCleanupHandlers(cleanup) {
@@ -227,11 +266,11 @@ function installCleanupHandlers(cleanup) {
   const handleException = (cause) => {
     if (handling) return;
     handling = true;
-    void cleanup().finally(() => {
+    void cleanup().finally(() =>
       process.nextTick(() => {
         throw cause;
-      });
-    });
+      })
+    );
   };
   const onInterrupt = () => handleSignal('SIGINT');
   const onTerminate = () => handleSignal('SIGTERM');
@@ -247,49 +286,6 @@ function installCleanupHandlers(cleanup) {
       process.removeListener('unhandledRejection', handleException);
     },
   };
-}
-
-function toEntry(identity, options) {
-  return {
-    ...identity,
-    marker: options.marker,
-    rootPid: options.rootPid,
-    role: options.role,
-    requiresMarker: options.requiresMarker,
-  };
-}
-
-async function collectOwnedTree(root, processes) {
-  const byParent = new Map();
-  processes.forEach((candidate) => {
-    const children = byParent.get(candidate.parentPid) ?? [];
-    children.push(candidate);
-    byParent.set(candidate.parentPid, children);
-  });
-  const discovered = [];
-  const pending = [...(byParent.get(root.pid) ?? [])];
-  while (pending.length > 0) {
-    const child = pending.shift();
-    discovered.push(
-      toEntry(child, {
-        marker: root.marker,
-        rootPid: root.rootPid,
-        role: 'discovered-child',
-        requiresMarker: child.commandLine.includes(root.marker),
-      })
-    );
-    pending.push(...(byParent.get(child.pid) ?? []));
-  }
-  return discovered;
-}
-
-async function findLiveEntries(entries, inspect) {
-  const live = [];
-  for (const entry of entries) {
-    const current = await inspect(entry.pid);
-    if (current) live.push(entry);
-  }
-  return live;
 }
 
 function createManifestStore(manifestPath) {
@@ -312,12 +308,13 @@ function createManifestStore(manifestPath) {
     },
     async upsert(marker, entry) {
       const current = await this.read();
-      if (current.marker && current.marker !== marker) {
-        throw new Error('Owned E2E manifest belongs to a different active run');
-      }
-      const entries = current.entries.filter((known) => known.pid !== entry.pid);
-      entries.push(entry);
-      await this.write({ version: manifestVersion, marker, entries });
+      if (current.marker && current.marker !== marker)
+        throw new Error('Manifest belongs to another run');
+      await this.write({
+        version: manifestVersion,
+        marker,
+        entries: [...current.entries.filter((known) => known.pid !== entry.pid), entry],
+      });
     },
     async upsertMany(marker, entries) {
       for (const entry of entries) await this.upsert(marker, entry);
@@ -336,19 +333,36 @@ function waitForChild(child) {
   });
 }
 
+function completedChildResult(childResult) {
+  return Promise.race([
+    childResult,
+    new Promise((resolve) => setTimeout(() => resolve(undefined), 250)),
+  ]);
+}
+
 async function terminateLiveChild(child) {
   if (child.exitCode !== null || child.killed) return;
   child.kill('SIGTERM');
   await waitForChild(child);
 }
 
-async function inspectProcess(pid, platform) {
+async function terminateProcess(entry, platform, inspect) {
+  const current = await inspect(entry.pid);
+  if (!isOwnedProcess(entry, current))
+    throw new Error(`Refusing to terminate unverified PID ${entry.pid}`);
   if (platform === 'win32') {
-    const output = await powershellJson(
-      `$process = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; if ($null -ne $process) { [PSCustomObject]@{ pid = $process.ProcessId; parentPid = $process.ParentProcessId; createdAt = $process.CreationDate; executable = $process.ExecutablePath; commandLine = $process.CommandLine } | ConvertTo-Json -Compress }`
-    );
-    return output ? JSON.parse(output) : undefined;
+    await execFileText('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Stop-Process -Id ${entry.pid} -Force -ErrorAction Stop`,
+    ]);
+    return;
   }
+  process.kill(entry.pid, 'SIGTERM');
+}
+
+async function inspectProcess(pid, platform) {
   return (await listProcesses(platform)).find((candidate) => candidate.pid === pid);
 }
 
@@ -358,30 +372,24 @@ async function listProcesses(platform) {
       'Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate; executable = $_.ExecutablePath; commandLine = $_.CommandLine } } | ConvertTo-Json -Compress'
     );
     if (!output) return [];
-    return Array.isArray(JSON.parse(output)) ? JSON.parse(output) : [JSON.parse(output)];
+    const parsed = JSON.parse(output);
+    return Array.isArray(parsed) ? parsed : [parsed];
   }
   const output = await execFileText('ps', ['-eo', 'pid=,ppid=,lstart=,comm=,args=']);
-  return output
-    .split('\n')
-    .filter(Boolean)
-    .flatMap((line) => {
-      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.{24})\s+(\S+)\s+(.*)$/);
-      return match
-        ? [{ pid: Number(match[1]), parentPid: Number(match[2]), createdAt: match[3].trim(), executable: match[4], commandLine: match[5] }]
-        : [];
-    });
-}
-
-async function terminateProcessTree(entry, platform) {
-  if (platform === 'win32') {
-    const current = await inspectProcess(entry.pid, platform);
-    if (!isOwnedProcess(entry, current)) {
-      throw new Error(`Refusing taskkill for unverified owned root ${entry.pid}`);
-    }
-    await execFileText('taskkill.exe', ['/PID', String(entry.pid), '/T', '/F']);
-    return;
-  }
-  process.kill(-entry.pid, 'SIGTERM');
+  return output.split('\n').flatMap((line) => {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.{24})\s+(\S+)\s+(.*)$/);
+    return match
+      ? [
+          {
+            pid: Number(match[1]),
+            parentPid: Number(match[2]),
+            createdAt: match[3].trim(),
+            executable: match[4],
+            commandLine: match[5],
+          },
+        ]
+      : [];
+  });
 }
 
 function powershellJson(script) {
@@ -396,18 +404,4 @@ function execFileText(command, args) {
       resolve(stdout.trim());
     });
   });
-}
-
-function readRootPid(value) {
-  const rootPid = Number(value);
-  return Number.isInteger(rootPid) && rootPid > 0 ? rootPid : undefined;
-}
-
-function unique(values) {
-  return [...new Set(values)];
-}
-
-function topLevelEntries(entries) {
-  const pids = new Set(entries.map((entry) => entry.pid));
-  return entries.filter((entry) => !pids.has(entry.parentPid));
 }
