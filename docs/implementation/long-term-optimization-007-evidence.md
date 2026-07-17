@@ -679,3 +679,22 @@ Summary: creator fingerprints now hash only canonical `leaseOwnerRecord` values;
 Requirement-to-test mapping: in-progress and late-revision behavior is covered by `ignores an in-progress event and rejects terminal clear after a late completed event`; event-size shape by `keeps event records minimal and bounded across many entries`; snapshot ordering by `takes its stale-owner snapshot after candidate enumeration`; owner-live/dead and unrelated run isolation by `isolates same-process runs and reclaims only owner-dead, well-formed runs` and `retains malformed or unknown-child runs without blocking a separate new run`; parallel cleanup by `makes parallel stale cleaners idempotent without touching a live separate run`; writer-before-clear/tombstone retry by `retains a paused writer during clear, then clears after release and revision revalidation`; old/new run isolation by `allows a paused old-generation writer to finish without contaminating a new run`; and real owned process cleanup by `cleans a real marked child and grandchild after a failing launcher exits`.
 Validation: focused serial supervisor suite passed `32` tests with no skips; targeted Prettier and ESLint passed; real launcher stress passed `10/10`; online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed. No full `npm run check` ran per direction. Final exact scan found zero attributable `zen-local`/`zen-e2e` runtime processes and zero owned supervisor temporary directories.
 Acceptance criteria status: Round 24 implementation is submitted for fresh review. Issue 007 remains Rework.
+
+## Codex Review Note
+
+Round: 20 manager disposition
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Accepted: Round 24 mapped tests inaccurately. Terminal barrier ordering, canonical creator fingerprints, hook cleanup, and direct tests must be corrected in code and test artifacts.
+Local tracker state decision: Rework.
+
+## Codex Worker Note
+
+Round: 25
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `7b9e5bb90399c1272dd38778bfffdd54e6754aca` (`fix: preserve owned run terminal barriers`).
+Correction: the Round 24 evidence mapping was incomplete. Round 25 changes `test/owned-e2e-supervisor.test.mjs` directly and adds `releases a writer lease when afterWriterLease fails` and `uses tombstone hooks to reject a writer that begins during terminal clear`. Existing direct tests cover in-progress event revision, bounded event records, stale snapshot ordering, paused writer clear behavior, old/new run isolation, and real launcher cleanup.
+Implementation: terminal deletion now removes events/writer leases, then immutable `run.json`, then tombstone last. Precommit clear failures remove only their tombstone; once deletion starts the tombstone is retained on failure. Creator fingerprinting uses canonical `leaseOwnerRecord`; writer hooks execute inside the lease finalizer; incomplete creation paths are confined before shallow cleanup.
+Validation: focused serial supervisor suite, targeted Prettier and ESLint passed; real launcher stress passed `10/10`; online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; exact scan found zero attributable runtime processes and zero supervisor temp directories. No full `npm run check` ran per direction.
+Acceptance criteria status: Round 25 is pending fresh review. Issue 007 remains Rework.
