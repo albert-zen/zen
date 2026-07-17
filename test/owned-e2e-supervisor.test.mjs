@@ -575,6 +575,30 @@ describe('owned E2E supervisor', () => {
     });
   });
 
+  it('atomically isolates a run when a writer pauses after reading before its lease capture', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const entered = deferred();
+      const release = deferred();
+      const owner = ownedEntry({ marker, pid: 472, parentPid: 1 });
+      const writer = ownedE2eSupervisorTesting.createManifestStore(manifestPath, {
+        captureLeaseOwner: async () => {
+          entered.resolve();
+          return release.promise;
+        },
+      });
+      const controller = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      const pending = writer.upsert(marker, ownedEntry({ marker, pid: 473, parentPid: 1 }));
+
+      await entered.promise;
+      const snapshot = await controller.read();
+      await controller.clear(marker, snapshot.revision);
+      release.resolve(owner);
+
+      await expect(pending).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readdir(manifestPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
   it('does not initialize a replacement generation until a paused writer releases', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entered = deferred();
@@ -657,6 +681,23 @@ describe('owned E2E supervisor', () => {
       orphanLive = false;
       await cleanupOwnedManifest(operations);
       await expect(readLedger(manifestPath)).resolves.toContain('"entries":[]');
+    });
+  });
+
+  it('uses an explicit marker postcondition without parsing a legacy manifest', async () => {
+    await withManifest(async ({ directory, marker }) => {
+      const legacy = path.join(directory, 'legacy-schema-5.json');
+      await writeFile(legacy, '{not valid json', 'utf8');
+      await expect(
+        assertNoOwnedProcesses({ manifestPath: legacy, marker, list: async () => [] })
+      ).resolves.toBeUndefined();
+      await expect(
+        assertNoOwnedProcesses({
+          manifestPath: legacy,
+          marker,
+          list: async () => [ownedEntry({ marker, pid: 474 })],
+        })
+      ).rejects.toThrow('independent marker scan');
     });
   });
 

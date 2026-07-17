@@ -143,12 +143,17 @@ export async function assertNoOwnedProcesses({
   marker,
   list = () => listProcesses(process.platform),
 } = {}) {
-  let manifest;
-  try {
-    manifest = await createManifestStore(manifestPath).read();
-  } catch (cause) {
-    if (cause?.cause?.code === 'ENOENT' || cause?.code === 'ENOENT') return;
-    throw cause;
+  // An explicit marker is the E2E postcondition. It intentionally does not
+  // consult a legacy/default manifest, which may belong to another run or no
+  // longer use the per-run ledger schema.
+  let manifest = { entries: [] };
+  if (!marker) {
+    try {
+      manifest = await createManifestStore(manifestPath).read();
+    } catch (cause) {
+      if (cause?.cause?.code === 'ENOENT' || cause?.code === 'ENOENT') return;
+      throw cause;
+    }
   }
   const ownerMarker = marker ?? manifest.marker;
   const failures = [];
@@ -577,7 +582,8 @@ function createManifestStore(runDirectory, hooks = {}) {
         if (refreshed.revision !== expectedRevision)
           throw new Error('Ownership ledger changed before terminal clear');
         committed = true;
-        await removeRunDirectory(runDirectory, current, hooks);
+        const terminalDirectory = await moveRunToTerminal(runDirectory, current, 'clear');
+        await removeTerminalDirectory(terminalDirectory, current, hooks);
       } catch (cause) {
         if (!committed) await fs.rm(tombstonePath(runDirectory), { force: true });
         throw cause;
@@ -615,6 +621,13 @@ async function createRunStore(ledgerRoot, marker, hooks = {}) {
 
 function runDirectoryPath(ledgerRoot, marker, runId) {
   return path.join(ledgerRoot, `run-${runId}-${encodeURIComponent(marker)}`);
+}
+
+function terminalDirectoryPath(ledgerRoot, marker, runId, purpose) {
+  return path.join(
+    ledgerRoot,
+    `terminal-${purpose}-${runId}-${randomUUID()}-${encodeURIComponent(marker)}`
+  );
 }
 
 function ownerFingerprint(owner) {
@@ -656,6 +669,22 @@ function parseRunDirectoryName(name) {
   try {
     const marker = decodeURIComponent(match[2]);
     return marker ? { runId: match[1], marker } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseTerminalDirectoryName(name) {
+  const match =
+    /^terminal-(clear|reclaim)-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})-(.+)$/i.exec(
+      name
+    );
+  if (!match) return undefined;
+  try {
+    const marker = decodeURIComponent(match[4]);
+    return marker
+      ? { purpose: match[1], runId: match[2], terminalId: match[3], marker }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -708,7 +737,7 @@ function isRunId(value) {
 }
 
 function isRunMetadata(value, directoryName) {
-  const name = parseRunDirectoryName(directoryName);
+  const name = parseRunDirectoryName(directoryName) ?? parseTerminalDirectoryName(directoryName);
   return (
     value?.version === manifestVersion &&
     typeof value.marker === 'string' &&
@@ -723,7 +752,11 @@ function isRunMetadata(value, directoryName) {
 
 async function readRunMetadata(runDirectory) {
   try {
-    await assertConfinedRunDirectory(runDirectory);
+    if (parseRunDirectoryName(path.basename(runDirectory))) {
+      await assertConfinedRunDirectory(runDirectory);
+    } else {
+      await assertConfinedTerminalDirectory(runDirectory);
+    }
     const parsed = JSON.parse(await readRegularFile(generationMetadataPath(runDirectory)));
     if (!isRunMetadata(parsed, path.basename(runDirectory))) {
       throw new Error(
@@ -932,23 +965,43 @@ async function writeRegularFile(filePath, contents, flag) {
     throw new Error(`Refusing non-regular ownership ledger file ${path.basename(filePath)}`);
 }
 
-async function removeRunDirectory(runDirectory, metadata, hooks = {}) {
+async function moveRunToTerminal(runDirectory, metadata, purpose) {
   await assertConfinedRunDirectory(runDirectory);
   if (metadata.runId !== parseRunDirectoryName(path.basename(runDirectory))?.runId)
     throw new Error('Ownership run metadata no longer matches its directory');
-  const names = await fs.readdir(runDirectory);
-  await assertKnownRunChildren(runDirectory, names);
+  const ledgerRoot = path.dirname(runDirectory);
+  const terminalDirectory = terminalDirectoryPath(
+    ledgerRoot,
+    metadata.marker,
+    metadata.runId,
+    purpose
+  );
+  await fs.rename(runDirectory, terminalDirectory);
+  await assertConfinedTerminalDirectory(terminalDirectory);
+  const terminal = parseTerminalDirectoryName(path.basename(terminalDirectory));
+  if (!terminal || terminal.runId !== metadata.runId || terminal.marker !== metadata.marker)
+    throw new Error('Ownership terminal directory no longer matches its run');
+  return terminalDirectory;
+}
+
+async function removeTerminalDirectory(terminalDirectory, metadata, hooks = {}) {
+  await assertConfinedTerminalDirectory(terminalDirectory);
+  const terminal = parseTerminalDirectoryName(path.basename(terminalDirectory));
+  if (!terminal || terminal.runId !== metadata.runId || terminal.marker !== metadata.marker)
+    throw new Error('Ownership terminal metadata no longer matches its directory');
+  const names = await fs.readdir(terminalDirectory);
+  await assertKnownRunChildren(terminalDirectory, names);
   const ordered = [
     ...names.filter((name) => /^entry-|^writer-/.test(name)),
     ...names.filter((name) => name === 'run.json'),
     ...names.filter((name) => name === 'tombstone.json'),
   ];
   for (let index = 0; index < ordered.length; index += 1) {
-    await fs.rm(path.join(runDirectory, ordered[index]), { force: true });
+    await fs.rm(path.join(terminalDirectory, ordered[index]), { force: true });
     await hooks.afterChildDeletion?.({ name: ordered[index], index });
   }
-  await assertConfinedRunDirectory(runDirectory);
-  await fs.rmdir(runDirectory);
+  await assertConfinedTerminalDirectory(terminalDirectory);
+  await fs.rmdir(terminalDirectory);
 }
 
 async function removeCreatingDirectory(directory) {
@@ -985,6 +1038,20 @@ async function assertConfinedCreatingDirectory(directory) {
     );
 }
 
+async function assertConfinedTerminalDirectory(directory) {
+  const root = path.dirname(directory);
+  await assertConfinedLedgerRoot(root);
+  if (path.dirname(directory) !== root || !parseTerminalDirectoryName(path.basename(directory)))
+    throw new Error('Ownership terminal directory escapes its ledger root');
+  const stats = await fs.lstat(directory);
+  if (!stats.isDirectory() || stats.isSymbolicLink())
+    throw new Error(`Ownership terminal ${path.basename(directory)} is not a real directory`);
+  if ((await fs.realpath(directory)) !== directory)
+    throw new Error(
+      `Ownership terminal ${path.basename(directory)} resolves outside its expected path`
+    );
+}
+
 async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
   await assertConfinedLedgerRoot(ledgerRoot, { create: true });
   const children = await fs.readdir(ledgerRoot, { withFileTypes: true });
@@ -994,8 +1061,9 @@ async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
       name: child.name,
       run: parseRunDirectoryName(child.name),
       creating: parseCreatingDirectoryName(child.name),
+      terminal: parseTerminalDirectoryName(child.name),
     }))
-    .filter((candidate) => candidate.run || candidate.creating);
+    .filter((candidate) => candidate.run || candidate.creating || candidate.terminal);
   await hooks.afterEnumerate?.(candidates);
   const snapshot = await list();
   for (const candidate of candidates) {
@@ -1008,6 +1076,26 @@ async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
         await removeCreatingDirectory(runDirectory);
       } catch {
         // Incomplete metadata is retained as evidence; it cannot affect another run.
+      }
+      continue;
+    }
+    if (candidate.terminal) {
+      try {
+        await assertConfinedTerminalDirectory(runDirectory);
+        const metadata = await readRunMetadata(runDirectory);
+        if (
+          metadata.runId !== candidate.terminal.runId ||
+          metadata.marker !== candidate.terminal.marker
+        )
+          continue;
+        await assertNoActiveWriterLeases(runDirectory, metadata, snapshot);
+        const ownerLive = snapshot.some((process) => exactLeaseOwner(metadata.owner, process));
+        const markerLive = snapshot.some((process) =>
+          process.commandLine?.includes(metadata.marker)
+        );
+        if (!ownerLive && !markerLive) await removeTerminalDirectory(runDirectory, metadata);
+      } catch {
+        // Terminal namespaces remain isolated evidence until their exact owners are absent.
       }
       continue;
     }
@@ -1031,7 +1119,8 @@ async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
     );
     if (ownerLive || markerLive || eventLive) continue;
     try {
-      await removeRunDirectory(runDirectory, metadata);
+      const terminalDirectory = await moveRunToTerminal(runDirectory, metadata, 'reclaim');
+      await removeTerminalDirectory(terminalDirectory, metadata);
     } catch (cause) {
       if (!(
         cause &&
@@ -1057,6 +1146,7 @@ export const ownedE2eSupervisorTesting = {
   createManifestStore,
   createRunStore,
   runDirectoryPath,
+  terminalDirectoryPath,
   generationMetadataPath,
   listProcesses,
   manifestVersion,

@@ -2,7 +2,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { assertNoOwnedProcesses, createRunMarker, runOwnedCommand } from './owned-e2e-supervisor.mjs';
+import {
+  assertNoOwnedProcesses,
+  createRunMarker,
+  runOwnedCommand,
+} from './owned-e2e-supervisor.mjs';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const marker = createRunMarker();
@@ -16,5 +20,5 @@ const result = await runOwnedCommand({
   marker,
 });
 
-await assertNoOwnedProcesses();
+await assertNoOwnedProcesses({ marker: result.marker });
 process.exitCode = result.exitCode;

@@ -35,6 +35,29 @@ describe('OwnedProcessTree', () => {
     expect(processes).toEqual(new Map());
   });
 
+  it('uses one paired snapshot provider per cleanup pass while preserving two distinct views', async () => {
+    const root = processIdentity(15, 1, 'root');
+    const processes = new Map([[root.pid, root]]);
+    let snapshotCalls = 0;
+    const tree = new OwnedProcessTree(expectation(root), {
+      snapshots: async () => {
+        snapshotCalls += 1;
+        const first = [...processes.values()];
+        const second = [...processes.values()].map((identity) => ({ ...identity }));
+        expect(first).not.toBe(second);
+        return [first, second];
+      },
+      terminate: async (identity) => {
+        processes.delete(identity.pid);
+      },
+    });
+    expect(tree.captureAttested(root)).toBe(true);
+
+    await expect(tree.terminateVerified()).resolves.toEqual([root.pid]);
+    // One paired operation for the root and two independent zero confirmations.
+    expect(snapshotCalls).toBe(3);
+  });
+
   it('refuses PID reuse or a changed ancestor chain without terminating any process', async () => {
     const root = processIdentity(20, 1, 'root');
     const child = processIdentity(21, root.pid, 'child');

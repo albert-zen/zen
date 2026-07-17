@@ -317,6 +317,7 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   private readonly fetchImpl: typeof fetch;
   private readonly createEventSource: (url: string) => WebUiEventSource;
   private readonly onSubscriptionStatus?: BrowserAppServerTransportClientOptions['onSubscriptionStatus'];
+  private readonly pendingSubscriptions = new Set<Promise<void>>();
 
   constructor(options: BrowserAppServerTransportClientOptions) {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -326,6 +327,9 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   }
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    // A thread request must not overtake the EventSource subscription that will
+    // deliver its notifications. Errors and disconnects settle their barrier.
+    await Promise.all([...this.pendingSubscriptions]);
     const response = await this.fetchImpl('/request', {
       method: 'POST',
       headers: {
@@ -346,18 +350,39 @@ export class BrowserAppServerTransportClient implements AppServerClient {
 
   subscribe(listener: AppServerNotificationListener): AppServerSubscription {
     const events = this.createEventSource('/events');
+    let resolveReady: (() => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    this.pendingSubscriptions.add(ready);
+    let settled = false;
+    let active = true;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      this.pendingSubscriptions.delete(ready);
+      resolveReady?.();
+    };
 
     events.onopen = () => {
+      if (!active) return;
+      settle();
       this.onSubscriptionStatus?.('connected');
     };
     events.onerror = (event) => {
+      if (!active) return;
+      settle();
       this.onSubscriptionStatus?.('failed', event);
     };
     events.addEventListener('notification', (event) => {
+      if (!active) return;
       listener(JSON.parse(event.data) as AppServerNotification);
     });
 
     return () => {
+      if (!active) return;
+      active = false;
+      settle();
       events.close();
       this.onSubscriptionStatus?.('disconnected');
     };

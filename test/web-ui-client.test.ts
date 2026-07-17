@@ -84,6 +84,55 @@ describe('Web UI client', () => {
     expect(events.closed).toBe(true);
   });
 
+  it('waits for browser EventSource readiness before a thread request can overtake it', async () => {
+    const events = new ControllableEventSource();
+    const requests: AppServerRequestInput[] = [];
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)) as AppServerRequestInput);
+        return new Response(
+          JSON.stringify({
+            method: 'thread/start',
+            ok: true,
+            result: { thread: { id: 'thread-1', status: 'idle', turns: [], items: [] } },
+          })
+        );
+      }) as typeof fetch,
+    });
+
+    const unsubscribe = client.subscribe(() => undefined);
+    const pending = client.request({ method: 'thread/start' });
+    await Promise.resolve();
+    expect(requests).toEqual([]);
+
+    events.open();
+    await pending;
+    expect(requests).toEqual([{ method: 'thread/start' }]);
+    unsubscribe();
+  });
+
+  it('settles a pending browser subscription barrier on error or disconnect without stale callbacks', async () => {
+    const events = new ControllableEventSource();
+    const statuses: string[] = [];
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () =>
+        new Response(
+          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
+        )) as typeof fetch,
+      onSubscriptionStatus: (status) => statuses.push(status),
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    const pending = client.request({ method: 'thread/list' });
+    events.fail(new Event('error'));
+    await pending;
+    unsubscribe();
+    events.open();
+
+    expect(statuses).toEqual(['failed', 'disconnected']);
+  });
+
   it('connects through real transport and projects streamed turn notifications', async () => {
     const server = new AppServer({
       threadManagerOptions: {
