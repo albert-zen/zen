@@ -621,3 +621,23 @@ Summary of behavior delivered: schema-7 removes the shared mutable current manif
 Tests and validation: focused supervisor suite passed 28 active tests (10 legacy current-run/reclaimer tests are intentionally skipped because their shared-pointer contract was removed), including new same-process isolated-run, owner-live/owner-dead reclamation, and malformed/unknown-run isolation tests. The real launcher/child/grandchild path passed 10 serial repetitions in 93.9 seconds. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed. Per direction, no full `npm run check` ran this round.
 Cleanup evidence: all three specified `zen-review16-*` directories were confirmed as direct temp children with zero non-self command-line references and removed by their exact paths only. A final scan found zero attributable `zen-local`/`zen-e2e` runtime processes, zero `zen-review16-*` directories, and zero owned supervisor temporary directories after two verified stale test directories were removed by exact path only.
 Acceptance criteria status: Round 21 implementation is complete pending fresh review. Issue 007 remains Rework; no broad process termination, recursive taskkill, or broad directory deletion was used.
+
+## Codex Review Note
+
+Round: 17 manager disposition
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Accepted: stale cleanup must enumerate/validate candidates before taking its fresh process snapshot; terminal clear needs a two-sided immutable tombstone barrier with writer lease recheck; events must contain only version, marker, run ID, and entry; and incomplete creation namespaces need attributable owner metadata rather than anonymous `.creating-*` directories.
+Test disposition: re-enable valid per-run invariants, remove obsolete shared-current/reclaimer mechanics, and finish with no skipped Issue 007 safety tests.
+Local tracker state decision: Rework.
+
+## Codex Worker Note
+
+Round: 22
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `c3999ea0980bba3b6e3799dbb4087003f3655efb` (`fix: harden immutable owned run cleanup`).
+Summary of behavior delivered: stale cleanup now enumerates and validates candidate namespaces first, invokes the deterministic post-enumeration hook, and only then takes the one process snapshot used for all ownership deletion decisions. Terminal clear publishes a `wx` tombstone before checking writer leases; writers acquire their exact lease then refuse and release when a tombstone exists. A recoverable clear refusal removes only its tombstone, allowing a pre-existing writer to finish. Event files now serialize only `{ version, marker, runId, entry }`. Incomplete creation directories encode run ID, marker, owner PID/token/fingerprint and retain owner metadata; stale cleanup retains them when identity is live or malformed and shallow-removes only complete, owner-absent attributable artifacts.
+Tests and validation: focused serial supervisor suite passed `29` tests with `0` skipped. It includes the deterministic snapshot-after-enumeration reproduction, same-process run isolation, owner-live/owner-dead reclamation, malformed/unknown run isolation, tombstone/paused writer behavior, real process cleanup, and exact identity handling. The real launcher/child/grandchild test passed `10/10` serial repetitions in `92.3` seconds. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed. Per manager direction, no full `npm run check` was run.
+Temporary-artifact evidence: all 17 `zen-review-*` directories were individually resolved under the system temp root, validated against the exact prefix and zero non-self command-line references, then removed by exact path only. Final scans found zero attributable `zen-local`/`zen-e2e` runtime processes, zero owned supervisor temporary directories, and zero `zen-review-*` directories.
+Acceptance criteria status: Round 22 implementation and focused validation are complete. Issue 007 remains Rework pending fresh review. No broad process kill, recursive taskkill, shared mutable manifest, takeover lease, or recursive owned-run cleanup was added.
