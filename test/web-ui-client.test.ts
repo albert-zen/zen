@@ -112,25 +112,86 @@ describe('Web UI client', () => {
     unsubscribe();
   });
 
-  it('settles a pending browser subscription barrier on error or disconnect without stale callbacks', async () => {
+  it('fails a request waiting on an errored subscription without sending its POST', async () => {
     const events = new ControllableEventSource();
+    let fetchCalls = 0;
     const statuses: string[] = [];
     const client = new BrowserAppServerTransportClient({
       createEventSource: () => events,
-      fetch: (async () =>
-        new Response(
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response(
           JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
-        )) as typeof fetch,
+        );
+      }) as typeof fetch,
       onSubscriptionStatus: (status) => statuses.push(status),
     });
     const unsubscribe = client.subscribe(() => undefined);
     const pending = client.request({ method: 'thread/list' });
+    const rejected = expect(pending).rejects.toThrow(
+      'Browser event subscription failed before request'
+    );
     events.fail(new Event('error'));
-    await pending;
-    unsubscribe();
-    events.open();
+    await rejected;
 
-    expect(statuses).toEqual(['failed', 'disconnected']);
+    expect(fetchCalls).toBe(0);
+    expect(statuses).toEqual(['failed']);
+    unsubscribe();
+  });
+
+  it('blocks requests during browser SSE reconnect and releases them on the next open', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response(
+          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
+        );
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+    events.fail(new Event('error'));
+
+    const pending = client.request({ method: 'thread/list' });
+    await Promise.resolve();
+    expect(fetchCalls).toBe(0);
+    events.open();
+    await pending;
+
+    expect(fetchCalls).toBe(1);
+    unsubscribe();
+  });
+
+  it('disconnect rejects pending browser readiness and stale open cannot revive it', async () => {
+    const events = new ControllableEventSource();
+    const statuses: string[] = [];
+    const notifications: string[] = [];
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response('{}');
+      }) as typeof fetch,
+      onSubscriptionStatus: (status) => statuses.push(status),
+    });
+    const unsubscribe = client.subscribe((notification) => notifications.push(notification.type));
+    const pending = client.request({ method: 'thread/list' });
+    const rejected = expect(pending).rejects.toThrow('Browser event subscription disconnected');
+    unsubscribe();
+    await rejected;
+    events.open();
+    events.emitNotification({
+      type: 'thread/started',
+      thread: { id: 'stale-thread', status: 'idle', turns: [], items: [] },
+    });
+
+    expect(fetchCalls).toBe(0);
+    expect(statuses).toEqual(['disconnected']);
+    expect(notifications).toEqual([]);
   });
 
   it('connects through real transport and projects streamed turn notifications', async () => {

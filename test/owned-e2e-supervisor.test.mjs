@@ -55,6 +55,93 @@ describe('owned E2E supervisor', () => {
     });
   });
 
+  it('accepts supervisor zero only from two empty views in one paired pass', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      await writeManifest(manifestPath, marker, []);
+      let snapshotCalls = 0;
+
+      await cleanupOwnedManifest({
+        manifestPath,
+        retainLedger: true,
+        snapshots: async () => {
+          snapshotCalls += 1;
+          return [[], []];
+        },
+      });
+
+      expect(snapshotCalls).toBe(1);
+    });
+  });
+
+  it('calls an injected supervisor list twice inside one fallback paired pass', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      await writeManifest(manifestPath, marker, []);
+      let listCalls = 0;
+
+      await cleanupOwnedManifest({
+        manifestPath,
+        retainLedger: true,
+        list: async () => {
+          listCalls += 1;
+          return [];
+        },
+      });
+
+      expect(listCalls).toBe(2);
+    });
+  });
+
+  it('discovers and cleans a marked process appearing only in the second supervisor view', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const root = ownedEntry({ marker, pid: 13, parentPid: 1, parentChain: [] });
+      await writeManifest(manifestPath, marker, [root]);
+      let live = true;
+      let snapshotCalls = 0;
+      const terminated = [];
+
+      await cleanupOwnedManifest({
+        manifestPath,
+        retainLedger: true,
+        snapshots: async () => {
+          snapshotCalls += 1;
+          return live ? [[], [root]] : [[], []];
+        },
+        terminate: async (entry) => {
+          terminated.push(entry.pid);
+          live = false;
+        },
+      });
+
+      expect(terminated).toEqual([root.pid]);
+      expect(snapshotCalls).toBe(2);
+    });
+  });
+
+  it('repeats paired confirmation when the ledger revision changes between views', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      await writeManifest(manifestPath, marker, []);
+      let snapshotCalls = 0;
+      let appended = false;
+
+      await cleanupOwnedManifest({
+        manifestPath,
+        retainLedger: true,
+        snapshots: async () => {
+          snapshotCalls += 1;
+          return [[], []];
+        },
+        afterDiscoveryView: async ({ manifest }) => {
+          if (appended) return;
+          appended = true;
+          await manifest.upsert(marker, ownedEntry({ marker, pid: 14, parentPid: 1 }));
+        },
+      });
+
+      expect(snapshotCalls).toBe(2);
+      await expect(readLedger(manifestPath)).resolves.toContain('"pid":14');
+    });
+  });
+
   it('discovers a marked descendant created during a termination pass', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const root = ownedEntry({ marker, pid: 70, parentPid: 1, parentChain: [] });

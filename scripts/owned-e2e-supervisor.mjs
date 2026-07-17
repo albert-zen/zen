@@ -69,53 +69,70 @@ async function waitForSpawnedIdentity(pid, marker, inspect) {
 export async function cleanupOwnedManifest({
   manifestPath = defaultManifestPath,
   platform = process.platform,
-  list = () => listProcesses(platform),
+  list,
+  snapshots,
+  afterDiscoveryView,
   terminate = (entry, current) => terminateProcess(entry, platform, current),
   maxPasses = 32,
   retainLedger = false,
 }) {
-  const manifest = createManifestStore(manifestPath);
-  let stableZeroScans = 0;
+  const listOperation = list ?? (() => listProcesses(platform));
+  const manifest = createManifestStore(manifestPath, { listLeaseOwners: listOperation });
+  const snapshotOperation =
+    snapshots ??
+    (list
+      ? () => Promise.all([listOperation(), listOperation()])
+      : () => listProcessSnapshots(platform));
   for (let pass = 0; pass < maxPasses; pass += 1) {
     const initial = await manifest.read();
-    const processes = await list();
-    assertRetainedAncestry(initial.entries, processes);
-    const discovered = discoverOwnedCandidates(initial.marker, processes, initial.entries);
-    if (discovered.length > 0) await manifest.upsertMany(initial.marker, discovered);
+    const [discoveryProcesses, currentProcesses] = await snapshotOperation();
 
-    const snapshot = await manifest.read();
-    const validation = validateLiveEntries(snapshot.entries, processes);
-    if (validation.invalid.length > 0) {
-      throw new Error(`Refusing cleanup: ${validation.invalid.join('; ')}`);
+    assertRetainedAncestry(initial.entries, discoveryProcesses);
+    const firstDiscovered = discoverOwnedCandidates(
+      initial.marker,
+      discoveryProcesses,
+      initial.entries
+    );
+    if (firstDiscovered.length > 0) await manifest.upsertMany(initial.marker, firstDiscovered);
+    const afterDiscovery = await manifest.read();
+    const discoveryValidation = validateLiveEntries(afterDiscovery.entries, discoveryProcesses);
+    await afterDiscoveryView?.({ manifest, snapshot: afterDiscovery, pass });
+
+    assertRetainedAncestry(afterDiscovery.entries, currentProcesses);
+    const secondDiscovered = discoverOwnedCandidates(
+      afterDiscovery.marker,
+      currentProcesses,
+      afterDiscovery.entries
+    );
+    if (secondDiscovered.length > 0)
+      await manifest.upsertMany(afterDiscovery.marker, secondDiscovered);
+    const afterCurrent = await manifest.read();
+    const currentValidation = validateLiveEntries(afterCurrent.entries, currentProcesses);
+    const invalid = [...discoveryValidation.invalid, ...currentValidation.invalid];
+    if (invalid.length > 0) {
+      throw new Error(`Refusing cleanup: ${invalid.join('; ')}`);
     }
 
-    if (validation.live.length === 0) {
-      // A second zero scan closes the root-exit window before the manifest is cleared.
-      await assertNoOwnedProcesses({ manifestPath, marker: snapshot.marker, list });
-      const afterScan = await manifest.read();
-      if (afterScan.revision !== snapshot.revision) {
-        stableZeroScans = 0;
-        continue;
-      }
-      stableZeroScans += 1;
-      if (stableZeroScans >= 2) {
-        if (!retainLedger) await manifest.clear(snapshot.marker, afterScan.revision);
-        return;
-      }
+    if (discoveryValidation.live.length === 0 && currentValidation.live.length === 0) {
+      if (afterCurrent.revision !== afterDiscovery.revision) continue;
+      if (!retainLedger) await manifest.clear(afterCurrent.marker, afterCurrent.revision);
+      return;
+    }
+    if (currentValidation.live.length === 0) {
+      // The first view observed a process which exited before the second. Only
+      // a subsequent paired-zero observation can close that window.
       continue;
     }
-    stableZeroScans = 0;
 
-    // Kill only one deepest exact identity each pass. A rescan before a parent can be
-    // stopped discovers descendants created while this leaf was terminating.
-    const entry = validation.live.sort(
+    // The second view is the immediate exact revalidation view. Kill only one
+    // deepest identity, then obtain a fresh pair before considering its parent.
+    const entry = currentValidation.live.sort(
       (left, right) => right.parentChain.length - left.parentChain.length
     )[0];
-    const preKillSnapshot = await list();
     const beforeKill = validateEntry(
       entry,
-      preKillSnapshot.find((candidate) => sameProcessIdentity(entry, candidate)),
-      preKillSnapshot
+      currentProcesses.find((candidate) => sameProcessIdentity(entry, candidate)),
+      currentProcesses
     );
     if (!beforeKill.valid) {
       throw new Error(`Refusing cleanup: ${beforeKill.reason}`);
@@ -181,17 +198,30 @@ export async function runOwnedCommand({
   stdio = 'inherit',
   spawnCommand = spawn,
   inspect = (pid) => inspectProcess(pid, platform),
-  list = () => listProcesses(platform),
+  list,
+  snapshots,
   terminate = (entry, current) => terminateProcess(entry, platform, current),
   signals = process,
   setExitCode,
 }) {
+  const listOperation = list ?? (() => listProcesses(platform));
+  const snapshotOperation =
+    snapshots ??
+    (list
+      ? () => Promise.all([listOperation(), listOperation()])
+      : () => listProcessSnapshots(platform));
   const existingRun = parseRunDirectoryName(path.basename(manifestPath));
   const manifest = existingRun
     ? createManifestStore(manifestPath)
     : await (async () => {
         const ledgerRoot = confinedLedgerRoot(manifestPath);
-        await cleanupStaleManifest({ ledgerRoot, platform, inspect, list, terminate });
+        await cleanupStaleManifest({
+          ledgerRoot,
+          platform,
+          inspect,
+          list: listOperation,
+          terminate,
+        });
         return createRunStore(ledgerRoot, marker);
       })();
 
@@ -216,7 +246,8 @@ export async function runOwnedCommand({
             manifestPath: manifest.runDirectory,
             platform,
             inspect,
-            list,
+            list: listOperation,
+            snapshots: snapshotOperation,
             terminate,
             retainLedger: true,
           });
@@ -236,7 +267,8 @@ export async function runOwnedCommand({
         manifestPath: manifest.runDirectory,
         platform,
         inspect,
-        list,
+        list: listOperation,
+        snapshots: snapshotOperation,
         terminate,
       });
     })();
@@ -264,7 +296,7 @@ export async function runOwnedCommand({
       manifestPath: manifest.runDirectory,
       platform,
       inspect,
-      list,
+      list: listOperation,
     });
     await registration;
     if (cleanupTask) {
@@ -1149,6 +1181,7 @@ export const ownedE2eSupervisorTesting = {
   terminalDirectoryPath,
   generationMetadataPath,
   listProcesses,
+  listProcessSnapshots,
   manifestVersion,
   reclaimStaleRuns,
 };
@@ -1204,6 +1237,19 @@ async function listProcesses(platform) {
         ]
       : [];
   });
+}
+
+async function listProcessSnapshots(platform) {
+  if (platform !== 'win32') {
+    return Promise.all([listProcesses(platform), listProcesses(platform)]);
+  }
+  const output = await powershellJson(
+    '$one=Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = ([DateTimeOffset]$_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds().ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } };$two=Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = ([DateTimeOffset]$_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds().ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } };[PSCustomObject]@{ first=@($one); second=@($two) } | ConvertTo-Json -Compress'
+  );
+  if (!output) return [[], []];
+  const parsed = JSON.parse(output);
+  const normalize = (value) => (!value ? [] : Array.isArray(value) ? value : [value]);
+  return [normalize(parsed.first), normalize(parsed.second)];
 }
 
 function powershellJson(script) {

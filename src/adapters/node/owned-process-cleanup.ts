@@ -76,22 +76,27 @@ export class OwnedProcessTree {
       );
     }
     const terminated: number[] = [];
-    let stableZeroScans = 0;
 
     for (let pass = 0; pass < (this.operations.maxPasses ?? 32); pass += 1) {
-      const [snapshot, currentProcesses] = await this.snapshots();
-      this.discoverDescendants(snapshot);
+      const [discoveryProcesses, currentProcesses] = await this.snapshots();
+      this.discoverDescendants(discoveryProcesses);
+      const discoveredLive = this.liveAncestryCandidates(discoveryProcesses);
+      this.discoverDescendants(currentProcesses);
+      const currentLive = this.liveAncestryCandidates(currentProcesses);
 
-      const live = this.liveAncestryCandidates(snapshot);
-      if (live.length === 0) {
-        // Two independent zero scans ensure a just-exited root did not leave a late child behind.
-        stableZeroScans += 1;
-        if (stableZeroScans >= 2) return terminated;
+      if (discoveredLive.length === 0 && currentLive.length === 0) {
+        // The paired helper provides the two independent zero observations.
+        return terminated;
+      }
+      if (currentLive.length === 0) {
+        // A process seen only in the first view exited between snapshots. A new
+        // paired pass is required before declaring zero.
         continue;
       }
-      stableZeroScans = 0;
 
-      const candidate = live.sort((left, right) => right.chain.length - left.chain.length)[0];
+      const candidate = currentLive.sort(
+        (left, right) => right.chain.length - left.chain.length
+      )[0];
       const current = currentProcesses.find((process) => sameIdentity(candidate.identity, process));
       if (!sameIdentity(candidate.identity, current)) {
         throw new OwnedProcessCleanupError(

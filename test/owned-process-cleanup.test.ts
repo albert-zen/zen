@@ -54,8 +54,60 @@ describe('OwnedProcessTree', () => {
     expect(tree.captureAttested(root)).toBe(true);
 
     await expect(tree.terminateVerified()).resolves.toEqual([root.pid]);
-    // One paired operation for the root and two independent zero confirmations.
-    expect(snapshotCalls).toBe(3);
+    // One paired operation terminates the root; one paired-zero operation closes cleanup.
+    expect(snapshotCalls).toBe(2);
+  });
+
+  it('accepts zero only when both views from one paired helper are empty', async () => {
+    const root = processIdentity(16, 1, 'root');
+    let snapshotCalls = 0;
+    const tree = new OwnedProcessTree(expectation(root), {
+      snapshots: async () => {
+        snapshotCalls += 1;
+        return [[], []];
+      },
+    });
+    expect(tree.captureAttested(root)).toBe(true);
+
+    await expect(tree.terminateVerified()).resolves.toEqual([]);
+    expect(snapshotCalls).toBe(1);
+  });
+
+  it('discovers and terminates an exact process appearing only in the second paired view', async () => {
+    const root = processIdentity(17, 1, 'root');
+    let snapshotCalls = 0;
+    let live = true;
+    const terminated: number[] = [];
+    const tree = new OwnedProcessTree(expectation(root), {
+      snapshots: async () => {
+        snapshotCalls += 1;
+        return live ? [[], [root]] : [[], []];
+      },
+      terminate: async (identity) => {
+        terminated.push(identity.pid);
+        live = false;
+      },
+    });
+    expect(tree.captureAttested(root)).toBe(true);
+
+    await expect(tree.terminateVerified()).resolves.toEqual([root.pid]);
+    expect(terminated).toEqual([root.pid]);
+    expect(snapshotCalls).toBe(2);
+  });
+
+  it('calls an injected list operation twice inside one fallback paired pass', async () => {
+    const root = processIdentity(18, 1, 'root');
+    let listCalls = 0;
+    const tree = new OwnedProcessTree(expectation(root), {
+      list: async () => {
+        listCalls += 1;
+        return [];
+      },
+    });
+    expect(tree.captureAttested(root)).toBe(true);
+
+    await expect(tree.terminateVerified()).resolves.toEqual([]);
+    expect(listCalls).toBe(2);
   });
 
   it('refuses PID reuse or a changed ancestor chain without terminating any process', async () => {
