@@ -16,7 +16,7 @@ describe('OwnedProcessTree', () => {
       [leaf.pid, leaf],
     ]);
     const terminated: number[] = [];
-    const tree = new OwnedProcessTree(root.pid, {
+    const tree = new OwnedProcessTree(expectation(root), {
       list: async () => [...processes.values()],
       terminate: async (identity) => {
         terminated.push(identity.pid);
@@ -25,7 +25,7 @@ describe('OwnedProcessTree', () => {
       },
     });
 
-    await tree.captureRoot();
+    expect(tree.captureAttested(root)).toBe(true);
 
     await expect(tree.terminateVerified()).resolves.toEqual([leaf.pid, child.pid, root.pid]);
     expect(terminated).toEqual([leaf.pid, child.pid, root.pid]);
@@ -40,23 +40,28 @@ describe('OwnedProcessTree', () => {
       [child.pid, child],
     ]);
     const terminated: number[] = [];
-    const tree = new OwnedProcessTree(root.pid, {
+    const tree = new OwnedProcessTree(expectation(root), {
       list: async () => [...processes.values()],
       terminate: async (identity) => {
         terminated.push(identity.pid);
         return undefined;
       },
     });
-    await tree.captureRoot();
-    processes.set(root.pid, { ...root, createdAt: 'reused-root' });
+    expect(tree.captureAttested(root)).toBe(true);
+    processes.set(root.pid, {
+      ...root,
+      createdAt: 'reused-root',
+      creationToken: String(BigInt(root.creationToken) + 100n),
+      commandLine: 'powershell unrelated-replacement',
+    });
+    processes.delete(child.pid);
 
-    await expect(tree.terminateVerified()).rejects.toThrow(
-      'root PID 20 no longer has its recorded identity'
-    );
+    await expect(tree.terminateVerified()).resolves.toEqual([]);
     expect(terminated).toEqual([]);
 
-    expect(processes.get(root.pid)).toEqual({ ...root, createdAt: 'reused-root' });
-    expect(processes.get(child.pid)).toEqual(child);
+    expect(processes.get(root.pid)).toEqual(
+      expect.objectContaining({ commandLine: 'powershell unrelated-replacement' })
+    );
   });
 
   it('leaves zero tracked residue after timeout and abort cleanup requests', async () => {
@@ -66,14 +71,14 @@ describe('OwnedProcessTree', () => {
       [root.pid, root],
       [child.pid, child],
     ]);
-    const tree = new OwnedProcessTree(root.pid, {
+    const tree = new OwnedProcessTree(expectation(root), {
       list: async () => [...processes.values()],
       terminate: async (identity) => {
         processes.delete(identity.pid);
         return undefined;
       },
     });
-    await tree.captureRoot();
+    expect(tree.captureAttested(root)).toBe(true);
 
     await tree.terminateVerified();
     await expect(tree.terminateVerified()).resolves.toEqual([child.pid, root.pid]);
@@ -91,7 +96,7 @@ describe('OwnedProcessTree', () => {
       [leaf.pid, leaf],
     ]);
     const terminated: number[] = [];
-    const tree = new OwnedProcessTree(root.pid, {
+    const tree = new OwnedProcessTree(expectation(root), {
       list: async () => [...processes.values()],
       terminate: async (identity) => {
         terminated.push(identity.pid);
@@ -99,7 +104,7 @@ describe('OwnedProcessTree', () => {
         if (identity.pid === leaf.pid) processes.set(lateChild.pid, lateChild);
       },
     });
-    await tree.captureRoot();
+    expect(tree.captureAttested(root)).toBe(true);
 
     await expect(tree.terminateVerified()).resolves.toEqual([
       leaf.pid,
@@ -115,7 +120,7 @@ describe('OwnedProcessTree', () => {
     const lateChild = processIdentity(46, root.pid, 'late-child');
     const processes = new Map([[root.pid, root]]);
     const terminated: number[] = [];
-    const tree = new OwnedProcessTree(root.pid, {
+    const tree = new OwnedProcessTree(expectation(root), {
       list: async () => [...processes.values()],
       terminate: async (identity) => {
         terminated.push(identity.pid);
@@ -123,30 +128,32 @@ describe('OwnedProcessTree', () => {
         if (identity.pid === root.pid) processes.set(lateChild.pid, lateChild);
       },
     });
-    await tree.captureRoot();
+    expect(tree.captureAttested(root)).toBe(true);
 
     await expect(tree.terminateVerified()).resolves.toEqual([root.pid, lateChild.pid]);
     expect(terminated).toEqual([root.pid, lateChild.pid]);
   });
 
   it('fails cleanup explicitly when the root identity was absent at capture time', async () => {
-    const tree = new OwnedProcessTree(47, { list: async () => [] });
+    const tree = new OwnedProcessTree(expectation(processIdentity(47, 1, 'missing')), {
+      list: async () => [],
+    });
 
-    await expect(tree.captureRoot()).resolves.toBe(false);
+    expect(tree.captureAttested(processIdentity(48, 1, 'wrong'))).toBe(false);
     await expect(tree.terminateVerified()).rejects.toThrow('was not captured before it exited');
   });
 
   it('propagates a cleanup failure through the one shared cleanup task', async () => {
     const root = processIdentity(50, 1, 'root');
     let terminateCalls = 0;
-    const tree = new OwnedProcessTree(root.pid, {
+    const tree = new OwnedProcessTree(expectation(root), {
       list: async () => [root],
       terminate: async () => {
         terminateCalls += 1;
         throw new Error('termination provider failed');
       },
     });
-    await tree.captureRoot();
+    expect(tree.captureAttested(root)).toBe(true);
 
     const first = tree.terminateVerified();
     const second = tree.terminateVerified();
@@ -160,7 +167,16 @@ function processIdentity(pid: number, parentPid: number, label: string): OwnedPr
     pid,
     parentPid,
     createdAt: `20260717120000.${pid}+000`,
+    creationToken: String(638000000000000000 + pid),
     executable: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-    commandLine: `powershell -Command ${label}`,
+    commandLine: `powershell -Command ${label} zen-test-${pid}`,
+  };
+}
+
+function expectation(identity: OwnedProcessIdentity) {
+  return {
+    pid: identity.pid,
+    marker: `zen-test-${identity.pid}`,
+    executable: identity.executable ?? '',
   };
 }

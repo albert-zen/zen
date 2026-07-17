@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { OwnedProcessTree } from './owned-process-cleanup.js';
+import { OwnedProcessTree, type OwnedProcessIdentity } from './owned-process-cleanup.js';
 import {
   ApprovalBroker,
   ToolApprovalDeniedError,
@@ -127,6 +128,8 @@ export class LocalToolRuntime implements ToolRuntime {
     let terminationRequested = false;
     let cleanupRequiresCapturedOwnership = false;
     const rootCapture: { task?: Promise<boolean> } = {};
+    let bootstrapBuffer = '';
+    let resolveBootstrap: ((captured: boolean) => void) | undefined;
     let cleanupTask: Promise<void> | undefined;
     let cleanupFailure: unknown;
 
@@ -140,6 +143,28 @@ export class LocalToolRuntime implements ToolRuntime {
     };
     const onStdout = (chunk: Buffer | string) => {
       const text = stringifyOutput(chunk);
+      if (resolveBootstrap) {
+        bootstrapBuffer += text;
+        const newline = bootstrapBuffer.indexOf('\n');
+        if (newline < 0) return;
+        const frame = bootstrapBuffer.slice(0, newline).trim();
+        const remainder = bootstrapBuffer.slice(newline + 1);
+        const resolve = resolveBootstrap;
+        resolveBootstrap = undefined;
+        try {
+          const encoded = frame.startsWith('__ZEN_OWNER__:') ? frame.slice(14) : '';
+          const identity = JSON.parse(
+            Buffer.from(encoded, 'base64').toString('utf8')
+          ) as OwnedProcessIdentity;
+          resolve(processHolder.ownership?.captureAttested(identity) ?? false);
+        } catch {
+          resolve(false);
+        }
+        if (!remainder) return;
+        stdout += remainder;
+        push({ type: 'output.delta', delta: { stream: 'stdout', chunk: remainder } });
+        return;
+      }
       stdout += text;
       push({ type: 'output.delta', delta: { stream: 'stdout', chunk: text } });
     };
@@ -169,6 +194,9 @@ export class LocalToolRuntime implements ToolRuntime {
           }
           return;
         }
+        // The attested ChildProcess is the exact spawned root; stopping it first
+        // prevents a long-running shell from holding the cancellation path open.
+        processHolder.child?.kill('SIGTERM');
         await processHolder.ownership?.terminateVerified();
       })();
       // Event handlers cannot await cleanup. Retain the error and wake the generator;
@@ -186,15 +214,28 @@ export class LocalToolRuntime implements ToolRuntime {
 
     // Register cancellation before spawn; the holder safely no-ops until ownership is captured.
     context.signal?.addEventListener('abort', cancel, { once: true });
-    const child = spawn('powershell', ['-NoProfile', '-Command', command], {
+    const ownerMarker = `zen-local-${randomUUID()}`;
+    const powershellPath = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+    const wrappedCommand = `$m='${ownerMarker}';$p=[Diagnostics.Process]::GetCurrentProcess();$o=[ordered]@{marker=$m;pid=$PID;createdAt=$p.StartTime.ToUniversalTime().ToString('o');creationToken=$p.StartTime.ToUniversalTime().Ticks.ToString();executable=$p.MainModule.FileName;commandLine=[Environment]::CommandLine};[Console]::Out.WriteLine('__ZEN_OWNER__:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($o|ConvertTo-Json -Compress))));[Console]::Out.Flush();& { ${command} }`;
+    const child = spawn(powershellPath, ['-NoProfile', '-Command', wrappedCommand], {
       cwd: this.cwd,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const ownership = new OwnedProcessTree(child.pid ?? 0);
+    const ownership = new OwnedProcessTree({
+      pid: child.pid ?? 0,
+      marker: ownerMarker,
+      executable: powershellPath,
+    });
     processHolder.child = child;
     processHolder.ownership = ownership;
-    rootCapture.task = ownership.captureRoot();
+    rootCapture.task = new Promise<boolean>((resolve) => {
+      resolveBootstrap = resolve;
+    });
+    const bootstrapTimeout = setTimeout(() => {
+      resolveBootstrap?.(false);
+      resolveBootstrap = undefined;
+    }, 250);
     rootCapture.task.catch((error: unknown) => {
       cleanupFailure ??= error;
       if (terminationRequested) finish();
@@ -218,6 +259,9 @@ export class LocalToolRuntime implements ToolRuntime {
     });
     child.on('close', (code) => {
       exitCode = code;
+      resolveBootstrap?.(false);
+      resolveBootstrap = undefined;
+      clearTimeout(bootstrapTimeout);
       finish();
       startCleanup(false).catch(() => undefined);
     });
