@@ -417,15 +417,22 @@ async function waitForStatus(
   client: WebUiClient,
   status: ReturnType<WebUiClient['getSnapshot']>['connection']['status']
 ): Promise<void> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (client.getSnapshot().connection.status === status) {
-      return;
-    }
+  if (client.getSnapshot().connection.status === status) return;
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-
-  throw new Error(`Timed out waiting for ${status}`);
+  await new Promise<void>((resolve, reject) => {
+    let unsubscribe: () => void = () => undefined;
+    const timeout = setTimeout(() => {
+      unsubscribe();
+      reject(new Error(`Timed out waiting for ${status}`));
+    }, 1_000);
+    unsubscribe = client.subscribe((snapshot) => {
+      if (snapshot.connection.status === status) {
+        clearTimeout(timeout);
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
 }
 
 class RecordingClient implements AppServerClient {

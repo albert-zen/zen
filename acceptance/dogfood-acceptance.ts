@@ -260,6 +260,7 @@ async function executeDogfoodScenario(input: {
   const notifications: AppServerNotification[] = [];
   let transport: Awaited<ReturnType<typeof serveAppServerHttpTransport>> | undefined;
   let unsubscribe: (() => void) | undefined;
+  let terminalWaiter: ReturnType<typeof createTerminalNotificationWaiter> | undefined;
 
   try {
     const appServer = await createScenarioAppServer(input);
@@ -274,6 +275,7 @@ async function executeDogfoodScenario(input: {
     });
     unsubscribe = client.subscribe((notification) => {
       notifications.push(notification);
+      terminalWaiter?.observe(notification);
     });
 
     const start = await client.request({ method: 'thread/start' });
@@ -289,7 +291,12 @@ async function executeDogfoodScenario(input: {
         input: createDogfoodPrompt(),
       },
     });
-    await waitForTurnTerminalNotification(notifications, start.result.thread.id, input.timeoutMs);
+    terminalWaiter = createTerminalNotificationWaiter(
+      notifications,
+      start.result.thread.id,
+      input.timeoutMs
+    );
+    await terminalWaiter.promise;
 
     const read = await client.request({
       method: 'thread/read',
@@ -387,29 +394,39 @@ function createDogfoodPrompt(): string {
   ].join('\n');
 }
 
-async function waitForTurnTerminalNotification(
+function createTerminalNotificationWaiter(
   notifications: readonly AppServerNotification[],
   threadId: string,
   timeoutMs: number
-): Promise<void> {
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt <= timeoutMs) {
+): { readonly promise: Promise<void>; observe(notification: AppServerNotification): void } {
+  let settled = false;
+  let resolvePromise: () => void = () => undefined;
+  let rejectPromise: (cause: Error) => void = () => undefined;
+  const promise = new Promise<void>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  const timeout = setTimeout(() => {
+    settle(() => rejectPromise(new Error(`Dogfood turn did not finish within ${timeoutMs}ms`)));
+  }, timeoutMs);
+  const settle = (action: () => void) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    action();
+  };
+  const observe = (notification: AppServerNotification) => {
     if (
-      notifications.some(
-        (notification) =>
-          'threadId' in notification &&
-          notification.threadId === threadId &&
-          (notification.type === 'turn/completed' || notification.type === 'turn/failed')
-      )
+      'threadId' in notification &&
+      notification.threadId === threadId &&
+      (notification.type === 'turn/completed' || notification.type === 'turn/failed')
     ) {
-      return;
+      settle(resolvePromise);
     }
+  };
 
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-
-  throw new Error(`Dogfood turn did not finish within ${timeoutMs}ms`);
+  notifications.forEach(observe);
+  return { promise, observe };
 }
 
 function isProviderUnavailableMessage(message: string): boolean {

@@ -62,3 +62,68 @@ Reviewer notes: request a fresh-context local review of the full uncommitted iss
 Open questions: none.
 Known residual risks: POSIX process-group cleanup is implemented but validated here on Windows only. The local-path origin prevents GitHub PR/check handoff until a canonical remote is configured.
 Blocker or context escalation details: none.
+
+## Codex Worker Note
+
+Round: 5
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+PR URL: not used; this program remains local-branch/local-review with local-path `origin`.
+Base revision/diff scope: `5541075`; exact-head correction of Review Round 1 findings.
+Summary of behavior delivered: Completed deterministic LF checkout policy, event-driven integration waits, full owned-process identity manifest, immediate registration for runner/launcher/fixture processes, safe verified tree cleanup, and retained-manifest failure behavior for unverified live entries.
+Final scope summary: Rework implementation complete; awaiting a fresh reviewer.
+Changed files/modules: `.gitattributes`; owned E2E supervisor and launcher scripts; E2E fixture registration; supervisor/Web UI/dogfood tests; tracker/evidence.
+Tests added/updated: 9 focused supervisor tests cover success, pre-registration signal cleanup, real failing launcher with marked child and grandchild cleanup, stale manifest, PID reuse, root-exited unmarked descendant safety, fixture registration, and post-run empty manifest. Event-driven Web and dogfood completion tests replace polling waits.
+Acceptance criteria status: Complete pending fresh review. Clean-clone baseline failure is retained in Round 4. Corrected brand-new disposable clone `D:\desktop\zen-opt-007-format-verified` passed `npm run format:check` under `core.autocrlf=true`, with `git ls-files --eol` reporting LF index/worktree. Exact `npm run check` passed with all required gates.
+Commands run and results: focused supervisor test: 9 passed; focused Web/dogfood/supervisor set: 27 passed; online `npm audit --include=dev --registry=https://registry.npmjs.org`: `found 0 vulnerabilities`; exact `npm run check`: passed in 164.5 seconds with 245 Vitest tests, all builds, kernel/product/presentation coverage, and 2 Playwright E2E tests.
+Validation log paths: ignored `coverage/`, `test-results/`, and `.zen-e2e-owned-processes.json`; no intentional generated artifact is staged.
+Required check status or local-check handoff reason: corrected exact-head local check passed. GitHub handoff is not applicable because `origin` is the local path `D:\desktop\zen`.
+Evidence links/paths: `docs/implementation/long-term-optimization-007-evidence.md`, `docs/implementation/long-term-optimization-tracker.md`.
+Decisions made: taskkill uses only an exact verified marked root or separately marked child. Before termination, the manifest persists all discovered tree identities; it is cleared only after each recorded identity is independently absent. PID reuse, command-marker mismatch, and unmarked live descendants retain manifest entries and fail safely.
+Standards notes: no threshold/exclusion weakening or coverage-ignore pragmas were added. Touched integration/UI/E2E files contain only bounded timeout guards racing an event; fixed polling delays were removed.
+Reviewer notes: fresh review required; tracker intentionally remains `Rework`.
+Open questions: none.
+Known residual risks: POSIX process-group cleanup is structurally covered but was not executed on this Windows worker.
+Blocker or context escalation details: none.
+
+## Codex Review Note
+
+Round: 1
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: user-supplied review after Worker Round 3
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-007`
+Base revision/diff scope: `5541075`; formatting portability, owned-process tracking, fixed polling waits, and online audit evidence.
+Standards Review blocking: Windows clean-clone formatting was unproven; the former supervisor tracked only one root and installed cleanup too late; fixed polling waits remained.
+Standards Review non-blocking: none.
+Standards Review missing evidence: online audit and cleanup cases for signal, PID reuse, root-exited descendants, and real child/grandchild failure.
+Spec Review blocking: process ownership/cleanup acceptance requirements were incomplete.
+Spec Review non-blocking: none.
+Spec Review missing evidence: corrected exact-head check and clean-clone format result.
+Local tracker state decision: Rework
+State decision reason: user accepted all blocking findings and assigned the same worker to correct them.
+
+## Codex Worker Note
+
+Round: 4
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Agent Review -> Rework
+Branch: `codex/long-term-optimization-007`
+PR URL: not used; this program remains local-branch/local-review with local-path `origin`.
+Base revision/diff scope: `5541075`; correcting all Review Round 1 findings without rewriting prior history.
+Summary of behavior delivered: Added an LF-enforcing `.gitattributes` policy with binary exceptions; replaced fixed polling waits with event/deferred completion plus bounded timeout guards; redesigned the owned E2E supervisor around persisted full process identities, root relations, explicit spawned-child registration, fixture-worker registration, verified tree discovery, and safe manifest retention on identity mismatch.
+Final scope summary: Rework in progress pending final exact-head validation and online audit.
+Changed files/modules: `.gitattributes`; `scripts/owned-e2e-supervisor.mjs`; E2E launcher and fixture registration; supervisor, Web UI, and dogfood acceptance tests.
+Tests added/updated: successful tree cleanup; real failing launcher with registered marked child and grandchild; pre-registration signal cleanup; stale/PID-reuse refusal; root-exited unmarked-descendant refusal; fixture identity registration; post-run empty manifest; event-driven Web and dogfood terminal completion.
+Acceptance criteria status: Baseline clone `D:\desktop\zen-opt-007-format-baseline`, configured with `core.autocrlf=true`, failed `npm run format:check` after `npm ci` with 100 formatted files reported. A corrected candidate commit made only in that disposable clone was then cloned again at `D:\desktop\zen-opt-007-format-verified`; it passed `npm run format:check`, and `git ls-files --eol` reports index/worktree LF. Targeted tests and real E2E pass with an empty version-2 manifest and no owned Windows process.
+Commands run and results: baseline and corrected disposable clones both completed `npm ci`; baseline format failed and corrected format passed. Targeted Vitest: 27 tests passed, then supervisor suite: 9 tests passed. `npm run lint`, `npm run typecheck`, build, and real E2E passed during rework.
+Validation log paths: disposable clone paths above; ignored `coverage/`, `test-results/`, and `.zen-e2e-owned-processes.json` remain non-staged.
+Required check status or local-check handoff reason: final exact-head `npm run check` and online audit remain to run after the rework is fully formatted and staged.
+Evidence links/paths: `docs/implementation/long-term-optimization-007-evidence.md`.
+Decisions made: Windows `taskkill /T` is permitted only for a root or separately marked child whose live PID, creation time, parent relation, executable, command line, and unique marker match its manifest entry. A live unmarked or mismatched PID is retained and fails safely. POSIX cleanup remains process-group based.
+Standards notes: no coverage threshold/exclusion weakening or coverage-ignore pragmas were added.
+Reviewer notes: fresh review required after final evidence.
+Open questions: none.
+Known residual risks: POSIX group behavior remains structurally tested but Windows is the exercised platform.
+Blocker or context escalation details: none.
