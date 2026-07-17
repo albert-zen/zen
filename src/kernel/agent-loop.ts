@@ -1,15 +1,8 @@
-import { ContextCompiler, type ModelContext } from "./context-compiler.js";
-import { HookRuntime, type HookHandlers } from "./hook-runtime.js";
-import type { Item, ItemAppendInput, ItemList } from "./item-list.js";
-import {
-  appendModelResponseItems,
-  type ModelGateway,
-  type ModelOptions
-} from "./model-gateway.js";
-import {
-  appendToolExecutionItems,
-  type ToolRuntime
-} from "./tool-runtime.js";
+import { ContextCompiler, type ModelContext } from './context-compiler.js';
+import { HookRuntime, type HookHandlers } from './hook-runtime.js';
+import type { Item, ItemAppendInput, ItemList } from './item-list.js';
+import { appendModelResponseItems, type ModelGateway, type ModelOptions } from './model-gateway.js';
+import { appendToolExecutionItems, type ToolRuntime } from './tool-runtime.js';
 
 export type AgentLoopOptions = {
   readonly itemList: ItemList;
@@ -55,25 +48,25 @@ export class AgentLoop {
 
   async run(input: AgentRunInput): Promise<AgentRunResult> {
     await this.append({
-      type: "run.started",
+      type: 'run.started',
       runId: input.runId,
       turnId: input.turnId,
-      visibility: "trace",
-      payload: {}
+      visibility: 'trace',
+      payload: {},
     });
     await this.append({
-      type: "turn.started",
+      type: 'turn.started',
       runId: input.runId,
       turnId: input.turnId,
-      visibility: "trace",
-      payload: {}
+      visibility: 'trace',
+      payload: {},
     });
     await this.ensureSystemPromptItem(input);
     await this.append({
-      type: "user.message.completed",
+      type: 'user.message.completed',
       runId: input.runId,
       turnId: input.turnId,
-      payload: { content: input.input }
+      payload: { content: input.input },
     });
 
     let shouldContinue = true;
@@ -89,14 +82,10 @@ export class AgentLoop {
         options: input.modelOptions,
         signal: input.signal,
         runId: input.runId,
-        turnId: input.turnId
+        turnId: input.turnId,
       });
 
-      if (
-        !modelItems.completed ||
-        !this.toolRuntime ||
-        !hasToolCalls(modelItems.completed)
-      ) {
+      if (!modelItems.completed || !this.toolRuntime || !hasToolCalls(modelItems.completed)) {
         shouldContinue = false;
         continue;
       }
@@ -108,7 +97,7 @@ export class AgentLoop {
         toolRuntime: this.toolRuntime,
         assistantItem: modelItems.completed,
         hookRuntime: this.hookRuntime,
-        signal: input.signal
+        signal: input.signal,
       });
     }
 
@@ -116,18 +105,18 @@ export class AgentLoop {
 
     if (!hasTurnFailure(this.itemList.getItems(), input.turnId)) {
       await this.append({
-        type: "turn.completed",
+        type: 'turn.completed',
         runId: input.runId,
         turnId: input.turnId,
-        visibility: "trace",
-        payload: { status: "completed" }
+        visibility: 'trace',
+        payload: { status: 'completed' },
       });
       await this.append({
-        type: "run.completed",
+        type: 'run.completed',
         runId: input.runId,
         turnId: input.turnId,
-        visibility: "trace",
-        payload: { status: "completed" }
+        visibility: 'trace',
+        payload: { status: 'completed' },
       });
     }
 
@@ -135,7 +124,7 @@ export class AgentLoop {
 
     return {
       items,
-      finalContext: this.contextCompiler.compile(items)
+      finalContext: this.contextCompiler.compile(items),
     };
   }
 
@@ -156,21 +145,21 @@ export class AgentLoop {
     }
 
     const item = await this.append({
-      type: "system.message.completed",
+      type: 'system.message.completed',
       runId: input.runId,
       turnId: input.turnId,
-      payload: { content: this.systemPrompt }
+      payload: { content: this.systemPrompt },
     });
 
     if (!item) {
-      throw new Error("Required item append was blocked: system.message.completed");
+      throw new Error('Required item append was blocked: system.message.completed');
     }
   }
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
-    throw new Error("Turn interrupted");
+    throw new Error('Turn interrupted');
   }
 }
 
@@ -178,7 +167,7 @@ function hasToolCalls(item: Item): boolean {
   const payload = item.payload;
 
   return (
-    typeof payload === "object" &&
+    typeof payload === 'object' &&
     payload !== null &&
     Array.isArray((payload as { readonly toolCalls?: unknown }).toolCalls) &&
     (payload as { readonly toolCalls: readonly unknown[] }).toolCalls.length > 0
@@ -189,7 +178,7 @@ function hasTurnFailure(items: readonly Item[], turnId: string): boolean {
   return items.some(
     (item) =>
       item.turnId === turnId &&
-      (item.type === "assistant.message.error" || item.type === "tool.error")
+      (item.type === 'assistant.message.error' || item.type === 'tool.error')
   );
 }
 
@@ -198,15 +187,15 @@ function latestSystemPromptContent(items: readonly Item[]): unknown {
     .reverse()
     .find(
       (item) =>
-        item.type === "system.message.completed" &&
-        (item.visibility === undefined || item.visibility === "model")
+        item.type === 'system.message.completed' &&
+        (item.visibility === undefined || item.visibility === 'model')
     );
 
   return readContent(latest?.payload);
 }
 
 function readContent(payload: unknown): unknown {
-  if (typeof payload === "object" && payload !== null && "content" in payload) {
+  if (typeof payload === 'object' && payload !== null && 'content' in payload) {
     return payload.content;
   }
 

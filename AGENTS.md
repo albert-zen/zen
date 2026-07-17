@@ -34,4 +34,3 @@ This repo currently has no GitHub remote. Symphony workflows are configured for 
 - Workers push local branches back to the local repo.
 - Reviewers inspect local branch diffs and Linear evidence.
 - GitHub PR/check handoff becomes required after a canonical remote is configured.
-

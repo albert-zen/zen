@@ -1,8 +1,5 @@
-import type {
-  ModelContext,
-  ModelContextPart
-} from "../../kernel/index.js";
-import type { ModelEvent, ModelGateway, ModelOptions } from "../../kernel/index.js";
+import type { ModelContext, ModelContextPart } from '../../kernel/index.js';
+import type { ModelEvent, ModelGateway, ModelOptions } from '../../kernel/index.js';
 
 type ToolDefinition = Readonly<Record<string, unknown>>;
 
@@ -18,7 +15,7 @@ export class OpenAiCompatibleModelGateway implements ModelGateway {
   private readonly endpoint: string;
 
   constructor(private readonly options: OpenAiCompatibleModelGatewayOptions) {
-    this.endpoint = `${options.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    this.endpoint = `${options.baseUrl.replace(/\/+$/, '')}/chat/completions`;
   }
 
   async *generate(
@@ -27,27 +24,25 @@ export class OpenAiCompatibleModelGateway implements ModelGateway {
     signal?: AbortSignal
   ): AsyncIterable<ModelEvent> {
     const response = await fetch(this.endpoint, {
-      method: "POST",
+      method: 'POST',
       signal,
       headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${this.options.apiKey}`
+        'content-type': 'application/json',
+        authorization: `Bearer ${this.options.apiKey}`,
       },
       body: JSON.stringify({
         model: this.options.model,
         messages: toMessages(context.parts),
         tools: this.options.tools,
-        tool_choice: this.options.tools?.length ? "auto" : undefined,
+        tool_choice: this.options.tools?.length ? 'auto' : undefined,
         stream: true,
         ...this.options.defaultParams,
-        ...options
-      })
+        ...options,
+      }),
     });
 
     if (!response.ok || !response.body) {
-      throw new Error(
-        `Model request failed: ${response.status} ${await response.text()}`
-      );
+      throw new Error(`Model request failed: ${response.status} ${await response.text()}`);
     }
 
     yield* parseStreamingResponse(response.body);
@@ -59,12 +54,9 @@ async function* parseStreamingResponse(
 ): AsyncIterable<ModelEvent> {
   const decoder = new TextDecoder();
   const reader = body.getReader();
-  let buffer = "";
-  let content = "";
-  const toolCalls = new Map<
-    number,
-    { id?: string; name?: string; arguments: string }
-  >();
+  let buffer = '';
+  let content = '';
+  const toolCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
 
   while (true) {
     const { done, value } = await reader.read();
@@ -75,25 +67,25 @@ async function* parseStreamingResponse(
 
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
+    buffer = lines.pop() ?? '';
 
     for (const line of lines) {
-      if (!line.startsWith("data:")) {
+      if (!line.startsWith('data:')) {
         continue;
       }
 
-      const data = line.slice("data:".length).trim();
+      const data = line.slice('data:'.length).trim();
 
-      if (data === "[DONE]") {
+      if (data === '[DONE]') {
         continue;
       }
 
       const delta = readDelta(JSON.parse(data));
-      const text = typeof delta.content === "string" ? delta.content : "";
+      const text = typeof delta.content === 'string' ? delta.content : '';
 
       if (text) {
         content += text;
-        yield { type: "text.delta", text };
+        yield { type: 'text.delta', text };
       }
 
       if (Array.isArray(delta.tool_calls)) {
@@ -103,7 +95,7 @@ async function* parseStreamingResponse(
   }
 
   yield {
-    type: "message.completed",
+    type: 'message.completed',
     content,
     toolCalls: [...toolCalls.values()].flatMap((call) => {
       if (!call.id || !call.name) {
@@ -114,15 +106,15 @@ async function* parseStreamingResponse(
         {
           id: call.id,
           name: call.name,
-          input: parseArguments(call.arguments)
-        }
+          input: parseArguments(call.arguments),
+        },
       ];
-    })
+    }),
   };
 }
 
 function readDelta(chunk: unknown): Readonly<Record<string, unknown>> {
-  if (typeof chunk !== "object" || chunk === null) {
+  if (typeof chunk !== 'object' || chunk === null) {
     return {};
   }
 
@@ -134,7 +126,7 @@ function readDelta(chunk: unknown): Readonly<Record<string, unknown>> {
 
   const first = choices[0] as { readonly delta?: unknown };
 
-  return typeof first.delta === "object" && first.delta !== null
+  return typeof first.delta === 'object' && first.delta !== null
     ? (first.delta as Readonly<Record<string, unknown>>)
     : {};
 }
@@ -144,7 +136,7 @@ function mergeToolCalls(
   deltas: readonly unknown[]
 ): void {
   for (const entry of deltas) {
-    if (typeof entry !== "object" || entry === null) {
+    if (typeof entry !== 'object' || entry === null) {
       continue;
     }
 
@@ -153,24 +145,18 @@ function mergeToolCalls(
       readonly id?: unknown;
       readonly function?: { readonly name?: unknown; readonly arguments?: unknown };
     };
-    const index = typeof delta.index === "number" ? delta.index : 0;
-    const current = toolCalls.get(index) ?? { arguments: "" };
+    const index = typeof delta.index === 'number' ? delta.index : 0;
+    const current = toolCalls.get(index) ?? { arguments: '' };
 
     toolCalls.set(index, {
-      id:
-        typeof delta.id === "string" && delta.id.length > 0
-          ? delta.id
-          : current.id,
+      id: typeof delta.id === 'string' && delta.id.length > 0 ? delta.id : current.id,
       name:
-        typeof delta.function?.name === "string" &&
-        delta.function.name.length > 0
+        typeof delta.function?.name === 'string' && delta.function.name.length > 0
           ? delta.function.name
           : current.name,
       arguments:
         current.arguments +
-        (typeof delta.function?.arguments === "string"
-          ? delta.function.arguments
-          : "")
+        (typeof delta.function?.arguments === 'string' ? delta.function.arguments : ''),
     });
   }
 }
@@ -189,20 +175,20 @@ function parseArguments(value: string): unknown {
 
 function toMessages(parts: readonly ModelContextPart[]): readonly unknown[] {
   return parts.flatMap((part): unknown[] => {
-    if (part.type === "message") {
+    if (part.type === 'message') {
       const message: Record<string, unknown> = {
         role: part.role,
-        content: stringify(part.content)
+        content: stringify(part.content),
       };
 
-      if (part.role === "assistant" && part.toolCalls?.length) {
+      if (part.role === 'assistant' && part.toolCalls?.length) {
         message.tool_calls = part.toolCalls.map((call) => ({
           id: call.id,
-          type: "function",
+          type: 'function',
           function: {
             name: call.name,
-            arguments: stringify(call.input ?? {})
-          }
+            arguments: stringify(call.input ?? {}),
+          },
         }));
       }
 
@@ -211,15 +197,15 @@ function toMessages(parts: readonly ModelContextPart[]): readonly unknown[] {
 
     return [
       {
-        role: "tool",
+        role: 'tool',
         tool_call_id: part.toolCallId,
         name: part.toolName,
-        content: stringify(part.content)
-      }
+        content: stringify(part.content),
+      },
     ];
   });
 }
 
 function stringify(value: unknown): string {
-  return typeof value === "string" ? value : JSON.stringify(value);
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }

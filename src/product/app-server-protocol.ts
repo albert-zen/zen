@@ -1,12 +1,12 @@
-import type { Item } from "../kernel/index.js";
+import type { Item } from '../kernel/index.js';
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { readonly [key: string]: JsonValue };
 
-export type ThreadStatus = "idle" | "running" | "failed";
-export type TurnStatus = "queued" | "inProgress" | "completed" | "failed" | "canceled";
-export type ApprovalDecision = "approveOnce" | "decline";
+export type ThreadStatus = 'idle' | 'running' | 'failed';
+export type TurnStatus = 'queued' | 'inProgress' | 'completed' | 'failed' | 'canceled';
+export type ApprovalDecision = 'approveOnce' | 'decline';
 
 export type ProtocolItem = {
   readonly id: string;
@@ -18,7 +18,7 @@ export type ProtocolItem = {
   readonly parentId?: string;
   readonly causeId?: string;
   readonly targetId?: string;
-  readonly visibility?: Item["visibility"];
+  readonly visibility?: Item['visibility'];
   readonly payload: JsonValue;
   readonly meta?: JsonObject;
 };
@@ -39,7 +39,7 @@ export type ThreadSnapshot = {
 };
 
 export type ThreadPersistenceFailure = {
-  readonly code: "THREAD_JOURNAL_CORRUPTION";
+  readonly code: 'THREAD_JOURNAL_CORRUPTION';
   readonly message: string;
   readonly path: string;
   readonly recordNumber: number;
@@ -47,14 +47,14 @@ export type ThreadPersistenceFailure = {
 };
 
 export type ThreadStartRequest = {
-  readonly method: "thread/start";
+  readonly method: 'thread/start';
   readonly params?: {
     readonly metadata?: JsonObject;
   };
 };
 
 export type ThreadReadRequest = {
-  readonly method: "thread/read";
+  readonly method: 'thread/read';
   readonly params: {
     readonly threadId: string;
     readonly includeInternal?: boolean;
@@ -62,12 +62,12 @@ export type ThreadReadRequest = {
 };
 
 export type ThreadListRequest = {
-  readonly method: "thread/list";
-  readonly params?: {};
+  readonly method: 'thread/list';
+  readonly params?: Record<string, never>;
 };
 
 export type TurnStartRequest = {
-  readonly method: "turn/start";
+  readonly method: 'turn/start';
   readonly params: {
     readonly threadId: string;
     readonly input: JsonValue;
@@ -76,14 +76,14 @@ export type TurnStartRequest = {
 };
 
 export type TurnInterruptRequest = {
-  readonly method: "turn/interrupt";
+  readonly method: 'turn/interrupt';
   readonly params: {
     readonly threadId: string;
   };
 };
 
 export type TurnRetryRequest = {
-  readonly method: "turn/retry";
+  readonly method: 'turn/retry';
   readonly params: {
     readonly threadId: string;
     readonly turnId?: string;
@@ -92,7 +92,7 @@ export type TurnRetryRequest = {
 };
 
 export type ApprovalResolveRequest = {
-  readonly method: "approval/resolve";
+  readonly method: 'approval/resolve';
   readonly params: {
     readonly threadId: string;
     readonly turnId: string;
@@ -118,17 +118,17 @@ export type AppServerError = {
 
 export type AppServerResponse =
   | {
-      readonly method: "thread/start";
+      readonly method: 'thread/start';
       readonly ok: true;
       readonly result: { readonly thread: ThreadSnapshot };
     }
   | {
-      readonly method: "thread/read";
+      readonly method: 'thread/read';
       readonly ok: true;
       readonly result: { readonly thread: ThreadSnapshot };
     }
   | {
-      readonly method: "thread/list";
+      readonly method: 'thread/list';
       readonly ok: true;
       readonly result: {
         readonly threads: readonly ThreadSnapshot[];
@@ -136,22 +136,22 @@ export type AppServerResponse =
       };
     }
   | {
-      readonly method: "turn/start";
+      readonly method: 'turn/start';
       readonly ok: true;
       readonly result: { readonly turn: TurnSnapshot };
     }
   | {
-      readonly method: "turn/interrupt";
+      readonly method: 'turn/interrupt';
       readonly ok: true;
       readonly result: { readonly turn: TurnSnapshot };
     }
   | {
-      readonly method: "turn/retry";
+      readonly method: 'turn/retry';
       readonly ok: true;
       readonly result: { readonly turn: TurnSnapshot };
     }
   | {
-      readonly method: "approval/resolve";
+      readonly method: 'approval/resolve';
       readonly ok: true;
       readonly result: { readonly approvalId: string; readonly decision: ApprovalDecision };
     }
@@ -163,40 +163,40 @@ export type AppServerResponse =
 
 export type AppServerNotification =
   | {
-      readonly type: "thread/started";
+      readonly type: 'thread/started';
       readonly thread: ThreadSnapshot;
     }
   | {
-      readonly type: "turn/started";
+      readonly type: 'turn/started';
       readonly threadId: string;
       readonly turn: TurnSnapshot;
     }
   | {
-      readonly type: "item/appended";
+      readonly type: 'item/appended';
       readonly threadId: string;
       readonly turnId: string;
       readonly item: ProtocolItem;
     }
   | {
-      readonly type: "turn/completed";
+      readonly type: 'turn/completed';
       readonly threadId: string;
       readonly turn: TurnSnapshot;
     }
   | {
-      readonly type: "turn/failed";
+      readonly type: 'turn/failed';
       readonly threadId: string;
       readonly turn: TurnSnapshot;
       readonly error: AppServerError;
     }
   | {
-      readonly type: "approval/requested";
+      readonly type: 'approval/requested';
       readonly threadId: string;
       readonly turnId: string;
       readonly approvalId: string;
       readonly item: ProtocolItem;
     }
   | {
-      readonly type: "approval/resolved";
+      readonly type: 'approval/resolved';
       readonly threadId: string;
       readonly turnId: string;
       readonly approvalId: string;
@@ -226,7 +226,7 @@ export function toProtocolItem(item: Item): ProtocolItem {
     targetId: item.targetId,
     visibility: item.visibility,
     payload: toJsonValue(item.payload),
-    meta: item.meta ? toJsonObject(item.meta) : undefined
+    meta: item.meta ? toJsonObject(item.meta) : undefined,
   };
 
   return omitUndefined(projected) as ProtocolItem;
@@ -237,7 +237,7 @@ export function filterProtocolItems(
   options: ProtocolItemOptions = {}
 ): readonly ProtocolItem[] {
   return items
-    .filter((item) => options.includeInternal || item.visibility !== "internal")
+    .filter((item) => options.includeInternal || item.visibility !== 'internal')
     .map(toProtocolItem);
 }
 
@@ -251,7 +251,7 @@ export function toThreadSnapshot(
     id: input.threadId,
     status: projectThreadStatus(turns),
     turns,
-    items: filterProtocolItems(input.items, options)
+    items: filterProtocolItems(input.items, options),
   };
 }
 
@@ -277,7 +277,7 @@ function projectTurns(items: readonly Item[]): readonly TurnSnapshot[] {
       id: item.turnId,
       runId: item.runId,
       status,
-      itemIds: []
+      itemIds: [],
     };
 
     turn.status = status;
@@ -289,54 +289,48 @@ function projectTurns(items: readonly Item[]): readonly TurnSnapshot[] {
     turns.get(item.turnId)?.itemIds.push(item.id);
   }
 
-  return [...turns.values()].map((turn) =>
-    omitUndefined({
-      id: turn.id,
-      runId: turn.runId,
-      status: turn.status,
-      itemIds: [...turn.itemIds],
-      error: turn.error
-    }) as TurnSnapshot
+  return [...turns.values()].map(
+    (turn) =>
+      omitUndefined({
+        id: turn.id,
+        runId: turn.runId,
+        status: turn.status,
+        itemIds: [...turn.itemIds],
+        error: turn.error,
+      }) as TurnSnapshot
   );
 }
 
 function lifecycleStatus(type: string): TurnStatus | undefined {
-  if (type === "turn.queued") {
-    return "queued";
+  if (type === 'turn.queued') {
+    return 'queued';
   }
 
-  if (type === "turn.started") {
-    return "inProgress";
+  if (type === 'turn.started') {
+    return 'inProgress';
   }
 
-  if (type === "turn.completed") {
-    return "completed";
+  if (type === 'turn.completed') {
+    return 'completed';
   }
 
-  if (type === "turn.failed" || type === "turn.repaired") {
-    return "failed";
+  if (type === 'turn.failed' || type === 'turn.repaired') {
+    return 'failed';
   }
 
-  if (type === "turn.canceled") {
-    return "canceled";
+  if (type === 'turn.canceled') {
+    return 'canceled';
   }
 
   return undefined;
 }
 
-function lifecycleError(
-  item: Item,
-  status: TurnStatus
-): JsonValue | undefined {
-  if (status !== "failed" && status !== "canceled") {
+function lifecycleError(item: Item, status: TurnStatus): JsonValue | undefined {
+  if (status !== 'failed' && status !== 'canceled') {
     return undefined;
   }
 
-  if (
-    typeof item.payload === "object" &&
-    item.payload !== null &&
-    "error" in item.payload
-  ) {
+  if (typeof item.payload === 'object' && item.payload !== null && 'error' in item.payload) {
     return toJsonValue(item.payload.error);
   }
 
@@ -344,15 +338,11 @@ function lifecycleError(
 }
 
 function projectThreadStatus(turns: readonly TurnSnapshot[]): ThreadStatus {
-  if (
-    turns.some(
-      (turn) => turn.status === "queued" || turn.status === "inProgress"
-    )
-  ) {
-    return "running";
+  if (turns.some((turn) => turn.status === 'queued' || turn.status === 'inProgress')) {
+    return 'running';
   }
 
-  return turns.at(-1)?.status === "failed" ? "failed" : "idle";
+  return turns.at(-1)?.status === 'failed' ? 'failed' : 'idle';
 }
 
 function toJsonObject(value: Readonly<Record<string, unknown>>): JsonObject {
@@ -366,22 +356,18 @@ function toJsonObject(value: Readonly<Record<string, unknown>>): JsonObject {
 }
 
 function toJsonValue(value: unknown): JsonValue {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
     return value;
   }
 
-  if (typeof value === "number") {
+  if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
   }
 
   if (value instanceof Error) {
     return {
       name: value.name,
-      message: value.message
+      message: value.message,
     };
   }
 
@@ -389,7 +375,7 @@ function toJsonValue(value: unknown): JsonValue {
     return value.map(toJsonValue);
   }
 
-  if (typeof value === "object") {
+  if (typeof value === 'object') {
     return toJsonObject(value as Readonly<Record<string, unknown>>);
   }
 
@@ -399,9 +385,9 @@ function toJsonValue(value: unknown): JsonValue {
 function isUnsupportedObjectEntry(value: unknown): boolean {
   return (
     value === undefined ||
-    typeof value === "function" ||
-    typeof value === "symbol" ||
-    typeof value === "bigint"
+    typeof value === 'function' ||
+    typeof value === 'symbol' ||
+    typeof value === 'bigint'
   );
 }
 

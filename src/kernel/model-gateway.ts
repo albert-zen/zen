@@ -1,19 +1,19 @@
-import type { ModelContext } from "./context-compiler.js";
-import type { Item, ItemAppendInput, ItemList } from "./item-list.js";
+import type { ModelContext } from './context-compiler.js';
+import type { Item, ItemAppendInput, ItemList } from './item-list.js';
 import {
   consumeAbortableAsyncIterator,
-  isAsyncIteratorAbortedError
-} from "./abortable-async-iterator.js";
+  isAsyncIteratorAbortedError,
+} from './abortable-async-iterator.js';
 
 export type ModelOptions = Readonly<Record<string, unknown>>;
 
 export type ModelTextDeltaEvent = {
-  readonly type: "text.delta";
+  readonly type: 'text.delta';
   readonly text: string;
 };
 
 export type ModelMessageCompletedEvent = {
-  readonly type: "message.completed";
+  readonly type: 'message.completed';
   readonly content: unknown;
   readonly toolCalls?: readonly Readonly<{
     readonly id: string;
@@ -23,14 +23,11 @@ export type ModelMessageCompletedEvent = {
 };
 
 export type ModelErrorEvent = {
-  readonly type: "error";
+  readonly type: 'error';
   readonly error: unknown;
 };
 
-export type ModelEvent =
-  | ModelTextDeltaEvent
-  | ModelMessageCompletedEvent
-  | ModelErrorEvent;
+export type ModelEvent = ModelTextDeltaEvent | ModelMessageCompletedEvent | ModelErrorEvent;
 
 export interface ModelGateway {
   generate(
@@ -51,9 +48,7 @@ export type AppendModelResponseItemsInput = {
   readonly turnId: string;
 };
 
-export type ItemAppender = (
-  input: ItemAppendInput
-) => Item | undefined | Promise<Item | undefined>;
+export type ItemAppender = (input: ItemAppendInput) => Item | undefined | Promise<Item | undefined>;
 
 export type ModelResponseItems = {
   readonly requestStarted: Item;
@@ -68,22 +63,22 @@ export async function appendModelResponseItems(
 ): Promise<ModelResponseItems> {
   const appendItem = createAppender(input);
   const requestStarted = await appendRequired(appendItem, {
-    type: "model.request.started",
+    type: 'model.request.started',
     runId: input.runId,
     turnId: input.turnId,
-    visibility: "trace",
+    visibility: 'trace',
     payload: {
       options: input.options ?? {},
-      contextPartCount: input.context.parts.length
-    }
+      contextPartCount: input.context.parts.length,
+    },
   });
   const assistantStarted = await appendRequired(appendItem, {
-    type: "assistant.message.started",
+    type: 'assistant.message.started',
     runId: input.runId,
     turnId: input.turnId,
     causeId: requestStarted.id,
-    visibility: "trace",
-    payload: {}
+    visibility: 'trace',
+    payload: {},
   });
   let completed: Item | undefined;
   let error: Item | undefined;
@@ -94,45 +89,45 @@ export async function appendModelResponseItems(
       input.model.generate(input.context, input.options, input.signal),
       input.signal,
       async (event) => {
-      if (event.type === "text.delta") {
-        await appendItem({
-          type: "assistant.message.delta",
-          runId: input.runId,
-          turnId: input.turnId,
-          causeId: requestStarted.id,
-          targetId: assistantStarted.id,
-          visibility: "trace",
-          payload: { delta: event.text, index: deltaIndex++ }
-        });
-      }
-
-      if (event.type === "message.completed") {
-        const payload: Record<string, unknown> = { content: event.content };
-
-        if (event.toolCalls) {
-          payload.toolCalls = event.toolCalls;
+        if (event.type === 'text.delta') {
+          await appendItem({
+            type: 'assistant.message.delta',
+            runId: input.runId,
+            turnId: input.turnId,
+            causeId: requestStarted.id,
+            targetId: assistantStarted.id,
+            visibility: 'trace',
+            payload: { delta: event.text, index: deltaIndex++ },
+          });
         }
 
-        completed = await appendRequired(appendItem, {
-          type: "assistant.message.completed",
-          runId: input.runId,
-          turnId: input.turnId,
-          causeId: requestStarted.id,
-          targetId: assistantStarted.id,
-          payload
-        });
-      }
+        if (event.type === 'message.completed') {
+          const payload: Record<string, unknown> = { content: event.content };
 
-      if (event.type === "error") {
-        error = await appendAssistantError(
-          appendItem,
-          input,
-          requestStarted,
-          assistantStarted,
-          event.error
-        );
-        return false;
-      }
+          if (event.toolCalls) {
+            payload.toolCalls = event.toolCalls;
+          }
+
+          completed = await appendRequired(appendItem, {
+            type: 'assistant.message.completed',
+            runId: input.runId,
+            turnId: input.turnId,
+            causeId: requestStarted.id,
+            targetId: assistantStarted.id,
+            payload,
+          });
+        }
+
+        if (event.type === 'error') {
+          error = await appendAssistantError(
+            appendItem,
+            input,
+            requestStarted,
+            assistantStarted,
+            event.error
+          );
+          return false;
+        }
       }
     );
   } catch (caughtError) {
@@ -147,13 +142,13 @@ export async function appendModelResponseItems(
   }
 
   const requestCompleted = await appendRequired(appendItem, {
-    type: "model.request.completed",
+    type: 'model.request.completed',
     runId: input.runId,
     turnId: input.turnId,
     causeId: requestStarted.id,
     targetId: error?.id ?? completed?.id ?? assistantStarted.id,
-    visibility: "trace",
-    payload: { status: error ? "error" : "completed" }
+    visibility: 'trace',
+    payload: { status: error ? 'error' : 'completed' },
   });
 
   return {
@@ -161,7 +156,7 @@ export async function appendModelResponseItems(
     assistantStarted,
     completed,
     error,
-    requestCompleted
+    requestCompleted,
   };
 }
 
@@ -173,16 +168,16 @@ async function appendAssistantError(
   cause: unknown
 ): Promise<Item> {
   return appendRequired(appendItem, {
-    type: "assistant.message.error",
+    type: 'assistant.message.error',
     runId: input.runId,
     turnId: input.turnId,
     causeId: requestStarted.id,
     targetId: assistantStarted.id,
-    visibility: "trace",
+    visibility: 'trace',
     payload: {
       message: readErrorMessage(cause),
-      cause: serializeErrorCause(cause)
-    }
+      cause: serializeErrorCause(cause),
+    },
   });
 }
 
@@ -190,10 +185,7 @@ function createAppender(input: AppendModelResponseItemsInput): ItemAppender {
   return input.appendItem ?? ((item) => input.itemList.append(item));
 }
 
-async function appendRequired(
-  appendItem: ItemAppender,
-  item: ItemAppendInput
-): Promise<Item> {
+async function appendRequired(appendItem: ItemAppender, item: ItemAppendInput): Promise<Item> {
   const appended = await appendItem(item);
 
   if (!appended) {

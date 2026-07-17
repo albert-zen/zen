@@ -49,10 +49,24 @@ are not supported.
 Run checks:
 
 ```powershell
-npm run typecheck
-npm test
-npm run build
+npm run check
 ```
+
+`npm run check` runs Prettier, ESLint, core and Web typechecks, serialized Vitest
+tests, production and acceptance builds, the Web build, separate
+kernel/product/presentation coverage gates, and Playwright browser workflows.
+Each coverage group requires at least 85% statements, functions, and lines,
+plus 80% branches.
+
+Install the Playwright Chromium browser once before the browser gate:
+
+```powershell
+npx playwright install chromium
+```
+
+The configured `origin` is a local workspace path. This program uses local
+branches and local review; no GitHub PR/check handoff is part of this workflow
+yet.
 
 Run the dogfood acceptance scenario:
 

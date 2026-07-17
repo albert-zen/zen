@@ -1,22 +1,18 @@
 import {
   AgentInteractionSession,
   type AgentRecoverableTurn,
-  type AgentThreadListEntry
-} from "../presentation/index.js";
-import type { AppServerClient, ThreadSnapshot } from "../product/index.js";
-import {
-  renderSlashCommandHelp,
-  slashSuggestions,
-  type SlashCommand
-} from "./slash-commands.js";
+  type AgentThreadListEntry,
+} from '../presentation/index.js';
+import type { AppServerClient, ThreadSnapshot } from '../product/index.js';
+import { renderSlashCommandHelp, slashSuggestions, type SlashCommand } from './slash-commands.js';
 import {
   Container,
   EditorComponent,
   TextBlock,
   TuiEngine,
-  type TerminalDevice
-} from "./tui-engine.js";
-import type { TimelineRow, WebUiState } from "../presentation/index.js";
+  type TerminalDevice,
+} from './tui-engine.js';
+import type { TimelineRow, WebUiState } from '../presentation/index.js';
 
 export type ZenTuiAppOptions = {
   readonly client: AppServerClient;
@@ -33,14 +29,14 @@ export class ZenTuiApp {
   private readonly engine: TuiEngine;
   private readonly root = new Container();
   private readonly transcript = new TextBlock(() => this.renderLines());
-  private readonly editor = new EditorComponent("Ask Zen...");
+  private readonly editor = new EditorComponent('Ask Zen...');
   private readonly queuedInputs: string[] = [];
   private drainingQueue = false;
   private closed = false;
   private showToolDetails = false;
   private localNotice?: string;
   private resumeChoices: readonly ResumeChoice[] = [];
-  private currentInput = "";
+  private currentInput = '';
 
   constructor(options: ZenTuiAppOptions) {
     this.session = new AgentInteractionSession({ client: options.client });
@@ -91,13 +87,13 @@ export class ZenTuiApp {
   private async handleSubmit(value: string): Promise<void> {
     const trimmed = value.trim();
 
-    if (trimmed === "/exit" || trimmed === "/quit") {
+    if (trimmed === '/exit' || trimmed === '/quit') {
       this.closed = true;
       this.engine.stop();
       return;
     }
 
-    if (trimmed === "/new") {
+    if (trimmed === '/new') {
       await this.session.newThread();
       this.resumeChoices = [];
       this.localNotice = undefined;
@@ -105,49 +101,49 @@ export class ZenTuiApp {
       return;
     }
 
-    if (trimmed === "/help") {
+    if (trimmed === '/help') {
       this.setLocalNotice(renderSlashCommandHelp());
       return;
     }
 
-    if (trimmed === "/status") {
+    if (trimmed === '/status') {
       this.setLocalNotice(renderStatus(this.session.getSnapshot().state));
       return;
     }
 
-    if (trimmed === "/interrupt") {
+    if (trimmed === '/interrupt') {
       await this.interrupt();
       return;
     }
 
-    if (trimmed === "/retry") {
+    if (trimmed === '/retry') {
       await this.retry();
       return;
     }
 
-    if (trimmed.startsWith("/approve ")) {
-      await this.resolveApproval(trimmed.slice("/approve ".length).trim(), "approveOnce");
+    if (trimmed.startsWith('/approve ')) {
+      await this.resolveApproval(trimmed.slice('/approve '.length).trim(), 'approveOnce');
       return;
     }
 
-    if (trimmed.startsWith("/decline ")) {
-      await this.resolveApproval(trimmed.slice("/decline ".length).trim(), "decline");
+    if (trimmed.startsWith('/decline ')) {
+      await this.resolveApproval(trimmed.slice('/decline '.length).trim(), 'decline');
       return;
     }
 
-    if (trimmed === "/tools") {
+    if (trimmed === '/tools') {
       this.showToolDetails = !this.showToolDetails;
-      this.setLocalNotice(`Tool detail ${this.showToolDetails ? "expanded" : "collapsed"}`);
+      this.setLocalNotice(`Tool detail ${this.showToolDetails ? 'expanded' : 'collapsed'}`);
       return;
     }
 
-    if (trimmed === "/resume") {
+    if (trimmed === '/resume') {
       await this.showResumeChoices();
       return;
     }
 
-    if (trimmed.startsWith("/resume ")) {
-      await this.handleResumeArgument(trimmed.slice("/resume ".length).trim());
+    if (trimmed.startsWith('/resume ')) {
+      await this.handleResumeArgument(trimmed.slice('/resume '.length).trim());
       return;
     }
 
@@ -192,7 +188,7 @@ export class ZenTuiApp {
     try {
       await this.session.interrupt();
       this.queuedInputs.splice(0);
-      this.setLocalNotice("Interrupted current turn");
+      this.setLocalNotice('Interrupted current turn');
     } catch (cause) {
       this.setLocalNotice(cause instanceof Error ? cause.message : String(cause));
     }
@@ -202,7 +198,7 @@ export class ZenTuiApp {
     const recoverableTurn = this.session.getSnapshot().recoverableTurn;
 
     if (!recoverableTurn?.retryAvailable) {
-      this.setLocalNotice("No failed or interrupted turn is available to retry");
+      this.setLocalNotice('No failed or interrupted turn is available to retry');
       return;
     }
 
@@ -216,24 +212,32 @@ export class ZenTuiApp {
     }
   }
 
-  private async resolveApproval(approvalId: string, decision: "approveOnce" | "decline"): Promise<void> {
-    const pending = this.session.getSnapshot().timelineRows.find(
-      (row) => row.type === "approval-pending" && row.approvalId === approvalId
-    );
-    if (!pending || pending.type !== "approval-pending") {
+  private async resolveApproval(
+    approvalId: string,
+    decision: 'approveOnce' | 'decline'
+  ): Promise<void> {
+    const pending = this.session
+      .getSnapshot()
+      .timelineRows.find((row) => row.type === 'approval-pending' && row.approvalId === approvalId);
+    if (!pending || pending.type !== 'approval-pending') {
       this.setLocalNotice(`Unknown pending approval: ${approvalId}`);
       return;
     }
     try {
-      await this.session.resolveApproval({ approvalId, threadId: pending.threadId, turnId: pending.turnId, decision });
-      this.setLocalNotice(`${decision === "approveOnce" ? "Approved" : "Declined"} ${approvalId}`);
+      await this.session.resolveApproval({
+        approvalId,
+        threadId: pending.threadId,
+        turnId: pending.turnId,
+        decision,
+      });
+      this.setLocalNotice(`${decision === 'approveOnce' ? 'Approved' : 'Declined'} ${approvalId}`);
     } catch (cause) {
       this.setLocalNotice(cause instanceof Error ? cause.message : String(cause));
     }
   }
 
   private async showResumeChoices(
-    query = "",
+    query = '',
     listedThreads?: readonly AgentThreadListEntry[]
   ): Promise<void> {
     let threads: readonly AgentThreadListEntry[];
@@ -259,9 +263,7 @@ export class ZenTuiApp {
     this.resumeChoices = filtered.map(toResumeChoice);
 
     if (threads.length === 0) {
-      this.setLocalNotice(
-        "No saved threads found. Unreadable saved thread files are skipped."
-      );
+      this.setLocalNotice('No saved threads found. Unreadable saved thread files are skipped.');
       return;
     }
 
@@ -273,7 +275,7 @@ export class ZenTuiApp {
     this.setLocalNotice(
       query
         ? `Filtered by "${query}". Select with /resume <number> or refine the query.`
-        : "Select with /resume <number>, /resume <query>, or /resume <thread-id>"
+        : 'Select with /resume <number>, /resume <query>, or /resume <thread-id>'
     );
   }
 
@@ -308,7 +310,7 @@ export class ZenTuiApp {
 
   private async resumeSelected(threadId: string | undefined): Promise<void> {
     if (!threadId) {
-      this.setLocalNotice("Unknown resume selection");
+      this.setLocalNotice('Unknown resume selection');
       return;
     }
 
@@ -331,54 +333,56 @@ export class ZenTuiApp {
     const snapshot = this.session.getSnapshot();
     const state = snapshot.state;
     const lines = [
-      "Zen Agent",
+      'Zen Agent',
       renderThreadSummary(snapshot.thread, state),
-      "Commands: /new /resume /status /tools /interrupt /retry /approve <approvalId> /decline <approvalId>",
-      "",
-      "Messages"
+      'Commands: /new /resume /status /tools /interrupt /retry /approve <approvalId> /decline <approvalId>',
+      '',
+      'Messages',
     ];
-    const rows = state.timelineRows.filter((row) => row.type !== "trace");
+    const rows = state.timelineRows.filter((row) => row.type !== 'trace');
 
     lines.push(...renderTranscript(rows, { showToolDetails: this.showToolDetails }));
 
     if (this.resumeChoices.length > 0) {
-      lines.push("", "Resume");
+      lines.push('', 'Resume');
       lines.push(
-        ...this.resumeChoices.flatMap((choice) =>
-          choice.lines.map((line) => `  ${line}`)
-        )
+        ...this.resumeChoices.flatMap((choice) => choice.lines.map((line) => `  ${line}`))
       );
     }
 
     if (snapshot.recoverableTurn) {
-      lines.push("", renderRecoverableTurn(snapshot.recoverableTurn));
+      lines.push('', renderRecoverableTurn(snapshot.recoverableTurn));
     }
 
     if (this.localNotice) {
-      lines.push("", `Notice: ${this.localNotice}`);
+      lines.push('', `Notice: ${this.localNotice}`);
     }
 
     const queuedCount = this.queuedInputs.length + (this.drainingQueue ? 1 : 0);
     lines.push(
-      "",
-      state.currentThread?.status === "running" || this.drainingQueue
-        ? `Working${queuedCount > 0 ? ` | queued ${this.queuedInputs.length}` : ""}`
-        : "Ready"
+      '',
+      state.currentThread?.status === 'running' || this.drainingQueue
+        ? `Working${queuedCount > 0 ? ` | queued ${this.queuedInputs.length}` : ''}`
+        : 'Ready'
     );
     const suggestions = slashSuggestions(this.currentInput);
     if (suggestions.length > 0) {
-      lines.push("", ...renderSlashSuggestions(suggestions));
+      lines.push('', ...renderSlashSuggestions(suggestions));
     }
     return lines;
   }
 }
 
 function renderThreadSummary(
-  thread: Pick<ThreadSnapshot, "id" | "status" | "turns"> & { readonly items: { readonly length: number } } | undefined,
+  thread:
+    | (Pick<ThreadSnapshot, 'id' | 'status' | 'turns'> & {
+        readonly items: { readonly length: number };
+      })
+    | undefined,
   state: WebUiState
 ): string {
   if (!thread) {
-    return "No thread";
+    return 'No thread';
   }
   return `Thread ${thread.id} | ${state.currentThread?.status ?? thread.status} | turns ${thread.turns.length} | items ${thread.items.length}`;
 }
@@ -386,15 +390,13 @@ function renderThreadSummary(
 function renderStatus(state: WebUiState): string {
   const thread = state.currentThread;
   if (!thread) {
-    return "thread: not started";
+    return 'thread: not started';
   }
   return `thread: ${thread.id} | status: ${thread.status} | turns: ${thread.turns.length} | items: ${state.items.length}`;
 }
 
 function renderRecoverableTurn(recoverableTurn: AgentRecoverableTurn): string {
-  const availability = recoverableTurn.retryAvailable
-    ? "Retry with /retry"
-    : "Retry unavailable";
+  const availability = recoverableTurn.retryAvailable ? 'Retry with /retry' : 'Retry unavailable';
 
   return `Recoverable ${recoverableTurn.status} turn: ${recoverableTurn.reason} | ${availability}`;
 }
@@ -404,7 +406,7 @@ function renderTranscript(
   options: { readonly showToolDetails: boolean }
 ): readonly string[] {
   if (rows.length === 0) {
-    return ["No messages yet."];
+    return ['No messages yet.'];
   }
 
   return rows.flatMap((row) => renderRow(row, options));
@@ -414,114 +416,114 @@ function renderRow(
   row: TimelineRow,
   options: { readonly showToolDetails: boolean }
 ): readonly string[] {
-  if (row.type === "user") {
-    return ["", `You`, indent(stringify(row.content))];
+  if (row.type === 'user') {
+    return ['', `You`, indent(stringify(row.content))];
   }
-  if (row.type === "assistant" || row.type === "assistant-progress") {
-    return ["", `Zen`, indent(stringify(row.content))];
+  if (row.type === 'assistant' || row.type === 'assistant-progress') {
+    return ['', `Zen`, indent(stringify(row.content))];
   }
-  if (row.type === "shell") {
+  if (row.type === 'shell') {
     return renderShellRow(row, options);
   }
-  if (row.type === "tool-call") {
+  if (row.type === 'tool-call') {
     return renderToolCall(row, options);
   }
-  if (row.type === "tool-result") {
+  if (row.type === 'tool-result') {
     return renderToolResult(row, options);
   }
-  if (row.type === "tool-error") {
-    return [`  Tool error: ${row.toolName ?? "tool"} (${row.message ?? "failed"})`];
+  if (row.type === 'tool-error') {
+    return [`  Tool error: ${row.toolName ?? 'tool'} (${row.message ?? 'failed'})`];
   }
-  if (row.type === "approval-pending") {
-    return [`  Approval pending: ${row.reason ?? row.approvalId}`, `  /approve ${row.approvalId} | /decline ${row.approvalId}`];
+  if (row.type === 'approval-pending') {
+    return [
+      `  Approval pending: ${row.reason ?? row.approvalId}`,
+      `  /approve ${row.approvalId} | /decline ${row.approvalId}`,
+    ];
   }
-  if (row.type === "approval-resolved") {
-    return [`  Approval resolved: ${row.decision ?? "resolved"}`];
+  if (row.type === 'approval-resolved') {
+    return [`  Approval resolved: ${row.decision ?? 'resolved'}`];
   }
   return [];
 }
 
 function renderToolCall(
-  row: Extract<TimelineRow, { readonly type: "tool-call" }>,
+  row: Extract<TimelineRow, { readonly type: 'tool-call' }>,
   options: { readonly showToolDetails: boolean }
 ): readonly string[] {
-  if (row.toolName === "shell") {
+  if (row.toolName === 'shell') {
     const command = readCommand(row.input);
 
     return options.showToolDetails
-      ? ["", "Shell", indent(command)]
+      ? ['', 'Shell', indent(command)]
       : [`  Shell: ${summarize(command)}`];
   }
 
   return options.showToolDetails
-    ? ["", `Tool: ${row.toolName ?? "tool"}`, indent(stringify(row.input))]
-    : [`  Tool: ${row.toolName ?? "tool"} (${summarize(row.input)})`];
+    ? ['', `Tool: ${row.toolName ?? 'tool'}`, indent(stringify(row.input))]
+    : [`  Tool: ${row.toolName ?? 'tool'} (${summarize(row.input)})`];
 }
 
 function renderToolResult(
-  row: Extract<TimelineRow, { readonly type: "tool-result" }>,
+  row: Extract<TimelineRow, { readonly type: 'tool-result' }>,
   options: { readonly showToolDetails: boolean }
 ): readonly string[] {
-  if (row.toolName === "shell") {
+  if (row.toolName === 'shell') {
     const output = stringify(row.content);
 
     return options.showToolDetails
-      ? ["  Shell result", indent(output)]
+      ? ['  Shell result', indent(output)]
       : [`  Shell result: ${summarizeShellResult(output)}`];
   }
 
   return options.showToolDetails
-    ? [`  Result: ${row.toolName ?? "tool"}`, indent(stringify(row.content))]
-    : [`  Result: ${row.toolName ?? "tool"} (${summarize(row.content)})`];
+    ? [`  Result: ${row.toolName ?? 'tool'}`, indent(stringify(row.content))]
+    : [`  Result: ${row.toolName ?? 'tool'} (${summarize(row.content)})`];
 }
 
 function renderShellRow(
-  row: Extract<TimelineRow, { readonly type: "shell" }>,
+  row: Extract<TimelineRow, { readonly type: 'shell' }>,
   options: { readonly showToolDetails: boolean }
 ): readonly string[] {
-  const status =
-    row.exitCode === undefined
-      ? row.status
-      : `${row.status} (exit ${row.exitCode})`;
+  const status = row.exitCode === undefined ? row.status : `${row.status} (exit ${row.exitCode})`;
 
   if (!options.showToolDetails) {
     const details = [
-      summarizeStream("stdout", row.stdout),
-      summarizeStream("stderr", row.stderr),
-      row.error
+      summarizeStream('stdout', row.stdout),
+      summarizeStream('stderr', row.stderr),
+      row.error,
     ].filter((entry): entry is string => Boolean(entry));
 
     return [
       [
         `  Shell ${status}: ${summarize(row.command)}`,
-        details.length > 0 ? details.join(" | ") : undefined
+        details.length > 0 ? details.join(' | ') : undefined,
       ]
         .filter((entry): entry is string => Boolean(entry))
-        .join(" | ")
+        .join(' | '),
     ];
   }
 
-  const lines = ["", `Shell ${status}`, indent(row.command)];
+  const lines = ['', `Shell ${status}`, indent(row.command)];
 
   if (row.stdout.trim().length > 0) {
-    lines.push("  stdout", indent(row.stdout.trimEnd()));
+    lines.push('  stdout', indent(row.stdout.trimEnd()));
   }
   if (row.stderr.trim().length > 0) {
-    lines.push("  stderr", indent(row.stderr.trimEnd()));
+    lines.push('  stderr', indent(row.stderr.trimEnd()));
   }
   if (row.error) {
-    lines.push("  error", indent(row.error));
+    lines.push('  error', indent(row.error));
   }
 
   return lines;
 }
 
 function stringify(value: unknown): string {
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     return value;
   }
   if (value === undefined || value === null) {
-    return "";
+    return '';
   }
   return JSON.stringify(value);
 }
@@ -530,19 +532,19 @@ function indent(value: string): string {
   return value
     .split(/\r?\n/)
     .map((line) => `  ${line}`)
-    .join("\n");
+    .join('\n');
 }
 
 function summarize(value: unknown): string {
-  const rendered = stringify(value).replace(/\s+/g, " ").trim();
+  const rendered = stringify(value).replace(/\s+/g, ' ').trim();
   if (rendered.length <= 80) {
     return rendered;
   }
   return `${rendered.slice(0, 77)}...`;
 }
 
-function summarizeStream(label: "stdout" | "stderr", value: string): string | undefined {
-  const rendered = value.replace(/\s+/g, " ").trim();
+function summarizeStream(label: 'stdout' | 'stderr', value: string): string | undefined {
+  const rendered = value.replace(/\s+/g, ' ').trim();
 
   return rendered.length > 0 ? `${label}: ${summarize(rendered)}` : undefined;
 }
@@ -550,23 +552,23 @@ function summarizeStream(label: "stdout" | "stderr", value: string): string | un
 function summarizeShellResult(output: string): string {
   const exitCode = output.match(/^exitCode:\s*([^\r\n]+)/m)?.[1]?.trim();
   const stdout = output
-    .replace(/^exitCode:[^\r\n]*(\r?\n)?/, "")
-    .replace(/^stdout:\s*/m, "")
-    .replace(/^stderr:\s*/m, "stderr: ")
-    .replace(/\s+/g, " ")
+    .replace(/^exitCode:[^\r\n]*(\r?\n)?/, '')
+    .replace(/^stdout:\s*/m, '')
+    .replace(/^stderr:\s*/m, 'stderr: ')
+    .replace(/\s+/g, ' ')
     .trim();
   const summary = [exitCode ? `exit ${exitCode}` : undefined, stdout || undefined]
     .filter(Boolean)
-    .join(" | ");
+    .join(' | ');
 
   return summary.length <= 80 ? summary : `${summary.slice(0, 77)}...`;
 }
 
 function readCommand(input: unknown): string {
-  if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+  if (typeof input === 'object' && input !== null && !Array.isArray(input)) {
     const command = (input as { readonly command?: unknown }).command;
 
-    if (typeof command === "string") {
+    if (typeof command === 'string') {
       return command;
     }
   }
@@ -576,29 +578,23 @@ function readCommand(input: unknown): string {
 
 function renderSlashSuggestions(commands: readonly SlashCommand[]): readonly string[] {
   return [
-    "Commands",
-    ...commands.map((command) => `  ${command.usage.padEnd(28)} ${command.description}`)
+    'Commands',
+    ...commands.map((command) => `  ${command.usage.padEnd(28)} ${command.description}`),
   ];
 }
 
-function toResumeChoice(
-  thread: AgentThreadListEntry,
-  index: number
-): ResumeChoice {
+function toResumeChoice(thread: AgentThreadListEntry, index: number): ResumeChoice {
   return {
     id: thread.id,
     lines: [
       `${index + 1}. ${thread.id} | ${thread.status} | ${formatUpdatedAt(thread.updatedAtMs)} | turns ${thread.turns} | items ${thread.items}`,
-      ...optionalResumeLine("you", thread.lastUserMessage),
-      ...optionalResumeLine("zen", thread.lastAssistantSummary)
-    ]
+      ...optionalResumeLine('you', thread.lastUserMessage),
+      ...optionalResumeLine('zen', thread.lastAssistantSummary),
+    ],
   };
 }
 
-function optionalResumeLine(
-  label: string,
-  value: string | undefined
-): readonly string[] {
+function optionalResumeLine(label: string, value: string | undefined): readonly string[] {
   return value ? [`${label}: ${summarize(value)}`] : [];
 }
 
@@ -608,10 +604,10 @@ function toResumeSearchText(thread: AgentThreadListEntry): string {
     thread.status,
     thread.lastUserMessage,
     thread.lastAssistantSummary,
-    thread.updatedAtMs === undefined ? undefined : formatUpdatedAt(thread.updatedAtMs)
+    thread.updatedAtMs === undefined ? undefined : formatUpdatedAt(thread.updatedAtMs),
   ]
     .filter((value): value is string => Boolean(value))
-    .join(" ");
+    .join(' ');
 }
 
 function normalizeSearchText(value: string): string {
@@ -620,6 +616,6 @@ function normalizeSearchText(value: string): string {
 
 function formatUpdatedAt(updatedAtMs: number | undefined): string {
   return updatedAtMs === undefined
-    ? "updated unknown"
+    ? 'updated unknown'
     : `updated ${new Date(updatedAtMs).toISOString()}`;
 }

@@ -1,13 +1,11 @@
 export class AsyncIteratorAbortedError extends Error {
   constructor() {
-    super("Async iterator consumption aborted");
-    this.name = "AsyncIteratorAbortedError";
+    super('Async iterator consumption aborted');
+    this.name = 'AsyncIteratorAbortedError';
   }
 }
 
-export function isAsyncIteratorAbortedError(
-  cause: unknown
-): cause is AsyncIteratorAbortedError {
+export function isAsyncIteratorAbortedError(cause: unknown): cause is AsyncIteratorAbortedError {
   return cause instanceof AsyncIteratorAbortedError;
 }
 
@@ -44,7 +42,7 @@ export async function consumeAbortableAsyncIterator<T>(
   }
 }
 
-const aborted = Symbol("aborted");
+const aborted = Symbol('aborted');
 
 async function nextOrAbort<T>(
   iterator: AsyncIterator<T>,
@@ -55,10 +53,13 @@ async function nextOrAbort<T>(
 
   return await new Promise<IteratorResult<T> | typeof aborted>((resolve, reject) => {
     const onAbort = () => resolve(aborted);
-    signal.addEventListener("abort", onAbort, { once: true });
-    void iterator.next().then(resolve, reject).finally(() => {
-      signal.removeEventListener("abort", onAbort);
-    });
+    signal.addEventListener('abort', onAbort, { once: true });
+    void iterator
+      .next()
+      .then(resolve, reject)
+      .finally(() => {
+        signal.removeEventListener('abort', onAbort);
+      });
   });
 }
 

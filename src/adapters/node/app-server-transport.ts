@@ -1,19 +1,16 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { ProxyOptions } from "vite";
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { ProxyOptions } from 'vite';
 
 import type {
   AppServerClient,
   AppServerNotificationListener,
   AppServerRequestInput,
-  AppServerSubscription
-} from "../../product/index.js";
-import type {
-  AppServerNotification,
-  AppServerResponse
-} from "../../product/index.js";
-import { assertLoopbackBindAllowed } from "./app-server-config.js";
+  AppServerSubscription,
+} from '../../product/index.js';
+import type { AppServerNotification, AppServerResponse } from '../../product/index.js';
+import { assertLoopbackBindAllowed } from './app-server-config.js';
 
 export type AppServerHttpTransportOptions = {
   readonly allowRemoteBind?: boolean;
@@ -42,12 +39,12 @@ export class AppServerTransportError extends Error {
     readonly details?: unknown
   ) {
     super(message);
-    this.name = "AppServerTransportError";
+    this.name = 'AppServerTransportError';
   }
 }
 
-const REQUEST_PATH = "/request";
-const EVENTS_PATH = "/events";
+const REQUEST_PATH = '/request';
+const EVENTS_PATH = '/events';
 const MAX_REQUEST_BODY_BYTES = 1_000_000;
 const MIN_CAPABILITY_BYTES = 32;
 
@@ -57,14 +54,11 @@ export function createAppServerHttpProxy(
 ): Record<string, ProxyOptions> {
   return {
     [REQUEST_PATH]: createAuthenticatedProxyOptions(target, capability),
-    [EVENTS_PATH]: createAuthenticatedProxyOptions(target, capability)
+    [EVENTS_PATH]: createAuthenticatedProxyOptions(target, capability),
   };
 }
 
-function createAuthenticatedProxyOptions(
-  target: string,
-  capability: string
-): ProxyOptions {
+function createAuthenticatedProxyOptions(target: string, capability: string): ProxyOptions {
   const authorization = `Bearer ${capability}`;
 
   return {
@@ -72,10 +66,10 @@ function createAuthenticatedProxyOptions(
     changeOrigin: true,
     bypass: rejectUntrustedProxyRequest,
     configure(proxy) {
-      proxy.on("proxyReq", (proxyRequest) => {
-        proxyRequest.setHeader("authorization", authorization);
+      proxy.on('proxyReq', (proxyRequest) => {
+        proxyRequest.setHeader('authorization', authorization);
       });
-    }
+    },
   };
 }
 
@@ -88,38 +82,38 @@ function rejectUntrustedProxyRequest(
   }
 
   response?.writeHead(403, {
-    "content-type": "application/json; charset=utf-8"
+    'content-type': 'application/json; charset=utf-8',
   });
-  response?.end(`${JSON.stringify({ error: "Forbidden proxy request" })}\n`);
+  response?.end(`${JSON.stringify({ error: 'Forbidden proxy request' })}\n`);
 
   // Vite stops before proxying when bypass returns a path after ending the response.
-  return request.url ?? "/";
+  return request.url ?? '/';
 }
 
 function isTrustedSameOriginRequest(request: IncomingMessage): boolean {
-  if (request.method === "OPTIONS") {
+  if (request.method === 'OPTIONS') {
     return false;
   }
 
-  const fetchSite = request.headers["sec-fetch-site"];
+  const fetchSite = request.headers['sec-fetch-site'];
 
-  if (fetchSite !== undefined && fetchSite !== "same-origin") {
+  if (fetchSite !== undefined && fetchSite !== 'same-origin') {
     return false;
   }
 
   const origin = request.headers.origin;
 
   if (origin === undefined) {
-    return fetchSite === "same-origin";
+    return fetchSite === 'same-origin';
   }
 
-  if (typeof origin !== "string" || !request.headers.host) {
+  if (typeof origin !== 'string' || !request.headers.host) {
     return false;
   }
 
   try {
-    const encrypted = "encrypted" in request.socket && request.socket.encrypted;
-    const expectedOrigin = `${encrypted ? "https" : "http"}://${request.headers.host}`;
+    const encrypted = 'encrypted' in request.socket && request.socket.encrypted;
+    const expectedOrigin = `${encrypted ? 'https' : 'http'}://${request.headers.host}`;
     return new URL(origin).origin === expectedOrigin;
   } catch {
     return false;
@@ -129,64 +123,60 @@ function isTrustedSameOriginRequest(request: IncomingMessage): boolean {
 export async function serveAppServerHttpTransport(
   options: AppServerHttpTransportOptions
 ): Promise<AppServerHttpTransport> {
-  const host = options.host ?? "127.0.0.1";
+  const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 0;
-  assertLoopbackBindAllowed(
-    host,
-    options.allowRemoteBind ?? false,
-    "Non-loopback App Server"
-  );
+  assertLoopbackBindAllowed(host, options.allowRemoteBind ?? false, 'Non-loopback App Server');
   const capability = resolveCapability(options.capability);
   const capabilityDigest = digestCapability(capability);
   const eventStreams = new Map<ServerResponse, AppServerSubscription>();
-  const server = createServer(async (request, response) => {
-    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? host}`);
+  const server = createServer((request, response) => {
+    void (async () => {
+      const url = new URL(request.url ?? '/', `http://${request.headers.host ?? host}`);
 
-    if (
-      (url.pathname === REQUEST_PATH || url.pathname === EVENTS_PATH) &&
-      !hasCapability(request, capabilityDigest)
-    ) {
-      sendUnauthorized(response);
-      return;
-    }
+      if (
+        (url.pathname === REQUEST_PATH || url.pathname === EVENTS_PATH) &&
+        !hasCapability(request, capabilityDigest)
+      ) {
+        sendUnauthorized(response);
+        return;
+      }
 
-    if (request.method === "POST" && url.pathname === REQUEST_PATH) {
-      await handleRequest(options.appServer, request, response);
-      return;
-    }
+      if (request.method === 'POST' && url.pathname === REQUEST_PATH) {
+        await handleRequest(options.appServer, request, response);
+        return;
+      }
 
-    if (request.method === "GET" && url.pathname === EVENTS_PATH) {
-      const unsubscribe = handleEventStream(
-        options.appServer,
-        response,
-        (streamResponse) => {
+      if (request.method === 'GET' && url.pathname === EVENTS_PATH) {
+        const unsubscribe = handleEventStream(options.appServer, response, (streamResponse) => {
           const streamUnsubscribe = eventStreams.get(streamResponse);
           eventStreams.delete(streamResponse);
           streamUnsubscribe?.();
-        }
-      );
-      eventStreams.set(response, unsubscribe);
-      request.on("close", () => {
-        eventStreams.delete(response);
-        unsubscribe();
-      });
-      return;
-    }
-
-    sendJson(response, 404, {
-      method: "transport/request",
-      ok: false,
-      error: {
-        code: "NOT_FOUND",
-        message: `Unknown App Server transport route: ${request.method ?? "GET"} ${url.pathname}`
+        });
+        eventStreams.set(response, unsubscribe);
+        request.on('close', () => {
+          eventStreams.delete(response);
+          unsubscribe();
+        });
+        return;
       }
+
+      sendJson(response, 404, {
+        method: 'transport/request',
+        ok: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: `Unknown App Server transport route: ${request.method ?? 'GET'} ${url.pathname}`,
+        },
+      });
+    })().catch((cause: unknown) => {
+      response.destroy(cause instanceof Error ? cause : new Error(String(cause)));
     });
   });
 
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
+    server.once('error', reject);
     server.listen(port, host, () => {
-      server.off("error", reject);
+      server.off('error', reject);
       resolve();
     });
   });
@@ -213,57 +203,54 @@ export async function serveAppServerHttpTransport(
           resolve();
         });
       });
-    }
+    },
   };
 }
 
 function formatUrlHost(host: string): string {
-  return host.includes(":") ? `[${host}]` : host;
+  return host.includes(':') ? `[${host}]` : host;
 }
 
 function resolveCapability(provided: string | undefined): string {
   if (provided === undefined) {
-    return randomBytes(MIN_CAPABILITY_BYTES).toString("base64url");
+    return randomBytes(MIN_CAPABILITY_BYTES).toString('base64url');
   }
 
   if (
-    Buffer.byteLength(provided, "utf8") < MIN_CAPABILITY_BYTES ||
+    Buffer.byteLength(provided, 'utf8') < MIN_CAPABILITY_BYTES ||
     /[\u0000-\u0020\u007f]/u.test(provided)
   ) {
     throw new Error(
-      "App Server capability must be at least 32 bytes without whitespace or control characters"
+      'App Server capability must be at least 32 bytes without whitespace or control characters'
     );
   }
 
   return provided;
 }
 
-function hasCapability(
-  request: IncomingMessage,
-  expectedDigest: Buffer
-): boolean {
+function hasCapability(request: IncomingMessage, expectedDigest: Buffer): boolean {
   const authorization = request.headers.authorization;
 
-  if (!authorization?.startsWith("Bearer ")) {
+  if (!authorization?.startsWith('Bearer ')) {
     return false;
   }
 
-  const candidateDigest = digestCapability(authorization.slice("Bearer ".length));
+  const candidateDigest = digestCapability(authorization.slice('Bearer '.length));
   return timingSafeEqual(candidateDigest, expectedDigest);
 }
 
 function digestCapability(capability: string): Buffer {
-  return createHash("sha256").update(capability, "utf8").digest();
+  return createHash('sha256').update(capability, 'utf8').digest();
 }
 
 function sendUnauthorized(response: ServerResponse): void {
   sendJson(response, 401, {
-    method: "transport/request",
+    method: 'transport/request',
     ok: false,
     error: {
-      code: "UNAUTHORIZED",
-      message: "App Server capability is missing or invalid"
-    }
+      code: 'UNAUTHORIZED',
+      message: 'App Server capability is missing or invalid',
+    },
   });
 }
 
@@ -283,18 +270,18 @@ export class HttpAppServerClient implements AppServerClient {
     await Promise.allSettled(this.pendingSubscriptionConnections);
 
     const response = await fetch(new URL(REQUEST_PATH, this.baseUrl), {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "accept": "application/json",
-        "authorization": this.authorization,
-        "content-type": "application/json"
+        accept: 'application/json',
+        authorization: this.authorization,
+        'content-type': 'application/json',
       },
-      body: JSON.stringify(request)
+      body: JSON.stringify(request),
     });
 
     if (!response.ok) {
       throw new AppServerTransportError(
-        "HTTP_REQUEST_FAILED",
+        'HTTP_REQUEST_FAILED',
         `App Server transport request failed with HTTP ${response.status}`,
         await readResponseBody(response)
       );
@@ -329,15 +316,15 @@ export class HttpAppServerClient implements AppServerClient {
     try {
       const response = await fetch(new URL(EVENTS_PATH, this.baseUrl), {
         headers: {
-          accept: "text/event-stream",
-          authorization: this.authorization
+          accept: 'text/event-stream',
+          authorization: this.authorization,
         },
-        signal
+        signal,
       });
 
       if (!response.ok) {
         throw new AppServerTransportError(
-          "SSE_CONNECT_FAILED",
+          'SSE_CONNECT_FAILED',
           `App Server event stream failed with HTTP ${response.status}`,
           await readResponseBody(response)
         );
@@ -345,8 +332,8 @@ export class HttpAppServerClient implements AppServerClient {
 
       if (!response.body) {
         throw new AppServerTransportError(
-          "SSE_BODY_MISSING",
-          "App Server event stream response did not include a body"
+          'SSE_BODY_MISSING',
+          'App Server event stream response did not include a body'
         );
       }
 
@@ -360,11 +347,7 @@ export class HttpAppServerClient implements AppServerClient {
       const error =
         cause instanceof AppServerTransportError
           ? cause
-          : new AppServerTransportError(
-              "SSE_READ_FAILED",
-              readErrorMessage(cause),
-              cause
-            );
+          : new AppServerTransportError('SSE_READ_FAILED', readErrorMessage(cause), cause);
       this.onSubscriptionError?.(error);
     }
   }
@@ -379,12 +362,12 @@ async function handleRequest(
 
   if (!parsed.ok) {
     sendJson(response, parsed.status, {
-      method: "transport/request",
+      method: 'transport/request',
       ok: false,
       error: {
         code: parsed.code,
-        message: parsed.message
-      }
+        message: parsed.message,
+      },
     });
     return;
   }
@@ -395,12 +378,12 @@ async function handleRequest(
     sendJson(response, 200, result);
   } catch {
     sendJson(response, 500, {
-      method: "transport/request",
+      method: 'transport/request',
       ok: false,
       error: {
-        code: "UPSTREAM_REQUEST_FAILED",
-        message: "App Server request failed"
-      }
+        code: 'UPSTREAM_REQUEST_FAILED',
+        message: 'App Server request failed',
+      },
     });
   }
 }
@@ -411,24 +394,22 @@ function handleEventStream(
   onClose: (response: ServerResponse) => void
 ): AppServerSubscription {
   response.writeHead(200, {
-    "cache-control": "no-cache, no-transform",
-    "connection": "keep-alive",
-    "content-type": "text/event-stream; charset=utf-8"
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'content-type': 'text/event-stream; charset=utf-8',
   });
-  response.write(": connected\n\n");
+  response.write(': connected\n\n');
 
   const unsubscribe = appServer.subscribe((notification) => {
     response.write(`event: notification\ndata: ${JSON.stringify(notification)}\n\n`);
   });
 
-  response.on("close", () => onClose(response));
+  response.on('close', () => onClose(response));
 
   return unsubscribe;
 }
 
-async function readRequestJson(
-  request: IncomingMessage
-): Promise<
+async function readRequestJson(request: IncomingMessage): Promise<
   | { readonly ok: true; readonly value: unknown }
   | {
       readonly ok: false;
@@ -437,17 +418,17 @@ async function readRequestJson(
       readonly message: string;
     }
 > {
-  let body = "";
+  let body = '';
 
   for await (const chunk of request) {
-    body += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    body += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
 
-    if (Buffer.byteLength(body, "utf8") > MAX_REQUEST_BODY_BYTES) {
+    if (Buffer.byteLength(body, 'utf8') > MAX_REQUEST_BODY_BYTES) {
       return {
         ok: false,
         status: 413,
-        code: "REQUEST_TOO_LARGE",
-        message: "App Server transport request body is too large"
+        code: 'REQUEST_TOO_LARGE',
+        message: 'App Server transport request body is too large',
       };
     }
   }
@@ -458,19 +439,15 @@ async function readRequestJson(
     return {
       ok: false,
       status: 400,
-      code: "INVALID_JSON",
-      message: "App Server transport request body must be valid JSON"
+      code: 'INVALID_JSON',
+      message: 'App Server transport request body must be valid JSON',
     };
   }
 }
 
-function sendJson(
-  response: ServerResponse,
-  statusCode: number,
-  value: unknown
-): void {
+function sendJson(response: ServerResponse, statusCode: number, value: unknown): void {
   response.writeHead(statusCode, {
-    "content-type": "application/json; charset=utf-8"
+    'content-type': 'application/json; charset=utf-8',
   });
   response.end(`${JSON.stringify(value)}\n`);
 }
@@ -480,25 +457,25 @@ function readAppServerResponse(body: string): AppServerResponse {
     const value = JSON.parse(body) as unknown;
 
     if (
-      typeof value === "object" &&
+      typeof value === 'object' &&
       value !== null &&
-      "method" in value &&
-      "ok" in value &&
-      typeof value.ok === "boolean"
+      'method' in value &&
+      'ok' in value &&
+      typeof value.ok === 'boolean'
     ) {
       return value as AppServerResponse;
     }
   } catch (cause) {
     throw new AppServerTransportError(
-      "INVALID_RESPONSE_JSON",
-      "App Server transport response body must be valid JSON",
+      'INVALID_RESPONSE_JSON',
+      'App Server transport response body must be valid JSON',
       cause
     );
   }
 
   throw new AppServerTransportError(
-    "INVALID_RESPONSE",
-    "App Server transport response did not match the protocol envelope"
+    'INVALID_RESPONSE',
+    'App Server transport response did not match the protocol envelope'
   );
 }
 
@@ -509,7 +486,7 @@ async function readServerSentEvents(
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  let buffer = '';
 
   try {
     while (!signal.aborted) {
@@ -531,19 +508,19 @@ function consumeServerSentEventBuffer(
   buffer: string,
   listener: AppServerNotificationListener
 ): string {
-  let remaining = buffer.replaceAll("\r\n", "\n");
-  let separatorIndex = remaining.indexOf("\n\n");
+  let remaining = buffer.replaceAll('\r\n', '\n');
+  let separatorIndex = remaining.indexOf('\n\n');
 
   while (separatorIndex >= 0) {
     const rawEvent = remaining.slice(0, separatorIndex);
     remaining = remaining.slice(separatorIndex + 2);
-    separatorIndex = remaining.indexOf("\n\n");
+    separatorIndex = remaining.indexOf('\n\n');
 
     const data = rawEvent
-      .split("\n")
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice("data:".length).trimStart())
-      .join("\n");
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice('data:'.length).trimStart())
+      .join('\n');
 
     if (data.length === 0) {
       continue;
@@ -556,7 +533,7 @@ function consumeServerSentEventBuffer(
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
-  const text = await response.text().catch(() => "");
+  const text = await response.text().catch(() => '');
 
   if (text.length === 0) {
     return undefined;
@@ -572,7 +549,7 @@ async function readResponseBody(response: Response): Promise<unknown> {
 function isAbortError(cause: unknown): boolean {
   return (
     cause instanceof Error &&
-    (cause.name === "AbortError" || cause.message === "This operation was aborted")
+    (cause.name === 'AbortError' || cause.message === 'This operation was aborted')
   );
 }
 

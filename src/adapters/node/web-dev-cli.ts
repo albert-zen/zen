@@ -1,32 +1,29 @@
 #!/usr/bin/env node
-import tailwindcss from "@tailwindcss/vite";
-import react from "@vitejs/plugin-react";
-import { createServer as createViteServer } from "vite";
+import tailwindcss from '@tailwindcss/vite';
+import react from '@vitejs/plugin-react';
+import { createServer as createViteServer } from 'vite';
 
 import {
   assertLoopbackBindAllowed,
   DEFAULT_APP_SERVER_HOST,
   readAppServerPort,
-  readRemoteBindOptIn
-} from "./app-server-config.js";
-import {
-  createAppServerHttpProxy,
-  serveAppServerHttpTransport
-} from "./app-server-transport.js";
-import { createProviderBackedAppServer } from "./provider-runtime.js";
+  readRemoteBindOptIn,
+} from './app-server-config.js';
+import { createAppServerHttpProxy, serveAppServerHttpTransport } from './app-server-transport.js';
+import { createProviderBackedAppServer } from './provider-runtime.js';
 
 const host = process.env.ZEN_WEB_HOST ?? DEFAULT_APP_SERVER_HOST;
-const port = readAppServerPort(process.env.ZEN_WEB_PORT ?? "4174");
+const port = readAppServerPort(process.env.ZEN_WEB_PORT ?? '4174');
 const allowRemoteBind = readRemoteBindOptIn(
   process.env.ZEN_WEB_ALLOW_REMOTE,
-  "ZEN_WEB_ALLOW_REMOTE"
+  'ZEN_WEB_ALLOW_REMOTE'
 );
-assertLoopbackBindAllowed(host, allowRemoteBind, "Non-loopback Zen Web");
+assertLoopbackBindAllowed(host, allowRemoteBind, 'Non-loopback Zen Web');
 const appServer = await createProviderBackedAppServer({ cwd: process.cwd() });
 const transport = await serveAppServerHttpTransport({
   appServer,
   host: DEFAULT_APP_SERVER_HOST,
-  port: 0
+  port: 0,
 });
 const proxy = createAppServerHttpProxy(transport.url, transport.capability);
 let vite: Awaited<ReturnType<typeof createViteServer>> | undefined;
@@ -41,8 +38,8 @@ try {
       host,
       port,
       strictPort: false,
-      proxy
-    }
+      proxy,
+    },
   });
 
   await vite.listen();
@@ -52,8 +49,8 @@ try {
   await new Promise<void>((resolve) => {
     const shutdown = () => resolve();
 
-    process.once("SIGINT", shutdown);
-    process.once("SIGTERM", shutdown);
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
   });
 } finally {
   await vite?.close();

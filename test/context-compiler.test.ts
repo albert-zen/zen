@@ -1,233 +1,255 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from 'vitest';
 
-import { ContextCompiler, type Item } from "./test-exports.js";
+import { ContextCompiler, type Item } from './test-exports.js';
 
-describe("ContextCompiler", () => {
-  it("compiles the latest completed system message at the front of model context", () => {
+describe('ContextCompiler', () => {
+  it('compiles the latest completed system message at the front of model context', () => {
     const compiler = new ContextCompiler();
     const context = compiler.compile([
       item({
-        id: "user-1",
+        id: 'user-1',
         seq: 2,
-        type: "user.message.completed",
-        payload: { content: "Hi" }
+        type: 'user.message.completed',
+        payload: { content: 'Hi' },
       }),
       item({
-        id: "system-1",
+        id: 'system-1',
         seq: 1,
-        type: "system.message.completed",
-        payload: { content: "Old prompt." }
+        type: 'system.message.completed',
+        payload: { content: 'Old prompt.' },
       }),
       item({
-        id: "system-2",
+        id: 'system-2',
         seq: 3,
-        type: "system.message.completed",
-        payload: { content: "You are Zen." }
-      })
+        type: 'system.message.completed',
+        payload: { content: 'You are Zen.' },
+      }),
     ]);
 
     expect(context.parts).toEqual([
-      { type: "message", role: "system", content: "You are Zen." },
-      { type: "message", role: "user", content: "Hi" }
+      { type: 'message', role: 'system', content: 'You are Zen.' },
+      { type: 'message', role: 'user', content: 'Hi' },
     ]);
   });
 
-  it("compiles completed user and assistant messages into model context by seq", () => {
+  it('compiles completed user and assistant messages into model context by seq', () => {
     const compiler = new ContextCompiler();
     const laterAssistant = item({
-      id: "assistant-1",
+      id: 'assistant-1',
       seq: 3,
-      type: "assistant.message.completed",
-      payload: { content: "Hello." }
+      type: 'assistant.message.completed',
+      payload: { content: 'Hello.' },
     });
     const earlierUser = item({
-      id: "user-1",
+      id: 'user-1',
       seq: 1,
-      type: "user.message.completed",
-      payload: { content: "Hi" }
+      type: 'user.message.completed',
+      payload: { content: 'Hi' },
     });
 
     const context = compiler.compile([laterAssistant, earlierUser]);
 
     expect(context).toEqual({
       parts: [
-        { type: "message", role: "user", content: "Hi" },
-        { type: "message", role: "assistant", content: "Hello." }
-      ]
+        { type: 'message', role: 'user', content: 'Hi' },
+        { type: 'message', role: 'assistant', content: 'Hello.' },
+      ],
     });
   });
 
-  it("ignores assistant and tool delta items when compiling completed context", () => {
+  it('ignores assistant and tool delta items when compiling completed context', () => {
     const compiler = new ContextCompiler();
     const items = [
       item({
-        id: "user-1",
+        id: 'user-1',
         seq: 1,
-        type: "user.message.completed",
-        payload: { content: "Run the search" }
+        type: 'user.message.completed',
+        payload: { content: 'Run the search' },
       }),
       item({
-        id: "assistant-delta-1",
+        id: 'assistant-delta-1',
         seq: 2,
-        type: "assistant.message.delta",
-        targetId: "assistant-1",
-        visibility: "trace",
-        payload: { delta: "Searching", index: 0 }
+        type: 'assistant.message.delta',
+        targetId: 'assistant-1',
+        visibility: 'trace',
+        payload: { delta: 'Searching', index: 0 },
       }),
       item({
-        id: "tool-delta-1",
+        id: 'tool-delta-1',
         seq: 3,
-        type: "tool.output.delta",
-        targetId: "tool-result-1",
-        visibility: "trace",
-        payload: { delta: "partial result", index: 0 }
+        type: 'tool.output.delta',
+        targetId: 'tool-result-1',
+        visibility: 'trace',
+        payload: { delta: 'partial result', index: 0 },
       }),
       item({
-        id: "assistant-1",
+        id: 'assistant-1',
         seq: 4,
-        type: "assistant.message.completed",
-        payload: { content: "I found the answer." }
-      })
+        type: 'assistant.message.completed',
+        payload: { content: 'I found the answer.' },
+      }),
     ];
 
     const context = compiler.compile(items);
 
     expect(context.parts).toEqual([
-      { type: "message", role: "user", content: "Run the search" },
-      { type: "message", role: "assistant", content: "I found the answer." }
+      { type: 'message', role: 'user', content: 'Run the search' },
+      { type: 'message', role: 'assistant', content: 'I found the answer.' },
     ]);
   });
 
-  it("ignores lifecycle and internal items by default", () => {
+  it('ignores lifecycle and internal items by default', () => {
     const compiler = new ContextCompiler();
     const items = [
       item({
-        id: "run-started",
+        id: 'run-started',
         seq: 1,
-        type: "run.started",
-        visibility: "trace",
-        payload: { input: "start" }
+        type: 'run.started',
+        visibility: 'trace',
+        payload: { input: 'start' },
       }),
       item({
-        id: "internal-user",
+        id: 'internal-user',
         seq: 2,
-        type: "user.message.completed",
-        visibility: "internal",
-        payload: { content: "hidden instruction" }
+        type: 'user.message.completed',
+        visibility: 'internal',
+        payload: { content: 'hidden instruction' },
       }),
       item({
-        id: "visible-user",
+        id: 'visible-user',
         seq: 3,
-        type: "user.message.completed",
-        payload: { content: "visible request" }
+        type: 'user.message.completed',
+        payload: { content: 'visible request' },
       }),
       item({
-        id: "hook-effect",
+        id: 'hook-effect',
         seq: 4,
-        type: "hook.effect",
-        visibility: "internal",
-        payload: { hook: "beforeContextCompile" }
+        type: 'hook.effect',
+        visibility: 'internal',
+        payload: { hook: 'beforeContextCompile' },
       }),
       item({
-        id: "turn-completed",
+        id: 'turn-completed',
         seq: 5,
-        type: "turn.completed",
-        visibility: "trace",
-        payload: { reason: "stop" }
-      })
+        type: 'turn.completed',
+        visibility: 'trace',
+        payload: { reason: 'stop' },
+      }),
     ];
 
     const context = compiler.compile(items);
 
-    expect(context.parts).toEqual([
-      { type: "message", role: "user", content: "visible request" }
-    ]);
+    expect(context.parts).toEqual([{ type: 'message', role: 'user', content: 'visible request' }]);
   });
 
-  it("compiles completed tool results with tool call linkage", () => {
+  it('compiles completed tool results with tool call linkage', () => {
     const compiler = new ContextCompiler();
     const items = [
       item({
-        id: "assistant-1",
+        id: 'assistant-1',
         seq: 1,
-        type: "assistant.message.completed",
-        payload: { content: "Checking the weather." }
+        type: 'assistant.message.completed',
+        payload: { content: 'Checking the weather.' },
       }),
       item({
-        id: "tool-result-1",
+        id: 'tool-result-1',
         seq: 2,
-        type: "tool.result.completed",
-        causeId: "assistant-1",
+        type: 'tool.result.completed',
+        causeId: 'assistant-1',
         payload: {
-          toolCallId: "call-weather-1",
-          toolName: "weather",
-          content: "Sunny and 72F"
-        }
-      })
+          toolCallId: 'call-weather-1',
+          toolName: 'weather',
+          content: 'Sunny and 72F',
+        },
+      }),
     ];
 
     const context = compiler.compile(items);
 
     expect(context.parts).toEqual([
       {
-        type: "message",
-        role: "assistant",
-        content: "Checking the weather."
+        type: 'message',
+        role: 'assistant',
+        content: 'Checking the weather.',
       },
       {
-        type: "toolResult",
-        toolCallId: "call-weather-1",
-        toolName: "weather",
-        content: "Sunny and 72F"
-      }
+        type: 'toolResult',
+        toolCallId: 'call-weather-1',
+        toolName: 'weather',
+        content: 'Sunny and 72F',
+      },
     ]);
   });
 
-  it("does not mutate input item order or item payloads while compiling context", () => {
+  it('does not mutate input item order or item payloads while compiling context', () => {
     const compiler = new ContextCompiler();
-    const userPayload = { content: "Second by seq" };
-    const assistantPayload = { content: "First by seq" };
+    const userPayload = { content: 'Second by seq' };
+    const assistantPayload = { content: 'First by seq' };
     const input = [
       item({
-        id: "user-1",
+        id: 'user-1',
         seq: 2,
-        type: "user.message.completed",
-        payload: userPayload
+        type: 'user.message.completed',
+        payload: userPayload,
       }),
       item({
-        id: "assistant-1",
+        id: 'assistant-1',
         seq: 1,
-        type: "assistant.message.completed",
-        payload: assistantPayload
-      })
+        type: 'assistant.message.completed',
+        payload: assistantPayload,
+      }),
     ];
 
     const context = compiler.compile(input);
 
     expect(context.parts).toEqual([
-      { type: "message", role: "assistant", content: "First by seq" },
-      { type: "message", role: "user", content: "Second by seq" }
+      { type: 'message', role: 'assistant', content: 'First by seq' },
+      { type: 'message', role: 'user', content: 'Second by seq' },
     ]);
-    expect(input.map((inputItem) => inputItem.id)).toEqual([
-      "user-1",
-      "assistant-1"
-    ]);
+    expect(input.map((inputItem) => inputItem.id)).toEqual(['user-1', 'assistant-1']);
     expect(input[0]?.payload).toBe(userPayload);
     expect(input[1]?.payload).toBe(assistantPayload);
-    expect(userPayload).toEqual({ content: "Second by seq" });
-    expect(assistantPayload).toEqual({ content: "First by seq" });
+    expect(userPayload).toEqual({ content: 'Second by seq' });
+    expect(assistantPayload).toEqual({ content: 'First by seq' });
+  });
+
+  it('rejects malformed tool linkage and malformed assistant tool calls from model context', () => {
+    const context = new ContextCompiler().compile([
+      item({
+        id: 'assistant-1',
+        seq: 1,
+        type: 'assistant.message.completed',
+        payload: {
+          content: 'No valid tools',
+          toolCalls: [null, { id: 'only-id' }, { name: 'only-name' }],
+        },
+      }),
+      item({ id: 'tool-1', seq: 2, type: 'tool.result.completed', payload: 'unlinked output' }),
+      item({
+        id: 'tool-2',
+        seq: 3,
+        type: 'tool.result.completed',
+        targetId: 'call-from-target',
+        payload: { content: 'linked without a tool name' },
+      }),
+    ]);
+
+    expect(context.parts).toEqual([
+      { type: 'message', role: 'assistant', content: 'No valid tools' },
+      { type: 'toolResult', toolCallId: 'call-from-target', content: 'linked without a tool name' },
+    ]);
   });
 });
 
 function item(overrides: Partial<Item>): Item {
   return {
-    id: "item-1",
-    type: "user.message.completed",
+    id: 'item-1',
+    type: 'user.message.completed',
     createdAtMs: 1000,
     seq: 1,
-    runId: "run-1",
-    turnId: "turn-1",
+    runId: 'run-1',
+    turnId: 'turn-1',
     payload: {},
-    ...overrides
+    ...overrides,
   };
 }

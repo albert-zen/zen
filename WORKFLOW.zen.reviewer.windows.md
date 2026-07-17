@@ -6,7 +6,7 @@ prompt_context:
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
-  project_slug: "zen-agent-04d56f75dcff"
+  project_slug: 'zen-agent-04d56f75dcff'
   dispatch_states:
     - Agent Review
   active_states:
@@ -23,7 +23,7 @@ tracker:
 polling:
   interval_ms: 5000
 workspace:
-  root: "D:/desktop/zen-workspaces/reviewer"
+  root: 'D:/desktop/zen-workspaces/reviewer'
 hooks:
   timeout_ms: 300000
   after_create: |
@@ -52,6 +52,7 @@ codex:
 You are running the Zen agent reviewer flywheel on Windows in local-branch mode.
 
 Issue:
+
 - Identifier: {{ issue.identifier }}
 - Title: {{ issue.title }}
 - State: {{ issue.state }}
@@ -122,4 +123,3 @@ Quality bar:
 - Do not approve scope creep because tests pass.
 - Do not ask a worker to resolve unclear product or architecture decisions by guessing.
 - Blocking findings must be concrete enough for a worker to fix without another discussion.
-

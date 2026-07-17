@@ -2,27 +2,20 @@ import type {
   AppServerClient,
   AppServerNotificationListener,
   AppServerRequestInput,
-  AppServerSubscription
-} from "../product/index.js";
+  AppServerSubscription,
+} from '../product/index.js';
 import type {
   AppServerNotification,
   AppServerResponse,
   ApprovalDecision,
-  ThreadSnapshot
-} from "../product/index.js";
-import {
-  InteractionProjection,
-  type WebUiState
-} from "./web-ui-state.js";
+  ThreadSnapshot,
+} from '../product/index.js';
+import { InteractionProjection, type WebUiState } from './web-ui-state.js';
 
-export type WebUiRuntimeMode = "real" | "demo";
+export type WebUiRuntimeMode = 'real' | 'demo';
 
 export type WebUiConnectionStatus =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "running"
-  | "failed";
+  'disconnected' | 'connecting' | 'connected' | 'running' | 'failed';
 
 export type WebUiConnectionState = {
   readonly status: WebUiConnectionStatus;
@@ -44,8 +37,8 @@ export type WebUiClientListener = (snapshot: WebUiClientSnapshot) => void;
 
 export class WebUiLifecycleCanceledError extends Error {
   constructor() {
-    super("Web UI lifecycle operation was superseded");
-    this.name = "WebUiLifecycleCanceledError";
+    super('Web UI lifecycle operation was superseded');
+    this.name = 'WebUiLifecycleCanceledError';
   }
 }
 
@@ -61,8 +54,8 @@ export class WebUiClient {
   constructor(options: WebUiClientOptions) {
     this.client = options.client;
     this.connection = {
-      status: "disconnected",
-      mode: options.mode ?? "real"
+      status: 'disconnected',
+      mode: options.mode ?? 'real',
     };
     this.snapshot = { connection: this.connection, state: this.projection.getSnapshot() };
   }
@@ -83,7 +76,7 @@ export class WebUiClient {
   async connect(options: { readonly threadId?: string } = {}): Promise<void> {
     const generation = ++this.lifecycleGeneration;
     this.disconnectFromServerOnly();
-    this.setConnection({ status: "connecting" });
+    this.setConnection({ status: 'connecting' });
     this.unsubscribeFromServer = this.client.subscribe((notification) => {
       if (generation === this.lifecycleGeneration) this.applyNotification(notification);
     });
@@ -91,11 +84,13 @@ export class WebUiClient {
     try {
       const thread = await this.requestThread(
         generation,
-        options.threadId ? { method: "thread/read", params: { threadId: options.threadId } } : { method: "thread/start" },
-        options.threadId ? "thread/read" : "thread/start"
+        options.threadId
+          ? { method: 'thread/read', params: { threadId: options.threadId } }
+          : { method: 'thread/start' },
+        options.threadId ? 'thread/read' : 'thread/start'
       );
       const projectionChanged = this.projection.replaceSnapshot(thread);
-      const connectionChanged = this.updateConnection({ status: "connected" });
+      const connectionChanged = this.updateConnection({ status: 'connected' });
       if (projectionChanged || connectionChanged) this.refreshSnapshot();
     } catch (cause) {
       if (generation === this.lifecycleGeneration) this.fail(cause);
@@ -106,7 +101,7 @@ export class WebUiClient {
   disconnect(): void {
     this.lifecycleGeneration += 1;
     this.disconnectFromServerOnly();
-    this.setConnection({ status: "disconnected" });
+    this.setConnection({ status: 'disconnected' });
   }
 
   dispose(): void {
@@ -115,16 +110,20 @@ export class WebUiClient {
   }
 
   async startThread(): Promise<void> {
-    const thread = await this.requestThread(this.lifecycleGeneration, { method: "thread/start" }, "thread/start");
+    const thread = await this.requestThread(
+      this.lifecycleGeneration,
+      { method: 'thread/start' },
+      'thread/start'
+    );
     if (this.projection.replaceSnapshot(thread)) {
       this.refreshSnapshot();
     }
   }
 
   async listThreads(): Promise<readonly ThreadSnapshot[]> {
-    const response = await this.client.request({ method: "thread/list" });
+    const response = await this.client.request({ method: 'thread/list' });
 
-    if (response.ok && response.method === "thread/list") {
+    if (response.ok && response.method === 'thread/list') {
       return response.result.threads;
     }
 
@@ -138,8 +137,8 @@ export class WebUiClient {
   async resumeThread(threadId: string): Promise<void> {
     const thread = await this.requestThread(
       this.lifecycleGeneration,
-      { method: "thread/read", params: { threadId } },
-      "thread/read"
+      { method: 'thread/read', params: { threadId } },
+      'thread/read'
     );
     if (this.projection.replaceSnapshot(thread)) {
       this.refreshSnapshot();
@@ -162,17 +161,17 @@ export class WebUiClient {
     const threadId = this.projection.getSnapshot().currentThread?.id;
 
     if (!threadId) {
-      throw new Error("Web UI has no current thread after thread/start");
+      throw new Error('Web UI has no current thread after thread/start');
     }
 
-    this.setConnection({ status: "running" });
+    this.setConnection({ status: 'running' });
 
     const response = await this.client.request({
-      method: "turn/start",
+      method: 'turn/start',
       params: {
         threadId,
-        input: trimmed
-      }
+        input: trimmed,
+      },
     });
 
     if (!response.ok) {
@@ -189,8 +188,8 @@ export class WebUiClient {
     }
 
     const response = await this.client.request({
-      method: "turn/interrupt",
-      params: { threadId }
+      method: 'turn/interrupt',
+      params: { threadId },
     });
 
     if (!response.ok) {
@@ -206,10 +205,10 @@ export class WebUiClient {
       return;
     }
 
-    this.setConnection({ status: "running" });
+    this.setConnection({ status: 'running' });
     const response = await this.client.request({
-      method: "turn/retry",
-      params: { threadId, turnId }
+      method: 'turn/retry',
+      params: { threadId, turnId },
     });
 
     if (!response.ok) {
@@ -223,8 +222,8 @@ export class WebUiClient {
     decision: ApprovalDecision
   ): Promise<void> {
     const response = await this.client.request({
-      method: "approval/resolve",
-      params: { ...approval, decision }
+      method: 'approval/resolve',
+      params: { ...approval, decision },
     });
 
     if (!response.ok) {
@@ -235,35 +234,36 @@ export class WebUiClient {
 
   private applyNotification(notification: AppServerNotification): void {
     const projectionChanged = this.projection.apply(notification);
-    const connectionChanged = notification.type === "turn/started"
-      ? this.updateConnection({ status: "running", message: undefined })
-      : notification.type === "turn/completed"
-        ? this.updateConnection({ status: "connected", message: undefined })
-        : notification.type === "turn/failed"
-          ? this.updateConnection({ status: "failed", message: notification.error.message })
-          : false;
+    const connectionChanged =
+      notification.type === 'turn/started'
+        ? this.updateConnection({ status: 'running', message: undefined })
+        : notification.type === 'turn/completed'
+          ? this.updateConnection({ status: 'connected', message: undefined })
+          : notification.type === 'turn/failed'
+            ? this.updateConnection({ status: 'failed', message: notification.error.message })
+            : false;
     if (projectionChanged || connectionChanged) this.refreshSnapshot();
   }
 
   private fail(cause: unknown): void {
     this.setConnection({
-      status: "failed",
-      message: readErrorMessage(cause)
+      status: 'failed',
+      message: readErrorMessage(cause),
     });
   }
 
   private setConnection(
-    next: Omit<WebUiConnectionState, "mode"> & Partial<Pick<WebUiConnectionState, "mode">>
+    next: Omit<WebUiConnectionState, 'mode'> & Partial<Pick<WebUiConnectionState, 'mode'>>
   ): void {
     if (this.updateConnection(next)) this.refreshSnapshot();
   }
 
   private updateConnection(
-    next: Omit<WebUiConnectionState, "mode"> & Partial<Pick<WebUiConnectionState, "mode">>
+    next: Omit<WebUiConnectionState, 'mode'> & Partial<Pick<WebUiConnectionState, 'mode'>>
   ): boolean {
     const nextConnection: WebUiConnectionState = {
       mode: this.connection.mode,
-      ...next
+      ...next,
     };
     if (sameConnection(this.connection, nextConnection)) return false;
     this.connection = nextConnection;
@@ -282,7 +282,7 @@ export class WebUiClient {
   private async requestThread(
     generation: number,
     request: AppServerRequestInput,
-    method: "thread/start" | "thread/read"
+    method: 'thread/start' | 'thread/read'
   ): Promise<ThreadSnapshot> {
     const response = await this.client.request(request);
     if (generation !== this.lifecycleGeneration) {
@@ -299,11 +299,9 @@ export class WebUiClient {
 
 export type BrowserAppServerTransportClientOptions = {
   readonly fetch?: typeof fetch;
-  readonly createEventSource?: (
-    url: string
-  ) => WebUiEventSource;
+  readonly createEventSource?: (url: string) => WebUiEventSource;
   readonly onSubscriptionStatus?: (
-    status: "connected" | "disconnected" | "failed",
+    status: 'connected' | 'disconnected' | 'failed',
     error?: unknown
   ) => void;
 };
@@ -311,34 +309,30 @@ export type BrowserAppServerTransportClientOptions = {
 export type WebUiEventSource = {
   onopen: ((event: Event) => void) | null;
   onerror: ((event: Event) => void) | null;
-  addEventListener(
-    type: string,
-    listener: (event: MessageEvent<string>) => void
-  ): void;
+  addEventListener(type: string, listener: (event: MessageEvent<string>) => void): void;
   close(): void;
 };
 
 export class BrowserAppServerTransportClient implements AppServerClient {
   private readonly fetchImpl: typeof fetch;
   private readonly createEventSource: (url: string) => WebUiEventSource;
-  private readonly onSubscriptionStatus?: BrowserAppServerTransportClientOptions["onSubscriptionStatus"];
+  private readonly onSubscriptionStatus?: BrowserAppServerTransportClientOptions['onSubscriptionStatus'];
 
   constructor(options: BrowserAppServerTransportClientOptions) {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.createEventSource =
-      options.createEventSource ??
-      ((url) => new globalThis.EventSource(url) as WebUiEventSource);
+      options.createEventSource ?? ((url) => new globalThis.EventSource(url) as WebUiEventSource);
     this.onSubscriptionStatus = options.onSubscriptionStatus;
   }
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
-    const response = await this.fetchImpl("/request", {
-      method: "POST",
+    const response = await this.fetchImpl('/request', {
+      method: 'POST',
       headers: {
-        accept: "application/json",
-        "content-type": "application/json"
+        accept: 'application/json',
+        'content-type': 'application/json',
       },
-      body: JSON.stringify(request)
+      body: JSON.stringify(request),
     });
 
     const body = await response.text();
@@ -351,29 +345,26 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   }
 
   subscribe(listener: AppServerNotificationListener): AppServerSubscription {
-    const events = this.createEventSource("/events");
+    const events = this.createEventSource('/events');
 
     events.onopen = () => {
-      this.onSubscriptionStatus?.("connected");
+      this.onSubscriptionStatus?.('connected');
     };
     events.onerror = (event) => {
-      this.onSubscriptionStatus?.("failed", event);
+      this.onSubscriptionStatus?.('failed', event);
     };
-    events.addEventListener("notification", (event) => {
+    events.addEventListener('notification', (event) => {
       listener(JSON.parse(event.data) as AppServerNotification);
     });
 
     return () => {
       events.close();
-      this.onSubscriptionStatus?.("disconnected");
+      this.onSubscriptionStatus?.('disconnected');
     };
   }
 }
 
-function readThreadResponse(
-  response: AppServerResponse,
-  method: "thread/start" | "thread/read"
-) {
+function readThreadResponse(response: AppServerResponse, method: 'thread/start' | 'thread/read') {
   if (response.ok && response.method === method) {
     return response.result.thread;
   }
