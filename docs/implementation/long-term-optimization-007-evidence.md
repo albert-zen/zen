@@ -641,3 +641,22 @@ Summary of behavior delivered: stale cleanup now enumerates and validates candid
 Tests and validation: focused serial supervisor suite passed `29` tests with `0` skipped. It includes the deterministic snapshot-after-enumeration reproduction, same-process run isolation, owner-live/owner-dead reclamation, malformed/unknown run isolation, tombstone/paused writer behavior, real process cleanup, and exact identity handling. The real launcher/child/grandchild test passed `10/10` serial repetitions in `92.3` seconds. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed. Per manager direction, no full `npm run check` was run.
 Temporary-artifact evidence: all 17 `zen-review-*` directories were individually resolved under the system temp root, validated against the exact prefix and zero non-self command-line references, then removed by exact path only. Final scans found zero attributable `zen-local`/`zen-e2e` runtime processes, zero owned supervisor temporary directories, and zero `zen-review-*` directories.
 Acceptance criteria status: Round 22 implementation and focused validation are complete. Issue 007 remains Rework pending fresh review. No broad process kill, recursive taskkill, shared mutable manifest, takeover lease, or recursive owned-run cleanup was added.
+
+## Codex Review Note
+
+Round: 18 manager disposition
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Accepted: Worker Round 22 incorrectly deleted still-valid safety tests. Restore deterministic per-run invariants, complete malformed creation-artifact cleanup by encoded exact identity, and leave no skipped or todo Issue 007 safety tests.
+Local tracker state decision: Rework.
+
+## Codex Worker Note
+
+Round: 23
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `58d530424a895ac1eb95bf9698384c5b7fa744a1` (`test: restore owned run safety coverage`).
+Summary of behavior delivered: stale incomplete-creation cleanup now matches the creator identity encoded in the namespace before attempting shallow cleanup, so empty or malformed allowlisted artifacts can be reclaimed when that exact creator is absent while a matching live creator remains retained. Writer/clear hooks expose deterministic writer-lease, tombstone, and clear-snapshot boundaries. Event serialization remains minimal and clear/stale cleanup remains per-run.
+Tests and validation: focused serial supervisor suite passed `32` tests with `0` skipped; restored/added coverage verifies in-progress event folding and stale revision refusal, minimal linear event shape, same-process run isolation, post-enumeration snapshot ordering, and parallel stale-cleaner idempotence. Targeted Prettier and ESLint passed for `scripts/owned-e2e-supervisor.mjs` and `test/owned-e2e-supervisor.test.mjs`. Real launcher/child/grandchild stress passed `10/10` serial repetitions in `94.4` seconds. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed. No full `npm run check` ran per direction.
+Residue evidence: final exact scan found zero attributable `zen-local`/`zen-e2e` runtime processes, zero owned supervisor temporary directories, and zero `zen-review-*` directories.
+Acceptance criteria status: Round 23 implementation and focused validation are complete. Issue 007 remains Rework pending fresh review.
