@@ -453,3 +453,35 @@ Final implementation revision: `cf187fc90b566c3c6221f6d7d4d168e4ec2ad026` (`fix:
 Tests added/updated: two real Windows default-terminator tests each spawn and own one uniquely marked long-lived Node child. The local path refuses wrong creation token, command line, parent PID, and executable before the exact held-handle kill. The E2E path refuses wrong token, marker, and command line before its exact held-handle kill. Both use only the direct child handle as failure fallback. Supervisor token assertions now mutate `creationToken`, and synthetic ancestry fixtures use canonical tokens.
 Commands run and results: focused local runtime, owned-process cleanup, and E2E supervisor suites passed 34 tests. The exact `npm run check` on `cf187fc90b566c3c6221f6d7d4d168e4ec2ad026` passed in 301.4 seconds: format, lint, both typechecks, builds, 34 test files/264 unit tests, kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; an independent Win32 `zen-local`/`zen-e2e` marker/path scan reported zero matches and killed nothing.
 Acceptance criteria status: complete for Worker Round 15, pending fresh review. No `taskkill /T`, `Stop-Process`, broad Node kill, threshold reduction, source exclusion, or coverage-ignore pragma was added.
+
+## Codex Review Note
+
+Round: 10
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewed branch and revision: `codex/long-term-optimization-007 @ 9dd9202ed7440826f805375fecc34a645da38164`
+Reviewer proposal: add a separate owner-marker field to generic local `OwnedProcessIdentity` values.
+Manager decision: rejected as unreasonable. The directly spawned local root attests its unique marker inside the exact command line; descendants are generic exact operating-system identities owned through the recorded temporal ancestry chain. An ignored additional object property cannot represent a different live process and would not strengthen the process identity contract.
+Reviewer edits: none.
+Local tracker state decision: Rework pending the fresh Round 11 review.
+
+## Codex Review Note
+
+Round: 11
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewed branch and revision: `codex/long-term-optimization-007 @ 9dd9202ed7440826f805375fecc34a645da38164`
+Review result: STRICT PASS from a fresh clean-context review; no concrete reproducible findings.
+Reviewer edits: none.
+Validation reviewed: focused ownership tests, formatting, lint, TypeScript typechecks, and an attributable Win32 process scan with zero matches.
+Local marker model confirmed: the attested local root marker is part of its exact command line, while generic descendants are owned only through exact composite identities and temporal ancestry, not through a redundant mutable marker property.
+Local tracker state decision: Complete.
+State decision reason: manager accepted the strict pass. Wave 5 remains not integrated until a separate canonical follow-up merge and gate.
+
+## Codex Worker Note
+
+Round: 15 terminal correction
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Branch: `codex/long-term-optimization-007`
+Exact Round 15 code/test revision: `cf187fc90b566c3c6221f6d7d4d168e4ec2ad026`.
+Exact reviewed documentation revision: `9dd9202ed7440826f805375fecc34a645da38164`.
+Validation record: the exact full gate at `cf187fc90b566c3c6221f6d7d4d168e4ec2ad026` passed 264 unit tests and 2 Playwright E2E tests. Coverage was kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, and presentation 92.18/80.31/94.11/93.01. Online development-dependency audit reported `found 0 vulnerabilities`; the final attributable `zen-local`/`zen-e2e` Win32 process scan reported zero matches.
+Final scope status: Worker Round 15 is complete and issue 007 is Complete after Review Round 11. Wave 5 integration remains a separate pending canonical follow-up.
