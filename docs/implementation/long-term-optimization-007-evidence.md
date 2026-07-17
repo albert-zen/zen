@@ -485,3 +485,26 @@ Exact Round 15 code/test revision: `cf187fc90b566c3c6221f6d7d4d168e4ec2ad026`.
 Exact reviewed documentation revision: `9dd9202ed7440826f805375fecc34a645da38164`.
 Validation record: the exact full gate at `cf187fc90b566c3c6221f6d7d4d168e4ec2ad026` passed 264 unit tests and 2 Playwright E2E tests. Coverage was kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, and presentation 92.18/80.31/94.11/93.01. Online development-dependency audit reported `found 0 vulnerabilities`; the final attributable `zen-local`/`zen-e2e` Win32 process scan reported zero matches.
 Final scope status: Worker Round 15 is complete and issue 007 is Complete after Review Round 11. Wave 5 integration remains a separate pending canonical follow-up.
+
+## Codex Review Note
+
+Round: 11 integration correction
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Canonical integration revision: `c9ac99a`
+Integration result: Rework. The canonical gate completed 263 of 264 tests and intermittently failed while concurrently registering the real launcher, child, and grandchild: Windows raised `EPERM` renaming the shared owned-process manifest. Five isolated reruns passed, confirming a real cross-process read-modify-write/rename race rather than a persistent process residue.
+Reviewer edits: none.
+Local tracker state decision: Complete -> Rework.
+State decision reason: unique temporary names did not make concurrent replacement of one manifest target safe.
+
+## Codex Worker Note
+
+Round: 16
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Complete -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revisions: `da00e1cb87bd6b80700f9cfaeac038b8e3cd68d2` replaces mutable manifest upserts with schema-5 immutable ledger events; `4b32b7149653eabc8885bb2972cd21a3406fcff9` removes the pre-command CIM parent lookup from local-root attestation by injecting the known direct Node parent PID.
+Summary of behavior delivered: run metadata is initialized once before spawn and each registration writes a unique temporary event then renames it to a unique final event file in the run ledger. Readers fold only complete events by composite identity key, ignore temporary files, and tolerate duplicate events. Terminal clear occurs only after the two-pass quiescence and independent marker scan, additionally verifying that no event arrived between scan and clear. Registration failure now stops only the original direct ChildProcess handle, performs retained-ledger safe cleanup/scanning, preserves unverified diagnostic evidence, and aggregates cleanup failures with the registration error.
+Tests added/updated: 23 focused supervisor tests passed, including 16 concurrent cross-process writers with no lost identities, reader exclusion of an in-progress event, late completed event observation before clear, duplicate folding, retained unverified-registration evidence, direct-root no-orphan cleanup, and aggregate failure propagation. The real launcher/child/grandchild registration test passed 10 serial repetitions after the ledger change. Test teardown verifies its exact temp-directory parent and prefix before removing it.
+Integration cleanup evidence: six pre-existing `zen-e2e-supervisor-*` temporary directories were individually verified to be direct children of the system temporary directory with no live Win32 command-line reference, then removed. No process was killed.
+Validation correction: the first exact Round 16 gate on `da00e1c` passed format, lint, both typechecks, build, 268 unit tests, kernel coverage, and product coverage, then timed out only in the pre-existing local wrapper behavior test during presentation coverage. The failure was preserved; isolated diagnosis showed bootstrap startup near the fixed test budget. The direct-parent injection revision `4b32b71` removed the unnecessary WMI dependency and its exact gate passed in 315.4 seconds: 34 test files/268 unit tests; kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; final attributable `zen-local`/`zen-e2e` process scan found zero matches and the owned supervisor temporary-residue scan found zero directories.
+Acceptance criteria status: complete for Worker Round 16, pending fresh review. No rename retry, fragile lock, broad process kill, recursive taskkill, coverage threshold reduction, source exclusion, or coverage-ignore pragma was added.
