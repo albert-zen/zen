@@ -796,6 +796,19 @@ Validation evidence: web client tests passed `23/23`; main and web typechecks, t
 Local tracker state decision: Complete / Ready for Integration.
 State decision reason: the exact reviewed implementation passed the fresh final review with no remaining findings. Wave 5 remains unintegrated pending the separate canonical integration step.
 
+## Codex Review Note
+
+Round: 26 canonical integration gate disposition
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: manager classification of the canonical full-check failure
+Reviewed branch: `codex/long-term-optimization-007`
+Reviewed revision: `47adb3208f35fcf9021f83dfa95b4fbf35fe97ef`
+Result: REWORK limited to the E2E assertion.
+Finding: `e2e/web-workflow.spec.ts` used a full-page exact-text count for `Approved command complete`. Reconnect legitimately refreshes the Threads sidebar preview from the persisted thread while the timeline retains the one final assistant row, so the full page contains two matching nodes without a duplicate production projection.
+Manager disposition: locator false positive accepted; no production `InteractionProjection` change or sidebar suppression is permitted. The reconnect assertion must remain an exact count of one inside `#timeline`.
+Local tracker state decision: Rework pending fresh review.
+State decision reason: the canonical gate exposed a test-scope defect after the previous strict pass. Wave 5 remains unintegrated.
+
 ## Codex Worker Note
 
 Round: 30
@@ -826,3 +839,31 @@ Commands and results: `npm run check` started at `2026-07-17T21:28:33.0372029Z`,
 Failure: `e2e/web-workflow.spec.ts:58` expected `page.getByText('Approved command complete', { exact: true })` to have count `1` after disconnect/reconnect, but received count `2` throughout its unchanged five-second assertion timeout. The failure context and trace are retained in ignored `test-results/web-workflow-uses-the-same-530f9-reconnect-and-thread-resume/`. No retry was run. The conditional audit did not run because the full check had already failed.
 Hygiene: the exact pre-run census found zero canonical command-line Node/Chromium processes and captured `1406` allowlisted OS-temp directories as baseline. The post-run census found zero canonical command-line processes and zero owner-marker processes. It found `32` new allowlisted-prefix directories relative to that baseline, all with zero live command-line references. They have no exact manifest or other ownership proof sufficient for deletion, so no process or temporary directory was terminated or deleted.
 Tracker and Wave decision: retain ISSUE-007 as `Complete`, not `Integrated`; retain Wave 5 unchecked/unintegrated. This canonical E2E failure blocks integration closeout pending an implementation/review cycle.
+
+## Codex Worker Note
+
+Round: 30
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Complete -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `54dd2c5799c203b4de4c092cac4dcb3126143d46` (`test: scope web workflow assertions to timeline`).
+DOM reproduction evidence: the diagnostic run reproduced the canonical failure with two exact `Approved command complete` nodes. Both were `div` elements; the first had a closest semantic container of the Threads sidebar `button`, whose text included the persisted completion preview, and the second had closest container `div#timeline`. The first workflow therefore failed only at the full-page count (`2` instead of `1`); the decline workflow passed. This confirms a locator false positive rather than duplicate timeline projection.
+Summary of behavior delivered: both workflows now establish a stable `page.locator('#timeline')` and scope streamed conversation text, approval controls, tool output, completion text, and decline text to it. The reconnect assertion remains `toHaveCount(1)` for the exact completion text inside the timeline; no `first`/`nth` masking, timeout change, or production workaround was added.
+Tests and validation: the final owned-supervisor E2E run passed `2/2` in `6.7s`; the reconnect workflow took `4.1s` and the decline workflow `718ms`. Targeted Prettier and ESLint for `e2e/web-workflow.spec.ts` passed, and `git diff --check` passed. Per manager scope, no full check, coverage run, or real-launcher stress run was executed.
+Hygiene evidence: independent scans before diagnosis, after the expected failing diagnostic run, and after the passing run found zero attributable workspace/`zen-e2e`/`zen-local` Win32 processes and zero owned supervisor/local temporary directories. The diagnostic `test-results` directory and closed ignored schema-5 PID manifest were removed only by their exact verified paths under this issue worktree. No process was killed and no broad deletion was used.
+Acceptance criteria status: the E2E locator defect is corrected and validated. Issue 007 remains Rework pending fresh review; Wave 5 remains unintegrated.
+
+## Codex Review Note
+
+Round: 27
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: fresh final reviewer
+Reviewed branch: `codex/long-term-optimization-007`
+Reviewed revision: `7c6d297110e61ce3a4145a6887a77affe78e58e5`
+Reviewed test-fix revision: `54dd2c5799c203b4de4c092cac4dcb3126143d46`
+Result: STRICT PASS
+Findings: no blockers, functional defects, or reasonable suggestions.
+Reviewer edits: none.
+Review evidence: the reviewer independently confirmed that the Threads sidebar preview and timeline completion are two legitimate views of the same persisted assistant result. Scoping the duplicate assertion to `#timeline` preserves the strict exact-count guarantee of one and does not hide a production duplicate. Both E2E workflows passed `2/2`; targeted formatting, lint, and diff gates passed.
+Local tracker state decision: Complete / Ready for Integration.
+State decision reason: the fresh reviewer accepted the exact E2E locator correction without findings. Wave 5 remains unintegrated pending the separate canonical integration step.
