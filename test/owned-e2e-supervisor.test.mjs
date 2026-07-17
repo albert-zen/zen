@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

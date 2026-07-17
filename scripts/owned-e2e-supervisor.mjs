@@ -143,7 +143,6 @@ export async function runOwnedCommand({
   await manifest.write(emptyManifest(marker));
 
   let child;
-  let rootEntry;
   let registration;
   let cleanupTask;
   const cleanup = () => {
@@ -179,9 +178,6 @@ export async function runOwnedCommand({
       platform,
       inspect,
       list,
-    }).then((entry) => {
-      rootEntry = entry;
-      return entry;
     });
     await registration;
     if (cleanupTask) {
