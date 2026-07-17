@@ -218,6 +218,67 @@ describe('Web UI client', () => {
     expect(fetchCalls).toBe(0);
   });
 
+  it('does not POST an open-generation request invalidated in the outer-await reconnect window', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response(
+          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
+        );
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+
+    const invalidated = client.request({ method: 'thread/list' });
+    const rejected = expect(invalidated).rejects.toThrow(
+      'Browser event subscription changed before request'
+    );
+    queueMicrotask(() => {
+      queueMicrotask(() => {
+        events.fail(new Event('error'));
+        events.open();
+      });
+    });
+    await rejected;
+    expect(fetchCalls).toBe(0);
+
+    await client.request({ method: 'thread/list' });
+    expect(fetchCalls).toBe(1);
+    unsubscribe();
+  });
+
+  it('does not POST an open-generation request invalidated in the outer-await disconnect window', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response('{}');
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+
+    const invalidated = client.request({ method: 'thread/list' });
+    const rejected = expect(invalidated).rejects.toThrow(
+      'Browser event subscription changed before request'
+    );
+    queueMicrotask(() => {
+      queueMicrotask(() => {
+        unsubscribe();
+        events.open();
+      });
+    });
+    await rejected;
+
+    expect(fetchCalls).toBe(0);
+  });
+
   it('disconnect rejects pending browser readiness and stale open cannot revive it', async () => {
     const events = new ControllableEventSource();
     const statuses: string[] = [];

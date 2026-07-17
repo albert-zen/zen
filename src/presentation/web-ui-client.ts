@@ -327,15 +327,16 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   }
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
-    await this.awaitSubscriptionsReady();
-    const response = await this.fetchImpl('/request', {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(request),
-    });
+    const response = await this.withSubscriptionsReady(() =>
+      this.fetchImpl('/request', {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      })
+    );
 
     const body = await response.text();
 
@@ -387,13 +388,16 @@ export class BrowserAppServerTransportClient implements AppServerClient {
     };
   }
 
-  private async awaitSubscriptionsReady(): Promise<void> {
+  private async withSubscriptionsReady<T>(operation: () => Promise<T>): Promise<T> {
     const authorization = [...this.subscriptions].map((subscription) => ({
       subscription,
       generation: subscription.generation,
       gate: subscription.gate,
     }));
     await Promise.all(authorization.map(({ gate }) => gate.promise));
+    // Let EventSource state callbacks already queued behind the gate settlement
+    // run before the final, atomic authorization-and-operation continuation.
+    await Promise.resolve();
     if (
       authorization.some(
         ({ subscription, generation, gate }) =>
@@ -405,6 +409,7 @@ export class BrowserAppServerTransportClient implements AppServerClient {
     ) {
       throw new Error('Browser event subscription changed before request');
     }
+    return operation();
   }
 }
 
