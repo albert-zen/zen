@@ -187,6 +187,7 @@ export class LocalToolRuntime implements ToolRuntime {
           processHolder.child?.kill('SIGTERM');
           return;
         }
+        if (cleanupRequiresCapturedOwnership) processHolder.child?.kill('SIGTERM');
         const captured = await rootCapture.task;
         if (!captured) {
           if (cleanupRequiresCapturedOwnership) {
@@ -194,9 +195,6 @@ export class LocalToolRuntime implements ToolRuntime {
           }
           return;
         }
-        // The attested ChildProcess is the exact spawned root; stopping it first
-        // prevents a long-running shell from holding the cancellation path open.
-        processHolder.child?.kill('SIGTERM');
         await processHolder.ownership?.terminateVerified();
       })();
       // Event handlers cannot await cleanup. Retain the error and wake the generator;
@@ -232,10 +230,6 @@ export class LocalToolRuntime implements ToolRuntime {
     rootCapture.task = new Promise<boolean>((resolve) => {
       resolveBootstrap = resolve;
     });
-    const bootstrapTimeout = setTimeout(() => {
-      resolveBootstrap?.(false);
-      resolveBootstrap = undefined;
-    }, 250);
     rootCapture.task.catch((error: unknown) => {
       cleanupFailure ??= error;
       if (terminationRequested) finish();
@@ -261,7 +255,6 @@ export class LocalToolRuntime implements ToolRuntime {
       exitCode = code;
       resolveBootstrap?.(false);
       resolveBootstrap = undefined;
-      clearTimeout(bootstrapTimeout);
       finish();
       startCleanup(false).catch(() => undefined);
     });
