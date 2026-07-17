@@ -940,8 +940,8 @@ async function removeRunDirectory(runDirectory, metadata, hooks = {}) {
   await assertKnownRunChildren(runDirectory, names);
   const ordered = [
     ...names.filter((name) => /^entry-|^writer-/.test(name)),
-    ...names.filter((name) => name === 'tombstone.json'),
     ...names.filter((name) => name === 'run.json'),
+    ...names.filter((name) => name === 'tombstone.json'),
   ];
   for (let index = 0; index < ordered.length; index += 1) {
     await fs.rm(path.join(runDirectory, ordered[index]), { force: true });

@@ -536,6 +536,45 @@ describe('owned E2E supervisor', () => {
     });
   });
 
+  it('releases a writer lease when afterWriterLease fails', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const failing = ownedE2eSupervisorTesting.createManifestStore(manifestPath, {
+        afterWriterLease: async () => {
+          throw new Error('writer hook failed');
+        },
+      });
+      await expect(failing.upsert(marker, ownedEntry({ marker, pid: 470 }))).rejects.toThrow(
+        'writer hook failed'
+      );
+      expect((await readdir(manifestPath)).filter((name) => name.startsWith('writer-'))).toEqual(
+        []
+      );
+      const ledger = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      const snapshot = await ledger.read();
+      await expect(ledger.clear(marker, snapshot.revision)).resolves.toBeUndefined();
+    });
+  });
+
+  it('uses tombstone hooks to reject a writer that begins during terminal clear', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const started = deferred();
+      const release = deferred();
+      const clearer = ownedE2eSupervisorTesting.createManifestStore(manifestPath, {
+        afterTombstone: async () => started.resolve(),
+        beforeClearSnapshot: async () => release.promise,
+      });
+      const snapshot = await clearer.read();
+      const clearing = clearer.clear(marker, snapshot.revision);
+      await started.promise;
+      const writer = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      await expect(writer.upsert(marker, ownedEntry({ marker, pid: 471 }))).rejects.toThrow(
+        'terminal run'
+      );
+      release.resolve();
+      await clearing;
+    });
+  });
+
   it('does not initialize a replacement generation until a paused writer releases', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entered = deferred();
