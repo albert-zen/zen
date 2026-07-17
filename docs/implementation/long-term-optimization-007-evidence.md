@@ -660,3 +660,22 @@ Summary of behavior delivered: stale incomplete-creation cleanup now matches the
 Tests and validation: focused serial supervisor suite passed `32` tests with `0` skipped; restored/added coverage verifies in-progress event folding and stale revision refusal, minimal linear event shape, same-process run isolation, post-enumeration snapshot ordering, and parallel stale-cleaner idempotence. Targeted Prettier and ESLint passed for `scripts/owned-e2e-supervisor.mjs` and `test/owned-e2e-supervisor.test.mjs`. Real launcher/child/grandchild stress passed `10/10` serial repetitions in `94.4` seconds. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed. No full `npm run check` ran per direction.
 Residue evidence: final exact scan found zero attributable `zen-local`/`zen-e2e` runtime processes, zero owned supervisor temporary directories, and zero `zen-review-*` directories.
 Acceptance criteria status: Round 23 implementation and focused validation are complete. Issue 007 remains Rework pending fresh review.
+
+## Codex Review Note
+
+Round: 19 manager disposition
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Accepted: canonical creator fingerprints, writer-finalizer hook cleanup, confined incomplete directories, committed terminal deletion behavior, and restoration of direct per-run safety tests are required.
+Local tracker state decision: Rework.
+
+## Codex Worker Note
+
+Round: 24
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `d84f964` (`fix: harden owned run barriers`).
+Summary: creator fingerprints now hash only canonical `leaseOwnerRecord` values; writer hooks execute inside the lease finalizer; incomplete namespaces receive exact confinement checks; clear treats precommit failure separately from committed shallow deletion and preserves its tombstone after deletion begins. Event, stale-scan, and barrier behavior remains explicit per run.
+Requirement-to-test mapping: in-progress and late-revision behavior is covered by `ignores an in-progress event and rejects terminal clear after a late completed event`; event-size shape by `keeps event records minimal and bounded across many entries`; snapshot ordering by `takes its stale-owner snapshot after candidate enumeration`; owner-live/dead and unrelated run isolation by `isolates same-process runs and reclaims only owner-dead, well-formed runs` and `retains malformed or unknown-child runs without blocking a separate new run`; parallel cleanup by `makes parallel stale cleaners idempotent without touching a live separate run`; writer-before-clear/tombstone retry by `retains a paused writer during clear, then clears after release and revision revalidation`; old/new run isolation by `allows a paused old-generation writer to finish without contaminating a new run`; and real owned process cleanup by `cleans a real marked child and grandchild after a failing launcher exits`.
+Validation: focused serial supervisor suite passed `32` tests with no skips; targeted Prettier and ESLint passed; real launcher stress passed `10/10`; online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed. No full `npm run check` ran per direction. Final exact scan found zero attributable `zen-local`/`zen-e2e` runtime processes and zero owned supervisor temporary directories.
+Acceptance criteria status: Round 24 implementation is submitted for fresh review. Issue 007 remains Rework.
