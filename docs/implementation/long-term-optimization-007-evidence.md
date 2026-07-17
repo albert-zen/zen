@@ -209,3 +209,27 @@ Spec Review non-blocking: none.
 Spec Review missing evidence: focused supervisor results and committed-clone formatting result.
 Local tracker state decision: Rework
 State decision reason: user accepted all Round 3 findings and retained the same implementation owner.
+
+## Codex Worker Note
+
+Round: 8
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+PR URL: not used; this program remains local-branch/local-review with local-path `origin`.
+Base revision/diff scope: `3adcd6a` through `ffc4272ec744bde18af547c1dabe3fd4a173ddca`; Round 3 correction and exact-head validation.
+Summary of behavior delivered: Prettier was run on `web/index.html`, all four repository tsconfig files, and `web/tsconfig.json`; tracked text was staged with `git add --renormalize`. Failed marker verification now writes an `unverified-<role>` live identity into the manifest and never calls the child kill provider. `runOwnedCommand` and `run-playwright-child.mjs` install handlers before spawn using child/registration holders; a pre-registration signal waits for marker verification and individually cleans the verified child without orphaning it.
+Final scope summary: Round 3 rework complete; tracker remains Rework pending fresh review.
+Changed files/modules: supervisor, Playwright child launcher, supervisor tests, `web/tsconfig.json` formatting, evidence/tracker.
+Tests added/updated: focused supervisor suite now has 13 tests, including unmarked registration retain/no-kill and an injected pre-registration signal cleanup test. The test asserts the direct child kill provider is not called in either safe path.
+Acceptance criteria status: The actual committed blob bytes at `ffc4272ec744bde18af547c1dabe3fd4a173ddca` are LF-only: `web/index.html` (298 bytes/12 LF), `tsconfig.json` (293/12), `tsconfig.build.json` (275/12), `tsconfig.acceptance.json` (222/11), and `web/tsconfig.json` (534/18), all with zero CR bytes. A brand-new clone at `D:\desktop\zen-opt-007-round3-format-clone-final`, created from that commit with `core.autocrlf=true`, reports LF index/worktree entries and passes `npx prettier --check` for all five files. This appends the requested committed-blob correction without altering prior notes.
+Commands run and results: focused supervisor tests: 13 passed; first exact check stopped at lint and was corrected; a first full check had an intermittent Vitest presentation-worker warning and was not accepted; isolated presentation coverage then passed (33 files/249 tests); final exact `npm run check` passed warning-free in 181.5 seconds with 249 tests, all builds, all group coverage, and 2 E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org`: `found 0 vulnerabilities`.
+Validation log paths: clone path above; ignored coverage/test-results/Playwright/PID artifacts only and none are staged.
+Required check status or local-check handoff reason: exact-head local check, online audit, blob inspection, and fresh-clone format proof passed. Local-path origin has no GitHub handoff; fresh review remains required.
+Evidence links/paths: `docs/implementation/long-term-optimization-007-evidence.md`, `docs/implementation/long-term-optimization-tracker.md`.
+Decisions made: only verified marker-owned children may be individually terminated. A live unmarked child is evidence, not a cleanup target. Spawn commands pass the marker explicitly; marker absence is a retained diagnosis failure.
+Standards notes: `.gitattributes` remains LF enforcing and no platform-dependent Prettier setting, coverage threshold/exclusion, or coverage-ignore pragma was added.
+Reviewer notes: tracker intentionally remains Rework until a fresh reviewer accepts this exact head.
+Open questions: none.
+Known residual risks: POSIX individual-process cleanup is structurally covered but not exercised on this Windows machine.
+Blocker or context escalation details: none.
