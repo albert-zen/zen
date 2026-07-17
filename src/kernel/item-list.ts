@@ -1,4 +1,4 @@
-export type ItemVisibility = "model" | "trace" | "ui" | "internal";
+export type ItemVisibility = 'model' | 'trace' | 'ui' | 'internal';
 
 export type Item = {
   readonly id: string;
@@ -15,7 +15,7 @@ export type Item = {
   readonly meta?: Readonly<Record<string, unknown>>;
 };
 
-export type ItemAppendInput = Omit<Item, "id" | "createdAtMs" | "seq">;
+export type ItemAppendInput = Omit<Item, 'id' | 'createdAtMs' | 'seq'>;
 
 export type IdGenerator = () => string;
 
@@ -35,14 +35,14 @@ export class ItemObserverError extends Error {
 
   constructor(item: Item, failures: readonly ItemObserverFailure[]) {
     super(createObserverErrorMessage(failures), {
-      cause: failures.length === 1 ? failures[0]?.cause : failures
+      cause: failures.length === 1 ? failures[0]?.cause : failures,
     });
-    this.name = "ItemObserverError";
+    this.name = 'ItemObserverError';
     this.item = cloneItem(item);
     this.failures = failures.map((failure) => ({
       observerIndex: failure.observerIndex,
       item: cloneItem(failure.item),
-      cause: failure.cause
+      cause: failure.cause,
     }));
   }
 }
@@ -71,8 +71,7 @@ export class InMemoryItemList implements ItemList {
     this.clock = options.clock ?? Date.now;
     this.observers = [...(options.observers ?? [])];
     this.items = [...(options.initialItems ?? [])].map(cloneItem);
-    this.nextSeq =
-      this.items.reduce((nextSeq, item) => Math.max(nextSeq, item.seq + 1), 1);
+    this.nextSeq = this.items.reduce((nextSeq, item) => Math.max(nextSeq, item.seq + 1), 1);
   }
 
   observe(observer: ItemObserver): () => void {
@@ -92,7 +91,7 @@ export class InMemoryItemList implements ItemList {
       ...input,
       id: this.generateId(),
       createdAtMs: this.clock(),
-      seq: this.nextSeq++
+      seq: this.nextSeq++,
     };
 
     this.items.push(item);
@@ -108,16 +107,14 @@ export class InMemoryItemList implements ItemList {
           observerFailures.push({
             observerIndex,
             item: cloneItem(item),
-            cause: new TypeError(
-              "Async item observers are not supported by synchronous append"
-            )
+            cause: new TypeError('Async item observers are not supported by synchronous append'),
           });
         }
       } catch (cause) {
         observerFailures.push({
           observerIndex,
           item: cloneItem(item),
-          cause
+          cause,
         });
       }
     });
@@ -139,7 +136,7 @@ function cloneItem(item: Item): Item {
 }
 
 function clonePlain<T>(value: T): T {
-  if (typeof globalThis.structuredClone === "function") {
+  if (typeof globalThis.structuredClone === 'function') {
     try {
       return globalThis.structuredClone(value);
     } catch {
@@ -151,7 +148,7 @@ function clonePlain<T>(value: T): T {
 }
 
 function clonePlainFallback<T>(value: T): T {
-  if (value === null || typeof value !== "object") {
+  if (value === null || typeof value !== 'object') {
     return value;
   }
 
@@ -160,27 +157,22 @@ function clonePlainFallback<T>(value: T): T {
   }
 
   return Object.fromEntries(
-    Object.entries(value).map(([key, entryValue]) => [
-      key,
-      clonePlainFallback(entryValue)
-    ])
+    Object.entries(value).map(([key, entryValue]) => [key, clonePlainFallback(entryValue)])
   ) as T;
 }
 
-function createObserverErrorMessage(
-  failures: readonly ItemObserverFailure[]
-): string {
+function createObserverErrorMessage(failures: readonly ItemObserverFailure[]): string {
   const failureCount = failures.length;
 
-  return `${failureCount} item observer${failureCount === 1 ? "" : "s"} failed`;
+  return `${failureCount} item observer${failureCount === 1 ? '' : 's'} failed`;
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (
     value !== null &&
-    (typeof value === "object" || typeof value === "function") &&
-    "then" in value &&
-    typeof value.then === "function"
+    (typeof value === 'object' || typeof value === 'function') &&
+    'then' in value &&
+    typeof value.then === 'function'
   );
 }
 

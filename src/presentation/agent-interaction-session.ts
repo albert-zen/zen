@@ -1,20 +1,15 @@
 import type {
   AppServerClient,
   AppServerNotificationListener,
-  AppServerSubscription
-} from "../product/index.js";
-import type {
-  JsonValue,
-  ProtocolItem,
-  ThreadSnapshot,
-  TurnSnapshot
-} from "../product/index.js";
+  AppServerSubscription,
+} from '../product/index.js';
+import type { JsonValue, ProtocolItem, ThreadSnapshot, TurnSnapshot } from '../product/index.js';
 import {
   InteractionProjection,
   type ReadonlyInteractionSequence,
   type TimelineRow,
-  type WebUiState
-} from "./web-ui-state.js";
+  type WebUiState,
+} from './web-ui-state.js';
 
 export type AgentInteractionSessionOptions = {
   readonly client: AppServerClient;
@@ -22,8 +17,8 @@ export type AgentInteractionSessionOptions = {
 
 export class AgentInteractionSessionDisposedError extends Error {
   constructor() {
-    super("Agent interaction session is disposed");
-    this.name = "AgentInteractionSessionDisposedError";
+    super('Agent interaction session is disposed');
+    this.name = 'AgentInteractionSessionDisposedError';
   }
 }
 
@@ -34,14 +29,14 @@ export type AgentInteractionSnapshot = {
   readonly recoverableTurn?: AgentRecoverableTurn;
 };
 
-export type AgentInteractionThread = Omit<ThreadSnapshot, "items"> & {
+export type AgentInteractionThread = Omit<ThreadSnapshot, 'items'> & {
   readonly items: ReadonlyInteractionSequence<ProtocolItem>;
 };
 
 export type AgentRecoverableTurn = {
   readonly threadId: string;
   readonly turnId: string;
-  readonly status: "failed" | "canceled";
+  readonly status: 'failed' | 'canceled';
   readonly input?: JsonValue;
   readonly reason: string;
   readonly retryAvailable: boolean;
@@ -49,7 +44,7 @@ export type AgentRecoverableTurn = {
 
 export type AgentThreadListEntry = {
   readonly id: string;
-  readonly status: ThreadSnapshot["status"];
+  readonly status: ThreadSnapshot['status'];
   readonly turns: number;
   readonly items: number;
   readonly updatedAtMs?: number;
@@ -59,18 +54,16 @@ export type AgentThreadListEntry = {
 
 export type AgentInteractionSessionEvent =
   | {
-      readonly type: "rows";
+      readonly type: 'rows';
       readonly rows: readonly TimelineRow[];
       readonly snapshot: AgentInteractionSnapshot;
     }
   | {
-      readonly type: "state";
+      readonly type: 'state';
       readonly snapshot: AgentInteractionSnapshot;
     };
 
-export type AgentInteractionSessionListener = (
-  event: AgentInteractionSessionEvent
-) => void;
+export type AgentInteractionSessionListener = (event: AgentInteractionSessionEvent) => void;
 
 type CompletionWaiter = {
   readonly promise: Promise<void>;
@@ -97,21 +90,21 @@ export class AgentInteractionSession {
             id: state.currentThread.id,
             status: state.currentThread.status,
             turns: state.currentThread.turns,
-            items: state.items
+            items: state.items,
           }
         : undefined,
       timelineRows: state.timelineRows,
-      recoverableTurn: findRecoverableTurn(state)
+      recoverableTurn: findRecoverableTurn(state),
     };
   }
 
   async start(): Promise<AgentInteractionSnapshot> {
     this.assertActive();
     this.subscribeOnce();
-    const list = await this.options.client.request({ method: "thread/list" });
+    const list = await this.options.client.request({ method: 'thread/list' });
     this.assertActive();
 
-    if (list.ok && list.method === "thread/list" && list.result.threads.length > 0) {
+    if (list.ok && list.method === 'thread/list' && list.result.threads.length > 0) {
       this.projection.replaceSnapshot(list.result.threads[0]);
       return this.getSnapshot();
     }
@@ -124,11 +117,11 @@ export class AgentInteractionSession {
   async newThread(): Promise<AgentInteractionSnapshot> {
     this.assertActive();
     this.subscribeOnce();
-    const response = await this.options.client.request({ method: "thread/start" });
+    const response = await this.options.client.request({ method: 'thread/start' });
     this.assertActive();
 
-    if (!response.ok || response.method !== "thread/start") {
-      throw new Error(response.ok ? "Unexpected thread/start response" : response.error.message);
+    if (!response.ok || response.method !== 'thread/start') {
+      throw new Error(response.ok ? 'Unexpected thread/start response' : response.error.message);
     }
 
     this.projection.replaceSnapshot(response.result.thread);
@@ -138,11 +131,11 @@ export class AgentInteractionSession {
 
   async listThreads(): Promise<readonly AgentThreadListEntry[]> {
     this.assertActive();
-    const response = await this.options.client.request({ method: "thread/list" });
+    const response = await this.options.client.request({ method: 'thread/list' });
     this.assertActive();
 
-    if (!response.ok || response.method !== "thread/list") {
-      throw new Error(response.ok ? "Unexpected thread/list response" : response.error.message);
+    if (!response.ok || response.method !== 'thread/list') {
+      throw new Error(response.ok ? 'Unexpected thread/list response' : response.error.message);
     }
 
     return response.result.threads.map(toThreadListEntry);
@@ -152,19 +145,19 @@ export class AgentInteractionSession {
     this.assertActive();
     this.subscribeOnce();
     const response = await this.options.client.request({
-      method: "thread/read",
+      method: 'thread/read',
       params: {
-        threadId
-      }
+        threadId,
+      },
     });
 
     this.assertActive();
-    if (!response.ok || response.method !== "thread/read") {
-      throw new Error(response.ok ? "Unexpected thread/read response" : response.error.message);
+    if (!response.ok || response.method !== 'thread/read') {
+      throw new Error(response.ok ? 'Unexpected thread/read response' : response.error.message);
     }
 
     if (this.projection.replaceSnapshot(response.result.thread)) {
-      this.emit({ type: "state", snapshot: this.getSnapshot() });
+      this.emit({ type: 'state', snapshot: this.getSnapshot() });
     }
 
     return this.getSnapshot();
@@ -174,15 +167,15 @@ export class AgentInteractionSession {
     this.assertActive();
     const currentThread = await this.ensureThread();
     const response = await this.options.client.request({
-      method: "turn/interrupt",
+      method: 'turn/interrupt',
       params: {
-        threadId: currentThread.id
-      }
+        threadId: currentThread.id,
+      },
     });
 
     this.assertActive();
-    if (!response.ok || response.method !== "turn/interrupt") {
-      throw new Error(response.ok ? "Unexpected turn/interrupt response" : response.error.message);
+    if (!response.ok || response.method !== 'turn/interrupt') {
+      throw new Error(response.ok ? 'Unexpected turn/interrupt response' : response.error.message);
     }
 
     return this.getSnapshot();
@@ -192,13 +185,18 @@ export class AgentInteractionSession {
     readonly approvalId: string;
     readonly threadId: string;
     readonly turnId: string;
-    readonly decision: "approveOnce" | "decline";
+    readonly decision: 'approveOnce' | 'decline';
   }): Promise<void> {
     this.assertActive();
-    const response = await this.options.client.request({ method: "approval/resolve", params: input });
+    const response = await this.options.client.request({
+      method: 'approval/resolve',
+      params: input,
+    });
     this.assertActive();
-    if (!response.ok || response.method !== "approval/resolve") {
-      throw new Error(response.ok ? "Unexpected approval/resolve response" : response.error.message);
+    if (!response.ok || response.method !== 'approval/resolve') {
+      throw new Error(
+        response.ok ? 'Unexpected approval/resolve response' : response.error.message
+      );
     }
   }
 
@@ -209,16 +207,16 @@ export class AgentInteractionSession {
     const completion = this.createCompletionWaiter(currentThread.id);
     try {
       const response = await this.options.client.request({
-        method: "turn/start",
+        method: 'turn/start',
         params: {
           threadId: currentThread.id,
-          input
-        }
+          input,
+        },
       });
 
       this.assertActive();
-      if (!response.ok || response.method !== "turn/start") {
-        throw new Error(response.ok ? "Unexpected turn/start response" : response.error.message);
+      if (!response.ok || response.method !== 'turn/start') {
+        throw new Error(response.ok ? 'Unexpected turn/start response' : response.error.message);
       }
     } catch (cause) {
       completion.discard();
@@ -237,22 +235,22 @@ export class AgentInteractionSession {
     const recoverableTurn = this.getSnapshot().recoverableTurn;
 
     if (!recoverableTurn?.retryAvailable) {
-      throw new Error("No recoverable turn available for retry");
+      throw new Error('No recoverable turn available for retry');
     }
 
     const completion = this.createCompletionWaiter(recoverableTurn.threadId);
     try {
       const response = await this.options.client.request({
-        method: "turn/retry",
+        method: 'turn/retry',
         params: {
           threadId: recoverableTurn.threadId,
-          turnId: recoverableTurn.turnId
-        }
+          turnId: recoverableTurn.turnId,
+        },
       });
 
       this.assertActive();
-      if (!response.ok || response.method !== "turn/retry") {
-        throw new Error(response.ok ? "Unexpected turn/retry response" : response.error.message);
+      if (!response.ok || response.method !== 'turn/retry') {
+        throw new Error(response.ok ? 'Unexpected turn/retry response' : response.error.message);
       }
     } catch (cause) {
       completion.discard();
@@ -306,7 +304,7 @@ export class AgentInteractionSession {
     this.assertActive();
 
     if (!snapshot.thread) {
-      throw new Error("Thread did not start");
+      throw new Error('Thread did not start');
     }
 
     return { id: snapshot.thread.id };
@@ -332,15 +330,17 @@ export class AgentInteractionSession {
       );
 
       if (nextRows.length > 0) {
-        this.emit({ type: "rows", rows: nextRows, snapshot });
+        this.emit({ type: 'rows', rows: nextRows, snapshot });
       }
 
-      this.emit({ type: "state", snapshot });
-      if (notification.type === "turn/completed" || notification.type === "turn/failed") {
+      this.emit({ type: 'state', snapshot });
+      if (notification.type === 'turn/completed' || notification.type === 'turn/failed') {
         const waiters = [...(this.completionWaiters.get(notification.threadId) ?? [])];
-        waiters.forEach((waiter) => notification.type === "turn/failed"
-          ? waiter.reject(new Error(notification.error.message))
-          : waiter.resolve());
+        waiters.forEach((waiter) =>
+          notification.type === 'turn/failed'
+            ? waiter.reject(new Error(notification.error.message))
+            : waiter.resolve()
+        );
       }
     };
 
@@ -375,7 +375,7 @@ export class AgentInteractionSession {
       promise,
       resolve: () => settle(resolvePromise),
       reject: (cause) => settle(() => rejectPromise(cause)),
-      discard: () => settle(() => undefined)
+      discard: () => settle(() => undefined),
     };
     promise.catch(() => undefined);
     waiters.add(waiter);
@@ -417,14 +417,14 @@ function findRecoverableTurn(state: WebUiState): AgentRecoverableTurn | undefine
     status: latestTurn.status,
     input,
     reason: readTurnErrorReason(latestTurn.error),
-    retryAvailable: input !== undefined
+    retryAvailable: input !== undefined,
   };
 }
 
 function isRecoverableTurn(
   turn: TurnSnapshot
-): turn is TurnSnapshot & { readonly status: "failed" | "canceled" } {
-  return turn.status === "failed" || turn.status === "canceled";
+): turn is TurnSnapshot & { readonly status: 'failed' | 'canceled' } {
+  return turn.status === 'failed' || turn.status === 'canceled';
 }
 
 function latestUserInputForTurn(
@@ -435,11 +435,11 @@ function latestUserInputForTurn(
   for (let index = orderedItems.length - 1; index >= 0; index -= 1) {
     const item = orderedItems[index];
 
-    if (item?.turnId !== turnId || item.type !== "user.message.completed") {
+    if (item?.turnId !== turnId || item.type !== 'user.message.completed') {
       continue;
     }
 
-    const content = readPayloadField(item.payload, "content");
+    const content = readPayloadField(item.payload, 'content');
 
     if (content !== undefined) {
       return content;
@@ -451,12 +451,12 @@ function latestUserInputForTurn(
 
 function readTurnErrorReason(error: JsonValue | undefined): string {
   if (error === undefined) {
-    return "Turn did not complete";
+    return 'Turn did not complete';
   }
 
-  const message = readPayloadField(error, "message");
+  const message = readPayloadField(error, 'message');
 
-  if (typeof message === "string" && message.length > 0) {
+  if (typeof message === 'string' && message.length > 0) {
     return message;
   }
 
@@ -470,17 +470,12 @@ function toThreadListEntry(thread: ThreadSnapshot): AgentThreadListEntry {
     turns: thread.turns.length,
     items: thread.items.length,
     updatedAtMs: latestItemTimestamp(thread.items),
-    lastUserMessage: latestContent(thread.items, "user.message.completed"),
-    lastAssistantSummary: latestContent(
-      thread.items,
-      "assistant.message.completed"
-    )
+    lastUserMessage: latestContent(thread.items, 'user.message.completed'),
+    lastAssistantSummary: latestContent(thread.items, 'assistant.message.completed'),
   };
 }
 
-function latestItemTimestamp(
-  items: readonly ProtocolItem[]
-): number | undefined {
+function latestItemTimestamp(items: readonly ProtocolItem[]): number | undefined {
   return items.reduce<number | undefined>(
     (latest, item) =>
       latest === undefined ? item.createdAtMs : Math.max(latest, item.createdAtMs),
@@ -488,10 +483,7 @@ function latestItemTimestamp(
   );
 }
 
-function latestContent(
-  items: readonly ProtocolItem[],
-  type: string
-): string | undefined {
+function latestContent(items: readonly ProtocolItem[], type: string): string | undefined {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
 
@@ -510,7 +502,7 @@ function latestContent(
 }
 
 function readPayloadField(payload: JsonValue, key: string): JsonValue | undefined {
-  if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
+  if (typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
     return payload[key];
   }
 
@@ -518,10 +510,10 @@ function readPayloadField(payload: JsonValue, key: string): JsonValue | undefine
 }
 
 function readPayloadContent(payload: JsonValue): string | undefined {
-  if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
+  if (typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
     const content = payload.content;
 
-    if (typeof content === "string") {
+    if (typeof content === 'string') {
       return content;
     }
   }
@@ -530,5 +522,5 @@ function readPayloadContent(payload: JsonValue): string | undefined {
 }
 
 function stringifyJson(value: JsonValue): string {
-  return typeof value === "string" ? value : JSON.stringify(value);
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }

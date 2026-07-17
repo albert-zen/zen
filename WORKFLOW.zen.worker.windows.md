@@ -6,7 +6,7 @@ prompt_context:
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
-  project_slug: "zen-agent-04d56f75dcff"
+  project_slug: 'zen-agent-04d56f75dcff'
   dispatch_states:
     - Ready for Agent
     - Rework
@@ -26,7 +26,7 @@ tracker:
 polling:
   interval_ms: 5000
 workspace:
-  root: "D:/desktop/zen-workspaces/worker"
+  root: 'D:/desktop/zen-workspaces/worker'
 hooks:
   timeout_ms: 300000
   after_create: |
@@ -57,6 +57,7 @@ codex:
 You are running the Zen agent worker flywheel on Windows in local-branch mode.
 
 Issue:
+
 - Identifier: {{ issue.identifier }}
 - Title: {{ issue.title }}
 - State: {{ issue.state }}
@@ -106,4 +107,3 @@ Quality bar:
 - Do not broaden scope to adjacent issues.
 - Do not weaken quality gates.
 - If a decision affects product behavior, public interfaces, architecture direction, data shape, security, or quality policy, move to `Needs Human Context`.
-

@@ -1,16 +1,16 @@
-import { execFile, spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { execFile, spawn } from 'node:child_process';
+import { resolve } from 'node:path';
 import {
   ApprovalBroker,
   ToolApprovalDeniedError,
-  toToolApprovalRequest
-} from "../../product/index.js";
+  toToolApprovalRequest,
+} from '../../product/index.js';
 import type {
   ToolCallPayload,
   ToolExecutionContext,
   ToolRuntime,
-  ToolRuntimeEvent
-} from "../../kernel/index.js";
+  ToolRuntimeEvent,
+} from '../../kernel/index.js';
 
 export type LocalToolRuntimeOptions = {
   readonly cwd?: string;
@@ -21,21 +21,21 @@ export type LocalToolRuntimeOptions = {
 
 export const localToolDefinitions = [
   {
-    type: "function",
+    type: 'function',
     function: {
-      name: "shell",
+      name: 'shell',
       description:
-        "Run a PowerShell command in the workspace. Use this for reading files, searching with rg, editing files, and running tests.",
+        'Run a PowerShell command in the workspace. Use this for reading files, searching with rg, editing files, and running tests.',
       parameters: {
-        type: "object",
+        type: 'object',
         properties: {
-          command: { type: "string" }
+          command: { type: 'string' },
         },
-        required: ["command"],
-        additionalProperties: false
-      }
-    }
-  }
+        required: ['command'],
+        additionalProperties: false,
+      },
+    },
+  },
 ] as const;
 
 export class LocalToolRuntime implements ToolRuntime {
@@ -56,7 +56,7 @@ export class LocalToolRuntime implements ToolRuntime {
     try {
       yield* this.executeCall(call, context);
     } catch (error) {
-      yield { type: "error", error };
+      yield { type: 'error', error };
     }
   }
 
@@ -66,25 +66,32 @@ export class LocalToolRuntime implements ToolRuntime {
   ): AsyncIterable<ToolRuntimeEvent> {
     const input = readObject(call.input);
 
-    if (call.name === "shell") {
-      const command = readString(input.command, "command");
+    if (call.name === 'shell') {
+      const command = readString(input.command, 'command');
       const broker = this.approvalBroker;
       if (!broker) {
-        throw new Error("LocalToolRuntime requires an ApprovalBroker before shell execution");
+        throw new Error('LocalToolRuntime requires an ApprovalBroker before shell execution');
       }
       const pending = broker.request({
-        threadId: context.threadId ?? "",
+        threadId: context.threadId ?? '',
         call,
         runId: context.runId,
         turnId: context.turnId,
         startedItemId: context.startedItem.id,
-        reason: "Shell commands require explicit approval"
+        reason: 'Shell commands require explicit approval',
       });
-      yield { type: "approval.requested", request: toToolApprovalRequest(pending.request) };
+      yield { type: 'approval.requested', request: toToolApprovalRequest(pending.request) };
       const decision = await pending.decision;
-      yield { type: "approval.resolved", request: toToolApprovalRequest(pending.request), decision };
-      if (decision.type === "decline") {
-        yield { type: "error", error: new ToolApprovalDeniedError(decision.reason ?? "approval declined") };
+      yield {
+        type: 'approval.resolved',
+        request: toToolApprovalRequest(pending.request),
+        decision,
+      };
+      if (decision.type === 'decline') {
+        yield {
+          type: 'error',
+          error: new ToolApprovalDeniedError(decision.reason ?? 'approval declined'),
+        };
         return;
       }
       yield* this.runShell(command, context);
@@ -99,19 +106,19 @@ export class LocalToolRuntime implements ToolRuntime {
     context: ToolExecutionContext
   ): AsyncIterable<ToolRuntimeEvent> {
     if (context.signal?.aborted) {
-      yield { type: "error", error: new Error("Shell command canceled") };
+      yield { type: 'error', error: new Error('Shell command canceled') };
       return;
     }
 
-    const child = spawn("powershell", ["-NoProfile", "-Command", command], {
+    const child = spawn('powershell', ['-NoProfile', '-Command', command], {
       cwd: this.cwd,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
     const queue: ToolRuntimeEvent[] = [];
     let wake: (() => void) | undefined;
-    let stdout = "";
-    let stderr = "";
+    let stdout = '';
+    let stderr = '';
     let exitCode: number | null = null;
     let done = false;
     let spawnError: unknown;
@@ -129,12 +136,12 @@ export class LocalToolRuntime implements ToolRuntime {
     const onStdout = (chunk: Buffer | string) => {
       const text = stringifyOutput(chunk);
       stdout += text;
-      push({ type: "output.delta", delta: { stream: "stdout", chunk: text } });
+      push({ type: 'output.delta', delta: { stream: 'stdout', chunk: text } });
     };
     const onStderr = (chunk: Buffer | string) => {
       const text = stringifyOutput(chunk);
       stderr += text;
-      push({ type: "output.delta", delta: { stream: "stderr", chunk: text } });
+      push({ type: 'output.delta', delta: { stream: 'stderr', chunk: text } });
     };
     const finish = () => {
       done = true;
@@ -150,19 +157,19 @@ export class LocalToolRuntime implements ToolRuntime {
       terminateChildProcess(child);
     }, this.shellTimeoutMs);
 
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", onStdout);
-    child.stderr.on("data", onStderr);
-    child.on("error", (error) => {
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', onStdout);
+    child.stderr.on('data', onStderr);
+    child.on('error', (error) => {
       spawnError = error;
       finish();
     });
-    child.on("close", (code) => {
+    child.on('close', (code) => {
       exitCode = code;
       finish();
     });
-    context.signal?.addEventListener("abort", cancel, { once: true });
+    context.signal?.addEventListener('abort', cancel, { once: true });
 
     try {
       while (!done || queue.length > 0) {
@@ -179,7 +186,7 @@ export class LocalToolRuntime implements ToolRuntime {
       }
     } finally {
       clearTimeout(timeout);
-      context.signal?.removeEventListener("abort", cancel);
+      context.signal?.removeEventListener('abort', cancel);
 
       if (!done) {
         terminateChildProcess(child);
@@ -187,26 +194,26 @@ export class LocalToolRuntime implements ToolRuntime {
     }
 
     if (spawnError) {
-      yield { type: "error", error: spawnError };
+      yield { type: 'error', error: spawnError };
       return;
     }
 
     if (canceled) {
-      yield { type: "error", error: new Error("Shell command canceled") };
+      yield { type: 'error', error: new Error('Shell command canceled') };
       return;
     }
 
     if (timedOut) {
       yield {
-        type: "error",
-        error: new Error(`Shell command timed out after ${this.shellTimeoutMs}ms`)
+        type: 'error',
+        error: new Error(`Shell command timed out after ${this.shellTimeoutMs}ms`),
       };
       return;
     }
 
     yield {
-      type: "result.completed",
-      content: formatShellResult({ exitCode, stdout, stderr })
+      type: 'result.completed',
+      content: formatShellResult({ exitCode, stdout, stderr }),
     };
   }
 }
@@ -221,20 +228,20 @@ function formatShellResult(result: ExecFileResult): string {
   return [
     `exitCode: ${result.exitCode}`,
     result.stdout ? `stdout:\n${result.stdout.trimEnd()}` : undefined,
-    result.stderr ? `stderr:\n${result.stderr.trimEnd()}` : undefined
+    result.stderr ? `stderr:\n${result.stderr.trimEnd()}` : undefined,
   ]
     .filter((line): line is string => Boolean(line))
-    .join("\n");
+    .join('\n');
 }
 
 function readObject(value: unknown): Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
     : {};
 }
 
 function readString(value: unknown, label: string): string {
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     return value;
   }
 
@@ -242,7 +249,7 @@ function readString(value: unknown, label: string): string {
 }
 
 function stringifyOutput(value: unknown): string {
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     return value;
   }
 
@@ -250,7 +257,7 @@ function stringifyOutput(value: unknown): string {
     return new TextDecoder().decode(value);
   }
 
-  return value === undefined || value === null ? "" : String(value);
+  return value === undefined || value === null ? '' : String(value);
 }
 
 function terminateChildProcess(child: ReturnType<typeof spawn>): void {
@@ -258,15 +265,15 @@ function terminateChildProcess(child: ReturnType<typeof spawn>): void {
     return;
   }
 
-  if (process.platform === "win32" && child.pid) {
+  if (process.platform === 'win32' && child.pid) {
     execFile(
-      "taskkill",
-      ["/pid", String(child.pid), "/T", "/F"],
+      'taskkill',
+      ['/pid', String(child.pid), '/T', '/F'],
       { windowsHide: true },
       () => undefined
     );
     return;
   }
 
-  child.kill("SIGTERM");
+  child.kill('SIGTERM');
 }

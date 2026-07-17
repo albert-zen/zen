@@ -1,12 +1,8 @@
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
-export const DEFAULT_MODEL_PROVIDER_CONFIG_PATH = join(
-  homedir(),
-  ".zen",
-  "model-provider.json"
-);
+export const DEFAULT_MODEL_PROVIDER_CONFIG_PATH = join(homedir(), '.zen', 'model-provider.json');
 
 export type ModelProviderConfig = {
   readonly providerName?: string;
@@ -34,16 +30,16 @@ export function loadModelProviderConfig(
 
   const configPath =
     options.path ?? env.ZEN_MODEL_PROVIDER_CONFIG ?? DEFAULT_MODEL_PROVIDER_CONFIG_PATH;
-  const raw = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
-  const root = readRecord(raw, "model provider config");
+  const raw = JSON.parse(readFileSync(configPath, 'utf8')) as unknown;
+  const root = readRecord(raw, 'model provider config');
 
   return {
-    providerName: readOptionalString(root.providerName, "providerName"),
-    modelId: readString(root.model, "model"),
-    displayName: readOptionalString(root.displayName, "displayName"),
-    baseUrl: readString(root.baseUrl, "baseUrl").replace(/\/+$/, ""),
-    apiKey: readString(root.apiKey, "apiKey"),
-    params: readParams(root.params)
+    providerName: readOptionalString(root.providerName, 'providerName'),
+    modelId: readString(root.model, 'model'),
+    displayName: readOptionalString(root.displayName, 'displayName'),
+    baseUrl: readString(root.baseUrl, 'baseUrl').replace(/\/+$/, ''),
+    apiKey: readString(root.apiKey, 'apiKey'),
+    params: readParams(root.params),
   };
 }
 
@@ -60,11 +56,11 @@ function readEnvConfig(
 
   return {
     providerName: env.ZEN_MODEL_PROVIDER,
-    modelId: readString(modelId, "ZEN_MODEL"),
+    modelId: readString(modelId, 'ZEN_MODEL'),
     displayName: env.ZEN_MODEL_DISPLAY_NAME,
-    baseUrl: readString(baseUrl, "ZEN_MODEL_BASE_URL").replace(/\/+$/, ""),
-    apiKey: readString(apiKey, "ZEN_MODEL_API_KEY"),
-    params: readEnvParams(env.ZEN_MODEL_PARAMS)
+    baseUrl: readString(baseUrl, 'ZEN_MODEL_BASE_URL').replace(/\/+$/, ''),
+    apiKey: readString(apiKey, 'ZEN_MODEL_API_KEY'),
+    params: readEnvParams(env.ZEN_MODEL_PARAMS),
   };
 }
 
@@ -76,11 +72,8 @@ function readEnvParams(value: string | undefined): Readonly<Record<string, unkno
   return readParams(JSON.parse(value) as unknown);
 }
 
-function readRecord(
-  value: unknown,
-  label: string
-): Readonly<Record<string, unknown>> {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+function readRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     return value as Readonly<Record<string, unknown>>;
   }
 
@@ -88,7 +81,7 @@ function readRecord(
 }
 
 function readString(value: unknown, label: string): string {
-  if (typeof value === "string" && value.length > 0) {
+  if (typeof value === 'string' && value.length > 0) {
     return value;
   }
 
@@ -108,5 +101,5 @@ function readParams(value: unknown): Readonly<Record<string, unknown>> {
     return {};
   }
 
-  return readRecord(value, "params");
+  return readRecord(value, 'params');
 }

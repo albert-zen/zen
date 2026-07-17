@@ -2,21 +2,24 @@ import type {
   ToolCallPayload,
   ToolExecutionContext,
   ToolRuntime,
-  ToolRuntimeEvent
-} from "../kernel/index.js";
+  ToolRuntimeEvent,
+} from '../kernel/index.js';
 
 export type PolicyDecision =
-  | { readonly type: "allow"; readonly reason?: string }
-  | { readonly type: "deny"; readonly reason: string }
-  | { readonly type: "needsApproval"; readonly reason?: string; readonly approvalId?: string };
+  | { readonly type: 'allow'; readonly reason?: string }
+  | { readonly type: 'deny'; readonly reason: string }
+  | { readonly type: 'needsApproval'; readonly reason?: string; readonly approvalId?: string };
 
 export interface PolicyRuntime {
-  evaluate(call: ToolCallPayload, context: ToolExecutionContext): PolicyDecision | Promise<PolicyDecision>;
+  evaluate(
+    call: ToolCallPayload,
+    context: ToolExecutionContext
+  ): PolicyDecision | Promise<PolicyDecision>;
 }
 
 export type ApprovalDecision =
-  | { readonly type: "approveOnce"; readonly reason?: string }
-  | { readonly type: "decline"; readonly reason?: string };
+  | { readonly type: 'approveOnce'; readonly reason?: string }
+  | { readonly type: 'decline'; readonly reason?: string };
 
 export type ApprovalRequest = {
   readonly id: string;
@@ -42,7 +45,9 @@ export type ApprovalResolveInput = {
 
 export type ApprovalBrokerOptions = { readonly generateId?: () => string };
 
-type PendingApproval = PendingApprovalRequest & { readonly resolve: (decision: ApprovalDecision) => void };
+type PendingApproval = PendingApprovalRequest & {
+  readonly resolve: (decision: ApprovalDecision) => void;
+};
 
 /** Owns the one-shot approval capability and consumes it only after tuple validation. */
 export class ApprovalBroker {
@@ -53,18 +58,22 @@ export class ApprovalBroker {
     this.generateId = options.generateId ?? createDefaultApprovalIdGenerator();
   }
 
-  request(input: Omit<ApprovalRequest, "id"> & { readonly id?: string }): PendingApprovalRequest {
+  request(input: Omit<ApprovalRequest, 'id'> & { readonly id?: string }): PendingApprovalRequest {
     const request: ApprovalRequest = { ...input, id: input.id ?? this.generateId() };
-    if (this.pending.has(request.id)) throw new Error(`Approval request already exists: ${request.id}`);
+    if (this.pending.has(request.id))
+      throw new Error(`Approval request already exists: ${request.id}`);
     let resolveDecision: (decision: ApprovalDecision) => void = () => undefined;
-    const decision = new Promise<ApprovalDecision>((resolve) => { resolveDecision = resolve; });
+    const decision = new Promise<ApprovalDecision>((resolve) => {
+      resolveDecision = resolve;
+    });
     this.pending.set(request.id, { request, decision, resolve: resolveDecision });
     return { request, decision };
   }
 
   resolve(input: ApprovalResolveInput): ApprovalRequest {
     const pending = this.pending.get(input.approvalId);
-    if (!pending) throw new Error(`Unknown or already resolved approval request: ${input.approvalId}`);
+    if (!pending)
+      throw new Error(`Unknown or already resolved approval request: ${input.approvalId}`);
     if (pending.request.threadId !== input.threadId || pending.request.turnId !== input.turnId) {
       throw new Error(`Approval request tuple does not match: ${input.approvalId}`);
     }
@@ -79,7 +88,7 @@ export class ApprovalBroker {
     );
     for (const pending of matches) {
       this.pending.delete(pending.request.id);
-      pending.resolve({ type: "decline", reason });
+      pending.resolve({ type: 'decline', reason });
     }
     return matches.map((pending) => pending.request);
   }
@@ -92,7 +101,7 @@ export class ApprovalBroker {
 export class ToolApprovalDeniedError extends Error {
   constructor(readonly reason: string) {
     super(`Tool call denied by policy: ${reason}`);
-    this.name = "ToolApprovalDeniedError";
+    this.name = 'ToolApprovalDeniedError';
   }
 }
 
@@ -106,25 +115,40 @@ export type PolicyToolRuntimeOptions = {
 export class PolicyToolRuntime implements ToolRuntime {
   constructor(private readonly options: PolicyToolRuntimeOptions) {}
 
-  async *execute(call: ToolCallPayload, context: ToolExecutionContext): AsyncIterable<ToolRuntimeEvent> {
+  async *execute(
+    call: ToolCallPayload,
+    context: ToolExecutionContext
+  ): AsyncIterable<ToolRuntimeEvent> {
     const policyDecision = await this.options.policy.evaluate(call, context);
-    if (policyDecision.type === "allow") { yield* this.options.toolRuntime.execute(call, context); return; }
-    if (policyDecision.type === "deny") { yield { type: "error", error: new ToolApprovalDeniedError(policyDecision.reason) }; return; }
+    if (policyDecision.type === 'allow') {
+      yield* this.options.toolRuntime.execute(call, context);
+      return;
+    }
+    if (policyDecision.type === 'deny') {
+      yield { type: 'error', error: new ToolApprovalDeniedError(policyDecision.reason) };
+      return;
+    }
 
     const pending = this.options.approvalBroker.request({
       id: policyDecision.approvalId,
-      threadId: context.threadId ?? "",
+      threadId: context.threadId ?? '',
       call,
       runId: context.runId,
       turnId: context.turnId,
       startedItemId: context.startedItem.id,
-      reason: policyDecision.reason
+      reason: policyDecision.reason,
     });
-    yield { type: "approval.requested", request: toToolApprovalRequest(pending.request) };
+    yield { type: 'approval.requested', request: toToolApprovalRequest(pending.request) };
     const decision = await pending.decision;
-    yield { type: "approval.resolved", request: toToolApprovalRequest(pending.request), decision };
-    if (decision.type === "approveOnce") { yield* this.options.toolRuntime.execute(call, context); return; }
-    yield { type: "error", error: new ToolApprovalDeniedError(decision.reason ?? "approval declined") };
+    yield { type: 'approval.resolved', request: toToolApprovalRequest(pending.request), decision };
+    if (decision.type === 'approveOnce') {
+      yield* this.options.toolRuntime.execute(call, context);
+      return;
+    }
+    yield {
+      type: 'error',
+      error: new ToolApprovalDeniedError(decision.reason ?? 'approval declined'),
+    };
   }
 }
 
@@ -137,7 +161,7 @@ export function toToolApprovalRequest(request: ApprovalRequest) {
     toolCallId: request.call.id,
     toolName: request.call.name,
     input: request.call.input,
-    reason: request.reason
+    reason: request.reason,
   };
 }
 

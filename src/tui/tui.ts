@@ -1,16 +1,16 @@
-import readline from "node:readline";
-import type { Readable, Writable } from "node:stream";
-import { AgentInteractionSession } from "../presentation/index.js";
-import type { AppServerClient } from "../product/index.js";
-import { createDemoAppServer } from "../product/index.js";
-import { renderSlashCommandHelp } from "./slash-commands.js";
+import readline from 'node:readline';
+import type { Readable, Writable } from 'node:stream';
+import { AgentInteractionSession } from '../presentation/index.js';
+import type { AppServerClient } from '../product/index.js';
+import { createDemoAppServer } from '../product/index.js';
+import { renderSlashCommandHelp } from './slash-commands.js';
 import {
   renderTerminalStatus,
   renderTerminalTranscript,
-  renderThreadStarted
-} from "./terminal-transcript.js";
-import { ProcessTerminalDevice } from "./tui-engine.js";
-import { ZenTuiApp } from "./zen-tui-app.js";
+  renderThreadStarted,
+} from './terminal-transcript.js';
+import { ProcessTerminalDevice } from './tui-engine.js';
+import { ZenTuiApp } from './zen-tui-app.js';
 
 export type TuiOptions = {
   readonly client?: AppServerClient;
@@ -29,7 +29,7 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
       terminal: new ProcessTerminalDevice(
         input as Readable & { setRawMode?: (mode: boolean) => void; isRaw?: boolean },
         output as Writable & { columns?: number; rows?: number }
-      )
+      ),
     }).run();
     return;
   }
@@ -40,16 +40,14 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
 async function runLineTui(options: Required<TuiOptions>): Promise<void> {
   const { input, output } = options;
   const session = new AgentInteractionSession({
-    client: options.client
+    client: options.client,
   });
   const unsubscribeRows = session.observe((event) => {
-    if (event.type !== "rows") {
+    if (event.type !== 'rows') {
       return;
     }
 
-    const printableRows = event.rows.filter(
-      (row) => row.type !== "assistant-progress"
-    );
+    const printableRows = event.rows.filter((row) => row.type !== 'assistant-progress');
 
     for (const renderedLine of renderTerminalTranscript(printableRows)) {
       writeLine(output, renderedLine);
@@ -60,11 +58,11 @@ async function runLineTui(options: Required<TuiOptions>): Promise<void> {
     input,
     output,
     terminal: isTty(input) && isTty(output),
-    prompt: "zen> "
+    prompt: 'zen> ',
   });
   let closed = false;
 
-  rl.once("close", () => {
+  rl.once('close', () => {
     closed = true;
   });
 
@@ -72,8 +70,8 @@ async function runLineTui(options: Required<TuiOptions>): Promise<void> {
     const started = await session.start();
     const thread = started.thread;
 
-    writeLine(output, "Zen Agent TUI");
-    writeLine(output, "Type /help for commands.");
+    writeLine(output, 'Zen Agent TUI');
+    writeLine(output, 'Type /help for commands.');
     if (thread) {
       writeLine(output, renderThreadStarted(thread));
     }
@@ -87,11 +85,11 @@ async function runLineTui(options: Required<TuiOptions>): Promise<void> {
         continue;
       }
 
-      if (line === "/exit" || line === "/quit") {
+      if (line === '/exit' || line === '/quit') {
         break;
       }
 
-      if (line === "/help") {
+      if (line === '/help') {
         for (const renderedLine of renderSlashCommandHelp().split(/\r?\n/)) {
           writeLine(output, renderedLine);
         }
@@ -99,13 +97,13 @@ async function runLineTui(options: Required<TuiOptions>): Promise<void> {
         continue;
       }
 
-      if (line === "/status") {
+      if (line === '/status') {
         writeLine(output, renderTerminalStatus(session.getSnapshot().state));
         promptIfOpen(rl, closed);
         continue;
       }
 
-      if (line === "/new") {
+      if (line === '/new') {
         const next = await session.newThread();
         if (next.thread) {
           writeLine(output, renderThreadStarted(next.thread));
@@ -139,7 +137,7 @@ function promptIfOpen(rl: readline.Interface, closed: boolean): void {
 }
 
 function isTty(stream: Readable | Writable): boolean {
-  return "isTTY" in stream && stream.isTTY === true;
+  return 'isTTY' in stream && stream.isTTY === true;
 }
 
 async function createDefaultClient(): Promise<AppServerClient> {

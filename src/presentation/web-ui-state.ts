@@ -3,14 +3,14 @@ import type {
   ApprovalDecision,
   JsonObject,
   ProtocolItem,
-  ThreadSnapshot
-} from "../product/index.js";
+  ThreadSnapshot,
+} from '../product/index.js';
 
 export type WebUiState = {
   readonly currentThread?: {
     readonly id: string;
-    readonly status: ThreadSnapshot["status"];
-    readonly turns: ThreadSnapshot["turns"];
+    readonly status: ThreadSnapshot['status'];
+    readonly turns: ThreadSnapshot['turns'];
   };
   readonly items: ReadonlyInteractionSequence<ProtocolItem>;
   readonly timelineRows: ReadonlyInteractionSequence<TimelineRow>;
@@ -28,9 +28,9 @@ export type ReadonlyInteractionSequence<T> = Iterable<T> & {
 };
 
 type SequenceOperation<T> =
-  | { readonly type: "append"; readonly slot: number; readonly value: T }
-  | { readonly type: "replace"; readonly slot: number; readonly value: T }
-  | { readonly type: "remove"; readonly slot: number };
+  | { readonly type: 'append'; readonly slot: number; readonly value: T }
+  | { readonly type: 'replace'; readonly slot: number; readonly value: T }
+  | { readonly type: 'remove'; readonly slot: number };
 
 /** Immutable version view backed by an append/patch log. */
 class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
@@ -54,15 +54,36 @@ class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
   }
 
   append(value: T): InteractionSequence<T> {
-    return new InteractionSequence(this.base, this, { type: "append", slot: this.slots, value }, this.metrics, this.slots + 1, this.length + 1);
+    return new InteractionSequence(
+      this.base,
+      this,
+      { type: 'append', slot: this.slots, value },
+      this.metrics,
+      this.slots + 1,
+      this.length + 1
+    );
   }
 
   replace(slot: number, value: T): InteractionSequence<T> {
-    return new InteractionSequence(this.base, this, { type: "replace", slot, value }, this.metrics, this.slots, this.length);
+    return new InteractionSequence(
+      this.base,
+      this,
+      { type: 'replace', slot, value },
+      this.metrics,
+      this.slots,
+      this.length
+    );
   }
 
   remove(slot: number): InteractionSequence<T> {
-    return new InteractionSequence(this.base, this, { type: "remove", slot }, this.metrics, this.slots, this.length - 1);
+    return new InteractionSequence(
+      this.base,
+      this,
+      { type: 'remove', slot },
+      this.metrics,
+      this.slots,
+      this.length - 1
+    );
   }
 
   at(index: number): T | undefined {
@@ -97,7 +118,8 @@ class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
     this.metrics.fullMaterializations += 1;
     this.metrics.sequenceTraversals += 1;
     const operations: SequenceOperation<T>[] = [];
-    let cursor: InteractionSequence<T> | undefined = this;
+    if (this.operation) operations.push(this.operation);
+    let cursor = this.parent;
     while (cursor?.parent) {
       this.metrics.sequenceTraversals += 1;
       if (cursor.operation) operations.push(cursor.operation);
@@ -106,9 +128,9 @@ class InteractionSequence<T> implements ReadonlyInteractionSequence<T> {
     this.metrics.sequenceCopies += 1;
     const slots = [...(cursor?.base ?? this.base)];
     for (const operation of operations.reverse()) {
-      if (operation.type === "append") slots.push(operation.value);
-      if (operation.type === "replace") slots[operation.slot] = operation.value;
-      if (operation.type === "remove") slots[operation.slot] = undefined as T;
+      if (operation.type === 'append') slots.push(operation.value);
+      if (operation.type === 'replace') slots[operation.slot] = operation.value;
+      if (operation.type === 'remove') slots[operation.slot] = undefined as T;
     }
     return slots.filter((value): value is T => value !== undefined);
   }
@@ -133,7 +155,7 @@ export type TimelineRow =
   | TraceTimelineRow;
 
 export type UserTimelineRow = {
-  readonly type: "user";
+  readonly type: 'user';
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
@@ -141,7 +163,7 @@ export type UserTimelineRow = {
 };
 
 export type AssistantTimelineRow = {
-  readonly type: "assistant";
+  readonly type: 'assistant';
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
@@ -149,7 +171,7 @@ export type AssistantTimelineRow = {
 };
 
 export type AssistantProgressTimelineRow = {
-  readonly type: "assistant-progress";
+  readonly type: 'assistant-progress';
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
@@ -157,7 +179,7 @@ export type AssistantProgressTimelineRow = {
 };
 
 export type TraceTimelineRow = {
-  readonly type: "trace";
+  readonly type: 'trace';
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
@@ -165,13 +187,13 @@ export type TraceTimelineRow = {
 };
 
 export type ShellTimelineRow = {
-  readonly type: "shell";
+  readonly type: 'shell';
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
   readonly toolCallId?: string;
   readonly command: string;
-  readonly status: "running" | "completed" | "failed" | "interrupted";
+  readonly status: 'running' | 'completed' | 'failed' | 'interrupted';
   readonly exitCode?: number | null;
   readonly stdout: string;
   readonly stderr: string;
@@ -179,7 +201,7 @@ export type ShellTimelineRow = {
 };
 
 export type ToolCallTimelineRow = {
-  readonly type: "tool-call";
+  readonly type: 'tool-call';
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
@@ -189,7 +211,7 @@ export type ToolCallTimelineRow = {
 };
 
 export type ToolResultTimelineRow = {
-  readonly type: "tool-result";
+  readonly type: 'tool-result';
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
@@ -199,7 +221,7 @@ export type ToolResultTimelineRow = {
 };
 
 export type ToolErrorTimelineRow = {
-  readonly type: "tool-error";
+  readonly type: 'tool-error';
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
@@ -209,7 +231,7 @@ export type ToolErrorTimelineRow = {
 };
 
 export type ApprovalPendingTimelineRow = {
-  readonly type: "approval-pending";
+  readonly type: 'approval-pending';
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
@@ -220,7 +242,7 @@ export type ApprovalPendingTimelineRow = {
 };
 
 export type ApprovalResolvedTimelineRow = {
-  readonly type: "approval-resolved";
+  readonly type: 'approval-resolved';
   readonly itemId: string;
   readonly seq: number;
   readonly turnId: string;
@@ -249,7 +271,7 @@ export class InteractionProjection {
   private readonly sequenceMetrics: SequenceMetrics = {
     fullMaterializations: 0,
     sequenceCopies: 0,
-    sequenceTraversals: 0
+    sequenceTraversals: 0,
   };
   private readonly listeners = new Set<InteractionProjectionListener>();
   private itemsById = new Map<string, ProtocolItem>();
@@ -268,7 +290,7 @@ export class InteractionProjection {
   private indexRebuilds = 0;
   private snapshot: WebUiState = {
     items: InteractionSequence.empty<ProtocolItem>(this.sequenceMetrics),
-    timelineRows: InteractionSequence.empty<TimelineRow>(this.sequenceMetrics)
+    timelineRows: InteractionSequence.empty<TimelineRow>(this.sequenceMetrics),
   };
 
   constructor(snapshot?: ThreadSnapshot) {
@@ -295,7 +317,7 @@ export class InteractionProjection {
       fullMaterializations: this.sequenceMetrics.fullMaterializations,
       sequenceTraversals: this.sequenceMetrics.sequenceTraversals,
       mapClones: this.mapClones,
-      indexRebuilds: this.indexRebuilds
+      indexRebuilds: this.indexRebuilds,
     };
   }
 
@@ -310,7 +332,7 @@ export class InteractionProjection {
   }
 
   apply(notification: AppServerNotification): boolean {
-    if (notification.type === "thread/started") {
+    if (notification.type === 'thread/started') {
       return this.replaceSnapshot(notification.thread);
     }
 
@@ -319,10 +341,13 @@ export class InteractionProjection {
       return this.updateTurn(notification.threadId, notification.turn);
     }
 
-    const item = notification.type === "item/appended" || notification.type === "approval/requested"
-      ? notification.item
-      : notification.type === "approval/resolved" ? notification.item : undefined;
-    const threadId = "threadId" in notification ? notification.threadId : undefined;
+    const item =
+      notification.type === 'item/appended' || notification.type === 'approval/requested'
+        ? notification.item
+        : notification.type === 'approval/resolved'
+          ? notification.item
+          : undefined;
+    const threadId = 'threadId' in notification ? notification.threadId : undefined;
     if (!item || !threadId || !isForCurrentThread(this.snapshot, threadId)) return false;
 
     const existing = this.itemsById.get(item.id);
@@ -347,45 +372,81 @@ export class InteractionProjection {
     const items = new Map(this.itemsById);
     this.mapClones += 1;
     items.set(item.id, item);
-    const next = createStateFromParts(this.snapshot.currentThread, [...items.values()], this.sequenceMetrics);
+    const next = createStateFromParts(
+      this.snapshot.currentThread,
+      [...items.values()],
+      this.sequenceMetrics
+    );
     this.resetIndexes(next);
     this.rebuilds += 1;
     this.publish(next);
     return true;
   }
 
-  private updateTurn(threadId: string, turn: ThreadSnapshot["turns"][number]): boolean {
-    const current = this.snapshot.currentThread ?? { id: threadId, status: "idle" as const, turns: [] };
+  private updateTurn(threadId: string, turn: ThreadSnapshot['turns'][number]): boolean {
+    const current = this.snapshot.currentThread ?? {
+      id: threadId,
+      status: 'idle' as const,
+      turns: [],
+    };
     const index = current.turns.findIndex((entry) => entry.id === turn.id);
-    const turns = index < 0
-      ? [...current.turns, cloneTurn(turn)]
-      : current.turns.map((entry, position) => position === index ? cloneTurn(turn) : entry);
-    const next = { ...this.snapshot, currentThread: { id: current.id, status: deriveThreadStatus(turns), turns } };
+    const turns =
+      index < 0
+        ? [...current.turns, cloneTurn(turn)]
+        : current.turns.map((entry, position) => (position === index ? cloneTurn(turn) : entry));
+    const next = {
+      ...this.snapshot,
+      currentThread: { id: current.id, status: deriveThreadStatus(turns), turns },
+    };
     if (sameState(this.snapshot, next)) return false;
     this.publish(next);
     return true;
   }
 
   private applyItemRow(item: ProtocolItem): void {
-    if (item.type === "assistant.message.started") {
+    if (item.type === 'assistant.message.started') {
       this.assistantStarted.add(item.id);
       return;
     }
-    if (item.type === "assistant.message.delta" && item.targetId && this.assistantStarted.has(item.targetId)) {
-      const content = `${this.assistantProgress.get(item.targetId) ?? ""}${readStringPayloadField(item.payload, "delta")}`;
+    if (
+      item.type === 'assistant.message.delta' &&
+      item.targetId &&
+      this.assistantStarted.has(item.targetId)
+    ) {
+      const content = `${this.assistantProgress.get(item.targetId) ?? ''}${readStringPayloadField(item.payload, 'delta')}`;
       this.assistantProgress.set(item.targetId, content);
       const started = this.itemsById.get(item.targetId);
-      if (started) this.upsertRow(`assistant:${item.targetId}`, { type: "assistant-progress", itemId: item.targetId, seq: started.seq, turnId: started.turnId, content });
+      if (started)
+        this.upsertRow(`assistant:${item.targetId}`, {
+          type: 'assistant-progress',
+          itemId: item.targetId,
+          seq: started.seq,
+          turnId: started.turnId,
+          content,
+        });
       return;
     }
-    if (item.type === "assistant.message.completed" && item.targetId) {
+    if (item.type === 'assistant.message.completed' && item.targetId) {
       this.removeRow(`assistant:${item.targetId}`);
       this.assistantProgress.delete(item.targetId);
     }
-    if (item.type === "tool.call.started" && readStringPayloadField(item.payload, "toolName") === "shell") {
+    if (
+      item.type === 'tool.call.started' &&
+      readStringPayloadField(item.payload, 'toolName') === 'shell'
+    ) {
       const key = `shell:${item.id}`;
       this.shellRowKeyByTarget.set(item.id, key);
-      this.upsertRow(key, { type: "shell", itemId: item.id, seq: item.seq, turnId: item.turnId, toolCallId: readOptionalStringPayloadField(item.payload, "toolCallId"), command: readCommand(readPayloadField(item.payload, "input")), status: "running", stdout: "", stderr: "" });
+      this.upsertRow(key, {
+        type: 'shell',
+        itemId: item.id,
+        seq: item.seq,
+        turnId: item.turnId,
+        toolCallId: readOptionalStringPayloadField(item.payload, 'toolCallId'),
+        command: readCommand(readPayloadField(item.payload, 'input')),
+        status: 'running',
+        stdout: '',
+        stderr: '',
+      });
       return;
     }
     if (item.targetId && this.shellRowKeyByTarget.has(item.targetId) && isShellChildType(item)) {
@@ -393,34 +454,57 @@ export class InteractionProjection {
       return;
     }
     const approvalType = readApprovalEventType(item);
-    if (approvalType === "approval.requested") {
-      const approvalId = readStringPayloadField(readApprovalPayload(item), "approvalId");
+    if (approvalType === 'approval.requested') {
+      const approvalId = readStringPayloadField(readApprovalPayload(item), 'approvalId');
       const key = `approval:${approvalId}`;
       this.approvalRowKeyById.set(approvalId, key);
       this.upsertRow(key, toTimelineRow(item));
       return;
     }
-    if (approvalType === "approval.resolved") {
-      this.removeRow(this.approvalRowKeyById.get(readStringPayloadField(readApprovalPayload(item), "approvalId")) ?? "");
+    if (approvalType === 'approval.resolved') {
+      this.removeRow(
+        this.approvalRowKeyById.get(
+          readStringPayloadField(readApprovalPayload(item), 'approvalId')
+        ) ?? ''
+      );
     }
-    if (item.type !== "system.message.completed" && item.type !== "assistant.message.delta") this.upsertRow(`item:${item.id}`, toTimelineRow(item));
+    if (item.type !== 'system.message.completed' && item.type !== 'assistant.message.delta')
+      this.upsertRow(`item:${item.id}`, toTimelineRow(item));
   }
 
   private updateShellRow(item: ProtocolItem): void {
     const key = this.shellRowKeyByTarget.get(item.targetId as string);
     const slot = key === undefined ? undefined : this.rowSlotByKey.get(key);
-    const current = slot === undefined ? undefined : this.currentRowsBySlot.get(slot) as ShellTimelineRow | undefined;
+    const current =
+      slot === undefined
+        ? undefined
+        : (this.currentRowsBySlot.get(slot) as ShellTimelineRow | undefined);
     if (key === undefined || slot === undefined || !current) return;
     let next = current;
-    if (item.type === "tool.output.delta") {
+    if (item.type === 'tool.output.delta') {
       const delta = readShellOutputDelta(item.payload);
-      if (delta) next = { ...current, stdout: delta.stream === "stdout" ? current.stdout + delta.chunk : current.stdout, stderr: delta.stream === "stderr" ? current.stderr + delta.chunk : current.stderr };
-    } else if (item.type === "tool.result.completed") {
-      const result = parseShellResult(readPayloadField(item.payload, "content"));
-      next = { ...current, status: result.exitCode !== undefined && result.exitCode !== 0 ? "failed" : "completed", exitCode: result.exitCode, stdout: result.stdout ?? current.stdout, stderr: result.stderr ?? current.stderr };
-    } else if (item.type === "tool.error") {
-      const error = readOptionalStringPayloadField(item.payload, "message") ?? "failed";
-      next = { ...current, status: isInterruptedShellMessage(error) ? "interrupted" : "failed", error };
+      if (delta)
+        next = {
+          ...current,
+          stdout: delta.stream === 'stdout' ? current.stdout + delta.chunk : current.stdout,
+          stderr: delta.stream === 'stderr' ? current.stderr + delta.chunk : current.stderr,
+        };
+    } else if (item.type === 'tool.result.completed') {
+      const result = parseShellResult(readPayloadField(item.payload, 'content'));
+      next = {
+        ...current,
+        status: result.exitCode !== undefined && result.exitCode !== 0 ? 'failed' : 'completed',
+        exitCode: result.exitCode,
+        stdout: result.stdout ?? current.stdout,
+        stderr: result.stderr ?? current.stderr,
+      };
+    } else if (item.type === 'tool.error') {
+      const error = readOptionalStringPayloadField(item.payload, 'message') ?? 'failed';
+      next = {
+        ...current,
+        status: isInterruptedShellMessage(error) ? 'interrupted' : 'failed',
+        error,
+      };
     }
     this.upsertRow(key, next);
   }
@@ -458,10 +542,24 @@ export class InteractionProjection {
     this.rows = InteractionSequence.from(state.timelineRows, this.sequenceMetrics);
     this.rowSlotByKey = new Map([...this.rows].map((row, index) => [rowKey(row), index]));
     this.currentRowsBySlot = new Map([...this.rows].map((row, index) => [index, row]));
-    this.shellRowKeyByTarget = new Map(this.rows.filter((row): row is ShellTimelineRow => row.type === "shell").map((row) => [row.itemId, rowKey(row)]));
-    this.assistantStarted = new Set(state.items.filter((item) => item.type === "assistant.message.started").map((item) => item.id));
-    this.assistantProgress = new Map(this.rows.filter((row): row is AssistantProgressTimelineRow => row.type === "assistant-progress").map((row) => [row.itemId, row.content]));
-    this.approvalRowKeyById = new Map(this.rows.filter((row): row is ApprovalPendingTimelineRow => row.type === "approval-pending").map((row) => [row.approvalId, rowKey(row)]));
+    this.shellRowKeyByTarget = new Map(
+      this.rows
+        .filter((row): row is ShellTimelineRow => row.type === 'shell')
+        .map((row) => [row.itemId, rowKey(row)])
+    );
+    this.assistantStarted = new Set(
+      state.items.filter((item) => item.type === 'assistant.message.started').map((item) => item.id)
+    );
+    this.assistantProgress = new Map(
+      this.rows
+        .filter((row): row is AssistantProgressTimelineRow => row.type === 'assistant-progress')
+        .map((row) => [row.itemId, row.content])
+    );
+    this.approvalRowKeyById = new Map(
+      this.rows
+        .filter((row): row is ApprovalPendingTimelineRow => row.type === 'approval-pending')
+        .map((row) => [row.approvalId, rowKey(row)])
+    );
     this.lastSeq = state.items.at(-1)?.seq ?? -Infinity;
   }
 
@@ -497,8 +595,15 @@ function isForCurrentThread(state: WebUiState, threadId: string): boolean {
 
 function isTurnNotification(
   notification: AppServerNotification
-): notification is Extract<AppServerNotification, { readonly type: "turn/started" | "turn/completed" | "turn/failed" }> {
-  return notification.type === "turn/started" || notification.type === "turn/completed" || notification.type === "turn/failed";
+): notification is Extract<
+  AppServerNotification,
+  { readonly type: 'turn/started' | 'turn/completed' | 'turn/failed' }
+> {
+  return (
+    notification.type === 'turn/started' ||
+    notification.type === 'turn/completed' ||
+    notification.type === 'turn/failed'
+  );
 }
 
 function createStateFromSnapshot(snapshot: ThreadSnapshot, metrics: SequenceMetrics): WebUiState {
@@ -510,7 +615,7 @@ function createStateFromSnapshot(snapshot: ThreadSnapshot, metrics: SequenceMetr
 }
 
 function createStateFromParts(
-  currentThread: WebUiState["currentThread"],
+  currentThread: WebUiState['currentThread'],
   items: readonly ProtocolItem[],
   metrics: SequenceMetrics
 ): WebUiState {
@@ -518,20 +623,25 @@ function createStateFromParts(
   return {
     currentThread,
     items: InteractionSequence.from(sortedItems, metrics),
-    timelineRows: InteractionSequence.from(buildTimelineRows(sortedItems), metrics)
+    timelineRows: InteractionSequence.from(buildTimelineRows(sortedItems), metrics),
   };
 }
 
 function toSnapshot(state: WebUiState): ThreadSnapshot | undefined {
   return state.currentThread
-    ? { id: state.currentThread.id, status: state.currentThread.status, turns: state.currentThread.turns, items: [...state.items] }
+    ? {
+        id: state.currentThread.id,
+        status: state.currentThread.status,
+        turns: state.currentThread.turns,
+        items: [...state.items],
+      }
     : undefined;
 }
 
 function rowKey(row: TimelineRow): string {
-  if (row.type === "assistant-progress") return `assistant:${row.itemId}`;
-  if (row.type === "shell") return `shell:${row.itemId}`;
-  if (row.type === "approval-pending") return `approval:${row.approvalId}`;
+  if (row.type === 'assistant-progress') return `assistant:${row.itemId}`;
+  if (row.type === 'shell') return `shell:${row.itemId}`;
+  if (row.type === 'approval-pending') return `approval:${row.approvalId}`;
   return `item:${row.itemId}`;
 }
 
@@ -540,85 +650,33 @@ function sameItem(left: ProtocolItem, right: ProtocolItem): boolean {
 }
 
 function sameState(left: WebUiState, right: WebUiState): boolean {
-  return left === right || (
-    left.currentThread?.id === right.currentThread?.id &&
-    JSON.stringify(left.currentThread) === JSON.stringify(right.currentThread) &&
-    JSON.stringify([...left.items]) === JSON.stringify([...right.items])
+  return (
+    left === right ||
+    (left.currentThread?.id === right.currentThread?.id &&
+      JSON.stringify(left.currentThread) === JSON.stringify(right.currentThread) &&
+      JSON.stringify([...left.items]) === JSON.stringify([...right.items]))
   );
 }
 
-function updateCurrentThreadTurn(
-  state: WebUiState,
-  threadId: string,
-  turn: ThreadSnapshot["turns"][number]
-): WebUiState {
-  const currentThread = state.currentThread ?? {
-    id: threadId,
-    status: "idle" as const,
-    turns: []
-  };
-  const turns = [
-    ...currentThread.turns.filter((existingTurn) => existingTurn.id !== turn.id),
-    cloneTurn(turn)
-  ];
-
-  return {
-    ...state,
-    currentThread: {
-      id: currentThread.id,
-      status: deriveThreadStatus(turns),
-      turns
-    }
-  };
-}
-
-function cloneTurn(
-  turn: ThreadSnapshot["turns"][number]
-): ThreadSnapshot["turns"][number] {
+function cloneTurn(turn: ThreadSnapshot['turns'][number]): ThreadSnapshot['turns'][number] {
   return {
     ...turn,
-    itemIds: [...turn.itemIds]
+    itemIds: [...turn.itemIds],
   };
 }
 
 function deriveThreadStatus(
-  turns: readonly ThreadSnapshot["turns"][number][]
-): ThreadSnapshot["status"] {
-  if (
-    turns.some(
-      (turn) => turn.status === "queued" || turn.status === "inProgress"
-    )
-  ) {
-    return "running";
+  turns: readonly ThreadSnapshot['turns'][number][]
+): ThreadSnapshot['status'] {
+  if (turns.some((turn) => turn.status === 'queued' || turn.status === 'inProgress')) {
+    return 'running';
   }
 
-  if (turns.at(-1)?.status === "failed") {
-    return "failed";
+  if (turns.at(-1)?.status === 'failed') {
+    return 'failed';
   }
 
-  return "idle";
-}
-
-function rebuildFromItems(
-  state: WebUiState,
-  items: readonly ProtocolItem[]
-): WebUiState {
-  const sortedItems = [...items].sort(compareItems);
-
-  return {
-    ...state,
-    items: sortedItems,
-    timelineRows: buildTimelineRows(sortedItems)
-  };
-}
-
-function appendOrReplaceItem(
-  items: readonly ProtocolItem[],
-  nextItem: ProtocolItem
-): readonly ProtocolItem[] {
-  const withoutExisting = items.filter((item) => item.id !== nextItem.id);
-
-  return [...withoutExisting, nextItem];
+  return 'idle';
 }
 
 function compareItems(left: ProtocolItem, right: ProtocolItem): number {
@@ -630,34 +688,34 @@ function buildTimelineRows(items: readonly ProtocolItem[]): readonly TimelineRow
   const shellRows = buildShellRows(sortedItems);
   const assistantCompletedTargets = new Set(
     sortedItems
-      .filter((item) => item.type === "assistant.message.completed")
+      .filter((item) => item.type === 'assistant.message.completed')
       .map((item) => item.targetId)
       .filter((targetId): targetId is string => Boolean(targetId))
   );
   const assistantDeltaTextByTarget = new Map<string, string>();
   const resolvedApprovalIds = new Set(
     sortedItems
-      .filter((item) => readApprovalEventType(item) === "approval.resolved")
-      .map((item) => readStringPayloadField(readApprovalPayload(item), "approvalId"))
+      .filter((item) => readApprovalEventType(item) === 'approval.resolved')
+      .map((item) => readStringPayloadField(readApprovalPayload(item), 'approvalId'))
       .filter((approvalId) => approvalId.length > 0)
   );
 
   for (const item of sortedItems) {
-    if (item.type !== "assistant.message.delta" || !item.targetId) {
+    if (item.type !== 'assistant.message.delta' || !item.targetId) {
       continue;
     }
 
     assistantDeltaTextByTarget.set(
       item.targetId,
-      `${assistantDeltaTextByTarget.get(item.targetId) ?? ""}${readStringPayloadField(
+      `${assistantDeltaTextByTarget.get(item.targetId) ?? ''}${readStringPayloadField(
         item.payload,
-        "delta"
+        'delta'
       )}`
     );
   }
 
   return sortedItems.flatMap((item): TimelineRow[] => {
-    if (item.type === "system.message.completed") {
+    if (item.type === 'system.message.completed') {
       return [];
     }
 
@@ -671,34 +729,29 @@ function buildTimelineRows(items: readonly ProtocolItem[]): readonly TimelineRow
       return [];
     }
 
-    if (
-      item.type === "assistant.message.started" &&
-      !assistantCompletedTargets.has(item.id)
-    ) {
+    if (item.type === 'assistant.message.started' && !assistantCompletedTargets.has(item.id)) {
       const progress = assistantDeltaTextByTarget.get(item.id);
 
       if (progress) {
         return [
           {
-            type: "assistant-progress",
+            type: 'assistant-progress',
             itemId: item.id,
             seq: item.seq,
             turnId: item.turnId,
-            content: progress
-          }
+            content: progress,
+          },
         ];
       }
     }
 
-    if (item.type === "assistant.message.delta") {
+    if (item.type === 'assistant.message.delta') {
       return [];
     }
 
     if (
-      readApprovalEventType(item) === "approval.requested" &&
-      resolvedApprovalIds.has(
-        readStringPayloadField(readApprovalPayload(item), "approvalId")
-      )
+      readApprovalEventType(item) === 'approval.requested' &&
+      resolvedApprovalIds.has(readStringPayloadField(readApprovalPayload(item), 'approvalId'))
     ) {
       return [];
     }
@@ -713,20 +766,23 @@ function buildShellRows(
   const rows = new Map<string, ShellTimelineRow>();
 
   for (const item of sortedItems) {
-    if (item.type !== "tool.call.started" || readStringPayloadField(item.payload, "toolName") !== "shell") {
+    if (
+      item.type !== 'tool.call.started' ||
+      readStringPayloadField(item.payload, 'toolName') !== 'shell'
+    ) {
       continue;
     }
 
     rows.set(item.id, {
-      type: "shell",
+      type: 'shell',
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      toolCallId: readOptionalStringPayloadField(item.payload, "toolCallId"),
-      command: readCommand(readPayloadField(item.payload, "input")),
-      status: "running",
-      stdout: "",
-      stderr: ""
+      toolCallId: readOptionalStringPayloadField(item.payload, 'toolCallId'),
+      command: readCommand(readPayloadField(item.payload, 'input')),
+      status: 'running',
+      stdout: '',
+      stderr: '',
     });
   }
 
@@ -743,7 +799,7 @@ function buildShellRows(
       continue;
     }
 
-    if (item.type === "tool.output.delta") {
+    if (item.type === 'tool.output.delta') {
       const delta = readShellOutputDelta(item.payload);
 
       if (!delta) {
@@ -752,30 +808,30 @@ function buildShellRows(
 
       rows.set(targetId, {
         ...existing,
-        stdout: delta.stream === "stdout" ? `${existing.stdout}${delta.chunk}` : existing.stdout,
-        stderr: delta.stream === "stderr" ? `${existing.stderr}${delta.chunk}` : existing.stderr
+        stdout: delta.stream === 'stdout' ? `${existing.stdout}${delta.chunk}` : existing.stdout,
+        stderr: delta.stream === 'stderr' ? `${existing.stderr}${delta.chunk}` : existing.stderr,
       });
     }
 
-    if (item.type === "tool.result.completed") {
-      const result = parseShellResult(readPayloadField(item.payload, "content"));
+    if (item.type === 'tool.result.completed') {
+      const result = parseShellResult(readPayloadField(item.payload, 'content'));
 
       rows.set(targetId, {
         ...existing,
-        status: result.exitCode !== undefined && result.exitCode !== 0 ? "failed" : "completed",
+        status: result.exitCode !== undefined && result.exitCode !== 0 ? 'failed' : 'completed',
         exitCode: result.exitCode,
         stdout: result.stdout ?? existing.stdout,
-        stderr: result.stderr ?? existing.stderr
+        stderr: result.stderr ?? existing.stderr,
       });
     }
 
-    if (item.type === "tool.error") {
-      const message = readOptionalStringPayloadField(item.payload, "message") ?? "failed";
+    if (item.type === 'tool.error') {
+      const message = readOptionalStringPayloadField(item.payload, 'message') ?? 'failed';
 
       rows.set(targetId, {
         ...existing,
-        status: isInterruptedShellMessage(message) ? "interrupted" : "failed",
-        error: message
+        status: isInterruptedShellMessage(message) ? 'interrupted' : 'failed',
+        error: message,
       });
     }
   }
@@ -793,116 +849,117 @@ function isShellChildItem(
 
   return (
     Boolean(item.targetId && shellRows.has(item.targetId)) &&
-    (item.type === "tool.output.delta" ||
-      item.type === "tool.result.completed" ||
-      item.type === "tool.error")
+    (item.type === 'tool.output.delta' ||
+      item.type === 'tool.result.completed' ||
+      item.type === 'tool.error')
   );
 }
 
 function isShellChildType(item: ProtocolItem): boolean {
-  return !readApprovalEventType(item) && (
-    item.type === "tool.output.delta" ||
-    item.type === "tool.result.completed" ||
-    item.type === "tool.error"
+  return (
+    !readApprovalEventType(item) &&
+    (item.type === 'tool.output.delta' ||
+      item.type === 'tool.result.completed' ||
+      item.type === 'tool.error')
   );
 }
 
 function toTimelineRow(item: ProtocolItem): TimelineRow {
-  if (item.type === "user.message.completed") {
+  if (item.type === 'user.message.completed') {
     return {
-      type: "user",
+      type: 'user',
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      content: readPayloadField(item.payload, "content")
+      content: readPayloadField(item.payload, 'content'),
     };
   }
 
-  if (item.type === "assistant.message.completed") {
+  if (item.type === 'assistant.message.completed') {
     return {
-      type: "assistant",
+      type: 'assistant',
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      content: readPayloadField(item.payload, "content")
+      content: readPayloadField(item.payload, 'content'),
     };
   }
 
-  if (item.type === "tool.call.started") {
+  if (item.type === 'tool.call.started') {
     return {
-      type: "tool-call",
+      type: 'tool-call',
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      toolCallId: readOptionalStringPayloadField(item.payload, "toolCallId"),
-      toolName: readOptionalStringPayloadField(item.payload, "toolName"),
-      input: readPayloadField(item.payload, "input")
+      toolCallId: readOptionalStringPayloadField(item.payload, 'toolCallId'),
+      toolName: readOptionalStringPayloadField(item.payload, 'toolName'),
+      input: readPayloadField(item.payload, 'input'),
     };
   }
 
-  if (item.type === "tool.result.completed") {
+  if (item.type === 'tool.result.completed') {
     return {
-      type: "tool-result",
+      type: 'tool-result',
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      toolCallId: readOptionalStringPayloadField(item.payload, "toolCallId"),
-      toolName: readOptionalStringPayloadField(item.payload, "toolName"),
-      content: readPayloadField(item.payload, "content")
+      toolCallId: readOptionalStringPayloadField(item.payload, 'toolCallId'),
+      toolName: readOptionalStringPayloadField(item.payload, 'toolName'),
+      content: readPayloadField(item.payload, 'content'),
     };
   }
 
-  if (item.type === "tool.error") {
+  if (item.type === 'tool.error') {
     return {
-      type: "tool-error",
+      type: 'tool-error',
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      toolCallId: readOptionalStringPayloadField(item.payload, "toolCallId"),
-      toolName: readOptionalStringPayloadField(item.payload, "toolName"),
-      message: readOptionalStringPayloadField(item.payload, "message")
+      toolCallId: readOptionalStringPayloadField(item.payload, 'toolCallId'),
+      toolName: readOptionalStringPayloadField(item.payload, 'toolName'),
+      message: readOptionalStringPayloadField(item.payload, 'message'),
     };
   }
 
-  if (readApprovalEventType(item) === "approval.requested") {
+  if (readApprovalEventType(item) === 'approval.requested') {
     const approvalPayload = readApprovalPayload(item);
 
     return {
-      type: "approval-pending",
+      type: 'approval-pending',
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      approvalId: readStringPayloadField(approvalPayload, "approvalId"),
-      threadId: readStringPayloadField(approvalPayload, "threadId") || item.turnId,
-      toolCallId: readOptionalStringPayloadField(approvalPayload, "toolCallId"),
-      reason: readOptionalStringPayloadField(approvalPayload, "reason")
+      approvalId: readStringPayloadField(approvalPayload, 'approvalId'),
+      threadId: readStringPayloadField(approvalPayload, 'threadId') || item.turnId,
+      toolCallId: readOptionalStringPayloadField(approvalPayload, 'toolCallId'),
+      reason: readOptionalStringPayloadField(approvalPayload, 'reason'),
     };
   }
 
-  if (readApprovalEventType(item) === "approval.resolved") {
+  if (readApprovalEventType(item) === 'approval.resolved') {
     const approvalPayload = readApprovalPayload(item);
 
     return {
-      type: "approval-resolved",
+      type: 'approval-resolved',
       itemId: item.id,
       seq: item.seq,
       turnId: item.turnId,
-      approvalId: readOptionalStringPayloadField(approvalPayload, "approvalId"),
-      decision: readApprovalDecision(approvalPayload)
+      approvalId: readOptionalStringPayloadField(approvalPayload, 'approvalId'),
+      decision: readApprovalDecision(approvalPayload),
     };
   }
 
   return {
-    type: "trace",
+    type: 'trace',
     itemId: item.id,
     seq: item.seq,
     turnId: item.turnId,
-    event: item.type
+    event: item.type,
   };
 }
 
-function readPayloadField(payload: ProtocolItem["payload"], key: string): unknown {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+function readPayloadField(payload: ProtocolItem['payload'], key: string): unknown {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     return undefined;
   }
 
@@ -910,10 +967,10 @@ function readPayloadField(payload: ProtocolItem["payload"], key: string): unknow
 }
 
 function readCommand(input: unknown): string {
-  if (typeof input === "object" && input !== null && !Array.isArray(input)) {
-    const command = readPayloadField(input as JsonObject, "command");
+  if (typeof input === 'object' && input !== null && !Array.isArray(input)) {
+    const command = readPayloadField(input as JsonObject, 'command');
 
-    if (typeof command === "string") {
+    if (typeof command === 'string') {
       return command;
     }
   }
@@ -922,18 +979,18 @@ function readCommand(input: unknown): string {
 }
 
 function readShellOutputDelta(
-  payload: ProtocolItem["payload"]
-): { readonly stream: "stdout" | "stderr"; readonly chunk: string } | undefined {
-  const delta = readPayloadField(payload, "delta");
+  payload: ProtocolItem['payload']
+): { readonly stream: 'stdout' | 'stderr'; readonly chunk: string } | undefined {
+  const delta = readPayloadField(payload, 'delta');
 
-  if (typeof delta !== "object" || delta === null || Array.isArray(delta)) {
+  if (typeof delta !== 'object' || delta === null || Array.isArray(delta)) {
     return undefined;
   }
 
-  const stream = readPayloadField(delta as JsonObject, "stream");
-  const chunk = readPayloadField(delta as JsonObject, "chunk");
+  const stream = readPayloadField(delta as JsonObject, 'stream');
+  const chunk = readPayloadField(delta as JsonObject, 'chunk');
 
-  if ((stream !== "stdout" && stream !== "stderr") || typeof chunk !== "string") {
+  if ((stream !== 'stdout' && stream !== 'stderr') || typeof chunk !== 'string') {
     return undefined;
   }
 
@@ -945,53 +1002,44 @@ function parseShellResult(content: unknown): {
   readonly stdout?: string;
   readonly stderr?: string;
 } {
-  if (typeof content !== "string") {
+  if (typeof content !== 'string') {
     return {};
   }
 
   const exitCodeText = content.match(/^exitCode:\s*([^\r\n]+)/m)?.[1]?.trim();
   const exitCode =
-    exitCodeText === undefined
-      ? undefined
-      : exitCodeText === "null"
-        ? null
-        : Number(exitCodeText);
+    exitCodeText === undefined ? undefined : exitCodeText === 'null' ? null : Number(exitCodeText);
 
   return {
     exitCode: Number.isNaN(exitCode) ? undefined : exitCode,
-    stdout: readShellSection(content, "stdout"),
-    stderr: readShellSection(content, "stderr")
+    stdout: readShellSection(content, 'stdout'),
+    stderr: readShellSection(content, 'stderr'),
   };
 }
 
-function readShellSection(content: string, section: "stdout" | "stderr"): string | undefined {
-  const nextSection = section === "stdout" ? "stderr" : undefined;
+function readShellSection(content: string, section: 'stdout' | 'stderr'): string | undefined {
+  const nextSection = section === 'stdout' ? 'stderr' : undefined;
   const pattern =
     nextSection === undefined
-      ? new RegExp(`^${section}:\\n([\\s\\S]*)`, "m")
-      : new RegExp(`^${section}:\\n([\\s\\S]*?)(?=^${nextSection}:\\n)`, "m");
+      ? new RegExp(`^${section}:\\n([\\s\\S]*)`, 'm')
+      : new RegExp(`^${section}:\\n([\\s\\S]*?)(?=^${nextSection}:\\n)`, 'm');
   const value = content.match(pattern)?.[1];
 
   return value === undefined ? undefined : value.trimEnd();
 }
 
 function isInterruptedShellMessage(message: string): boolean {
-  return /\b(abort|aborted|cancel|canceled|cancelled|interrupt|interrupted)\b/i.test(
-    message
-  );
+  return /\b(abort|aborted|cancel|canceled|cancelled|interrupt|interrupted)\b/i.test(message);
 }
 
-function readStringPayloadField(
-  payload: ProtocolItem["payload"],
-  key: string
-): string {
+function readStringPayloadField(payload: ProtocolItem['payload'], key: string): string {
   const value = readPayloadField(payload, key);
 
-  return typeof value === "string" ? value : "";
+  return typeof value === 'string' ? value : '';
 }
 
 function readOptionalStringPayloadField(
-  payload: ProtocolItem["payload"],
+  payload: ProtocolItem['payload'],
   key: string
 ): string | undefined {
   const value = readStringPayloadField(payload, key);
@@ -999,14 +1047,10 @@ function readOptionalStringPayloadField(
   return value.length > 0 ? value : undefined;
 }
 
-function readApprovalDecision(
-  payload: ProtocolItem["payload"]
-): ApprovalDecision | undefined {
-  const value = readStringPayloadField(payload, "decision");
+function readApprovalDecision(payload: ProtocolItem['payload']): ApprovalDecision | undefined {
+  const value = readStringPayloadField(payload, 'decision');
 
-  if (
-    value === "approveOnce" || value === "decline"
-  ) {
+  if (value === 'approveOnce' || value === 'decline') {
     return value;
   }
 
@@ -1015,35 +1059,33 @@ function readApprovalDecision(
 
 function readApprovalEventType(
   item: ProtocolItem
-): "approval.requested" | "approval.resolved" | undefined {
-  if (item.type === "approval.requested" || item.type === "approval.resolved") {
+): 'approval.requested' | 'approval.resolved' | undefined {
+  if (item.type === 'approval.requested' || item.type === 'approval.resolved') {
     return item.type;
   }
 
-  const delta = readPayloadField(item.payload, "delta");
+  const delta = readPayloadField(item.payload, 'delta');
 
-  if (typeof delta !== "object" || delta === null || Array.isArray(delta)) {
+  if (typeof delta !== 'object' || delta === null || Array.isArray(delta)) {
     return undefined;
   }
 
-  const type = readPayloadField(delta as JsonObject, "type");
+  const type = readPayloadField(delta as JsonObject, 'type');
 
-  return type === "approval.requested" || type === "approval.resolved"
-    ? type
-    : undefined;
+  return type === 'approval.requested' || type === 'approval.resolved' ? type : undefined;
 }
 
-function readApprovalPayload(item: ProtocolItem): ProtocolItem["payload"] {
+function readApprovalPayload(item: ProtocolItem): ProtocolItem['payload'] {
   return item.payload;
 }
 
 function stringify(value: unknown): string {
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     return value;
   }
 
   if (value === undefined || value === null) {
-    return "";
+    return '';
   }
 
   return JSON.stringify(value);

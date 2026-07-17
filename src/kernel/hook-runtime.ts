@@ -1,4 +1,4 @@
-import type { Item, ItemAppendInput, ItemList } from "./item-list.js";
+import type { Item, ItemAppendInput, ItemList } from './item-list.js';
 
 export type ToolCallHookPayload = {
   readonly id: string;
@@ -7,62 +7,57 @@ export type ToolCallHookPayload = {
 };
 
 export type HookName =
-  | "onItemAppending"
-  | "onItemAppended"
-  | "beforeContextCompile"
-  | "afterContextCompile"
-  | "beforeModelRequest"
-  | "onModelEvent"
-  | "beforeToolCall"
-  | "afterToolResult"
-  | "onRunFinished";
+  | 'onItemAppending'
+  | 'onItemAppended'
+  | 'beforeContextCompile'
+  | 'afterContextCompile'
+  | 'beforeModelRequest'
+  | 'onModelEvent'
+  | 'beforeToolCall'
+  | 'afterToolResult'
+  | 'onRunFinished';
 
 export type ItemAppendingHookContext = {
-  readonly hookName: "onItemAppending";
+  readonly hookName: 'onItemAppending';
   readonly item: ItemAppendInput;
   readonly items: readonly Item[];
 };
 
 export type ItemAppendedHookContext = {
-  readonly hookName: "onItemAppended";
+  readonly hookName: 'onItemAppended';
   readonly item: Item;
   readonly items: readonly Item[];
 };
 
 export type BeforeToolCallHookContext = {
-  readonly hookName: "beforeToolCall";
+  readonly hookName: 'beforeToolCall';
   readonly call: ToolCallHookPayload;
   readonly assistantItem: Item;
   readonly items: readonly Item[];
 };
 
 export type HookBlockDecision = {
-  readonly type: "block";
+  readonly type: 'block';
   readonly reason?: string;
 };
 
 export type HookReplaceDecision = {
-  readonly type: "replace";
+  readonly type: 'replace';
   readonly reason?: string;
   readonly item: ItemAppendInput;
 };
 
 export type HookToolCallReplaceDecision = {
-  readonly type: "replace";
+  readonly type: 'replace';
   readonly reason?: string;
   readonly call: ToolCallHookPayload;
 };
 
 export type HookItemDecision = HookBlockDecision | HookReplaceDecision;
 
-export type HookToolCallDecision =
-  | HookBlockDecision
-  | HookToolCallReplaceDecision;
+export type HookToolCallDecision = HookBlockDecision | HookToolCallReplaceDecision;
 
-export type HookDecision =
-  | HookBlockDecision
-  | HookReplaceDecision
-  | HookToolCallReplaceDecision;
+export type HookDecision = HookBlockDecision | HookReplaceDecision | HookToolCallReplaceDecision;
 
 export type HookResponse<TDecision extends HookDecision = HookDecision> = {
   readonly append?: readonly ItemAppendInput[];
@@ -70,17 +65,11 @@ export type HookResponse<TDecision extends HookDecision = HookDecision> = {
 };
 
 export type HookResult<TDecision extends HookDecision = HookDecision> =
-  | void
-  | HookResponse<TDecision>
-  | Promise<void | HookResponse<TDecision>>;
+  void | HookResponse<TDecision> | Promise<void | HookResponse<TDecision>>;
 
 export type HookHandlers = {
-  readonly onItemAppending?: (
-    context: ItemAppendingHookContext
-  ) => HookResult<HookItemDecision>;
-  readonly onItemAppended?: (
-    context: ItemAppendedHookContext
-  ) => HookResult<never>;
+  readonly onItemAppending?: (context: ItemAppendingHookContext) => HookResult<HookItemDecision>;
+  readonly onItemAppended?: (context: ItemAppendedHookContext) => HookResult<never>;
   readonly beforeToolCall?: (
     context: BeforeToolCallHookContext
   ) => HookResult<HookToolCallDecision>;
@@ -105,21 +94,21 @@ export class HookRuntime {
 
     try {
       beforeAppendResult = await this.hooks.onItemAppending?.({
-        hookName: "onItemAppending",
+        hookName: 'onItemAppending',
         item: cloneAppendInput(input),
-        items: this.getHookItemsSnapshot()
+        items: this.getHookItemsSnapshot(),
       });
     } catch (cause) {
-      this.appendHookError("onItemAppending", input, cause);
+      this.appendHookError('onItemAppending', input, cause);
       throw cause;
     }
 
     await this.appendHookItems(beforeAppendResult);
 
     if (beforeAppendResult?.decision) {
-      this.appendHookEffect("onItemAppending", input, beforeAppendResult.decision);
+      this.appendHookEffect('onItemAppending', input, beforeAppendResult.decision);
 
-      if (beforeAppendResult.decision.type === "block") {
+      if (beforeAppendResult.decision.type === 'block') {
         return undefined;
       }
 
@@ -131,13 +120,13 @@ export class HookRuntime {
     try {
       await this.appendHookItems(
         await this.hooks.onItemAppended?.({
-          hookName: "onItemAppended",
+          hookName: 'onItemAppended',
           item: cloneItem(appended),
-          items: this.getHookItemsSnapshot()
+          items: this.getHookItemsSnapshot(),
         })
       );
     } catch (cause) {
-      this.appendHookError("onItemAppended", appended, cause);
+      this.appendHookError('onItemAppended', appended, cause);
       throw cause;
     }
 
@@ -148,17 +137,16 @@ export class HookRuntime {
     readonly call: ToolCallHookPayload;
     readonly assistantItem: Item;
   }): Promise<
-    | { readonly type: "continue"; readonly call: ToolCallHookPayload }
-    | { readonly type: "block" }
+    { readonly type: 'continue'; readonly call: ToolCallHookPayload } | { readonly type: 'block' }
   > {
     let result: Awaited<HookResult<HookToolCallDecision>>;
 
     try {
       result = await this.hooks.beforeToolCall?.({
-        hookName: "beforeToolCall",
+        hookName: 'beforeToolCall',
         call: clonePlain(input.call),
         assistantItem: cloneItem(input.assistantItem),
-        items: this.getHookItemsSnapshot()
+        items: this.getHookItemsSnapshot(),
       });
     } catch (cause) {
       this.appendToolHookError(input.call, input.assistantItem, cause);
@@ -168,16 +156,16 @@ export class HookRuntime {
     await this.appendHookItems(result);
 
     if (!result?.decision) {
-      return { type: "continue", call: input.call };
+      return { type: 'continue', call: input.call };
     }
 
     this.appendToolHookEffect(input.call, input.assistantItem, result.decision);
 
-    if (result.decision.type === "block") {
-      return { type: "block" };
+    if (result.decision.type === 'block') {
+      return { type: 'block' };
     }
 
-    return { type: "continue", call: result.decision.call };
+    return { type: 'continue', call: result.decision.call };
   }
 
   private async appendHookItems(result: Awaited<HookResult>): Promise<void> {
@@ -194,23 +182,23 @@ export class HookRuntime {
     const payload: Record<string, unknown> = {
       hook: hookName,
       effect: decision.type,
-      itemType: input.type
+      itemType: input.type,
     };
 
     if (decision.reason) {
       payload.reason = decision.reason;
     }
 
-    if (decision.type === "replace") {
+    if (decision.type === 'replace') {
       payload.replacementType = decision.item.type;
     }
 
     return this.itemList.append({
-      type: "hook.effect",
+      type: 'hook.effect',
       runId: input.runId,
       turnId: input.turnId,
-      visibility: "trace",
-      payload
+      visibility: 'trace',
+      payload,
     });
   }
 
@@ -220,48 +208,44 @@ export class HookRuntime {
     decision: HookToolCallDecision
   ): Item {
     const payload: Record<string, unknown> = {
-      hook: "beforeToolCall",
+      hook: 'beforeToolCall',
       effect: decision.type,
       toolCallId: call.id,
-      toolName: call.name
+      toolName: call.name,
     };
 
     if (decision.reason) {
       payload.reason = decision.reason;
     }
 
-    if (decision.type === "replace") {
+    if (decision.type === 'replace') {
       payload.replacementToolCallId = decision.call.id;
       payload.replacementToolName = decision.call.name;
     }
 
     return this.itemList.append({
-      type: "hook.effect",
+      type: 'hook.effect',
       runId: assistantItem.runId,
       turnId: assistantItem.turnId,
       causeId: assistantItem.id,
-      visibility: "trace",
-      payload
+      visibility: 'trace',
+      payload,
     });
   }
 
-  private appendHookError(
-    hookName: HookName,
-    input: ItemAppendInput,
-    cause: unknown
-  ): Item {
+  private appendHookError(hookName: HookName, input: ItemAppendInput, cause: unknown): Item {
     return this.itemList.append({
-      type: "hook.effect",
+      type: 'hook.effect',
       runId: input.runId,
       turnId: input.turnId,
-      visibility: "trace",
+      visibility: 'trace',
       payload: {
         hook: hookName,
-        effect: "error",
+        effect: 'error',
         message: readErrorMessage(cause),
         cause: serializeErrorCause(cause),
-        itemType: input.type
-      }
+        itemType: input.type,
+      },
     });
   }
 
@@ -271,19 +255,19 @@ export class HookRuntime {
     cause: unknown
   ): Item {
     return this.itemList.append({
-      type: "hook.effect",
+      type: 'hook.effect',
       runId: assistantItem.runId,
       turnId: assistantItem.turnId,
       causeId: assistantItem.id,
-      visibility: "trace",
+      visibility: 'trace',
       payload: {
-        hook: "beforeToolCall",
-        effect: "error",
+        hook: 'beforeToolCall',
+        effect: 'error',
         message: readErrorMessage(cause),
         cause: serializeErrorCause(cause),
         toolCallId: call.id,
-        toolName: call.name
-      }
+        toolName: call.name,
+      },
     });
   }
 
@@ -301,7 +285,7 @@ function cloneItem(item: Item): Item {
 }
 
 function clonePlain<T>(value: T): T {
-  if (typeof globalThis.structuredClone === "function") {
+  if (typeof globalThis.structuredClone === 'function') {
     return globalThis.structuredClone(value);
   }
 

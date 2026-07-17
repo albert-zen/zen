@@ -6,15 +6,15 @@ import {
   type ThreadJournal,
   type ThreadPersistenceFailure,
   type ThreadRuntime,
-  type ThreadRuntimeFactory
-} from "../../product/index.js";
-import { LocalToolRuntime, localToolDefinitions } from "./local-tool-runtime.js";
+  type ThreadRuntimeFactory,
+} from '../../product/index.js';
+import { LocalToolRuntime, localToolDefinitions } from './local-tool-runtime.js';
 import {
   loadModelProviderConfig,
-  type ModelProviderConfigOptions
-} from "./model-provider-config.js";
-import { OpenAiCompatibleModelGateway } from "./openai-compatible-model-gateway.js";
-import { FileThreadJournal } from "./file-thread-journal.js";
+  type ModelProviderConfigOptions,
+} from './model-provider-config.js';
+import { OpenAiCompatibleModelGateway } from './openai-compatible-model-gateway.js';
+import { FileThreadJournal } from './file-thread-journal.js';
 
 export type ProviderBackedAppServerOptions = {
   readonly cwd?: string;
@@ -28,14 +28,24 @@ export async function createProviderBackedAppServer(
 ): Promise<AppServer> {
   const threadJournal = options.threadJournal ?? new FileThreadJournal();
   const replay = await threadJournal.replay();
-  const initialThreads = replay.filter((result): result is Extract<typeof result, { type: "success" }> => result.type === "success").map((result) => toThreadSnapshot({ threadId: result.threadId, items: result.items }));
-  const persistenceFailures = replay.flatMap((result): readonly ThreadPersistenceFailure[] => result.type === "failure" ? [{
-    code: "THREAD_JOURNAL_CORRUPTION",
-    message: result.error.message,
-    path: result.path,
-    recordNumber: result.error.recordNumber,
-    threadId: result.threadId
-  }] : []);
+  const initialThreads = replay
+    .filter(
+      (result): result is Extract<typeof result, { type: 'success' }> => result.type === 'success'
+    )
+    .map((result) => toThreadSnapshot({ threadId: result.threadId, items: result.items }));
+  const persistenceFailures = replay.flatMap((result): readonly ThreadPersistenceFailure[] =>
+    result.type === 'failure'
+      ? [
+          {
+            code: 'THREAD_JOURNAL_CORRUPTION',
+            message: result.error.message,
+            path: result.path,
+            recordNumber: result.error.recordNumber,
+            threadId: result.threadId,
+          },
+        ]
+      : []
+  );
 
   const server = new AppServer({
     ...options.appServerOptions,
@@ -44,8 +54,8 @@ export async function createProviderBackedAppServer(
     threadManagerOptions: {
       ...options.appServerOptions?.threadManagerOptions,
       initialThreads,
-      runtimeFactory: createProviderThreadRuntimeFactory(options)
-    }
+      runtimeFactory: createProviderThreadRuntimeFactory(options),
+    },
   });
 
   return server;
@@ -63,10 +73,10 @@ export function createProviderThreadRuntimeFactory(
         apiKey: config.apiKey,
         model: config.modelId,
         defaultParams: config.params,
-        tools: localToolDefinitions
+        tools: localToolDefinitions,
       }),
       toolRuntime: new LocalToolRuntime({ cwd: options.cwd, approvalBroker }),
-      systemPrompt: DEFAULT_ZEN_SYSTEM_PROMPT
+      systemPrompt: DEFAULT_ZEN_SYSTEM_PROMPT,
     };
   };
 }

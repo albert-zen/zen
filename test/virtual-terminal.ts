@@ -1,9 +1,9 @@
-import type { TerminalDevice } from "./test-exports.js";
+import type { TerminalDevice } from './test-exports.js';
 
 export class VirtualTerminalDevice implements TerminalDevice {
   private inputHandler?: (data: string) => void;
   private resizeHandler?: () => void;
-  private output = "";
+  private output = '';
 
   constructor(
     private width = 80,
@@ -43,7 +43,7 @@ export class VirtualTerminalDevice implements TerminalDevice {
   }
 
   clearOutput(): void {
-    this.output = "";
+    this.output = '';
   }
 
   get columns(): number {
@@ -60,7 +60,5 @@ export async function waitForRender(): Promise<void> {
 }
 
 function stripAnsi(value: string): string {
-  return value
-    .replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, "")
-    .replace(/\u001B_[^\u0007]*\u0007/g, "");
+  return value.replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\u001B_[^\u0007]*\u0007/g, '');
 }

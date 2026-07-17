@@ -7,18 +7,18 @@ import {
   type TurnSnapshot,
   type TurnStatus,
   toProtocolItem,
-  toThreadSnapshot
-} from "./app-server-protocol.js";
-import { AgentLoop, type AgentLoopOptions, type ContextCompiler } from "../kernel/index.js";
+  toThreadSnapshot,
+} from './app-server-protocol.js';
+import { AgentLoop, type AgentLoopOptions, type ContextCompiler } from '../kernel/index.js';
 import {
   InMemoryItemList,
   type Clock,
   type IdGenerator,
   type Item,
-  type ItemAppendInput
-} from "../kernel/index.js";
-import { type ModelGateway, type ModelOptions, type ToolRuntime } from "../kernel/index.js";
-import { type ApprovalBroker } from "./approval-runtime.js";
+  type ItemAppendInput,
+} from '../kernel/index.js';
+import { type ModelGateway, type ModelOptions, type ToolRuntime } from '../kernel/index.js';
+import { type ApprovalBroker } from './approval-runtime.js';
 
 export type { ModelGateway, ModelOptions, ToolRuntime };
 
@@ -35,9 +35,7 @@ export type ThreadRuntimeFactoryInput = {
   readonly approvalBroker?: ApprovalBroker;
 };
 
-export type ThreadRuntimeFactory = (
-  input: ThreadRuntimeFactoryInput
-) => ThreadRuntime;
+export type ThreadRuntimeFactory = (input: ThreadRuntimeFactoryInput) => ThreadRuntime;
 
 export type ThreadManagerOptions = {
   readonly generateThreadId?: IdGenerator;
@@ -49,7 +47,7 @@ export type ThreadManagerOptions = {
   readonly initialThreads?: readonly ThreadSnapshot[];
   readonly repairOnLoad?: boolean;
   readonly persistenceObserver?: (threadId: string, item: Item) => void;
-  readonly persistenceFailures?: readonly import("./app-server-protocol.js").ThreadPersistenceFailure[];
+  readonly persistenceFailures?: readonly import('./app-server-protocol.js').ThreadPersistenceFailure[];
   readonly approvalBroker?: ApprovalBroker;
 };
 
@@ -93,9 +91,8 @@ type ActiveTurn = {
   readonly controller: AbortController;
 };
 
-const STALE_TURN_REPAIR_CODE = "TURN_REPAIRED_ON_STARTUP";
-const STALE_TURN_REPAIR_MESSAGE =
-  "Turn was still in progress when the previous process stopped";
+const STALE_TURN_REPAIR_CODE = 'TURN_REPAIRED_ON_STARTUP';
+const STALE_TURN_REPAIR_MESSAGE = 'Turn was still in progress when the previous process stopped';
 
 export class ThreadManager {
   private readonly threads = new Map<string, ThreadState>();
@@ -109,16 +106,19 @@ export class ThreadManager {
   private readonly turnTails = new Map<string, Promise<void>>();
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private readonly approvalBroker?: ApprovalBroker;
-  private readonly persistenceObserver?: ThreadManagerOptions["persistenceObserver"];
-  private readonly persistenceFailuresByThread = new Map<string, import("./app-server-protocol.js").ThreadPersistenceFailure>();
-  private readonly persistenceFailures: readonly import("./app-server-protocol.js").ThreadPersistenceFailure[];
+  private readonly persistenceObserver?: ThreadManagerOptions['persistenceObserver'];
+  private readonly persistenceFailuresByThread = new Map<
+    string,
+    import('./app-server-protocol.js').ThreadPersistenceFailure
+  >();
+  private readonly persistenceFailures: readonly import('./app-server-protocol.js').ThreadPersistenceFailure[];
   private closing = false;
 
   constructor(options: ThreadManagerOptions = {}) {
-    this.generateThreadId = options.generateThreadId ?? createSequence("thread");
-    this.generateRunId = options.generateRunId ?? createSequence("run");
-    this.generateTurnId = options.generateTurnId ?? createSequence("turn");
-    this.generateItemId = options.generateItemId ?? createSequence("item");
+    this.generateThreadId = options.generateThreadId ?? createSequence('thread');
+    this.generateRunId = options.generateRunId ?? createSequence('run');
+    this.generateTurnId = options.generateTurnId ?? createSequence('turn');
+    this.generateItemId = options.generateItemId ?? createSequence('item');
     this.clock = options.clock ?? Date.now;
     this.runtimeFactory = options.runtimeFactory ?? createDefaultRuntime;
     this.approvalBroker = options.approvalBroker;
@@ -150,21 +150,21 @@ export class ThreadManager {
     const id = this.generateUniqueThreadId();
     const created: Item = {
       id: `thread-created:${id}`,
-      type: "thread.created",
+      type: 'thread.created',
       createdAtMs: 0,
       seq: 0,
       runId: id,
       turnId: id,
-      visibility: "internal",
-      payload: { threadId: id }
+      visibility: 'internal',
+      payload: { threadId: id },
     };
     const thread: ThreadState = {
       id,
       itemList: new InMemoryItemList({
         generateId: createUniqueIdGenerator(this.generateItemId, new Set([created.id])),
         clock: this.clock,
-        initialItems: [created]
-      })
+        initialItems: [created],
+      }),
     };
 
     this.threads.set(thread.id, thread);
@@ -173,7 +173,7 @@ export class ThreadManager {
 
     const snapshot = this.snapshotThread(thread);
 
-    this.emit({ type: "thread/started", thread: snapshot });
+    this.emit({ type: 'thread/started', thread: snapshot });
 
     return snapshot;
   }
@@ -186,10 +186,7 @@ export class ThreadManager {
     return [...this.threads.values()].map((thread) => this.snapshotThread(thread));
   }
 
-  loadThread(
-    snapshot: ThreadSnapshot,
-    options: { readonly emit?: boolean } = {}
-  ): ThreadSnapshot {
+  loadThread(snapshot: ThreadSnapshot, options: { readonly emit?: boolean } = {}): ThreadSnapshot {
     const thread = this.createThreadState(snapshot);
 
     this.threads.set(thread.id, thread);
@@ -198,17 +195,19 @@ export class ThreadManager {
     const loaded = this.snapshotThread(thread);
 
     if (options.emit ?? true) {
-      this.emit({ type: "thread/started", thread: loaded });
+      this.emit({ type: 'thread/started', thread: loaded });
     }
 
     return loaded;
   }
 
-  listPersistenceFailures(): readonly import("./app-server-protocol.js").ThreadPersistenceFailure[] {
+  listPersistenceFailures(): readonly import('./app-server-protocol.js').ThreadPersistenceFailure[] {
     return this.persistenceFailures;
   }
 
-  persistenceFailure(threadId: string): import("./app-server-protocol.js").ThreadPersistenceFailure | undefined {
+  persistenceFailure(
+    threadId: string
+  ): import('./app-server-protocol.js').ThreadPersistenceFailure | undefined {
     return this.persistenceFailuresByThread.get(threadId);
   }
 
@@ -222,13 +221,13 @@ export class ThreadManager {
       this.approvalBroker?.declineTurn(
         pending.request.threadId,
         pending.request.turnId,
-        "Server closing"
+        'Server closing'
       );
     }
     for (const thread of this.threads.values()) {
       const active = this.activeTurns.get(thread.id);
       for (const turn of this.snapshotThread(thread).turns) {
-        if (turn.status === "queued") this.cancelTurn(thread, turn);
+        if (turn.status === 'queued') this.cancelTurn(thread, turn);
       }
       if (active) active.controller.abort();
     }
@@ -255,7 +254,7 @@ export class ThreadManager {
     }
 
     // Resolve before aborting so the waiting tool emits its audit resolution and error.
-    this.approvalBroker?.declineTurn(threadId, active.turnId, "Turn interrupted");
+    this.approvalBroker?.declineTurn(threadId, active.turnId, 'Turn interrupted');
     active.controller.abort();
 
     return this.getTurnSnapshot(this.getThread(threadId), active.turnId);
@@ -283,7 +282,7 @@ export class ThreadManager {
     return this.enqueueTurn({
       threadId: thread.id,
       input: readUserInputForTurn(thread, retrySource),
-      modelOptions: input.modelOptions
+      modelOptions: input.modelOptions,
     });
   }
 
@@ -291,7 +290,7 @@ export class ThreadManager {
     readonly turn: TurnSnapshot;
     readonly completion: Promise<TurnSnapshot>;
   } {
-    if (this.closing) throw new Error("Thread manager is closing");
+    if (this.closing) throw new Error('Thread manager is closing');
     const thread = this.getThread(input.threadId);
     const current = this.snapshotThread(thread);
     const turnId = generateUniqueId(
@@ -308,7 +307,7 @@ export class ThreadManager {
 
     return {
       turn: this.getTurnSnapshot(thread, turnId),
-      completion
+      completion,
     };
   }
 
@@ -319,11 +318,11 @@ export class ThreadManager {
     input: JsonValue
   ): void {
     thread.itemList.append({
-      type: "turn.queued",
+      type: 'turn.queued',
       runId,
       turnId,
-      visibility: "trace",
-      payload: { input }
+      visibility: 'trace',
+      payload: { input },
     });
   }
 
@@ -356,9 +355,7 @@ export class ThreadManager {
   ): Promise<TurnSnapshot> {
     const existing = this.getTurnSnapshot(thread, turnId);
     if (this.closing) {
-      return isTerminalTurnStatus(existing.status)
-        ? existing
-        : this.cancelTurn(thread, existing);
+      return isTerminalTurnStatus(existing.status) ? existing : this.cancelTurn(thread, existing);
     }
     const controller = new AbortController();
 
@@ -369,7 +366,7 @@ export class ThreadManager {
       const runtime = this.runtimeFactory({
         thread: toThreadRecord(thread),
         turn,
-        approvalBroker: this.approvalBroker
+        approvalBroker: this.approvalBroker,
       });
       const loop = new AgentLoop(createAgentLoopOptions(thread, runtime));
       const result = await loop.run({
@@ -378,16 +375,16 @@ export class ThreadManager {
         runId: turn.runId,
         turnId: turn.id,
         modelOptions: input.modelOptions,
-        signal: controller.signal
+        signal: controller.signal,
       });
 
       const terminal = this.getTurnSnapshot(thread, turn.id);
 
-      if (terminal.status === "completed") {
+      if (terminal.status === 'completed') {
         this.emit({
-          type: "turn/completed",
+          type: 'turn/completed',
           threadId: thread.id,
-          turn: terminal
+          turn: terminal,
         });
 
         return terminal;
@@ -400,20 +397,20 @@ export class ThreadManager {
       const failureItem = result.items.find(
         (item) =>
           item.turnId === turn.id &&
-          (item.type === "assistant.message.error" || item.type === "tool.error")
+          (item.type === 'assistant.message.error' || item.type === 'tool.error')
       );
 
       if (failureItem) {
         return this.failTurn(thread, turn, {
-          code: "TURN_FAILED",
+          code: 'TURN_FAILED',
           message: readFailureMessage(failureItem.payload),
-          details: toProtocolItem(failureItem).payload
+          details: toProtocolItem(failureItem).payload,
         });
       }
 
       return this.failTurn(thread, turn, {
-        code: "TURN_FAILED",
-        message: "Turn ended without a terminal lifecycle item"
+        code: 'TURN_FAILED',
+        message: 'Turn ended without a terminal lifecycle item',
       });
     } catch (cause) {
       const turn = this.getTurnSnapshot(thread, turnId);
@@ -427,9 +424,9 @@ export class ThreadManager {
       }
 
       return this.failTurn(thread, turn, {
-        code: "TURN_FAILED",
+        code: 'TURN_FAILED',
         message: readErrorMessage(cause),
-        details: serializeError(cause)
+        details: serializeError(cause),
       });
     } finally {
       if (this.activeTurns.get(thread.id)?.turnId === turnId) {
@@ -443,13 +440,10 @@ export class ThreadManager {
     const thread: ThreadState = {
       id: snapshot.id,
       itemList: new InMemoryItemList({
-        generateId: createUniqueIdGenerator(
-          this.generateItemId,
-          existingItemIds
-        ),
+        generateId: createUniqueIdGenerator(this.generateItemId, existingItemIds),
         clock: this.clock,
-        initialItems: snapshot.items.map((item) => ({ ...item }))
-      })
+        initialItems: snapshot.items.map((item) => ({ ...item })),
+      }),
     };
 
     return thread;
@@ -458,58 +452,73 @@ export class ThreadManager {
   private repairStaleTurns(thread: ThreadState): void {
     const error = {
       code: STALE_TURN_REPAIR_CODE,
-      message: STALE_TURN_REPAIR_MESSAGE
+      message: STALE_TURN_REPAIR_MESSAGE,
     };
 
     for (const turn of this.snapshotThread(thread).turns) {
-      if (turn.status !== "inProgress" && turn.status !== "queued") {
+      if (turn.status !== 'inProgress' && turn.status !== 'queued') {
         continue;
       }
 
       thread.itemList.append({
-        type: "turn.repaired",
+        type: 'turn.repaired',
         runId: turn.runId,
         turnId: turn.id,
-        visibility: "trace",
+        visibility: 'trace',
         payload: {
           previousStatus: turn.status,
-          status: "failed",
+          status: 'failed',
           reason: STALE_TURN_REPAIR_MESSAGE,
-          error
-        }
+          error,
+        },
       });
     }
   }
 
   private attachItemObserver(thread: ThreadState): void {
     thread.itemList.observe((item) => {
-      if (item.visibility === "internal") {
+      if (item.visibility === 'internal') {
         return;
       }
 
       this.emit({
-        type: "item/appended",
+        type: 'item/appended',
         threadId: thread.id,
         turnId: item.turnId,
-        item: toProtocolItem(item)
+        item: toProtocolItem(item),
       });
 
-      if (item.type === "turn.started") {
+      if (item.type === 'turn.started') {
         this.emit({
-          type: "turn/started",
+          type: 'turn/started',
           threadId: thread.id,
-          turn: this.getTurnSnapshot(thread, item.turnId)
+          turn: this.getTurnSnapshot(thread, item.turnId),
         });
       }
 
-      if (item.type === "approval.requested") {
-        const approvalId = readStringPayloadField(item.payload, "approvalId");
-        if (approvalId) this.emit({ type: "approval/requested", threadId: thread.id, turnId: item.turnId, approvalId, item: toProtocolItem(item) });
+      if (item.type === 'approval.requested') {
+        const approvalId = readStringPayloadField(item.payload, 'approvalId');
+        if (approvalId)
+          this.emit({
+            type: 'approval/requested',
+            threadId: thread.id,
+            turnId: item.turnId,
+            approvalId,
+            item: toProtocolItem(item),
+          });
       }
-      if (item.type === "approval.resolved") {
-        const approvalId = readStringPayloadField(item.payload, "approvalId");
+      if (item.type === 'approval.resolved') {
+        const approvalId = readStringPayloadField(item.payload, 'approvalId');
         const decision = readApprovalDecision(item.payload);
-        if (approvalId && decision) this.emit({ type: "approval/resolved", threadId: thread.id, turnId: item.turnId, approvalId, decision, item: toProtocolItem(item) });
+        if (approvalId && decision)
+          this.emit({
+            type: 'approval/resolved',
+            threadId: thread.id,
+            turnId: item.turnId,
+            approvalId,
+            decision,
+            item: toProtocolItem(item),
+          });
       }
     });
   }
@@ -517,17 +526,12 @@ export class ThreadManager {
   private snapshotThread(thread: ThreadState): ThreadSnapshot {
     return toThreadSnapshot({
       threadId: thread.id,
-      items: thread.itemList.getItems()
+      items: thread.itemList.getItems(),
     });
   }
 
-  private getTurnSnapshot(
-    thread: ThreadState,
-    turnId: string
-  ): TurnSnapshot {
-    const turn = this.snapshotThread(thread).turns.find(
-      (entry) => entry.id === turnId
-    );
+  private getTurnSnapshot(thread: ThreadState, turnId: string): TurnSnapshot {
+    const turn = this.snapshotThread(thread).turns.find((entry) => entry.id === turnId);
 
     if (!turn) {
       throw new Error(`Unknown turn: ${turnId}`);
@@ -554,20 +558,16 @@ export class ThreadManager {
     this.observers.forEach((observer) => observer(event));
   }
 
-  private failTurn(
-    thread: ThreadState,
-    turn: TurnSnapshot,
-    error: AppServerError
-  ): TurnSnapshot {
+  private failTurn(thread: ThreadState, turn: TurnSnapshot, error: AppServerError): TurnSnapshot {
     const terminal = this.appendTerminalItem(thread, turn, {
-      type: "turn.failed",
+      type: 'turn.failed',
       runId: turn.runId,
       turnId: turn.id,
-      visibility: "trace",
+      visibility: 'trace',
       payload: {
-        status: "failed",
-        error: error.details ?? { code: error.code, message: error.message }
-      }
+        status: 'failed',
+        error: error.details ?? { code: error.code, message: error.message },
+      },
     });
 
     if (!terminal.appended) {
@@ -575,27 +575,24 @@ export class ThreadManager {
     }
 
     this.emit({
-      type: "turn/failed",
+      type: 'turn/failed',
       threadId: thread.id,
       turn: terminal.turn,
-      error
+      error,
     });
 
     return terminal.turn;
   }
 
-  private cancelTurn(
-    thread: ThreadState,
-    turn: TurnSnapshot
-  ): TurnSnapshot {
-    const error = { code: "TURN_INTERRUPTED", message: "Turn interrupted" };
+  private cancelTurn(thread: ThreadState, turn: TurnSnapshot): TurnSnapshot {
+    const error = { code: 'TURN_INTERRUPTED', message: 'Turn interrupted' };
 
     const terminal = this.appendTerminalItem(thread, turn, {
-      type: "turn.canceled",
+      type: 'turn.canceled',
       runId: turn.runId,
       turnId: turn.id,
-      visibility: "trace",
-      payload: { status: "canceled", error }
+      visibility: 'trace',
+      payload: { status: 'canceled', error },
     });
 
     if (!terminal.appended) {
@@ -603,9 +600,9 @@ export class ThreadManager {
     }
 
     this.emit({
-      type: "turn/completed",
+      type: 'turn/completed',
       threadId: thread.id,
-      turn: terminal.turn
+      turn: terminal.turn,
     });
 
     return terminal.turn;
@@ -626,39 +623,37 @@ export class ThreadManager {
 
     return {
       turn: this.getTurnSnapshot(thread, turn.id),
-      appended: true
+      appended: true,
     };
   }
 }
 
 function readStringPayloadField(payload: unknown, key: string): string | undefined {
-  if (typeof payload !== "object" || payload === null || !(key in payload)) return undefined;
+  if (typeof payload !== 'object' || payload === null || !(key in payload)) return undefined;
   const value = (payload as Readonly<Record<string, unknown>>)[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function readApprovalDecision(payload: unknown): "approveOnce" | "decline" | undefined {
-  const decision = readStringPayloadField(payload, "decision");
-  return decision === "approveOnce" || decision === "decline" ? decision : undefined;
+function readApprovalDecision(payload: unknown): 'approveOnce' | 'decline' | undefined {
+  const decision = readStringPayloadField(payload, 'decision');
+  return decision === 'approveOnce' || decision === 'decline' ? decision : undefined;
 }
 
 function toThreadRecord(thread: ThreadState): ThreadRecord {
   const snapshot = toThreadSnapshot({
     threadId: thread.id,
-    items: thread.itemList.getItems()
+    items: thread.itemList.getItems(),
   });
 
   return {
     id: snapshot.id,
     status: snapshot.status,
     turns: snapshot.turns,
-    items: thread.itemList.getItems()
+    items: thread.itemList.getItems(),
   };
 }
 
-function latestRecoverableTurn(
-  turns: readonly TurnSnapshot[]
-): TurnSnapshot | undefined {
+function latestRecoverableTurn(turns: readonly TurnSnapshot[]): TurnSnapshot | undefined {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
 
@@ -671,29 +666,22 @@ function latestRecoverableTurn(
 }
 
 function isRecoverableTurnStatus(status: TurnStatus): boolean {
-  return status === "failed" || status === "canceled";
+  return status === 'failed' || status === 'canceled';
 }
 
 function isTerminalTurnStatus(status: TurnStatus): boolean {
-  return (
-    status === "completed" || status === "failed" || status === "canceled"
-  );
+  return status === 'completed' || status === 'failed' || status === 'canceled';
 }
 
-function readUserInputForTurn(
-  thread: ThreadState,
-  turn: TurnSnapshot
-): JsonValue {
+function readUserInputForTurn(thread: ThreadState, turn: TurnSnapshot): JsonValue {
   const items = thread.itemList.getItems();
   const userItem = items.find(
-    (item) => item.turnId === turn.id && item.type === "user.message.completed"
+    (item) => item.turnId === turn.id && item.type === 'user.message.completed'
   );
-  const queuedItem = items.find(
-    (item) => item.turnId === turn.id && item.type === "turn.queued"
-  );
+  const queuedItem = items.find((item) => item.turnId === turn.id && item.type === 'turn.queued');
   const input = userItem
-    ? readObjectProperty(userItem.payload, "content")
-    : readObjectProperty(queuedItem?.payload, "input");
+    ? readObjectProperty(userItem.payload, 'content')
+    : readObjectProperty(queuedItem?.payload, 'input');
 
   if (!isJsonValue(input)) {
     throw new Error(`Cannot retry turn without JSON user input: ${turn.id}`);
@@ -703,7 +691,7 @@ function readUserInputForTurn(
 }
 
 function readObjectProperty(payload: unknown, key: string): unknown {
-  if (typeof payload === "object" && payload !== null && key in payload) {
+  if (typeof payload === 'object' && payload !== null && key in payload) {
     return payload[key as keyof typeof payload];
   }
 
@@ -711,15 +699,11 @@ function readObjectProperty(payload: unknown, key: string): unknown {
 }
 
 function isJsonValue(value: unknown): value is JsonValue {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
     return true;
   }
 
-  if (typeof value === "number") {
+  if (typeof value === 'number') {
     return Number.isFinite(value);
   }
 
@@ -727,23 +711,16 @@ function isJsonValue(value: unknown): value is JsonValue {
     return value.every(isJsonValue);
   }
 
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    Object.values(value).every(isJsonValue)
-  );
+  return typeof value === 'object' && value !== null && Object.values(value).every(isJsonValue);
 }
 
-function createAgentLoopOptions(
-  thread: ThreadState,
-  runtime: ThreadRuntime
-): AgentLoopOptions {
+function createAgentLoopOptions(thread: ThreadState, runtime: ThreadRuntime): AgentLoopOptions {
   return {
     itemList: thread.itemList,
     model: runtime.model,
     toolRuntime: runtime.toolRuntime,
     contextCompiler: runtime.contextCompiler,
-    systemPrompt: runtime.systemPrompt
+    systemPrompt: runtime.systemPrompt,
   };
 }
 
@@ -752,11 +729,11 @@ function createDefaultRuntime(): ThreadRuntime {
     model: {
       async *generate() {
         yield {
-          type: "message.completed" as const,
-          content: "Fake response"
+          type: 'message.completed' as const,
+          content: 'Fake response',
         };
-      }
-    }
+      },
+    },
   };
 }
 
@@ -781,10 +758,7 @@ function createUniqueIdGenerator(
   };
 }
 
-function generateUniqueId(
-  generateId: IdGenerator,
-  existingIds: ReadonlySet<string>
-): string {
+function generateUniqueId(generateId: IdGenerator, existingIds: ReadonlySet<string>): string {
   for (let attempt = 0; attempt < 10_000; attempt += 1) {
     const id = generateId();
 
@@ -793,20 +767,20 @@ function generateUniqueId(
     }
   }
 
-  throw new Error("Unable to generate a unique id");
+  throw new Error('Unable to generate a unique id');
 }
 
 function readFailureMessage(payload: unknown): string {
   if (
-    typeof payload === "object" &&
+    typeof payload === 'object' &&
     payload !== null &&
-    "message" in payload &&
-    typeof payload.message === "string"
+    'message' in payload &&
+    typeof payload.message === 'string'
   ) {
     return payload.message;
   }
 
-  return "Turn failed";
+  return 'Turn failed';
 }
 
 function readErrorMessage(cause: unknown): string {
@@ -820,9 +794,9 @@ function serializeError(cause: unknown): JsonValue {
 
   if (
     cause === null ||
-    typeof cause === "string" ||
-    typeof cause === "number" ||
-    typeof cause === "boolean"
+    typeof cause === 'string' ||
+    typeof cause === 'number' ||
+    typeof cause === 'boolean'
   ) {
     return cause;
   }

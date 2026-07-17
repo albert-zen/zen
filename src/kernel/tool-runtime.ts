@@ -1,9 +1,9 @@
-import type { HookRuntime } from "./hook-runtime.js";
-import type { Item, ItemAppendInput, ItemList } from "./item-list.js";
+import type { HookRuntime } from './hook-runtime.js';
+import type { Item, ItemAppendInput, ItemList } from './item-list.js';
 import {
   consumeAbortableAsyncIterator,
-  isAsyncIteratorAbortedError
-} from "./abortable-async-iterator.js";
+  isAsyncIteratorAbortedError,
+} from './abortable-async-iterator.js';
 
 export type ToolCallPayload = {
   readonly id: string;
@@ -12,12 +12,12 @@ export type ToolCallPayload = {
 };
 
 export type ToolOutputDeltaEvent = {
-  readonly type: "output.delta";
+  readonly type: 'output.delta';
   readonly delta: unknown;
 };
 
 export type ToolApprovalRequestedEvent = {
-  readonly type: "approval.requested";
+  readonly type: 'approval.requested';
   readonly request: {
     readonly id: string;
     readonly threadId: string;
@@ -31,21 +31,21 @@ export type ToolApprovalRequestedEvent = {
 };
 
 export type ToolApprovalResolvedEvent = {
-  readonly type: "approval.resolved";
-  readonly request: ToolApprovalRequestedEvent["request"];
+  readonly type: 'approval.resolved';
+  readonly request: ToolApprovalRequestedEvent['request'];
   readonly decision: {
-    readonly type: "approveOnce" | "decline";
+    readonly type: 'approveOnce' | 'decline';
     readonly reason?: string;
   };
 };
 
 export type ToolResultCompletedEvent = {
-  readonly type: "result.completed";
+  readonly type: 'result.completed';
   readonly content: unknown;
 };
 
 export type ToolErrorEvent = {
-  readonly type: "error";
+  readonly type: 'error';
   readonly error: unknown;
 };
 
@@ -66,10 +66,7 @@ export type ToolExecutionContext = {
 };
 
 export interface ToolRuntime {
-  execute(
-    call: ToolCallPayload,
-    context: ToolExecutionContext
-  ): AsyncIterable<ToolRuntimeEvent>;
+  execute(call: ToolCallPayload, context: ToolExecutionContext): AsyncIterable<ToolRuntimeEvent>;
 }
 
 export type AppendToolExecutionItemsInput = {
@@ -82,9 +79,7 @@ export type AppendToolExecutionItemsInput = {
   readonly signal?: AbortSignal;
 };
 
-export type ItemAppender = (
-  input: ItemAppendInput
-) => Item | undefined | Promise<Item | undefined>;
+export type ItemAppender = (input: ItemAppendInput) => Item | undefined | Promise<Item | undefined>;
 
 export type ToolExecutionItems = {
   readonly started: readonly Item[];
@@ -107,21 +102,21 @@ export async function appendToolExecutionItems(
 
     const hookDecision = await input.hookRuntime?.beforeToolCall({
       call: requestedCall,
-      assistantItem: input.assistantItem
+      assistantItem: input.assistantItem,
     });
 
-    if (hookDecision?.type === "block") {
+    if (hookDecision?.type === 'block') {
       continue;
     }
 
     const call = hookDecision?.call ?? requestedCall;
     const startedItem = await appendRequired(appendItem, {
-      type: "tool.call.started",
+      type: 'tool.call.started',
       runId: input.assistantItem.runId,
       turnId: input.assistantItem.turnId,
       causeId: input.assistantItem.id,
-      visibility: "trace",
-      payload: createToolCallPayload(call)
+      visibility: 'trace',
+      payload: createToolCallPayload(call),
     });
     let deltaIndex = 0;
 
@@ -130,79 +125,79 @@ export async function appendToolExecutionItems(
     try {
       await consumeAbortableAsyncIterator(
         input.toolRuntime.execute(call, {
-          threadId: input.threadId ?? "",
+          threadId: input.threadId ?? '',
           runId: input.assistantItem.runId,
           turnId: input.assistantItem.turnId,
           signal: input.signal,
           assistantItem: input.assistantItem,
-          startedItem
+          startedItem,
         }),
         input.signal,
         async (event) => {
-        if (event.type === "approval.requested") {
-          await appendRequired(appendItem, {
-            type: "approval.requested",
-            runId: input.assistantItem.runId,
-            turnId: input.assistantItem.turnId,
-            causeId: startedItem.id,
-            targetId: startedItem.id,
-            visibility: "trace",
-            payload: approvalRequestPayload(event.request)
-          });
-        }
-
-        if (event.type === "approval.resolved") {
-          await appendRequired(appendItem, {
-            type: "approval.resolved",
-            runId: input.assistantItem.runId,
-            turnId: input.assistantItem.turnId,
-            causeId: startedItem.id,
-            targetId: startedItem.id,
-            visibility: "trace",
-            payload: {
-              ...approvalRequestPayload(event.request),
-              decision: event.decision.type,
-              ...(event.decision.reason === undefined ? {} : { reason: event.decision.reason })
-            }
-          });
-        }
-
-        if (event.type === "output.delta") {
-          await appendItem({
-            type: "tool.output.delta",
-            runId: input.assistantItem.runId,
-            turnId: input.assistantItem.turnId,
-            causeId: startedItem.id,
-            targetId: startedItem.id,
-            visibility: "trace",
-            payload: {
-              ...createToolCallPayload(call),
-              delta: event.delta,
-              index: deltaIndex++
-            }
-          });
-        }
-
-        if (event.type === "result.completed") {
-          completed.push(
+          if (event.type === 'approval.requested') {
             await appendRequired(appendItem, {
-              type: "tool.result.completed",
+              type: 'approval.requested',
               runId: input.assistantItem.runId,
               turnId: input.assistantItem.turnId,
               causeId: startedItem.id,
               targetId: startedItem.id,
+              visibility: 'trace',
+              payload: approvalRequestPayload(event.request),
+            });
+          }
+
+          if (event.type === 'approval.resolved') {
+            await appendRequired(appendItem, {
+              type: 'approval.resolved',
+              runId: input.assistantItem.runId,
+              turnId: input.assistantItem.turnId,
+              causeId: startedItem.id,
+              targetId: startedItem.id,
+              visibility: 'trace',
+              payload: {
+                ...approvalRequestPayload(event.request),
+                decision: event.decision.type,
+                ...(event.decision.reason === undefined ? {} : { reason: event.decision.reason }),
+              },
+            });
+          }
+
+          if (event.type === 'output.delta') {
+            await appendItem({
+              type: 'tool.output.delta',
+              runId: input.assistantItem.runId,
+              turnId: input.assistantItem.turnId,
+              causeId: startedItem.id,
+              targetId: startedItem.id,
+              visibility: 'trace',
               payload: {
                 ...createToolCallPayload(call),
-                content: event.content
-              }
-            })
-          );
-        }
+                delta: event.delta,
+                index: deltaIndex++,
+              },
+            });
+          }
 
-        if (event.type === "error") {
-          errors.push(await appendToolError(appendItem, startedItem, call, event.error));
-          return false;
-        }
+          if (event.type === 'result.completed') {
+            completed.push(
+              await appendRequired(appendItem, {
+                type: 'tool.result.completed',
+                runId: input.assistantItem.runId,
+                turnId: input.assistantItem.turnId,
+                causeId: startedItem.id,
+                targetId: startedItem.id,
+                payload: {
+                  ...createToolCallPayload(call),
+                  content: event.content,
+                },
+              })
+            );
+          }
+
+          if (event.type === 'error') {
+            errors.push(await appendToolError(appendItem, startedItem, call, event.error));
+            return false;
+          }
         }
       );
     } catch (caughtError) {
@@ -219,7 +214,7 @@ export async function appendToolExecutionItems(
 }
 
 function approvalRequestPayload(
-  request: ToolApprovalRequestedEvent["request"]
+  request: ToolApprovalRequestedEvent['request']
 ): Readonly<Record<string, unknown>> {
   return {
     approvalId: request.id,
@@ -229,7 +224,7 @@ function approvalRequestPayload(
     toolCallId: request.toolCallId,
     toolName: request.toolName,
     ...(request.input === undefined ? {} : { input: request.input }),
-    ...(request.reason === undefined ? {} : { reason: request.reason })
+    ...(request.reason === undefined ? {} : { reason: request.reason }),
   };
 }
 
@@ -240,17 +235,17 @@ function appendToolError(
   cause: unknown
 ): Promise<Item> {
   return appendRequired(appendItem, {
-    type: "tool.error",
+    type: 'tool.error',
     runId: startedItem.runId,
     turnId: startedItem.turnId,
     causeId: startedItem.id,
     targetId: startedItem.id,
-    visibility: "trace",
+    visibility: 'trace',
     payload: {
       ...createToolCallPayload(call),
       message: readErrorMessage(cause),
-      cause: serializeErrorCause(cause)
-    }
+      cause: serializeErrorCause(cause),
+    },
   });
 }
 
@@ -258,10 +253,7 @@ function createAppender(input: AppendToolExecutionItemsInput): ItemAppender {
   return input.appendItem ?? ((item) => input.itemList.append(item));
 }
 
-async function appendRequired(
-  appendItem: ItemAppender,
-  item: ItemAppendInput
-): Promise<Item> {
+async function appendRequired(appendItem: ItemAppender, item: ItemAppendInput): Promise<Item> {
   const appended = await appendItem(item);
 
   if (!appended) {
@@ -292,15 +284,13 @@ function readToolCalls(payload: unknown): readonly ToolCallPayload[] {
   });
 }
 
-function createToolCallPayload(
-  call: ToolCallPayload
-): Readonly<Record<string, unknown>> {
+function createToolCallPayload(call: ToolCallPayload): Readonly<Record<string, unknown>> {
   const payload: Record<string, unknown> = {
     toolCallId: call.id,
-    toolName: call.name
+    toolName: call.name,
   };
 
-  if ("input" in call) {
+  if ('input' in call) {
     payload.input = call.input;
   }
 
@@ -320,9 +310,9 @@ function serializeErrorCause(cause: unknown): unknown {
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null;
+  return typeof value === 'object' && value !== null;
 }
 
 function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+  return typeof value === 'string' ? value : undefined;
 }

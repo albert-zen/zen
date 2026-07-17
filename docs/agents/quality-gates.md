@@ -8,17 +8,19 @@ Worker/reviewer note and state-transition discipline is part of the quality gate
 
 ## Commands
 
-| Gate | Command | Required? | Notes |
-| --- | --- | --- | --- |
-| Format | `<not configured>` | no | Not configured for the minimal scaffold. |
-| Lint | `<not configured>` | no | Not configured for the minimal scaffold. |
-| Typecheck | `npm run typecheck` | yes | Runs TypeScript with `--noEmit`. |
-| Unit tests | `npm test` | yes | Runs Vitest smoke/unit tests. |
-| Integration tests | `<not configured>` | no | Required for end-to-end agent loop behavior. |
-| E2E/browser | `<not configured>` | no | Not relevant until UI exists. |
-| Commit message | Manual review | yes | Must follow `docs/agents/engineering-standards.md`. |
-| Worker note | Linear comment | yes | Required before `Agent Review`. |
-| Review note | Linear comment | yes | Required before `Human Review`, `Rework`, `Needs Human Context`, or `Blocked`. |
+| Gate             | Command                                                          | Required? | Notes                                                                                         |
+| ---------------- | ---------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------- |
+| Format           | `npm run format:check`                                           | yes       | Prettier checks source, tests, configs, Web, acceptance, and E2E code.                        |
+| Lint             | `npm run lint`                                                   | yes       | ESLint flat config with TypeScript-aware production/Web rules and React Hooks rules.          |
+| Typecheck        | `npm run typecheck && npm run typecheck:web`                     | yes       | Core and Web TypeScript checks.                                                               |
+| Unit/integration | `npm test`                                                       | yes       | Serialized Vitest suite for deterministic Windows execution.                                  |
+| Builds           | `npm run build && npm run build:acceptance && npm run web:build` | yes       | Production, acceptance, and Web builds.                                                       |
+| Coverage         | `npm run coverage`                                               | yes       | Each kernel/product/presentation group needs 85% statements/functions/lines and 80% branches. |
+| E2E/browser      | `npm run e2e`                                                    | yes       | Playwright Chromium real-proxy workflow. Run `npx playwright install chromium` once first.    |
+| Release gate     | `npm run check`                                                  | yes       | Fail-fast sequence of every gate above.                                                       |
+| Commit message   | Manual review                                                    | yes       | Must follow `docs/agents/engineering-standards.md`.                                           |
+| Worker note      | Local append-only evidence document                              | yes       | Required before `Agent Review`.                                                               |
+| Review note      | Local append-only evidence document                              | yes       | Required before `Integrated`, `Rework`, `Needs Human Context`, or `Blocked`.                  |
 
 ## Evidence
 
@@ -51,4 +53,4 @@ An issue must stay out of `Agent Review` unless:
 - the worker scope is complete or explicitly blocked,
 - validation evidence exists,
 - the latest worker note includes branch/PR reference and acceptance criteria status,
-- required checks are passing, or the current local-only mode explicitly records why GitHub checks do not exist yet.
+- required checks are passing, or the current local-branch/local-review mode explicitly records why GitHub PR/check handoff is not used yet.
