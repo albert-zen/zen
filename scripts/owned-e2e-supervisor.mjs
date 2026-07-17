@@ -41,7 +41,7 @@ export async function registerSpawnedProcess({
   inspect = (pid) => inspectProcess(pid, platform),
   list = () => listProcesses(platform),
 }) {
-  const current = await inspect(child.pid);
+  const current = await waitForSpawnedIdentity(child.pid, marker, inspect);
   if (!current || !current.commandLine?.includes(marker)) {
     if (current) {
       const entry = makeEntry(current, marker, rootPid, `unverified-${role}`, await list());
@@ -56,12 +56,20 @@ export async function registerSpawnedProcess({
   return entry;
 }
 
+async function waitForSpawnedIdentity(pid, marker, inspect) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const current = await inspect(pid);
+    if (!current || current.commandLine?.includes(marker)) return current;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return inspect(pid);
+}
+
 export async function cleanupOwnedManifest({
   manifestPath = defaultManifestPath,
   platform = process.platform,
-  inspect = (pid) => inspectProcess(pid, platform),
   list = () => listProcesses(platform),
-  terminate = (entry) => terminateProcess(entry, platform, inspect),
+  terminate = (entry, current) => terminateProcess(entry, platform, current),
   maxPasses = 32,
 }) {
   const manifest = createManifestStore(manifestPath);
@@ -74,14 +82,14 @@ export async function cleanupOwnedManifest({
     if (discovered.length > 0) await manifest.upsertMany(initial.marker, discovered);
 
     const snapshot = await manifest.read();
-    const validation = await validateLiveEntries(snapshot.entries, inspect, list);
+    const validation = validateLiveEntries(snapshot.entries, processes);
     if (validation.invalid.length > 0) {
       throw new Error(`Refusing cleanup: ${validation.invalid.join('; ')}`);
     }
 
     if (validation.live.length === 0) {
       // A second zero scan closes the root-exit window before the manifest is cleared.
-      await assertNoOwnedProcesses({ manifestPath, marker: snapshot.marker, inspect, list });
+      await assertNoOwnedProcesses({ manifestPath, marker: snapshot.marker, list });
       stableZeroScans += 1;
       if (stableZeroScans >= 2) {
         await manifest.write(emptyManifest(snapshot.marker));
@@ -96,11 +104,16 @@ export async function cleanupOwnedManifest({
     const entry = validation.live.sort(
       (left, right) => right.parentChain.length - left.parentChain.length
     )[0];
-    const beforeKill = await validateEntry(entry, await inspect(entry.pid), await list());
+    const preKillSnapshot = await list();
+    const beforeKill = validateEntry(
+      entry,
+      preKillSnapshot.find((candidate) => candidate.pid === entry.pid),
+      preKillSnapshot
+    );
     if (!beforeKill.valid) {
       throw new Error(`Refusing cleanup: ${beforeKill.reason}`);
     }
-    await terminate(entry);
+    await terminate(entry, beforeKill.current);
   }
 
   throw new Error(`Owned cleanup did not reach quiescence after ${maxPasses} passes`);
@@ -115,24 +128,24 @@ export async function terminateRegisteredProcess(
   if (!isOwnedProcess(entry, current)) {
     throw new Error(`Refusing to terminate unverified PID ${entry.pid}`);
   }
-  await terminateProcess(entry, platform, inspect);
+  await terminateProcess(entry, platform, current);
 }
 
 export async function assertNoOwnedProcesses({
   manifestPath = defaultManifestPath,
   marker,
-  inspect = (pid) => inspectProcess(pid, process.platform),
   list = () => listProcesses(process.platform),
 } = {}) {
   const manifest = await createManifestStore(manifestPath).read();
   const ownerMarker = marker ?? manifest.marker;
   const failures = [];
+  const processes = await list();
   for (const entry of manifest.entries) {
-    const current = await inspect(entry.pid);
+    const current = processes.find((candidate) => candidate.pid === entry.pid);
     if (current) failures.push(`manifest PID ${entry.pid} is still live or has been reused`);
   }
   if (ownerMarker) {
-    const marked = await findOwnedProcesses(ownerMarker, { list });
+    const marked = processes.filter((candidate) => candidate.commandLine?.includes(ownerMarker));
     if (marked.length > 0)
       failures.push(`independent marker scan found ${marked.length} owned process(es)`);
   }
@@ -150,7 +163,7 @@ export async function runOwnedCommand({
   spawnCommand = spawn,
   inspect = (pid) => inspectProcess(pid, platform),
   list = () => listProcesses(platform),
-  terminate = (entry) => terminateProcess(entry, platform, inspect),
+  terminate = (entry, current) => terminateProcess(entry, platform, current),
   signals = process,
   setExitCode,
 }) {
@@ -305,11 +318,15 @@ function assertRetainedAncestry(entries, processes) {
 }
 
 function parentIdentity(entry) {
-  return { pid: entry.pid, createdAt: entry.createdAt };
+  return { pid: entry.pid, creationToken: creationToken(entry) };
 }
 
 function createdAfter(child, parent) {
-  return child.createdAt >= parent.createdAt;
+  const childToken = creationToken(child);
+  const parentToken = creationToken(parent);
+  return /^\d+$/.test(childToken) && /^\d+$/.test(parentToken)
+    ? BigInt(childToken) >= BigInt(parentToken)
+    : childToken >= parentToken;
 }
 
 function readParentChain(current, processes) {
@@ -317,17 +334,21 @@ function readParentChain(current, processes) {
   const chain = [];
   let parent = byPid.get(current.parentPid);
   while (parent) {
-    chain.push({ pid: parent.pid, createdAt: parent.createdAt });
+    chain.push({ pid: parent.pid, creationToken: creationToken(parent) });
     parent = byPid.get(parent.parentPid);
   }
   return chain;
 }
 
-async function validateLiveEntries(entries, inspect, list) {
+function validateLiveEntries(entries, processes) {
   const live = [];
   const invalid = [];
   for (const entry of entries) {
-    const validation = await validateEntry(entry, await inspect(entry.pid), await list());
+    const validation = validateEntry(
+      entry,
+      processes.find((candidate) => candidate.pid === entry.pid),
+      processes
+    );
     if (!validation.current) continue;
     if (!validation.valid) invalid.push(validation.reason);
     else live.push(entry);
@@ -335,26 +356,26 @@ async function validateLiveEntries(entries, inspect, list) {
   return { live, invalid };
 }
 
-async function validateEntry(entry, current, processes) {
-  if (!current) return { current: false, valid: true };
+function validateEntry(entry, current, processes) {
+  if (!current) return { current: undefined, valid: true };
   if (!isOwnedProcess(entry, current)) {
     return {
-      current: true,
+      current,
       valid: false,
       reason: `PID ${entry.pid} failed exact owner identity validation`,
     };
   }
   if (!hasStableParentChain(entry.parentChain, readParentChain(current, processes), processes)) {
-    return { current: true, valid: false, reason: `PID ${entry.pid} parent chain changed` };
+    return { current, valid: false, reason: `PID ${entry.pid} parent chain changed` };
   }
-  return { current: true, valid: true };
+  return { current, valid: true };
 }
 
 function sameProcessIdentity(entry, current) {
   return Boolean(
     current &&
     current.pid === entry.pid &&
-    current.createdAt === entry.createdAt &&
+    creationToken(current) === creationToken(entry) &&
     current.parentPid === entry.parentPid &&
     current.executable === entry.executable &&
     current.commandLine === entry.commandLine
@@ -366,13 +387,18 @@ function hasStableParentChain(recorded, actual, processes) {
   for (let index = 0; index < actual.length; index += 1) {
     if (
       actual[index].pid !== recorded[index]?.pid ||
-      actual[index].createdAt !== recorded[index]?.createdAt
+      creationToken(actual[index]) !==
+        (recorded[index]?.creationToken ?? recorded[index]?.createdAt)
     ) {
       return false;
     }
   }
   const byPid = new Map(processes.map((candidate) => [candidate.pid, candidate]));
   return recorded.slice(actual.length).every((parent) => !byPid.has(parent.pid));
+}
+
+function creationToken(entry) {
+  return entry.creationToken ?? entry.createdAt;
 }
 
 async function cleanupStaleManifest(operations) {
@@ -465,8 +491,7 @@ function waitForChild(child) {
   });
 }
 
-async function terminateProcess(entry, platform, inspect) {
-  const current = await inspect(entry.pid);
+async function terminateProcess(entry, platform, current) {
   if (!isOwnedProcess(entry, current))
     throw new Error(`Refusing to terminate unverified PID ${entry.pid}`);
   if (platform === 'win32') {
@@ -488,7 +513,7 @@ async function inspectProcess(pid, platform) {
 async function listProcesses(platform) {
   if (platform === 'win32') {
     const output = await powershellJson(
-      'Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate; executable = $_.ExecutablePath; commandLine = $_.CommandLine } } | ConvertTo-Json -Compress'
+      'Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = $_.CreationDate.ToUniversalTime().Ticks.ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } } | ConvertTo-Json -Compress'
     );
     if (!output) return [];
     const parsed = JSON.parse(output);

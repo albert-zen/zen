@@ -324,7 +324,7 @@ describe('owned E2E supervisor', () => {
         terminate: async (candidate) => processes.delete(candidate.pid),
       };
 
-      await expect(cleanupOwnedManifest(operations)).rejects.toThrow('independent marker scan');
+      await expect(cleanupOwnedManifest(operations)).rejects.toThrow('did not reach quiescence');
       await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 1234');
 
       orphanLive = false;

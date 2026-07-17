@@ -65,6 +65,26 @@ Blocker or context escalation details: none.
 
 ## Codex Review Note
 
+Round: 7 integration-gate correction
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: canonical integration gate at merge `776ccedf` failed after the prior STRICT PASS.
+Reviewer edits: none
+Reviewed revision: `3fb9ee5487b2debc9aed969bbd4c00cb11a80141`
+Finding: P1. Supervisor cleanup mixed many independent WMI `inspect` and `list` snapshots and compared opaque creation strings. This produced temporal ancestry false refusals (`predates ancestry parent` and `failed exact identity validation`) in the real failing-launcher test, despite zero residual processes.
+Local tracker state decision: Rework
+State decision reason: manager accepted the reproducible integration failure; previous strict-pass claims remain historical and superseded for the integration gate.
+
+## Codex Worker Note
+
+Round: 12
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Complete -> Rework
+Summary of behavior delivered: supervisor cleanup now uses one coherent snapshot for each discovery/validation pass and exactly one fresh snapshot immediately before an individual kill. Win32 process creation identity is normalized at the query boundary to UTC ticks and ISO UTC text; custom test entries retain compatible fallback identity handling. Spawn registration waits conditionally for the marker-bearing WMI identity rather than accepting a transient incoherent observation.
+Validation: direct real supervisor suite passed 5 consecutive repetitions, each 17 tests, in 6.88s, 6.92s, 6.95s, 7.06s, and 7.11s; zero residual process scan remains required after final gates.
+Acceptance criteria status: Rework pending fresh review and final full gates.
+
+## Codex Review Note
+
 Round: 7
 Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
 Reviewer context: fresh Review Round 7 strict review accepted by manager
