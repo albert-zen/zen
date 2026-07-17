@@ -5,6 +5,7 @@ import { OwnedProcessTree, type OwnedProcessIdentity } from './owned-process-cle
 import {
   ApprovalBroker,
   ToolApprovalDeniedError,
+  toPublicApprovalDecision,
   toToolApprovalRequest,
 } from '../../product/index.js';
 import type {
@@ -84,11 +85,13 @@ export class LocalToolRuntime implements ToolRuntime {
       });
       yield { type: 'approval.requested', request: toToolApprovalRequest(pending.request) };
       const decision = await pending.decision;
-      yield {
-        type: 'approval.resolved',
-        request: toToolApprovalRequest(pending.request),
-        decision,
-      };
+      if (!decision.resolutionRecorded) {
+        yield {
+          type: 'approval.resolved',
+          request: toToolApprovalRequest(pending.request),
+          decision: toPublicApprovalDecision(decision),
+        };
+      }
       if (decision.type === 'decline') {
         yield {
           type: 'error',

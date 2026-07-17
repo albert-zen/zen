@@ -6,12 +6,17 @@ import { appendToolExecutionItems, type ToolRuntime } from './tool-runtime.js';
 
 export type AgentLoopOptions = {
   readonly itemList: ItemList;
+  readonly appendItem?: AgentItemAppender;
   readonly model: ModelGateway;
   readonly toolRuntime?: ToolRuntime;
   readonly contextCompiler?: ContextCompiler;
   readonly hooks?: HookHandlers;
   readonly systemPrompt?: string;
 };
+
+export type AgentItemAppender = (
+  input: ItemAppendInput
+) => Item | undefined | Promise<Item | undefined>;
 
 export type AgentRunInput = {
   readonly threadId?: string;
@@ -29,6 +34,7 @@ export type AgentRunResult = {
 
 export class AgentLoop {
   private readonly itemList: ItemList;
+  private readonly appendItem?: AgentItemAppender;
   private readonly model: ModelGateway;
   private readonly toolRuntime?: ToolRuntime;
   private readonly contextCompiler: ContextCompiler;
@@ -37,6 +43,7 @@ export class AgentLoop {
 
   constructor(options: AgentLoopOptions) {
     this.itemList = options.itemList;
+    this.appendItem = options.appendItem;
     this.model = options.model;
     this.toolRuntime = options.toolRuntime;
     this.contextCompiler = options.contextCompiler ?? new ContextCompiler();
@@ -133,7 +140,7 @@ export class AgentLoop {
       return this.hookRuntime.append(input);
     }
 
-    return this.itemList.append(input);
+    return await (this.appendItem?.(input) ?? this.itemList.append(input));
   }
 
   private async ensureSystemPromptItem(input: AgentRunInput): Promise<void> {

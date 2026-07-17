@@ -18,7 +18,11 @@ import {
   type ItemAppendInput,
 } from '../kernel/index.js';
 import { type ModelGateway, type ModelOptions, type ToolRuntime } from '../kernel/index.js';
-import { type ApprovalBroker } from './approval-runtime.js';
+import {
+  type ApprovalBroker,
+  type ApprovalDecision,
+  type ApprovalRequest,
+} from './approval-runtime.js';
 
 export type { ModelGateway, ModelOptions, ToolRuntime };
 
@@ -47,6 +51,7 @@ export type ThreadManagerOptions = {
   readonly initialThreads?: readonly ThreadSnapshot[];
   readonly repairOnLoad?: boolean;
   readonly persistenceObserver?: (threadId: string, item: Item) => void;
+  readonly itemCommitBarrier?: (threadId: string, item: Item) => Promise<void>;
   readonly persistenceFailures?: readonly import('./app-server-protocol.js').ThreadPersistenceFailure[];
   readonly approvalBroker?: ApprovalBroker;
 };
@@ -61,6 +66,12 @@ export type TurnRetryInput = {
   readonly threadId: string;
   readonly turnId?: string;
   readonly modelOptions?: ModelOptions;
+};
+
+export type PreparedTurn = {
+  readonly turn: TurnSnapshot;
+  activate(): Promise<TurnSnapshot>;
+  abandon(): void;
 };
 
 export type ThreadRecord = {
@@ -107,12 +118,15 @@ export class ThreadManager {
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private readonly approvalBroker?: ApprovalBroker;
   private readonly persistenceObserver?: ThreadManagerOptions['persistenceObserver'];
+  private readonly itemCommitBarrier?: ThreadManagerOptions['itemCommitBarrier'];
+  private readonly pendingTurnActivations = new Set<() => void>();
   private readonly persistenceFailuresByThread = new Map<
     string,
     import('./app-server-protocol.js').ThreadPersistenceFailure
   >();
   private readonly persistenceFailures: readonly import('./app-server-protocol.js').ThreadPersistenceFailure[];
   private closing = false;
+  private fenced = false;
 
   constructor(options: ThreadManagerOptions = {}) {
     this.generateThreadId = options.generateThreadId ?? createSequence('thread');
@@ -123,6 +137,7 @@ export class ThreadManager {
     this.runtimeFactory = options.runtimeFactory ?? createDefaultRuntime;
     this.approvalBroker = options.approvalBroker;
     this.persistenceObserver = options.persistenceObserver;
+    this.itemCommitBarrier = options.itemCommitBarrier;
     this.persistenceFailures = [...(options.persistenceFailures ?? [])];
     for (const failure of this.persistenceFailures) {
       if (failure.threadId) this.persistenceFailuresByThread.set(failure.threadId, failure);
@@ -217,6 +232,7 @@ export class ThreadManager {
 
   async shutdown(): Promise<void> {
     this.closing = true;
+    this.abandonPendingTurns();
     for (const pending of this.approvalBroker?.listPending() ?? []) {
       this.approvalBroker?.declineTurn(
         pending.request.threadId,
@@ -224,26 +240,61 @@ export class ThreadManager {
         'Server closing'
       );
     }
+    if (this.fenced) {
+      for (const active of this.activeTurns.values()) active.controller.abort();
+      await Promise.all([...this.turnTails.values()]);
+      return;
+    }
+    const cancellations: Promise<TurnSnapshot>[] = [];
     for (const thread of this.threads.values()) {
       const active = this.activeTurns.get(thread.id);
       for (const turn of this.snapshotThread(thread).turns) {
-        if (turn.status === 'queued') this.cancelTurn(thread, turn);
+        if (turn.status === 'queued') cancellations.push(this.cancelTurn(thread, turn));
       }
       if (active) active.controller.abort();
     }
+    await Promise.all(cancellations);
     await Promise.all([...this.turnTails.values()]);
   }
 
+  failStop(): void {
+    if (this.fenced) return;
+    this.fenced = true;
+    this.closing = true;
+    this.abandonPendingTurns();
+    for (const pending of this.approvalBroker?.listPending() ?? []) {
+      this.approvalBroker?.declineTurn(
+        pending.request.threadId,
+        pending.request.turnId,
+        'Persistence unavailable'
+      );
+    }
+    for (const active of this.activeTurns.values()) {
+      active.controller.abort();
+    }
+  }
+
   enqueueTurn(input: TurnStartInput): TurnSnapshot {
-    const { turn, completion } = this.queueTurn(input);
-
-    void completion;
-
-    return turn;
+    const { preparation, appendError } = this.createPreparedTurn(input);
+    void preparation.activate();
+    if (appendError) throw appendError;
+    return preparation.turn;
   }
 
   async startTurn(input: TurnStartInput): Promise<TurnSnapshot> {
-    return await this.queueTurn(input).completion;
+    const { preparation, appendError } = this.createPreparedTurn(input);
+    const completion = preparation.activate();
+    if (appendError) throw appendError;
+    return await completion;
+  }
+
+  prepareTurn(input: TurnStartInput): PreparedTurn {
+    const { preparation, appendError } = this.createPreparedTurn(input);
+    if (appendError) {
+      preparation.abandon();
+      throw appendError;
+    }
+    return preparation;
   }
 
   interruptTurn(threadId: string): TurnSnapshot {
@@ -260,7 +311,47 @@ export class ThreadManager {
     return this.getTurnSnapshot(this.getThread(threadId), active.turnId);
   }
 
+  async recordApprovalResolution(
+    request: ApprovalRequest,
+    decision: ApprovalDecision
+  ): Promise<void> {
+    const thread = this.getThread(request.threadId);
+    const payload: Record<string, unknown> = {
+      approvalId: request.id,
+      threadId: request.threadId,
+      turnId: request.turnId,
+      runId: request.runId,
+      toolCallId: request.call.id,
+      toolName: request.call.name,
+      decision: decision.type,
+    };
+    if (request.call.input !== undefined) payload.input = request.call.input;
+    if (request.reason !== undefined) payload.reason = request.reason;
+    if (decision.reason !== undefined) payload.decisionReason = decision.reason;
+    await this.appendItem(thread, {
+      type: 'approval.resolved',
+      runId: request.runId,
+      turnId: request.turnId,
+      causeId: request.startedItemId,
+      targetId: request.startedItemId,
+      visibility: 'trace',
+      payload,
+    });
+  }
+
   retryTurn(input: TurnRetryInput): TurnSnapshot {
+    return this.enqueuePreparedRetry(input);
+  }
+
+  prepareRetry(input: TurnRetryInput): PreparedTurn {
+    return this.prepareTurn(this.retryStartInput(input));
+  }
+
+  private enqueuePreparedRetry(input: TurnRetryInput): TurnSnapshot {
+    return this.enqueueTurn(this.retryStartInput(input));
+  }
+
+  private retryStartInput(input: TurnRetryInput): TurnStartInput {
     const thread = this.getThread(input.threadId);
     const turns = this.snapshotThread(thread).turns;
     const retrySource = input.turnId
@@ -279,16 +370,16 @@ export class ThreadManager {
       throw new Error(`Turn is not recoverable: ${retrySource.id}`);
     }
 
-    return this.enqueueTurn({
+    return {
       threadId: thread.id,
       input: readUserInputForTurn(thread, retrySource),
       modelOptions: input.modelOptions,
-    });
+    };
   }
 
-  private queueTurn(input: TurnStartInput): {
-    readonly turn: TurnSnapshot;
-    readonly completion: Promise<TurnSnapshot>;
+  private createPreparedTurn(input: TurnStartInput): {
+    readonly preparation: PreparedTurn;
+    readonly appendError?: unknown;
   } {
     if (this.closing) throw new Error('Thread manager is closing');
     const thread = this.getThread(input.threadId);
@@ -301,13 +392,41 @@ export class ThreadManager {
       this.generateRunId,
       new Set(current.turns.map((turn) => turn.runId))
     );
-    const completion = this.scheduleTurn(thread, turnId, input);
-
-    this.appendQueuedTurn(thread, turnId, runId, input.input);
+    let activate!: (value: boolean) => void;
+    const activation = new Promise<boolean>((resolve) => {
+      activate = resolve;
+    });
+    const completion = this.scheduleTurn(thread, turnId, input, activation);
+    let state: 'pending' | 'active' | 'abandoned' = 'pending';
+    const abandon = () => {
+      if (state !== 'pending') return;
+      state = 'abandoned';
+      this.pendingTurnActivations.delete(abandon);
+      activate(false);
+    };
+    this.pendingTurnActivations.add(abandon);
+    let appendError: unknown;
+    try {
+      this.appendQueuedTurn(thread, turnId, runId, input.input);
+    } catch (cause) {
+      appendError = cause;
+    }
+    const turn = this.getTurnSnapshot(thread, turnId);
 
     return {
-      turn: this.getTurnSnapshot(thread, turnId),
-      completion,
+      preparation: {
+        turn,
+        activate: () => {
+          if (state === 'pending') {
+            state = 'active';
+            this.pendingTurnActivations.delete(abandon);
+            activate(true);
+          }
+          return completion;
+        },
+        abandon,
+      },
+      appendError,
     };
   }
 
@@ -326,13 +445,21 @@ export class ThreadManager {
     });
   }
 
+  private abandonPendingTurns(): void {
+    for (const abandon of [...this.pendingTurnActivations]) abandon();
+  }
+
   private scheduleTurn(
     thread: ThreadState,
     turnId: string,
-    input: TurnStartInput
+    input: TurnStartInput,
+    activation: Promise<boolean>
   ): Promise<TurnSnapshot> {
     const previous = this.turnTails.get(thread.id) ?? Promise.resolve();
-    const result = previous.then(() => this.runTurn(thread, turnId, input));
+    const result = previous.then(async () => {
+      if (!(await activation) || this.fenced) return this.getTurnSnapshot(thread, turnId);
+      return await this.runTurn(thread, turnId, input);
+    });
     const tail = result.then(
       () => undefined,
       () => undefined
@@ -355,7 +482,9 @@ export class ThreadManager {
   ): Promise<TurnSnapshot> {
     const existing = this.getTurnSnapshot(thread, turnId);
     if (this.closing) {
-      return isTerminalTurnStatus(existing.status) ? existing : this.cancelTurn(thread, existing);
+      return isTerminalTurnStatus(existing.status)
+        ? existing
+        : await this.cancelTurn(thread, existing);
     }
     const controller = new AbortController();
 
@@ -368,7 +497,9 @@ export class ThreadManager {
         turn,
         approvalBroker: this.approvalBroker,
       });
-      const loop = new AgentLoop(createAgentLoopOptions(thread, runtime));
+      const loop = new AgentLoop(
+        createAgentLoopOptions(thread, runtime, (item) => this.appendItem(thread, item))
+      );
       const result = await loop.run({
         threadId: thread.id,
         input: input.input,
@@ -391,7 +522,7 @@ export class ThreadManager {
       }
 
       if (controller.signal.aborted) {
-        return this.cancelTurn(thread, turn);
+        return await this.cancelTurn(thread, turn);
       }
 
       const failureItem = result.items.find(
@@ -401,29 +532,33 @@ export class ThreadManager {
       );
 
       if (failureItem) {
-        return this.failTurn(thread, turn, {
+        return await this.failTurn(thread, turn, {
           code: 'TURN_FAILED',
           message: readFailureMessage(failureItem.payload),
           details: toProtocolItem(failureItem).payload,
         });
       }
 
-      return this.failTurn(thread, turn, {
+      return await this.failTurn(thread, turn, {
         code: 'TURN_FAILED',
         message: 'Turn ended without a terminal lifecycle item',
       });
     } catch (cause) {
       const turn = this.getTurnSnapshot(thread, turnId);
 
+      if (this.fenced) {
+        return turn;
+      }
+
       if (isTerminalTurnStatus(turn.status)) {
         throw cause;
       }
 
       if (controller.signal.aborted) {
-        return this.cancelTurn(thread, turn);
+        return await this.cancelTurn(thread, turn);
       }
 
-      return this.failTurn(thread, turn, {
+      return await this.failTurn(thread, turn, {
         code: 'TURN_FAILED',
         message: readErrorMessage(cause),
         details: serializeError(cause),
@@ -558,8 +693,12 @@ export class ThreadManager {
     this.observers.forEach((observer) => observer(event));
   }
 
-  private failTurn(thread: ThreadState, turn: TurnSnapshot, error: AppServerError): TurnSnapshot {
-    const terminal = this.appendTerminalItem(thread, turn, {
+  private async failTurn(
+    thread: ThreadState,
+    turn: TurnSnapshot,
+    error: AppServerError
+  ): Promise<TurnSnapshot> {
+    const terminal = await this.appendTerminalItem(thread, turn, {
       type: 'turn.failed',
       runId: turn.runId,
       turnId: turn.id,
@@ -584,10 +723,10 @@ export class ThreadManager {
     return terminal.turn;
   }
 
-  private cancelTurn(thread: ThreadState, turn: TurnSnapshot): TurnSnapshot {
+  private async cancelTurn(thread: ThreadState, turn: TurnSnapshot): Promise<TurnSnapshot> {
     const error = { code: 'TURN_INTERRUPTED', message: 'Turn interrupted' };
 
-    const terminal = this.appendTerminalItem(thread, turn, {
+    const terminal = await this.appendTerminalItem(thread, turn, {
       type: 'turn.canceled',
       runId: turn.runId,
       turnId: turn.id,
@@ -608,23 +747,29 @@ export class ThreadManager {
     return terminal.turn;
   }
 
-  private appendTerminalItem(
+  private async appendTerminalItem(
     thread: ThreadState,
     turn: TurnSnapshot,
     item: ItemAppendInput
-  ): { readonly turn: TurnSnapshot; readonly appended: boolean } {
+  ): Promise<{ readonly turn: TurnSnapshot; readonly appended: boolean }> {
     const current = this.getTurnSnapshot(thread, turn.id);
 
     if (isTerminalTurnStatus(current.status)) {
       return { turn: current, appended: false };
     }
 
-    thread.itemList.append(item);
+    await this.appendItem(thread, item);
 
     return {
       turn: this.getTurnSnapshot(thread, turn.id),
       appended: true,
     };
+  }
+
+  private async appendItem(thread: ThreadState, input: ItemAppendInput): Promise<Item> {
+    const item = thread.itemList.append(input);
+    await this.itemCommitBarrier?.(thread.id, item);
+    return item;
   }
 }
 
@@ -714,9 +859,14 @@ function isJsonValue(value: unknown): value is JsonValue {
   return typeof value === 'object' && value !== null && Object.values(value).every(isJsonValue);
 }
 
-function createAgentLoopOptions(thread: ThreadState, runtime: ThreadRuntime): AgentLoopOptions {
+function createAgentLoopOptions(
+  thread: ThreadState,
+  runtime: ThreadRuntime,
+  appendItem: NonNullable<AgentLoopOptions['appendItem']>
+): AgentLoopOptions {
   return {
     itemList: thread.itemList,
+    appendItem,
     model: runtime.model,
     toolRuntime: runtime.toolRuntime,
     contextCompiler: runtime.contextCompiler,

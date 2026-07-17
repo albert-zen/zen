@@ -33,6 +33,7 @@ export type {
   ApprovalRequest,
   ApprovalResolveInput,
   PendingApprovalRequest,
+  PreparedApprovalResolution,
   PolicyDecision,
   PolicyRuntime,
   PolicyToolRuntimeOptions,
@@ -41,6 +42,7 @@ export {
   ApprovalBroker,
   PolicyToolRuntime,
   ToolApprovalDeniedError,
+  toPublicApprovalDecision,
   toToolApprovalRequest,
 } from './approval-runtime.js';
 export type { DemoAppServerOptions } from './demo-runtime.js';
@@ -50,6 +52,7 @@ export type {
   ThreadManagerEvent,
   ThreadManagerObserver,
   ThreadManagerOptions,
+  PreparedTurn,
   ThreadRecord,
   ThreadRuntime,
   ThreadRuntimeFactory,
