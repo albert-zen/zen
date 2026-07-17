@@ -762,3 +762,22 @@ Summary: every browser request now captures the active subscription objects, the
 Tests and validation: the reviewer race tests first reproduced both incorrect fulfilled requests, then passed after the generation fix. The complete browser/owned-cleanup/supervisor suite passed `75/75` in `104.63s`. An initial aggregate run exposed an existing paused-writer test at `5.025s`; replacing unnecessary real WMI calls in that deterministic fixture with exact injected lease identities reduced it to `3.554s`, without changing timeout or production behavior. The LocalToolRuntime shell test passed under its unchanged 5-second timeout (`3.493s` test body, `4.70s` Vitest duration). The real launcher test passed `2/2` under its unchanged 15-second timeout (`11.64s`, `11.75s` test bodies; `13.88s`, `14.08s` wall time). Targeted ESLint, Prettier, main/web TypeScript checks, and `git diff --check` passed. Online dev audit reported `found 0 vulnerabilities`. No full `npm run check` ran.
 Residue evidence: exact pre-work and post-validation Win32 scans found zero attributable processes. Exact `zen-e2e-supervisor-*`, `zen-local-*`, and `zen-review-*` temp scans found zero directories before and after validation. No process was killed and no temporary directory was deleted in this round.
 Acceptance criteria status: Round 28 is complete pending final review. Issue 007 remains Rework; Wave 5 remains unintegrated.
+
+## Codex Review Note
+
+Round: 24 final outer-await disposition
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Accepted: `request()` performed a second await after generation validation, leaving a microtask window in which reconnect or unsubscribe could invalidate the generation before `fetch` was invoked. Authorization and operation startup must share one continuation, with no await after the final generation check.
+Local tracker state decision: Rework pending final review.
+
+## Codex Worker Note
+
+Round: 29
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `b7f3eb49e47bb5e8621e4e56848ed4b6bebc9253` (`fix: launch browser requests inside SSE authorization`).
+Summary: browser request readiness now uses `withSubscriptionsReady(operation)`. It captures the invocation-time subscriptions, generations, and gates; waits for those gates; allows already-queued EventSource state callbacks to settle; performs the final exact open-generation validation; and synchronously invokes the supplied fetch operation in that same continuation. There is no await between final validation and `fetch` startup. Reconnect or unsubscribe in the former outer-await window therefore rejects the old request with zero POSTs, while a new request can use the newly opened generation.
+Tests and validation: both reviewer double-`queueMicrotask` regressions first reproduced fulfilled requests and one POST on the old implementation, then passed with rejection and zero POSTs after the fix. The complete web client suite passed `23/23` in `1.34s` (`2.53s` command wall time), preserving all prior 21 tests. Targeted ESLint and Prettier, main/web TypeScript checks, and `git diff --check` passed. Per scope, no process-cleanup implementation or test changed, no real launcher or full check ran, and no audit rerun was requested.
+Residue evidence: exact pre-work and post-validation scans found zero attributable Win32 processes and zero `zen-e2e-supervisor-*`, `zen-local-*`, or `zen-review-*` temp directories. No process was killed and no directory was deleted.
+Acceptance criteria status: Round 29 is complete pending final review. Issue 007 remains Rework; Wave 5 remains unintegrated.
