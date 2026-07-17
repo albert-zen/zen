@@ -821,3 +821,18 @@ Summary of behavior delivered: both workflows now establish a stable `page.locat
 Tests and validation: the final owned-supervisor E2E run passed `2/2` in `6.7s`; the reconnect workflow took `4.1s` and the decline workflow `718ms`. Targeted Prettier and ESLint for `e2e/web-workflow.spec.ts` passed, and `git diff --check` passed. Per manager scope, no full check, coverage run, or real-launcher stress run was executed.
 Hygiene evidence: independent scans before diagnosis, after the expected failing diagnostic run, and after the passing run found zero attributable workspace/`zen-e2e`/`zen-local` Win32 processes and zero owned supervisor/local temporary directories. The diagnostic `test-results` directory and closed ignored schema-5 PID manifest were removed only by their exact verified paths under this issue worktree. No process was killed and no broad deletion was used.
 Acceptance criteria status: the E2E locator defect is corrected and validated. Issue 007 remains Rework pending fresh review; Wave 5 remains unintegrated.
+
+## Codex Review Note
+
+Round: 27
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: fresh final reviewer
+Reviewed branch: `codex/long-term-optimization-007`
+Reviewed revision: `7c6d297110e61ce3a4145a6887a77affe78e58e5`
+Reviewed test-fix revision: `54dd2c5799c203b4de4c092cac4dcb3126143d46`
+Result: STRICT PASS
+Findings: no blockers, functional defects, or reasonable suggestions.
+Reviewer edits: none.
+Review evidence: the reviewer independently confirmed that the Threads sidebar preview and timeline completion are two legitimate views of the same persisted assistant result. Scoping the duplicate assertion to `#timeline` preserves the strict exact-count guarantee of one and does not hide a production duplicate. Both E2E workflows passed `2/2`; targeted formatting, lint, and diff gates passed.
+Local tracker state decision: Complete / Ready for Integration.
+State decision reason: the fresh reviewer accepted the exact E2E locator correction without findings. Wave 5 remains unintegrated pending the separate canonical integration step.
