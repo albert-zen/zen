@@ -781,3 +781,17 @@ Summary: browser request readiness now uses `withSubscriptionsReady(operation)`.
 Tests and validation: both reviewer double-`queueMicrotask` regressions first reproduced fulfilled requests and one POST on the old implementation, then passed with rejection and zero POSTs after the fix. The complete web client suite passed `23/23` in `1.34s` (`2.53s` command wall time), preserving all prior 21 tests. Targeted ESLint and Prettier, main/web TypeScript checks, and `git diff --check` passed. Per scope, no process-cleanup implementation or test changed, no real launcher or full check ran, and no audit rerun was requested.
 Residue evidence: exact pre-work and post-validation scans found zero attributable Win32 processes and zero `zen-e2e-supervisor-*`, `zen-local-*`, or `zen-review-*` temp directories. No process was killed and no directory was deleted.
 Acceptance criteria status: Round 29 is complete pending final review. Issue 007 remains Rework; Wave 5 remains unintegrated.
+
+## Codex Review Note
+
+Round: 25
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: fresh final reviewer
+Reviewed branch: `codex/long-term-optimization-007`
+Reviewed revision: `47adb3208f35fcf9021f83dfa95b4fbf35fe97ef`
+Result: STRICT PASS
+Findings: no blockers, functional defects, or reasonable suggestions.
+Reviewer edits: none.
+Validation evidence: web client tests passed `23/23`; main and web typechecks, targeted lint, Prettier, and `git diff --check` passed. Independent attributable Win32 process and owned temporary-directory scans both reported zero.
+Local tracker state decision: Complete / Ready for Integration.
+State decision reason: the exact reviewed implementation passed the fresh final review with no remaining findings. Wave 5 remains unintegrated pending the separate canonical integration step.
