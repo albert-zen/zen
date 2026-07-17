@@ -91,15 +91,18 @@ export async function runAppServerCliComposition(
   let publishedHandoff: PublishedAppServerClientHandoff | undefined;
   let hasPrimaryFailure = false;
   let primaryFailure: unknown;
+  const shutdownSignal = createShutdownSignalWaiter(options.signalSource, true);
 
   try {
-    appServer = await options.createAppServer();
-    transport = await options.createTransport(
-      appServer,
-      options.credentialMode.type === 'provided' ? options.credentialMode.capability : undefined
-    );
+    if (!shutdownSignal.requested) appServer = await options.createAppServer();
+    if (appServer && !shutdownSignal.requested) {
+      transport = await options.createTransport(
+        appServer,
+        options.credentialMode.type === 'provided' ? options.credentialMode.capability : undefined
+      );
+    }
 
-    if (options.credentialMode.type === 'handoff') {
+    if (transport && !shutdownSignal.requested && options.credentialMode.type === 'handoff') {
       publishedHandoff = await options.publishHandoff!(options.credentialMode.directory, {
         baseUrl: transport.url,
         capability: transport.capability,
@@ -107,16 +110,15 @@ export async function runAppServerCliComposition(
       await options.onHandoffPublished?.(publishedHandoff);
     }
 
-    const shutdownSignal = createShutdownSignalWaiter(options.signalSource, true);
-    try {
+    if (transport && !shutdownSignal.requested) {
       await options.onListening?.(transport, publishedHandoff);
-      await shutdownSignal.promise;
-    } finally {
-      shutdownSignal.cancel();
     }
+    if (!shutdownSignal.requested) await shutdownSignal.promise;
   } catch (cause) {
     hasPrimaryFailure = true;
     primaryFailure = cause;
+  } finally {
+    shutdownSignal.cancel();
   }
 
   const shutdown = new AggregateProductionShutdown({
@@ -165,22 +167,24 @@ export async function runWebDevCliComposition(options: WebDevCliCompositionOptio
   let vite: ViteServerOwner | undefined;
   let hasPrimaryFailure = false;
   let primaryFailure: unknown;
+  const shutdownSignal = createShutdownSignalWaiter(options.signalSource, false);
 
   try {
-    appServer = await options.createAppServer();
-    transport = await options.createTransport(appServer);
-    vite = await options.createVite(transport);
-    await vite.listen();
-    const shutdownSignal = createShutdownSignalWaiter(options.signalSource, false);
-    try {
-      await options.onListening?.(transport, vite);
-      await shutdownSignal.promise;
-    } finally {
-      shutdownSignal.cancel();
+    if (!shutdownSignal.requested) appServer = await options.createAppServer();
+    if (appServer && !shutdownSignal.requested) {
+      transport = await options.createTransport(appServer);
     }
+    if (transport && !shutdownSignal.requested) vite = await options.createVite(transport);
+    if (vite && !shutdownSignal.requested) await vite.listen();
+    if (transport && vite && !shutdownSignal.requested) {
+      await options.onListening?.(transport, vite);
+    }
+    if (!shutdownSignal.requested) await shutdownSignal.promise;
   } catch (cause) {
     hasPrimaryFailure = true;
     primaryFailure = cause;
+  } finally {
+    shutdownSignal.cancel();
   }
 
   const shutdown = new AggregateProductionShutdown({
@@ -246,7 +250,7 @@ async function finishComposition(
 function createShutdownSignalWaiter(
   source: ShutdownSignalSource,
   acceptParentMessage: boolean
-): { readonly promise: Promise<void>; cancel(): void } {
+): { readonly promise: Promise<void>; readonly requested: boolean; cancel(): void } {
   let settled = false;
   let resolvePromise!: () => void;
   const promise = new Promise<void>((resolve) => {
@@ -280,6 +284,9 @@ function createShutdownSignalWaiter(
 
   return {
     promise,
+    get requested() {
+      return settled;
+    },
     cancel() {
       if (settled) return;
       settled = true;

@@ -42,6 +42,36 @@ describe('AgentInteractionSession', () => {
     session.dispose();
   });
 
+  it('settles a submit waiter from an authoritative reconnect snapshot', async () => {
+    const client = new DeferredSessionClient(threadSnapshot());
+    const session = new AgentInteractionSession({ client });
+    await session.start();
+    const observed = session.submit('finish while offline').then(
+      () => 'resolved' as const,
+      () => 'rejected' as const
+    );
+    await client.waitForTurnRequest();
+
+    client.emit({
+      type: 'sync/reset',
+      threads: [
+        {
+          id: 'thread-1',
+          status: 'idle',
+          turns: [{ id: 'turn-2', runId: 'run-2', status: 'completed', itemIds: ['terminal-1'] }],
+          items: [sessionItem('terminal-1', 1)],
+        },
+      ],
+    });
+    await Promise.resolve();
+    const waiterCount = session.getPendingCompletionWaiterCountForTest();
+    if (waiterCount > 0) session.dispose();
+
+    expect(await observed).toBe('resolved');
+    expect(waiterCount).toBe(0);
+    session.dispose();
+  });
+
   it('discards a submit waiter when turn/start rejects', async () => {
     const client = new DeferredSessionClient(threadSnapshot(), {
       turnFailure: new Error('submit request failed'),

@@ -522,6 +522,44 @@ describe('AgentLoop', () => {
     ]);
   });
 
+  it('keeps the injected appender authoritative when hooks are enabled', async () => {
+    const itemList = createItems();
+    let modelCalls = 0;
+    let toolCalls = 0;
+    const agent = new AgentLoop({
+      itemList,
+      appendItem: async (input) => {
+        const item = itemList.append(input);
+        if (item.type === 'tool.call.started') throw new Error('tool start is not durable');
+        return item;
+      },
+      model: {
+        async *generate() {
+          modelCalls += 1;
+          yield modelCalls === 1
+            ? {
+                type: 'message.completed' as const,
+                content: 'Calling tool',
+                toolCalls: [{ id: 'call-1', name: 'test' }],
+              }
+            : { type: 'message.completed' as const, content: 'Done' };
+        },
+      },
+      toolRuntime: {
+        async *execute() {
+          toolCalls += 1;
+          yield { type: 'result.completed', content: 'unexpected' };
+        },
+      },
+      hooks: { onItemAppending: () => undefined },
+    });
+
+    await expect(agent.run({ input: 'run', runId: 'run-1', turnId: 'turn-1' })).rejects.toThrow(
+      'tool start is not durable'
+    );
+    expect(toolCalls).toBe(0);
+  });
+
   it('notifies observers in the same appended item order as the item list', async () => {
     const observed: string[] = [];
     const itemList = createItems();

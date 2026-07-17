@@ -78,15 +78,22 @@ export type HookHandlers = {
 export type HookRuntimeOptions = {
   readonly itemList: ItemList;
   readonly hooks?: HookHandlers;
+  readonly appendItem?: HookItemAppender;
 };
+
+export type HookItemAppender = (
+  input: ItemAppendInput
+) => Item | undefined | Promise<Item | undefined>;
 
 export class HookRuntime {
   private readonly itemList: ItemList;
   private readonly hooks: HookHandlers;
+  private readonly appendItem: HookItemAppender;
 
   constructor(options: HookRuntimeOptions) {
     this.itemList = options.itemList;
     this.hooks = options.hooks ?? {};
+    this.appendItem = options.appendItem ?? ((input) => this.itemList.append(input));
   }
 
   async append(input: ItemAppendInput): Promise<Item | undefined> {
@@ -99,14 +106,14 @@ export class HookRuntime {
         items: this.getHookItemsSnapshot(),
       });
     } catch (cause) {
-      this.appendHookError('onItemAppending', input, cause);
+      await this.appendHookError('onItemAppending', input, cause);
       throw cause;
     }
 
     await this.appendHookItems(beforeAppendResult);
 
     if (beforeAppendResult?.decision) {
-      this.appendHookEffect('onItemAppending', input, beforeAppendResult.decision);
+      await this.appendHookEffect('onItemAppending', input, beforeAppendResult.decision);
 
       if (beforeAppendResult.decision.type === 'block') {
         return undefined;
@@ -115,7 +122,8 @@ export class HookRuntime {
       return this.append(beforeAppendResult.decision.item);
     }
 
-    const appended = this.itemList.append(input);
+    const appended = await this.appendItem(input);
+    if (!appended) return undefined;
 
     try {
       await this.appendHookItems(
@@ -126,7 +134,7 @@ export class HookRuntime {
         })
       );
     } catch (cause) {
-      this.appendHookError('onItemAppended', appended, cause);
+      await this.appendHookError('onItemAppended', appended, cause);
       throw cause;
     }
 
@@ -149,7 +157,7 @@ export class HookRuntime {
         items: this.getHookItemsSnapshot(),
       });
     } catch (cause) {
-      this.appendToolHookError(input.call, input.assistantItem, cause);
+      await this.appendToolHookError(input.call, input.assistantItem, cause);
       throw cause;
     }
 
@@ -159,7 +167,7 @@ export class HookRuntime {
       return { type: 'continue', call: input.call };
     }
 
-    this.appendToolHookEffect(input.call, input.assistantItem, result.decision);
+    await this.appendToolHookEffect(input.call, input.assistantItem, result.decision);
 
     if (result.decision.type === 'block') {
       return { type: 'block' };
@@ -174,11 +182,11 @@ export class HookRuntime {
     }
   }
 
-  private appendHookEffect(
+  private async appendHookEffect(
     hookName: HookName,
     input: ItemAppendInput,
     decision: HookItemDecision
-  ): Item {
+  ): Promise<Item | undefined> {
     const payload: Record<string, unknown> = {
       hook: hookName,
       effect: decision.type,
@@ -193,7 +201,7 @@ export class HookRuntime {
       payload.replacementType = decision.item.type;
     }
 
-    return this.itemList.append({
+    return await this.appendItem({
       type: 'hook.effect',
       runId: input.runId,
       turnId: input.turnId,
@@ -202,11 +210,11 @@ export class HookRuntime {
     });
   }
 
-  private appendToolHookEffect(
+  private async appendToolHookEffect(
     call: ToolCallHookPayload,
     assistantItem: Item,
     decision: HookToolCallDecision
-  ): Item {
+  ): Promise<Item | undefined> {
     const payload: Record<string, unknown> = {
       hook: 'beforeToolCall',
       effect: decision.type,
@@ -223,7 +231,7 @@ export class HookRuntime {
       payload.replacementToolName = decision.call.name;
     }
 
-    return this.itemList.append({
+    return await this.appendItem({
       type: 'hook.effect',
       runId: assistantItem.runId,
       turnId: assistantItem.turnId,
@@ -233,8 +241,12 @@ export class HookRuntime {
     });
   }
 
-  private appendHookError(hookName: HookName, input: ItemAppendInput, cause: unknown): Item {
-    return this.itemList.append({
+  private async appendHookError(
+    hookName: HookName,
+    input: ItemAppendInput,
+    cause: unknown
+  ): Promise<Item | undefined> {
+    return await this.appendItem({
       type: 'hook.effect',
       runId: input.runId,
       turnId: input.turnId,
@@ -249,12 +261,12 @@ export class HookRuntime {
     });
   }
 
-  private appendToolHookError(
+  private async appendToolHookError(
     call: ToolCallHookPayload,
     assistantItem: Item,
     cause: unknown
-  ): Item {
-    return this.itemList.append({
+  ): Promise<Item | undefined> {
+    return await this.appendItem({
       type: 'hook.effect',
       runId: assistantItem.runId,
       turnId: assistantItem.turnId,

@@ -68,6 +68,8 @@ export type AgentInteractionSessionListener = (event: AgentInteractionSessionEve
 
 type CompletionWaiter = {
   readonly promise: Promise<void>;
+  bindTurn(turnId: string): void;
+  reconcile(thread: ThreadSnapshot | undefined): void;
   resolve(): void;
   reject(cause: Error): void;
   discard(): void;
@@ -241,6 +243,7 @@ export class AgentInteractionSession {
       if (!response.ok || response.method !== 'turn/start') {
         throw new Error(response.ok ? 'Unexpected turn/start response' : response.error.message);
       }
+      completion.bindTurn(response.result.turn.id);
     } catch (cause) {
       completion.discard();
       throw cause;
@@ -275,6 +278,7 @@ export class AgentInteractionSession {
       if (!response.ok || response.method !== 'turn/retry') {
         throw new Error(response.ok ? 'Unexpected turn/retry response' : response.error.message);
       }
+      completion.bindTurn(response.result.turn.id);
     } catch (cause) {
       completion.discard();
       throw cause;
@@ -356,6 +360,12 @@ export class AgentInteractionSession {
     const previousRows = this.projection.getSnapshot().timelineRows;
     const previousRowKeys = new Set(previousRows.map(toTimelineRowKey));
     const changed = this.projection.apply(notification);
+    if (notification.type === 'sync/reset') {
+      for (const [threadId, waiters] of [...this.completionWaiters]) {
+        const thread = notification.threads.find((candidate) => candidate.id === threadId);
+        for (const waiter of [...waiters]) waiter.reconcile(thread);
+      }
+    }
     if (!changed) return;
     const snapshot = this.getSnapshot();
     const nextRows = snapshot.timelineRows.filter(
@@ -404,6 +414,9 @@ export class AgentInteractionSession {
   private createCompletionWaiter(threadId: string): CompletionWaiter {
     this.assertActive();
     let settled = false;
+    let expectedTurnId: string | undefined;
+    let hasRecoverySnapshot = false;
+    let recoveredThread: ThreadSnapshot | undefined;
     let resolvePromise: () => void = () => undefined;
     let rejectPromise: (cause: Error) => void = () => undefined;
     const promise = new Promise<void>((resolve, reject) => {
@@ -421,8 +434,36 @@ export class AgentInteractionSession {
       remove();
       action();
     };
+    const reconcile = () => {
+      if (settled || !expectedTurnId || !hasRecoverySnapshot) return;
+      if (!recoveredThread) {
+        settle(() => rejectPromise(new Error(`Thread unavailable after recovery: ${threadId}`)));
+        return;
+      }
+      const turn = recoveredThread.turns.find((candidate) => candidate.id === expectedTurnId);
+      if (!turn) {
+        settle(() =>
+          rejectPromise(new Error(`Turn unavailable after recovery: ${expectedTurnId}`))
+        );
+        return;
+      }
+      if (turn.status === 'completed' || turn.status === 'canceled') {
+        settle(resolvePromise);
+      } else if (turn.status === 'failed') {
+        settle(() => rejectPromise(new Error(readTurnErrorReason(turn.error))));
+      }
+    };
     const waiter: CompletionWaiter = {
       promise,
+      bindTurn: (turnId) => {
+        expectedTurnId = turnId;
+        reconcile();
+      },
+      reconcile: (thread) => {
+        hasRecoverySnapshot = true;
+        recoveredThread = thread;
+        reconcile();
+      },
       resolve: () => settle(resolvePromise),
       reject: (cause) => settle(() => rejectPromise(cause)),
       discard: () => settle(() => undefined),

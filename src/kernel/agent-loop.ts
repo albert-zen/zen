@@ -49,7 +49,11 @@ export class AgentLoop {
     this.contextCompiler = options.contextCompiler ?? new ContextCompiler();
     this.systemPrompt = options.systemPrompt;
     this.hookRuntime = options.hooks
-      ? new HookRuntime({ itemList: options.itemList, hooks: options.hooks })
+      ? new HookRuntime({
+          itemList: options.itemList,
+          hooks: options.hooks,
+          appendItem: options.appendItem,
+        })
       : undefined;
   }
 

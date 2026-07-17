@@ -153,6 +153,40 @@ describe('production composition shutdown', () => {
     expect(vite.close).toHaveBeenCalledTimes(1);
   });
 
+  it('captures a startup signal before acquiring later web resources', async () => {
+    const signals = new FakeSignalSource();
+    const transportStarted = deferred<void>();
+    const releaseTransport = deferred<void>();
+    const order: string[] = [];
+    const appServer = fakeAppServer(order);
+    const transport = fakeTransport(order);
+    const createVite = vi.fn(async () => ({
+      async listen() {},
+      async close() {},
+    }));
+    const running = runWebDevCliComposition({
+      signalSource: signals,
+      createAppServer: async () => appServer,
+      createTransport: async () => {
+        transportStarted.resolve();
+        await releaseTransport.promise;
+        return transport;
+      },
+      createVite,
+    });
+
+    await transportStarted.promise;
+    signals.emit('SIGTERM');
+    releaseTransport.resolve();
+    setImmediate(() => signals.emit('SIGTERM'));
+    await running;
+
+    expect(createVite).not.toHaveBeenCalled();
+    expect(appServer.close).toHaveBeenCalledTimes(1);
+    expect(transport.quiesce).toHaveBeenCalledTimes(1);
+    expect(transport.close).toHaveBeenCalledTimes(1);
+  });
+
   it('retains every shutdown failure while still closing handoff and transport', async () => {
     const signals = new FakeSignalSource();
     const ready = deferred<void>();

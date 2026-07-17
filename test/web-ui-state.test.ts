@@ -43,6 +43,19 @@ describe('web ui state projection', () => {
     ]);
   });
 
+  it('clears stale state when an authoritative reset no longer contains the current thread', () => {
+    const projection = new InteractionProjection({
+      id: 'thread-1',
+      status: 'running',
+      turns: [],
+      items: [item({ id: 'stale-item', seq: 1 })],
+    });
+
+    expect(projection.apply({ type: 'sync/reset', threads: [] })).toBe(true);
+    expect(projection.getSnapshot()).toMatchObject({ currentThread: undefined });
+    expect([...projection.getSnapshot().items]).toEqual([]);
+  });
+
   it('caches snapshots and processes 1k/5k ordered appends with constant work and no sequence copies', () => {
     const projection = new InteractionProjection({
       id: 'thread-1',
