@@ -63,6 +63,47 @@ Open questions: none.
 Known residual risks: POSIX process-group cleanup is implemented but validated here on Windows only. The local-path origin prevents GitHub PR/check handoff until a canonical remote is configured.
 Blocker or context escalation details: none.
 
+## Codex Review Note
+
+Round: 4
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: user-supplied Review Round 4 on `355e3f59b6549fcbf75f910a7dc4e8494222522f`
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-007`
+Base revision/diff scope: LocalToolRuntime ownership cleanup and direct TUI post-action synchronization.
+Standards Review blocking: LocalToolRuntime used recursive Windows `taskkill /T /F`; direct TUI sleeps and the shell fixture phase delay were scheduler-dependent.
+Standards Review non-blocking: none.
+Standards Review missing evidence: verified leaf-first cleanup, mismatch refusal, timeout/abort zero-residue behavior, and exact-head validation.
+Spec Review blocking: remove broad taskkill and replace direct sleeps with observable synchronization.
+Spec Review non-blocking: bounded AppServer CLI/journal condition polling and watchdogs are not defects; do not churn them.
+Spec Review missing evidence: targeted tests, audit, and final process scan.
+Local tracker state decision: Rework
+State decision reason: manager accepted LocalToolRuntime and direct TUI timing findings, and rejected mechanical removal of condition-driven timers.
+
+## Codex Worker Note
+
+Round: 9
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+PR URL: not used; local-path origin.
+Base revision/diff scope: `355e3f5` through `65b57b1cc98cd9976f9f7b275dac87b0d624d86e`.
+Summary of behavior delivered: Replaced LocalToolRuntime recursive taskkill with `OwnedProcessTree`, which captures a directly spawned PowerShell root, verifies exact creation/executable/command/parent-chain identities, and terminates verified processes individually leaf-first. Uncertain or reused identities are skipped. Abort handling is installed before spawn through an explicit holder. Direct TUI post-action sleeps and the 50 ms shell fixture delay now use observable transcript/deferred synchronization.
+Final scope summary: Round 4 implementation complete; tracker remains Rework pending fresh review.
+Changed files/modules: LocalToolRuntime; new Node process ownership helper and tests; TUI tests; evidence/tracker.
+Tests added/updated: deterministic leaf-first cleanup, root reuse and changed descendant-chain refusal, repeated timeout/abort zero-residue cleanup, existing LocalToolRuntime tests, and event/deferred TUI phase tests.
+Acceptance criteria status: `rg taskkill src scripts` has no source/script matches. No recursive or broad Node kill was introduced.
+Commands run and results: targeted runtime/process/TUI tests: 24 passed; lint and typecheck passed; exact `npm run check` passed warning-free in 196.2 seconds with 34 files/252 tests, all group coverage gates, and 2 E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org`: `found 0 vulnerabilities`. `git diff --check` passed.
+Validation log paths: ignored coverage/test-results/Playwright/PID artifacts only.
+Required check status or local-check handoff reason: exact local validation passed; tracker remains Rework for fresh review.
+Evidence links/paths: `docs/implementation/long-term-optimization-007-evidence.md`, `docs/implementation/long-term-optimization-tracker.md`.
+Decisions made: only exact verified identities are individually terminated; unmatched descendants remain untouched. Rejected bounded condition polling/watchdog timers were left unchanged.
+Standards notes: no coverage thresholds, exclusions, or coverage-ignore pragmas changed.
+Reviewer notes: fresh review required.
+Open questions: none.
+Known residual risks: POSIX behavior remains structurally covered only on this Windows worker.
+Blocker or context escalation details: final independent marker/path process scan returned zero owned Zen E2E/Vite/Vitest/Playwright/Chromium processes.
+
 ## Codex Worker Note
 
 Round: 5
