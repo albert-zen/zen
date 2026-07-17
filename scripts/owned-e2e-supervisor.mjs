@@ -43,7 +43,10 @@ export async function registerSpawnedProcess({
 }) {
   const current = await inspect(child.pid);
   if (!current || !current.commandLine?.includes(marker)) {
-    await terminateLiveChild(child);
+    if (current) {
+      const entry = makeEntry(current, marker, rootPid, `unverified-${role}`, await list());
+      await createManifestStore(manifestPath).upsert(marker, entry);
+    }
     throw new Error(
       `Refusing to register spawned ${role}: its command line lacks owner marker ${marker}`
     );
@@ -87,6 +90,18 @@ export async function cleanupOwnedManifest({
   await manifest.write(emptyManifest(snapshot.marker));
 }
 
+export async function terminateRegisteredProcess(
+  entry,
+  { platform = process.platform, inspect = (pid) => inspectProcess(pid, platform) } = {}
+) {
+  const current = await inspect(entry.pid);
+  if (!current) return;
+  if (!isOwnedProcess(entry, current)) {
+    throw new Error(`Refusing to terminate unverified PID ${entry.pid}`);
+  }
+  await terminateProcess(entry, platform, inspect);
+}
+
 export async function assertNoOwnedProcesses({
   manifestPath = defaultManifestPath,
   marker,
@@ -120,6 +135,8 @@ export async function runOwnedCommand({
   inspect = (pid) => inspectProcess(pid, platform),
   list = () => listProcesses(platform),
   terminate = (entry) => terminateProcess(entry, platform, inspect),
+  signals = process,
+  setExitCode,
 }) {
   await cleanupStaleManifest({ manifestPath, platform, inspect, list, terminate });
   const manifest = createManifestStore(manifestPath);
@@ -127,18 +144,23 @@ export async function runOwnedCommand({
 
   let child;
   let rootEntry;
-  let cleanupStarted = false;
-  const cleanup = async () => {
-    if (cleanupStarted) return;
-    cleanupStarted = true;
-    if (rootEntry) {
+  let registration;
+  let cleanupTask;
+  const cleanup = () => {
+    if (!child) return Promise.resolve();
+    if (cleanupTask) return cleanupTask;
+    cleanupTask = (async () => {
+      try {
+        await registration;
+      } catch {
+        // Registration retained the live, unverified identity for safe diagnosis.
+        return;
+      }
       await cleanupOwnedManifest({ manifestPath, platform, inspect, list, terminate });
-    } else if (child) {
-      await terminateLiveChild(child);
-      await assertNoOwnedProcesses({ manifestPath, marker, inspect, list });
-    }
+    })();
+    return cleanupTask;
   };
-  const handlers = installCleanupHandlers(cleanup);
+  const handlers = installCleanupHandlers(cleanup, signals, setExitCode);
 
   try {
     child = spawnCommand(command, args, {
@@ -148,18 +170,24 @@ export async function runOwnedCommand({
       stdio,
     });
     const childResult = waitForChild(child);
-    const current = await inspect(child.pid);
-    if (!current || !current.commandLine?.includes(marker)) {
-      const completed = await completedChildResult(childResult);
-      if (completed) {
-        await cleanup();
-        return { ...completed, marker };
-      }
-      await terminateLiveChild(child);
-      throw new Error(`Spawned runner child ${child.pid} did not expose its owner marker`);
+    registration = registerSpawnedProcess({
+      child,
+      marker,
+      rootPid: child.pid,
+      role: 'runner-root',
+      manifestPath,
+      platform,
+      inspect,
+      list,
+    }).then((entry) => {
+      rootEntry = entry;
+      return entry;
+    });
+    await registration;
+    if (cleanupTask) {
+      await cleanup();
+      return { ...(await childResult), marker };
     }
-    rootEntry = makeEntry(current, marker, child.pid, 'runner-root', await list());
-    await manifest.upsert(marker, rootEntry);
     const result = await childResult;
     await cleanup();
     return { ...result, marker };
@@ -355,19 +383,6 @@ function waitForChild(child) {
     child.once('error', reject);
     child.once('exit', (exitCode, signal) => resolve({ exitCode: exitCode ?? 1, signal }));
   });
-}
-
-function completedChildResult(childResult) {
-  return Promise.race([
-    childResult,
-    new Promise((resolve) => setTimeout(() => resolve(undefined), 250)),
-  ]);
-}
-
-async function terminateLiveChild(child) {
-  if (child.exitCode !== null || child.killed) return;
-  child.kill('SIGTERM');
-  await waitForChild(child);
 }
 
 async function terminateProcess(entry, platform, inspect) {

@@ -6,7 +6,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { closeFixtureResources } from '../e2e/fixture-server.mjs';
 import {
@@ -52,15 +52,14 @@ describe('owned E2E supervisor', () => {
     });
   });
 
-  it('requires a visible owner marker before registering a spawned child', async () => {
+  it('retains an unmarked spawned child without calling its kill provider', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
-      const child = spawn(
-        process.execPath,
-        ['--title=unowned-child', '-e', 'setInterval(() => {}, 1000)'],
-        {
-          stdio: 'ignore',
-        }
-      );
+      const identity = {
+        ...ownedEntry({ marker, pid: 55, parentPid: 1, parentChain: [] }),
+        commandLine: 'node unmarked-child',
+      };
+      const child = { pid: identity.pid, kill: vi.fn() };
+      const processes = new Map([[identity.pid, identity]]);
 
       await expect(
         registerSpawnedProcess({
@@ -69,10 +68,25 @@ describe('owned E2E supervisor', () => {
           rootPid: process.pid,
           role: 'unowned-test',
           manifestPath,
+          inspect: async () => identity,
+          list: async () => [...processes.values()],
         })
       ).rejects.toThrow('lacks owner marker');
 
-      await expect(readFile(manifestPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(child.kill).not.toHaveBeenCalled();
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 55');
+
+      const terminated = [];
+      await expect(
+        cleanupOwnedManifest({
+          manifestPath,
+          inspect: async (pid) => processes.get(pid),
+          list: async () => [...processes.values()],
+          terminate: async (entry) => terminated.push(entry.pid),
+        })
+      ).rejects.toThrow('exact owner identity');
+      expect(terminated).toEqual([]);
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('unverified-unowned-test');
     });
   });
 
@@ -251,12 +265,28 @@ describe('owned E2E supervisor', () => {
 
   it('cleans its manifest after a normal marked command', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
+      const identity = ownedEntry({ marker, pid: 65, parentPid: 1, parentChain: [] });
+      const processes = new Map([[identity.pid, identity]]);
+      const child = new EventEmitter();
+      child.pid = identity.pid;
+      child.exitCode = null;
+      child.killed = false;
       const result = await runOwnedCommand({
         command: process.execPath,
-        args: [`--title=${marker}-normal`, '-e', 'process.exit(0)'],
+        args: [`--title=${marker}-normal`, marker],
         marker,
         manifestPath,
         stdio: 'ignore',
+        spawnCommand: () => {
+          setImmediate(() => {
+            child.exitCode = 0;
+            child.emit('exit', 0, null);
+          });
+          return child;
+        },
+        inspect: async () => processes.get(identity.pid),
+        list: async () => [...processes.values()],
+        terminate: async (entry) => processes.delete(entry.pid),
       });
 
       expect(result.exitCode).toBe(0);
@@ -286,6 +316,52 @@ describe('owned E2E supervisor', () => {
     } finally {
       handlers.dispose();
     }
+  });
+
+  it('cleans a marker-owned child when a signal arrives before registration completes', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const signals = new EventEmitter();
+      const identity = ownedEntry({ marker, pid: 66, parentPid: 1, parentChain: [] });
+      const processes = new Map([[identity.pid, identity]]);
+      const child = new EventEmitter();
+      child.pid = identity.pid;
+      child.exitCode = null;
+      child.killed = false;
+      const terminated = [];
+      const exitCodes = [];
+      child.kill = vi.fn();
+
+      const result = await runOwnedCommand({
+        command: process.execPath,
+        args: [`--title=${marker}-pre-registration`],
+        marker,
+        manifestPath,
+        signals,
+        setExitCode: (code) => exitCodes.push(code),
+        spawnCommand: () => {
+          queueMicrotask(() => signals.emit('SIGTERM'));
+          return child;
+        },
+        inspect: async () => {
+          await new Promise(setImmediate);
+          return processes.get(identity.pid);
+        },
+        list: async () => [...processes.values()],
+        terminate: async (entry) => {
+          terminated.push(entry.pid);
+          processes.delete(entry.pid);
+          child.exitCode = 143;
+          child.emit('exit', 143, 'SIGTERM');
+        },
+      });
+
+      expect(result.exitCode).toBe(143);
+      expect(terminated).toEqual([identity.pid]);
+      expect(child.kill).not.toHaveBeenCalled();
+      await new Promise(setImmediate);
+      expect(exitCodes).toEqual([143]);
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+    });
   });
 
   it('requires exact creation, command, parent, executable, and marker identity', () => {

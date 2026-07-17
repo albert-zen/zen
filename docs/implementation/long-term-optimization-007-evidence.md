@@ -192,3 +192,20 @@ Reviewer notes: fresh reviewer required; no Agent Review transition has been mad
 Open questions: none.
 Known residual risks: POSIX individual-process cleanup is structurally covered but not exercised on this Windows machine.
 Blocker or context escalation details: none.
+
+## Codex Review Note
+
+Round: 3
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: user-supplied Review Round 3 after Worker Round 7
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-007`
+Base revision/diff scope: `3adcd6a`; committed formatting verification, unmarked registration safety, and pre-registration launcher cleanup.
+Standards Review blocking: The required clean-clone proof must inspect newly committed blobs, not an uncommitted checkout. An unmarked registered child must never be terminated. `run-playwright-child.mjs` lacks handlers before its spawn.
+Standards Review non-blocking: none.
+Standards Review missing evidence: clone hash, byte-level blob inspection, exact-head check, audit, and final owned-process scan.
+Spec Review blocking: process ownership requirements are incomplete until failed marker verification retains the live identity and a deterministic pre-registration signal/failure test proves no orphan.
+Spec Review non-blocking: none.
+Spec Review missing evidence: focused supervisor results and committed-clone formatting result.
+Local tracker state decision: Rework
+State decision reason: user accepted all Round 3 findings and retained the same implementation owner.
