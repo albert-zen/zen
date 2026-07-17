@@ -489,15 +489,22 @@ export function installCleanupHandlers(
   };
 }
 
-function createManifestStore(manifestPath) {
-  const ledgerDirectory = `${manifestPath}.ledger`;
+function createManifestStore(manifestPath, hooks = {}) {
+  const ledgerRoot = `${manifestPath}.ledger`;
   return {
     async read() {
       try {
         const parsed = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-        if (parsed?.version !== manifestVersion || typeof parsed.marker !== 'string')
+        if (
+          parsed?.version !== manifestVersion ||
+          typeof parsed.marker !== 'string' ||
+          typeof parsed.runId !== 'string'
+        )
           return emptyManifest();
-        const events = await readLedgerEvents(ledgerDirectory, parsed);
+        const events = await readLedgerEvents(
+          ledgerGenerationDirectory(ledgerRoot, parsed.runId),
+          parsed
+        );
         const folded = new Map();
         for (const event of events) folded.set(identityKey(event.entry), event.entry);
         return {
@@ -514,11 +521,12 @@ function createManifestStore(manifestPath) {
       }
     },
     async initialize(marker) {
-      await fs.rm(ledgerDirectory, { force: true, recursive: true });
-      await fs.mkdir(ledgerDirectory, { recursive: true });
+      await fs.rm(ledgerRoot, { force: true, recursive: true });
+      const runId = randomUUID();
+      await fs.mkdir(ledgerGenerationDirectory(ledgerRoot, runId), { recursive: true });
       await fs.writeFile(
         manifestPath,
-        `${JSON.stringify({ ...emptyManifest(marker), runId: randomUUID(), closed: false }, null, 2)}\n`
+        `${JSON.stringify({ ...emptyManifest(marker), runId, closed: false }, null, 2)}\n`
       );
     },
     async upsert(marker, entry) {
@@ -529,9 +537,11 @@ function createManifestStore(manifestPath) {
       if (current.closed) throw new Error('Ownership ledger is already closed');
       const event = { version: manifestVersion, runId: current.runId, marker, entry };
       const eventId = randomUUID();
-      const temporary = path.join(ledgerDirectory, `entry-${eventId}.tmp`);
-      const final = path.join(ledgerDirectory, `entry-${eventId}.json`);
+      const generationDirectory = ledgerGenerationDirectory(ledgerRoot, current.runId);
+      const temporary = path.join(generationDirectory, `entry-${eventId}.tmp`);
+      const final = path.join(generationDirectory, `entry-${eventId}.json`);
       await fs.writeFile(temporary, `${JSON.stringify(event)}\n`);
+      await hooks.beforeAppendRename?.({ current, temporary, final });
       await fs.rename(temporary, final);
     },
     async upsertMany(marker, entries) {
@@ -545,14 +555,20 @@ function createManifestStore(manifestPath) {
         manifestPath,
         `${JSON.stringify({ ...emptyManifest(marker), runId: current.runId, closed: true }, null, 2)}\n`
       );
-      await fs.rm(ledgerDirectory, { force: true, recursive: true });
-      await fs.mkdir(ledgerDirectory, { recursive: true });
+      await fs.rm(ledgerGenerationDirectory(ledgerRoot, current.runId), {
+        force: true,
+        recursive: true,
+      });
     },
   };
 }
 
 function emptyManifest(marker) {
   return { version: manifestVersion, marker, entries: [], revision: '' };
+}
+
+function ledgerGenerationDirectory(ledgerRoot, runId) {
+  return path.join(ledgerRoot, runId);
 }
 
 async function readLedgerEvents(ledgerDirectory, metadata) {
@@ -584,7 +600,11 @@ async function readLedgerEvents(ledgerDirectory, metadata) {
 }
 
 /** Internal test seam; intentionally kept inside the supervisor script. */
-export const ownedE2eSupervisorTesting = { createManifestStore };
+export const ownedE2eSupervisorTesting = {
+  createManifestStore,
+  ledgerGenerationDirectory,
+  listProcesses,
+};
 
 function waitForChild(child) {
   return new Promise((resolve, reject) => {

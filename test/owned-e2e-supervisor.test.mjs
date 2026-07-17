@@ -371,19 +371,30 @@ describe('owned E2E supervisor', () => {
         ledger.upsert(marker, snapshot.entries[0]),
       ]);
       expect((await ledger.read()).entries).toHaveLength(16);
-      expect(await readdir(`${manifestPath}.ledger`)).toHaveLength(18);
+      expect(
+        await readdir(
+          ownedE2eSupervisorTesting.ledgerGenerationDirectory(
+            `${manifestPath}.ledger`,
+            snapshot.runId
+          )
+        )
+      ).toHaveLength(18);
     });
   }, 15_000);
 
   it('ignores an in-progress ledger event and observes a late complete event before clearing', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
-      const ledgerDirectory = `${manifestPath}.ledger`;
+      const ledger = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      const initial = await ledger.read();
+      const ledgerDirectory = ownedE2eSupervisorTesting.ledgerGenerationDirectory(
+        `${manifestPath}.ledger`,
+        initial.runId
+      );
       await writeFile(
         path.join(ledgerDirectory, 'entry-interrupted.tmp'),
         '{"partial":true}',
         'utf8'
       );
-      const ledger = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
       expect((await ledger.read()).entries).toEqual([]);
 
       const late = ownedEntry({ marker, pid: 333, parentPid: 1, parentChain: [] });
@@ -399,7 +410,68 @@ describe('owned E2E supervisor', () => {
 
       expect(lists).toBeGreaterThan(4);
       expect((await ledger.read()).entries).toEqual([]);
-      expect(await readdir(ledgerDirectory)).toEqual([]);
+      await expect(readdir(ledgerDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('cannot append a paused writer after terminal clear of its generation', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const entered = deferred();
+      const release = deferred();
+      const writer = ownedE2eSupervisorTesting.createManifestStore(manifestPath, {
+        beforeAppendRename: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      });
+      const controller = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      const append = writer.upsert(marker, ownedEntry({ marker, pid: 401, parentPid: 1 }));
+
+      await entered.promise;
+      const beforeClear = await controller.read();
+      await controller.clear(marker, beforeClear.revision);
+      release.resolve();
+      await expect(append).rejects.toBeDefined();
+
+      const closed = await controller.read();
+      expect(closed.closed).toBe(true);
+      expect(closed.entries).toEqual([]);
+      await expect(
+        readdir(
+          ownedE2eSupervisorTesting.ledgerGenerationDirectory(
+            `${manifestPath}.ledger`,
+            beforeClear.runId
+          )
+        )
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('keeps a late old-generation writer out of the next initialized run', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const entered = deferred();
+      const release = deferred();
+      const writer = ownedE2eSupervisorTesting.createManifestStore(manifestPath, {
+        beforeAppendRename: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      });
+      const controller = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      const append = writer.upsert(marker, ownedEntry({ marker, pid: 402, parentPid: 1 }));
+
+      await entered.promise;
+      const first = await controller.read();
+      await controller.clear(marker, first.revision);
+      await controller.initialize(marker);
+      const next = await controller.read();
+      release.resolve();
+      await expect(append).rejects.toBeDefined();
+
+      const after = await controller.read();
+      expect(after.runId).not.toBe(first.runId);
+      expect(after.runId).toBe(next.runId);
+      expect(after.entries).toEqual([]);
     });
   });
 
@@ -685,6 +757,28 @@ describe('owned E2E supervisor', () => {
     });
   }, 15_000);
 
+  it('refuses test-directory teardown while a live command line references its path or marker', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'zen-e2e-supervisor-'));
+    const marker = `zen-e2e-test-${path.basename(directory)}`;
+    let removed = false;
+    try {
+      for (const commandLine of [`node ${directory}`, `node --title=${marker}`]) {
+        await expect(
+          removeOwnedTestDirectory(directory, marker, {
+            list: async () => [{ commandLine }],
+          })
+        ).rejects.toThrow('referenced by 1 live process');
+        await expect(readdir(directory)).resolves.toEqual([]);
+      }
+
+      await removeOwnedTestDirectory(directory, marker, { list: async () => [] });
+      removed = true;
+      await expect(readdir(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      if (!removed) await removeOwnedTestDirectory(directory, marker, { list: async () => [] });
+    }
+  });
+
   it('closes every fixture resource after a shutdown failure', async () => {
     const closed = [];
     await expect(
@@ -719,11 +813,15 @@ async function withManifest(run) {
     await ownedE2eSupervisorTesting.createManifestStore(manifestPath).initialize(marker);
     await run({ directory, manifestPath, marker });
   } finally {
-    await removeOwnedTestDirectory(directory);
+    await removeOwnedTestDirectory(directory, marker);
   }
 }
 
-async function removeOwnedTestDirectory(directory) {
+async function removeOwnedTestDirectory(
+  directory,
+  marker,
+  { list = () => ownedE2eSupervisorTesting.listProcesses(process.platform) } = {}
+) {
   const root = path.resolve(tmpdir());
   const resolved = path.resolve(directory);
   if (
@@ -732,7 +830,24 @@ async function removeOwnedTestDirectory(directory) {
   ) {
     throw new Error(`Refusing to remove unexpected test directory ${resolved}`);
   }
+  const references = (await list()).filter(
+    (candidate) =>
+      candidate.commandLine?.includes(resolved) ||
+      (marker && candidate.commandLine?.includes(marker))
+  );
+  if (references.length > 0)
+    throw new Error(
+      `Refusing to remove test directory referenced by ${references.length} live process(es)`
+    );
   await rm(resolved, { force: true, recursive: true });
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }
 
 function waitForExit(child) {
