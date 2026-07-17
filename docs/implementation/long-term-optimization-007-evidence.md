@@ -743,3 +743,22 @@ Round: 27 terminal scan correction
 Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
 Correction: the pre-commit scan recorded one unproven reviewer-window tool directory and correctly left it untouched. The independent post-push scan subsequently found that directory absent, with zero `zen-tool-*` directories in the review window. No command in this worker session deleted a tool directory. The same terminal scan reported zero attributable Win32 processes, zero `zen-e2e-supervisor-*` directories, and zero directories in the exact seven-journal review window.
 Local tracker state decision: Rework pending final review; Wave 5 remains unintegrated.
+
+## Codex Review Note
+
+Round: 23 final generation-race disposition
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Accepted: an open-generation browser request can retain a resolved gate while synchronous `onerror` or unsubscribe changes the subscription, allowing the old request to follow the new gate or bypass a removed subscription. Each request must retain its invocation-time subscription generations and reject before POST if any captured generation changes. Coverage must also prove second-view discovery of previously unrecorded local and E2E descendants.
+Local tracker state decision: Rework pending final review.
+
+## Codex Worker Note
+
+Round: 28
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `5f1bf833ca0e2c8917e8d6ef18576bdf7511dfd5` (`fix: bind browser requests to SSE generations`).
+Summary: every browser request now captures the active subscription objects, their monotonic connection generations, and their gates synchronously at invocation. After the captured gates settle, the request verifies that every subscription remains active, open, and on the same generation/gate, then invokes `fetch` without another await boundary. Synchronous reconnect or unsubscribe therefore rejects the old request with no POST; the reconnect gate belongs only to subsequent requests, and stale `onopen` cannot revive a closed subscription. Added cleanup regressions introduce previously unrecorded child/grandchild identities only in the second paired view; both existing implementations discover and terminate them leaf-first without a false zero result, so no cleanup production change was required.
+Tests and validation: the reviewer race tests first reproduced both incorrect fulfilled requests, then passed after the generation fix. The complete browser/owned-cleanup/supervisor suite passed `75/75` in `104.63s`. An initial aggregate run exposed an existing paused-writer test at `5.025s`; replacing unnecessary real WMI calls in that deterministic fixture with exact injected lease identities reduced it to `3.554s`, without changing timeout or production behavior. The LocalToolRuntime shell test passed under its unchanged 5-second timeout (`3.493s` test body, `4.70s` Vitest duration). The real launcher test passed `2/2` under its unchanged 15-second timeout (`11.64s`, `11.75s` test bodies; `13.88s`, `14.08s` wall time). Targeted ESLint, Prettier, main/web TypeScript checks, and `git diff --check` passed. Online dev audit reported `found 0 vulnerabilities`. No full `npm run check` ran.
+Residue evidence: exact pre-work and post-validation Win32 scans found zero attributable processes. Exact `zen-e2e-supervisor-*`, `zen-local-*`, and `zen-review-*` temp scans found zero directories before and after validation. No process was killed and no temporary directory was deleted in this round.
+Acceptance criteria status: Round 28 is complete pending final review. Issue 007 remains Rework; Wave 5 remains unintegrated.
