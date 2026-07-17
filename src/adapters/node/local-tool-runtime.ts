@@ -1,5 +1,6 @@
-import { execFile, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
+import { OwnedProcessTree } from './owned-process-cleanup.js';
 import {
   ApprovalBroker,
   ToolApprovalDeniedError,
@@ -110,11 +111,6 @@ export class LocalToolRuntime implements ToolRuntime {
       return;
     }
 
-    const child = spawn('powershell', ['-NoProfile', '-Command', command], {
-      cwd: this.cwd,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
     const queue: ToolRuntimeEvent[] = [];
     let wake: (() => void) | undefined;
     let stdout = '';
@@ -124,6 +120,11 @@ export class LocalToolRuntime implements ToolRuntime {
     let spawnError: unknown;
     let canceled = false;
     let timedOut = false;
+    const processHolder: {
+      child?: ReturnType<typeof spawn>;
+      ownership?: OwnedProcessTree;
+    } = {};
+    let terminationRequested = false;
 
     const wakeConsumer = () => {
       wake?.();
@@ -145,18 +146,43 @@ export class LocalToolRuntime implements ToolRuntime {
     };
     const finish = () => {
       done = true;
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       wakeConsumer();
+    };
+    const terminateOwnedTree = () => {
+      terminationRequested = true;
+      if (process.platform !== 'win32') {
+        processHolder.child?.kill('SIGTERM');
+        return;
+      }
+      void processHolder.ownership?.terminateVerified();
     };
     const cancel = () => {
       canceled = true;
-      terminateChildProcess(child);
+      terminateOwnedTree();
     };
+
+    // Register cancellation before spawn; the holder safely no-ops until ownership is captured.
+    context.signal?.addEventListener('abort', cancel, { once: true });
+    const child = spawn('powershell', ['-NoProfile', '-Command', command], {
+      cwd: this.cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const ownership = new OwnedProcessTree(child.pid ?? 0);
+    processHolder.child = child;
+    processHolder.ownership = ownership;
+    void ownership.captureRoot().then(() => {
+      if (terminationRequested) void processHolder.ownership?.terminateVerified();
+    });
     const timeout = setTimeout(() => {
       timedOut = true;
-      terminateChildProcess(child);
+      terminateOwnedTree();
     }, this.shellTimeoutMs);
 
+    if (!child.stdout || !child.stderr) {
+      throw new Error('PowerShell child did not expose output streams');
+    }
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', onStdout);
@@ -169,8 +195,6 @@ export class LocalToolRuntime implements ToolRuntime {
       exitCode = code;
       finish();
     });
-    context.signal?.addEventListener('abort', cancel, { once: true });
-
     try {
       while (!done || queue.length > 0) {
         const event = queue.shift();
@@ -189,7 +213,7 @@ export class LocalToolRuntime implements ToolRuntime {
       context.signal?.removeEventListener('abort', cancel);
 
       if (!done) {
-        terminateChildProcess(child);
+        terminateOwnedTree();
       }
     }
 
@@ -258,22 +282,4 @@ function stringifyOutput(value: unknown): string {
   }
 
   return value === undefined || value === null ? '' : String(value);
-}
-
-function terminateChildProcess(child: ReturnType<typeof spawn>): void {
-  if (child.killed) {
-    return;
-  }
-
-  if (process.platform === 'win32' && child.pid) {
-    execFile(
-      'taskkill',
-      ['/pid', String(child.pid), '/T', '/F'],
-      { windowsHide: true },
-      () => undefined
-    );
-    return;
-  }
-
-  child.kill('SIGTERM');
 }

@@ -131,7 +131,7 @@ describe('ZenTuiApp', () => {
     await waitForRender();
     terminal.sendInput('hello');
     terminal.sendInput('\r');
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await waitForText(terminal, 'hello');
 
     const text = terminal.textOutput();
     expect(text).toContain('You');
@@ -154,7 +154,7 @@ describe('ZenTuiApp', () => {
     await waitForRender();
     terminal.sendInput('hello');
     terminal.sendInput('\r');
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await waitForText(terminal, 'hello');
 
     expect(terminal.textOutput()).not.toContain('assistant.message.started');
     expect(terminal.textOutput()).not.toContain('model.request.started');
@@ -166,8 +166,9 @@ describe('ZenTuiApp', () => {
 
   it('renders collapsed shell rows while a command runs and completes', async () => {
     const terminal = new VirtualTerminalDevice(100, 30);
+    const shell = createShellAppServer();
     const app = new ZenTuiApp({
-      client: createShellAppServer(),
+      client: shell.server,
       terminal,
     });
     const run = app.run();
@@ -175,13 +176,15 @@ describe('ZenTuiApp', () => {
     await waitForRender();
     terminal.sendInput('run tests');
     terminal.sendInput('\r');
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await shell.waitForStarted();
+    await waitForText(terminal, 'Shell running: npm test');
 
     expect(terminal.textOutput()).toContain('Shell running: npm test');
     expect(terminal.textOutput()).toContain('stdout: started');
 
     terminal.clearOutput();
-    await new Promise<void>((resolve) => setTimeout(resolve, 80));
+    shell.release();
+    await waitForText(terminal, 'Shell completed (exit 0): npm test');
 
     expect(terminal.textOutput()).toContain('Shell completed (exit 0): npm test');
     expect(terminal.textOutput()).toContain('stdout: started done');
@@ -193,10 +196,11 @@ describe('ZenTuiApp', () => {
 
   it('renders expanded shell output through the tools toggle', async () => {
     const terminal = new VirtualTerminalDevice(100, 30);
+    const shell = createShellAppServer({
+      stderr: 'warn\n',
+    });
     const app = new ZenTuiApp({
-      client: createShellAppServer({
-        stderr: 'warn\n',
-      }),
+      client: shell.server,
       terminal,
     });
     const run = app.run();
@@ -204,7 +208,9 @@ describe('ZenTuiApp', () => {
     await waitForRender();
     terminal.sendInput('run tests');
     terminal.sendInput('\r');
-    await new Promise<void>((resolve) => setTimeout(resolve, 90));
+    await shell.waitForStarted();
+    shell.release();
+    await waitForText(terminal, 'Shell completed (exit 0)');
     terminal.clearOutput();
 
     terminal.sendInput('/tools');
@@ -263,7 +269,7 @@ describe('ZenTuiApp', () => {
     await waitForRender();
     terminal.sendInput('/interrupt');
     terminal.sendInput('\r');
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await waitForText(terminal, 'Interrupted current turn');
 
     expect(terminal.textOutput()).toContain('Interrupted current turn');
 
@@ -283,7 +289,7 @@ describe('ZenTuiApp', () => {
     await waitForRender();
     terminal.sendInput('recover me');
     terminal.sendInput('\r');
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await waitForText(terminal, 'Recoverable failed turn: model overloaded');
 
     let text = terminal.textOutput();
     expect(text).toContain('Recoverable failed turn: model overloaded');
@@ -292,7 +298,7 @@ describe('ZenTuiApp', () => {
     terminal.clearOutput();
     terminal.sendInput('/retry');
     terminal.sendInput('\r');
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await waitForText(terminal, 'Recovered after retry');
 
     text = terminal.textOutput();
     expect(text).toContain('Retrying failed turn');
@@ -318,7 +324,7 @@ describe('ZenTuiApp', () => {
     await waitForRender();
     terminal.sendInput('/interrupt');
     terminal.sendInput('\r');
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await waitForText(terminal, 'Recoverable canceled turn');
 
     expect(terminal.textOutput()).toContain('Recoverable canceled turn');
     expect(terminal.textOutput()).toContain('Retry with /retry');
@@ -326,7 +332,7 @@ describe('ZenTuiApp', () => {
     terminal.clearOutput();
     terminal.sendInput('/retry');
     terminal.sendInput('\r');
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await waitForText(terminal, 'Recovered interrupted turn');
 
     const text = terminal.textOutput();
     expect(text).toContain('Retrying canceled turn');
@@ -712,8 +718,14 @@ function threadWithMessages(options: {
   };
 }
 
-function createShellAppServer(options: { readonly stderr?: string } = {}): AppServer {
+function createShellAppServer(options: { readonly stderr?: string } = {}): {
+  readonly server: AppServer;
+  readonly waitForStarted: () => Promise<void>;
+  readonly release: () => void;
+} {
   let generatedToolCall = false;
+  const started = deferred<void>();
+  const completion = deferred<void>();
   const model: ModelGateway = {
     async *generate() {
       if (!generatedToolCall) {
@@ -744,7 +756,8 @@ function createShellAppServer(options: { readonly stderr?: string } = {}): AppSe
         type: 'output.delta',
         delta: { stream: 'stdout', chunk: 'started\n' },
       };
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      started.resolve();
+      await completion.promise;
       yield {
         type: 'output.delta',
         delta: { stream: 'stdout', chunk: 'done\n' },
@@ -770,11 +783,23 @@ function createShellAppServer(options: { readonly stderr?: string } = {}): AppSe
     },
   };
 
-  return new AppServer({
-    threadManagerOptions: {
-      runtimeFactory: () => ({ model, toolRuntime }),
-    },
+  return {
+    server: new AppServer({
+      threadManagerOptions: {
+        runtimeFactory: () => ({ model, toolRuntime }),
+      },
+    }),
+    waitForStarted: () => started.promise,
+    release: () => completion.resolve(),
+  };
+}
+
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
   });
+  return { promise, resolve };
 }
 
 async function delay(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
