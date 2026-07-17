@@ -508,3 +508,26 @@ Tests added/updated: 23 focused supervisor tests passed, including 16 concurrent
 Integration cleanup evidence: six pre-existing `zen-e2e-supervisor-*` temporary directories were individually verified to be direct children of the system temporary directory with no live Win32 command-line reference, then removed. No process was killed.
 Validation correction: the first exact Round 16 gate on `da00e1c` passed format, lint, both typechecks, build, 268 unit tests, kernel coverage, and product coverage, then timed out only in the pre-existing local wrapper behavior test during presentation coverage. The failure was preserved; isolated diagnosis showed bootstrap startup near the fixed test budget. The direct-parent injection revision `4b32b71` removed the unnecessary WMI dependency and its exact gate passed in 315.4 seconds: 34 test files/268 unit tests; kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; final attributable `zen-local`/`zen-e2e` process scan found zero matches and the owned supervisor temporary-residue scan found zero directories.
 Acceptance criteria status: complete for Worker Round 16, pending fresh review. No rename retry, fragile lock, broad process kill, recursive taskkill, coverage threshold reduction, source exclusion, or coverage-ignore pragma was added.
+
+## Codex Review Note
+
+Round: 12
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewed branch and revision: `codex/long-term-optimization-007 @ 26f7045b17ba70c56589cdcf5db21435e95a606c`
+Review result: Rework.
+Standards Review blocking: terminal ledger clear closed metadata then removed and recreated a shared ledger directory. A paused writer that had already read open metadata could append after recreation and contaminate the terminal or next run.
+Spec Review blocking: test directory teardown checked only the path shape before recursive removal and did not independently refuse a live command line referencing the exact directory or run marker.
+Reviewer edits: none.
+Local tracker state decision: Rework.
+
+## Codex Worker Note
+
+Round: 17
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `45eeaca4daa8d34fd2d36849c7e1cadcff460f97` (`fix: isolate owned ledger generations`).
+Summary of behavior delivered: every initialization now creates a fresh run ID and a dedicated `<manifest>.ledger/<runId>` directory. Metadata identifies that immutable generation. Appenders read the generation once and never create it; clear validates the expected revision, writes closed metadata, removes only that exact generation, and never recreates it. A paused writer therefore fails with the removed generation or has its event removed by clear, and a next initialization uses a distinct generation that old writers cannot contaminate. If Windows cannot remove an open generation, cleanup fails rather than claiming a false terminal clear.
+Tests added/updated: focused supervisor tests now cover the paused writer after terminal clear, old-generation writer after next initialization, generation-specific temporary-event reads, and teardown refusal for both an exact directory and exact marker reference. Teardown validates the exact temporary root/prefix, independently lists Win32 processes immediately before deletion, refuses live references without killing them, and deletes only when the scan is empty. The focused suite passed 26 tests; the real launcher/child/grandchild test passed 10 serial repetitions.
+Commands run and results: exact `npm run check` passed in 374.1 seconds: format, lint, both typechecks, builds, 34 test files/271 unit tests; kernel coverage 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; attributable `zen-local`/`zen-e2e` process scan found zero matches and the owned supervisor temporary-residue scan found zero directories.
+Acceptance criteria status: complete for Worker Round 17, pending fresh review. No lock, rename retry, broad process kill, recursive taskkill, or coverage weakening was added.
