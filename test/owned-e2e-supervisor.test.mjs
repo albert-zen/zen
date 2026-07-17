@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -414,7 +414,7 @@ describe('owned E2E supervisor', () => {
     });
   });
 
-  it('cannot append a paused writer after terminal clear of its generation', async () => {
+  it('retains a paused writer during clear, then clears after release and revision revalidation', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entered = deferred();
       const release = deferred();
@@ -429,9 +429,14 @@ describe('owned E2E supervisor', () => {
 
       await entered.promise;
       const beforeClear = await controller.read();
-      await controller.clear(marker, beforeClear.revision);
+      await expect(controller.clear(marker, beforeClear.revision)).rejects.toThrow(
+        'active writer lease'
+      );
+      expect((await controller.read()).closed).toBe(false);
       release.resolve();
-      await expect(append).rejects.toBeDefined();
+      await expect(append).resolves.toBeUndefined();
+      const afterWrite = await controller.read();
+      await controller.clear(marker, afterWrite.revision);
 
       const closed = await controller.read();
       expect(closed.closed).toBe(true);
@@ -447,7 +452,7 @@ describe('owned E2E supervisor', () => {
     });
   });
 
-  it('keeps a late old-generation writer out of the next initialized run', async () => {
+  it('does not initialize a replacement generation until a paused writer releases', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entered = deferred();
       const release = deferred();
@@ -462,11 +467,13 @@ describe('owned E2E supervisor', () => {
 
       await entered.promise;
       const first = await controller.read();
-      await controller.clear(marker, first.revision);
+      await expect(controller.clear(marker, first.revision)).rejects.toThrow('active writer lease');
+      release.resolve();
+      await expect(append).resolves.toBeUndefined();
+      const refreshed = await controller.read();
+      await controller.clear(marker, refreshed.revision);
       await controller.initialize(marker);
       const next = await controller.read();
-      release.resolve();
-      await expect(append).rejects.toBeDefined();
 
       const after = await controller.read();
       expect(after.runId).not.toBe(first.runId);
@@ -616,7 +623,13 @@ describe('owned E2E supervisor', () => {
           version: ownedE2eSupervisorTesting.manifestVersion,
           marker,
           runId: first.runId,
-          ownerPid: 99999,
+          type: 'writer',
+          owner: {
+            pid: 99999,
+            creationToken: '1',
+            executable: 'node.exe',
+            commandLine: `node --title=${marker}`,
+          },
         })}\n`,
         'utf8'
       );
@@ -624,7 +637,14 @@ describe('owned E2E supervisor', () => {
 
       await expect(
         controller.reclaimStaleGenerations({
-          list: async () => [{ pid: 99999, commandLine: `node --title=${marker}` }],
+          list: async () => [
+            {
+              pid: 99999,
+              creationToken: '1',
+              executable: 'node.exe',
+              commandLine: `node --title=${marker}`,
+            },
+          ],
         })
       ).rejects.toThrow('active writer lease');
       await expect(readdir(staleDirectory)).resolves.toContain('run.json');
@@ -632,6 +652,127 @@ describe('owned E2E supervisor', () => {
       await controller.reclaimStaleGenerations({ list: async () => [] });
       await expect(readdir(staleDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     });
+  });
+
+  it('recovers a crash-leftover reclaimer lease only after its exact owner is absent', async () => {
+    const owner = leaseOwner(810);
+    const formerOwner = leaseOwner(811);
+    const owners = [formerOwner];
+    await withLeasedManifest(
+      { owner, owners: () => owners },
+      async ({ manifestPath, marker, store }) => {
+        const first = await store.read();
+        const root = `${manifestPath}.ledger`;
+        const staleDirectory = ownedE2eSupervisorTesting.ledgerGenerationDirectory(
+          root,
+          first.runId
+        );
+        await writeFile(
+          path.join(staleDirectory, 'reclaimer.lease'),
+          `${JSON.stringify({
+            version: ownedE2eSupervisorTesting.manifestVersion,
+            type: 'reclaimer',
+            marker,
+            runId: first.runId,
+            owner: formerOwner,
+          })}\n`,
+          'utf8'
+        );
+        await store.initialize(marker);
+
+        await expect(store.reclaimStaleGenerations({ list: async () => [] })).rejects.toThrow(
+          'active reclaimer lease'
+        );
+        await expect(readdir(staleDirectory)).resolves.toContain('reclaimer.lease');
+
+        owners.length = 0;
+        await store.reclaimStaleGenerations({ list: async () => [] });
+        await expect(readdir(staleDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    );
+  });
+
+  it('recovers malformed current metadata only after the exact prior current-run owner is absent', async () => {
+    const formerOwner = leaseOwner(820);
+    const replacement = leaseOwner(821);
+    const owners = [formerOwner];
+    const directory = await mkdtemp(path.join(tmpdir(), 'zen-e2e-supervisor-'));
+    const manifestPath = path.join(directory, 'owned-processes.json');
+    const marker = `zen-e2e-test-${path.basename(directory)}`;
+    try {
+      const old = testStore(manifestPath, formerOwner, () => owners);
+      await old.initialize(marker);
+      await writeFile(manifestPath, '{"version":', 'utf8');
+      const next = testStore(manifestPath, replacement, () => owners);
+      await expect(next.initialize(marker)).rejects.toThrow(
+        'another exact current-run owner is live'
+      );
+
+      owners.length = 0;
+      await next.initialize(marker);
+      await expect(next.read()).resolves.toMatchObject({ marker, closed: false });
+    } finally {
+      await removeOwnedTestDirectory(directory, marker, { list: async () => [] });
+    }
+  });
+
+  it('keeps an old writer generation while a new store initializes, then reclaims only after release', async () => {
+    const owner = leaseOwner(830);
+    const owners = [owner];
+    await withLeasedManifest(
+      { owner, owners: () => owners },
+      async ({ manifestPath, marker, store }) => {
+        const entered = deferred();
+        const release = deferred();
+        const writer = testStore(manifestPath, owner, () => owners, {
+          beforeAppendRename: async () => {
+            entered.resolve();
+            await release.promise;
+          },
+        });
+        const append = writer.upsert(marker, ownedEntry({ marker, pid: 831, parentPid: 1 }));
+        await entered.promise;
+        const old = await store.read();
+        await store.initialize(marker);
+        await expect(store.reclaimStaleGenerations({ list: async () => [] })).rejects.toThrow(
+          'active writer lease'
+        );
+        release.resolve();
+        await append;
+        await store.reclaimStaleGenerations({ list: async () => [] });
+        await expect(
+          readdir(
+            ownedE2eSupervisorTesting.ledgerGenerationDirectory(`${manifestPath}.ledger`, old.runId)
+          )
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    );
+  });
+
+  it('fails closed when the ledger root or current generation is a symbolic link', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'zen-e2e-supervisor-'));
+    const manifestPath = path.join(directory, 'owned-processes.json');
+    const marker = `zen-e2e-test-${path.basename(directory)}`;
+    const target = path.join(directory, 'outside');
+    try {
+      const store = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      await store.initialize(marker);
+      const current = await store.read();
+      const root = `${manifestPath}.ledger`;
+      const generation = ownedE2eSupervisorTesting.ledgerGenerationDirectory(root, current.runId);
+      await mkdir(target);
+      await rm(generation, { recursive: true });
+      try {
+        await symlink(target, generation, process.platform === 'win32' ? 'junction' : 'dir');
+      } catch (cause) {
+        if (cause?.code === 'EPERM' || cause?.code === 'EACCES') return;
+        throw cause;
+      }
+      await expect(store.read()).rejects.toThrow('not a real directory');
+      await expect(readdir(target)).resolves.toEqual([]);
+    } finally {
+      await removeOwnedTestDirectory(directory, marker, { list: async () => [] });
+    }
   });
 
   it('keeps its manifest until both records and the independent marker scan are clear', async () => {
@@ -974,6 +1115,37 @@ async function withManifest(run) {
   } finally {
     await removeOwnedTestDirectory(directory, marker);
   }
+}
+
+async function withLeasedManifest({ owner, owners }, run) {
+  const directory = await mkdtemp(path.join(tmpdir(), 'zen-e2e-supervisor-'));
+  const manifestPath = path.join(directory, 'owned-processes.json');
+  const marker = `zen-e2e-test-${path.basename(directory)}`;
+  const store = testStore(manifestPath, owner, owners);
+  try {
+    await store.initialize(marker);
+    await run({ directory, manifestPath, marker, store });
+  } finally {
+    await removeOwnedTestDirectory(directory, marker, { list: async () => [] });
+  }
+}
+
+function testStore(manifestPath, owner, owners, hooks = {}) {
+  return ownedE2eSupervisorTesting.createManifestStore(manifestPath, {
+    ...hooks,
+    captureLeaseOwner: async () => owner,
+    listLeaseOwners: async () => owners(),
+  });
+}
+
+function leaseOwner(pid) {
+  return {
+    pid,
+    parentPid: 1,
+    creationToken: `${1784300000000 + pid}`,
+    executable: 'C:\\node.exe',
+    commandLine: `node --title=lease-owner-${pid}`,
+  };
 }
 
 async function removeOwnedTestDirectory(

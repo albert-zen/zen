@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
-const manifestVersion = 5;
+const manifestVersion = 6;
 const defaultManifestPath = path.resolve(process.cwd(), '.zen-e2e-owned-processes.json');
 
 export function createRunMarker() {
@@ -175,7 +175,7 @@ export async function runOwnedCommand({
   signals = process,
   setExitCode,
 }) {
-  await cleanupStaleManifest({ manifestPath, platform, inspect, list, terminate });
+  await cleanupStaleManifest({ manifestPath, platform, inspect, list, terminate, marker });
   const manifest = createManifestStore(manifestPath);
   await manifest.initialize(marker);
 
@@ -446,7 +446,17 @@ function identityKey(entry) {
 
 async function cleanupStaleManifest(operations) {
   const manifest = createManifestStore(operations.manifestPath);
-  const snapshot = await manifest.read();
+  // Initialization owns a durable current-run lease. If a prior owner crashed while
+  // truncating metadata, initialize can safely supersede it after exact-owner absence.
+  await manifest.acquireCurrentRunLease?.(operations.marker ?? createRunMarker());
+  let snapshot;
+  try {
+    snapshot = await manifest.read();
+  } catch (cause) {
+    if (!/Invalid ownership manifest schema/.test(String(cause))) throw cause;
+    snapshot = emptyManifest();
+  }
+  if (snapshot.runId) await manifest.adoptCurrentRunLease(snapshot);
   if (snapshot.entries.length > 0) await cleanupOwnedManifest(operations);
   await manifest.reclaimStaleGenerations({ list: operations.list });
 }
@@ -493,16 +503,27 @@ export function installCleanupHandlers(
 
 const activeWriterLeases = new Set();
 const activeReclaimerLeases = new Set();
+const activeCurrentRunLeases = new Set();
+let currentProcessIdentityPromise;
 
 function createManifestStore(manifestPath, hooks = {}) {
-  const ledgerRoot = `${manifestPath}.ledger`;
+  const ledgerRoot = confinedLedgerRoot(manifestPath);
+  const captureLeaseOwner = hooks.captureLeaseOwner ?? captureCurrentProcessIdentity;
+  const listLeaseOwners = hooks.listLeaseOwners ?? (() => listProcesses(process.platform));
   return {
+    async acquireCurrentRunLease(marker) {
+      await acquireCurrentRunLease(ledgerRoot, marker, captureLeaseOwner, listLeaseOwners);
+    },
+    async adoptCurrentRunLease(generation) {
+      await updateCurrentRunLease(ledgerRoot, generation, captureLeaseOwner);
+    },
     async read() {
       try {
         const parsed = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
         if (!isManifestMetadata(parsed)) throw new Error('Invalid ownership manifest schema');
+        if (parsed.closed) return { ...parsed, entries: [], revision: '' };
         const events = await readLedgerEvents(
-          ledgerGenerationDirectory(ledgerRoot, parsed.runId),
+          await assertConfinedGeneration(ledgerRoot, parsed.runId),
           parsed
         );
         const folded = new Map();
@@ -521,10 +542,11 @@ function createManifestStore(manifestPath, hooks = {}) {
       }
     },
     async initialize(marker) {
+      await acquireCurrentRunLease(ledgerRoot, marker, captureLeaseOwner, listLeaseOwners);
+      await assertConfinedLedgerRoot(ledgerRoot, { create: true });
       const runId = randomUUID();
-      const generationDirectory = ledgerGenerationDirectory(ledgerRoot, runId);
+      const generationDirectory = await createConfinedGeneration(ledgerRoot, runId);
       const generation = { version: manifestVersion, marker, runId, closed: false };
-      await fs.mkdir(generationDirectory, { recursive: true });
       await fs.writeFile(
         generationMetadataPath(generationDirectory),
         `${JSON.stringify(generation, null, 2)}\n`
@@ -533,6 +555,7 @@ function createManifestStore(manifestPath, hooks = {}) {
         manifestPath,
         `${JSON.stringify({ ...emptyManifest(marker), ...generation }, null, 2)}\n`
       );
+      await updateCurrentRunLease(ledgerRoot, generation, captureLeaseOwner);
     },
     async upsert(marker, entry) {
       const current = await this.read();
@@ -542,10 +565,14 @@ function createManifestStore(manifestPath, hooks = {}) {
       if (current.closed) throw new Error('Ownership ledger is already closed');
       const event = { version: manifestVersion, runId: current.runId, marker, entry };
       const eventId = randomUUID();
-      const generationDirectory = ledgerGenerationDirectory(ledgerRoot, current.runId);
+      const generationDirectory = await assertConfinedGeneration(ledgerRoot, current.runId);
       const temporary = path.join(generationDirectory, `entry-${eventId}.tmp`);
       const final = path.join(generationDirectory, `entry-${eventId}.json`);
-      const releaseLease = await acquireWriterLease(generationDirectory, current);
+      const releaseLease = await acquireWriterLease(
+        generationDirectory,
+        current,
+        captureLeaseOwner
+      );
       try {
         await fs.writeFile(temporary, `${JSON.stringify(event)}\n`);
         await hooks.beforeAppendRename?.({ current, temporary, final });
@@ -562,25 +589,41 @@ function createManifestStore(manifestPath, hooks = {}) {
       const current = await this.read();
       if (current.marker !== marker || current.revision !== expectedRevision)
         throw new Error('Ownership ledger changed before terminal clear');
-      await fs.writeFile(
-        manifestPath,
-        `${JSON.stringify({ ...emptyManifest(marker), runId: current.runId, closed: true }, null, 2)}\n`
+      await assertCurrentRunLeaseOwned(ledgerRoot, current, captureLeaseOwner, listLeaseOwners);
+      const generationDirectory = await assertConfinedGeneration(ledgerRoot, current.runId);
+      const releaseLease = await acquireReclaimerLease(
+        generationDirectory,
+        current,
+        captureLeaseOwner,
+        listLeaseOwners
       );
-      const generationDirectory = ledgerGenerationDirectory(ledgerRoot, current.runId);
-      await fs.writeFile(
-        generationMetadataPath(generationDirectory),
-        `${JSON.stringify(
-          { version: manifestVersion, marker, runId: current.runId, closed: true },
-          null,
-          2
-        )}\n`
-      );
-      await fs.rm(generationDirectory, {
-        force: true,
-        recursive: true,
-      });
+      try {
+        const processes = await listLeaseOwners();
+        await removeStaleWriterLeases(generationDirectory, current, processes);
+        const refreshed = await this.read();
+        if (refreshed.marker !== marker || refreshed.revision !== expectedRevision)
+          throw new Error('Ownership ledger changed before terminal clear');
+        await fs.writeFile(
+          generationMetadataPath(generationDirectory),
+          `${JSON.stringify(
+            { version: manifestVersion, marker, runId: current.runId, closed: true },
+            null,
+            2
+          )}\n`
+        );
+        await fs.writeFile(
+          manifestPath,
+          `${JSON.stringify({ ...emptyManifest(marker), runId: current.runId, closed: true }, null, 2)}\n`
+        );
+        await assertConfinedGeneration(ledgerRoot, current.runId);
+        await fs.rm(generationDirectory, { force: true, recursive: true });
+        await releaseCurrentRunLease(ledgerRoot, current, captureLeaseOwner, listLeaseOwners);
+      } finally {
+        await releaseLease();
+      }
     },
     async reclaimStaleGenerations({ list = () => listProcesses(process.platform) } = {}) {
+      await assertConfinedLedgerRoot(ledgerRoot);
       let names;
       try {
         names = await fs.readdir(ledgerRoot, { withFileTypes: true });
@@ -589,13 +632,20 @@ function createManifestStore(manifestPath, hooks = {}) {
         throw cause;
       }
       const current = await this.read();
-      const processes = await list();
       for (const item of names) {
         if (!item.isDirectory() || !isRunId(item.name) || item.name === current.runId) continue;
-        const generationDirectory = ledgerGenerationDirectory(ledgerRoot, item.name);
+        const generationDirectory = await assertConfinedGeneration(ledgerRoot, item.name);
         const generation = await readGenerationMetadata(generationDirectory, item.name);
-        const releaseLease = await acquireReclaimerLease(generationDirectory, generation);
+        const releaseLease = await acquireReclaimerLease(
+          generationDirectory,
+          generation,
+          captureLeaseOwner,
+          listLeaseOwners
+        );
         try {
+          // The reclaimer is visible before this fresh ownership snapshot. A writer must
+          // recheck this lease after creating its own lease, closing the create/reclaim gap.
+          const processes = await list();
           await removeStaleWriterLeases(generationDirectory, generation, processes);
           const events = await readLedgerEvents(generationDirectory, generation);
           const liveIdentity = events.some((event) =>
@@ -609,6 +659,7 @@ function createManifestStore(manifestPath, hooks = {}) {
               `Refusing to reclaim active ownership ledger generation ${generation.runId}`
             );
           }
+          await assertConfinedGeneration(ledgerRoot, generation.runId);
           await fs.rm(generationDirectory, { force: true, recursive: true });
         } finally {
           await releaseLease();
@@ -626,6 +677,53 @@ function ledgerGenerationDirectory(ledgerRoot, runId) {
   return path.join(ledgerRoot, runId);
 }
 
+function confinedLedgerRoot(manifestPath) {
+  const absoluteManifest = path.resolve(manifestPath);
+  const root = path.resolve(`${absoluteManifest}.ledger`);
+  if (
+    path.dirname(root) !== path.dirname(absoluteManifest) ||
+    path.basename(root) !== `${path.basename(absoluteManifest)}.ledger`
+  ) {
+    throw new Error('Ownership ledger root escapes its manifest directory');
+  }
+  return root;
+}
+
+async function assertConfinedLedgerRoot(ledgerRoot, { create = false } = {}) {
+  try {
+    const stats = await fs.lstat(ledgerRoot);
+    if (!stats.isDirectory() || stats.isSymbolicLink())
+      throw new Error('Ownership ledger root is not a real directory');
+    if ((await fs.realpath(ledgerRoot)) !== ledgerRoot)
+      throw new Error('Ownership ledger root resolves outside its expected path');
+  } catch (cause) {
+    if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT') || !create) throw cause;
+    await fs.mkdir(ledgerRoot, { recursive: true });
+    return assertConfinedLedgerRoot(ledgerRoot);
+  }
+}
+
+async function assertConfinedGeneration(ledgerRoot, runId) {
+  if (!isRunId(runId)) throw new Error('Invalid ownership ledger run ID');
+  await assertConfinedLedgerRoot(ledgerRoot);
+  const generationDirectory = ledgerGenerationDirectory(ledgerRoot, runId);
+  if (path.dirname(generationDirectory) !== ledgerRoot)
+    throw new Error('Ownership ledger generation escapes its root');
+  const stats = await fs.lstat(generationDirectory);
+  if (!stats.isDirectory() || stats.isSymbolicLink())
+    throw new Error(`Ownership ledger generation ${runId} is not a real directory`);
+  if ((await fs.realpath(generationDirectory)) !== generationDirectory)
+    throw new Error(`Ownership ledger generation ${runId} resolves outside its expected path`);
+  return generationDirectory;
+}
+
+async function createConfinedGeneration(ledgerRoot, runId) {
+  await assertConfinedLedgerRoot(ledgerRoot, { create: true });
+  const generationDirectory = ledgerGenerationDirectory(ledgerRoot, runId);
+  await fs.mkdir(generationDirectory);
+  return assertConfinedGeneration(ledgerRoot, runId);
+}
+
 function generationMetadataPath(generationDirectory) {
   return path.join(generationDirectory, 'run.json');
 }
@@ -636,6 +734,10 @@ function writerLeasePath(generationDirectory, leaseId) {
 
 function reclaimerLeasePath(generationDirectory) {
   return path.join(generationDirectory, 'reclaimer.lease');
+}
+
+function currentRunLeasePath(ledgerRoot) {
+  return path.join(ledgerRoot, 'current-run.lease');
 }
 
 function isRunId(value) {
@@ -672,14 +774,61 @@ async function readGenerationMetadata(generationDirectory, expectedRunId) {
   }
 }
 
-async function acquireWriterLease(generationDirectory, generation) {
-  const leasePath = writerLeasePath(generationDirectory, randomUUID());
-  const lease = {
+async function captureCurrentProcessIdentity() {
+  currentProcessIdentityPromise ??= (async () => {
+    const current = (await listProcesses(process.platform)).find(
+      (candidate) => candidate.pid === process.pid
+    );
+    if (!isLeaseOwner(current))
+      throw new Error('Could not capture exact current process identity for ownership lease');
+    return current;
+  })();
+  return currentProcessIdentityPromise;
+}
+
+function isLeaseOwner(value) {
+  return Boolean(
+    value &&
+    Number.isSafeInteger(value.pid) &&
+    /^\d+$/.test(creationToken(value)) &&
+    typeof value.executable === 'string' &&
+    value.executable.length > 0 &&
+    typeof value.commandLine === 'string' &&
+    value.commandLine.length > 0
+  );
+}
+
+function exactLeaseOwner(left, right) {
+  return Boolean(
+    isLeaseOwner(left) &&
+    isLeaseOwner(right) &&
+    left.pid === right.pid &&
+    creationToken(left) === creationToken(right) &&
+    left.executable === right.executable &&
+    left.commandLine === right.commandLine
+  );
+}
+
+function leaseRecord(generation, owner, type) {
+  if (!isLeaseOwner(owner))
+    throw new Error(`Cannot create ${type} lease without exact owner identity`);
+  return {
     version: manifestVersion,
+    type,
     marker: generation.marker,
     runId: generation.runId,
-    ownerPid: process.pid,
+    owner: {
+      pid: owner.pid,
+      creationToken: creationToken(owner),
+      executable: owner.executable,
+      commandLine: owner.commandLine,
+    },
   };
+}
+
+async function acquireWriterLease(generationDirectory, generation, captureLeaseOwner) {
+  const leasePath = writerLeasePath(generationDirectory, randomUUID());
+  const lease = leaseRecord(generation, await captureLeaseOwner(), 'writer');
   await fs.writeFile(leasePath, `${JSON.stringify(lease)}\n`, { flag: 'wx' });
   activeWriterLeases.add(leasePath);
   try {
@@ -698,22 +847,29 @@ async function acquireWriterLease(generationDirectory, generation) {
   };
 }
 
-async function acquireReclaimerLease(generationDirectory, generation) {
+async function acquireReclaimerLease(
+  generationDirectory,
+  generation,
+  captureLeaseOwner,
+  listLeaseOwners
+) {
   const leasePath = reclaimerLeasePath(generationDirectory);
-  const lease = {
-    version: manifestVersion,
-    marker: generation.marker,
-    runId: generation.runId,
-    ownerPid: process.pid,
-  };
+  const lease = leaseRecord(generation, await captureLeaseOwner(), 'reclaimer');
   try {
     await fs.writeFile(leasePath, `${JSON.stringify(lease)}\n`, { flag: 'wx' });
   } catch (cause) {
     if (!(cause && typeof cause === 'object' && cause.code === 'EEXIST')) throw cause;
-    throw new Error(
-      `Refusing to reclaim generation ${generation.runId} with an active reclaimer lease`,
-      { cause }
-    );
+    const retained = await readLease(leasePath, generation, 'reclaimer');
+    const owners = await listLeaseOwners();
+    if (!owners.some((candidate) => exactLeaseOwner(retained.owner, candidate))) {
+      await fs.rm(leasePath, { force: true });
+      await fs.writeFile(leasePath, `${JSON.stringify(lease)}\n`, { flag: 'wx' });
+    } else {
+      throw new Error(
+        `Refusing to reclaim generation ${generation.runId} with an active reclaimer lease`,
+        { cause }
+      );
+    }
   }
   activeReclaimerLeases.add(leasePath);
   return async () => {
@@ -732,10 +888,7 @@ async function removeStaleWriterLeases(generationDirectory, generation, processe
       );
     }
     const lease = await readLease(leasePath, generation, 'writer');
-    const ownerLive = processes.some(
-      (candidate) =>
-        candidate.pid === lease.ownerPid && candidate.commandLine?.includes(generation.marker)
-    );
+    const ownerLive = processes.some((candidate) => exactLeaseOwner(lease.owner, candidate));
     if (ownerLive) {
       throw new Error(
         `Refusing to reclaim generation ${generation.runId} with an active writer lease`
@@ -745,14 +898,17 @@ async function removeStaleWriterLeases(generationDirectory, generation, processe
   }
 }
 
-async function readLease(leasePath, generation, type) {
+async function readLease(leasePath, generation, type, { allowAnyGeneration = false } = {}) {
   try {
     const parsed = JSON.parse(await fs.readFile(leasePath, 'utf8'));
     if (
       parsed?.version !== manifestVersion ||
-      parsed.marker !== generation.marker ||
-      parsed.runId !== generation.runId ||
-      !Number.isSafeInteger(parsed.ownerPid)
+      (!allowAnyGeneration && parsed.marker !== generation.marker) ||
+      (!allowAnyGeneration && parsed.runId !== generation.runId) ||
+      (allowAnyGeneration &&
+        (!isRunId(parsed.runId) || typeof parsed.marker !== 'string' || !parsed.marker)) ||
+      parsed.type !== type ||
+      !isLeaseOwner(parsed.owner)
     ) {
       throw new Error(`Invalid ${type} lease for generation ${generation.runId}`);
     }
@@ -763,6 +919,68 @@ async function readLease(leasePath, generation, type) {
     }
     throw cause;
   }
+}
+
+async function acquireCurrentRunLease(ledgerRoot, marker, captureLeaseOwner, listLeaseOwners) {
+  await assertConfinedLedgerRoot(ledgerRoot, { create: true });
+  const leasePath = currentRunLeasePath(ledgerRoot);
+  const owner = await captureLeaseOwner();
+  const lease = leaseRecord({ marker, runId: randomUUID() }, owner, 'current-run');
+  try {
+    await fs.writeFile(leasePath, `${JSON.stringify(lease)}\n`, { flag: 'wx' });
+    activeCurrentRunLeases.add(leasePath);
+    return;
+  } catch (cause) {
+    if (!(cause && typeof cause === 'object' && cause.code === 'EEXIST')) throw cause;
+  }
+  const existing = await readLease(
+    leasePath,
+    { marker: undefined, runId: undefined },
+    'current-run',
+    {
+      allowAnyGeneration: true,
+    }
+  );
+  if (exactLeaseOwner(existing.owner, owner)) return;
+  const owners = await listLeaseOwners();
+  if (owners.some((candidate) => exactLeaseOwner(existing.owner, candidate)))
+    throw new Error('Refusing to initialize while another exact current-run owner is live');
+  await fs.rm(leasePath, { force: true });
+  await fs.writeFile(leasePath, `${JSON.stringify(lease)}\n`, { flag: 'wx' });
+  activeCurrentRunLeases.add(leasePath);
+}
+
+async function updateCurrentRunLease(ledgerRoot, generation, captureLeaseOwner) {
+  const leasePath = currentRunLeasePath(ledgerRoot);
+  const owner = await captureLeaseOwner();
+  await fs.writeFile(
+    leasePath,
+    `${JSON.stringify(leaseRecord(generation, owner, 'current-run'))}\n`
+  );
+}
+
+async function assertCurrentRunLeaseOwned(
+  ledgerRoot,
+  generation,
+  captureLeaseOwner,
+  listLeaseOwners
+) {
+  const leasePath = currentRunLeasePath(ledgerRoot);
+  const lease = await readLease(leasePath, generation, 'current-run');
+  const owner = await captureLeaseOwner();
+  if (!exactLeaseOwner(lease.owner, owner)) {
+    const owners = await listLeaseOwners();
+    if (owners.some((candidate) => exactLeaseOwner(lease.owner, candidate)))
+      throw new Error('Refusing terminal clear: current-run lease belongs to a live owner');
+    throw new Error('Refusing terminal clear: current-run lease owner is absent or unknown');
+  }
+}
+
+async function releaseCurrentRunLease(ledgerRoot, generation, captureLeaseOwner, listLeaseOwners) {
+  await assertCurrentRunLeaseOwned(ledgerRoot, generation, captureLeaseOwner, listLeaseOwners);
+  const leasePath = currentRunLeasePath(ledgerRoot);
+  activeCurrentRunLeases.delete(leasePath);
+  await fs.rm(leasePath, { force: true });
 }
 
 async function readLedgerEvents(ledgerDirectory, metadata) {
