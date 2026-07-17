@@ -16,21 +16,43 @@ integration. Workers implement one issue only.
 
 ## State Board
 
-| Backlog | Ready | In Progress | Agent Review | Rework | Integrated               | Complete          | Blocked |
-| ------- | ----- | ----------- | ------------ | ------ | ------------------------ | ----------------- | ------- |
-| -       | -     | -           | -            | -      | 003<br>004<br>005<br>006<br>007 | 001<br>002 | -       |
+| Backlog | Ready | In Progress | Agent Review | Rework | Integrated                      | Complete   | Blocked |
+| ------- | ----- | ----------- | ------------ | ------ | ------------------------------- | ---------- | ------- |
+| 010     | -     | 009         | 008          | -      | 003<br>004<br>005<br>006<br>007 | 001<br>002 | -       |
 
 ## Issue Register
 
-| Issue                      | State      | Dependencies | Branch                                                                        | Worker Round | Review Round | Last Evidence Path                                           |
-| -------------------------- | ---------- | ------------ | ----------------------------------------------------------------------------- | -----------: | -----------: | ------------------------------------------------------------ |
-| long-term-optimization-001 | Complete   | none         | `codex/long-term-optimization-001`                                            |            3 |            3 | `docs/implementation/long-term-optimization-001-evidence.md` |
-| long-term-optimization-002 | Complete   | none         | `codex/long-term-optimization-002`                                            |            4 |            4 | `docs/implementation/long-term-optimization-002-evidence.md` |
-| long-term-optimization-003 | Integrated | 001, 002     | `codex/long-term-optimization-003 @ bc0a83de948e520cce63f6c4f85947e44ecbff8f` |            3 |            3 | `docs/implementation/long-term-optimization-003-evidence.md` |
-| long-term-optimization-004 | Integrated | 002, 003     | `codex/long-term-optimization-004 @ 0a27953e64f8913a4e5362618ee7f0122fe2c712` |            4 |            4 | `docs/implementation/long-term-optimization-004-evidence.md` |
-| long-term-optimization-005 | Integrated | 002, 003     | `codex/long-term-optimization-005 @ 8654cf10b2bc0b7a884ca5105a4a8487740f4dfc` |            6 |            6 | `docs/implementation/long-term-optimization-005-evidence.md` |
-| long-term-optimization-006 | Integrated | 001-005      | `codex/long-term-optimization-006 @ b62873bd3aa216f56d870c072f651ab2dbcd074a` |            2 |            2 | `docs/implementation/long-term-optimization-006-evidence.md` |
-| long-term-optimization-007 | Integrated | 006          | `codex/long-term-optimization-007 @ bf795d40a3669d925eb95933b484290709099e0c` |           32 |           27 | `docs/implementation/long-term-optimization-007-evidence.md` |
+| Issue                      | State        | Dependencies               | Branch                                                                                       | Worker Round | Review Round | Last Evidence Path                                                          |
+| -------------------------- | ------------ | -------------------------- | -------------------------------------------------------------------------------------------- | -----------: | -----------: | --------------------------------------------------------------------------- |
+| long-term-optimization-001 | Complete     | none                       | `codex/long-term-optimization-001`                                                           |            3 |            3 | `docs/implementation/long-term-optimization-001-evidence.md`                |
+| long-term-optimization-002 | Complete     | none                       | `codex/long-term-optimization-002`                                                           |            4 |            4 | `docs/implementation/long-term-optimization-002-evidence.md`                |
+| long-term-optimization-003 | Integrated   | 001, 002                   | `codex/long-term-optimization-003 @ bc0a83de948e520cce63f6c4f85947e44ecbff8f`                |            3 |            3 | `docs/implementation/long-term-optimization-003-evidence.md`                |
+| long-term-optimization-004 | Integrated   | 002, 003                   | `codex/long-term-optimization-004 @ 0a27953e64f8913a4e5362618ee7f0122fe2c712`                |            4 |            4 | `docs/implementation/long-term-optimization-004-evidence.md`                |
+| long-term-optimization-005 | Integrated   | 002, 003                   | `codex/long-term-optimization-005 @ 8654cf10b2bc0b7a884ca5105a4a8487740f4dfc`                |            6 |            6 | `docs/implementation/long-term-optimization-005-evidence.md`                |
+| long-term-optimization-006 | Integrated   | 001-005                    | `codex/long-term-optimization-006 @ b62873bd3aa216f56d870c072f651ab2dbcd074a`                |            2 |            2 | `docs/implementation/long-term-optimization-006-evidence.md`                |
+| long-term-optimization-007 | Integrated   | 006                        | `codex/long-term-optimization-007 @ bf795d40a3669d925eb95933b484290709099e0c`                |           32 |           27 | `docs/implementation/long-term-optimization-007-evidence.md`                |
+| long-term-optimization-008 | Agent Review | 007                        | `codex/long-term-optimization-global-remediation @ ec52adbeaf77de2076ec42316edb324a6714cfe3` |            1 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| long-term-optimization-009 | In Progress  | 008 implementation         | `codex/long-term-optimization-global-remediation`                                            |            0 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| long-term-optimization-010 | Backlog      | 009 resource serialization | `codex/long-term-optimization-global-remediation`                                            |            0 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+
+## Global Remediation DAG
+
+The manager-owned final remediation sequence is intentionally serialized on one
+worker branch:
+
+```mermaid
+flowchart LR
+  A["008 Durability before activation"] --> B["009 Lossless snapshot/stream handoff"]
+  B --> C["010 Aggregate production shutdown"]
+  C --> D["Fresh Standards and Spec review"]
+```
+
+Issue 009 may proceed after issue 008 implementation and evidence are complete;
+review is batched until all three issues reach `Agent Review`. Issue 010 is
+logically independent but remains serialized after 009 to avoid concurrent Node
+and browser resource use. Acceptance criteria and append-only worker notes are
+recorded in
+[`docs/implementation/long-term-optimization-global-remediation-evidence.md`](long-term-optimization-global-remediation-evidence.md).
 
 ## State Transitions
 
@@ -78,6 +100,7 @@ document:
 - `docs/implementation/long-term-optimization-005-evidence.md`
 - `docs/implementation/long-term-optimization-006-evidence.md`
 - `docs/implementation/long-term-optimization-007-evidence.md`
+- `docs/implementation/long-term-optimization-global-remediation-evidence.md`
 
 The worker round and review round in the Issue Register must match the latest
 append-only notes in the corresponding evidence document.
@@ -153,12 +176,12 @@ required worker return, readiness, and review fields from
 
 ## Wave Review Register
 
-| Wave   | Local Review State | Standards   | Spec        | Verified Code Revision                     | Review Evidence                                        |
-| ------ | ------------------ | ----------- | ----------- | ------------------------------------------ | ------------------------------------------------------ |
-| Wave 1 | Complete           | STRICT PASS | STRICT PASS | `47304b2168cb8048fe7e57fad596d509a726afe2` | `docs/implementation/long-term-optimization-review.md` |
-| Wave 2 | Integrated         | STRICT PASS | STRICT PASS | `674dcd29fdc01cf261d90501fd45ef63023ed8ac` | `docs/implementation/long-term-optimization-review.md` |
-| Wave 3 | Complete           | STRICT PASS | STRICT PASS | `6b1ea5c1e87c713f16a2cd54d6e236d0a135d5f7` | `docs/implementation/long-term-optimization-review.md` |
-| Wave 4 | Complete           | STRICT PASS | STRICT PASS | `0fd30da99ac2ad0f506e456ec66cecd2eb736313` | `docs/implementation/long-term-optimization-review.md` |
+| Wave   | Local Review State | Standards   | Spec        | Verified Code Revision                     | Review Evidence                                              |
+| ------ | ------------------ | ----------- | ----------- | ------------------------------------------ | ------------------------------------------------------------ |
+| Wave 1 | Complete           | STRICT PASS | STRICT PASS | `47304b2168cb8048fe7e57fad596d509a726afe2` | `docs/implementation/long-term-optimization-review.md`       |
+| Wave 2 | Integrated         | STRICT PASS | STRICT PASS | `674dcd29fdc01cf261d90501fd45ef63023ed8ac` | `docs/implementation/long-term-optimization-review.md`       |
+| Wave 3 | Complete           | STRICT PASS | STRICT PASS | `6b1ea5c1e87c713f16a2cd54d6e236d0a135d5f7` | `docs/implementation/long-term-optimization-review.md`       |
+| Wave 4 | Complete           | STRICT PASS | STRICT PASS | `0fd30da99ac2ad0f506e456ec66cecd2eb736313` | `docs/implementation/long-term-optimization-review.md`       |
 | Wave 5 | Integrated         | STRICT PASS | STRICT PASS | `54dd2c5799c203b4de4c092cac4dcb3126143d46` | `docs/implementation/long-term-optimization-007-evidence.md` |
 
 ## Final Completion Gate
