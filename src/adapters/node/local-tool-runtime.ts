@@ -153,10 +153,15 @@ export class LocalToolRuntime implements ToolRuntime {
         resolveBootstrap = undefined;
         try {
           const encoded = frame.startsWith('__ZEN_OWNER__:') ? frame.slice(14) : '';
-          const identity = JSON.parse(
-            Buffer.from(encoded, 'base64').toString('utf8')
-          ) as OwnedProcessIdentity;
-          resolve(processHolder.ownership?.captureAttested(identity) ?? false);
+          const identity = readAttestedIdentity(
+            JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')),
+            ownerMarker,
+            child.pid ?? 0,
+            powershellPath
+          );
+          resolve(
+            identity !== undefined && (processHolder.ownership?.captureAttested(identity) ?? false)
+          );
         } catch {
           resolve(false);
         }
@@ -214,7 +219,8 @@ export class LocalToolRuntime implements ToolRuntime {
     context.signal?.addEventListener('abort', cancel, { once: true });
     const ownerMarker = `zen-local-${randomUUID()}`;
     const powershellPath = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
-    const wrappedCommand = `$m='${ownerMarker}';$p=[Diagnostics.Process]::GetCurrentProcess();$o=[ordered]@{marker=$m;pid=$PID;createdAt=$p.StartTime.ToUniversalTime().ToString('o');creationToken=$p.StartTime.ToUniversalTime().Ticks.ToString();executable=$p.MainModule.FileName;commandLine=[Environment]::CommandLine};[Console]::Out.WriteLine('__ZEN_OWNER__:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($o|ConvertTo-Json -Compress))));[Console]::Out.Flush();& { ${command} }`;
+    const encodedCommand = Buffer.from(command, 'utf8').toString('base64');
+    const wrappedCommand = `$m='${ownerMarker}';$c='${encodedCommand}';$p=[Diagnostics.Process]::GetCurrentProcess();$parentPid=(Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId;$o=[ordered]@{marker=$m;pid=$PID;parentPid=$parentPid;createdAt=$p.StartTime.ToUniversalTime().ToString('o');creationToken=$p.StartTime.ToUniversalTime().Ticks.ToString();executable=$p.MainModule.FileName;commandLine=[Environment]::CommandLine};[Console]::Out.WriteLine('__ZEN_OWNER__:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($o|ConvertTo-Json -Compress))));[Console]::Out.Flush();$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($c));& ([ScriptBlock]::Create($s))`;
     const child = spawn(powershellPath, ['-NoProfile', '-Command', wrappedCommand], {
       cwd: this.cwd,
       windowsHide: true,
@@ -389,4 +395,44 @@ function stringifyOutput(value: unknown): string {
   }
 
   return value === undefined || value === null ? '' : String(value);
+}
+
+function readAttestedIdentity(
+  value: unknown,
+  marker: string,
+  pid: number,
+  executable: string
+): OwnedProcessIdentity | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const integer = (key: string) =>
+    typeof record[key] === 'number' && Number.isSafeInteger(record[key]) ? record[key] : undefined;
+  const text = (key: string) =>
+    typeof record[key] === 'string' && record[key] ? record[key] : undefined;
+  const attestedPid = integer('pid');
+  const parentPid = integer('parentPid');
+  const createdAt = text('createdAt');
+  const creationToken = text('creationToken');
+  const frameExecutable = text('executable');
+  const commandLine = text('commandLine');
+  if (
+    record.marker !== marker ||
+    attestedPid !== pid ||
+    parentPid === undefined ||
+    !createdAt ||
+    !creationToken ||
+    !/^\d+$/.test(creationToken) ||
+    !frameExecutable ||
+    !commandLine?.includes(marker) ||
+    frameExecutable.toLowerCase() !== executable.toLowerCase()
+  )
+    return undefined;
+  return {
+    pid: attestedPid,
+    parentPid,
+    createdAt,
+    creationToken,
+    executable: frameExecutable,
+    commandLine,
+  };
 }

@@ -503,11 +503,12 @@ async function terminateProcess(entry, platform, current) {
   if (!isOwnedProcess(entry, current))
     throw new Error(`Refusing to terminate unverified PID ${entry.pid}`);
   if (platform === 'win32') {
+    const expected = Buffer.from(JSON.stringify(entry), 'utf8').toString('base64');
     await execFileText('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `Stop-Process -Id ${entry.pid} -Force -ErrorAction Stop`,
+      `$e=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${expected}'))|ConvertFrom-Json;$p=[Diagnostics.Process]::GetProcessById($e.pid);$ticks=$p.StartTime.ToUniversalTime().Ticks.ToString();$exe=$p.MainModule.FileName;$w=Get-CimInstance Win32_Process -Filter "ProcessId=$($e.pid)";if($ticks -ne $e.creationToken -or $exe -ine $e.executable -or $w.ParentProcessId -ne $e.parentPid -or $w.CommandLine -ne $e.commandLine -or $w.CommandLine -notlike ('*'+$e.marker+'*')){throw 'owned identity mismatch'};$p.Kill();$p.Dispose()`,
     ]);
     return;
   }
