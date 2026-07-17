@@ -42,6 +42,11 @@ export class OwnedProcessTree {
 
   captureAttested(root: OwnedProcessIdentity): boolean {
     if (
+      !Number.isSafeInteger(root.pid) ||
+      !Number.isSafeInteger(root.parentPid) ||
+      !root.createdAt ||
+      !/^\d+$/.test(root.creationToken) ||
+      !root.executable ||
       root.pid !== this.expectation.pid ||
       !sameExecutable(root.executable, this.expectation.executable) ||
       !root.commandLine?.includes(this.expectation.marker)

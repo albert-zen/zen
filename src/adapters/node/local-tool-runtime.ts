@@ -420,6 +420,7 @@ function readAttestedIdentity(
     attestedPid !== pid ||
     parentPid === undefined ||
     !createdAt ||
+    Number.isNaN(Date.parse(createdAt)) ||
     !creationToken ||
     !/^\d+$/.test(creationToken) ||
     !frameExecutable ||

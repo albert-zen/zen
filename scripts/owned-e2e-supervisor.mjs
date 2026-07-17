@@ -15,10 +15,11 @@ export function isOwnedProcess(entry, current) {
   return Boolean(
     current &&
     current.pid === entry.pid &&
-    current.createdAt === entry.createdAt &&
+    creationToken(current) === creationToken(entry) &&
     current.parentPid === entry.parentPid &&
     current.executable === entry.executable &&
     current.commandLine === entry.commandLine &&
+    typeof entry.marker === 'string' &&
     typeof current.commandLine === 'string' &&
     current.commandLine.includes(entry.marker)
   );
