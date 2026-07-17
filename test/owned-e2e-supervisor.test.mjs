@@ -51,6 +51,100 @@ describe('owned E2E supervisor', () => {
     });
   });
 
+  it('discovers a marked descendant created during a termination pass', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const root = ownedEntry({ marker, pid: 70, parentPid: 1, parentChain: [] });
+      const late = ownedEntry({ marker, pid: 71, parentPid: root.pid, rootPid: root.pid });
+      const processes = new Map([[root.pid, root]]);
+      const terminated = [];
+      await writeManifest(manifestPath, marker, [root]);
+
+      await cleanupOwnedManifest({
+        manifestPath,
+        inspect: async (pid) => processes.get(pid),
+        list: async () => [...processes.values()],
+        terminate: async (entry) => {
+          terminated.push(entry.pid);
+          processes.delete(entry.pid);
+          if (entry.pid === root.pid) processes.set(late.pid, late);
+        },
+      });
+
+      expect(terminated).toEqual([root.pid, late.pid]);
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
+    });
+  });
+
+  it('retains an unmarked descendant discovered on the pass after a leaf termination', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const root = ownedEntry({ marker, pid: 80, parentPid: 1, parentChain: [] });
+      const leaf = ownedEntry({
+        marker,
+        pid: 81,
+        parentPid: root.pid,
+        rootPid: root.pid,
+        parentChain: [{ pid: root.pid, createdAt: root.createdAt }],
+      });
+      const unmarked = {
+        ...ownedEntry({ marker, pid: 82, parentPid: root.pid, rootPid: root.pid }),
+        commandLine: 'node unrelated-late-child',
+      };
+      const processes = new Map([
+        [root.pid, root],
+        [leaf.pid, leaf],
+      ]);
+      const terminated = [];
+      await writeManifest(manifestPath, marker, [root, leaf]);
+
+      await expect(
+        cleanupOwnedManifest({
+          manifestPath,
+          inspect: async (pid) => processes.get(pid),
+          list: async () => [...processes.values()],
+          terminate: async (entry) => {
+            terminated.push(entry.pid);
+            processes.delete(entry.pid);
+            if (entry.pid === leaf.pid) processes.set(unmarked.pid, unmarked);
+          },
+        })
+      ).rejects.toThrow('exact owner identity');
+
+      expect(terminated).toEqual([leaf.pid]);
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 82');
+    });
+  });
+
+  it('fails bounded cleanup when marked descendants keep appearing', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const root = ownedEntry({ marker, pid: 90, parentPid: 1, parentChain: [] });
+      const processes = new Map([[root.pid, root]]);
+      let nextPid = 91;
+      await writeManifest(manifestPath, marker, [root]);
+
+      await expect(
+        cleanupOwnedManifest({
+          manifestPath,
+          maxPasses: 3,
+          inspect: async (pid) => processes.get(pid),
+          list: async () => [...processes.values()],
+          terminate: async (entry) => {
+            processes.delete(entry.pid);
+            const replacement = ownedEntry({
+              marker,
+              pid: nextPid++,
+              parentPid: root.pid,
+              rootPid: root.pid,
+            });
+            processes.set(replacement.pid, replacement);
+            processes.set(root.pid, root);
+          },
+        })
+      ).rejects.toThrow('did not reach quiescence after 3 passes');
+
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries":');
+    });
+  });
+
   it('retains an unmarked spawned child without calling its kill provider', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const identity = {

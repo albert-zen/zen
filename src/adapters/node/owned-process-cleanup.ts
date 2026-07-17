@@ -12,11 +12,21 @@ export type OwnedProcessOperations = {
   readonly platform?: NodeJS.Platform;
   readonly list?: () => Promise<readonly OwnedProcessIdentity[]>;
   readonly terminate?: (identity: OwnedProcessIdentity) => Promise<void>;
+  readonly maxPasses?: number;
 };
+
+export class OwnedProcessCleanupError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OwnedProcessCleanupError';
+  }
+}
 
 /** Tracks a directly spawned root and only terminates descendants whose full parent chain remains exact. */
 export class OwnedProcessTree {
   private root: OwnedProcessIdentity | undefined;
+  private cleanupTask: Promise<readonly number[]> | undefined;
+  private readonly retained = new Map<string, Candidate>();
 
   constructor(
     private readonly rootPid: number,
@@ -29,25 +39,82 @@ export class OwnedProcessTree {
   }
 
   async terminateVerified(): Promise<readonly number[]> {
+    this.cleanupTask ??= this.terminateUntilQuiescent();
+    return this.cleanupTask;
+  }
+
+  private async terminateUntilQuiescent(): Promise<readonly number[]> {
     const root = this.root;
     if (!root) return [];
-    const snapshot = await this.list();
-    const rootCurrent = snapshot.find((candidate) => candidate.pid === root.pid);
-    if (!sameIdentity(root, rootCurrent)) return [];
-
-    const candidates = descendantsOf(root, snapshot);
     const terminated: number[] = [];
-    for (const candidate of candidates.sort(
-      (left, right) => right.chain.length - left.chain.length
-    )) {
-      const current = (await this.list()).find((process) => process.pid === candidate.identity.pid);
-      if (!sameIdentity(candidate.identity, current)) continue;
+    let stableZeroScans = 0;
+
+    for (let pass = 0; pass < (this.operations.maxPasses ?? 32); pass += 1) {
+      const snapshot = await this.list();
+      const rootCurrent = snapshot.find((candidate) => candidate.pid === root.pid);
+      if (rootCurrent && !sameIdentity(root, rootCurrent)) {
+        throw new OwnedProcessCleanupError(
+          `Refusing cleanup: root PID ${root.pid} no longer has its recorded identity`
+        );
+      }
+      if (rootCurrent) {
+        for (const candidate of descendantsOf(root, snapshot)) {
+          this.retained.set(candidateKey(candidate.identity), candidate);
+        }
+      }
+
+      const live = this.liveRetainedCandidates(snapshot);
+      if (live.length === 0) {
+        // Two independent zero scans ensure a just-exited root did not leave a late child behind.
+        stableZeroScans += 1;
+        if (stableZeroScans >= 2) return terminated;
+        continue;
+      }
+      stableZeroScans = 0;
+
+      const candidate = live.sort((left, right) => right.chain.length - left.chain.length)[0];
       const currentProcesses = await this.list();
-      if (!hasExactChain(candidate.chain, current, currentProcesses)) continue;
+      const current = currentProcesses.find((process) => process.pid === candidate.identity.pid);
+      if (!sameIdentity(candidate.identity, current)) {
+        throw new OwnedProcessCleanupError(
+          `Refusing cleanup: PID ${candidate.identity.pid} no longer has its recorded identity`
+        );
+      }
+      if (!hasRecordedChain(candidate.chain, current, currentProcesses)) {
+        throw new OwnedProcessCleanupError(
+          `Refusing cleanup: PID ${candidate.identity.pid} parent chain changed`
+        );
+      }
       await this.terminate(candidate.identity);
       terminated.push(candidate.identity.pid);
     }
-    return terminated;
+
+    throw new OwnedProcessCleanupError(
+      `Owned process cleanup did not reach quiescence after ${this.operations.maxPasses ?? 32} passes`
+    );
+  }
+
+  private liveRetainedCandidates(processes: readonly OwnedProcessIdentity[]): Candidate[] {
+    const live: Candidate[] = [];
+    for (const [key, candidate] of this.retained) {
+      const current = processes.find((process) => process.pid === candidate.identity.pid);
+      if (!current) {
+        this.retained.delete(key);
+        continue;
+      }
+      if (!sameIdentity(candidate.identity, current)) {
+        throw new OwnedProcessCleanupError(
+          `Refusing cleanup: retained PID ${candidate.identity.pid} was reused`
+        );
+      }
+      if (!hasRecordedChain(candidate.chain, current, processes)) {
+        throw new OwnedProcessCleanupError(
+          `Refusing cleanup: retained PID ${candidate.identity.pid} parent chain changed`
+        );
+      }
+      live.push(candidate);
+    }
+    return live;
   }
 
   private list(): Promise<readonly OwnedProcessIdentity[]> {
@@ -87,7 +154,7 @@ function descendantsOf(
   return candidates;
 }
 
-function hasExactChain(
+function hasRecordedChain(
   recorded: readonly OwnedProcessIdentity[],
   current: OwnedProcessIdentity | undefined,
   processes: readonly OwnedProcessIdentity[]
@@ -100,11 +167,19 @@ function hasExactChain(
     if (!sameIdentity(expected, cursor)) return false;
     if (index > 0) {
       const parent = byPid.get(cursor.parentPid);
-      if (!parent) return false;
+      if (!parent) {
+        // A recorded ancestor may already have exited. It is still safe only while no
+        // PID in the remaining recorded chain has been reused by another process.
+        return recorded.slice(0, index).every((ancestor) => !byPid.has(ancestor.pid));
+      }
       cursor = parent;
     }
   }
   return true;
+}
+
+function candidateKey(identity: OwnedProcessIdentity): string {
+  return `${identity.pid}:${identity.createdAt}`;
 }
 
 function sameIdentity(

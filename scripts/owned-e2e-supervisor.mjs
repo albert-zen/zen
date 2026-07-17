@@ -62,22 +62,39 @@ export async function cleanupOwnedManifest({
   inspect = (pid) => inspectProcess(pid, platform),
   list = () => listProcesses(platform),
   terminate = (entry) => terminateProcess(entry, platform, inspect),
+  maxPasses = 32,
 }) {
   const manifest = createManifestStore(manifestPath);
-  const initial = await manifest.read();
-  const processes = await list();
-  const discovered = discoverOwnedCandidates(initial.marker, processes, initial.entries);
-  if (discovered.length > 0) await manifest.upsertMany(initial.marker, discovered);
+  let stableZeroScans = 0;
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    const initial = await manifest.read();
+    const processes = await list();
+    const discovered = discoverOwnedCandidates(initial.marker, processes, initial.entries);
+    if (discovered.length > 0) await manifest.upsertMany(initial.marker, discovered);
 
-  const snapshot = await manifest.read();
-  const validation = await validateLiveEntries(snapshot.entries, inspect, list);
-  if (validation.invalid.length > 0) {
-    throw new Error(`Refusing cleanup: ${validation.invalid.join('; ')}`);
-  }
+    const snapshot = await manifest.read();
+    const validation = await validateLiveEntries(snapshot.entries, inspect, list);
+    if (validation.invalid.length > 0) {
+      throw new Error(`Refusing cleanup: ${validation.invalid.join('; ')}`);
+    }
 
-  for (const entry of validation.live.sort(
-    (left, right) => right.parentChain.length - left.parentChain.length
-  )) {
+    if (validation.live.length === 0) {
+      // A second zero scan closes the root-exit window before the manifest is cleared.
+      await assertNoOwnedProcesses({ manifestPath, marker: snapshot.marker, inspect, list });
+      stableZeroScans += 1;
+      if (stableZeroScans >= 2) {
+        await manifest.write(emptyManifest(snapshot.marker));
+        return;
+      }
+      continue;
+    }
+    stableZeroScans = 0;
+
+    // Kill only one deepest exact identity each pass. A rescan before a parent can be
+    // stopped discovers descendants created while this leaf was terminating.
+    const entry = validation.live.sort(
+      (left, right) => right.parentChain.length - left.parentChain.length
+    )[0];
     const beforeKill = await validateEntry(entry, await inspect(entry.pid), await list());
     if (!beforeKill.valid) {
       throw new Error(`Refusing cleanup: ${beforeKill.reason}`);
@@ -85,9 +102,7 @@ export async function cleanupOwnedManifest({
     await terminate(entry);
   }
 
-  // This independently scans Win32_Process/ps by marker before the manifest can be cleared.
-  await assertNoOwnedProcesses({ manifestPath, marker: snapshot.marker, inspect, list });
-  await manifest.write(emptyManifest(snapshot.marker));
+  throw new Error(`Owned cleanup did not reach quiescence after ${maxPasses} passes`);
 }
 
 export async function terminateRegisteredProcess(

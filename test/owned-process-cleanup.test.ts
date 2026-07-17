@@ -50,13 +50,13 @@ describe('OwnedProcessTree', () => {
     await tree.captureRoot();
     processes.set(root.pid, { ...root, createdAt: 'reused-root' });
 
-    await expect(tree.terminateVerified()).resolves.toEqual([]);
+    await expect(tree.terminateVerified()).rejects.toThrow(
+      'root PID 20 no longer has its recorded identity'
+    );
     expect(terminated).toEqual([]);
 
-    processes.set(root.pid, root);
-    processes.set(child.pid, { ...child, parentPid: 999 });
-    await expect(tree.terminateVerified()).resolves.toEqual([root.pid]);
-    expect(terminated).toEqual([root.pid]);
+    expect(processes.get(root.pid)).toEqual({ ...root, createdAt: 'reused-root' });
+    expect(processes.get(child.pid)).toEqual(child);
   });
 
   it('leaves zero tracked residue after timeout and abort cleanup requests', async () => {
@@ -76,8 +76,56 @@ describe('OwnedProcessTree', () => {
     await tree.captureRoot();
 
     await tree.terminateVerified();
-    await expect(tree.terminateVerified()).resolves.toEqual([]);
+    await expect(tree.terminateVerified()).resolves.toEqual([child.pid, root.pid]);
     expect(processes.size).toBe(0);
+  });
+
+  it('rescans and terminates descendants created while a leaf is being stopped', async () => {
+    const root = processIdentity(40, 1, 'root');
+    const child = processIdentity(41, root.pid, 'child');
+    const leaf = processIdentity(42, child.pid, 'leaf');
+    const lateChild = processIdentity(43, child.pid, 'late-child');
+    const processes = new Map([
+      [root.pid, root],
+      [child.pid, child],
+      [leaf.pid, leaf],
+    ]);
+    const terminated: number[] = [];
+    const tree = new OwnedProcessTree(root.pid, {
+      list: async () => [...processes.values()],
+      terminate: async (identity) => {
+        terminated.push(identity.pid);
+        processes.delete(identity.pid);
+        if (identity.pid === leaf.pid) processes.set(lateChild.pid, lateChild);
+      },
+    });
+    await tree.captureRoot();
+
+    await expect(tree.terminateVerified()).resolves.toEqual([
+      leaf.pid,
+      lateChild.pid,
+      child.pid,
+      root.pid,
+    ]);
+    expect(terminated).toEqual([leaf.pid, lateChild.pid, child.pid, root.pid]);
+  });
+
+  it('propagates a cleanup failure through the one shared cleanup task', async () => {
+    const root = processIdentity(50, 1, 'root');
+    let terminateCalls = 0;
+    const tree = new OwnedProcessTree(root.pid, {
+      list: async () => [root],
+      terminate: async () => {
+        terminateCalls += 1;
+        throw new Error('termination provider failed');
+      },
+    });
+    await tree.captureRoot();
+
+    const first = tree.terminateVerified();
+    const second = tree.terminateVerified();
+    await expect(Promise.all([first, second])).rejects.toThrow('termination provider failed');
+    expect(terminateCalls).toBe(1);
   });
 });
 

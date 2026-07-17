@@ -63,6 +63,13 @@ Open questions: none.
 Known residual risks: POSIX process-group cleanup is implemented but validated here on Windows only. The local-path origin prevents GitHub PR/check handoff until a canonical remote is configured.
 Blocker or context escalation details: none.
 
+## Codex Worker Note
+
+Round: 10 correction
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Correction reason: the prior Round 10 note recorded the first passing 230.5-second aggregate check. A subsequent root-close cleanup-path correction was made before commit, so that run is not the final exact-head validation.
+Corrected exact-head result: after the root-close change, focused ownership/runtime/supervisor/TUI tests passed (42 tests), and `npm run check` passed in 247.7 seconds: 34 test files/257 tests, all builds, kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` again reported `found 0 vulnerabilities`; `git diff --check` passed; the independent constructed-marker/path Win32 Node/Vite/Vitest/Playwright/Chromium scan again reported zero matches. This correction appends without rewriting prior history.
+
 ## Codex Review Note
 
 Round: 4
@@ -236,6 +243,47 @@ Blocker or context escalation details: none.
 
 ## Codex Review Note
 
+Round: 5
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: user-supplied Review Round 5 on exact head `f02706ba2c82bacd5724033eb027e138b36fc2cd`
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-007`
+Base revision/diff scope: `f02706ba2c82bacd5724033eb027e138b36fc2cd`; owned-process quiescence and LocalToolRuntime cleanup ownership.
+Standards Review blocking: `OwnedProcessTree.terminateVerified` used one discovery snapshot, so descendants created during termination could be missed. `LocalToolRuntime` launched capture and termination through unobserved promises and could report cancellation without waiting for cleanup.
+Standards Review non-blocking: none.
+Standards Review missing evidence: deterministic late-descendant, non-quiescence, cleanup-failure, and exact-once cleanup tests; fresh exact-head gate and process scan.
+Spec Review blocking: supervisor manifest cleanup must repeatedly discover, persist, revalidate, and terminate one verified leaf at a time until stable zero ownership, or retain evidence and fail at a bounded limit.
+Spec Review non-blocking: none.
+Spec Review missing evidence: targeted process/runtime/supervisor results, exact check, online audit, diff check, and independent final marker/path scan.
+Local tracker state decision: Rework
+State decision reason: user accepted both ownership-race findings; this worker remains implementation owner pending fresh review.
+
+## Codex Worker Note
+
+Round: 10
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+PR URL: not used; this program remains local-branch/local-review with local-path `origin`.
+Base revision/diff scope: `f02706ba2c82bacd5724033eb027e138b36fc2cd` through the pending Round 5 fix commit.
+Summary of behavior delivered: `OwnedProcessTree` now retains creation-qualified candidate chains, rescans between individual deepest-first stops, permits an already-exited recorded ancestor only when no recorded ancestor PID has been reused, requires two independent zero scans, and fails at a bounded pass budget instead of claiming cleanup success. `LocalToolRuntime` owns one capture/cleanup task; cancellation, timeout, and generator-finalizer paths retain and await it before emitting their terminal outcome, and surface cleanup failures as aggregate tool errors. The E2E manifest supervisor now discovers/persists/revalidates one exact leaf per pass until quiescence, retains late unmarked descendants as failure evidence, and fails without clearing its manifest when the pass budget is exhausted.
+Final scope summary: Accepted Review Round 5 ownership races fixed; tracker remains Rework pending fresh reviewer.
+Changed files/modules: `src/adapters/node/owned-process-cleanup.ts`, `src/adapters/node/local-tool-runtime.ts`, `scripts/owned-e2e-supervisor.mjs`, focused ownership/supervisor tests, evidence, and tracker.
+Tests added/updated: ownership primitive tests cover late descendants, multiple generations, PID-reuse refusal, zero residue, cleanup failure propagation, and exactly-once provider invocation. Supervisor tests cover marked late discovery, late unmarked retention/no-kill, and bounded non-quiescence. Focused runtime/process/TUI command: 4 files, 42 tests passed.
+Acceptance criteria status: complete pending fresh review. The first Round 5 aggregate run stopped at lint because cleanup event invocations were not explicitly observed; this was corrected before the accepted exact run. No threshold, exclusion, coverage-ignore, recursive taskkill, or broad Node kill was added.
+Commands run and results: `npm run check` passed in 230.5 seconds: format/lint/typechecks/builds; 34 test files/257 tests; kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines; product 91.23/80.74/97.14/91.30; presentation 92.18/80.31/94.11/93.01; 2 Playwright E2E tests passed. Online `npm audit --include=dev --registry=https://registry.npmjs.org`: `found 0 vulnerabilities`. `git diff --check` passed. Independent Win32 command-line scan for constructed `zen-e2e-` and workspace marker fragments across Node/Vite/Vitest/Playwright/Chromium found zero matches; no process was terminated by the scan.
+Validation log paths: ignored coverage, test-results, Playwright artifacts, and PID manifests remain untracked and are not evidence artifacts.
+Required check status or local-check handoff reason: exact local check and online audit passed; local-path origin has no GitHub handoff. Fresh reviewer remains required by the tracker.
+Evidence links/paths: `docs/implementation/long-term-optimization-007-evidence.md`, `docs/implementation/long-term-optimization-tracker.md`.
+Decisions made: cleanup is deliberately conservative: a reused PID, changed chain, or unmarked late descendant is retained and reported rather than terminated. Quiescence requires fresh discovery after every individual stop and two zero-owned scans.
+Standards notes: no `taskkill /T` exists in tracked source or scripts; Windows cleanup uses individual exact identity checks only.
+Reviewer notes: tracker intentionally remains Rework until a fresh reviewer accepts the new exact head.
+Open questions: none.
+Known residual risks: POSIX individual-process cleanup is structurally covered but not exercised on this Windows machine; a hostile child that continually creates valid marked descendants will intentionally leave retained manifest evidence after the bounded failure.
+Blocker or context escalation details: none.
+
+## Codex Review Note
+
 Round: 3
 Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
 Reviewer context: user-supplied Review Round 3 after Worker Round 7
@@ -274,3 +322,11 @@ Reviewer notes: tracker intentionally remains Rework until a fresh reviewer acce
 Open questions: none.
 Known residual risks: POSIX individual-process cleanup is structurally covered but not exercised on this Windows machine.
 Blocker or context escalation details: none.
+
+## Codex Worker Note
+
+Round: 10 terminal correction
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Evidence ordering correction: the document contains pre-existing non-chronological append-only history. The preceding Round 10 correction is retained where the generic context inserted it; this terminal note records the final result without moving or rewriting any historical entry.
+Corrected exact-head result: after the root-close cleanup-path correction, focused ownership/runtime/supervisor/TUI tests passed (42 tests), and `npm run check` passed in 247.7 seconds: 34 test files/257 tests, all builds, kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` again reported `found 0 vulnerabilities`; `git diff --check` passed; the independent constructed-marker/path Win32 Node/Vite/Vitest/Playwright/Chromium scan again reported zero matches. No process was killed by this scan.
+Local tracker state: Rework pending fresh reviewer.

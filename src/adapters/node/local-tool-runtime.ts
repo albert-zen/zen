@@ -125,6 +125,9 @@ export class LocalToolRuntime implements ToolRuntime {
       ownership?: OwnedProcessTree;
     } = {};
     let terminationRequested = false;
+    const rootCapture: { task?: Promise<void> } = {};
+    let cleanupTask: Promise<void> | undefined;
+    let cleanupFailure: unknown;
 
     const wakeConsumer = () => {
       wake?.();
@@ -149,17 +152,28 @@ export class LocalToolRuntime implements ToolRuntime {
       if (timeout) clearTimeout(timeout);
       wakeConsumer();
     };
-    const terminateOwnedTree = () => {
+    const startCleanup = (): Promise<void> => {
       terminationRequested = true;
-      if (process.platform !== 'win32') {
-        processHolder.child?.kill('SIGTERM');
-        return;
-      }
-      void processHolder.ownership?.terminateVerified();
+      if (!processHolder.child) return Promise.resolve();
+      cleanupTask ??= (async () => {
+        if (process.platform !== 'win32') {
+          processHolder.child?.kill('SIGTERM');
+          return;
+        }
+        await rootCapture.task;
+        await processHolder.ownership?.terminateVerified();
+      })();
+      // Event handlers cannot await cleanup. Retain the error and wake the generator;
+      // the terminal path below always awaits this same task before reporting success.
+      cleanupTask.catch((error: unknown) => {
+        cleanupFailure ??= error;
+        finish();
+      });
+      return cleanupTask;
     };
     const cancel = () => {
       canceled = true;
-      terminateOwnedTree();
+      startCleanup().catch(() => undefined);
     };
 
     // Register cancellation before spawn; the holder safely no-ops until ownership is captured.
@@ -172,12 +186,15 @@ export class LocalToolRuntime implements ToolRuntime {
     const ownership = new OwnedProcessTree(child.pid ?? 0);
     processHolder.child = child;
     processHolder.ownership = ownership;
-    void ownership.captureRoot().then(() => {
-      if (terminationRequested) void processHolder.ownership?.terminateVerified();
+    rootCapture.task = ownership.captureRoot();
+    rootCapture.task.catch((error: unknown) => {
+      cleanupFailure ??= error;
+      if (terminationRequested) finish();
     });
+    if (terminationRequested) startCleanup().catch(() => undefined);
     const timeout = setTimeout(() => {
       timedOut = true;
-      terminateOwnedTree();
+      startCleanup().catch(() => undefined);
     }, this.shellTimeoutMs);
 
     if (!child.stdout || !child.stderr) {
@@ -194,6 +211,7 @@ export class LocalToolRuntime implements ToolRuntime {
     child.on('close', (code) => {
       exitCode = code;
       finish();
+      startCleanup().catch(() => undefined);
     });
     try {
       while (!done || queue.length > 0) {
@@ -213,25 +231,69 @@ export class LocalToolRuntime implements ToolRuntime {
       context.signal?.removeEventListener('abort', cancel);
 
       if (!done) {
-        terminateOwnedTree();
+        try {
+          await startCleanup();
+        } catch (error) {
+          cleanupFailure ??= error;
+        }
+      }
+    }
+
+    if (cleanupTask) {
+      try {
+        await cleanupTask;
+      } catch (error) {
+        cleanupFailure ??= error;
       }
     }
 
     if (spawnError) {
+      if (cleanupFailure) {
+        yield {
+          type: 'error',
+          error: new AggregateError([spawnError, cleanupFailure], 'Shell spawn and cleanup failed'),
+        };
+        return;
+      }
       yield { type: 'error', error: spawnError };
       return;
     }
 
     if (canceled) {
+      if (cleanupFailure) {
+        yield {
+          type: 'error',
+          error: new AggregateError(
+            [new Error('Shell command canceled'), cleanupFailure],
+            'Shell cancellation cleanup failed'
+          ),
+        };
+        return;
+      }
       yield { type: 'error', error: new Error('Shell command canceled') };
       return;
     }
 
     if (timedOut) {
+      if (cleanupFailure) {
+        yield {
+          type: 'error',
+          error: new AggregateError(
+            [new Error(`Shell command timed out after ${this.shellTimeoutMs}ms`), cleanupFailure],
+            'Shell timeout cleanup failed'
+          ),
+        };
+        return;
+      }
       yield {
         type: 'error',
         error: new Error(`Shell command timed out after ${this.shellTimeoutMs}ms`),
       };
+      return;
+    }
+
+    if (cleanupFailure) {
+      yield { type: 'error', error: cleanupFailure };
       return;
     }
 
