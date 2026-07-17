@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,6 +12,7 @@ import { closeFixtureResources } from '../e2e/fixture-server.mjs';
 import {
   assertNoOwnedProcesses,
   cleanupOwnedManifest,
+  installCleanupHandlers,
   isOwnedProcess,
   registerSpawnedProcess,
   runOwnedCommand,
@@ -124,24 +126,37 @@ describe('owned E2E supervisor', () => {
     });
   });
 
-  it('retains an unmarked live descendant and does not kill it', async () => {
+  it('discovers an unmarked live descendant, retains it, and does not kill it', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
-      const entry = ownedEntry({ marker });
-      const unmarked = { ...entry, commandLine: 'node unrelated-worker' };
-      await writeManifest(manifestPath, marker, [entry]);
+      const root = ownedEntry({ marker, pid: 10, parentPid: 1, parentChain: [] });
+      const unmarked = {
+        ...ownedEntry({
+          marker,
+          pid: 11,
+          parentPid: root.pid,
+          rootPid: root.pid,
+          parentChain: [{ pid: root.pid, createdAt: root.createdAt }],
+        }),
+        commandLine: 'node unrelated-worker',
+      };
+      const processes = new Map([
+        [root.pid, root],
+        [unmarked.pid, unmarked],
+      ]);
+      await writeManifest(manifestPath, marker, [root]);
 
       await expect(
         cleanupOwnedManifest({
           manifestPath,
-          inspect: async () => unmarked,
-          list: async () => [unmarked],
+          inspect: async (pid) => processes.get(pid),
+          list: async () => [...processes.values()],
           terminate: async () => {
             throw new Error('unmarked process must not be terminated');
           },
         })
       ).rejects.toThrow('exact owner identity');
 
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 1234');
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 11');
     });
   });
 
@@ -249,28 +264,29 @@ describe('owned E2E supervisor', () => {
     });
   });
 
-  it('handles SIGTERM with the installed cleanup handler and leaves no owned process', async () => {
-    await withManifest(async ({ directory, manifestPath, marker }) => {
-      const runner = path.join(directory, 'signal-runner.mjs');
-      const supervisorUrl = pathToFileURL(path.resolve('scripts/owned-e2e-supervisor.mjs')).href;
-      await writeFile(
-        runner,
-        [
-          "import process from 'node:process';",
-          `import { runOwnedCommand } from '${supervisorUrl}';`,
-          'const [manifestPath, marker] = process.argv.slice(2);',
-          "const result = await runOwnedCommand({ command: process.execPath, args: [`--title=${marker}-signal-child`, '-e', \"process.kill(process.ppid, 'SIGTERM'); setInterval(() => {}, 1000)\"], marker, manifestPath, stdio: 'ignore' });",
-          'process.exitCode = result.exitCode;',
-        ].join('\n'),
-        'utf8'
-      );
-
-      const child = spawn(process.execPath, [runner, manifestPath, marker], { stdio: 'ignore' });
-      await onceExit(child);
-      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"entries": []');
-      await expect(assertNoOwnedProcesses({ manifestPath })).resolves.toBeUndefined();
+  it('runs the installed SIGTERM cleanup handler before any spawned work', async () => {
+    const signals = new EventEmitter();
+    const exitCodes = [];
+    let resolveCleanup;
+    const cleaned = new Promise((resolve) => {
+      resolveCleanup = resolve;
     });
-  }, 15_000);
+    const handlers = installCleanupHandlers(
+      async () => resolveCleanup(),
+      signals,
+      (code) => {
+        exitCodes.push(code);
+      }
+    );
+    try {
+      signals.emit('SIGTERM');
+      await cleaned;
+      await new Promise(setImmediate);
+      expect(exitCodes).toEqual([143]);
+    } finally {
+      handlers.dispose();
+    }
+  });
 
   it('requires exact creation, command, parent, executable, and marker identity', () => {
     const entry = ownedEntry({ marker: 'zen-e2e-test-marker' });
@@ -319,13 +335,6 @@ async function withManifest(run) {
 
 async function writeManifest(manifestPath, marker, entries) {
   await writeFile(manifestPath, `${JSON.stringify({ version: 3, marker, entries }, null, 2)}\n`);
-}
-
-function onceExit(child) {
-  return new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', resolve);
-  });
 }
 
 function ownedEntry({

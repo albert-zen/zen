@@ -63,7 +63,7 @@ export async function cleanupOwnedManifest({
   const manifest = createManifestStore(manifestPath);
   const initial = await manifest.read();
   const processes = await list();
-  const discovered = discoverMarkedProcesses(initial.marker, processes, initial.entries);
+  const discovered = discoverOwnedCandidates(initial.marker, processes, initial.entries);
   if (discovered.length > 0) await manifest.upsertMany(initial.marker, discovered);
 
   const snapshot = await manifest.read();
@@ -187,14 +187,32 @@ function makeEntry(current, marker, rootPid, role, processes) {
   };
 }
 
-function discoverMarkedProcesses(marker, processes, knownEntries) {
+function discoverOwnedCandidates(marker, processes, knownEntries) {
   if (!marker) return [];
   const known = new Set(knownEntries.map((entry) => entry.pid));
-  return processes
-    .filter((candidate) => candidate.commandLine?.includes(marker) && !known.has(candidate.pid))
-    .map((candidate) =>
-      makeEntry(candidate, marker, candidate.pid, 'independent-marker-scan', processes)
+  const children = new Map();
+  for (const candidate of processes) {
+    const siblings = children.get(candidate.parentPid) ?? [];
+    siblings.push(candidate);
+    children.set(candidate.parentPid, siblings);
+  }
+  const discovered = new Map();
+  const pending = processes
+    .filter((candidate) => candidate.commandLine?.includes(marker))
+    .map((candidate) => ({ candidate, rootPid: candidate.pid }));
+
+  while (pending.length > 0) {
+    const { candidate, rootPid } = pending.pop();
+    if (discovered.has(candidate.pid)) continue;
+    discovered.set(
+      candidate.pid,
+      makeEntry(candidate, marker, rootPid, 'owned-tree-candidate', processes)
     );
+    for (const child of children.get(candidate.pid) ?? [])
+      pending.push({ candidate: child, rootPid });
+  }
+
+  return [...discovered.values()].filter((candidate) => !known.has(candidate.pid));
 }
 
 function readParentChain(current, processes) {
@@ -254,13 +272,19 @@ async function cleanupStaleManifest(operations) {
   if (snapshot.entries.length > 0) await cleanupOwnedManifest(operations);
 }
 
-function installCleanupHandlers(cleanup) {
+export function installCleanupHandlers(
+  cleanup,
+  signals = process,
+  setExitCode = (code) => {
+    process.exitCode = code;
+  }
+) {
   let handling = false;
   const handleSignal = (signal) => {
     if (handling) return;
     handling = true;
     void cleanup().finally(() => {
-      process.exitCode = signal === 'SIGINT' ? 130 : 143;
+      setExitCode(signal === 'SIGINT' ? 130 : 143);
     });
   };
   const handleException = (cause) => {
@@ -274,16 +298,16 @@ function installCleanupHandlers(cleanup) {
   };
   const onInterrupt = () => handleSignal('SIGINT');
   const onTerminate = () => handleSignal('SIGTERM');
-  process.once('SIGINT', onInterrupt);
-  process.once('SIGTERM', onTerminate);
-  process.once('uncaughtException', handleException);
-  process.once('unhandledRejection', handleException);
+  signals.once('SIGINT', onInterrupt);
+  signals.once('SIGTERM', onTerminate);
+  signals.once('uncaughtException', handleException);
+  signals.once('unhandledRejection', handleException);
   return {
     dispose() {
-      process.removeListener('SIGINT', onInterrupt);
-      process.removeListener('SIGTERM', onTerminate);
-      process.removeListener('uncaughtException', handleException);
-      process.removeListener('unhandledRejection', handleException);
+      signals.removeListener('SIGINT', onInterrupt);
+      signals.removeListener('SIGTERM', onTerminate);
+      signals.removeListener('uncaughtException', handleException);
+      signals.removeListener('unhandledRejection', handleException);
     },
   };
 }

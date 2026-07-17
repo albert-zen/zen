@@ -168,3 +168,27 @@ Reviewer notes: fresh review required; tracker intentionally remains Rework.
 Open questions: none.
 Known residual risks: POSIX individual `SIGTERM` behavior is structurally implemented but not exercised on this Windows worker. An abrupt machine kill before JavaScript handlers run can only be addressed by next-startup safe preflight.
 Blocker or context escalation details: none.
+
+## Codex Worker Note
+
+Round: 7
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+PR URL: not used; this program remains local-branch/local-review with local-path `origin`.
+Base revision/diff scope: `fb195e8`; final descendant-discovery and Windows-safe signal-test correction.
+Summary of behavior delivered: Candidate discovery now persists every descendant of a marker-owned process before cleanup, including an unmarked descendant that must be retained and fail safe. The SIGTERM handler test no longer sends a Windows process-killing signal; it drives the installed handler through an injected event emitter and exit-code sink, proving cleanup behavior without destabilizing Vitest workers.
+Final scope summary: complete rework awaiting fresh review.
+Changed files/modules: `scripts/owned-e2e-supervisor.mjs`; `test/owned-e2e-supervisor.test.mjs`; evidence/tracker.
+Tests added/updated: the unmarked-descendant test now proves discovery, manifest persistence, and refusal to terminate. Signal cleanup is deterministic and coverage-safe. Focused supervisor tests: 12 passed.
+Acceptance criteria status: all Round 2 requirements remain satisfied. The final exact check is clean rather than merely exit-code clean.
+Commands run and results: targeted supervisor tests and isolated kernel/product coverage passed with 33 files and 248 tests. Final exact `npm run check` passed in 256.2 seconds: format, lint, both typechecks, 248 unit tests, builds, Web build, kernel/product/presentation coverage, and 2 E2E tests. Final online `npm audit --include=dev --registry=https://registry.npmjs.org` returned `found 0 vulnerabilities`. Final `git diff --check` passed.
+Validation log paths: ignored coverage/test-results/Playwright/PID artifacts only; none are staged.
+Required check status or local-check handoff reason: exact-head local validation passed; tracker remains Rework pending fresh review.
+Evidence links/paths: `docs/implementation/long-term-optimization-007-evidence.md`, `docs/implementation/long-term-optimization-tracker.md`.
+Decisions made: no Windows process is killed through a recursive tree command. The final independent Win32 command-line scan, using the dynamically assembled owner marker, found zero owned Zen E2E/Vite/Vitest/Playwright/Chromium processes.
+Standards notes: no thresholds, exclusions, or coverage-ignore pragmas changed.
+Reviewer notes: fresh reviewer required; no Agent Review transition has been made.
+Open questions: none.
+Known residual risks: POSIX individual-process cleanup is structurally covered but not exercised on this Windows machine.
+Blocker or context escalation details: none.
