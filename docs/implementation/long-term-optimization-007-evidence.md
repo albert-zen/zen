@@ -698,3 +698,22 @@ Correction: the Round 24 evidence mapping was incomplete. Round 25 changes `test
 Implementation: terminal deletion now removes events/writer leases, then immutable `run.json`, then tombstone last. Precommit clear failures remove only their tombstone; once deletion starts the tombstone is retained on failure. Creator fingerprinting uses canonical `leaseOwnerRecord`; writer hooks execute inside the lease finalizer; incomplete creation paths are confined before shallow cleanup.
 Validation: focused serial supervisor suite, targeted Prettier and ESLint passed; real launcher stress passed `10/10`; online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; exact scan found zero attributable runtime processes and zero supervisor temp directories. No full `npm run check` ran per direction.
 Acceptance criteria status: Round 25 is pending fresh review. Issue 007 remains Rework.
+
+## Codex Review Note
+
+Round: 21 final high review manager disposition
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Accepted: terminal ownership transitions must commit by an atomic confined rename; explicit-marker E2E postconditions must remain independent of legacy manifest state; browser EventSource readiness must order requests; and Windows cleanup must use paired snapshots without weakening exact identity validation.
+Local tracker state decision: Rework pending final high review.
+
+## Codex Worker Note
+
+Round: 26
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `5808873c61a06ef1bf681a336b5403b9a6de6eb0` (`fix: atomically terminalize owned e2e runs`).
+Summary: terminal clear and stale reclamation now atomically rename the exact confined run into a unique terminal sibling before any shallow deletion. A late writer holding the old pathname fails rather than appending to an open generation; leftover terminal namespaces are isolated and safely finalized only after ownership checks. Explicit-marker E2E assertions bypass legacy manifests and always run the independent marker scan, and `run-e2e.mjs` supplies the owned result marker. Browser EventSource subscriptions now hold a readiness barrier until open, error, or disconnect settles it, preventing POST requests from overtaking `/events`. Windows owned cleanup uses one paired default PowerShell/CIM helper per pass to supply distinct discovery and pre-kill snapshots.
+Tests and validation: focused serial supervisor/browser/owned-cleanup suite passed `62` tests in `45.63s`; this includes `atomically isolates a run when a writer pauses after reading before its lease capture`, explicit-marker legacy isolation, browser readiness/error settlement, and paired snapshot call coverage. The isolated LocalToolRuntime shell test passed in `2.43s`. The real launcher/child/grandchild test passed `10/10` serial repetitions in `83.9s` wall-clock (per-run `8.03, 8.04, 8.93, 8.06, 8.06, 8.11, 8.11, 8.21, 8.20, 8.13` seconds). Targeted ESLint and Prettier passed; `git diff --check` passed. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`. Per manager direction, no full `npm run check` ran this round.
+Residue evidence: final independent Win32 scan, excluding the scan process itself, found `0` attributable `zen-e2e`/`zen-local` or workspace processes. Exact owned supervisor/review temporary-directory scan found `0` directories. No process or directory was killed or broadly deleted during validation.
+Acceptance criteria status: Round 26 implementation is complete pending a final high review. Issue 007 remains Rework; Wave 5 is not integrated.
