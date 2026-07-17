@@ -599,3 +599,25 @@ Tests added/updated: focused supervisor suite passed 36 tests. New deterministic
 Commands run and results: focused serial supervisor suite passed (`36` tests, 44.61 seconds); serial real launcher stress passed `10/10` (100.3 seconds); online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed. Per manager direction, this round intentionally did not run `npm run check`; a fresh strict review is to trigger the single authoritative canonical integration gate.
 Residue evidence: independent Windows scan found zero `zen-local`/`zen-e2e` runtime processes and zero `zen-e2e-supervisor-*` temporary directories. No process or directory outside exact owned test scope was removed.
 Acceptance criteria status: Round 20 implementation and focused validation are complete. Issue 007 remains Rework pending a brand-new review. No retry-based manifest replacement, broad deletion, broad process termination, recursive taskkill, or coverage weakening was added.
+
+## Codex Review Note
+
+Round: 16 manager disposition
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Accepted: same-process logical runs are not serialized; the shared current-run/reclaimer lease has an ABA takeover race; and malformed current-run lease data is unrecoverable. The shared mutable current manifest and all current-run/reclaimer lease state must be removed.
+Confinement disposition: full same-privilege adversarial TOCTOU prevention is outside Node/Windows capability and not required. The accepted boundary is allowlisted, non-link regular files only, shallow per-file deletion, exact run-path revalidation before `rmdir`, and no recursive generation deletion.
+Architecture decision: use immutable per-run namespaces with immutable metadata and append-only events. The explicit run directory is passed to descendants; stale cleanup independently enumerates isolated runs and retains malformed, live, or unknown-content runs without blocking unrelated new runs.
+Reviewer edits: none.
+Local tracker state decision: Rework.
+
+## Codex Worker Note
+
+Round: 21
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `3abce75ce8765b22628e17ccda49bf4e039b514f` (`fix: isolate immutable owned process runs`).
+Summary of behavior delivered: schema-7 removes the shared mutable current manifest, current-run lease, and reclaimer lease. Each command now creates one immutable marker/run-ID directory under the confined ledger root, with immutable `run.json` containing the exact supervisor identity. The explicit directory is passed through `ZEN_E2E_MANIFEST_PATH`; registrations append unique events only there. Startup stale cleanup enumerates independent runs and retains any live exact owner, marker-bearing process, event identity, active writer lease, malformed metadata, link, or unknown child. Terminal clear refuses active writers, revalidates the event revision, validates every direct child against the regular-file allowlist, deletes known files shallowly, revalidates the exact run path, and then removes only that directory.
+Tests and validation: focused supervisor suite passed 28 active tests (10 legacy current-run/reclaimer tests are intentionally skipped because their shared-pointer contract was removed), including new same-process isolated-run, owner-live/owner-dead reclamation, and malformed/unknown-run isolation tests. The real launcher/child/grandchild path passed 10 serial repetitions in 93.9 seconds. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed. Per direction, no full `npm run check` ran this round.
+Cleanup evidence: all three specified `zen-review16-*` directories were confirmed as direct temp children with zero non-self command-line references and removed by their exact paths only. A final scan found zero attributable `zen-local`/`zen-e2e` runtime processes, zero `zen-review16-*` directories, and zero owned supervisor temporary directories after two verified stale test directories were removed by exact path only.
+Acceptance criteria status: Round 21 implementation is complete pending fresh review. Issue 007 remains Rework; no broad process termination, recursive taskkill, or broad directory deletion was used.
