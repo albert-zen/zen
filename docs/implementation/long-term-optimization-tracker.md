@@ -18,7 +18,7 @@ integration. Workers implement one issue only.
 
 | Backlog | Ready | In Progress | Agent Review | Rework | Integrated                      | Complete   | Blocked |
 | ------- | ----- | ----------- | ------------ | ------ | ------------------------------- | ---------- | ------- |
-| 010     | -     | 009         | 008          | -      | 003<br>004<br>005<br>006<br>007 | 001<br>002 | -       |
+| -       | -     | 010         | 008<br>009   | -      | 003<br>004<br>005<br>006<br>007 | 001<br>002 | -       |
 
 ## Issue Register
 
@@ -32,8 +32,8 @@ integration. Workers implement one issue only.
 | long-term-optimization-006 | Integrated   | 001-005                    | `codex/long-term-optimization-006 @ b62873bd3aa216f56d870c072f651ab2dbcd074a`                |            2 |            2 | `docs/implementation/long-term-optimization-006-evidence.md`                |
 | long-term-optimization-007 | Integrated   | 006                        | `codex/long-term-optimization-007 @ bf795d40a3669d925eb95933b484290709099e0c`                |           32 |           27 | `docs/implementation/long-term-optimization-007-evidence.md`                |
 | long-term-optimization-008 | Agent Review | 007                        | `codex/long-term-optimization-global-remediation @ ec52adbeaf77de2076ec42316edb324a6714cfe3` |            1 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
-| long-term-optimization-009 | In Progress  | 008 implementation         | `codex/long-term-optimization-global-remediation`                                            |            0 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
-| long-term-optimization-010 | Backlog      | 009 resource serialization | `codex/long-term-optimization-global-remediation`                                            |            0 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| long-term-optimization-009 | Agent Review | 008 implementation         | `codex/long-term-optimization-global-remediation @ aae53237cb2761f0bed6d3f0a8fd58733e841ea1` |            1 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| long-term-optimization-010 | In Progress  | 009 resource serialization | `codex/long-term-optimization-global-remediation`                                            |            0 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
 
 ## Global Remediation DAG
 
