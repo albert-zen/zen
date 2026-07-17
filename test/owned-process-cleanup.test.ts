@@ -95,6 +95,29 @@ describe('OwnedProcessTree', () => {
     expect(snapshotCalls).toBe(2);
   });
 
+  it('discovers unknown descendants appearing only in the second paired view', async () => {
+    const root = processIdentity(181, 1, 'root');
+    const child = processIdentity(182, root.pid, 'late-child');
+    const grandchild = processIdentity(183, child.pid, 'late-grandchild');
+    const processes = new Map([
+      [child.pid, child],
+      [grandchild.pid, grandchild],
+    ]);
+    const terminated: number[] = [];
+    const tree = new OwnedProcessTree(expectation(root), {
+      snapshots: async () => [[], [...processes.values()]],
+      terminate: async (identity) => {
+        terminated.push(identity.pid);
+        processes.delete(identity.pid);
+      },
+    });
+    expect(tree.captureAttested(root)).toBe(true);
+
+    await expect(tree.terminateVerified()).resolves.toEqual([grandchild.pid, child.pid]);
+    expect(terminated).toEqual([grandchild.pid, child.pid]);
+    expect(processes.size).toBe(0);
+  });
+
   it('calls an injected list operation twice inside one fallback paired pass', async () => {
     const root = processIdentity(18, 1, 'root');
     let listCalls = 0;

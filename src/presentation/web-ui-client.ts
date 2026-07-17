@@ -351,6 +351,7 @@ export class BrowserAppServerTransportClient implements AppServerClient {
     const subscription: BrowserSubscriptionState = {
       phase: 'connecting',
       active: true,
+      generation: 0,
       gate: createBrowserSubscriptionGate(),
     };
     this.subscriptions.add(subscription);
@@ -364,6 +365,7 @@ export class BrowserAppServerTransportClient implements AppServerClient {
     events.onerror = (event) => {
       if (!subscription.active) return;
       subscription.gate.reject(new Error('Browser event subscription failed before request'));
+      subscription.generation += 1;
       subscription.phase = 'reconnecting';
       subscription.gate = createBrowserSubscriptionGate();
       this.onSubscriptionStatus?.('failed', event);
@@ -376,6 +378,7 @@ export class BrowserAppServerTransportClient implements AppServerClient {
     return () => {
       if (!subscription.active) return;
       subscription.active = false;
+      subscription.generation += 1;
       subscription.phase = 'closed';
       subscription.gate.reject(new Error('Browser event subscription disconnected'));
       this.subscriptions.delete(subscription);
@@ -385,20 +388,22 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   }
 
   private async awaitSubscriptionsReady(): Promise<void> {
-    while (true) {
-      const pending = [...this.subscriptions].map((subscription) => ({
-        subscription,
-        gate: subscription.gate,
-      }));
-      if (pending.length === 0) return;
-      await Promise.all(pending.map(({ gate }) => gate.promise));
-      if (
-        pending.every(
-          ({ subscription, gate }) =>
-            subscription.active && subscription.phase === 'open' && subscription.gate === gate
-        )
+    const authorization = [...this.subscriptions].map((subscription) => ({
+      subscription,
+      generation: subscription.generation,
+      gate: subscription.gate,
+    }));
+    await Promise.all(authorization.map(({ gate }) => gate.promise));
+    if (
+      authorization.some(
+        ({ subscription, generation, gate }) =>
+          !subscription.active ||
+          subscription.phase !== 'open' ||
+          subscription.generation !== generation ||
+          subscription.gate !== gate
       )
-        return;
+    ) {
+      throw new Error('Browser event subscription changed before request');
     }
   }
 }
@@ -414,6 +419,7 @@ type BrowserSubscriptionGate = {
 type BrowserSubscriptionState = {
   phase: BrowserSubscriptionPhase;
   active: boolean;
+  generation: number;
   gate: BrowserSubscriptionGate;
 };
 

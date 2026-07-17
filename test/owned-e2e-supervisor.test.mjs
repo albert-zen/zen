@@ -117,6 +117,44 @@ describe('owned E2E supervisor', () => {
     });
   });
 
+  it('discovers unknown child and grandchild identities only in the second supervisor view', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const root = ownedEntry({ marker, pid: 15, parentPid: 1, parentChain: [] });
+      const child = ownedEntry({ marker, pid: 16, parentPid: root.pid, rootPid: root.pid });
+      const grandchild = ownedEntry({
+        marker,
+        pid: 17,
+        parentPid: child.pid,
+        rootPid: root.pid,
+      });
+      await writeManifest(manifestPath, marker, [root]);
+      const processes = new Map([
+        [root.pid, root],
+        [child.pid, child],
+        [grandchild.pid, grandchild],
+      ]);
+      const terminated = [];
+
+      await cleanupOwnedManifest({
+        manifestPath,
+        retainLedger: true,
+        snapshots: async () => [processes.has(root.pid) ? [root] : [], [...processes.values()]],
+        terminate: async (entry) => {
+          terminated.push(entry.pid);
+          processes.delete(entry.pid);
+        },
+      });
+
+      expect(terminated).toEqual([grandchild.pid, child.pid, root.pid]);
+      const persisted = await ownedE2eSupervisorTesting.createManifestStore(manifestPath).read();
+      expect(persisted.entries.map((entry) => entry.pid).sort()).toEqual([
+        root.pid,
+        child.pid,
+        grandchild.pid,
+      ]);
+    });
+  });
+
   it('repeats paired confirmation when the ledger revision changes between views', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       await writeManifest(manifestPath, marker, []);
@@ -690,13 +728,17 @@ describe('owned E2E supervisor', () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entered = deferred();
       const release = deferred();
+      const owner = leaseOwner(4020);
       const writer = ownedE2eSupervisorTesting.createManifestStore(manifestPath, {
+        captureLeaseOwner: async () => owner,
         beforeAppendRename: async () => {
           entered.resolve();
           await release.promise;
         },
       });
-      const controller = ownedE2eSupervisorTesting.createManifestStore(manifestPath);
+      const controller = ownedE2eSupervisorTesting.createManifestStore(manifestPath, {
+        listLeaseOwners: async () => [],
+      });
       const append = writer.upsert(marker, ownedEntry({ marker, pid: 402, parentPid: 1 }));
 
       await entered.promise;
@@ -708,7 +750,8 @@ describe('owned E2E supervisor', () => {
       await controller.clear(marker, refreshed.revision);
       const nextStore = await ownedE2eSupervisorTesting.createRunStore(
         path.dirname(manifestPath),
-        marker
+        marker,
+        { captureLeaseOwner: async () => owner }
       );
       const next = await nextStore.read();
 

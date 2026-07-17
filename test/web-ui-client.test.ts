@@ -165,6 +165,59 @@ describe('Web UI client', () => {
     unsubscribe();
   });
 
+  it('rejects an open-generation request invalidated synchronously by reconnect', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response(
+          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
+        );
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+
+    const invalidated = client.request({ method: 'thread/list' });
+    const rejected = expect(invalidated).rejects.toThrow(
+      'Browser event subscription changed before request'
+    );
+    events.fail(new Event('error'));
+    events.open();
+    await rejected;
+    expect(fetchCalls).toBe(0);
+
+    await client.request({ method: 'thread/list' });
+    expect(fetchCalls).toBe(1);
+    unsubscribe();
+  });
+
+  it('rejects an open-generation request invalidated synchronously by disconnect', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response('{}');
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+
+    const invalidated = client.request({ method: 'thread/list' });
+    const rejected = expect(invalidated).rejects.toThrow(
+      'Browser event subscription changed before request'
+    );
+    unsubscribe();
+    events.open();
+    await rejected;
+
+    expect(fetchCalls).toBe(0);
+  });
+
   it('disconnect rejects pending browser readiness and stale open cannot revive it', async () => {
     const events = new ControllableEventSource();
     const statuses: string[] = [];
