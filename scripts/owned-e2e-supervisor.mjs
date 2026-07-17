@@ -1,10 +1,10 @@
 import { execFile, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
-const manifestVersion = 4;
+const manifestVersion = 7;
 const defaultManifestPath = path.resolve(process.cwd(), '.zen-e2e-owned-processes.json');
 
 export function createRunMarker() {
@@ -69,47 +69,70 @@ async function waitForSpawnedIdentity(pid, marker, inspect) {
 export async function cleanupOwnedManifest({
   manifestPath = defaultManifestPath,
   platform = process.platform,
-  list = () => listProcesses(platform),
+  list,
+  snapshots,
+  afterDiscoveryView,
   terminate = (entry, current) => terminateProcess(entry, platform, current),
   maxPasses = 32,
+  retainLedger = false,
 }) {
-  const manifest = createManifestStore(manifestPath);
-  let stableZeroScans = 0;
+  const listOperation = list ?? (() => listProcesses(platform));
+  const manifest = createManifestStore(manifestPath, { listLeaseOwners: listOperation });
+  const snapshotOperation =
+    snapshots ??
+    (list
+      ? () => Promise.all([listOperation(), listOperation()])
+      : () => listProcessSnapshots(platform));
   for (let pass = 0; pass < maxPasses; pass += 1) {
     const initial = await manifest.read();
-    const processes = await list();
-    assertRetainedAncestry(initial.entries, processes);
-    const discovered = discoverOwnedCandidates(initial.marker, processes, initial.entries);
-    if (discovered.length > 0) await manifest.upsertMany(initial.marker, discovered);
+    const [discoveryProcesses, currentProcesses] = await snapshotOperation();
 
-    const snapshot = await manifest.read();
-    const validation = validateLiveEntries(snapshot.entries, processes);
-    if (validation.invalid.length > 0) {
-      throw new Error(`Refusing cleanup: ${validation.invalid.join('; ')}`);
+    assertRetainedAncestry(initial.entries, discoveryProcesses);
+    const firstDiscovered = discoverOwnedCandidates(
+      initial.marker,
+      discoveryProcesses,
+      initial.entries
+    );
+    if (firstDiscovered.length > 0) await manifest.upsertMany(initial.marker, firstDiscovered);
+    const afterDiscovery = await manifest.read();
+    const discoveryValidation = validateLiveEntries(afterDiscovery.entries, discoveryProcesses);
+    await afterDiscoveryView?.({ manifest, snapshot: afterDiscovery, pass });
+
+    assertRetainedAncestry(afterDiscovery.entries, currentProcesses);
+    const secondDiscovered = discoverOwnedCandidates(
+      afterDiscovery.marker,
+      currentProcesses,
+      afterDiscovery.entries
+    );
+    if (secondDiscovered.length > 0)
+      await manifest.upsertMany(afterDiscovery.marker, secondDiscovered);
+    const afterCurrent = await manifest.read();
+    const currentValidation = validateLiveEntries(afterCurrent.entries, currentProcesses);
+    const invalid = [...discoveryValidation.invalid, ...currentValidation.invalid];
+    if (invalid.length > 0) {
+      throw new Error(`Refusing cleanup: ${invalid.join('; ')}`);
     }
 
-    if (validation.live.length === 0) {
-      // A second zero scan closes the root-exit window before the manifest is cleared.
-      await assertNoOwnedProcesses({ manifestPath, marker: snapshot.marker, list });
-      stableZeroScans += 1;
-      if (stableZeroScans >= 2) {
-        await manifest.write(emptyManifest(snapshot.marker));
-        return;
-      }
+    if (discoveryValidation.live.length === 0 && currentValidation.live.length === 0) {
+      if (afterCurrent.revision !== afterDiscovery.revision) continue;
+      if (!retainLedger) await manifest.clear(afterCurrent.marker, afterCurrent.revision);
+      return;
+    }
+    if (currentValidation.live.length === 0) {
+      // The first view observed a process which exited before the second. Only
+      // a subsequent paired-zero observation can close that window.
       continue;
     }
-    stableZeroScans = 0;
 
-    // Kill only one deepest exact identity each pass. A rescan before a parent can be
-    // stopped discovers descendants created while this leaf was terminating.
-    const entry = validation.live.sort(
+    // The second view is the immediate exact revalidation view. Kill only one
+    // deepest identity, then obtain a fresh pair before considering its parent.
+    const entry = currentValidation.live.sort(
       (left, right) => right.parentChain.length - left.parentChain.length
     )[0];
-    const preKillSnapshot = await list();
     const beforeKill = validateEntry(
       entry,
-      preKillSnapshot.find((candidate) => sameProcessIdentity(entry, candidate)),
-      preKillSnapshot
+      currentProcesses.find((candidate) => sameProcessIdentity(entry, candidate)),
+      currentProcesses
     );
     if (!beforeKill.valid) {
       throw new Error(`Refusing cleanup: ${beforeKill.reason}`);
@@ -137,7 +160,18 @@ export async function assertNoOwnedProcesses({
   marker,
   list = () => listProcesses(process.platform),
 } = {}) {
-  const manifest = await createManifestStore(manifestPath).read();
+  // An explicit marker is the E2E postcondition. It intentionally does not
+  // consult a legacy/default manifest, which may belong to another run or no
+  // longer use the per-run ledger schema.
+  let manifest = { entries: [] };
+  if (!marker) {
+    try {
+      manifest = await createManifestStore(manifestPath).read();
+    } catch (cause) {
+      if (cause?.cause?.code === 'ENOENT' || cause?.code === 'ENOENT') return;
+      throw cause;
+    }
+  }
   const ownerMarker = marker ?? manifest.marker;
   const failures = [];
   const processes = await list();
@@ -164,14 +198,32 @@ export async function runOwnedCommand({
   stdio = 'inherit',
   spawnCommand = spawn,
   inspect = (pid) => inspectProcess(pid, platform),
-  list = () => listProcesses(platform),
+  list,
+  snapshots,
   terminate = (entry, current) => terminateProcess(entry, platform, current),
   signals = process,
   setExitCode,
 }) {
-  await cleanupStaleManifest({ manifestPath, platform, inspect, list, terminate });
-  const manifest = createManifestStore(manifestPath);
-  await manifest.write(emptyManifest(marker));
+  const listOperation = list ?? (() => listProcesses(platform));
+  const snapshotOperation =
+    snapshots ??
+    (list
+      ? () => Promise.all([listOperation(), listOperation()])
+      : () => listProcessSnapshots(platform));
+  const existingRun = parseRunDirectoryName(path.basename(manifestPath));
+  const manifest = existingRun
+    ? createManifestStore(manifestPath)
+    : await (async () => {
+        const ledgerRoot = confinedLedgerRoot(manifestPath);
+        await cleanupStaleManifest({
+          ledgerRoot,
+          platform,
+          inspect,
+          list: listOperation,
+          terminate,
+        });
+        return createRunStore(ledgerRoot, marker);
+      })();
 
   let child;
   let registration;
@@ -182,11 +234,43 @@ export async function runOwnedCommand({
     cleanupTask = (async () => {
       try {
         await registration;
-      } catch {
-        // Registration retained the live, unverified identity for safe diagnosis.
-        return;
+      } catch (registrationCause) {
+        const cleanupFailures = [];
+        try {
+          await stopDirectChild(child);
+        } catch (cause) {
+          cleanupFailures.push(cause);
+        }
+        try {
+          await cleanupOwnedManifest({
+            manifestPath: manifest.runDirectory,
+            platform,
+            inspect,
+            list: listOperation,
+            snapshots: snapshotOperation,
+            terminate,
+            retainLedger: true,
+          });
+        } catch (cause) {
+          cleanupFailures.push(cause);
+        }
+        if (cleanupFailures.length > 0) {
+          throw new AggregateError(
+            [registrationCause, ...cleanupFailures],
+            'Owned E2E registration and cleanup both failed',
+            { cause: registrationCause }
+          );
+        }
+        throw registrationCause;
       }
-      await cleanupOwnedManifest({ manifestPath, platform, inspect, list, terminate });
+      await cleanupOwnedManifest({
+        manifestPath: manifest.runDirectory,
+        platform,
+        inspect,
+        list: listOperation,
+        snapshots: snapshotOperation,
+        terminate,
+      });
     })();
     return cleanupTask;
   };
@@ -196,7 +280,11 @@ export async function runOwnedCommand({
     child = spawnCommand(command, args, {
       cwd,
       detached: false,
-      env: { ...process.env, ZEN_E2E_MANIFEST_PATH: manifestPath, ZEN_E2E_RUN_MARKER: marker },
+      env: {
+        ...process.env,
+        ZEN_E2E_MANIFEST_PATH: manifest.runDirectory,
+        ZEN_E2E_RUN_MARKER: marker,
+      },
       stdio,
     });
     const childResult = waitForChild(child);
@@ -205,10 +293,10 @@ export async function runOwnedCommand({
       marker,
       rootPid: child.pid,
       role: 'runner-root',
-      manifestPath,
+      manifestPath: manifest.runDirectory,
       platform,
       inspect,
-      list,
+      list: listOperation,
     });
     await registration;
     if (cleanupTask) {
@@ -222,6 +310,7 @@ export async function runOwnedCommand({
     try {
       await cleanup();
     } catch (cleanupCause) {
+      if (cleanupCause === cause || cleanupCause instanceof AggregateError) throw cleanupCause;
       throw new AggregateError([cause, cleanupCause], 'Owned E2E command and cleanup both failed', {
         cause: cleanupCause,
       });
@@ -230,6 +319,12 @@ export async function runOwnedCommand({
   } finally {
     handlers.dispose();
   }
+}
+
+async function stopDirectChild(child) {
+  if ((child.exitCode !== null && child.exitCode !== undefined) || typeof child.kill !== 'function')
+    return;
+  if (!child.kill('SIGTERM')) throw new Error(`Failed to stop direct owned child PID ${child.pid}`);
 }
 
 function makeEntry(current, marker, rootPid, role, processes) {
@@ -408,8 +503,7 @@ function identityKey(entry) {
 }
 
 async function cleanupStaleManifest(operations) {
-  const snapshot = await createManifestStore(operations.manifestPath).read();
-  if (snapshot.entries.length > 0) await cleanupOwnedManifest(operations);
+  await reclaimStaleRuns(operations.ledgerRoot, operations.list);
 }
 
 export function installCleanupHandlers(
@@ -452,46 +546,645 @@ export function installCleanupHandlers(
   };
 }
 
-function createManifestStore(manifestPath) {
+const activeWriterLeases = new Set();
+let currentProcessIdentityPromise;
+
+function createManifestStore(runDirectory, hooks = {}) {
+  const captureLeaseOwner = hooks.captureLeaseOwner ?? captureCurrentProcessIdentity;
+  const listLeaseOwners = hooks.listLeaseOwners ?? (() => listProcesses(process.platform));
   return {
+    runDirectory,
     async read() {
-      try {
-        const parsed = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-        return parsed?.version === manifestVersion && Array.isArray(parsed.entries)
-          ? parsed
-          : emptyManifest();
-      } catch (cause) {
-        if (cause && typeof cause === 'object' && cause.code === 'ENOENT') return emptyManifest();
-        throw cause;
-      }
-    },
-    async write(value) {
-      const temporary = `${manifestPath}.${process.pid}.${randomUUID()}.tmp`;
-      await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`);
-      await fs.rename(temporary, manifestPath);
+      const metadata = await readRunMetadata(runDirectory);
+      const events = await readLedgerEvents(runDirectory, metadata);
+      const folded = new Map();
+      for (const event of events) folded.set(identityKey(event.entry), event.entry);
+      return {
+        ...metadata,
+        entries: [...folded.values()],
+        revision: events
+          .map((event) => event.name)
+          .sort()
+          .join(','),
+      };
     },
     async upsert(marker, entry) {
       const current = await this.read();
-      if (current.marker && current.marker !== marker)
-        throw new Error('Manifest belongs to another run');
-      await this.write({
-        version: manifestVersion,
-        marker,
-        entries: [
-          ...current.entries.filter((known) => identityKey(known) !== identityKey(entry)),
-          entry,
-        ],
-      });
+      if (current.marker !== marker) throw new Error('Run directory belongs to another marker');
+      const eventId = randomUUID();
+      const temporary = path.join(runDirectory, `entry-${eventId}.tmp`);
+      const final = path.join(runDirectory, `entry-${eventId}.json`);
+      const release = await acquireWriterLease(runDirectory, current, captureLeaseOwner);
+      try {
+        await hooks.afterWriterLease?.({ current });
+        await fs.access(tombstonePath(runDirectory));
+        throw new Error(`Refusing to append to terminal run ${current.runId}`);
+      } catch (cause) {
+        if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) throw cause;
+        await writeRegularFile(
+          temporary,
+          `${JSON.stringify({ version: manifestVersion, marker, runId: current.runId, entry })}\n`,
+          'wx'
+        );
+        await hooks.beforeAppendRename?.({ current, temporary, final });
+        await fs.rename(temporary, final);
+      } finally {
+        await fs.rm(temporary, { force: true });
+        await release();
+      }
     },
     async upsertMany(marker, entries) {
       for (const entry of entries) await this.upsert(marker, entry);
     },
+    async clear(marker, expectedRevision) {
+      const current = await this.read();
+      if (current.marker !== marker || current.revision !== expectedRevision)
+        throw new Error('Ownership ledger changed before terminal clear');
+      await writeRegularFile(
+        tombstonePath(runDirectory),
+        `${JSON.stringify({ version: manifestVersion, marker, runId: current.runId })}\n`,
+        'wx'
+      );
+      let committed = false;
+      try {
+        await hooks.afterTombstone?.({ current });
+        await hooks.beforeClearSnapshot?.({ current });
+        await assertNoActiveWriterLeases(runDirectory, current, await listLeaseOwners());
+        const refreshed = await this.read();
+        if (refreshed.revision !== expectedRevision)
+          throw new Error('Ownership ledger changed before terminal clear');
+        committed = true;
+        const terminalDirectory = await moveRunToTerminal(runDirectory, current, 'clear');
+        await removeTerminalDirectory(terminalDirectory, current, hooks);
+      } catch (cause) {
+        if (!committed) await fs.rm(tombstonePath(runDirectory), { force: true });
+        throw cause;
+      }
+    },
+    async reclaimStaleGenerations({ list = () => listProcesses(process.platform) } = {}) {
+      await reclaimStaleRuns(path.dirname(runDirectory), list);
+    },
   };
 }
 
-function emptyManifest(marker) {
-  return { version: manifestVersion, marker, entries: [] };
+async function createRunStore(ledgerRoot, marker, hooks = {}) {
+  await assertConfinedLedgerRoot(ledgerRoot, { create: true });
+  const owner = await (hooks.captureLeaseOwner ?? captureCurrentProcessIdentity)();
+  if (!isLeaseOwner(owner))
+    throw new Error('Cannot initialize run without exact supervisor identity');
+  const runId = randomUUID();
+  const runDirectory = runDirectoryPath(ledgerRoot, marker, runId);
+  const ownerRecord = leaseOwnerRecord(owner);
+  const temporary = creatingDirectoryPath(ledgerRoot, marker, runId, ownerRecord);
+  const metadata = { version: manifestVersion, marker, runId, owner: leaseOwnerRecord(owner) };
+  await fs.mkdir(temporary);
+  try {
+    await fs.writeFile(creatingMetadataPath(temporary), `${JSON.stringify(metadata, null, 2)}\n`, {
+      flag: 'wx',
+    });
+    await fs.rename(creatingMetadataPath(temporary), generationMetadataPath(temporary));
+    await fs.rename(temporary, runDirectory);
+  } catch (cause) {
+    await removeCreatingDirectory(temporary);
+    throw cause;
+  }
+  return createManifestStore(runDirectory, hooks);
 }
+
+function runDirectoryPath(ledgerRoot, marker, runId) {
+  return path.join(ledgerRoot, `run-${runId}-${encodeURIComponent(marker)}`);
+}
+
+function terminalDirectoryPath(ledgerRoot, marker, runId, purpose) {
+  return path.join(
+    ledgerRoot,
+    `terminal-${purpose}-${runId}-${randomUUID()}-${encodeURIComponent(marker)}`
+  );
+}
+
+function ownerFingerprint(owner) {
+  return createHash('sha256')
+    .update(JSON.stringify(leaseOwnerRecord(owner)))
+    .digest('hex')
+    .slice(0, 24);
+}
+
+function creatingDirectoryPath(ledgerRoot, marker, runId, owner) {
+  return path.join(
+    ledgerRoot,
+    `creating-${runId}-${owner.pid}-${owner.creationToken}-${ownerFingerprint(owner)}-${encodeURIComponent(marker)}`
+  );
+}
+
+function parseCreatingDirectoryName(name) {
+  const match = /^creating-([0-9a-f-]+)-(\d+)-(\d+)-([0-9a-f]{24})-(.+)$/i.exec(name);
+  if (!match || !isRunId(match[1])) return undefined;
+  try {
+    const marker = decodeURIComponent(match[5]);
+    return marker
+      ? {
+          runId: match[1],
+          marker,
+          pid: Number(match[2]),
+          creationToken: match[3],
+          fingerprint: match[4],
+        }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseRunDirectoryName(name) {
+  const match = /^run-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})-(.+)$/i.exec(name);
+  if (!match) return undefined;
+  try {
+    const marker = decodeURIComponent(match[2]);
+    return marker ? { runId: match[1], marker } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseTerminalDirectoryName(name) {
+  const match =
+    /^terminal-(clear|reclaim)-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})-(.+)$/i.exec(
+      name
+    );
+  if (!match) return undefined;
+  try {
+    const marker = decodeURIComponent(match[4]);
+    return marker
+      ? { purpose: match[1], runId: match[2], terminalId: match[3], marker }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function confinedLedgerRoot(manifestPath) {
+  const absoluteManifest = path.resolve(manifestPath);
+  const root = path.resolve(`${absoluteManifest}.ledger`);
+  if (
+    path.dirname(root) !== path.dirname(absoluteManifest) ||
+    path.basename(root) !== `${path.basename(absoluteManifest)}.ledger`
+  ) {
+    throw new Error('Ownership ledger root escapes its manifest directory');
+  }
+  return root;
+}
+
+async function assertConfinedLedgerRoot(ledgerRoot, { create = false } = {}) {
+  try {
+    const stats = await fs.lstat(ledgerRoot);
+    if (!stats.isDirectory() || stats.isSymbolicLink())
+      throw new Error('Ownership ledger root is not a real directory');
+    if ((await fs.realpath(ledgerRoot)) !== ledgerRoot)
+      throw new Error('Ownership ledger root resolves outside its expected path');
+  } catch (cause) {
+    if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT') || !create) throw cause;
+    await fs.mkdir(ledgerRoot, { recursive: true });
+    return assertConfinedLedgerRoot(ledgerRoot);
+  }
+}
+
+function generationMetadataPath(generationDirectory) {
+  return path.join(generationDirectory, 'run.json');
+}
+
+function creatingMetadataPath(directory) {
+  return path.join(directory, 'creator.json');
+}
+
+function tombstonePath(directory) {
+  return path.join(directory, 'tombstone.json');
+}
+
+function writerLeasePath(generationDirectory, leaseId) {
+  return path.join(generationDirectory, `writer-${leaseId}.lease`);
+}
+
+function isRunId(value) {
+  return /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
+}
+
+function isRunMetadata(value, directoryName) {
+  const name = parseRunDirectoryName(directoryName) ?? parseTerminalDirectoryName(directoryName);
+  return (
+    value?.version === manifestVersion &&
+    typeof value.marker === 'string' &&
+    value.marker.length > 0 &&
+    typeof value.runId === 'string' &&
+    isRunId(value.runId) &&
+    isLeaseOwner(value.owner) &&
+    name?.runId === value.runId &&
+    name.marker === value.marker
+  );
+}
+
+async function readRunMetadata(runDirectory) {
+  try {
+    if (parseRunDirectoryName(path.basename(runDirectory))) {
+      await assertConfinedRunDirectory(runDirectory);
+    } else {
+      await assertConfinedTerminalDirectory(runDirectory);
+    }
+    const parsed = JSON.parse(await readRegularFile(generationMetadataPath(runDirectory)));
+    if (!isRunMetadata(parsed, path.basename(runDirectory))) {
+      throw new Error(
+        `Invalid immutable ownership run metadata for ${path.basename(runDirectory)}`
+      );
+    }
+    return parsed;
+  } catch (cause) {
+    if (cause && typeof cause === 'object' && cause.code === 'ENOENT') {
+      throw new Error(
+        `Invalid immutable ownership run metadata for ${path.basename(runDirectory)}`,
+        {
+          cause,
+        }
+      );
+    }
+    throw cause;
+  }
+}
+
+async function captureCurrentProcessIdentity() {
+  currentProcessIdentityPromise ??= (async () => {
+    const current = (await listProcesses(process.platform)).find(
+      (candidate) => candidate.pid === process.pid
+    );
+    if (!isLeaseOwner(current))
+      throw new Error('Could not capture exact current process identity for ownership lease');
+    return current;
+  })();
+  return currentProcessIdentityPromise;
+}
+
+function isLeaseOwner(value) {
+  return Boolean(
+    value &&
+    Number.isSafeInteger(value.pid) &&
+    /^\d+$/.test(creationToken(value)) &&
+    typeof value.executable === 'string' &&
+    value.executable.length > 0 &&
+    typeof value.commandLine === 'string' &&
+    value.commandLine.length > 0
+  );
+}
+
+function exactLeaseOwner(left, right) {
+  return Boolean(
+    isLeaseOwner(left) &&
+    isLeaseOwner(right) &&
+    left.pid === right.pid &&
+    creationToken(left) === creationToken(right) &&
+    left.executable === right.executable &&
+    left.commandLine === right.commandLine
+  );
+}
+
+function leaseOwnerRecord(owner) {
+  return {
+    pid: owner.pid,
+    creationToken: creationToken(owner),
+    executable: owner.executable,
+    commandLine: owner.commandLine,
+  };
+}
+
+function leaseRecord(generation, owner, type) {
+  if (!isLeaseOwner(owner))
+    throw new Error(`Cannot create ${type} lease without exact owner identity`);
+  return {
+    version: manifestVersion,
+    type,
+    marker: generation.marker,
+    runId: generation.runId,
+    owner: leaseOwnerRecord(owner),
+  };
+}
+
+async function acquireWriterLease(generationDirectory, generation, captureLeaseOwner) {
+  const leasePath = writerLeasePath(generationDirectory, randomUUID());
+  const lease = leaseRecord(generation, await captureLeaseOwner(), 'writer');
+  await fs.writeFile(leasePath, `${JSON.stringify(lease)}\n`, { flag: 'wx' });
+  activeWriterLeases.add(leasePath);
+  return async () => {
+    activeWriterLeases.delete(leasePath);
+    await fs.rm(leasePath, { force: true });
+  };
+}
+
+async function assertNoActiveWriterLeases(generationDirectory, generation, processes) {
+  const names = await fs.readdir(generationDirectory);
+  for (const name of names.filter((candidate) => /^writer-[0-9a-f-]+\.lease$/i.test(candidate))) {
+    const leasePath = path.join(generationDirectory, name);
+    if (activeWriterLeases.has(leasePath)) {
+      throw new Error(
+        `Refusing to reclaim generation ${generation.runId} with an active writer lease`
+      );
+    }
+    const lease = await readLease(leasePath, generation, 'writer');
+    const ownerLive = processes.some((candidate) => exactLeaseOwner(lease.owner, candidate));
+    if (ownerLive) {
+      throw new Error(
+        `Refusing to reclaim generation ${generation.runId} with an active writer lease`
+      );
+    }
+  }
+}
+
+async function readLease(leasePath, generation, type, { allowAnyGeneration = false } = {}) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(leasePath, 'utf8'));
+    if (
+      parsed?.version !== manifestVersion ||
+      (!allowAnyGeneration && parsed.marker !== generation.marker) ||
+      (!allowAnyGeneration && parsed.runId !== generation.runId) ||
+      (allowAnyGeneration &&
+        (!isRunId(parsed.runId) || typeof parsed.marker !== 'string' || !parsed.marker)) ||
+      parsed.type !== type ||
+      !isLeaseOwner(parsed.owner)
+    ) {
+      throw new Error(`Invalid ${type} lease for generation ${generation.runId}`);
+    }
+    return parsed;
+  } catch (cause) {
+    if (cause && typeof cause === 'object' && cause.code === 'ENOENT') {
+      throw new Error(`Missing ${type} lease for generation ${generation.runId}`, { cause });
+    }
+    throw cause;
+  }
+}
+
+async function readLedgerEvents(ledgerDirectory, metadata) {
+  let names;
+  try {
+    names = await fs.readdir(ledgerDirectory);
+  } catch (cause) {
+    if (cause && typeof cause === 'object' && cause.code === 'ENOENT') return [];
+    throw cause;
+  }
+  await assertKnownRunChildren(ledgerDirectory, names);
+  const completeNames = names.filter((name) => /^entry-[0-9a-f-]+\.json$/i.test(name));
+  const events = await Promise.all(
+    completeNames.map(async (name) => {
+      try {
+        const event = JSON.parse(await readRegularFile(path.join(ledgerDirectory, name)));
+        return event?.version === manifestVersion &&
+          event.runId === metadata.runId &&
+          event.marker === metadata.marker &&
+          event.entry
+          ? { name, entry: event.entry }
+          : undefined;
+      } catch (cause) {
+        if (cause && typeof cause === 'object' && cause.code === 'ENOENT') return undefined;
+        throw cause;
+      }
+    })
+  );
+  return events.filter(Boolean);
+}
+
+async function assertConfinedRunDirectory(runDirectory) {
+  const root = path.dirname(runDirectory);
+  await assertConfinedLedgerRoot(root);
+  if (path.dirname(runDirectory) !== root || !parseRunDirectoryName(path.basename(runDirectory)))
+    throw new Error('Ownership run directory escapes its ledger root');
+  const stats = await fs.lstat(runDirectory);
+  if (!stats.isDirectory() || stats.isSymbolicLink())
+    throw new Error(
+      `Ownership run directory ${path.basename(runDirectory)} is not a real directory`
+    );
+  if ((await fs.realpath(runDirectory)) !== runDirectory)
+    throw new Error(
+      `Ownership run directory ${path.basename(runDirectory)} resolves outside its expected path`
+    );
+}
+
+function isKnownRunChild(name) {
+  return (
+    name === 'run.json' ||
+    /^entry-[0-9a-f-]+\.(?:json|tmp)$/i.test(name) ||
+    /^writer-[0-9a-f-]+\.lease$/i.test(name) ||
+    name === 'tombstone.json'
+  );
+}
+
+async function assertKnownRunChildren(runDirectory, names) {
+  names ??= await fs.readdir(runDirectory);
+  for (const name of names) {
+    if (!isKnownRunChild(name))
+      throw new Error(`Refusing ownership run with unknown child ${name}`);
+    const stats = await fs.lstat(path.join(runDirectory, name));
+    if (!stats.isFile() || stats.isSymbolicLink())
+      throw new Error(`Refusing ownership run with non-regular child ${name}`);
+  }
+}
+
+async function readRegularFile(filePath) {
+  const stats = await fs.lstat(filePath);
+  if (!stats.isFile() || stats.isSymbolicLink())
+    throw new Error(`Refusing non-regular ownership ledger file ${path.basename(filePath)}`);
+  return fs.readFile(filePath, 'utf8');
+}
+
+async function writeRegularFile(filePath, contents, flag) {
+  await fs.writeFile(filePath, contents, { flag });
+  const stats = await fs.lstat(filePath);
+  if (!stats.isFile() || stats.isSymbolicLink())
+    throw new Error(`Refusing non-regular ownership ledger file ${path.basename(filePath)}`);
+}
+
+async function moveRunToTerminal(runDirectory, metadata, purpose) {
+  await assertConfinedRunDirectory(runDirectory);
+  if (metadata.runId !== parseRunDirectoryName(path.basename(runDirectory))?.runId)
+    throw new Error('Ownership run metadata no longer matches its directory');
+  const ledgerRoot = path.dirname(runDirectory);
+  const terminalDirectory = terminalDirectoryPath(
+    ledgerRoot,
+    metadata.marker,
+    metadata.runId,
+    purpose
+  );
+  await fs.rename(runDirectory, terminalDirectory);
+  await assertConfinedTerminalDirectory(terminalDirectory);
+  const terminal = parseTerminalDirectoryName(path.basename(terminalDirectory));
+  if (!terminal || terminal.runId !== metadata.runId || terminal.marker !== metadata.marker)
+    throw new Error('Ownership terminal directory no longer matches its run');
+  return terminalDirectory;
+}
+
+async function removeTerminalDirectory(terminalDirectory, metadata, hooks = {}) {
+  await assertConfinedTerminalDirectory(terminalDirectory);
+  const terminal = parseTerminalDirectoryName(path.basename(terminalDirectory));
+  if (!terminal || terminal.runId !== metadata.runId || terminal.marker !== metadata.marker)
+    throw new Error('Ownership terminal metadata no longer matches its directory');
+  const names = await fs.readdir(terminalDirectory);
+  await assertKnownRunChildren(terminalDirectory, names);
+  const ordered = [
+    ...names.filter((name) => /^entry-|^writer-/.test(name)),
+    ...names.filter((name) => name === 'run.json'),
+    ...names.filter((name) => name === 'tombstone.json'),
+  ];
+  for (let index = 0; index < ordered.length; index += 1) {
+    await fs.rm(path.join(terminalDirectory, ordered[index]), { force: true });
+    await hooks.afterChildDeletion?.({ name: ordered[index], index });
+  }
+  await assertConfinedTerminalDirectory(terminalDirectory);
+  await fs.rmdir(terminalDirectory);
+}
+
+async function removeCreatingDirectory(directory) {
+  try {
+    await assertConfinedCreatingDirectory(directory);
+    const names = await fs.readdir(directory);
+    for (const name of names) {
+      if (name !== 'creator.json' && name !== 'run.json')
+        throw new Error(`Refusing incomplete run with unknown child ${name}`);
+      const file = path.join(directory, name);
+      const stats = await fs.lstat(file);
+      if (!stats.isFile() || stats.isSymbolicLink())
+        throw new Error(`Refusing incomplete run with non-regular child ${name}`);
+      await fs.rm(file, { force: true });
+    }
+    await assertConfinedCreatingDirectory(directory);
+    await fs.rmdir(directory);
+  } catch (cause) {
+    if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) throw cause;
+  }
+}
+
+async function assertConfinedCreatingDirectory(directory) {
+  const root = path.dirname(directory);
+  await assertConfinedLedgerRoot(root);
+  if (path.dirname(directory) !== root || !parseCreatingDirectoryName(path.basename(directory)))
+    throw new Error('Incomplete ownership run escapes its ledger root');
+  const stats = await fs.lstat(directory);
+  if (!stats.isDirectory() || stats.isSymbolicLink())
+    throw new Error(`Incomplete ownership run ${path.basename(directory)} is not a real directory`);
+  if ((await fs.realpath(directory)) !== directory)
+    throw new Error(
+      `Incomplete ownership run ${path.basename(directory)} resolves outside its expected path`
+    );
+}
+
+async function assertConfinedTerminalDirectory(directory) {
+  const root = path.dirname(directory);
+  await assertConfinedLedgerRoot(root);
+  if (path.dirname(directory) !== root || !parseTerminalDirectoryName(path.basename(directory)))
+    throw new Error('Ownership terminal directory escapes its ledger root');
+  const stats = await fs.lstat(directory);
+  if (!stats.isDirectory() || stats.isSymbolicLink())
+    throw new Error(`Ownership terminal ${path.basename(directory)} is not a real directory`);
+  if ((await fs.realpath(directory)) !== directory)
+    throw new Error(
+      `Ownership terminal ${path.basename(directory)} resolves outside its expected path`
+    );
+}
+
+async function reclaimStaleRuns(ledgerRoot, list, hooks = {}) {
+  await assertConfinedLedgerRoot(ledgerRoot, { create: true });
+  const children = await fs.readdir(ledgerRoot, { withFileTypes: true });
+  const candidates = children
+    .filter((child) => child.isDirectory())
+    .map((child) => ({
+      name: child.name,
+      run: parseRunDirectoryName(child.name),
+      creating: parseCreatingDirectoryName(child.name),
+      terminal: parseTerminalDirectoryName(child.name),
+    }))
+    .filter((candidate) => candidate.run || candidate.creating || candidate.terminal);
+  await hooks.afterEnumerate?.(candidates);
+  const snapshot = await list();
+  for (const candidate of candidates) {
+    const runDirectory = path.join(ledgerRoot, candidate.name);
+    if (candidate.creating) {
+      try {
+        await assertConfinedCreatingDirectory(runDirectory);
+        if (snapshot.some((process) => matchesEncodedCreator(process, candidate.creating)))
+          continue;
+        await removeCreatingDirectory(runDirectory);
+      } catch {
+        // Incomplete metadata is retained as evidence; it cannot affect another run.
+      }
+      continue;
+    }
+    if (candidate.terminal) {
+      try {
+        await assertConfinedTerminalDirectory(runDirectory);
+        const metadata = await readRunMetadata(runDirectory);
+        if (
+          metadata.runId !== candidate.terminal.runId ||
+          metadata.marker !== candidate.terminal.marker
+        )
+          continue;
+        await assertNoActiveWriterLeases(runDirectory, metadata, snapshot);
+        const ownerLive = snapshot.some((process) => exactLeaseOwner(metadata.owner, process));
+        const markerLive = snapshot.some((process) =>
+          process.commandLine?.includes(metadata.marker)
+        );
+        if (!ownerLive && !markerLive) await removeTerminalDirectory(runDirectory, metadata);
+      } catch {
+        // Terminal namespaces remain isolated evidence until their exact owners are absent.
+      }
+      continue;
+    }
+    let metadata;
+    let events;
+    try {
+      metadata = await readRunMetadata(runDirectory);
+      events = await readLedgerEvents(runDirectory, metadata);
+      await assertNoActiveWriterLeases(runDirectory, metadata, snapshot);
+    } catch {
+      // A malformed, unknown, linked, or actively-written run is diagnostic evidence.
+      // It is isolated from unrelated future runs and is never deleted opportunistically.
+      continue;
+    }
+    const ownerLive = snapshot.some((candidate) => exactLeaseOwner(metadata.owner, candidate));
+    const markerLive = snapshot.some((candidate) =>
+      candidate.commandLine?.includes(metadata.marker)
+    );
+    const eventLive = events.some((event) =>
+      snapshot.some((candidate) => sameProcessIdentity(event.entry, candidate))
+    );
+    if (ownerLive || markerLive || eventLive) continue;
+    try {
+      const terminalDirectory = await moveRunToTerminal(runDirectory, metadata, 'reclaim');
+      await removeTerminalDirectory(terminalDirectory, metadata);
+    } catch (cause) {
+      if (!(
+        cause &&
+        typeof cause === 'object' &&
+        (cause.code === 'ENOENT' || cause.code === 'EPERM')
+      ))
+        throw cause;
+    }
+  }
+}
+
+function matchesEncodedCreator(candidate, encoded) {
+  return Boolean(
+    isLeaseOwner(candidate) &&
+    candidate.pid === encoded.pid &&
+    creationToken(candidate) === encoded.creationToken &&
+    ownerFingerprint(leaseOwnerRecord(candidate)) === encoded.fingerprint
+  );
+}
+
+/** Internal test seam; intentionally kept inside the supervisor script. */
+export const ownedE2eSupervisorTesting = {
+  createManifestStore,
+  createRunStore,
+  runDirectoryPath,
+  terminalDirectoryPath,
+  generationMetadataPath,
+  listProcesses,
+  listProcessSnapshots,
+  manifestVersion,
+  reclaimStaleRuns,
+};
 
 function waitForChild(child) {
   return new Promise((resolve, reject) => {
@@ -544,6 +1237,19 @@ async function listProcesses(platform) {
         ]
       : [];
   });
+}
+
+async function listProcessSnapshots(platform) {
+  if (platform !== 'win32') {
+    return Promise.all([listProcesses(platform), listProcesses(platform)]);
+  }
+  const output = await powershellJson(
+    '$one=Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = ([DateTimeOffset]$_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds().ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } };$two=Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = ([DateTimeOffset]$_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds().ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } };[PSCustomObject]@{ first=@($one); second=@($two) } | ConvertTo-Json -Compress'
+  );
+  if (!output) return [[], []];
+  const parsed = JSON.parse(output);
+  const normalize = (value) => (!value ? [] : Array.isArray(value) ? value : [value]);
+  return [normalize(parsed.first), normalize(parsed.second)];
 }
 
 function powershellJson(script) {

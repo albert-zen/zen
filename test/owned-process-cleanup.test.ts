@@ -35,6 +35,104 @@ describe('OwnedProcessTree', () => {
     expect(processes).toEqual(new Map());
   });
 
+  it('uses one paired snapshot provider per cleanup pass while preserving two distinct views', async () => {
+    const root = processIdentity(15, 1, 'root');
+    const processes = new Map([[root.pid, root]]);
+    let snapshotCalls = 0;
+    const tree = new OwnedProcessTree(expectation(root), {
+      snapshots: async () => {
+        snapshotCalls += 1;
+        const first = [...processes.values()];
+        const second = [...processes.values()].map((identity) => ({ ...identity }));
+        expect(first).not.toBe(second);
+        return [first, second];
+      },
+      terminate: async (identity) => {
+        processes.delete(identity.pid);
+      },
+    });
+    expect(tree.captureAttested(root)).toBe(true);
+
+    await expect(tree.terminateVerified()).resolves.toEqual([root.pid]);
+    // One paired operation terminates the root; one paired-zero operation closes cleanup.
+    expect(snapshotCalls).toBe(2);
+  });
+
+  it('accepts zero only when both views from one paired helper are empty', async () => {
+    const root = processIdentity(16, 1, 'root');
+    let snapshotCalls = 0;
+    const tree = new OwnedProcessTree(expectation(root), {
+      snapshots: async () => {
+        snapshotCalls += 1;
+        return [[], []];
+      },
+    });
+    expect(tree.captureAttested(root)).toBe(true);
+
+    await expect(tree.terminateVerified()).resolves.toEqual([]);
+    expect(snapshotCalls).toBe(1);
+  });
+
+  it('discovers and terminates an exact process appearing only in the second paired view', async () => {
+    const root = processIdentity(17, 1, 'root');
+    let snapshotCalls = 0;
+    let live = true;
+    const terminated: number[] = [];
+    const tree = new OwnedProcessTree(expectation(root), {
+      snapshots: async () => {
+        snapshotCalls += 1;
+        return live ? [[], [root]] : [[], []];
+      },
+      terminate: async (identity) => {
+        terminated.push(identity.pid);
+        live = false;
+      },
+    });
+    expect(tree.captureAttested(root)).toBe(true);
+
+    await expect(tree.terminateVerified()).resolves.toEqual([root.pid]);
+    expect(terminated).toEqual([root.pid]);
+    expect(snapshotCalls).toBe(2);
+  });
+
+  it('discovers unknown descendants appearing only in the second paired view', async () => {
+    const root = processIdentity(181, 1, 'root');
+    const child = processIdentity(182, root.pid, 'late-child');
+    const grandchild = processIdentity(183, child.pid, 'late-grandchild');
+    const processes = new Map([
+      [child.pid, child],
+      [grandchild.pid, grandchild],
+    ]);
+    const terminated: number[] = [];
+    const tree = new OwnedProcessTree(expectation(root), {
+      snapshots: async () => [[], [...processes.values()]],
+      terminate: async (identity) => {
+        terminated.push(identity.pid);
+        processes.delete(identity.pid);
+      },
+    });
+    expect(tree.captureAttested(root)).toBe(true);
+
+    await expect(tree.terminateVerified()).resolves.toEqual([grandchild.pid, child.pid]);
+    expect(terminated).toEqual([grandchild.pid, child.pid]);
+    expect(processes.size).toBe(0);
+  });
+
+  it('calls an injected list operation twice inside one fallback paired pass', async () => {
+    const root = processIdentity(18, 1, 'root');
+    let listCalls = 0;
+    const tree = new OwnedProcessTree(expectation(root), {
+      list: async () => {
+        listCalls += 1;
+        return [];
+      },
+    });
+    expect(tree.captureAttested(root)).toBe(true);
+
+    await expect(tree.terminateVerified()).resolves.toEqual([]);
+    expect(listCalls).toBe(2);
+  });
+
   it('refuses PID reuse or a changed ancestor chain without terminating any process', async () => {
     const root = processIdentity(20, 1, 'root');
     const child = processIdentity(21, root.pid, 'child');

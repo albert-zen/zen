@@ -12,6 +12,10 @@ export type OwnedProcessIdentity = {
 export type OwnedProcessOperations = {
   readonly platform?: NodeJS.Platform;
   readonly list?: () => Promise<readonly OwnedProcessIdentity[]>;
+  /** One coherent helper invocation can provide the discovery and pre-kill views. */
+  readonly snapshots?: () => Promise<
+    readonly [readonly OwnedProcessIdentity[], readonly OwnedProcessIdentity[]]
+  >;
   readonly terminate?: (identity: OwnedProcessIdentity) => Promise<void>;
   readonly maxPasses?: number;
 };
@@ -72,23 +76,27 @@ export class OwnedProcessTree {
       );
     }
     const terminated: number[] = [];
-    let stableZeroScans = 0;
 
     for (let pass = 0; pass < (this.operations.maxPasses ?? 32); pass += 1) {
-      const snapshot = await this.list();
-      this.discoverDescendants(snapshot);
+      const [discoveryProcesses, currentProcesses] = await this.snapshots();
+      this.discoverDescendants(discoveryProcesses);
+      const discoveredLive = this.liveAncestryCandidates(discoveryProcesses);
+      this.discoverDescendants(currentProcesses);
+      const currentLive = this.liveAncestryCandidates(currentProcesses);
 
-      const live = this.liveAncestryCandidates(snapshot);
-      if (live.length === 0) {
-        // Two independent zero scans ensure a just-exited root did not leave a late child behind.
-        stableZeroScans += 1;
-        if (stableZeroScans >= 2) return terminated;
+      if (discoveredLive.length === 0 && currentLive.length === 0) {
+        // The paired helper provides the two independent zero observations.
+        return terminated;
+      }
+      if (currentLive.length === 0) {
+        // A process seen only in the first view exited between snapshots. A new
+        // paired pass is required before declaring zero.
         continue;
       }
-      stableZeroScans = 0;
 
-      const candidate = live.sort((left, right) => right.chain.length - left.chain.length)[0];
-      const currentProcesses = await this.list();
+      const candidate = currentLive.sort(
+        (left, right) => right.chain.length - left.chain.length
+      )[0];
       const current = currentProcesses.find((process) => sameIdentity(candidate.identity, process));
       if (!sameIdentity(candidate.identity, current)) {
         throw new OwnedProcessCleanupError(
@@ -154,6 +162,14 @@ export class OwnedProcessTree {
 
   private list(): Promise<readonly OwnedProcessIdentity[]> {
     return this.operations.list?.() ?? listWindowsProcesses();
+  }
+
+  private snapshots(): Promise<
+    readonly [readonly OwnedProcessIdentity[], readonly OwnedProcessIdentity[]]
+  > {
+    if (this.operations.snapshots) return this.operations.snapshots();
+    if (!this.operations.list) return listWindowsProcessSnapshots();
+    return Promise.all([this.list(), this.list()]);
   }
 
   private terminate(identity: OwnedProcessIdentity): Promise<void> {
@@ -231,6 +247,28 @@ async function listWindowsProcesses(): Promise<readonly OwnedProcessIdentity[]> 
   return Array.isArray(parsed) ? parsed : [parsed as OwnedProcessIdentity];
 }
 
+async function listWindowsProcessSnapshots(): Promise<
+  readonly [readonly OwnedProcessIdentity[], readonly OwnedProcessIdentity[]]
+> {
+  if (process.platform !== 'win32') return [[], []];
+  const command =
+    '$one=Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = ([DateTimeOffset]$_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds().ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } };$two=Get-CimInstance Win32_Process | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = ([DateTimeOffset]$_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds().ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine } };[PSCustomObject]@{ first=@($one); second=@($two) } | ConvertTo-Json -Compress';
+  const output = await execFileText('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    command,
+  ]);
+  if (!output) return [[], []];
+  const parsed = JSON.parse(output) as {
+    first?: OwnedProcessIdentity | readonly OwnedProcessIdentity[];
+    second?: OwnedProcessIdentity | readonly OwnedProcessIdentity[];
+  };
+  const normalize = (value: OwnedProcessIdentity | readonly OwnedProcessIdentity[] | undefined) =>
+    !value ? [] : Array.isArray(value) ? value : [value];
+  return [normalize(parsed.first), normalize(parsed.second)];
+}
+
 async function terminateWindowsProcess(identity: OwnedProcessIdentity): Promise<void> {
   if (process.platform === 'win32') {
     const expected = Buffer.from(JSON.stringify(identity), 'utf8').toString('base64');
@@ -246,7 +284,11 @@ async function terminateWindowsProcess(identity: OwnedProcessIdentity): Promise<
 }
 
 /** Internal test seam; deliberately not re-exported by package entrypoints. */
-export const ownedProcessTesting = { terminateWindowsProcess, listWindowsProcesses };
+export const ownedProcessTesting = {
+  terminateWindowsProcess,
+  listWindowsProcesses,
+  listWindowsProcessSnapshots,
+};
 
 function execFileText(command: string, args: readonly string[]): Promise<string> {
   return new Promise((resolve, reject) => {

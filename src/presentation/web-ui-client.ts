@@ -317,6 +317,7 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   private readonly fetchImpl: typeof fetch;
   private readonly createEventSource: (url: string) => WebUiEventSource;
   private readonly onSubscriptionStatus?: BrowserAppServerTransportClientOptions['onSubscriptionStatus'];
+  private readonly subscriptions = new Set<BrowserSubscriptionState>();
 
   constructor(options: BrowserAppServerTransportClientOptions) {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -326,14 +327,16 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   }
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
-    const response = await this.fetchImpl('/request', {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(request),
-    });
+    const response = await this.withSubscriptionsReady(() =>
+      this.fetchImpl('/request', {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      })
+    );
 
     const body = await response.text();
 
@@ -346,22 +349,96 @@ export class BrowserAppServerTransportClient implements AppServerClient {
 
   subscribe(listener: AppServerNotificationListener): AppServerSubscription {
     const events = this.createEventSource('/events');
+    const subscription: BrowserSubscriptionState = {
+      phase: 'connecting',
+      active: true,
+      generation: 0,
+      gate: createBrowserSubscriptionGate(),
+    };
+    this.subscriptions.add(subscription);
 
     events.onopen = () => {
+      if (!subscription.active) return;
+      subscription.phase = 'open';
+      subscription.gate.resolve();
       this.onSubscriptionStatus?.('connected');
     };
     events.onerror = (event) => {
+      if (!subscription.active) return;
+      subscription.gate.reject(new Error('Browser event subscription failed before request'));
+      subscription.generation += 1;
+      subscription.phase = 'reconnecting';
+      subscription.gate = createBrowserSubscriptionGate();
       this.onSubscriptionStatus?.('failed', event);
     };
     events.addEventListener('notification', (event) => {
+      if (!subscription.active || subscription.phase !== 'open') return;
       listener(JSON.parse(event.data) as AppServerNotification);
     });
 
     return () => {
+      if (!subscription.active) return;
+      subscription.active = false;
+      subscription.generation += 1;
+      subscription.phase = 'closed';
+      subscription.gate.reject(new Error('Browser event subscription disconnected'));
+      this.subscriptions.delete(subscription);
       events.close();
       this.onSubscriptionStatus?.('disconnected');
     };
   }
+
+  private async withSubscriptionsReady<T>(operation: () => Promise<T>): Promise<T> {
+    const authorization = [...this.subscriptions].map((subscription) => ({
+      subscription,
+      generation: subscription.generation,
+      gate: subscription.gate,
+    }));
+    await Promise.all(authorization.map(({ gate }) => gate.promise));
+    // Let EventSource state callbacks already queued behind the gate settlement
+    // run before the final, atomic authorization-and-operation continuation.
+    await Promise.resolve();
+    if (
+      authorization.some(
+        ({ subscription, generation, gate }) =>
+          !subscription.active ||
+          subscription.phase !== 'open' ||
+          subscription.generation !== generation ||
+          subscription.gate !== gate
+      )
+    ) {
+      throw new Error('Browser event subscription changed before request');
+    }
+    return operation();
+  }
+}
+
+type BrowserSubscriptionPhase = 'connecting' | 'open' | 'reconnecting' | 'closed';
+
+type BrowserSubscriptionGate = {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+  readonly reject: (cause: Error) => void;
+};
+
+type BrowserSubscriptionState = {
+  phase: BrowserSubscriptionPhase;
+  active: boolean;
+  generation: number;
+  gate: BrowserSubscriptionGate;
+};
+
+function createBrowserSubscriptionGate(): BrowserSubscriptionGate {
+  let resolve!: () => void;
+  let reject!: (cause: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  // EventSource may fail while no request is waiting. Keep the rejection
+  // observable to request callers without producing an unhandled rejection.
+  void promise.catch(() => undefined);
+  return { promise, resolve, reject };
 }
 
 function readThreadResponse(response: AppServerResponse, method: 'thread/start' | 'thread/read') {

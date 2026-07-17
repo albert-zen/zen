@@ -84,6 +84,230 @@ describe('Web UI client', () => {
     expect(events.closed).toBe(true);
   });
 
+  it('waits for browser EventSource readiness before a thread request can overtake it', async () => {
+    const events = new ControllableEventSource();
+    const requests: AppServerRequestInput[] = [];
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)) as AppServerRequestInput);
+        return new Response(
+          JSON.stringify({
+            method: 'thread/start',
+            ok: true,
+            result: { thread: { id: 'thread-1', status: 'idle', turns: [], items: [] } },
+          })
+        );
+      }) as typeof fetch,
+    });
+
+    const unsubscribe = client.subscribe(() => undefined);
+    const pending = client.request({ method: 'thread/start' });
+    await Promise.resolve();
+    expect(requests).toEqual([]);
+
+    events.open();
+    await pending;
+    expect(requests).toEqual([{ method: 'thread/start' }]);
+    unsubscribe();
+  });
+
+  it('fails a request waiting on an errored subscription without sending its POST', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const statuses: string[] = [];
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response(
+          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
+        );
+      }) as typeof fetch,
+      onSubscriptionStatus: (status) => statuses.push(status),
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    const pending = client.request({ method: 'thread/list' });
+    const rejected = expect(pending).rejects.toThrow(
+      'Browser event subscription failed before request'
+    );
+    events.fail(new Event('error'));
+    await rejected;
+
+    expect(fetchCalls).toBe(0);
+    expect(statuses).toEqual(['failed']);
+    unsubscribe();
+  });
+
+  it('blocks requests during browser SSE reconnect and releases them on the next open', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response(
+          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
+        );
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+    events.fail(new Event('error'));
+
+    const pending = client.request({ method: 'thread/list' });
+    await Promise.resolve();
+    expect(fetchCalls).toBe(0);
+    events.open();
+    await pending;
+
+    expect(fetchCalls).toBe(1);
+    unsubscribe();
+  });
+
+  it('rejects an open-generation request invalidated synchronously by reconnect', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response(
+          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
+        );
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+
+    const invalidated = client.request({ method: 'thread/list' });
+    const rejected = expect(invalidated).rejects.toThrow(
+      'Browser event subscription changed before request'
+    );
+    events.fail(new Event('error'));
+    events.open();
+    await rejected;
+    expect(fetchCalls).toBe(0);
+
+    await client.request({ method: 'thread/list' });
+    expect(fetchCalls).toBe(1);
+    unsubscribe();
+  });
+
+  it('rejects an open-generation request invalidated synchronously by disconnect', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response('{}');
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+
+    const invalidated = client.request({ method: 'thread/list' });
+    const rejected = expect(invalidated).rejects.toThrow(
+      'Browser event subscription changed before request'
+    );
+    unsubscribe();
+    events.open();
+    await rejected;
+
+    expect(fetchCalls).toBe(0);
+  });
+
+  it('does not POST an open-generation request invalidated in the outer-await reconnect window', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response(
+          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
+        );
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+
+    const invalidated = client.request({ method: 'thread/list' });
+    const rejected = expect(invalidated).rejects.toThrow(
+      'Browser event subscription changed before request'
+    );
+    queueMicrotask(() => {
+      queueMicrotask(() => {
+        events.fail(new Event('error'));
+        events.open();
+      });
+    });
+    await rejected;
+    expect(fetchCalls).toBe(0);
+
+    await client.request({ method: 'thread/list' });
+    expect(fetchCalls).toBe(1);
+    unsubscribe();
+  });
+
+  it('does not POST an open-generation request invalidated in the outer-await disconnect window', async () => {
+    const events = new ControllableEventSource();
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response('{}');
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+
+    const invalidated = client.request({ method: 'thread/list' });
+    const rejected = expect(invalidated).rejects.toThrow(
+      'Browser event subscription changed before request'
+    );
+    queueMicrotask(() => {
+      queueMicrotask(() => {
+        unsubscribe();
+        events.open();
+      });
+    });
+    await rejected;
+
+    expect(fetchCalls).toBe(0);
+  });
+
+  it('disconnect rejects pending browser readiness and stale open cannot revive it', async () => {
+    const events = new ControllableEventSource();
+    const statuses: string[] = [];
+    const notifications: string[] = [];
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response('{}');
+      }) as typeof fetch,
+      onSubscriptionStatus: (status) => statuses.push(status),
+    });
+    const unsubscribe = client.subscribe((notification) => notifications.push(notification.type));
+    const pending = client.request({ method: 'thread/list' });
+    const rejected = expect(pending).rejects.toThrow('Browser event subscription disconnected');
+    unsubscribe();
+    await rejected;
+    events.open();
+    events.emitNotification({
+      type: 'thread/started',
+      thread: { id: 'stale-thread', status: 'idle', turns: [], items: [] },
+    });
+
+    expect(fetchCalls).toBe(0);
+    expect(statuses).toEqual(['disconnected']);
+    expect(notifications).toEqual([]);
+  });
+
   it('connects through real transport and projects streamed turn notifications', async () => {
     const server = new AppServer({
       threadManagerOptions: {
