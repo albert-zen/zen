@@ -332,6 +332,13 @@ export class InteractionProjection {
   }
 
   apply(notification: AppServerNotification): boolean {
+    if (notification.type === 'sync/reset') {
+      const currentThreadId = this.snapshot.currentThread?.id;
+      const thread = currentThreadId
+        ? notification.threads.find((candidate) => candidate.id === currentThreadId)
+        : notification.threads[0];
+      return thread ? this.replaceSnapshot(thread) : false;
+    }
     if (notification.type === 'thread/started') {
       return this.replaceSnapshot(notification.thread);
     }

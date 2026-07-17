@@ -1,5 +1,6 @@
 import type {
   AppServerClient,
+  AppServerNotification,
   AppServerNotificationListener,
   AppServerSubscription,
 } from '../product/index.js';
@@ -78,6 +79,7 @@ export class AgentInteractionSession {
   private readonly listeners: AgentInteractionSessionListener[] = [];
   private readonly completionWaiters = new Map<string, Set<CompletionWaiter>>();
   private disposed = false;
+  private snapshotHandoff?: SessionSnapshotHandoff;
 
   constructor(private readonly options: AgentInteractionSessionOptions) {}
 
@@ -101,32 +103,47 @@ export class AgentInteractionSession {
   async start(): Promise<AgentInteractionSnapshot> {
     this.assertActive();
     this.subscribeOnce();
-    const list = await this.options.client.request({ method: 'thread/list' });
-    this.assertActive();
+    const handoff = this.beginSnapshotHandoff();
+    try {
+      const list = await this.options.client.request({ method: 'thread/list' });
+      this.assertActive();
 
-    if (list.ok && list.method === 'thread/list' && list.result.threads.length > 0) {
-      this.projection.replaceSnapshot(list.result.threads[0]);
+      if (list.ok && list.method === 'thread/list' && list.result.threads.length > 0) {
+        this.installSnapshot(list.result.threads[0], handoff);
+        return this.getSnapshot();
+      }
+
+      const started = await this.options.client.request({ method: 'thread/start' });
+      this.assertActive();
+      if (!started.ok || started.method !== 'thread/start') {
+        throw new Error(started.ok ? 'Unexpected thread/start response' : started.error.message);
+      }
+      this.installSnapshot(started.result.thread, handoff);
       return this.getSnapshot();
+    } catch (cause) {
+      this.cancelSnapshotHandoff(handoff);
+      throw cause;
     }
-
-    await this.newThread();
-
-    return this.getSnapshot();
   }
 
   async newThread(): Promise<AgentInteractionSnapshot> {
     this.assertActive();
     this.subscribeOnce();
-    const response = await this.options.client.request({ method: 'thread/start' });
-    this.assertActive();
+    const handoff = this.beginSnapshotHandoff();
+    try {
+      const response = await this.options.client.request({ method: 'thread/start' });
+      this.assertActive();
 
-    if (!response.ok || response.method !== 'thread/start') {
-      throw new Error(response.ok ? 'Unexpected thread/start response' : response.error.message);
+      if (!response.ok || response.method !== 'thread/start') {
+        throw new Error(response.ok ? 'Unexpected thread/start response' : response.error.message);
+      }
+
+      this.installSnapshot(response.result.thread, handoff);
+      return this.getSnapshot();
+    } catch (cause) {
+      this.cancelSnapshotHandoff(handoff);
+      throw cause;
     }
-
-    this.projection.replaceSnapshot(response.result.thread);
-
-    return this.getSnapshot();
   }
 
   async listThreads(): Promise<readonly AgentThreadListEntry[]> {
@@ -144,23 +161,29 @@ export class AgentInteractionSession {
   async resumeThread(threadId: string): Promise<AgentInteractionSnapshot> {
     this.assertActive();
     this.subscribeOnce();
-    const response = await this.options.client.request({
-      method: 'thread/read',
-      params: {
-        threadId,
-      },
-    });
+    const handoff = this.beginSnapshotHandoff();
+    try {
+      const response = await this.options.client.request({
+        method: 'thread/read',
+        params: {
+          threadId,
+        },
+      });
 
-    this.assertActive();
-    if (!response.ok || response.method !== 'thread/read') {
-      throw new Error(response.ok ? 'Unexpected thread/read response' : response.error.message);
+      this.assertActive();
+      if (!response.ok || response.method !== 'thread/read') {
+        throw new Error(response.ok ? 'Unexpected thread/read response' : response.error.message);
+      }
+
+      if (this.installSnapshot(response.result.thread, handoff)) {
+        this.emit({ type: 'state', snapshot: this.getSnapshot() });
+      }
+
+      return this.getSnapshot();
+    } catch (cause) {
+      this.cancelSnapshotHandoff(handoff);
+      throw cause;
     }
-
-    if (this.projection.replaceSnapshot(response.result.thread)) {
-      this.emit({ type: 'state', snapshot: this.getSnapshot() });
-    }
-
-    return this.getSnapshot();
   }
 
   async interrupt(): Promise<AgentInteractionSnapshot> {
@@ -283,6 +306,7 @@ export class AgentInteractionSession {
       return;
     }
     this.disposed = true;
+    this.snapshotHandoff = undefined;
     this.subscription?.();
     this.subscription = undefined;
     const error = new AgentInteractionSessionDisposedError();
@@ -317,34 +341,60 @@ export class AgentInteractionSession {
     }
 
     const listener: AppServerNotificationListener = (notification) => {
-      if (this.disposed) {
+      if (this.disposed) return;
+      if (this.snapshotHandoff) {
+        this.snapshotHandoff.notifications.push(notification);
         return;
       }
-      const previousRows = this.projection.getSnapshot().timelineRows;
-      const previousRowKeys = new Set(previousRows.map(toTimelineRowKey));
-      const changed = this.projection.apply(notification);
-      if (!changed) return;
-      const snapshot = this.getSnapshot();
-      const nextRows = snapshot.timelineRows.filter(
-        (row) => !previousRowKeys.has(toTimelineRowKey(row))
-      );
-
-      if (nextRows.length > 0) {
-        this.emit({ type: 'rows', rows: nextRows, snapshot });
-      }
-
-      this.emit({ type: 'state', snapshot });
-      if (notification.type === 'turn/completed' || notification.type === 'turn/failed') {
-        const waiters = [...(this.completionWaiters.get(notification.threadId) ?? [])];
-        waiters.forEach((waiter) =>
-          notification.type === 'turn/failed'
-            ? waiter.reject(new Error(notification.error.message))
-            : waiter.resolve()
-        );
-      }
+      this.applyNotification(notification);
     };
 
     this.subscription = this.options.client.subscribe(listener);
+  }
+
+  private applyNotification(notification: Parameters<AppServerNotificationListener>[0]): void {
+    const previousRows = this.projection.getSnapshot().timelineRows;
+    const previousRowKeys = new Set(previousRows.map(toTimelineRowKey));
+    const changed = this.projection.apply(notification);
+    if (!changed) return;
+    const snapshot = this.getSnapshot();
+    const nextRows = snapshot.timelineRows.filter(
+      (row) => !previousRowKeys.has(toTimelineRowKey(row))
+    );
+
+    if (nextRows.length > 0) {
+      this.emit({ type: 'rows', rows: nextRows, snapshot });
+    }
+
+    this.emit({ type: 'state', snapshot });
+    if (notification.type === 'turn/completed' || notification.type === 'turn/failed') {
+      const waiters = [...(this.completionWaiters.get(notification.threadId) ?? [])];
+      waiters.forEach((waiter) =>
+        notification.type === 'turn/failed'
+          ? waiter.reject(new Error(notification.error.message))
+          : waiter.resolve()
+      );
+    }
+  }
+
+  private beginSnapshotHandoff(): SessionSnapshotHandoff {
+    const handoff = { notifications: [] } satisfies SessionSnapshotHandoff;
+    this.snapshotHandoff = handoff;
+    return handoff;
+  }
+
+  private installSnapshot(snapshot: ThreadSnapshot, handoff: SessionSnapshotHandoff): boolean {
+    if (this.snapshotHandoff !== handoff) throw new AgentInteractionSessionDisposedError();
+    const changed = this.projection.replaceSnapshot(snapshot);
+    this.snapshotHandoff = undefined;
+    for (const notification of handoff.notifications) this.applyNotification(notification);
+    return changed;
+  }
+
+  private cancelSnapshotHandoff(handoff: SessionSnapshotHandoff): void {
+    if (this.snapshotHandoff !== handoff) return;
+    this.snapshotHandoff = undefined;
+    for (const notification of handoff.notifications) this.applyNotification(notification);
   }
 
   getPendingCompletionWaiterCountForTest(): number {
@@ -396,6 +446,10 @@ export class AgentInteractionSession {
     }
   }
 }
+
+type SessionSnapshotHandoff = {
+  readonly notifications: AppServerNotification[];
+};
 
 function toTimelineRowKey(row: TimelineRow): string {
   return `${row.type}:${row.itemId}`;

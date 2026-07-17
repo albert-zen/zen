@@ -16,6 +16,32 @@ import {
 } from './test-exports.js';
 
 describe('AgentInteractionSession', () => {
+  it('replays notifications that arrive while the startup snapshot is in flight', async () => {
+    const client = new SessionHandoffClient();
+    const session = new AgentInteractionSession({ client });
+    const starting = session.start();
+    client.emit({
+      type: 'item/appended',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: sessionItem('item-2', 2),
+    });
+    client.resolveList({
+      id: 'thread-1',
+      status: 'running',
+      turns: [],
+      items: [sessionItem('item-1', 1)],
+    });
+
+    const snapshot = await starting;
+
+    expect([...(snapshot.thread?.items ?? [])].map((item) => item.id)).toEqual([
+      'item-1',
+      'item-2',
+    ]);
+    session.dispose();
+  });
+
   it('discards a submit waiter when turn/start rejects', async () => {
     const client = new DeferredSessionClient(threadSnapshot(), {
       turnFailure: new Error('submit request failed'),
@@ -362,4 +388,49 @@ class DeferredSessionClient implements AppServerClient {
     this.pendingTurnReject?.(cause);
     this.pendingTurnReject = undefined;
   }
+}
+
+class SessionHandoffClient implements AppServerClient {
+  private listener?: AppServerNotificationListener;
+  private resolveListRequest!: (snapshot: ThreadSnapshot) => void;
+  private readonly listRequest = new Promise<ThreadSnapshot>((resolve) => {
+    this.resolveListRequest = resolve;
+  });
+
+  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    if (request.method !== 'thread/list') throw new Error(`Unexpected request: ${request.method}`);
+    const snapshot = await this.listRequest;
+    return {
+      method: 'thread/list',
+      ok: true,
+      result: { threads: [snapshot], persistenceFailures: [] },
+    };
+  }
+
+  subscribe(listener: AppServerNotificationListener): AppServerSubscription {
+    this.listener = listener;
+    return () => {
+      this.listener = undefined;
+    };
+  }
+
+  emit(notification: Parameters<AppServerNotificationListener>[0]): void {
+    this.listener?.(notification);
+  }
+
+  resolveList(snapshot: ThreadSnapshot): void {
+    this.resolveListRequest(snapshot);
+  }
+}
+
+function sessionItem(id: string, seq: number) {
+  return {
+    id,
+    type: 'assistant.message.completed',
+    createdAtMs: seq,
+    seq,
+    runId: 'run-1',
+    turnId: 'turn-1',
+    payload: { content: id },
+  };
 }

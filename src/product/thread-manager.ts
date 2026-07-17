@@ -89,7 +89,7 @@ export type TurnRecord = {
   readonly error?: JsonValue;
 };
 
-export type ThreadManagerEvent = AppServerNotification;
+export type ThreadManagerEvent = Exclude<AppServerNotification, { readonly type: 'sync/reset' }>;
 export type ThreadManagerObserver = (event: ThreadManagerEvent) => void;
 
 type ThreadState = {

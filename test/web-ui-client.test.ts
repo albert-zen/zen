@@ -16,6 +16,31 @@ import {
 } from './test-exports.js';
 
 describe('Web UI client', () => {
+  it('replays notifications that arrive while the initial snapshot is in flight', async () => {
+    const client = new SnapshotHandoffClient();
+    const webUi = new WebUiClient({ client });
+    const connecting = webUi.connect({ threadId: 'thread-1' });
+    client.emit({
+      type: 'item/appended',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: protocolItem('item-2', 2, 'assistant.message.completed'),
+    });
+    client.resolveSnapshot({
+      id: 'thread-1',
+      status: 'running',
+      turns: [],
+      items: [protocolItem('item-1', 1, 'user.message.completed')],
+    });
+
+    await connecting;
+
+    expect([...webUi.getSnapshot().state.items].map((item) => item.id)).toEqual([
+      'item-1',
+      'item-2',
+    ]);
+  });
+
   it('uses same-origin browser routes without receiving a capability', async () => {
     const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     let eventUrl: string | undefined;
@@ -139,7 +164,7 @@ describe('Web UI client', () => {
     unsubscribe();
   });
 
-  it('blocks requests during browser SSE reconnect and releases them on the next open', async () => {
+  it('blocks effectful requests until browser SSE replay completes', async () => {
     const events = new ControllableEventSource();
     let fetchCalls = 0;
     const client = new BrowserAppServerTransportClient({
@@ -155,13 +180,154 @@ describe('Web UI client', () => {
     events.open();
     events.fail(new Event('error'));
 
-    const pending = client.request({ method: 'thread/list' });
+    const pending = client.request({ method: 'thread/start' });
     await Promise.resolve();
     expect(fetchCalls).toBe(0);
     events.open();
+    await Promise.resolve();
+    expect(fetchCalls).toBe(0);
+    events.emitSync({ streamId: 'stream-1', cursor: 2 });
     await pending;
 
     expect(fetchCalls).toBe(1);
+    unsubscribe();
+  });
+
+  it('recovers item, approval, and terminal notifications before reopening effects', async () => {
+    const events = new ControllableEventSource();
+    const received: string[] = [];
+    let fetchCalls = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async () => {
+        fetchCalls += 1;
+        return new Response(
+          JSON.stringify({
+            method: 'thread/start',
+            ok: true,
+            result: { thread: { id: 'thread-1', status: 'idle', turns: [], items: [] } },
+          })
+        );
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe((notification) => received.push(notification.type));
+    events.open();
+    events.fail(new Event('error'));
+    const effect = client.request({ method: 'thread/start' });
+    events.open();
+    events.emitNotification({
+      type: 'item/appended',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: protocolItem('item-2', 2, 'assistant.message.completed'),
+    });
+    events.emitNotification({
+      type: 'approval/requested',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      approvalId: 'approval-1',
+      item: protocolItem('item-3', 3, 'approval.requested'),
+    });
+    events.emitNotification({
+      type: 'turn/completed',
+      threadId: 'thread-1',
+      turn: {
+        id: 'turn-1',
+        runId: 'run-1',
+        status: 'completed',
+        itemIds: ['item-2', 'item-3'],
+      },
+    });
+    await Promise.resolve();
+    expect(fetchCalls).toBe(0);
+    events.emitSync({ streamId: 'stream-1', cursor: 3 });
+    await effect;
+
+    expect(received).toEqual(['item/appended', 'approval/requested', 'turn/completed']);
+    expect(fetchCalls).toBe(1);
+    unsubscribe();
+  });
+
+  it('resnapshots on a reconnect gap before releasing effectful requests', async () => {
+    const events = new ControllableEventSource();
+    const snapshot = deferred<Response>();
+    const postedMethods: string[] = [];
+    const notifications: string[] = [];
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as AppServerRequestInput;
+        postedMethods.push(request.method);
+        if (request.method === 'thread/list') return await snapshot.promise;
+        return new Response(
+          JSON.stringify({
+            method: request.method,
+            ok: true,
+            result: { thread: { id: 'new', status: 'idle', turns: [], items: [] } },
+          })
+        );
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe((notification) => notifications.push(notification.type));
+    events.open();
+    events.fail(new Event('error'));
+    const effect = client.request({ method: 'thread/start' });
+    events.open();
+    events.emitReset({ streamId: 'stream-2', cursor: 9 });
+    events.emitSync({ streamId: 'stream-2', cursor: 9 });
+    await Promise.resolve();
+
+    expect(postedMethods).toEqual(['thread/list']);
+    snapshot.resolve(
+      new Response(
+        JSON.stringify({
+          method: 'thread/list',
+          ok: true,
+          result: {
+            threads: [
+              {
+                id: 'thread-1',
+                status: 'idle',
+                turns: [],
+                items: [protocolItem('item-9', 9, 'turn.completed')],
+              },
+            ],
+            persistenceFailures: [],
+          },
+        })
+      )
+    );
+    await effect;
+
+    expect(postedMethods).toEqual(['thread/list', 'thread/start']);
+    expect(notifications).toContain('sync/reset');
+    unsubscribe();
+  });
+
+  it('does not release the effect gate when reconnect resnapshot fails', async () => {
+    const events = new ControllableEventSource();
+    const postedMethods: string[] = [];
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as AppServerRequestInput;
+        postedMethods.push(request.method);
+        if (request.method === 'thread/list') {
+          return new Response('resnapshot failed', { status: 503 });
+        }
+        return new Response('{}');
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+    events.fail(new Event('error'));
+    const effect = client.request({ method: 'thread/start' });
+    events.open();
+    events.emitReset({ streamId: 'stream-2', cursor: 9 });
+    events.emitSync({ streamId: 'stream-2', cursor: 9 });
+
+    await expect(effect).rejects.toThrow('Reconnect resnapshot failed');
+    expect(postedMethods).toEqual(['thread/list']);
     unsubscribe();
   });
 
@@ -189,6 +355,7 @@ describe('Web UI client', () => {
     await rejected;
     expect(fetchCalls).toBe(0);
 
+    events.emitSync({ streamId: 'stream-1', cursor: 2 });
     await client.request({ method: 'thread/list' });
     expect(fetchCalls).toBe(1);
     unsubscribe();
@@ -246,6 +413,7 @@ describe('Web UI client', () => {
     await rejected;
     expect(fetchCalls).toBe(0);
 
+    events.emitSync({ streamId: 'stream-1', cursor: 2 });
     await client.request({ method: 'thread/list' });
     expect(fetchCalls).toBe(1);
     unsubscribe();
@@ -867,10 +1035,14 @@ class RecordingEventSource {
 
 class ControllableEventSource extends RecordingEventSource {
   private notificationListener?: (event: MessageEvent<string>) => void;
+  private resetListener?: (event: MessageEvent<string>) => void;
+  private syncListener?: (event: MessageEvent<string>) => void;
   closed = false;
 
   override addEventListener(type: string, listener: (event: MessageEvent<string>) => void): void {
     if (type === 'notification') this.notificationListener = listener;
+    if (type === 'reset') this.resetListener = listener;
+    if (type === 'sync') this.syncListener = listener;
   }
 
   override close(): void {
@@ -888,4 +1060,57 @@ class ControllableEventSource extends RecordingEventSource {
   emitNotification(notification: Parameters<AppServerNotificationListener>[0]): void {
     this.notificationListener?.({ data: JSON.stringify(notification) } as MessageEvent<string>);
   }
+
+  emitReset(checkpoint: { readonly streamId: string; readonly cursor: number }): void {
+    this.resetListener?.({ data: JSON.stringify(checkpoint) } as MessageEvent<string>);
+  }
+
+  emitSync(checkpoint: { readonly streamId: string; readonly cursor: number }): void {
+    this.syncListener?.({ data: JSON.stringify(checkpoint) } as MessageEvent<string>);
+  }
+}
+
+class SnapshotHandoffClient implements AppServerClient {
+  private listener?: AppServerNotificationListener;
+  private readonly response = deferred<import('../src/product/index.js').ThreadSnapshot>();
+
+  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    const thread = await this.response.promise;
+    return { method: request.method, ok: true, result: { thread } } as AppServerResponse;
+  }
+
+  subscribe(listener: AppServerNotificationListener): AppServerSubscription {
+    this.listener = listener;
+    return () => {
+      this.listener = undefined;
+    };
+  }
+
+  emit(notification: Parameters<AppServerNotificationListener>[0]): void {
+    this.listener?.(notification);
+  }
+
+  resolveSnapshot(snapshot: import('../src/product/index.js').ThreadSnapshot): void {
+    this.response.resolve(snapshot);
+  }
+}
+
+function protocolItem(id: string, seq: number, type: string) {
+  return {
+    id,
+    seq,
+    type,
+    createdAtMs: seq,
+    runId: 'run-1',
+    turnId: 'turn-1',
+    payload: {},
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
 }

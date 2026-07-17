@@ -50,6 +50,7 @@ export class WebUiClient {
   private connection: WebUiConnectionState;
   private snapshot: WebUiClientSnapshot;
   private lifecycleGeneration = 0;
+  private snapshotHandoff?: SnapshotHandoff;
 
   constructor(options: WebUiClientOptions) {
     this.client = options.client;
@@ -77,8 +78,11 @@ export class WebUiClient {
     const generation = ++this.lifecycleGeneration;
     this.disconnectFromServerOnly();
     this.setConnection({ status: 'connecting' });
+    const handoff = this.beginSnapshotHandoff(generation);
     this.unsubscribeFromServer = this.client.subscribe((notification) => {
-      if (generation === this.lifecycleGeneration) this.applyNotification(notification);
+      if (generation === this.lifecycleGeneration) {
+        this.receiveNotification(notification);
+      }
     });
 
     try {
@@ -89,10 +93,11 @@ export class WebUiClient {
           : { method: 'thread/start' },
         options.threadId ? 'thread/read' : 'thread/start'
       );
-      const projectionChanged = this.projection.replaceSnapshot(thread);
+      const projectionChanged = this.installSnapshot(thread, handoff);
       const connectionChanged = this.updateConnection({ status: 'connected' });
       if (projectionChanged || connectionChanged) this.refreshSnapshot();
     } catch (cause) {
+      this.cancelSnapshotHandoff(handoff);
       if (generation === this.lifecycleGeneration) this.fail(cause);
       throw cause;
     }
@@ -100,6 +105,7 @@ export class WebUiClient {
 
   disconnect(): void {
     this.lifecycleGeneration += 1;
+    this.snapshotHandoff = undefined;
     this.disconnectFromServerOnly();
     this.setConnection({ status: 'disconnected' });
   }
@@ -110,13 +116,19 @@ export class WebUiClient {
   }
 
   async startThread(): Promise<void> {
-    const thread = await this.requestThread(
-      this.lifecycleGeneration,
-      { method: 'thread/start' },
-      'thread/start'
-    );
-    if (this.projection.replaceSnapshot(thread)) {
-      this.refreshSnapshot();
+    const handoff = this.beginSnapshotHandoff(this.lifecycleGeneration);
+    try {
+      const thread = await this.requestThread(
+        this.lifecycleGeneration,
+        { method: 'thread/start' },
+        'thread/start'
+      );
+      if (this.installSnapshot(thread, handoff)) {
+        this.refreshSnapshot();
+      }
+    } catch (cause) {
+      this.cancelSnapshotHandoff(handoff);
+      throw cause;
     }
   }
 
@@ -135,13 +147,19 @@ export class WebUiClient {
   }
 
   async resumeThread(threadId: string): Promise<void> {
-    const thread = await this.requestThread(
-      this.lifecycleGeneration,
-      { method: 'thread/read', params: { threadId } },
-      'thread/read'
-    );
-    if (this.projection.replaceSnapshot(thread)) {
-      this.refreshSnapshot();
+    const handoff = this.beginSnapshotHandoff(this.lifecycleGeneration);
+    try {
+      const thread = await this.requestThread(
+        this.lifecycleGeneration,
+        { method: 'thread/read', params: { threadId } },
+        'thread/read'
+      );
+      if (this.installSnapshot(thread, handoff)) {
+        this.refreshSnapshot();
+      }
+    } catch (cause) {
+      this.cancelSnapshotHandoff(handoff);
+      throw cause;
     }
   }
 
@@ -243,6 +261,36 @@ export class WebUiClient {
             ? this.updateConnection({ status: 'failed', message: notification.error.message })
             : false;
     if (projectionChanged || connectionChanged) this.refreshSnapshot();
+  }
+
+  private beginSnapshotHandoff(generation: number): SnapshotHandoff {
+    const handoff = { generation, notifications: [] } satisfies SnapshotHandoff;
+    this.snapshotHandoff = handoff;
+    return handoff;
+  }
+
+  private receiveNotification(notification: AppServerNotification): void {
+    if (this.snapshotHandoff) {
+      this.snapshotHandoff.notifications.push(notification);
+      return;
+    }
+    this.applyNotification(notification);
+  }
+
+  private installSnapshot(snapshot: ThreadSnapshot, handoff: SnapshotHandoff): boolean {
+    if (this.snapshotHandoff !== handoff || handoff.generation !== this.lifecycleGeneration) {
+      throw new WebUiLifecycleCanceledError();
+    }
+    let changed = this.projection.replaceSnapshot(snapshot);
+    this.snapshotHandoff = undefined;
+    for (const notification of handoff.notifications) {
+      changed = this.projection.apply(notification) || changed;
+    }
+    return changed;
+  }
+
+  private cancelSnapshotHandoff(handoff: SnapshotHandoff): void {
+    if (this.snapshotHandoff === handoff) this.snapshotHandoff = undefined;
   }
 
   private fail(cause: unknown): void {
@@ -354,26 +402,54 @@ export class BrowserAppServerTransportClient implements AppServerClient {
       active: true,
       generation: 0,
       gate: createBrowserSubscriptionGate(),
+      needsReset: false,
+      pendingNotifications: [],
     };
     this.subscriptions.add(subscription);
 
     events.onopen = () => {
       if (!subscription.active) return;
-      subscription.phase = 'open';
-      subscription.gate.resolve();
-      this.onSubscriptionStatus?.('connected');
+      if (subscription.phase === 'connecting') {
+        subscription.phase = 'open';
+        subscription.gate.resolve();
+        this.onSubscriptionStatus?.('connected');
+        return;
+      }
+      if (subscription.phase === 'reconnecting') {
+        subscription.phase = 'recovering';
+      }
     };
     events.onerror = (event) => {
       if (!subscription.active) return;
+      const preserveReset = subscription.phase === 'recovering' && subscription.needsReset;
       subscription.gate.reject(new Error('Browser event subscription failed before request'));
       subscription.generation += 1;
       subscription.phase = 'reconnecting';
       subscription.gate = createBrowserSubscriptionGate();
+      subscription.needsReset = preserveReset;
+      if (!preserveReset) subscription.pendingNotifications = [];
       this.onSubscriptionStatus?.('failed', event);
     };
     events.addEventListener('notification', (event) => {
-      if (!subscription.active || subscription.phase !== 'open') return;
-      listener(JSON.parse(event.data) as AppServerNotification);
+      if (!subscription.active) return;
+      const notification = JSON.parse(event.data) as AppServerNotification;
+      if (subscription.phase === 'recovering') {
+        if (subscription.needsReset) {
+          subscription.pendingNotifications.push(notification);
+        } else {
+          listener(notification);
+        }
+        return;
+      }
+      if (subscription.phase === 'open') listener(notification);
+    });
+    events.addEventListener('reset', () => {
+      if (!subscription.active || subscription.phase !== 'recovering') return;
+      subscription.needsReset = true;
+    });
+    events.addEventListener('sync', () => {
+      if (!subscription.active || subscription.phase !== 'recovering') return;
+      void this.completeRecovery(subscription, listener);
     });
 
     return () => {
@@ -386,6 +462,68 @@ export class BrowserAppServerTransportClient implements AppServerClient {
       events.close();
       this.onSubscriptionStatus?.('disconnected');
     };
+  }
+
+  private async completeRecovery(
+    subscription: BrowserSubscriptionState,
+    listener: AppServerNotificationListener
+  ): Promise<void> {
+    const generation = subscription.generation;
+    const gate = subscription.gate;
+    try {
+      let resetThreads: readonly ThreadSnapshot[] | undefined;
+      if (subscription.needsReset) {
+        resetThreads = await this.readRecoverySnapshots();
+      }
+      if (
+        !subscription.active ||
+        subscription.phase !== 'recovering' ||
+        subscription.generation !== generation ||
+        subscription.gate !== gate
+      ) {
+        return;
+      }
+      if (resetThreads) listener({ type: 'sync/reset', threads: resetThreads });
+      if (
+        !subscription.active ||
+        subscription.phase !== 'recovering' ||
+        subscription.generation !== generation ||
+        subscription.gate !== gate
+      ) {
+        return;
+      }
+      for (const notification of subscription.pendingNotifications) listener(notification);
+      subscription.pendingNotifications = [];
+      subscription.phase = 'open';
+      gate.resolve();
+      this.onSubscriptionStatus?.('connected');
+    } catch (cause) {
+      if (subscription.active && subscription.generation === generation) {
+        subscription.phase = 'failed';
+        gate.reject(new Error(`Reconnect resnapshot failed: ${readErrorMessage(cause)}`));
+        this.onSubscriptionStatus?.('failed', cause);
+      }
+    }
+  }
+
+  private async readRecoverySnapshots(): Promise<readonly ThreadSnapshot[]> {
+    const response = await this.fetchImpl('/request', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ method: 'thread/list' }),
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${body}`);
+    }
+    const result = JSON.parse(body) as AppServerResponse;
+    if (!result.ok || result.method !== 'thread/list') {
+      throw new Error(result.ok ? `Unexpected ${result.method}` : result.error.message);
+    }
+    return result.result.threads;
   }
 
   private async withSubscriptionsReady<T>(operation: () => Promise<T>): Promise<T> {
@@ -413,7 +551,8 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   }
 }
 
-type BrowserSubscriptionPhase = 'connecting' | 'open' | 'reconnecting' | 'closed';
+type BrowserSubscriptionPhase =
+  'connecting' | 'open' | 'reconnecting' | 'recovering' | 'failed' | 'closed';
 
 type BrowserSubscriptionGate = {
   readonly promise: Promise<void>;
@@ -426,6 +565,13 @@ type BrowserSubscriptionState = {
   active: boolean;
   generation: number;
   gate: BrowserSubscriptionGate;
+  needsReset: boolean;
+  pendingNotifications: AppServerNotification[];
+};
+
+type SnapshotHandoff = {
+  readonly generation: number;
+  readonly notifications: AppServerNotification[];
 };
 
 function createBrowserSubscriptionGate(): BrowserSubscriptionGate {
