@@ -212,6 +212,34 @@ describe('owned E2E supervisor', () => {
     });
   });
 
+  it('retains an unmarked late child when its recorded root is already absent', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const root = ownedEntry({ marker, pid: 120, parentPid: 1, parentChain: [] });
+      const unmarked = {
+        ...ownedEntry({ marker, pid: 121, parentPid: root.pid, rootPid: root.pid }),
+        commandLine: 'node late-unmarked-child',
+      };
+      const processes = new Map([[unmarked.pid, unmarked]]);
+      const terminated = [];
+      await writeManifest(manifestPath, marker, [root]);
+
+      await expect(
+        cleanupOwnedManifest({
+          manifestPath,
+          inspect: async (pid) => processes.get(pid),
+          list: async () => [...processes.values()],
+          terminate: async (entry) => terminated.push(entry.pid),
+        })
+      ).rejects.toThrow('exact owner identity');
+
+      expect(terminated).toEqual([]);
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain(
+        'unverified-ancestry-descendant'
+      );
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 121');
+    });
+  });
+
   it('retains a PID-reused record and does not kill it', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entry = ownedEntry({ marker });
@@ -226,7 +254,7 @@ describe('owned E2E supervisor', () => {
           list: async () => [reused],
           terminate: async (candidate) => terminated.push(candidate.pid),
         })
-      ).rejects.toThrow('exact owner identity');
+      ).rejects.toThrow('failed exact identity validation');
 
       expect(terminated).toEqual([]);
       await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"pid": 1234');

@@ -26,16 +26,22 @@ export class OwnedProcessCleanupError extends Error {
 export class OwnedProcessTree {
   private root: OwnedProcessIdentity | undefined;
   private cleanupTask: Promise<readonly number[]> | undefined;
-  private readonly retained = new Map<string, Candidate>();
+  /** Historical identities remain ancestry anchors until cleanup reaches its terminal decision. */
+  private readonly ancestry = new Map<string, Candidate>();
 
   constructor(
     private readonly rootPid: number,
     private readonly operations: OwnedProcessOperations = {}
   ) {}
 
-  async captureRoot(): Promise<void> {
+  async captureRoot(): Promise<boolean> {
     const root = (await this.list()).find((candidate) => candidate.pid === this.rootPid);
-    if (root) this.root = root;
+    if (!root) {
+      return false;
+    }
+    this.root = root;
+    this.ancestry.set(candidateKey(root), { identity: root, chain: [root] });
+    return true;
   }
 
   async terminateVerified(): Promise<readonly number[]> {
@@ -45,7 +51,11 @@ export class OwnedProcessTree {
 
   private async terminateUntilQuiescent(): Promise<readonly number[]> {
     const root = this.root;
-    if (!root) return [];
+    if (!root) {
+      throw new OwnedProcessCleanupError(
+        `Refusing cleanup: root PID ${this.rootPid} was not captured before it exited`
+      );
+    }
     const terminated: number[] = [];
     let stableZeroScans = 0;
 
@@ -57,13 +67,9 @@ export class OwnedProcessTree {
           `Refusing cleanup: root PID ${root.pid} no longer has its recorded identity`
         );
       }
-      if (rootCurrent) {
-        for (const candidate of descendantsOf(root, snapshot)) {
-          this.retained.set(candidateKey(candidate.identity), candidate);
-        }
-      }
+      this.discoverDescendants(snapshot);
 
-      const live = this.liveRetainedCandidates(snapshot);
+      const live = this.liveAncestryCandidates(snapshot);
       if (live.length === 0) {
         // Two independent zero scans ensure a just-exited root did not leave a late child behind.
         stableZeroScans += 1;
@@ -94,17 +100,60 @@ export class OwnedProcessTree {
     );
   }
 
-  private liveRetainedCandidates(processes: readonly OwnedProcessIdentity[]): Candidate[] {
-    const live: Candidate[] = [];
-    for (const [key, candidate] of this.retained) {
-      const current = processes.find((process) => process.pid === candidate.identity.pid);
-      if (!current) {
-        this.retained.delete(key);
-        continue;
+  private discoverDescendants(processes: readonly OwnedProcessIdentity[]): void {
+    const byParent = new Map<number, OwnedProcessIdentity[]>();
+    const byPid = new Map(processes.map((process) => [process.pid, process]));
+    for (const process of processes) {
+      const children = byParent.get(process.parentPid) ?? [];
+      children.push(process);
+      byParent.set(process.parentPid, children);
+    }
+
+    for (const candidate of this.ancestry.values()) {
+      const current = byPid.get(candidate.identity.pid);
+      if (current && !sameIdentity(candidate.identity, current)) {
+        throw new OwnedProcessCleanupError(
+          `Refusing cleanup: ancestry PID ${candidate.identity.pid} was reused`
+        );
       }
+    }
+
+    const pending = [...this.ancestry.values()];
+    while (pending.length > 0) {
+      const parent = pending.pop();
+      if (!parent) continue;
+      for (const child of byParent.get(parent.identity.pid) ?? []) {
+        if (!createdAfter(child, parent.identity)) {
+          throw new OwnedProcessCleanupError(
+            `Refusing cleanup: PID ${child.pid} predates ancestry parent ${parent.identity.pid}`
+          );
+        }
+        const existing = [...this.ancestry.values()].find(
+          (candidate) => candidate.identity.pid === child.pid
+        );
+        if (existing) {
+          if (!sameIdentity(existing.identity, child)) {
+            throw new OwnedProcessCleanupError(
+              `Refusing cleanup: ancestry PID ${child.pid} was reused`
+            );
+          }
+          continue;
+        }
+        const discovered = { identity: child, chain: [...parent.chain, child] };
+        this.ancestry.set(candidateKey(child), discovered);
+        pending.push(discovered);
+      }
+    }
+  }
+
+  private liveAncestryCandidates(processes: readonly OwnedProcessIdentity[]): Candidate[] {
+    const live: Candidate[] = [];
+    for (const candidate of this.ancestry.values()) {
+      const current = processes.find((process) => process.pid === candidate.identity.pid);
+      if (!current) continue;
       if (!sameIdentity(candidate.identity, current)) {
         throw new OwnedProcessCleanupError(
-          `Refusing cleanup: retained PID ${candidate.identity.pid} was reused`
+          `Refusing cleanup: ancestry PID ${candidate.identity.pid} was reused`
         );
       }
       if (!hasRecordedChain(candidate.chain, current, processes)) {
@@ -131,29 +180,6 @@ type Candidate = {
   readonly chain: readonly OwnedProcessIdentity[];
 };
 
-function descendantsOf(
-  root: OwnedProcessIdentity,
-  processes: readonly OwnedProcessIdentity[]
-): Candidate[] {
-  const byParent = new Map<number, OwnedProcessIdentity[]>();
-  for (const process of processes) {
-    const children = byParent.get(process.parentPid) ?? [];
-    children.push(process);
-    byParent.set(process.parentPid, children);
-  }
-  const candidates: Candidate[] = [];
-  const pending: Candidate[] = [{ identity: root, chain: [root] }];
-  while (pending.length > 0) {
-    const candidate = pending.pop();
-    if (!candidate) continue;
-    candidates.push(candidate);
-    for (const child of byParent.get(candidate.identity.pid) ?? []) {
-      pending.push({ identity: child, chain: [...candidate.chain, child] });
-    }
-  }
-  return candidates;
-}
-
 function hasRecordedChain(
   recorded: readonly OwnedProcessIdentity[],
   current: OwnedProcessIdentity | undefined,
@@ -176,6 +202,10 @@ function hasRecordedChain(
     }
   }
   return true;
+}
+
+function createdAfter(child: OwnedProcessIdentity, parent: OwnedProcessIdentity): boolean {
+  return child.createdAt >= parent.createdAt;
 }
 
 function candidateKey(identity: OwnedProcessIdentity): string {

@@ -110,6 +110,32 @@ describe('OwnedProcessTree', () => {
     expect(terminated).toEqual([leaf.pid, lateChild.pid, child.pid, root.pid]);
   });
 
+  it('discovers a child linked to retained root ancestry after root termination', async () => {
+    const root = processIdentity(45, 1, 'root');
+    const lateChild = processIdentity(46, root.pid, 'late-child');
+    const processes = new Map([[root.pid, root]]);
+    const terminated: number[] = [];
+    const tree = new OwnedProcessTree(root.pid, {
+      list: async () => [...processes.values()],
+      terminate: async (identity) => {
+        terminated.push(identity.pid);
+        processes.delete(identity.pid);
+        if (identity.pid === root.pid) processes.set(lateChild.pid, lateChild);
+      },
+    });
+    await tree.captureRoot();
+
+    await expect(tree.terminateVerified()).resolves.toEqual([root.pid, lateChild.pid]);
+    expect(terminated).toEqual([root.pid, lateChild.pid]);
+  });
+
+  it('fails cleanup explicitly when the root identity was absent at capture time', async () => {
+    const tree = new OwnedProcessTree(47, { list: async () => [] });
+
+    await expect(tree.captureRoot()).resolves.toBe(false);
+    await expect(tree.terminateVerified()).rejects.toThrow('was not captured before it exited');
+  });
+
   it('propagates a cleanup failure through the one shared cleanup task', async () => {
     const root = processIdentity(50, 1, 'root');
     let terminateCalls = 0;

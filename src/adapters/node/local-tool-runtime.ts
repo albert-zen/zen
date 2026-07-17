@@ -125,7 +125,8 @@ export class LocalToolRuntime implements ToolRuntime {
       ownership?: OwnedProcessTree;
     } = {};
     let terminationRequested = false;
-    const rootCapture: { task?: Promise<void> } = {};
+    let cleanupRequiresCapturedOwnership = false;
+    const rootCapture: { task?: Promise<boolean> } = {};
     let cleanupTask: Promise<void> | undefined;
     let cleanupFailure: unknown;
 
@@ -152,15 +153,22 @@ export class LocalToolRuntime implements ToolRuntime {
       if (timeout) clearTimeout(timeout);
       wakeConsumer();
     };
-    const startCleanup = (): Promise<void> => {
-      terminationRequested = true;
+    const startCleanup = (requiresCapturedOwnership: boolean): Promise<void> => {
+      terminationRequested ||= requiresCapturedOwnership;
+      cleanupRequiresCapturedOwnership ||= requiresCapturedOwnership;
       if (!processHolder.child) return Promise.resolve();
       cleanupTask ??= (async () => {
         if (process.platform !== 'win32') {
           processHolder.child?.kill('SIGTERM');
           return;
         }
-        await rootCapture.task;
+        const captured = await rootCapture.task;
+        if (!captured) {
+          if (cleanupRequiresCapturedOwnership) {
+            throw new Error('Shell cleanup could not capture the owned PowerShell root identity');
+          }
+          return;
+        }
         await processHolder.ownership?.terminateVerified();
       })();
       // Event handlers cannot await cleanup. Retain the error and wake the generator;
@@ -173,7 +181,7 @@ export class LocalToolRuntime implements ToolRuntime {
     };
     const cancel = () => {
       canceled = true;
-      startCleanup().catch(() => undefined);
+      startCleanup(true).catch(() => undefined);
     };
 
     // Register cancellation before spawn; the holder safely no-ops until ownership is captured.
@@ -191,10 +199,10 @@ export class LocalToolRuntime implements ToolRuntime {
       cleanupFailure ??= error;
       if (terminationRequested) finish();
     });
-    if (terminationRequested) startCleanup().catch(() => undefined);
+    if (terminationRequested) startCleanup(true).catch(() => undefined);
     const timeout = setTimeout(() => {
       timedOut = true;
-      startCleanup().catch(() => undefined);
+      startCleanup(true).catch(() => undefined);
     }, this.shellTimeoutMs);
 
     if (!child.stdout || !child.stderr) {
@@ -211,7 +219,7 @@ export class LocalToolRuntime implements ToolRuntime {
     child.on('close', (code) => {
       exitCode = code;
       finish();
-      startCleanup().catch(() => undefined);
+      startCleanup(false).catch(() => undefined);
     });
     try {
       while (!done || queue.length > 0) {
@@ -232,7 +240,7 @@ export class LocalToolRuntime implements ToolRuntime {
 
       if (!done) {
         try {
-          await startCleanup();
+          await startCleanup(true);
         } catch (error) {
           cleanupFailure ??= error;
         }

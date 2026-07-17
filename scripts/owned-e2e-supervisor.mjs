@@ -69,6 +69,7 @@ export async function cleanupOwnedManifest({
   for (let pass = 0; pass < maxPasses; pass += 1) {
     const initial = await manifest.read();
     const processes = await list();
+    assertRetainedAncestry(initial.entries, processes);
     const discovered = discoverOwnedCandidates(initial.marker, processes, initial.entries);
     if (discovered.length > 0) await manifest.upsertMany(initial.marker, discovered);
 
@@ -229,6 +230,7 @@ function makeEntry(current, marker, rootPid, role, processes) {
 function discoverOwnedCandidates(marker, processes, knownEntries) {
   if (!marker) return [];
   const known = new Set(knownEntries.map((entry) => entry.pid));
+  const anchors = new Map(knownEntries.map((entry) => [entry.pid, entry]));
   const children = new Map();
   for (const candidate of processes) {
     const siblings = children.get(candidate.parentPid) ?? [];
@@ -238,20 +240,76 @@ function discoverOwnedCandidates(marker, processes, knownEntries) {
   const discovered = new Map();
   const pending = processes
     .filter((candidate) => candidate.commandLine?.includes(marker))
-    .map((candidate) => ({ candidate, rootPid: candidate.pid }));
+    .map((candidate) => ({
+      candidate,
+      rootPid: candidate.pid,
+      parentChain: readParentChain(candidate, processes),
+    }));
+
+  for (const anchor of anchors.values()) {
+    for (const child of children.get(anchor.pid) ?? []) {
+      if (!createdAfter(child, anchor)) {
+        throw new Error(
+          `Refusing cleanup: PID ${child.pid} predates ancestry parent ${anchor.pid}`
+        );
+      }
+      pending.push({
+        candidate: child,
+        rootPid: anchor.rootPid,
+        parentChain: [parentIdentity(anchor), ...anchor.parentChain],
+      });
+    }
+  }
 
   while (pending.length > 0) {
-    const { candidate, rootPid } = pending.pop();
-    if (discovered.has(candidate.pid)) continue;
-    discovered.set(
-      candidate.pid,
-      makeEntry(candidate, marker, rootPid, 'owned-tree-candidate', processes)
-    );
-    for (const child of children.get(candidate.pid) ?? [])
-      pending.push({ candidate: child, rootPid });
+    const { candidate, rootPid, parentChain } = pending.pop();
+    const previous = discovered.get(candidate.pid);
+    if (previous && previous.parentChain.length >= parentChain.length) continue;
+    const entry = {
+      ...candidate,
+      marker,
+      rootPid,
+      role: candidate.commandLine?.includes(marker)
+        ? 'owned-tree-candidate'
+        : 'unverified-ancestry-descendant',
+      parentChain,
+    };
+    discovered.set(candidate.pid, entry);
+    for (const child of children.get(candidate.pid) ?? []) {
+      if (!createdAfter(child, candidate)) {
+        throw new Error(
+          `Refusing cleanup: PID ${child.pid} predates ancestry parent ${candidate.pid}`
+        );
+      }
+      pending.push({
+        candidate: child,
+        rootPid,
+        parentChain: [parentIdentity(entry), ...parentChain],
+      });
+    }
   }
 
   return [...discovered.values()].filter((candidate) => !known.has(candidate.pid));
+}
+
+function assertRetainedAncestry(entries, processes) {
+  const byPid = new Map(processes.map((candidate) => [candidate.pid, candidate]));
+  for (const entry of entries) {
+    const current = byPid.get(entry.pid);
+    if (current && !sameProcessIdentity(entry, current)) {
+      throw new Error(
+        `Refusing cleanup: ancestry PID ${entry.pid} failed exact identity validation`
+      );
+    }
+  }
+}
+
+function parentIdentity(entry) {
+  return { pid: entry.pid, createdAt: entry.createdAt };
+}
+
+function createdAfter(child, parent) {
+  return child.createdAt >= parent.createdAt;
 }
 
 function readParentChain(current, processes) {
@@ -290,6 +348,17 @@ async function validateEntry(entry, current, processes) {
     return { current: true, valid: false, reason: `PID ${entry.pid} parent chain changed` };
   }
   return { current: true, valid: true };
+}
+
+function sameProcessIdentity(entry, current) {
+  return Boolean(
+    current &&
+    current.pid === entry.pid &&
+    current.createdAt === entry.createdAt &&
+    current.parentPid === entry.parentPid &&
+    current.executable === entry.executable &&
+    current.commandLine === entry.commandLine
+  );
 }
 
 function hasStableParentChain(recorded, actual, processes) {

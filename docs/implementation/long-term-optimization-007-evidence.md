@@ -330,3 +330,44 @@ Issue: long-term-optimization-007 Establish release-quality local gates and brow
 Evidence ordering correction: the document contains pre-existing non-chronological append-only history. The preceding Round 10 correction is retained where the generic context inserted it; this terminal note records the final result without moving or rewriting any historical entry.
 Corrected exact-head result: after the root-close cleanup-path correction, focused ownership/runtime/supervisor/TUI tests passed (42 tests), and `npm run check` passed in 247.7 seconds: 34 test files/257 tests, all builds, kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` again reported `found 0 vulnerabilities`; `git diff --check` passed; the independent constructed-marker/path Win32 Node/Vite/Vitest/Playwright/Chromium scan again reported zero matches. No process was killed by this scan.
 Local tracker state: Rework pending fresh reviewer.
+
+## Codex Review Note
+
+Round: 6
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: user-supplied Review Round 6 on exact head `fafd920eefac25a5423219995b0601c034d8b827`
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-007`
+Base revision/diff scope: `fafd920eefac25a5423219995b0601c034d8b827`; retained ancestry and post-root-exit cleanup discovery.
+Standards Review blocking: cleanup discovery was anchored only in currently live roots or marked processes. When a recorded root exited, an unmarked late child linked by its historical parent PID could escape two empty scans and allow false manifest success.
+Standards Review non-blocking: none.
+Standards Review missing evidence: exact absent-root marked/unmarked reproductions, root-termination late-child behavior, explicit root-capture absence behavior, and fresh final gates.
+Spec Review blocking: retain creation-qualified ancestry through terminal cleanup; discover recursively from retained anchors even when absent; refuse root PID reuse; preserve unmarked descendants as evidence; distinguish short-lived normal completion from required cleanup with no captured root.
+Spec Review non-blocking: none.
+Spec Review missing evidence: focused ownership/runtime/supervisor tests, exact check, online audit, diff check, and independent final process scan.
+Local tracker state decision: Rework
+State decision reason: user accepted both P1 counterexamples; worker remains owner pending a fresh review.
+
+## Codex Worker Note
+
+Round: 11
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+PR URL: not used; this program remains local-branch/local-review with local-path `origin`.
+Base revision/diff scope: `fafd920eefac25a5423219995b0601c034d8b827` through the pending Round 6 fix commit.
+Summary of behavior delivered: cleanup now keeps a creation-qualified ancestry ledger through its terminal decision. The Node owned-process tree discovers recursively from every retained ancestry identity even after the root has exited, rejects a live PID whose identity differs from the ledger, and retains historical chains for post-root-exit revalidation. The E2E manifest supervisor applies the same ancestry-aware discovery: late marked descendants are persisted with inherited ancestry and individually terminated; late unmarked descendants are persisted as `unverified-ancestry-descendant` evidence and fail without termination. Local runtime root capture now returns an explicit boolean; normal close tolerates a root that completed before capture, while cancellation, timeout, or finalization requiring cleanup reports missing root ownership as a cleanup error.
+Final scope summary: Accepted Review Round 6 P1 ancestry races fixed; tracker remains Rework pending fresh reviewer.
+Changed files/modules: `src/adapters/node/owned-process-cleanup.ts`, `src/adapters/node/local-tool-runtime.ts`, `scripts/owned-e2e-supervisor.mjs`, focused ownership/supervisor tests, evidence, and tracker.
+Tests added/updated: 45 focused ownership/runtime/supervisor/TUI tests passed. Added deterministic root-termination late-child discovery, root-capture absence refusal, and absent-root/live-unmarked-child manifest reproduction with `terminated=[]`. Existing marked absent-root and root PID-reuse cases continue to pass.
+Acceptance criteria status: complete pending fresh review. No recursive `taskkill`, broad Node kill, coverage threshold/exclusion, or coverage-ignore pragma was added.
+Commands run and results: `npm run check` passed in 247.3 seconds: format/lint/typechecks/builds; 34 test files/260 tests; kernel 89.45 statements/81.71 branches/93.75 functions/89.91 lines; product 91.23/80.74/97.14/91.30; presentation 92.18/80.31/94.11/93.01; 2 Playwright E2E tests passed. Online `npm audit --include=dev --registry=https://registry.npmjs.org`: `found 0 vulnerabilities`. `git diff --check` passed. Independent constructed-marker/path Win32 Node/Vite/Vitest/Playwright/Chromium scan found zero matches; no process was terminated by that scan.
+Validation log paths: ignored coverage, test-results, Playwright artifacts, and PID manifests remain untracked and are not evidence artifacts.
+Required check status or local-check handoff reason: exact local check and online audit passed; local-path origin has no GitHub handoff. Fresh reviewer remains required by the tracker.
+Evidence links/paths: `docs/implementation/long-term-optimization-007-evidence.md`, `docs/implementation/long-term-optimization-tracker.md`.
+Decisions made: a missing historical parent is not permission to forget ownership. It remains an ancestry anchor unless its PID is live with a different identity, which fails safely. A normal already-completed process is distinct from a cancellation/timeout/finalizer cleanup request that cannot prove root ownership.
+Standards notes: Windows termination remains individual and identity-validated; no `taskkill /T` remains in tracked source or scripts.
+Reviewer notes: tracker intentionally remains Rework until a fresh reviewer accepts the new exact head.
+Open questions: none.
+Known residual risks: POSIX individual-process cleanup is structurally covered but not exercised on this Windows machine; an unmarked retained descendant intentionally leaves manifest evidence for operator diagnosis rather than being killed.
+Blocker or context escalation details: none.
