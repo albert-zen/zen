@@ -553,3 +553,25 @@ Summary of behavior delivered: initialization now creates a new immutable run-ID
 Tests added/updated: focused supervisor coverage now includes the accepted interleaving where an old writer pauses after creating its temporary event, a new initialization creates another generation, and the old writer resumes successfully into its own generation without contaminating the new run. It also covers crash-leftover generation reclamation, active-generation refusal, and preservation of unrelated ledger-root paths. The focused suite passed 28 tests; the real launcher/child/grandchild path passed 10 serial repetitions.
 Commands run and results: exact `npm run check` passed in 377.2 seconds: format, lint, both typechecks, builds, 34 test files/273 unit tests; kernel coverage 89.45 statements/81.71 branches/93.75 functions/89.91 lines, product 91.23/80.74/97.14/91.30, presentation 92.18/80.31/94.11/93.01, and 2 Playwright E2E tests. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; final attributable `zen-local`/`zen-e2e` process scan found zero matches and the supervisor temporary-residue scan found zero directories.
 Acceptance criteria status: complete for Worker Round 18, pending fresh review. Issue 007 remains Rework; no retry, lock, broad deletion, broad process kill, recursive taskkill, or coverage weakening was added.
+
+## Codex Review Note
+
+Round: 14 manager disposition
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewed branch and revision: `codex/long-term-optimization-007 @ aefb977660a52e46313912600f90b8e32fd586a3`
+Accepted: syntactically valid but invalid manifest schema must fail closed; generation metadata run ID must exactly match its enumerated directory; and reclamation requires a real generation-scoped writer/reclaimer exclusion protocol that protects an old paused writer while a new run initializes.
+Rejected: replacing marker substring detection with exact token matching. Owner markers intentionally appear in derived launcher/child/grandchild arguments, so substring matching remains required. Empty or malformed persisted markers are rejected by manifest and generation metadata validation instead.
+Reviewer edits: none.
+Local tracker state decision: Rework.
+
+## Codex Worker Note
+
+Round: 19
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+Implementation revision: `548a66d0e705ce185d4eca676aae92b9993b20c5` (`fix: lease owned ledger reclamation`).
+Summary of behavior delivered: global ownership manifest metadata now validates schema strictly and rejects invalid version, marker, run ID, or closed-state fields instead of treating them as empty. Reclamation validates generation `run.json` against its exact directory run ID before reading events or deleting anything; malformed or mismatched metadata remains in place and fails closed. Generation-scoped writer leases are created before temporary event writes and held through rename. Reclaimer leases prevent new writers after reclamation begins, while reclaimer discovery refuses active in-process or marker-bearing cross-process writer leases. Stale writer leases are removed only after their owner marker is absent from the supplied process snapshot. Derived marker substring matching remains unchanged.
+Tests added/updated: focused supervisor coverage passed 32 tests, including valid-but-invalid manifest schema refusal, metadata directory/run-ID mismatch retention, paused old writer/new initialization/reclaimer exclusion, successful exact-generation reclamation after writer release, and crash-leftover writer-lease handling. The real launcher/child/grandchild path passed 10 serial repetitions.
+Validation record: the requested single exact `npm run check` on `548a66d0e705ce185d4eca676aae92b9993b20c5` failed after 307 seconds. Format, lint, both typechecks, builds, 34 test files/277 unit tests, and kernel coverage passed; product coverage then timed out only in the pre-existing `test/local-tool-runtime.test.ts` basic shell-output test at its fixed 5-second budget. The failure was preserved without a blind full rerun. An isolated verbose execution of that exact test passed in 2.126 seconds, and no attributable owned process remained. Online `npm audit --include=dev --registry=https://registry.npmjs.org` reported `found 0 vulnerabilities`; `git diff --check` passed; final attributable `zen-local`/`zen-e2e` process scan found zero matches and the supervisor temporary-residue scan found zero directories.
+Acceptance criteria status: Round 19 implementation and focused stress validation are complete, but the exact aggregate gate is not accepted because of the recorded unrelated LocalToolRuntime timeout. Issue 007 remains Rework pending fresh review and a later authoritative gate decision. No timeout increase, retry workaround, broad deletion, broad process kill, recursive taskkill, or coverage weakening was added.
