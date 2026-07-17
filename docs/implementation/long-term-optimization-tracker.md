@@ -30,7 +30,7 @@ integration. Workers implement one issue only.
 | long-term-optimization-004 | Integrated | 002, 003     | `codex/long-term-optimization-004 @ 0a27953e64f8913a4e5362618ee7f0122fe2c712` |            4 |            4 | `docs/implementation/long-term-optimization-004-evidence.md` |
 | long-term-optimization-005 | Integrated | 002, 003     | `codex/long-term-optimization-005 @ 8654cf10b2bc0b7a884ca5105a4a8487740f4dfc` |            6 |            6 | `docs/implementation/long-term-optimization-005-evidence.md` |
 | long-term-optimization-006 | Integrated | 001-005      | `codex/long-term-optimization-006 @ b62873bd3aa216f56d870c072f651ab2dbcd074a` |            2 |            2 | `docs/implementation/long-term-optimization-006-evidence.md` |
-| long-term-optimization-007 | Rework     | 006          | `codex/long-term-optimization-007`                                            |            5 |            1 | `docs/implementation/long-term-optimization-007-evidence.md` |
+| long-term-optimization-007 | Rework     | 006          | `codex/long-term-optimization-007`                                            |            6 |            2 | `docs/implementation/long-term-optimization-007-evidence.md` |
 
 ## State Transitions
 

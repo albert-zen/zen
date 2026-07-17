@@ -63,23 +63,6 @@ Open questions: none.
 Known residual risks: POSIX process-group cleanup is implemented but validated here on Windows only. The local-path origin prevents GitHub PR/check handoff until a canonical remote is configured.
 Blocker or context escalation details: none.
 
-## Codex Review Note
-
-Round: 2
-Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
-Reviewer context: user-supplied Review Round 2 after Worker Round 5
-Reviewer edits: none
-Reviewed branch: `codex/long-term-optimization-007`
-Base revision/diff scope: `27accbb`; deterministic formatting proof and process-cleanup safety redesign.
-Standards Review blocking: The prior disposable-clone formatting claim was contradictory because four tracked blobs (`web/index.html`, `tsconfig.json`, `tsconfig.build.json`, and `tsconfig.acceptance.json`) still required an exact committed-blob and `core.autocrlf=true` clone verification. Windows cleanup still allowed `taskkill /T`, and manifest cleanup was not individually leaf-first revalidated.
-Standards Review non-blocking: none.
-Standards Review missing evidence: exact-head clean-clone format result, independently scanned post-run Windows process result, and full online audit.
-Spec Review blocking: Ownership records must include parent chains and exact marker/creation identity for every killable candidate; unverified live records must remain retained and fail safely. Actual Chromium marker propagation and missing-manifest orphan detection require behavioral proof.
-Spec Review non-blocking: none.
-Spec Review missing evidence: targeted supervisor cases for leaf-first individual kills, marker-required registration, root-exited marked descendants, PID reuse, unmarked descendants, independent orphan scan, and manifest-clear ordering.
-Local tracker state decision: Rework
-State decision reason: user accepted all Round 2 blocking findings and retained the same implementation owner until fresh review.
-
 ## Codex Worker Note
 
 Round: 5
@@ -143,4 +126,45 @@ Standards notes: no coverage threshold/exclusion weakening or coverage-ignore pr
 Reviewer notes: fresh review required after final evidence.
 Open questions: none.
 Known residual risks: POSIX group behavior remains structurally tested but Windows is the exercised platform.
+Blocker or context escalation details: none.
+
+## Codex Review Note
+
+Round: 2
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Reviewer context: user-supplied Review Round 2 after Worker Round 5
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-007`
+Base revision/diff scope: `27accbb`; deterministic formatting proof and process-cleanup safety redesign.
+Standards Review blocking: The prior disposable-clone formatting claim was contradictory because four tracked blobs (`web/index.html`, `tsconfig.json`, `tsconfig.build.json`, and `tsconfig.acceptance.json`) still required an exact committed-blob and `core.autocrlf=true` clone verification. Windows cleanup still allowed `taskkill /T`, and manifest cleanup was not individually leaf-first revalidated.
+Standards Review non-blocking: none.
+Standards Review missing evidence: exact-head clean-clone format result, independently scanned post-run Windows process result, and full online audit.
+Spec Review blocking: Ownership records must include parent chains and exact marker/creation identity for every killable candidate; unverified live records must remain retained and fail safely. Actual Chromium marker propagation and missing-manifest orphan detection require behavioral proof.
+Spec Review non-blocking: none.
+Spec Review missing evidence: targeted supervisor cases for leaf-first individual kills, marker-required registration, root-exited marked descendants, PID reuse, unmarked descendants, independent orphan scan, and manifest-clear ordering.
+Local tracker state decision: Rework
+State decision reason: user accepted all Round 2 blocking findings and retained the same implementation owner until fresh review.
+
+## Codex Worker Note
+
+Round: 6
+Issue: long-term-optimization-007 Establish release-quality local gates and browser workflow
+Local tracker state transition: Rework -> Rework
+Branch: `codex/long-term-optimization-007`
+PR URL: not used; this program remains local-branch/local-review with local-path `origin`.
+Base revision/diff scope: `27accbb` through `41f3a96de7225512f4b84937b04e5db4139d8f57`, plus this final evidence append.
+Summary of behavior delivered: Removed all Windows `taskkill /T` use. The supervisor installs cleanup handlers before spawning, immediately records verified spawned identities, persists marker-owned candidate parent chains, revalidates each identity and chain before individual leaf-first termination, and retains any unverified live record. Manifest deletion requires recorded identity absence plus an independent Win32 marker scan with zero matches. Chromium receives an observable launch marker; Vite and AppServer are in-process fixture resources closed explicitly by the fixture.
+Final scope summary: Round 2 rework is complete and remains Rework pending fresh review.
+Changed files/modules: supervisor, Playwright config/workflow/fixture, supervisor tests, evidence, and local tracker.
+Tests added/updated: 12 focused supervisor tests cover leaf-first exact kills, marker-required registration, root-exited descendant cleanup, PID reuse, unmarked process retention, independent orphan scans, manifest clear ordering, real failing child/grandchild, normal cleanup, SIGTERM cleanup, identity matching, and fixture close failure. The real E2E observes a live Chromium command line containing `--zen-e2e-owner=<marker>`.
+Acceptance criteria status: satisfied. Correction to prior history: Worker Round 4/5's disposable-clone formatting claim was insufficient. A new clone of `41f3a96` at `D:\desktop\zen-opt-007-round2-format-clone`, configured with `core.autocrlf=true`, reports LF index/worktree entries for `.gitattributes`, `web/index.html`, `tsconfig.json`, `tsconfig.build.json`, and `tsconfig.acceptance.json`; after `npm ci`, `npm run format:check` passes. This correction is appended without altering prior notes.
+Commands run and results: Prettier on the four cited files; `git diff --check`; focused supervisor tests (12 passed); focused lint/supervisor/Web UI tests (27 passed); real E2E (2 passed); clean-clone `npm ci` and format check passed; isolated presentation coverage rerun passed (33 files, 248 tests); online `npm audit --include=dev --registry=https://registry.npmjs.org` retried after a transient TLS failure and returned `found 0 vulnerabilities`; exact `npm run check` passed in 190.2 seconds with 248 Vitest tests, all builds, coverage groups, and 2 E2E tests. Each experimental E2E/check run and the final gate had a zero-result Win32 marker scan.
+Validation log paths: `D:\desktop\zen-opt-007-round2-format-clone`; ignored coverage, test-results, Playwright artifacts, and PID manifests are not evidence artifacts.
+Required check status or local-check handoff reason: exact local check and online audit passed; local-path origin has no GitHub handoff. Tracker stays Rework for fresh review.
+Evidence links/paths: `docs/implementation/long-term-optimization-007-evidence.md`, `docs/implementation/long-term-optimization-tracker.md`.
+Decisions made: Windows uses only `Stop-Process -Id <verified pid> -Force`, never a recursive tree kill. A candidate missing exact marker, creation identity, command fingerprint, executable, parent relation, or parent chain is not killable. Immediate registration failure uses the live `ChildProcess` handle.
+Standards notes: no coverage thresholds, exclusions, or coverage-ignore pragmas were weakened. Integration waits are event/deferred driven; the supervisor's 250 ms startup guard races the child's exit event.
+Reviewer notes: fresh review required; tracker intentionally remains Rework.
+Open questions: none.
+Known residual risks: POSIX individual `SIGTERM` behavior is structurally implemented but not exercised on this Windows worker. An abrupt machine kill before JavaScript handlers run can only be addressed by next-startup safe preflight.
 Blocker or context escalation details: none.
