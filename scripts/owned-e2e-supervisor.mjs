@@ -491,19 +491,16 @@ export function installCleanupHandlers(
   };
 }
 
+const activeWriterLeases = new Set();
+const activeReclaimerLeases = new Set();
+
 function createManifestStore(manifestPath, hooks = {}) {
   const ledgerRoot = `${manifestPath}.ledger`;
   return {
     async read() {
       try {
         const parsed = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-        if (
-          parsed?.version !== manifestVersion ||
-          typeof parsed.marker !== 'string' ||
-          typeof parsed.runId !== 'string' ||
-          !isRunId(parsed.runId)
-        )
-          return emptyManifest();
+        if (!isManifestMetadata(parsed)) throw new Error('Invalid ownership manifest schema');
         const events = await readLedgerEvents(
           ledgerGenerationDirectory(ledgerRoot, parsed.runId),
           parsed
@@ -548,9 +545,15 @@ function createManifestStore(manifestPath, hooks = {}) {
       const generationDirectory = ledgerGenerationDirectory(ledgerRoot, current.runId);
       const temporary = path.join(generationDirectory, `entry-${eventId}.tmp`);
       const final = path.join(generationDirectory, `entry-${eventId}.json`);
-      await fs.writeFile(temporary, `${JSON.stringify(event)}\n`);
-      await hooks.beforeAppendRename?.({ current, temporary, final });
-      await fs.rename(temporary, final);
+      const releaseLease = await acquireWriterLease(generationDirectory, current);
+      try {
+        await fs.writeFile(temporary, `${JSON.stringify(event)}\n`);
+        await hooks.beforeAppendRename?.({ current, temporary, final });
+        await fs.rename(temporary, final);
+      } finally {
+        await fs.rm(temporary, { force: true });
+        await releaseLease();
+      }
     },
     async upsertMany(marker, entries) {
       for (const entry of entries) await this.upsert(marker, entry);
@@ -590,21 +593,26 @@ function createManifestStore(manifestPath, hooks = {}) {
       for (const item of names) {
         if (!item.isDirectory() || !isRunId(item.name) || item.name === current.runId) continue;
         const generationDirectory = ledgerGenerationDirectory(ledgerRoot, item.name);
-        const generation = await readGenerationMetadata(generationDirectory);
-        if (!generation) continue;
-        const events = await readLedgerEvents(generationDirectory, generation);
-        const liveIdentity = events.some((event) =>
-          processes.some((candidate) => sameProcessIdentity(event.entry, candidate))
-        );
-        const liveMarker = processes.some((candidate) =>
-          candidate.commandLine?.includes(generation.marker)
-        );
-        if (liveIdentity || liveMarker) {
-          throw new Error(
-            `Refusing to reclaim active ownership ledger generation ${generation.runId}`
+        const generation = await readGenerationMetadata(generationDirectory, item.name);
+        const releaseLease = await acquireReclaimerLease(generationDirectory, generation);
+        try {
+          await removeStaleWriterLeases(generationDirectory, generation, processes);
+          const events = await readLedgerEvents(generationDirectory, generation);
+          const liveIdentity = events.some((event) =>
+            processes.some((candidate) => sameProcessIdentity(event.entry, candidate))
           );
+          const liveMarker = processes.some((candidate) =>
+            candidate.commandLine?.includes(generation.marker)
+          );
+          if (liveIdentity || liveMarker) {
+            throw new Error(
+              `Refusing to reclaim active ownership ledger generation ${generation.runId}`
+            );
+          }
+          await fs.rm(generationDirectory, { force: true, recursive: true });
+        } finally {
+          await releaseLease();
         }
-        await fs.rm(generationDirectory, { force: true, recursive: true });
       }
     },
   };
@@ -622,23 +630,137 @@ function generationMetadataPath(generationDirectory) {
   return path.join(generationDirectory, 'run.json');
 }
 
+function writerLeasePath(generationDirectory, leaseId) {
+  return path.join(generationDirectory, `writer-${leaseId}.lease`);
+}
+
+function reclaimerLeasePath(generationDirectory) {
+  return path.join(generationDirectory, 'reclaimer.lease');
+}
+
 function isRunId(value) {
   return /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
 }
 
-async function readGenerationMetadata(generationDirectory) {
+function isManifestMetadata(value) {
+  return (
+    value?.version === manifestVersion &&
+    typeof value.marker === 'string' &&
+    value.marker.length > 0 &&
+    typeof value.runId === 'string' &&
+    isRunId(value.runId) &&
+    typeof value.closed === 'boolean'
+  );
+}
+
+async function readGenerationMetadata(generationDirectory, expectedRunId) {
   try {
     const parsed = JSON.parse(
       await fs.readFile(generationMetadataPath(generationDirectory), 'utf8')
     );
-    return parsed?.version === manifestVersion &&
-      typeof parsed.marker === 'string' &&
-      typeof parsed.runId === 'string' &&
-      isRunId(parsed.runId)
-      ? parsed
-      : undefined;
+    if (!isManifestMetadata(parsed) || parsed.runId !== expectedRunId) {
+      throw new Error(`Invalid ownership ledger generation metadata for ${expectedRunId}`);
+    }
+    return parsed;
   } catch (cause) {
-    if (cause && typeof cause === 'object' && cause.code === 'ENOENT') return undefined;
+    if (cause && typeof cause === 'object' && cause.code === 'ENOENT') {
+      throw new Error(`Invalid ownership ledger generation metadata for ${expectedRunId}`, {
+        cause,
+      });
+    }
+    throw cause;
+  }
+}
+
+async function acquireWriterLease(generationDirectory, generation) {
+  const leasePath = writerLeasePath(generationDirectory, randomUUID());
+  const lease = {
+    version: manifestVersion,
+    marker: generation.marker,
+    runId: generation.runId,
+    ownerPid: process.pid,
+  };
+  await fs.writeFile(leasePath, `${JSON.stringify(lease)}\n`, { flag: 'wx' });
+  activeWriterLeases.add(leasePath);
+  try {
+    await fs.access(reclaimerLeasePath(generationDirectory));
+    throw new Error(`Refusing to append while generation ${generation.runId} is being reclaimed`);
+  } catch (cause) {
+    if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT')) {
+      await fs.rm(leasePath, { force: true });
+      activeWriterLeases.delete(leasePath);
+      throw cause;
+    }
+  }
+  return async () => {
+    activeWriterLeases.delete(leasePath);
+    await fs.rm(leasePath, { force: true });
+  };
+}
+
+async function acquireReclaimerLease(generationDirectory, generation) {
+  const leasePath = reclaimerLeasePath(generationDirectory);
+  const lease = {
+    version: manifestVersion,
+    marker: generation.marker,
+    runId: generation.runId,
+    ownerPid: process.pid,
+  };
+  try {
+    await fs.writeFile(leasePath, `${JSON.stringify(lease)}\n`, { flag: 'wx' });
+  } catch (cause) {
+    if (!(cause && typeof cause === 'object' && cause.code === 'EEXIST')) throw cause;
+    throw new Error(
+      `Refusing to reclaim generation ${generation.runId} with an active reclaimer lease`,
+      { cause }
+    );
+  }
+  activeReclaimerLeases.add(leasePath);
+  return async () => {
+    activeReclaimerLeases.delete(leasePath);
+    await fs.rm(leasePath, { force: true });
+  };
+}
+
+async function removeStaleWriterLeases(generationDirectory, generation, processes) {
+  const names = await fs.readdir(generationDirectory);
+  for (const name of names.filter((candidate) => /^writer-[0-9a-f-]+\.lease$/i.test(candidate))) {
+    const leasePath = path.join(generationDirectory, name);
+    if (activeWriterLeases.has(leasePath)) {
+      throw new Error(
+        `Refusing to reclaim generation ${generation.runId} with an active writer lease`
+      );
+    }
+    const lease = await readLease(leasePath, generation, 'writer');
+    const ownerLive = processes.some(
+      (candidate) =>
+        candidate.pid === lease.ownerPid && candidate.commandLine?.includes(generation.marker)
+    );
+    if (ownerLive) {
+      throw new Error(
+        `Refusing to reclaim generation ${generation.runId} with an active writer lease`
+      );
+    }
+    await fs.rm(leasePath, { force: true });
+  }
+}
+
+async function readLease(leasePath, generation, type) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(leasePath, 'utf8'));
+    if (
+      parsed?.version !== manifestVersion ||
+      parsed.marker !== generation.marker ||
+      parsed.runId !== generation.runId ||
+      !Number.isSafeInteger(parsed.ownerPid)
+    ) {
+      throw new Error(`Invalid ${type} lease for generation ${generation.runId}`);
+    }
+    return parsed;
+  } catch (cause) {
+    if (cause && typeof cause === 'object' && cause.code === 'ENOENT') {
+      throw new Error(`Missing ${type} lease for generation ${generation.runId}`, { cause });
+    }
     throw cause;
   }
 }
@@ -677,6 +799,7 @@ export const ownedE2eSupervisorTesting = {
   ledgerGenerationDirectory,
   generationMetadataPath,
   listProcesses,
+  manifestVersion,
 };
 
 function waitForChild(child) {
