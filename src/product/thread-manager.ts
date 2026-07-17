@@ -231,6 +231,7 @@ export class ThreadManager {
   }
 
   async shutdown(): Promise<void> {
+    const failures: unknown[] = [];
     this.closing = true;
     this.abandonPendingTurns();
     for (const pending of this.approvalBroker?.listPending() ?? []) {
@@ -242,7 +243,8 @@ export class ThreadManager {
     }
     if (this.fenced) {
       for (const active of this.activeTurns.values()) active.controller.abort();
-      await Promise.all([...this.turnTails.values()]);
+      collectRejected(await Promise.allSettled([...this.turnTails.values()]), failures);
+      if (failures.length > 0) throw new AggregateError(failures, 'ThreadManager shutdown failed');
       return;
     }
     const cancellations: Promise<TurnSnapshot>[] = [];
@@ -253,8 +255,9 @@ export class ThreadManager {
       }
       if (active) active.controller.abort();
     }
-    await Promise.all(cancellations);
-    await Promise.all([...this.turnTails.values()]);
+    collectRejected(await Promise.allSettled(cancellations), failures);
+    collectRejected(await Promise.allSettled([...this.turnTails.values()]), failures);
+    if (failures.length > 0) throw new AggregateError(failures, 'ThreadManager shutdown failed');
   }
 
   failStop(): void {
@@ -771,6 +774,20 @@ export class ThreadManager {
     await this.itemCommitBarrier?.(thread.id, item);
     return item;
   }
+}
+
+function collectRejected(
+  results: readonly PromiseSettledResult<unknown>[],
+  failures: unknown[]
+): void {
+  for (const result of results) {
+    if (result.status === 'rejected') failures.push(...flattenAggregateError(result.reason));
+  }
+}
+
+function flattenAggregateError(cause: unknown): readonly unknown[] {
+  if (!(cause instanceof AggregateError)) return [cause];
+  return cause.errors.flatMap((nested) => flattenAggregateError(nested));
 }
 
 function readStringPayloadField(payload: unknown, key: string): string | undefined {

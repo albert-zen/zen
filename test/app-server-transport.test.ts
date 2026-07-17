@@ -67,6 +67,78 @@ describe('App Server HTTP transport', () => {
     }
   });
 
+  it('quiesces new ingress and closes idempotently', async () => {
+    let requestCount = 0;
+    const appServer = {
+      async request() {
+        requestCount += 1;
+        return {
+          method: 'thread/list',
+          ok: true as const,
+          result: { threads: [], persistenceFailures: [] },
+        };
+      },
+      subscribe() {
+        return () => undefined;
+      },
+    } satisfies AppServerClient;
+    const transport = await serveAppServerHttpTransport({
+      appServer,
+      capability: TEST_CAPABILITY,
+    });
+
+    await transport.quiesce();
+    const response = await fetch(new URL('/request', transport.url), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${TEST_CAPABILITY}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ method: 'thread/list' }),
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'SERVER_QUIESCING' },
+    });
+    expect(requestCount).toBe(0);
+    const firstClose = transport.close();
+    const secondClose = transport.close();
+    expect(secondClose).toBe(firstClose);
+    await firstClose;
+  });
+
+  it('unsubscribes when transport startup cannot bind', async () => {
+    const occupied = await listenWithPlainTextResponse();
+    let subscriptionCount = 0;
+    let unsubscribeCount = 0;
+    const appServer = {
+      async request() {
+        throw new Error('unused');
+      },
+      subscribe() {
+        subscriptionCount += 1;
+        return () => {
+          unsubscribeCount += 1;
+        };
+      },
+    } satisfies AppServerClient;
+
+    try {
+      await expect(
+        serveAppServerHttpTransport({
+          appServer,
+          host: '127.0.0.1',
+          port: Number(new URL(occupied.url).port),
+        })
+      ).rejects.toMatchObject({ code: 'EADDRINUSE' });
+      expect(subscriptionCount).toBe(1);
+      expect(unsubscribeCount).toBe(1);
+    } finally {
+      await occupied.close();
+    }
+  });
+
   it('generates independent 256-bit capabilities by default', async () => {
     const first = await serveAppServerHttpTransport({ appServer: createServer() });
     const second = await serveAppServerHttpTransport({ appServer: createServer() });

@@ -24,6 +24,7 @@ export type AppServerHttpTransportOptions = {
 export type AppServerHttpTransport = {
   readonly capability: string;
   readonly url: string;
+  quiesce(): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -135,8 +136,21 @@ export async function serveAppServerHttpTransport(
     options.eventReplayLimit ?? 1_024
   );
   const eventStreams = new Map<ServerResponse, AppServerSubscription>();
+  let accepting = true;
   const server = createServer((request, response) => {
     void (async () => {
+      if (!accepting) {
+        sendJson(response, 503, {
+          method: 'transport/request',
+          ok: false,
+          error: {
+            code: 'SERVER_QUIESCING',
+            message: 'App Server transport is shutting down',
+          },
+        });
+        return;
+      }
+
       const url = new URL(request.url ?? '/', `http://${request.headers.host ?? host}`);
 
       if (
@@ -184,39 +198,87 @@ export async function serveAppServerHttpTransport(
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, host, () => {
-      server.off('error', reject);
-      resolve();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, host, () => {
+        server.off('error', reject);
+        resolve();
+      });
     });
-  });
+  } catch (cause) {
+    const cleanup = await Promise.allSettled([
+      Promise.resolve().then(() => notificationStream.close()),
+      ...(server.listening ? [closeHttpServer(server)] : []),
+    ]);
+    const cleanupFailures = cleanup.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : []
+    );
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError([cause, ...cleanupFailures], 'App Server transport startup failed', {
+        cause,
+      });
+    }
+    throw cause;
+  }
 
   const address = server.address() as AddressInfo;
+  let closePromise: Promise<void> | undefined;
+
+  const quiesce = (): Promise<void> => {
+    accepting = false;
+    return Promise.resolve();
+  };
+
+  const close = (): Promise<void> => {
+    closePromise ??= closeTransport();
+    return closePromise;
+  };
+
+  const closeTransport = async (): Promise<void> => {
+    await quiesce();
+    const streamTasks: Promise<void>[] = [];
+
+    for (const [streamResponse, unsubscribe] of eventStreams) {
+      streamTasks.push(Promise.resolve().then(() => unsubscribe()));
+      streamTasks.push(
+        Promise.resolve().then(() => {
+          streamResponse.end();
+        })
+      );
+    }
+    eventStreams.clear();
+    streamTasks.push(Promise.resolve().then(() => notificationStream.close()));
+
+    const streamResults = await Promise.allSettled(streamTasks);
+    const serverResult = await Promise.allSettled([closeHttpServer(server)]);
+    const failures = [...streamResults, ...serverResult].flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : []
+    );
+
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'App Server HTTP transport close failed');
+    }
+  };
 
   return {
     capability,
     url: `http://${formatUrlHost(address.address)}:${address.port}`,
-    async close() {
-      for (const [streamResponse, unsubscribe] of eventStreams) {
-        unsubscribe();
-        streamResponse.end();
-      }
-      eventStreams.clear();
-      notificationStream.close();
-
-      await new Promise<void>((resolve, reject) => {
-        server.close((cause) => {
-          if (cause) {
-            reject(cause);
-            return;
-          }
-
-          resolve();
-        });
-      });
-    },
+    quiesce,
+    close,
   };
+}
+
+function closeHttpServer(server: ReturnType<typeof createServer>): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.close((cause) => {
+      if (cause) {
+        reject(cause);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 function formatUrlHost(host: string): string {

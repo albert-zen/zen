@@ -248,10 +248,19 @@ export class AppServer implements AppServerClient {
   }
 
   private async closeAfterProducerBarrier(): Promise<void> {
+    const failures: unknown[] = [];
+
     try {
-      await this.threadManager.shutdown();
-      await Promise.all([...this.eventTails.values()]);
-      await this.threadJournal?.close();
+      await settleCloseStage([this.threadManager.shutdown()], failures);
+      await settleCloseStage([...this.eventTails.values()], failures);
+      await settleCloseStage(
+        this.threadJournal ? [Promise.resolve().then(() => this.threadJournal!.close())] : [],
+        failures
+      );
+
+      if (failures.length > 0) {
+        throw new AggregateError(failures, 'AppServer close failed');
+      }
     } finally {
       this.lifecycle = 'closed';
     }
@@ -393,6 +402,23 @@ class KnownThreadJournalCorruptionError extends Error {
   constructor(readonly failure: ThreadPersistenceFailure) {
     super(failure.message);
   }
+}
+
+async function settleCloseStage(
+  tasks: readonly Promise<unknown>[],
+  failures: unknown[]
+): Promise<void> {
+  const results = await Promise.allSettled(tasks);
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      failures.push(...flattenAggregateError(result.reason));
+    }
+  }
+}
+
+function flattenAggregateError(cause: unknown): readonly unknown[] {
+  if (!(cause instanceof AggregateError)) return [cause];
+  return cause.errors.flatMap((nested) => flattenAggregateError(nested));
 }
 
 class ThreadPersistenceOperationError extends Error {

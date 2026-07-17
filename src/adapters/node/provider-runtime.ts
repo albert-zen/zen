@@ -27,38 +27,49 @@ export async function createProviderBackedAppServer(
   options: ProviderBackedAppServerOptions = {}
 ): Promise<AppServer> {
   const threadJournal = options.threadJournal ?? new FileThreadJournal();
-  const replay = await threadJournal.replay();
-  const initialThreads = replay
-    .filter(
-      (result): result is Extract<typeof result, { type: 'success' }> => result.type === 'success'
-    )
-    .map((result) => toThreadSnapshot({ threadId: result.threadId, items: result.items }));
-  const persistenceFailures = replay.flatMap((result): readonly ThreadPersistenceFailure[] =>
-    result.type === 'failure'
-      ? [
-          {
-            code: 'THREAD_JOURNAL_CORRUPTION',
-            message: result.error.message,
-            path: result.path,
-            recordNumber: result.error.recordNumber,
-            threadId: result.threadId,
-          },
-        ]
-      : []
-  );
+  try {
+    const replay = await threadJournal.replay();
+    const initialThreads = replay
+      .filter(
+        (result): result is Extract<typeof result, { type: 'success' }> => result.type === 'success'
+      )
+      .map((result) => toThreadSnapshot({ threadId: result.threadId, items: result.items }));
+    const persistenceFailures = replay.flatMap((result): readonly ThreadPersistenceFailure[] =>
+      result.type === 'failure'
+        ? [
+            {
+              code: 'THREAD_JOURNAL_CORRUPTION',
+              message: result.error.message,
+              path: result.path,
+              recordNumber: result.error.recordNumber,
+              threadId: result.threadId,
+            },
+          ]
+        : []
+    );
 
-  const server = new AppServer({
-    ...options.appServerOptions,
-    threadJournal,
-    persistenceFailures,
-    threadManagerOptions: {
-      ...options.appServerOptions?.threadManagerOptions,
-      initialThreads,
-      runtimeFactory: createProviderThreadRuntimeFactory(options),
-    },
-  });
-
-  return server;
+    return new AppServer({
+      ...options.appServerOptions,
+      threadJournal,
+      persistenceFailures,
+      threadManagerOptions: {
+        ...options.appServerOptions?.threadManagerOptions,
+        initialThreads,
+        runtimeFactory: createProviderThreadRuntimeFactory(options),
+      },
+    });
+  } catch (cause) {
+    try {
+      await threadJournal.close();
+    } catch (closeCause) {
+      throw new AggregateError(
+        [cause, closeCause],
+        'Provider-backed AppServer startup and journal close failed',
+        { cause: closeCause }
+      );
+    }
+    throw cause;
+  }
 }
 
 export function createProviderThreadRuntimeFactory(
