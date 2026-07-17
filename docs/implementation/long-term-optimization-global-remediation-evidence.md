@@ -57,15 +57,15 @@ updates are made for this local remediation DAG.
 
 ### long-term-optimization-010: Aggregate production shutdown
 
-- [ ] `app-server-cli` and `web-dev-cli` own and invoke `AppServer.close()`.
+- [x] `app-server-cli` and `web-dev-cli` own and invoke `AppServer.close()`.
       Aggregate shutdown quiesces ingress, drains AppServer/thread/journal, then
       closes transport, Vite, and handoff resources.
-- [ ] Shutdown is idempotent and uses all-settled aggregation so one cleanup
+- [x] Shutdown is idempotent and uses all-settled aggregation so one cleanup
       failure cannot skip another and all failures are retained.
-- [ ] Composition wiring tests cover SIGINT, SIGTERM, startup failure, active
+- [x] Composition wiring tests cover SIGINT, SIGTERM, startup failure, active
       abort, pending approval decline, queued cancel, journal close, and exactly
       once closure of transport/Vite/handoff resources.
-- [ ] A throwing close still allows every other close and produces an aggregate
+- [x] A throwing close still allows every other close and produces an aggregate
       error. No `process.exit`, broad Node kill, or resource-ownership workaround
       is introduced.
 
@@ -171,3 +171,61 @@ full resnapshot; fresh review and final combined validation remain.
 Blocker or context escalation details: none. Every ISSUE-009 Node test command
 started and ended with zero attributable Node/Chromium processes and produced
 zero `zen-*` OS-temp delta. No process or temporary path was removed.
+
+## Codex Worker Note
+
+Round: 1
+Issue: long-term-optimization-010 Aggregate production shutdown
+Local tracker state transition: In Progress -> Agent Review
+Branch: `codex/long-term-optimization-global-remediation`
+PR URL: not configured; local-branch mode
+Base revision/diff scope: `79d35ff2f0d18fdd69a7132f2ce222f0446784c0..31ebc3b1a303cca923da924caa927bab61ed996d`
+Summary of behavior delivered: both production CLIs now delegate resource
+ownership to one injectable composition module. Shutdown first quiesces HTTP
+ingress, then closes AppServer so active/approval/queued work drains through the
+journal, then closes transport, Vite, and handoff resources with all-settled
+error aggregation and one idempotent close promise.
+Final scope summary: ISSUE-010 production composition roots, transport
+quiescence/startup cleanup, AppServer/ThreadManager drain aggregation, provider
+startup ownership, and focused tests only.
+Changed files/modules: App Server/Web CLI, HTTP transport, Node exports,
+production composition, provider runtime, product AppServer/ThreadManager, and
+`test/{app-server-transport,production-composition}.test.ts`.
+Tests added/updated: real AppServer SIGINT drain with active abort, queued
+cancellation, pending approval decline, and journal close; web SIGTERM and Vite
+close; startup failure cleanup; aggregate multi-error retention; repeated
+signal/close idempotency; transport 503 quiescence and bind-failure unsubscribe;
+journal close despite cancellation failure; replay-failure journal cleanup.
+Acceptance criteria status: all ISSUE-010 criteria pass; fresh review pending.
+Commands run and results: valid RED failed import because the new composition
+contract did not exist (one failed suite, 0 tests, 0.29s). The first behavioral
+run exposed a deterministic ready/listener race (3/5 timed out); the fix installs
+the signal waiter before publishing readiness without sleep or timeout changes.
+Final focused composition passed 7/7 in 1.60s; related composition, transport,
+and ThreadManager suite passed 3 files and 51/51 tests in 2.40s; core typecheck,
+touched-file ESLint, touched-file Prettier check, build, and `git diff --check`
+passed.
+Validation log paths: console evidence summarized here; no separate log file.
+Required check status or local-check handoff reason: targeted unit/integration,
+core type, lint, format, build, and diff gates pass. Full `npm run check`,
+coverage, browser E2E, Web build, and real launchers remain reserved for
+integration per manager instruction.
+Evidence links/paths:
+`docs/implementation/long-term-optimization-global-remediation-evidence.md`
+Decisions made: expose protocol-level transport `quiesce()` separately from
+idempotent `close()`; sequence all-settled phases while running peers within a
+phase together; flatten nested AggregateErrors into resource-labelled leaves;
+transfer journal ownership only after successful provider replay.
+Standards notes: ItemList remains the sole product state source. No timeout or
+quality gate was weakened, no `process.exit` or kill path was added, and both
+CLI files are thin owners over the same tested lifecycle contract.
+Reviewer notes: inspect phase ordering under simultaneous signals, startup
+failure after partial acquisition, nested AggregateError preservation, and HTTP
+quiescence with open SSE streams.
+Open questions: none.
+Known residual risks: fresh review and the final cross-issue combined validation
+remain.
+Blocker or context escalation details: none. Final ISSUE-010 Node test commands
+started and ended with zero attributable Node/browser processes and produced
+zero `zen-*` OS-temp delta from the 4582 historical-directory baseline. No
+process or temporary path was removed.

@@ -33,7 +33,7 @@ integration. Workers implement one issue only.
 | long-term-optimization-007 | Integrated   | 006                        | `codex/long-term-optimization-007 @ bf795d40a3669d925eb95933b484290709099e0c`                |           32 |           27 | `docs/implementation/long-term-optimization-007-evidence.md`                |
 | long-term-optimization-008 | Agent Review | 007                        | `codex/long-term-optimization-global-remediation @ ec52adbeaf77de2076ec42316edb324a6714cfe3` |            1 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
 | long-term-optimization-009 | Agent Review | 008 implementation         | `codex/long-term-optimization-global-remediation @ aae53237cb2761f0bed6d3f0a8fd58733e841ea1` |            1 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
-| long-term-optimization-010 | In Progress  | 009 resource serialization | `codex/long-term-optimization-global-remediation`                                            |            0 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| long-term-optimization-010 | Agent Review | 009 resource serialization | `codex/long-term-optimization-global-remediation @ 31ebc3b1a303cca923da924caa927bab61ed996d` |            1 |            0 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
 
 ## Global Remediation DAG
 
