@@ -1,6 +1,6 @@
 import type { Clock, IdGenerator } from '../kernel/index.js';
 import type { ThreadSnapshot } from './app-server-protocol.js';
-import type { ProjectPolicy, ProjectSnapshot } from './project-registry.js';
+import type { ProjectSnapshot } from './project-registry.js';
 import { ProjectManager } from './project-manager.js';
 import {
   InMemoryProjectCoordinationJournal,

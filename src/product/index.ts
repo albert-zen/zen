@@ -108,3 +108,17 @@ export {
   ProjectIdempotencyConflictError,
   ThreadMailbox,
 } from './project-coordinator.js';
+export type { WaitMode, WaitResult } from './wait-graph.js';
+export { WaitCycleError, WaitGraph } from './wait-graph.js';
+export type { AgentLease, AgentSchedulerEvent, AgentSchedulerOptions } from './agent-scheduler.js';
+export { AgentScheduler } from './agent-scheduler.js';
+export type {
+  ThreadCapability,
+  ThreadToolExecutionContext,
+  ThreadToolRuntimeOptions,
+} from './thread-tool-runtime.js';
+export {
+  ThreadToolError,
+  ThreadToolRuntime,
+  threadToolDefinitions,
+} from './thread-tool-runtime.js';
