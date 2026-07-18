@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { createProviderBackedAppServer } from './provider-runtime.js';
-import { serveAppServerHttpTransport } from './app-server-transport.js';
-import { runAppServerCliComposition } from './production-composition.js';
+import { join } from 'node:path';
+
+import { createAgentAppProductionComposition } from './agent-app-production.js';
+import { serveAgentAppHttpTransport } from './agent-app-transport.js';
+import { runAgentAppCliComposition } from './production-composition.js';
 import {
   cleanupPublishedAppServerClientHandoff,
   DEFAULT_APP_SERVER_HOST,
@@ -19,14 +21,16 @@ const allowRemoteBind = readRemoteBindOptIn(
   'ZEN_APP_SERVER_ALLOW_REMOTE'
 );
 
-await runAppServerCliComposition({
+await runAgentAppCliComposition({
   credentialMode,
   signalSource: process,
-  createAppServer: async () => await createProviderBackedAppServer({ cwd: process.cwd() }),
+  createAppServer: async () =>
+    (await createAgentAppProductionComposition({ appDataRoot: join(process.cwd(), '.zen') }))
+      .agentAppServer,
   createTransport: async (appServer, capability) =>
-    await serveAppServerHttpTransport({
+    await serveAgentAppHttpTransport({
       allowRemoteBind,
-      appServer,
+      agentAppServer: appServer as import('../../product/index.js').AgentAppClient,
       capability,
       host,
       port,

@@ -85,3 +85,29 @@
   check, coverage, and E2E were intentionally not run.
 - Hygiene census: the integration tests remove only their exact mkdtemp roots;
   no processes were terminated and no broad temporary-directory cleanup was run.
+
+## APP-005C
+
+- Public product, Node, and presentation entrypoints no longer export
+  `AppServerRequest`, `AppServerResponse`, `AppServerNotification`,
+  `AppServerClient`, `HttpAppServerClient`, or `serveAppServerHttpTransport`.
+  The legacy single-project runtime remains an unexported Node implementation.
+- Added `AgentAppTransportClient` for Node and
+  `BrowserAgentAppTransportClient` for browser HTTP/SSE, retaining the
+  existing request gate, replay, reconnect, and reset behavior behind the
+  project notification envelope.
+- Web bootstrap now lists projects through Agent App, selects an explicit
+  requested project when available, otherwise the first active project, and
+  creates a default project through `project/create` when none exists. Thread,
+  turn, and approval requests all carry `projectId`; subscriptions filter the
+  selected project before projection installation.
+- `zen-app-server` and `zen-web` now start the Agent App production
+  composition and Agent App HTTP transport. The legacy TUI build is isolated
+  behind a Node entrypoint and is not a network route.
+- Validation passed: main and Web TypeScript checks, ESLint, Prettier check,
+  serial Agent App server/node integration/module-boundary tests (3 files,
+  10 tests), core build, Web build, and `git diff --check`. Full check,
+  coverage, and E2E were not run.
+- Hygiene census: no process was terminated; the exact
+  `zen-agent-app-*` temporary-root census was empty after validation. No broad
+  temporary-directory cleanup was performed.

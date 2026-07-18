@@ -32,7 +32,7 @@ export {
   createWebUiState,
 } from './web-ui-state.js';
 export type {
-  BrowserAppServerTransportClientOptions,
+  BrowserAgentAppTransportClientOptions,
   WebUiClientListener,
   WebUiClientOptions,
   WebUiClientSnapshot,
@@ -42,7 +42,7 @@ export type {
   WebUiRuntimeMode,
 } from './web-ui-client.js';
 export {
-  BrowserAppServerTransportClient,
+  BrowserAgentAppTransportClient,
   WebUiClient,
   WebUiLifecycleCanceledError,
 } from './web-ui-client.js';

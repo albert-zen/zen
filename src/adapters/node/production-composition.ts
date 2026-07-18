@@ -1,10 +1,10 @@
-import type { AppServerClient } from '../../product/index.js';
+import type { AgentAppClient } from '../../product/index.js';
 import type {
   AppServerClientHandoff,
   AppServerCredentialMode,
   PublishedAppServerClientHandoff,
 } from './app-server-config.js';
-import type { AppServerHttpTransport } from './app-server-transport.js';
+import type { AgentAppHttpTransport } from './agent-app-transport.js';
 
 export type ShutdownTask = {
   readonly name: string;
@@ -58,18 +58,25 @@ export interface ShutdownSignalSource {
   off(event: 'message', listener: (message: unknown) => void): unknown;
 }
 
-export type OwnedAppServer = AppServerClient & {
+export type OwnedAgentAppServer = AgentAppClient & {
   close(): Promise<void>;
 };
 
-export type AppServerCliCompositionOptions = {
+type CompositionClient = {
+  request(request: never): Promise<unknown>;
+  subscribe(listener: never): () => void;
+};
+
+export type AgentAppCliCompositionOptions = {
   readonly credentialMode: AppServerCredentialMode;
   readonly signalSource: ShutdownSignalSource;
-  readonly createAppServer: () => Promise<OwnedAppServer>;
+  readonly createAppServer: () => Promise<
+    OwnedAgentAppServer | (CompositionClient & { close(): Promise<void> })
+  >;
   readonly createTransport: (
-    appServer: AppServerClient,
+    appServer: AgentAppClient | CompositionClient,
     capability: string | undefined
-  ) => Promise<AppServerHttpTransport>;
+  ) => Promise<AgentAppHttpTransport>;
   readonly publishHandoff?: (
     directory: string,
     handoff: AppServerClientHandoff
@@ -77,17 +84,18 @@ export type AppServerCliCompositionOptions = {
   readonly cleanupHandoff?: (handoff: PublishedAppServerClientHandoff) => Promise<void>;
   readonly onHandoffPublished?: (handoff: PublishedAppServerClientHandoff) => void | Promise<void>;
   readonly onListening?: (
-    transport: AppServerHttpTransport,
+    transport: AgentAppHttpTransport,
     handoff: PublishedAppServerClientHandoff | undefined
   ) => void | Promise<void>;
 };
 
-export async function runAppServerCliComposition(
-  options: AppServerCliCompositionOptions
+export async function runAgentAppCliComposition(
+  options: AgentAppCliCompositionOptions
 ): Promise<void> {
   assertHandoffDependencies(options);
-  let appServer: OwnedAppServer | undefined;
-  let transport: AppServerHttpTransport | undefined;
+  let appServer:
+    (OwnedAgentAppServer | (CompositionClient & { close(): Promise<void> })) | undefined;
+  let transport: AgentAppHttpTransport | undefined;
   let publishedHandoff: PublishedAppServerClientHandoff | undefined;
   let hasPrimaryFailure = false;
   let primaryFailure: unknown;
@@ -146,6 +154,9 @@ export async function runAppServerCliComposition(
   }
 }
 
+/** @internal Test-only name for historical shutdown characterization. */
+export const runAppServerCliComposition = runAgentAppCliComposition;
+
 export type ViteServerOwner = {
   listen(): Promise<unknown>;
   close(): Promise<void>;
@@ -154,18 +165,23 @@ export type ViteServerOwner = {
 
 export type WebDevCliCompositionOptions = {
   readonly signalSource: ShutdownSignalSource;
-  readonly createAppServer: () => Promise<OwnedAppServer>;
-  readonly createTransport: (appServer: AppServerClient) => Promise<AppServerHttpTransport>;
-  readonly createVite: (transport: AppServerHttpTransport) => Promise<ViteServerOwner>;
+  readonly createAppServer: () => Promise<
+    OwnedAgentAppServer | (CompositionClient & { close(): Promise<void> })
+  >;
+  readonly createTransport: (
+    appServer: AgentAppClient | CompositionClient
+  ) => Promise<AgentAppHttpTransport>;
+  readonly createVite: (transport: AgentAppHttpTransport) => Promise<ViteServerOwner>;
   readonly onListening?: (
-    transport: AppServerHttpTransport,
+    transport: AgentAppHttpTransport,
     vite: ViteServerOwner
   ) => void | Promise<void>;
 };
 
 export async function runWebDevCliComposition(options: WebDevCliCompositionOptions): Promise<void> {
-  let appServer: OwnedAppServer | undefined;
-  let transport: AppServerHttpTransport | undefined;
+  let appServer:
+    (OwnedAgentAppServer | (CompositionClient & { close(): Promise<void> })) | undefined;
+  let transport: AgentAppHttpTransport | undefined;
   let vite: ViteServerOwner | undefined;
   let hasPrimaryFailure = false;
   let primaryFailure: unknown;
@@ -297,7 +313,7 @@ function createShutdownSignalWaiter(
   };
 }
 
-function assertHandoffDependencies(options: AppServerCliCompositionOptions): void {
+function assertHandoffDependencies(options: AgentAppCliCompositionOptions): void {
   if (
     options.credentialMode.type === 'handoff' &&
     (!options.publishHandoff || !options.cleanupHandoff)

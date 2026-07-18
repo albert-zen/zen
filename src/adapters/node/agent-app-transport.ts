@@ -1,12 +1,22 @@
-import type { AgentAppNotificationEnvelope, AgentAppServer } from '../../product/index.js';
-import { parseAgentAppRequest } from '../../product/index.js';
 import type {
-  AppServerClient,
+  AgentAppClient,
+  AgentAppNotificationEnvelope,
+  AgentAppNotificationListener,
+  AgentAppRequest,
+  AgentAppResponse,
+  AgentAppSubscription,
+} from '../../product/index.js';
+import { parseAgentAppRequest } from '../../product/index.js';
+import type { AppServerClient } from '../../product/app-server.js';
+import type {
   AppServerNotification,
   AppServerResponse,
-} from '../../product/index.js';
+} from '../../product/app-server-protocol.js';
 import {
   serveAppServerHttpTransport,
+  createAppServerHttpProxy,
+  HttpAppServerClient,
+  type HttpAppServerClientOptions,
   type AppServerHttpTransport,
   type AppServerHttpTransportOptions,
 } from './app-server-transport.js';
@@ -20,20 +30,50 @@ export type AgentAppHttpTransportOptions = Omit<
   AppServerHttpTransportOptions,
   'appServer' | 'parseRequest'
 > & {
-  readonly agentAppServer: AgentAppServer;
+  readonly agentAppServer: AgentAppClient;
 };
 
 export type AgentAppHttpTransport = AppServerHttpTransport;
+
+export type AgentAppTransportClientOptions = HttpAppServerClientOptions;
+
+/**
+ * The legacy HTTP client supplies the transport lifecycle, replay, and reset
+ * gate.  This adapter makes the project envelope the only public payload.
+ */
+export class AgentAppTransportClient implements AgentAppClient {
+  private readonly client: HttpAppServerClient;
+
+  constructor(options: AgentAppTransportClientOptions) {
+    this.client = new HttpAppServerClient(options);
+  }
+
+  async request(request: AgentAppRequest): Promise<AgentAppResponse> {
+    return (await this.client.request(request)) as unknown as AgentAppResponse;
+  }
+
+  subscribe(listener: AgentAppNotificationListener): AgentAppSubscription {
+    return this.client.subscribe((notification) =>
+      listener(readAgentAppNotification(notification))
+    );
+  }
+}
+
+export function createAgentAppHttpProxy(target: string, capability: string) {
+  return createAppServerHttpProxy(target, capability);
+}
 
 export async function serveAgentAppHttpTransport(
   options: AgentAppHttpTransportOptions
 ): Promise<AgentAppHttpTransport> {
   const appServer: AppServerClient = {
     async request(request): Promise<AppServerResponse> {
-      return (await options.agentAppServer.request(request)) as unknown as AppServerResponse;
+      return (await options.agentAppServer.request(
+        request as AgentAppRequest
+      )) as unknown as AppServerResponse;
     },
     subscribe(listener) {
-      return options.agentAppServer.observe((notification) => {
+      return options.agentAppServer.subscribe((notification) => {
         listener(notification as unknown as AppServerNotification);
       });
     },

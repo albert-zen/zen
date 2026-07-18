@@ -1,8 +1,8 @@
 import readline from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import { AgentInteractionSession } from '../presentation/index.js';
-import type { AppServerClient } from '../product/index.js';
-import { createDemoAppServer } from '../product/index.js';
+import type { AppServerClient } from '../product/app-server.js';
+import { createDemoAppServer } from '../product/demo-runtime.js';
 import { renderSlashCommandHelp } from './slash-commands.js';
 import {
   renderTerminalStatus,

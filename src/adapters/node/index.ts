@@ -6,18 +6,16 @@ export {
   publishAppServerClientHandoff,
 } from './app-server-config.js';
 export type {
-  AppServerHttpTransport,
-  AppServerHttpTransportOptions,
-  HttpAppServerClientOptions,
-} from './app-server-transport.js';
+  AgentAppHttpTransport,
+  AgentAppHttpTransportOptions,
+  AgentAppTransportClientOptions,
+} from './agent-app-transport.js';
 export {
-  AppServerTransportError,
-  HttpAppServerClient,
-  serveAppServerHttpTransport,
-  createAppServerHttpProxy,
-} from './app-server-transport.js';
-export type { AgentAppHttpTransport, AgentAppHttpTransportOptions } from './agent-app-transport.js';
-export { readAgentAppNotification, serveAgentAppHttpTransport } from './agent-app-transport.js';
+  AgentAppTransportClient,
+  createAgentAppHttpProxy,
+  readAgentAppNotification,
+  serveAgentAppHttpTransport,
+} from './agent-app-transport.js';
 export type { FileThreadJournalOptions, ThreadJournalFileSystem } from './file-thread-journal.js';
 export { FileThreadJournal } from './file-thread-journal.js';
 export type {
@@ -34,7 +32,10 @@ export type {
 } from './file-project-coordination-journal.js';
 export { FileProjectCoordinationJournal } from './file-project-coordination-journal.js';
 export type { AgentAppProjectRuntimeFactoryOptions } from './agent-app-runtime.js';
-export { createAgentAppProjectRuntimeFactory, projectRuntimeDirectory } from './agent-app-runtime.js';
+export {
+  createAgentAppProjectRuntimeFactory,
+  projectRuntimeDirectory,
+} from './agent-app-runtime.js';
 export type {
   AgentAppProductionComposition,
   AgentAppServerConfiguration,
@@ -53,15 +54,12 @@ export {
 export type { OpenAiCompatibleModelGatewayOptions } from './openai-compatible-model-gateway.js';
 export { OpenAiCompatibleModelGateway } from './openai-compatible-model-gateway.js';
 export type { ProviderBackedAppServerOptions } from './provider-runtime.js';
-export {
-  createProviderBackedAppServer,
-  createProviderThreadRuntimeFactory,
-  replayThreadJournal,
-} from './provider-runtime.js';
+export { createProviderThreadRuntimeFactory, replayThreadJournal } from './provider-runtime.js';
+export { createLegacyTuiClient } from './tui-legacy-client.js';
 export type {
   AggregateProductionShutdownOptions,
-  AppServerCliCompositionOptions,
-  OwnedAppServer,
+  AgentAppCliCompositionOptions,
+  OwnedAgentAppServer,
   ShutdownSignalSource,
   ShutdownTask,
   ViteServerOwner,
@@ -70,6 +68,6 @@ export type {
 export {
   AggregateProductionShutdown,
   ProductionResourceShutdownError,
-  runAppServerCliComposition,
+  runAgentAppCliComposition,
   runWebDevCliComposition,
 } from './production-composition.js';

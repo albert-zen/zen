@@ -57,7 +57,7 @@ describe('Web UI client', () => {
           { status: 200 }
         );
       }) as typeof fetch,
-      createEventSource: (url) => {
+      createEventSource: (url: string) => {
         eventUrl = url;
         return eventSource;
       },
@@ -84,7 +84,7 @@ describe('Web UI client', () => {
     const client = new BrowserAppServerTransportClient({
       fetch: (async () => new Response('proxy unavailable', { status: 503 })) as typeof fetch,
       createEventSource: () => events,
-      onSubscriptionStatus: (status, error) => statuses.push({ status, error }),
+      onSubscriptionStatus: (status: string, error: unknown) => statuses.push({ status, error }),
     });
 
     await expect(client.request({ method: 'thread/list' })).rejects.toThrow(
@@ -149,7 +149,7 @@ describe('Web UI client', () => {
           JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
         );
       }) as typeof fetch,
-      onSubscriptionStatus: (status) => statuses.push(status),
+      onSubscriptionStatus: (status: string) => statuses.push(status),
     });
     const unsubscribe = client.subscribe(() => undefined);
     const pending = client.request({ method: 'thread/list' });
@@ -410,7 +410,7 @@ describe('Web UI client', () => {
     });
     const unsubscribe = client.subscribe((notification) => {
       if (notification.type === 'sync/reset') {
-        installedThreadIds.push(...notification.threads.map((thread) => thread.id));
+        installedThreadIds.push(...(notification.threads ?? []).map((thread) => thread.id));
       }
     });
     events.open();
@@ -567,7 +567,7 @@ describe('Web UI client', () => {
         fetchCalls += 1;
         return new Response('{}');
       }) as typeof fetch,
-      onSubscriptionStatus: (status) => statuses.push(status),
+      onSubscriptionStatus: (status: string) => statuses.push(status),
     });
     const unsubscribe = client.subscribe((notification) => notifications.push(notification.type));
     const pending = client.request({ method: 'thread/list' });

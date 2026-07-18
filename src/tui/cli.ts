@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createProviderBackedAppServer } from '../adapters/node/index.js';
+import { createLegacyTuiClient } from '../adapters/node/index.js';
 import { runTui } from './tui.js';
 
-await runTui({ client: await createProviderBackedAppServer({ cwd: process.cwd() }) });
+await runTui({ client: await createLegacyTuiClient(process.cwd()) });

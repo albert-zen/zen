@@ -1,3 +1,4 @@
+import type { AppServerNotification } from './app-server-protocol.js';
 import type { JsonObject, JsonValue, ProjectSnapshot } from './index.js';
 
 export type AgentAppErrorCode =
@@ -56,7 +57,15 @@ export type AgentAppNotificationEnvelope = {
   readonly projectId: string;
   readonly notification: AgentAppNotification;
 };
-export type AgentAppNotification = { readonly type: string; readonly [key: string]: unknown };
+export type AgentAppNotification = AppServerNotification;
+
+/** The only remotely consumable Agent App protocol surface. */
+export type AgentAppSubscription = () => void;
+export type AgentAppNotificationListener = (notification: AgentAppNotificationEnvelope) => void;
+export interface AgentAppClient {
+  request(request: AgentAppRequest): Promise<AgentAppResponse>;
+  subscribe(listener: AgentAppNotificationListener): AgentAppSubscription;
+}
 
 const projectScoped = new Set<AgentAppMethod>([
   'project/read',

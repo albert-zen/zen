@@ -9,7 +9,9 @@ import {
 } from './agent-app-protocol.js';
 export interface ProjectRuntime {
   request(request: AgentAppRequest): Promise<AgentAppResponse>;
-  observe(listener: (notification: AgentAppNotification) => void): () => void;
+  observe(
+    listener: (notification: { readonly type: string; readonly threadId?: string }) => void
+  ): () => void;
   close(): Promise<void>;
 }
 export type AgentAppServerOptions = {
@@ -25,6 +27,9 @@ export class AgentAppServer {
   observe(listener: (n: AgentAppNotificationEnvelope) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+  subscribe(listener: (n: AgentAppNotificationEnvelope) => void): () => void {
+    return this.observe(listener);
   }
   async request(value: unknown): Promise<AgentAppResponse> {
     if (this.closing) return error('SERVER_CLOSING', 'Agent App Server is closing');
@@ -95,7 +100,9 @@ export class AgentAppServer {
       this.runtimes.set(project.id, runtime);
       void runtime.then((r) =>
         r.observe((n) =>
-          this.listeners.forEach((l) => l({ projectId: project.id, notification: n }))
+          this.listeners.forEach((l) =>
+            l({ projectId: project.id, notification: n as AgentAppNotification })
+          )
         )
       );
     }

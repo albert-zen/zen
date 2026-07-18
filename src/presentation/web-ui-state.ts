@@ -1,5 +1,5 @@
 import type {
-  AppServerNotification,
+  AgentAppNotification,
   ApprovalDecision,
   JsonObject,
   ProtocolItem,
@@ -338,7 +338,7 @@ export class InteractionProjection {
     return true;
   }
 
-  apply(notification: AppServerNotification): boolean {
+  apply(notification: AgentAppNotification): boolean {
     if (notification.type === 'sync/reset') {
       const currentThreadId = this.snapshot.currentThread?.id;
       const thread = currentThreadId
@@ -594,7 +594,7 @@ export function createWebUiState(snapshot?: ThreadSnapshot): WebUiState {
 
 export function applyAppServerNotification(
   state: WebUiState,
-  notification: AppServerNotification
+  notification: AgentAppNotification
 ): WebUiState {
   const projection = projections.get(state) ?? new InteractionProjection(toSnapshot(state));
   projection.apply(notification);
@@ -608,9 +608,9 @@ function isForCurrentThread(state: WebUiState, threadId: string): boolean {
 }
 
 function isTurnNotification(
-  notification: AppServerNotification
+  notification: AgentAppNotification
 ): notification is Extract<
-  AppServerNotification,
+  AgentAppNotification,
   { readonly type: 'turn/started' | 'turn/completed' | 'turn/failed' }
 > {
   return (

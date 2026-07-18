@@ -1,10 +1,10 @@
 import type {
-  AppServerClient,
-  AppServerNotification,
-  AppServerNotificationListener,
-  AppServerSubscription,
+  AgentAppNotification,
+  JsonValue,
+  ProtocolItem,
+  ThreadSnapshot,
+  TurnSnapshot,
 } from '../product/index.js';
-import type { JsonValue, ProtocolItem, ThreadSnapshot, TurnSnapshot } from '../product/index.js';
 import {
   InteractionProjection,
   type ReadonlyInteractionSequence,
@@ -13,7 +13,26 @@ import {
 } from './web-ui-state.js';
 
 export type AgentInteractionSessionOptions = {
-  readonly client: AppServerClient;
+  readonly client: {
+    request(request: never): Promise<unknown>;
+    subscribe(listener: never): () => void;
+  };
+};
+
+type LegacyInteractionClient = {
+  request(request: unknown): Promise<LegacyInteractionResponse>;
+  subscribe(listener: (notification: AgentAppNotification) => void): () => void;
+};
+
+type LegacyInteractionResponse = {
+  readonly ok: boolean;
+  readonly method: string;
+  readonly result: {
+    readonly threads: readonly ThreadSnapshot[];
+    readonly thread: ThreadSnapshot;
+    readonly turn: TurnSnapshot;
+  };
+  readonly error: { readonly message: string };
 };
 
 export class AgentInteractionSessionDisposedError extends Error {
@@ -81,14 +100,18 @@ type CompletionTerminal =
 
 export class AgentInteractionSession {
   private readonly projection = new InteractionProjection();
-  private subscription?: AppServerSubscription;
+  private subscription?: () => void;
   private readonly listeners: AgentInteractionSessionListener[] = [];
   private readonly completionWaiters = new Map<string, Set<CompletionWaiter>>();
   private readonly earlyCompletionTerminals = new Map<string, Map<string, CompletionTerminal>>();
   private disposed = false;
   private snapshotHandoff?: SessionSnapshotHandoff;
 
-  constructor(private readonly options: AgentInteractionSessionOptions) {}
+  private readonly client: LegacyInteractionClient;
+
+  constructor(options: AgentInteractionSessionOptions) {
+    this.client = options.client as unknown as LegacyInteractionClient;
+  }
 
   getSnapshot(): AgentInteractionSnapshot {
     const state = this.projection.getSnapshot();
@@ -112,7 +135,7 @@ export class AgentInteractionSession {
     this.subscribeOnce();
     const handoff = this.beginSnapshotHandoff();
     try {
-      const list = await this.options.client.request({ method: 'thread/list' });
+      const list = await this.client.request({ method: 'thread/list' });
       this.assertActive();
 
       if (list.ok && list.method === 'thread/list' && list.result.threads.length > 0) {
@@ -120,7 +143,7 @@ export class AgentInteractionSession {
         return this.getSnapshot();
       }
 
-      const started = await this.options.client.request({ method: 'thread/start' });
+      const started = await this.client.request({ method: 'thread/start' });
       this.assertActive();
       if (!started.ok || started.method !== 'thread/start') {
         throw new Error(started.ok ? 'Unexpected thread/start response' : started.error.message);
@@ -138,7 +161,7 @@ export class AgentInteractionSession {
     this.subscribeOnce();
     const handoff = this.beginSnapshotHandoff();
     try {
-      const response = await this.options.client.request({ method: 'thread/start' });
+      const response = await this.client.request({ method: 'thread/start' });
       this.assertActive();
 
       if (!response.ok || response.method !== 'thread/start') {
@@ -155,7 +178,7 @@ export class AgentInteractionSession {
 
   async listThreads(): Promise<readonly AgentThreadListEntry[]> {
     this.assertActive();
-    const response = await this.options.client.request({ method: 'thread/list' });
+    const response = await this.client.request({ method: 'thread/list' });
     this.assertActive();
 
     if (!response.ok || response.method !== 'thread/list') {
@@ -170,7 +193,7 @@ export class AgentInteractionSession {
     this.subscribeOnce();
     const handoff = this.beginSnapshotHandoff();
     try {
-      const response = await this.options.client.request({
+      const response = await this.client.request({
         method: 'thread/read',
         params: {
           threadId,
@@ -196,7 +219,7 @@ export class AgentInteractionSession {
   async interrupt(): Promise<AgentInteractionSnapshot> {
     this.assertActive();
     const currentThread = await this.ensureThread();
-    const response = await this.options.client.request({
+    const response = await this.client.request({
       method: 'turn/interrupt',
       params: {
         threadId: currentThread.id,
@@ -218,7 +241,7 @@ export class AgentInteractionSession {
     readonly decision: 'approveOnce' | 'decline';
   }): Promise<void> {
     this.assertActive();
-    const response = await this.options.client.request({
+    const response = await this.client.request({
       method: 'approval/resolve',
       params: input,
     });
@@ -236,7 +259,7 @@ export class AgentInteractionSession {
     const currentThread = await this.ensureThread();
     const completion = this.createCompletionWaiter(currentThread.id);
     try {
-      const response = await this.options.client.request({
+      const response = await this.client.request({
         method: 'turn/start',
         params: {
           threadId: currentThread.id,
@@ -271,7 +294,7 @@ export class AgentInteractionSession {
 
     const completion = this.createCompletionWaiter(recoverableTurn.threadId);
     try {
-      const response = await this.options.client.request({
+      const response = await this.client.request({
         method: 'turn/retry',
         params: {
           threadId: recoverableTurn.threadId,
@@ -350,7 +373,7 @@ export class AgentInteractionSession {
       return;
     }
 
-    const listener: AppServerNotificationListener = (notification) => {
+    const listener = (notification: AgentAppNotification) => {
       if (this.disposed) return;
       if (this.snapshotHandoff) {
         this.snapshotHandoff.notifications.push(notification);
@@ -359,10 +382,10 @@ export class AgentInteractionSession {
       this.applyNotification(notification);
     };
 
-    this.subscription = this.options.client.subscribe(listener);
+    this.subscription = this.client.subscribe(listener);
   }
 
-  private applyNotification(notification: Parameters<AppServerNotificationListener>[0]): void {
+  private applyNotification(notification: AgentAppNotification): void {
     const previousThreadId = this.projection.getSnapshot().currentThread?.id;
     const previousRows = this.projection.getSnapshot().timelineRows;
     const previousRowKeys = new Set(previousRows.map(toTimelineRowKey));
@@ -583,7 +606,7 @@ export class AgentInteractionSession {
 }
 
 type SessionSnapshotHandoff = {
-  readonly notifications: AppServerNotification[];
+  readonly notifications: AgentAppNotification[];
 };
 
 function toTimelineRowKey(row: TimelineRow): string {

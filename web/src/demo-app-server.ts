@@ -1,19 +1,22 @@
 import type {
-  AppServerClient,
-  AppServerNotificationListener,
-  AppServerSubscription,
-  AppServerRequestInput,
+  AgentAppClient,
+  AgentAppNotification,
+  AgentAppNotificationListener,
+  AgentAppRequest,
+  AgentAppResponse,
+  AgentAppSubscription,
 } from '#zen/product';
-import type { AppServerResponse, ProtocolItem, ThreadSnapshot, TurnSnapshot } from '#zen/product';
+import type { ProtocolItem, ThreadSnapshot, TurnSnapshot } from '#zen/product';
 
-export function createBrowserDemoAppServer(): AppServerClient {
+export function createBrowserDemoAppServer(): AgentAppClient {
+  const project = { id: 'demo-project', name: 'Demo project', rootPath: '/demo', status: 'active' };
   let activeThreadId: string | undefined;
   let nextThread = 1;
   let nextRun = 1;
   let nextTurn = 1;
   let nextItem = 1;
   const threadsById = new Map<string, MutableThread>();
-  const listeners = new Set<AppServerNotificationListener>();
+  const listeners = new Set<AgentAppNotificationListener>();
 
   seedThread(
     'Map the item-first kernel',
@@ -25,14 +28,34 @@ export function createBrowserDemoAppServer(): AppServerClient {
   );
 
   return {
-    subscribe(listener): AppServerSubscription {
+    subscribe(listener): AgentAppSubscription {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    async request(request: AppServerRequestInput): Promise<AppServerResponse> {
-      if (request.method === 'thread/start') {
+    async request(request: AgentAppRequest): Promise<AgentAppResponse> {
+      if (request.method === 'project/list') {
+        return { method: 'project/list', ok: true, result: { projects: [project] } };
+      }
+      if (request.method === 'project/create') {
+        return { method: 'project/create', ok: true, result: { project } };
+      }
+      if (!request.method.startsWith('project/') && request.params.projectId !== project.id) {
+        return {
+          method: request.method,
+          ok: false,
+          error: { code: 'PROJECT_NOT_FOUND', message: 'Unknown demo project' },
+        };
+      }
+      if (
+        request.method === 'project/read' ||
+        request.method === 'project/update' ||
+        request.method === 'project/archive'
+      ) {
+        return { method: request.method, ok: true, result: { project } };
+      }
+      if (request.method === 'thread/create') {
         const thread = startThread();
-        return { method: 'thread/start', ok: true, result: { thread: snapshot(thread.id) } };
+        return { method: 'thread/create', ok: true, result: { thread: snapshot(thread.id) } };
       }
 
       if (request.method === 'thread/list') {
@@ -87,7 +110,7 @@ export function createBrowserDemoAppServer(): AppServerClient {
       return {
         method: request.method,
         ok: false,
-        error: { code: 'UNKNOWN_METHOD', message: `Unknown method ${request.method}` },
+        error: { code: 'INVALID_REQUEST', message: `Unknown method ${request.method}` },
       };
     },
   };
@@ -235,8 +258,10 @@ export function createBrowserDemoAppServer(): AppServerClient {
     };
   }
 
-  function emit(notification: Parameters<AppServerNotificationListener>[0]): void {
-    listeners.forEach((listener) => listener(notification));
+  function emit(notification: { readonly type: string; readonly [key: string]: unknown }): void {
+    listeners.forEach((listener) =>
+      listener({ projectId: project.id, notification: notification as AgentAppNotification })
+    );
   }
 }
 

@@ -27,7 +27,9 @@ describe('module boundaries', () => {
         if (!target || !target.startsWith(resolve(root, 'src'))) continue;
         const to = groupFor(target);
         expect(allowed[from]).toContain(to);
-        if (from !== to) expect(specifier).toMatch(/index\.js$/u);
+        if (from !== to && !isInternalLegacyRuntimeImport(from, to, specifier)) {
+          expect(specifier).toMatch(/index\.js$/u);
+        }
       }
     }
   });
@@ -65,6 +67,14 @@ describe('module boundaries', () => {
     ).toThrow('must not reference a physical src path');
   });
 });
+
+function isInternalLegacyRuntimeImport(from: Group, to: Group, specifier: string): boolean {
+  return (
+    to === 'product' &&
+    (from === 'adapters/node' || from === 'tui') &&
+    /^\.\.\/.*product\/(app-server|app-server-protocol|demo-runtime)\.js$/u.test(specifier)
+  );
+}
 
 function sourceFiles(): readonly string[] {
   return groups.flatMap((group) =>

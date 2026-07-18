@@ -1,16 +1,4 @@
 export type {
-  AppServerClient,
-  AppServerNotificationListener,
-  AppServerOptions,
-  AppServerRequestInput,
-  AppServerSubscription,
-} from './app-server.js';
-export { AppServer } from './app-server.js';
-export type {
-  AppServerError,
-  AppServerNotification,
-  AppServerRequest,
-  AppServerResponse,
   ApprovalDecision,
   JsonObject,
   JsonPrimitive,
@@ -45,8 +33,6 @@ export {
   toPublicApprovalDecision,
   toToolApprovalRequest,
 } from './approval-runtime.js';
-export type { DemoAppServerOptions } from './demo-runtime.js';
-export { createDemoAppServer, createDemoThreadRuntime } from './demo-runtime.js';
 export { DEFAULT_ZEN_SYSTEM_PROMPT } from './system-prompt.js';
 export type {
   ThreadManagerEvent,
@@ -123,13 +109,16 @@ export {
   threadToolDefinitions,
 } from './thread-tool-runtime.js';
 export type {
+  AgentAppClient,
   AgentAppError,
   AgentAppErrorCode,
   AgentAppMethod,
   AgentAppNotification,
   AgentAppNotificationEnvelope,
+  AgentAppNotificationListener,
   AgentAppRequest,
   AgentAppResponse,
+  AgentAppSubscription,
 } from './agent-app-protocol.js';
 export { parseAgentAppRequest } from './agent-app-protocol.js';
 export type { AgentAppServerOptions, ProjectRuntime } from './agent-app-server.js';

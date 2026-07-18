@@ -184,7 +184,7 @@ describe('dogfood acceptance scenario', () => {
         evidencePath,
         fixtureRoot,
         now: () => new Date('2026-06-05T00:00:00.000Z'),
-        createAppServer: ({ fixturePath }) => {
+        createAppServer: ({ fixturePath }: { readonly fixturePath: string }) => {
           const approvalBroker = new ApprovalBroker();
           const server = new AppServer({
             approvalBroker,

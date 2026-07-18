@@ -3,7 +3,8 @@ import {
   type AgentRecoverableTurn,
   type AgentThreadListEntry,
 } from '../presentation/index.js';
-import type { AppServerClient, ThreadSnapshot } from '../product/index.js';
+import type { AppServerClient } from '../product/app-server.js';
+import type { ThreadSnapshot } from '../product/app-server-protocol.js';
 import { renderSlashCommandHelp, slashSuggestions, type SlashCommand } from './slash-commands.js';
 import {
   Container,

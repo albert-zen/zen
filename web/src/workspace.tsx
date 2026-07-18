@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Plus, RefreshCw, Send, Square, RotateCcw } from 'lucide-react';
 
 import {
-  BrowserAppServerTransportClient,
+  BrowserAgentAppTransportClient,
   WebUiClient,
   type WebUiClientSnapshot,
   type WebUiConnectionState,
@@ -487,7 +487,7 @@ function createWebClient(
     client:
       mode === 'demo'
         ? createBrowserDemoAppServer()
-        : new BrowserAppServerTransportClient({
+        : new BrowserAgentAppTransportClient({
             onSubscriptionStatus,
           }),
   });

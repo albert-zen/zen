@@ -2,7 +2,6 @@ import { join, relative, resolve, sep } from 'node:path';
 
 import {
   AgentScheduler,
-  AppServer,
   DEFAULT_ZEN_SYSTEM_PROMPT,
   ProjectCoordinator,
   ThreadManager,
@@ -15,6 +14,7 @@ import {
   type ProjectSnapshot,
   type ThreadRuntimeFactory,
 } from '../../product/index.js';
+import { AppServer } from '../../product/app-server.js';
 import {
   CompositeToolRuntime,
   type ModelGateway,

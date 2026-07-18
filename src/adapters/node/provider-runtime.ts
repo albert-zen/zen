@@ -1,13 +1,12 @@
 import {
-  AppServer,
   DEFAULT_ZEN_SYSTEM_PROMPT,
   toThreadSnapshot,
-  type AppServerOptions,
   type ThreadJournal,
   type ThreadPersistenceFailure,
   type ThreadRuntime,
   type ThreadRuntimeFactory,
 } from '../../product/index.js';
+import { AppServer, type AppServerOptions } from '../../product/app-server.js';
 import { LocalToolRuntime, localToolDefinitions } from './local-tool-runtime.js';
 import {
   loadModelProviderConfig,

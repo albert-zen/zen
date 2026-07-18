@@ -1,15 +1,13 @@
 import type {
-  AppServerClient,
-  AppServerNotificationListener,
-  AppServerRequestInput,
-  AppServerSubscription,
+  AgentAppClient,
+  AgentAppNotification,
+  AgentAppNotificationEnvelope,
+  AgentAppNotificationListener,
+  AgentAppRequest,
+  AgentAppResponse,
+  AgentAppSubscription,
 } from '../product/index.js';
-import type {
-  AppServerNotification,
-  AppServerResponse,
-  ApprovalDecision,
-  ThreadSnapshot,
-} from '../product/index.js';
+import type { ApprovalDecision, ThreadSnapshot } from '../product/index.js';
 import { InteractionProjection, type WebUiState } from './web-ui-state.js';
 
 export type WebUiRuntimeMode = 'real' | 'demo';
@@ -29,8 +27,14 @@ export type WebUiClientSnapshot = {
 };
 
 export type WebUiClientOptions = {
-  readonly client: AppServerClient;
+  /** Structural to keep legacy in-process characterization fixtures private. */
+  readonly client: {
+    request(request: never): Promise<unknown>;
+    subscribe(listener: never): () => void;
+  };
   readonly mode?: WebUiRuntimeMode;
+  readonly projectRoot?: string;
+  readonly projectName?: string;
 };
 
 export type WebUiClientListener = (snapshot: WebUiClientSnapshot) => void;
@@ -43,9 +47,12 @@ export class WebUiLifecycleCanceledError extends Error {
 }
 
 export class WebUiClient {
-  private readonly client: AppServerClient;
+  private readonly client: AgentAppClient;
+  private readonly projectRoot: string;
+  private readonly projectName: string;
+  private selectedProjectId?: string;
   private readonly listeners = new Set<WebUiClientListener>();
-  private unsubscribeFromServer?: AppServerSubscription;
+  private unsubscribeFromServer?: AgentAppSubscription;
   private readonly projection = new InteractionProjection();
   private connection: WebUiConnectionState;
   private snapshot: WebUiClientSnapshot;
@@ -53,7 +60,9 @@ export class WebUiClient {
   private snapshotHandoff?: SnapshotHandoff;
 
   constructor(options: WebUiClientOptions) {
-    this.client = options.client;
+    this.client = options.client as AgentAppClient;
+    this.projectRoot = options.projectRoot ?? '/';
+    this.projectName = options.projectName ?? 'Zen project';
     this.connection = {
       status: 'disconnected',
       mode: options.mode ?? 'real',
@@ -65,7 +74,7 @@ export class WebUiClient {
     return this.snapshot;
   }
 
-  subscribe(listener: WebUiClientListener): AppServerSubscription {
+  subscribe(listener: WebUiClientListener): AgentAppSubscription {
     this.listeners.add(listener);
     listener(this.getSnapshot());
 
@@ -74,14 +83,17 @@ export class WebUiClient {
     };
   }
 
-  async connect(options: { readonly threadId?: string } = {}): Promise<void> {
+  async connect(
+    options: { readonly threadId?: string; readonly projectId?: string } = {}
+  ): Promise<void> {
     const generation = ++this.lifecycleGeneration;
     this.disconnectFromServerOnly();
     this.setConnection({ status: 'connecting' });
+    const projectId = await this.selectProject(generation, options.projectId);
     const handoff = this.beginSnapshotHandoff(generation);
     this.unsubscribeFromServer = this.client.subscribe((notification) => {
-      if (generation === this.lifecycleGeneration) {
-        this.receiveNotification(notification);
+      if (generation === this.lifecycleGeneration && notification.projectId === projectId) {
+        this.receiveNotification(notification.notification);
       }
     });
 
@@ -89,9 +101,12 @@ export class WebUiClient {
       const thread = await this.requestThread(
         generation,
         options.threadId
-          ? { method: 'thread/read', params: { threadId: options.threadId } }
-          : { method: 'thread/start' },
-        options.threadId ? 'thread/read' : 'thread/start'
+          ? { method: 'thread/read', params: { projectId, threadId: options.threadId } }
+          : {
+              method: 'thread/create',
+              params: { projectId, idempotencyKey: this.idempotencyKey() },
+            },
+        options.threadId ? 'thread/read' : 'thread/create'
       );
       const projectionChanged = this.installSnapshot(thread, handoff);
       const connectionChanged = this.deriveConnectionFromProjection();
@@ -120,8 +135,11 @@ export class WebUiClient {
     try {
       const thread = await this.requestThread(
         this.lifecycleGeneration,
-        { method: 'thread/start' },
-        'thread/start'
+        {
+          method: 'thread/create',
+          params: { projectId: this.requireProjectId(), idempotencyKey: this.idempotencyKey() },
+        },
+        'thread/create'
       );
       const projectionChanged = this.installSnapshot(thread, handoff);
       const connectionChanged = this.deriveConnectionFromProjection();
@@ -135,10 +153,13 @@ export class WebUiClient {
   }
 
   async listThreads(): Promise<readonly ThreadSnapshot[]> {
-    const response = await this.client.request({ method: 'thread/list' });
+    const response = await this.client.request({
+      method: 'thread/list',
+      params: { projectId: this.requireProjectId() },
+    });
 
     if (response.ok && response.method === 'thread/list') {
-      return response.result.threads;
+      return response.result.threads as readonly ThreadSnapshot[];
     }
 
     if (!response.ok) {
@@ -153,7 +174,7 @@ export class WebUiClient {
     try {
       const thread = await this.requestThread(
         this.lifecycleGeneration,
-        { method: 'thread/read', params: { threadId } },
+        { method: 'thread/read', params: { projectId: this.requireProjectId(), threadId } },
         'thread/read'
       );
       const projectionChanged = this.installSnapshot(thread, handoff);
@@ -191,8 +212,10 @@ export class WebUiClient {
     const response = await this.client.request({
       method: 'turn/start',
       params: {
+        projectId: this.requireProjectId(),
         threadId,
         input: trimmed,
+        idempotencyKey: this.idempotencyKey(),
       },
     });
 
@@ -211,7 +234,11 @@ export class WebUiClient {
 
     const response = await this.client.request({
       method: 'turn/interrupt',
-      params: { threadId },
+      params: {
+        projectId: this.requireProjectId(),
+        threadId,
+        idempotencyKey: this.idempotencyKey(),
+      },
     });
 
     if (!response.ok) {
@@ -230,7 +257,12 @@ export class WebUiClient {
     this.setConnection({ status: 'running' });
     const response = await this.client.request({
       method: 'turn/retry',
-      params: { threadId, turnId },
+      params: {
+        projectId: this.requireProjectId(),
+        threadId,
+        ...(turnId === undefined ? {} : { turnId }),
+        idempotencyKey: this.idempotencyKey(),
+      },
     });
 
     if (!response.ok) {
@@ -245,7 +277,12 @@ export class WebUiClient {
   ): Promise<void> {
     const response = await this.client.request({
       method: 'approval/resolve',
-      params: { ...approval, decision },
+      params: {
+        projectId: this.requireProjectId(),
+        ...approval,
+        decision,
+        idempotencyKey: this.idempotencyKey(),
+      },
     });
 
     if (!response.ok) {
@@ -254,7 +291,7 @@ export class WebUiClient {
     }
   }
 
-  private applyNotification(notification: AppServerNotification): void {
+  private applyNotification(notification: AgentAppNotification): void {
     const previousThreadId = this.projection.getSnapshot().currentThread?.id;
     const projectionChanged = this.projection.apply(notification);
     const connectionChanged =
@@ -291,7 +328,7 @@ export class WebUiClient {
     return handoff;
   }
 
-  private receiveNotification(notification: AppServerNotification): void {
+  private receiveNotification(notification: AgentAppNotification): void {
     if (this.snapshotHandoff) {
       this.snapshotHandoff.notifications.push(notification);
       return;
@@ -351,8 +388,8 @@ export class WebUiClient {
 
   private async requestThread(
     generation: number,
-    request: AppServerRequestInput,
-    method: 'thread/start' | 'thread/read'
+    request: AgentAppRequest,
+    method: 'thread/create' | 'thread/read'
   ): Promise<ThreadSnapshot> {
     const response = await this.client.request(request);
     if (generation !== this.lifecycleGeneration) {
@@ -365,9 +402,55 @@ export class WebUiClient {
     this.snapshot = { connection: this.connection, state: this.projection.getSnapshot() };
     this.emit();
   }
+
+  private async selectProject(generation: number, requestedId?: string): Promise<string> {
+    const listed = await this.client.request({ method: 'project/list', params: {} });
+    if (generation !== this.lifecycleGeneration) throw new WebUiLifecycleCanceledError();
+    if (!listed.ok || listed.method !== 'project/list')
+      throw new Error(listed.ok ? 'Unexpected project/list response' : listed.error.message);
+    const projects = listed.result.projects as unknown[];
+    const active = projects.filter(
+      (project): project is { id: string; status: string } =>
+        typeof project === 'object' &&
+        project !== null &&
+        'id' in project &&
+        typeof project.id === 'string' &&
+        'status' in project &&
+        project.status === 'active'
+    );
+    const selected = active.find((project) => project.id === requestedId) ?? active[0];
+    if (selected) {
+      this.selectedProjectId = selected.id;
+      return selected.id;
+    }
+    const created = await this.client.request({
+      method: 'project/create',
+      params: {
+        name: this.projectName,
+        rootPath: this.projectRoot,
+        idempotencyKey: this.idempotencyKey(),
+      },
+    });
+    if (!created.ok || created.method !== 'project/create')
+      throw new Error(created.ok ? 'Unexpected project/create response' : created.error.message);
+    const project = created.result.project as { id?: unknown };
+    if (typeof project?.id !== 'string')
+      throw new Error('project/create did not return a project id');
+    this.selectedProjectId = project.id;
+    return project.id;
+  }
+
+  private requireProjectId(): string {
+    if (!this.selectedProjectId) throw new Error('Web UI has no selected project');
+    return this.selectedProjectId;
+  }
+
+  private idempotencyKey(): string {
+    return globalThis.crypto?.randomUUID?.() ?? `web-${Date.now()}-${Math.random()}`;
+  }
 }
 
-export type BrowserAppServerTransportClientOptions = {
+export type BrowserAgentAppTransportClientOptions = {
   readonly fetch?: typeof fetch;
   readonly createEventSource?: (url: string) => WebUiEventSource;
   readonly onSubscriptionStatus?: (
@@ -383,20 +466,22 @@ export type WebUiEventSource = {
   close(): void;
 };
 
-export class BrowserAppServerTransportClient implements AppServerClient {
+export class BrowserAgentAppTransportClient implements AgentAppClient {
   private readonly fetchImpl: typeof fetch;
   private readonly createEventSource: (url: string) => WebUiEventSource;
-  private readonly onSubscriptionStatus?: BrowserAppServerTransportClientOptions['onSubscriptionStatus'];
+  private readonly onSubscriptionStatus?: BrowserAgentAppTransportClientOptions['onSubscriptionStatus'];
   private readonly subscriptions = new Set<BrowserSubscriptionState>();
+  private lastProjectId?: string;
 
-  constructor(options: BrowserAppServerTransportClientOptions) {
+  constructor(options: BrowserAgentAppTransportClientOptions) {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.createEventSource =
       options.createEventSource ?? ((url) => new globalThis.EventSource(url) as WebUiEventSource);
     this.onSubscriptionStatus = options.onSubscriptionStatus;
   }
 
-  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+  async request(request: AgentAppRequest): Promise<AgentAppResponse> {
+    if (typeof request.params.projectId === 'string') this.lastProjectId = request.params.projectId;
     const response = await this.withSubscriptionsReady(() =>
       this.fetchImpl('/request', {
         method: 'POST',
@@ -414,10 +499,10 @@ export class BrowserAppServerTransportClient implements AppServerClient {
       throw new Error(`App Server request failed with HTTP ${response.status}: ${body}`);
     }
 
-    return JSON.parse(body) as AppServerResponse;
+    return JSON.parse(body) as AgentAppResponse;
   }
 
-  subscribe(listener: AppServerNotificationListener): AppServerSubscription {
+  subscribe(listener: AgentAppNotificationListener): AgentAppSubscription {
     const events = this.createEventSource('/events');
     const subscription: BrowserSubscriptionState = {
       phase: 'connecting',
@@ -453,7 +538,7 @@ export class BrowserAppServerTransportClient implements AppServerClient {
     };
     events.addEventListener('notification', (event) => {
       if (!subscription.active) return;
-      const notification = JSON.parse(event.data) as AppServerNotification;
+      const notification = JSON.parse(event.data) as AgentAppNotificationEnvelope;
       if (subscription.phase === 'recovering') {
         if (hasBrowserResetDebt(subscription)) {
           subscription.pendingNotifications.push(notification);
@@ -487,7 +572,7 @@ export class BrowserAppServerTransportClient implements AppServerClient {
 
   private async completeRecovery(
     subscription: BrowserSubscriptionState,
-    listener: AppServerNotificationListener
+    listener: AgentAppNotificationListener
   ): Promise<void> {
     const generation = subscription.generation;
     const gate = subscription.gate;
@@ -506,7 +591,12 @@ export class BrowserAppServerTransportClient implements AppServerClient {
       ) {
         return;
       }
-      if (resetThreads) listener({ type: 'sync/reset', threads: resetThreads });
+      if (resetThreads && this.lastProjectId) {
+        listener({
+          projectId: this.lastProjectId,
+          notification: { type: 'sync/reset', threads: resetThreads },
+        });
+      }
       if (
         !subscription.active ||
         subscription.phase !== 'recovering' ||
@@ -533,23 +623,24 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   }
 
   private async readRecoverySnapshots(): Promise<readonly ThreadSnapshot[]> {
+    if (!this.lastProjectId) return [];
     const response = await this.fetchImpl('/request', {
       method: 'POST',
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ method: 'thread/list' }),
+      body: JSON.stringify({ method: 'thread/list', params: { projectId: this.lastProjectId } }),
     });
     const body = await response.text();
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${body}`);
     }
-    const result = JSON.parse(body) as AppServerResponse;
+    const result = JSON.parse(body) as AgentAppResponse;
     if (!result.ok || result.method !== 'thread/list') {
       throw new Error(result.ok ? `Unexpected ${result.method}` : result.error.message);
     }
-    return result.result.threads;
+    return result.result.threads as readonly ThreadSnapshot[];
   }
 
   private async withSubscriptionsReady<T>(operation: () => Promise<T>): Promise<T> {
@@ -593,7 +684,7 @@ type BrowserSubscriptionState = {
   gate: BrowserSubscriptionGate;
   resetVersion: number;
   installedResetVersion: number;
-  pendingNotifications: AppServerNotification[];
+  pendingNotifications: AgentAppNotificationEnvelope[];
 };
 
 function hasBrowserResetDebt(subscription: BrowserSubscriptionState): boolean {
@@ -602,7 +693,7 @@ function hasBrowserResetDebt(subscription: BrowserSubscriptionState): boolean {
 
 type SnapshotHandoff = {
   readonly generation: number;
-  readonly notifications: AppServerNotification[];
+  readonly notifications: AgentAppNotification[];
 };
 
 function createBrowserSubscriptionGate(): BrowserSubscriptionGate {
@@ -618,9 +709,12 @@ function createBrowserSubscriptionGate(): BrowserSubscriptionGate {
   return { promise, resolve, reject };
 }
 
-function readThreadResponse(response: AppServerResponse, method: 'thread/start' | 'thread/read') {
+function readThreadResponse(
+  response: AgentAppResponse,
+  method: 'thread/create' | 'thread/read'
+): ThreadSnapshot {
   if (response.ok && response.method === method) {
-    return response.result.thread;
+    return response.result.thread as ThreadSnapshot;
   }
 
   if (!response.ok) {

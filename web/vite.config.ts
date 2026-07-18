@@ -2,7 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-import { consumeAppServerClientHandoff, createAppServerHttpProxy } from '#zen/node';
+import { consumeAppServerClientHandoff, createAgentAppHttpProxy } from '#zen/node';
 
 const defaultProxyTarget = process.env.ZEN_APP_SERVER_URL ?? 'http://127.0.0.1:3000';
 
@@ -41,8 +41,8 @@ async function readAuthenticatedProxy() {
 
   if (handoffPath) {
     const handoff = await consumeAppServerClientHandoff(handoffPath);
-    return createAppServerHttpProxy(handoff.baseUrl, handoff.capability);
+    return createAgentAppHttpProxy(handoff.baseUrl, handoff.capability);
   }
 
-  return createAppServerHttpProxy(defaultProxyTarget, capability as string);
+  return createAgentAppHttpProxy(defaultProxyTarget, capability as string);
 }

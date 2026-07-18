@@ -2,6 +2,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { createServer as createViteServer } from 'vite';
+import { join } from 'node:path';
 
 import {
   assertLoopbackBindAllowed,
@@ -9,8 +10,8 @@ import {
   readAppServerPort,
   readRemoteBindOptIn,
 } from './app-server-config.js';
-import { createAppServerHttpProxy, serveAppServerHttpTransport } from './app-server-transport.js';
-import { createProviderBackedAppServer } from './provider-runtime.js';
+import { createAgentAppProductionComposition } from './agent-app-production.js';
+import { createAgentAppHttpProxy, serveAgentAppHttpTransport } from './agent-app-transport.js';
 import { runWebDevCliComposition } from './production-composition.js';
 
 const host = process.env.ZEN_WEB_HOST ?? DEFAULT_APP_SERVER_HOST;
@@ -23,15 +24,17 @@ assertLoopbackBindAllowed(host, allowRemoteBind, 'Non-loopback Zen Web');
 
 await runWebDevCliComposition({
   signalSource: process,
-  createAppServer: async () => await createProviderBackedAppServer({ cwd: process.cwd() }),
+  createAppServer: async () =>
+    (await createAgentAppProductionComposition({ appDataRoot: join(process.cwd(), '.zen') }))
+      .agentAppServer,
   createTransport: async (appServer) =>
-    await serveAppServerHttpTransport({
-      appServer,
+    await serveAgentAppHttpTransport({
+      agentAppServer: appServer as import('../../product/index.js').AgentAppClient,
       host: DEFAULT_APP_SERVER_HOST,
       port: 0,
     }),
   createVite: async (transport) => {
-    const proxy = createAppServerHttpProxy(transport.url, transport.capability);
+    const proxy = createAgentAppHttpProxy(transport.url, transport.capability);
     return await createViteServer({
       configFile: false,
       root: process.cwd(),
