@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "main": "desktop-dist/main.js",
   "exports": {
     ".": {
       "types": "./dist/kernel/index.d.ts",
@@ -41,8 +42,12 @@
     "coverage:product": "node scripts/run-coverage.mjs product",
     "dogfood:alb-94": "npm run build && npm run build:acceptance && node docs/implementation/alb-94-dogfood-acceptance.mjs",
     "e2e": "node scripts/run-e2e.mjs",
-    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
+    "desktop:build": "npm run build && npm run web:build && tsc -p tsconfig.desktop.json",
+    "desktop:dev": "npm run desktop:build && electron .",
+    "desktop:dist": "npm run desktop:build && electron-builder",
+    "desktop:pack": "npm run desktop:build && electron-builder --dir",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"desktop/**/*.ts\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"desktop/**/*.ts\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
     "lint": "eslint .",
     "test": "vitest run --pool=forks --fileParallelism=false",
     "typecheck": "tsc --noEmit",
@@ -66,6 +71,8 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
     "@vitest/coverage-v8": "^4.1.10",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^10.7.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
@@ -84,5 +91,30 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tailwind-merge": "^3.6.0"
+  },
+  "build": {
+    "appId": "com.zen.agent",
+    "productName": "Zen Agent",
+    "asar": true,
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "web-dist/**",
+      "desktop-dist/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
   }
 }

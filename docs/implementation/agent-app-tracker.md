@@ -11,8 +11,8 @@ No Linear mutation is performed for this local wave.
 | APP-005  | Complete | 005A/B/005C now expose only the project-scoped Agent App remote protocol.                                      |
 | APP-005B | Complete | Shared HTTP/SSE transport adapter, Node project runtime factory, and production composition committed locally. |
 | APP-005C | Complete | Migrated public client/transport, web bootstrap/demo, and production CLI composition to Agent App.             |
-| APP-006  | Complete | Project/thread control-plane UI and presentation projection committed locally.                                |
-| APP-007  | Pending  | Depends on APP-006.                                                                                            |
+| APP-006  | Complete | Project/thread control-plane UI and presentation projection committed locally.                                 |
+| APP-007  | Complete | Thin Electron desktop shell, same-origin static host, and bounded platform bridge committed locally.           |
 | APP-008  | Pending  | Cross-cutting after coordination/UI work.                                                                      |
 | APP-009  | Pending  | Depends on all implementation work.                                                                            |
 | APP-010  | Pending  | Global review/remediation after APP-009.                                                                       |

@@ -176,3 +176,56 @@ Round: 1
   `zen-agent-app-*` temporary-root census was empty before and after the serial
   run. Every integration-test `mkdtemp` root was removed by its owning test; no
   process was terminated and no broad deletion was performed.
+
+## APP-007
+
+- Branch: `codex/agent-app`; base: `732246a7423896fcf540ef6cc1147152c667e982`.
+- Desktop: Electron starts the Agent App production composition under
+  `app.getPath('userData')`, binds its capability-authenticated HTTP/SSE
+  transport to loopback on an ephemeral port, and serves `web-dist` through a
+  same-origin static host. The host safely normalizes paths, rejects traversal,
+  keeps `/request` and `/events` out of SPA fallback, injects the capability
+  only into its proxy, and supplies MIME, cache, and CSP headers.
+- Security: BrowserWindow uses `contextIsolation`, sandbox, disabled Node
+  integration, enabled web security, denied navigation, and denied window
+  creation. Only external `http(s)` popups are delegated to Electron shell.
+  The preload bridge exposes only a validated directory picker, bounded native
+  notification, platform, and Electron version; it exposes no shell, git, or
+  filesystem IPC.
+- Lifecycle: the testable desktop lifecycle quiesces transport and static-host
+  ingress, drains Agent App composition, then closes transport, host, and
+  window with idempotent aggregate semantics. Single-instance focus, repeated
+  signal shutdown, partial startup, and sibling-close failure behavior are
+  covered without starting Electron GUI.
+- Web: the project dialog retains manual root-path entry and conditionally adds
+  a folder-icon picker in desktop mode. Project creation still goes through the
+  Agent App `project/create` protocol.
+- Build: added `tsconfig.desktop.json`, Electron main/preload compilation to
+  `desktop-dist`, desktop build/dev/pack/dist scripts, and explicit asar/NSIS
+  x64 electron-builder configuration. `package.json` and `package-lock.json`
+  include the expected Electron `43.1.1` and electron-builder `26.15.3`
+  dependencies.
+- Validation passed: serial focused Vitest (`6` files, `14` tests), Prettier
+  check, ESLint, core/Web/desktop TypeScript checks, core/Web/desktop build,
+  `git diff --check`, and `npm audit --audit-level=low` (`0` vulnerabilities).
+  Full check, coverage, and E2E were intentionally not run for this scoped
+  issue.
+- Packaging attempt: `npm run desktop:pack` completed the configured desktop
+  build and electron-builder setup but failed while downloading an Electron
+  packaging dependency because the client TLS connection disconnected before
+  establishment. No `release` artifact remained; the unsigned package
+  configuration is retained for APP-009/package-environment retry.
+- Hygiene census: final process list contained no Electron process. Existing
+  Node PIDs were `472, 5264, 19176, 19252, 21148, 21468, 23320, 25040, 25232,
+30164`; no process was terminated. Exact `zen-desktop-*` and
+  `zen-agent-app-*` temporary-root counts were both zero. No broad delete or
+  workspace scan was used.
+
+## Codex Worker Note
+
+Round: 1
+
+- APP-007 complete on `codex/agent-app`; APP-008 remains Pending.
+- Local-only workflow: no Linear mutation, no intermediate review, and no
+  GitHub push. Electron packaging is blocked only by the recorded transient
+  TLS download failure; APP-009 owns package smoke/retry work.

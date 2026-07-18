@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { FolderOpen } from 'lucide-react';
 
 import type { ProjectSnapshot, ThreadSnapshot } from '#zen/product';
 import type { WorkspaceThread } from '#zen/presentation';
@@ -50,12 +51,33 @@ export function ProjectDialog(props: {
         </label>
         <label className="grid gap-1 text-sm">
           Root path
-          <input
-            required
-            value={rootPath}
-            onChange={(event) => setRootPath(event.target.value)}
-            className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-2"
-          />
+          <div className="flex gap-2">
+            <input
+              required
+              value={rootPath}
+              onChange={(event) => setRootPath(event.target.value)}
+              className="h-9 min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-2"
+            />
+            {window.zenDesktop ? (
+              <Button
+                type="button"
+                variant="ghost"
+                aria-label="Choose project directory"
+                title="Choose project directory"
+                disabled={busy}
+                onClick={() => {
+                  void window.zenDesktop
+                    ?.pickProjectDirectory()
+                    .then((path) => {
+                      if (path) setRootPath(path);
+                    })
+                    .catch(() => undefined);
+                }}
+              >
+                <FolderOpen className="h-4 w-4" />
+              </Button>
+            ) : null}
+          </div>
         </label>
         <div className="flex justify-end gap-2">
           <Button type="button" onClick={props.onClose}>

@@ -23,6 +23,7 @@ describe('AgentWorkspace', () => {
     container?.remove();
     root = undefined;
     container = undefined;
+    delete window.zenDesktop;
   });
 
   it('offers project creation from an empty bootstrap and closes the dialog with Escape', async () => {
@@ -46,6 +47,37 @@ describe('AgentWorkspace', () => {
     );
     expect(container.querySelector('[role="dialog"]')).toBeNull();
     expect(container.querySelector('.grid-cols-3')).not.toBeNull();
+  });
+
+  it('uses the desktop directory picker when the bridge is available', async () => {
+    const transport = new WorkspaceTransport();
+    window.zenDesktop = {
+      platform: 'win32',
+      version: '43.1.1',
+      pickProjectDirectory: async () => 'C:\\work\\zen',
+      showNotification: async () => undefined,
+    };
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(
+        <AgentWorkspace createClient={() => new AgentWorkspaceClient({ client: transport })} />
+      );
+    });
+
+    await act(async () => {
+      (container?.querySelector('[aria-label="Create project"]') as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      (
+        container?.querySelector('[aria-label="Choose project directory"]') as HTMLButtonElement
+      ).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect((container?.querySelectorAll('input')[1] as HTMLInputElement).value).toBe(
+      'C:\\work\\zen'
+    );
   });
 });
 

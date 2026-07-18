@@ -41,6 +41,36 @@ Run the Web product with its trusted same-origin proxy:
 npm run web
 ```
 
+## Desktop Development
+
+Build the local Electron desktop application:
+
+```powershell
+npm run desktop:build
+```
+
+Run the built desktop application locally:
+
+```powershell
+npm run desktop:dev
+```
+
+The desktop main process starts the project-scoped Agent App HTTP/SSE transport
+on loopback and serves `web-dist` from a same-origin static host. The renderer
+only uses Agent App `/request` and `/events`; the transport capability remains
+in the main-process proxy. Electron exposes only directory selection and a
+bounded native-notification bridge to the Web UI.
+
+Create an unsigned unpacked Windows artifact with:
+
+```powershell
+npm run desktop:pack
+```
+
+`npm run desktop:dist` creates the default x64 NSIS artifact. These are
+development artifacts and are unsigned; release signing and updates are not
+configured in this wave.
+
 The Web browser only calls same-origin `/request` and `/events` routes. The
 Node/Vite process creates and injects the App Server capability; browser code
 never receives it. Direct browser-to-App-Server URLs and cross-origin access
