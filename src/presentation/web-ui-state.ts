@@ -592,7 +592,7 @@ export function createWebUiState(snapshot?: ThreadSnapshot): WebUiState {
   return state;
 }
 
-export function applyAppServerNotification(
+export function applyAgentAppNotification(
   state: WebUiState,
   notification: AgentAppNotification
 ): WebUiState {

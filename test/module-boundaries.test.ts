@@ -66,6 +66,34 @@ describe('module boundaries', () => {
       assertWebSpecifiers(['../src/adapters/node/app-server-transport.js'], 'browser')
     ).toThrow('must not reference a physical src path');
   });
+
+  it('keeps the removed single-project remote protocol out of public entrypoints', () => {
+    const product = readFileSync(resolve(root, 'src/product/index.ts'), 'utf8');
+    const node = readFileSync(resolve(root, 'src/adapters/node/index.ts'), 'utf8');
+    const presentation = readFileSync(resolve(root, 'src/presentation/index.ts'), 'utf8');
+    const removedNames = [
+      'AppServerRequest',
+      'AppServerResponse',
+      'AppServerNotification',
+      'AppServerClient',
+      'HttpAppServerClient',
+      'serveAppServerHttpTransport',
+      'applyAppServerNotification',
+    ];
+
+    for (const name of removedNames) {
+      const exactName = new RegExp(`\\b${name}\\b`, 'u');
+      expect(product).not.toMatch(exactName);
+      expect(node).not.toMatch(exactName);
+      expect(presentation).not.toMatch(exactName);
+    }
+
+    for (const path of sourceFiles().filter((path) => groupFor(path) === 'presentation')) {
+      expect(importsOf(path)).not.toContain('../product/app-server.js');
+      expect(importsOf(path)).not.toContain('../product/app-server-protocol.js');
+      expect(importsOf(path)).not.toContain('../adapters/node/app-server-transport.js');
+    }
+  });
 });
 
 function isInternalLegacyRuntimeImport(from: Group, to: Group, specifier: string): boolean {

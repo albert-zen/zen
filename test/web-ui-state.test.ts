@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ThreadSnapshot } from '../src/product/app-server-protocol.js';
 import {
-  applyAppServerNotification,
+  applyAgentAppNotification,
   createWebUiState,
   InteractionProjection,
 } from '../src/presentation/web-ui-state.js';
@@ -144,7 +144,7 @@ describe('web ui state projection', () => {
   it('keeps stable shell slots when approval resolution tombstones a row', () => {
     let state = createWebUiState({ id: 'thread-1', status: 'running', turns: [], items: [] });
     const append = (nextItem: ReturnType<typeof item>) => {
-      state = applyAppServerNotification(state, {
+      state = applyAgentAppNotification(state, {
         type: 'item/appended',
         threadId: 'thread-1',
         turnId: 'turn-1',
@@ -407,7 +407,7 @@ describe('web ui state projection', () => {
       items: [],
     });
 
-    state = applyAppServerNotification(state, {
+    state = applyAgentAppNotification(state, {
       type: 'item/appended',
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -418,7 +418,7 @@ describe('web ui state projection', () => {
         payload: { content: 'second' },
       }),
     });
-    state = applyAppServerNotification(state, {
+    state = applyAgentAppNotification(state, {
       type: 'item/appended',
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -472,7 +472,7 @@ describe('web ui state projection', () => {
       ])
     );
 
-    state = applyAppServerNotification(state, {
+    state = applyAgentAppNotification(state, {
       type: 'item/appended',
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -569,7 +569,7 @@ describe('web ui state projection', () => {
       items: [],
     });
 
-    state = applyAppServerNotification(state, {
+    state = applyAgentAppNotification(state, {
       type: 'approval/requested',
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -596,7 +596,7 @@ describe('web ui state projection', () => {
       }),
     ]);
 
-    state = applyAppServerNotification(state, {
+    state = applyAgentAppNotification(state, {
       type: 'approval/resolved',
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -913,7 +913,7 @@ describe('web ui state projection', () => {
   it('updates current thread state from thread and turn lifecycle notifications', () => {
     let state = createWebUiState();
 
-    state = applyAppServerNotification(state, {
+    state = applyAgentAppNotification(state, {
       type: 'thread/started',
       thread: {
         id: 'thread-1',
@@ -922,7 +922,7 @@ describe('web ui state projection', () => {
         items: [],
       },
     });
-    state = applyAppServerNotification(state, {
+    state = applyAgentAppNotification(state, {
       type: 'turn/started',
       threadId: 'thread-1',
       turn: {
@@ -946,7 +946,7 @@ describe('web ui state projection', () => {
       ],
     });
 
-    state = applyAppServerNotification(state, {
+    state = applyAgentAppNotification(state, {
       type: 'turn/completed',
       threadId: 'thread-1',
       turn: {
@@ -986,7 +986,7 @@ describe('web ui state projection', () => {
       items: [],
     });
 
-    state = applyAppServerNotification(state, {
+    state = applyAgentAppNotification(state, {
       type: 'turn/completed',
       threadId: 'thread-1',
       turn: {
@@ -1001,7 +1001,7 @@ describe('web ui state projection', () => {
   });
 
   it('ignores item notifications for a different current thread', () => {
-    const state = applyAppServerNotification(
+    const state = applyAgentAppNotification(
       createWebUiState({
         id: 'thread-1',
         status: 'idle',

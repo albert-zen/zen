@@ -27,11 +27,7 @@ export type WebUiClientSnapshot = {
 };
 
 export type WebUiClientOptions = {
-  /** Structural to keep legacy in-process characterization fixtures private. */
-  readonly client: {
-    request(request: never): Promise<unknown>;
-    subscribe(listener: never): () => void;
-  };
+  readonly client: AgentAppClient;
   readonly mode?: WebUiRuntimeMode;
   readonly projectRoot?: string;
   readonly projectName?: string;
@@ -60,7 +56,7 @@ export class WebUiClient {
   private snapshotHandoff?: SnapshotHandoff;
 
   constructor(options: WebUiClientOptions) {
-    this.client = options.client as AgentAppClient;
+    this.client = options.client;
     this.projectRoot = options.projectRoot ?? '/';
     this.projectName = options.projectName ?? 'Zen project';
     this.connection = {
@@ -87,9 +83,17 @@ export class WebUiClient {
     options: { readonly threadId?: string; readonly projectId?: string } = {}
   ): Promise<void> {
     const generation = ++this.lifecycleGeneration;
+    const previousProjectId = this.selectedProjectId;
+    this.snapshotHandoff = undefined;
     this.disconnectFromServerOnly();
-    this.setConnection({ status: 'connecting' });
+    const projectionChanged =
+      options.projectId !== undefined && options.projectId !== previousProjectId
+        ? this.clearProjection()
+        : false;
+    const connectionChanged = this.updateConnection({ status: 'connecting' });
+    if (projectionChanged || connectionChanged) this.refreshSnapshot();
     const projectId = await this.selectProject(generation, options.projectId);
+    if (projectId !== previousProjectId && this.clearProjection()) this.refreshSnapshot();
     const handoff = this.beginSnapshotHandoff(generation);
     this.unsubscribeFromServer = this.client.subscribe((notification) => {
       if (generation === this.lifecycleGeneration && notification.projectId === projectId) {
@@ -204,7 +208,7 @@ export class WebUiClient {
     const threadId = this.projection.getSnapshot().currentThread?.id;
 
     if (!threadId) {
-      throw new Error('Web UI has no current thread after thread/start');
+      throw new Error('Web UI has no current thread after thread/create');
     }
 
     this.setConnection({ status: 'running' });
@@ -382,6 +386,10 @@ export class WebUiClient {
     this.unsubscribeFromServer = undefined;
   }
 
+  private clearProjection(): boolean {
+    return this.projection.apply({ type: 'sync/reset', threads: [] });
+  }
+
   private emit(): void {
     this.listeners.forEach((listener) => listener(this.snapshot));
   }
@@ -496,7 +504,7 @@ export class BrowserAgentAppTransportClient implements AgentAppClient {
     const body = await response.text();
 
     if (!response.ok) {
-      throw new Error(`App Server request failed with HTTP ${response.status}: ${body}`);
+      throw new Error(`Agent App request failed with HTTP ${response.status}: ${body}`);
     }
 
     return JSON.parse(body) as AgentAppResponse;

@@ -28,7 +28,7 @@ export type {
 } from './web-ui-state.js';
 export {
   InteractionProjection,
-  applyAppServerNotification,
+  applyAgentAppNotification,
   createWebUiState,
 } from './web-ui-state.js';
 export type {

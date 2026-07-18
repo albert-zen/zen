@@ -149,3 +149,30 @@ Round: 1
 - APP-007 remains Pending. No intermediate review is required by this wave.
 - Residual risk: APP-009 should replace or retire the legacy single-project WebUi
   client characterization fixture as part of the protocol/E2E fixture refresh.
+
+## APP-005C Migration Repair
+
+- The APP-006 known test-contract gap above is resolved and its residual-risk
+  statement is superseded. `test/web-ui-client.test.ts` retains 32 tests, now
+  covering the project-scoped Agent App browser request gate, SSE replay/reset
+  generations, Web UI lifecycle cancellation, authoritative snapshot handoff,
+  projection idempotency, project-scoped thread/turn/approval operations, and
+  two-project notification isolation.
+- Removed the test-only `BrowserAppServerTransportClient` compatibility alias.
+  `WebUiClientOptions.client` now exposes `AgentAppClient` directly, and the
+  presentation notification helper is `applyAgentAppNotification` with no old
+  public alias.
+- Fixed a project-switch exposure found by the migrated tests: an explicit
+  switch now cancels the old handoff/subscription and clears the old projection
+  before the new authoritative snapshot is installed. Stale callbacks and
+  foreign-project envelopes cannot repopulate it.
+- Serial related validation passed 8 files and 87 tests, including 32/32 in
+  `test/web-ui-client.test.ts` and the Agent App server/Node transport,
+  workspace client, interaction session waiter/early-terminal, presentation
+  projection, UI lifecycle, and module-boundary suites.
+- APP-005, APP-005C, and APP-006 remain Complete. No APP-006 visual changes were
+  made. Full check, coverage, and E2E were not run.
+- Hygiene census: the pre/post Node PID set was identical and the exact
+  `zen-agent-app-*` temporary-root census was empty before and after the serial
+  run. Every integration-test `mkdtemp` root was removed by its owning test; no
+  process was terminated and no broad deletion was performed.

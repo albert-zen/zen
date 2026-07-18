@@ -23,3 +23,10 @@ Local states mirror the repository workflow: Pending, In Progress, Complete,
 Blocked. Worker progress is retained in this append-only artifact while Linear
 is intentionally untouched. APP-010 is the only planned review gate for this
 wave.
+
+## APP-005C Migration Repair
+
+- The APP-006 known test-contract gap is resolved: all 32 browser transport and
+  Web UI client tests now exercise the project-scoped Agent App protocol.
+- APP-005, APP-005C, and APP-006 remain Complete. This repair changes no APP-006
+  visual behavior and does not advance APP-007.

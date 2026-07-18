@@ -1,38 +1,413 @@
 import { describe, expect, it } from 'vitest';
 
+import type {
+  AgentAppClient,
+  AgentAppMethod,
+  AgentAppNotification,
+  AgentAppNotificationEnvelope,
+  AgentAppNotificationListener,
+  AgentAppRequest,
+  AgentAppResponse,
+  AgentAppSubscription,
+  JsonObject,
+  ProjectSnapshot,
+  ThreadSnapshot,
+} from './test-exports.js';
 import {
-  AppServer,
-  type AppServerClient,
-  type AppServerNotificationListener,
-  type AppServerRequestInput,
-  type AppServerResponse,
-  type AppServerSubscription,
-  BrowserAppServerTransportClient,
-  HttpAppServerClient,
+  BrowserAgentAppTransportClient,
   WebUiClient,
   WebUiLifecycleCanceledError,
-  serveAppServerHttpTransport,
-  type ModelGateway,
 } from './test-exports.js';
 
-describe('Web UI client', () => {
-  it('replays notifications that arrive while the initial snapshot is in flight', async () => {
-    const client = new SnapshotHandoffClient();
-    const webUi = new WebUiClient({ client });
-    const connecting = webUi.connect({ threadId: 'thread-1' });
-    client.emit({
-      type: 'item/appended',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      item: protocolItem('item-2', 2, 'assistant.message.completed'),
+const PROJECT_ONE = 'project-1';
+const PROJECT_TWO = 'project-2';
+
+describe('BrowserAgentAppTransportClient', () => {
+  it('uses same-origin routes and sends a project-scoped request', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+
+    await client.request(threadListRequest());
+    const unsubscribe = client.subscribe(() => undefined);
+
+    expect(harness.requests).toEqual([threadListRequest()]);
+    expect(harness.requestUrls).toEqual(['/request']);
+    expect(harness.eventUrl).toBe('/events');
+    unsubscribe();
+  });
+
+  it('waits for first EventSource open before posting a request', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+    const unsubscribe = client.subscribe(() => undefined);
+
+    const pending = client.request(threadCreateRequest());
+    await Promise.resolve();
+    expect(harness.requests).toEqual([]);
+
+    harness.events.open();
+    await pending;
+    expect(harness.requests).toEqual([threadCreateRequest()]);
+    unsubscribe();
+  });
+
+  it('rejects first-open waiters when EventSource fails without posting', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+    const unsubscribe = client.subscribe(() => undefined);
+    const pending = client.request(threadListRequest());
+
+    harness.events.fail(new Event('error'));
+
+    await expect(pending).rejects.toThrow('Browser event subscription failed before request');
+    expect(harness.requests).toEqual([]);
+    unsubscribe();
+  });
+
+  it('reports HTTP errors, subscription lifecycle, and project envelopes', async () => {
+    const statuses: Array<{ status: string; error?: unknown }> = [];
+    const received: AgentAppNotificationEnvelope[] = [];
+    const harness = new BrowserHarness(() => new Response('upstream unavailable', { status: 503 }));
+    const client = harness.client({
+      onSubscriptionStatus: (status, error) => statuses.push({ status, error }),
     });
-    client.resolveSnapshot({
-      id: 'thread-1',
-      status: 'running',
-      turns: [],
-      items: [protocolItem('item-1', 1, 'user.message.completed')],
+    const unsubscribe = client.subscribe((envelope) => received.push(envelope));
+
+    harness.events.open();
+    await expect(client.request(threadListRequest())).rejects.toThrow(
+      'Agent App request failed with HTTP 503: upstream unavailable'
+    );
+    harness.events.emitNotification(PROJECT_ONE, {
+      type: 'thread/started',
+      thread: thread('thread-1'),
+    });
+    const failure = new Event('error');
+    harness.events.fail(failure);
+    unsubscribe();
+
+    expect(received).toEqual([
+      {
+        projectId: PROJECT_ONE,
+        notification: { type: 'thread/started', thread: thread('thread-1') },
+      },
+    ]);
+    expect(statuses).toEqual([
+      { status: 'connected' },
+      { status: 'failed', error: failure },
+      { status: 'disconnected' },
+    ]);
+  });
+
+  it('blocks requests while reconnect replay is incomplete', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+    const unsubscribe = client.subscribe(() => undefined);
+    harness.events.open();
+    harness.events.fail(new Event('error'));
+
+    const pending = client.request(threadCreateRequest());
+    harness.events.open();
+    await Promise.resolve();
+    expect(harness.requests).toEqual([]);
+
+    harness.events.emitSync(2);
+    await pending;
+    expect(harness.requests).toEqual([threadCreateRequest()]);
+    unsubscribe();
+  });
+
+  it('replays buffered notification envelopes before reopening requests', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+    const received: string[] = [];
+    const unsubscribe = client.subscribe((envelope) => received.push(envelope.notification.type));
+    harness.events.open();
+    harness.events.fail(new Event('error'));
+    const pending = client.request(threadCreateRequest());
+    harness.events.open();
+
+    harness.events.emitNotification(PROJECT_ONE, itemNotification('item-1'));
+    harness.events.emitNotification(PROJECT_ONE, approvalNotification('approval-1'));
+    harness.events.emitNotification(PROJECT_ONE, completedNotification('turn-1'));
+    expect(received).toEqual(['item/appended', 'approval/requested', 'turn/completed']);
+
+    harness.events.emitSync(3);
+    await pending;
+    expect(received).toEqual(['item/appended', 'approval/requested', 'turn/completed']);
+    unsubscribe();
+  });
+
+  it('installs an authoritative project reset before releasing effects after a gap', async () => {
+    const snapshot = deferred<Response>();
+    const harness = new BrowserHarness(async (request) => {
+      if (request.method === 'thread/list') return await snapshot.promise;
+      return successResponse(request.method, { thread: thread('created') });
+    });
+    const client = harness.client();
+    const received: AgentAppNotificationEnvelope[] = [];
+    const unsubscribe = client.subscribe((envelope) => received.push(envelope));
+    harness.events.open();
+    harness.events.fail(new Event('error'));
+    const effect = client.request(threadCreateRequest());
+    harness.events.open();
+    harness.events.emitReset(9);
+    harness.events.emitSync(9);
+    await Promise.resolve();
+
+    expect(harness.requests).toEqual([threadListRequest()]);
+    snapshot.resolve(threadListResponse('recovered'));
+    await effect;
+
+    expect(harness.requests).toEqual([threadListRequest(), threadCreateRequest()]);
+    expect(received).toContainEqual({
+      projectId: PROJECT_ONE,
+      notification: { type: 'sync/reset', threads: [thread('recovered')] },
+    });
+    unsubscribe();
+  });
+
+  it('keeps the effect gate closed when reconnect resnapshot fails', async () => {
+    const harness = new BrowserHarness(async (request) =>
+      request.method === 'thread/list'
+        ? new Response('resnapshot failed', { status: 503 })
+        : successResponse(request.method, {})
+    );
+    const client = harness.client();
+    const unsubscribe = client.subscribe(() => undefined);
+    harness.events.open();
+    harness.events.fail(new Event('error'));
+    const effect = client.request(threadCreateRequest());
+    harness.events.open();
+    harness.events.emitReset(9);
+    harness.events.emitSync(9);
+
+    await expect(effect).rejects.toThrow('Reconnect resnapshot failed');
+    expect(harness.requests).toEqual([threadListRequest()]);
+    unsubscribe();
+  });
+
+  it('retains reset debt until a later reconnect installs a successful snapshot', async () => {
+    let attempts = 0;
+    const harness = new BrowserHarness(async (request) => {
+      if (request.method !== 'thread/list') return successResponse(request.method, {});
+      attempts += 1;
+      return attempts === 1
+        ? new Response('resnapshot failed', { status: 503 })
+        : threadListResponse('recovered');
+    });
+    const client = harness.client();
+    const unsubscribe = client.subscribe(() => undefined);
+    harness.events.open();
+    harness.events.fail(new Event('first-error'));
+    const first = client.request(threadCreateRequest());
+    harness.events.open();
+    harness.events.emitReset(9);
+    harness.events.emitSync(9);
+    await expect(first).rejects.toThrow('Reconnect resnapshot failed');
+
+    harness.events.fail(new Event('second-error'));
+    const second = client.request(threadCreateRequest());
+    harness.events.open();
+    harness.events.emitSync(10);
+    await second;
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      'thread/list',
+      'thread/list',
+      'thread/create',
+    ]);
+    unsubscribe();
+  });
+
+  it('ignores stale generation snapshots and installs only the current reset', async () => {
+    const firstSnapshot = deferred<Response>();
+    const secondSnapshot = deferred<Response>();
+    const snapshots = [firstSnapshot, secondSnapshot];
+    const harness = new BrowserHarness(async (request) => {
+      if (request.method === 'project/read')
+        return successResponse(request.method, { project: project(PROJECT_ONE) });
+      if (request.method === 'thread/list') return await snapshots.shift()!.promise;
+      return successResponse(request.method, { thread: thread('created') });
+    });
+    const client = harness.client();
+    await client.request(projectReadRequest());
+    harness.clearRequests();
+    const installed: string[] = [];
+    const unsubscribe = client.subscribe((envelope) => {
+      if (envelope.notification.type === 'sync/reset') {
+        installed.push(...envelope.notification.threads.map((entry) => entry.id));
+      }
+    });
+    harness.events.open();
+    harness.events.fail(new Event('first-error'));
+    harness.events.open();
+    harness.events.emitReset(1);
+    harness.events.emitSync(1);
+    await Promise.resolve();
+
+    harness.events.fail(new Event('second-error'));
+    const effect = client.request(threadCreateRequest());
+    harness.events.open();
+    harness.events.emitReset(2);
+    harness.events.emitSync(2);
+    await Promise.resolve();
+    firstSnapshot.resolve(threadListResponse('stale'));
+    await Promise.resolve();
+    expect(installed).toEqual([]);
+
+    secondSnapshot.resolve(threadListResponse('current'));
+    await effect;
+    expect(installed).toEqual(['current']);
+    unsubscribe();
+  });
+
+  it('rejects an open-generation request invalidated synchronously by reconnect', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+    const unsubscribe = client.subscribe(() => undefined);
+    harness.events.open();
+
+    const invalidated = client.request(threadListRequest());
+    harness.events.fail(new Event('error'));
+    harness.events.open();
+
+    await expect(invalidated).rejects.toThrow('Browser event subscription changed before request');
+    expect(harness.requests).toEqual([]);
+    harness.events.emitSync(2);
+    unsubscribe();
+  });
+
+  it('rejects an open-generation request invalidated synchronously by unsubscribe', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+    const unsubscribe = client.subscribe(() => undefined);
+    harness.events.open();
+
+    const invalidated = client.request(threadListRequest());
+    unsubscribe();
+
+    await expect(invalidated).rejects.toThrow('Browser event subscription changed before request');
+    expect(harness.requests).toEqual([]);
+  });
+
+  it('does not POST when reconnect invalidates the outer-await continuation', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+    const unsubscribe = client.subscribe(() => undefined);
+    harness.events.open();
+
+    const invalidated = client.request(threadListRequest());
+    queueMicrotask(() =>
+      queueMicrotask(() => {
+        harness.events.fail(new Event('error'));
+        harness.events.open();
+      })
+    );
+
+    await expect(invalidated).rejects.toThrow('Browser event subscription changed before request');
+    expect(harness.requests).toEqual([]);
+    harness.events.emitSync(2);
+    unsubscribe();
+  });
+
+  it('does not POST when unsubscribe invalidates the outer-await continuation', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+    const unsubscribe = client.subscribe(() => undefined);
+    harness.events.open();
+
+    const invalidated = client.request(threadListRequest());
+    queueMicrotask(() => queueMicrotask(unsubscribe));
+
+    await expect(invalidated).rejects.toThrow('Browser event subscription changed before request');
+    expect(harness.requests).toEqual([]);
+  });
+
+  it('disconnect rejects pending readiness and a stale open cannot revive it', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+    const received: AgentAppNotificationEnvelope[] = [];
+    const unsubscribe = client.subscribe((envelope) => received.push(envelope));
+    const pending = client.request(threadListRequest());
+
+    unsubscribe();
+    harness.events.open();
+    harness.events.emitNotification(PROJECT_ONE, {
+      type: 'thread/started',
+      thread: thread('stale'),
     });
 
+    await expect(pending).rejects.toThrow('Browser event subscription disconnected');
+    expect(harness.requests).toEqual([]);
+    expect(received).toEqual([]);
+  });
+
+  it('resnapshots the most recently requested project and envelopes its reset', async () => {
+    const harness = new BrowserHarness();
+    const client = harness.client();
+    await client.request(threadListRequest(PROJECT_ONE));
+    await client.request(threadListRequest(PROJECT_TWO));
+    harness.clearRequests();
+    const received: AgentAppNotificationEnvelope[] = [];
+    const unsubscribe = client.subscribe((envelope) => received.push(envelope));
+    harness.events.open();
+    harness.events.fail(new Event('error'));
+    harness.events.open();
+    harness.events.emitReset(5);
+    harness.events.emitSync(5);
+    await waitFor(() => received.length === 1);
+
+    expect(harness.requests).toEqual([threadListRequest(PROJECT_TWO)]);
+    expect(received[0]?.projectId).toBe(PROJECT_TWO);
+    expect(received[0]?.notification.type).toBe('sync/reset');
+    unsubscribe();
+  });
+});
+
+describe('project-scoped WebUiClient', () => {
+  it('bootstraps no-project state through project/create before thread/create', async () => {
+    const client = new FakeAgentAppClient([]);
+    const webUi = new WebUiClient({ client, projectRoot: '/workspace', projectName: 'Workspace' });
+
+    await webUi.connect();
+
+    expect(client.requests.map((request) => request.method)).toEqual([
+      'project/list',
+      'project/create',
+      'thread/create',
+    ]);
+    expect(client.requests[1]?.params).toMatchObject({ name: 'Workspace', rootPath: '/workspace' });
+    expect(client.requests[2]?.params.projectId).toBe('created-project');
+  });
+
+  it('selects the requested active project and scopes the initial thread read', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE), project(PROJECT_TWO)]);
+    const webUi = new WebUiClient({ client });
+
+    await webUi.connect({ projectId: PROJECT_TWO, threadId: 'thread-2' });
+
+    expect(client.requests.at(-1)).toEqual({
+      method: 'thread/read',
+      params: { projectId: PROJECT_TWO, threadId: 'thread-2' },
+    });
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-2');
+  });
+
+  it('replays selected-project notifications that arrive during snapshot handoff', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
+    const pending = client.deferNext('thread/read');
+    const webUi = new WebUiClient({ client });
+    const connecting = webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+    await waitFor(() => client.subscribeCalls === 1);
+    client.emit(PROJECT_ONE, itemNotification('item-2'));
+    pending.resolve(
+      success('thread/read', {
+        thread: thread('thread-1', {
+          status: 'running',
+          items: [protocolItem('item-1', 1, 'user.message.completed')],
+        }),
+      })
+    );
     await connecting;
 
     expect([...webUi.getSnapshot().state.items].map((item) => item.id)).toEqual([
@@ -41,713 +416,225 @@ describe('Web UI client', () => {
     ]);
   });
 
-  it('uses same-origin browser routes without receiving a capability', async () => {
-    const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
-    let eventUrl: string | undefined;
-    const eventSource = new RecordingEventSource();
-    const client = new BrowserAppServerTransportClient({
-      fetch: (async (input, init) => {
-        requests.push({ input, init });
-        return new Response(
-          JSON.stringify({
-            method: 'thread/list',
-            ok: true,
-            result: { threads: [] },
-          }),
-          { status: 200 }
-        );
-      }) as typeof fetch,
-      createEventSource: (url: string) => {
-        eventUrl = url;
-        return eventSource;
-      },
-    });
-
-    await client.request({ method: 'thread/list' });
-    const unsubscribe = client.subscribe(() => undefined);
-
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.input).toBe('/request');
-    expect(requests[0]?.init?.headers).toEqual({
-      accept: 'application/json',
-      'content-type': 'application/json',
-    });
-    expect(eventUrl).toBe('/events');
-
-    unsubscribe();
-  });
-
-  it('surfaces transport failures and subscription lifecycle events through public browser callbacks', async () => {
-    const statuses: Array<{ status: string; error?: unknown }> = [];
-    const events = new ControllableEventSource();
-    const notifications: string[] = [];
-    const client = new BrowserAppServerTransportClient({
-      fetch: (async () => new Response('proxy unavailable', { status: 503 })) as typeof fetch,
-      createEventSource: () => events,
-      onSubscriptionStatus: (status: string, error: unknown) => statuses.push({ status, error }),
-    });
-
-    await expect(client.request({ method: 'thread/list' })).rejects.toThrow(
-      'App Server request failed with HTTP 503: proxy unavailable'
-    );
-    const unsubscribe = client.subscribe((notification) => notifications.push(notification.type));
-    events.open();
-    events.emitNotification({
-      type: 'thread/started',
-      thread: { id: 'thread-1', status: 'idle', turns: [], items: [] },
-    });
-    const streamFailure = new Event('error');
-    events.fail(streamFailure);
-    unsubscribe();
-
-    expect(notifications).toEqual(['thread/started']);
-    expect(statuses).toEqual([
-      { status: 'connected' },
-      { status: 'failed', error: streamFailure },
-      { status: 'disconnected' },
-    ]);
-    expect(events.closed).toBe(true);
-  });
-
-  it('waits for browser EventSource readiness before a thread request can overtake it', async () => {
-    const events = new ControllableEventSource();
-    const requests: AppServerRequestInput[] = [];
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async (_input, init) => {
-        requests.push(JSON.parse(String(init?.body)) as AppServerRequestInput);
-        return new Response(
-          JSON.stringify({
-            method: 'thread/start',
-            ok: true,
-            result: { thread: { id: 'thread-1', status: 'idle', turns: [], items: [] } },
-          })
-        );
-      }) as typeof fetch,
-    });
-
-    const unsubscribe = client.subscribe(() => undefined);
-    const pending = client.request({ method: 'thread/start' });
-    await Promise.resolve();
-    expect(requests).toEqual([]);
-
-    events.open();
-    await pending;
-    expect(requests).toEqual([{ method: 'thread/start' }]);
-    unsubscribe();
-  });
-
-  it('fails a request waiting on an errored subscription without sending its POST', async () => {
-    const events = new ControllableEventSource();
-    let fetchCalls = 0;
-    const statuses: string[] = [];
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async () => {
-        fetchCalls += 1;
-        return new Response(
-          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
-        );
-      }) as typeof fetch,
-      onSubscriptionStatus: (status: string) => statuses.push(status),
-    });
-    const unsubscribe = client.subscribe(() => undefined);
-    const pending = client.request({ method: 'thread/list' });
-    const rejected = expect(pending).rejects.toThrow(
-      'Browser event subscription failed before request'
-    );
-    events.fail(new Event('error'));
-    await rejected;
-
-    expect(fetchCalls).toBe(0);
-    expect(statuses).toEqual(['failed']);
-    unsubscribe();
-  });
-
-  it('blocks effectful requests until browser SSE replay completes', async () => {
-    const events = new ControllableEventSource();
-    let fetchCalls = 0;
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async () => {
-        fetchCalls += 1;
-        return new Response(
-          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
-        );
-      }) as typeof fetch,
-    });
-    const unsubscribe = client.subscribe(() => undefined);
-    events.open();
-    events.fail(new Event('error'));
-
-    const pending = client.request({ method: 'thread/start' });
-    await Promise.resolve();
-    expect(fetchCalls).toBe(0);
-    events.open();
-    await Promise.resolve();
-    expect(fetchCalls).toBe(0);
-    events.emitSync({ streamId: 'stream-1', cursor: 2 });
-    await pending;
-
-    expect(fetchCalls).toBe(1);
-    unsubscribe();
-  });
-
-  it('recovers item, approval, and terminal notifications before reopening effects', async () => {
-    const events = new ControllableEventSource();
-    const received: string[] = [];
-    let fetchCalls = 0;
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async () => {
-        fetchCalls += 1;
-        return new Response(
-          JSON.stringify({
-            method: 'thread/start',
-            ok: true,
-            result: { thread: { id: 'thread-1', status: 'idle', turns: [], items: [] } },
-          })
-        );
-      }) as typeof fetch,
-    });
-    const unsubscribe = client.subscribe((notification) => received.push(notification.type));
-    events.open();
-    events.fail(new Event('error'));
-    const effect = client.request({ method: 'thread/start' });
-    events.open();
-    events.emitNotification({
-      type: 'item/appended',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      item: protocolItem('item-2', 2, 'assistant.message.completed'),
-    });
-    events.emitNotification({
-      type: 'approval/requested',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      approvalId: 'approval-1',
-      item: protocolItem('item-3', 3, 'approval.requested'),
-    });
-    events.emitNotification({
-      type: 'turn/completed',
-      threadId: 'thread-1',
-      turn: {
-        id: 'turn-1',
-        runId: 'run-1',
-        status: 'completed',
-        itemIds: ['item-2', 'item-3'],
-      },
-    });
-    await Promise.resolve();
-    expect(fetchCalls).toBe(0);
-    events.emitSync({ streamId: 'stream-1', cursor: 3 });
-    await effect;
-
-    expect(received).toEqual(['item/appended', 'approval/requested', 'turn/completed']);
-    expect(fetchCalls).toBe(1);
-    unsubscribe();
-  });
-
-  it('resnapshots on a reconnect gap before releasing effectful requests', async () => {
-    const events = new ControllableEventSource();
-    const snapshot = deferred<Response>();
-    const postedMethods: string[] = [];
-    const notifications: string[] = [];
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async (_input, init) => {
-        const request = JSON.parse(String(init?.body)) as AppServerRequestInput;
-        postedMethods.push(request.method);
-        if (request.method === 'thread/list') return await snapshot.promise;
-        return new Response(
-          JSON.stringify({
-            method: request.method,
-            ok: true,
-            result: { thread: { id: 'new', status: 'idle', turns: [], items: [] } },
-          })
-        );
-      }) as typeof fetch,
-    });
-    const unsubscribe = client.subscribe((notification) => notifications.push(notification.type));
-    events.open();
-    events.fail(new Event('error'));
-    const effect = client.request({ method: 'thread/start' });
-    events.open();
-    events.emitReset({ streamId: 'stream-2', cursor: 9 });
-    events.emitSync({ streamId: 'stream-2', cursor: 9 });
-    await Promise.resolve();
-
-    expect(postedMethods).toEqual(['thread/list']);
-    snapshot.resolve(
-      new Response(
-        JSON.stringify({
-          method: 'thread/list',
-          ok: true,
-          result: {
-            threads: [
-              {
-                id: 'thread-1',
-                status: 'idle',
-                turns: [],
-                items: [protocolItem('item-9', 9, 'turn.completed')],
-              },
-            ],
-            persistenceFailures: [],
-          },
-        })
-      )
-    );
-    await effect;
-
-    expect(postedMethods).toEqual(['thread/list', 'thread/start']);
-    expect(notifications).toContain('sync/reset');
-    unsubscribe();
-  });
-
-  it('does not release the effect gate when reconnect resnapshot fails', async () => {
-    const events = new ControllableEventSource();
-    const postedMethods: string[] = [];
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async (_input, init) => {
-        const request = JSON.parse(String(init?.body)) as AppServerRequestInput;
-        postedMethods.push(request.method);
-        if (request.method === 'thread/list') {
-          return new Response('resnapshot failed', { status: 503 });
-        }
-        return new Response('{}');
-      }) as typeof fetch,
-    });
-    const unsubscribe = client.subscribe(() => undefined);
-    events.open();
-    events.fail(new Event('error'));
-    const effect = client.request({ method: 'thread/start' });
-    events.open();
-    events.emitReset({ streamId: 'stream-2', cursor: 9 });
-    events.emitSync({ streamId: 'stream-2', cursor: 9 });
-
-    await expect(effect).rejects.toThrow('Reconnect resnapshot failed');
-    expect(postedMethods).toEqual(['thread/list']);
-    unsubscribe();
-  });
-
-  it('retains reset debt across a failed resnapshot and requires a later successful snapshot', async () => {
-    const events = new ControllableEventSource();
-    const secondSnapshot = deferred<Response>();
-    const postedMethods: string[] = [];
-    let listAttempts = 0;
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async (_input, init) => {
-        const request = JSON.parse(String(init?.body)) as AppServerRequestInput;
-        postedMethods.push(request.method);
-        if (request.method === 'thread/list') {
-          listAttempts += 1;
-          if (listAttempts === 1) return new Response('resnapshot failed', { status: 503 });
-          return await secondSnapshot.promise;
-        }
-        return new Response(
-          JSON.stringify({
-            method: request.method,
-            ok: true,
-            result: { thread: { id: 'new', status: 'idle', turns: [], items: [] } },
-          })
-        );
-      }) as typeof fetch,
-    });
-    const unsubscribe = client.subscribe(() => undefined);
-    events.open();
-    events.fail(new Event('first-disconnect'));
-    const firstEffect = client.request({ method: 'thread/start' });
-    events.open();
-    events.emitReset({ streamId: 'stream-2', cursor: 9 });
-    events.emitReset({ streamId: 'stream-2', cursor: 9 });
-    events.emitSync({ streamId: 'stream-2', cursor: 9 });
-    await expect(firstEffect).rejects.toThrow('Reconnect resnapshot failed');
-
-    events.fail(new Event('retry-disconnect'));
-    const secondEffect = client.request({ method: 'thread/start' });
-    events.open();
-    events.emitSync({ streamId: 'stream-2', cursor: 10 });
-    await Promise.resolve();
-    expect(postedMethods).toEqual(['thread/list', 'thread/list']);
-
-    secondSnapshot.resolve(
-      new Response(
-        JSON.stringify({
-          method: 'thread/list',
-          ok: true,
-          result: { threads: [], persistenceFailures: [] },
-        })
-      )
-    );
-    await secondEffect;
-    expect(postedMethods).toEqual(['thread/list', 'thread/list', 'thread/start']);
-    unsubscribe();
-  });
-
-  it('ignores an old generation resnapshot and installs only the current reset snapshot', async () => {
-    const events = new ControllableEventSource();
-    const firstSnapshot = deferred<Response>();
-    const secondSnapshot = deferred<Response>();
-    const snapshots = [firstSnapshot, secondSnapshot];
-    const postedMethods: string[] = [];
-    const installedThreadIds: string[] = [];
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async (_input, init) => {
-        const request = JSON.parse(String(init?.body)) as AppServerRequestInput;
-        postedMethods.push(request.method);
-        if (request.method === 'thread/list') return await snapshots.shift()!.promise;
-        return new Response(
-          JSON.stringify({
-            method: request.method,
-            ok: true,
-            result: { thread: { id: 'effect', status: 'idle', turns: [], items: [] } },
-          })
-        );
-      }) as typeof fetch,
-    });
-    const unsubscribe = client.subscribe((notification) => {
-      if (notification.type === 'sync/reset') {
-        installedThreadIds.push(...(notification.threads ?? []).map((thread) => thread.id));
-      }
-    });
-    events.open();
-    events.fail(new Event('first-disconnect'));
-    events.open();
-    events.emitReset({ streamId: 'stream-2', cursor: 1 });
-    events.emitSync({ streamId: 'stream-2', cursor: 1 });
-    await Promise.resolve();
-
-    events.fail(new Event('second-disconnect'));
-    const effect = client.request({ method: 'thread/start' });
-    events.open();
-    events.emitReset({ streamId: 'stream-3', cursor: 2 });
-    events.emitSync({ streamId: 'stream-3', cursor: 2 });
-    await Promise.resolve();
-    expect(postedMethods).toEqual(['thread/list', 'thread/list']);
-
-    firstSnapshot.resolve(threadListResponse('stale-thread'));
-    await Promise.resolve();
-    expect(installedThreadIds).toEqual([]);
-    expect(postedMethods).toEqual(['thread/list', 'thread/list']);
-
-    secondSnapshot.resolve(threadListResponse('current-thread'));
-    await effect;
-    expect(installedThreadIds).toEqual(['current-thread']);
-    expect(postedMethods).toEqual(['thread/list', 'thread/list', 'thread/start']);
-    unsubscribe();
-  });
-
-  it('rejects an open-generation request invalidated synchronously by reconnect', async () => {
-    const events = new ControllableEventSource();
-    let fetchCalls = 0;
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async () => {
-        fetchCalls += 1;
-        return new Response(
-          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
-        );
-      }) as typeof fetch,
-    });
-    const unsubscribe = client.subscribe(() => undefined);
-    events.open();
-
-    const invalidated = client.request({ method: 'thread/list' });
-    const rejected = expect(invalidated).rejects.toThrow(
-      'Browser event subscription changed before request'
-    );
-    events.fail(new Event('error'));
-    events.open();
-    await rejected;
-    expect(fetchCalls).toBe(0);
-
-    events.emitSync({ streamId: 'stream-1', cursor: 2 });
-    await client.request({ method: 'thread/list' });
-    expect(fetchCalls).toBe(1);
-    unsubscribe();
-  });
-
-  it('rejects an open-generation request invalidated synchronously by disconnect', async () => {
-    const events = new ControllableEventSource();
-    let fetchCalls = 0;
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async () => {
-        fetchCalls += 1;
-        return new Response('{}');
-      }) as typeof fetch,
-    });
-    const unsubscribe = client.subscribe(() => undefined);
-    events.open();
-
-    const invalidated = client.request({ method: 'thread/list' });
-    const rejected = expect(invalidated).rejects.toThrow(
-      'Browser event subscription changed before request'
-    );
-    unsubscribe();
-    events.open();
-    await rejected;
-
-    expect(fetchCalls).toBe(0);
-  });
-
-  it('does not POST an open-generation request invalidated in the outer-await reconnect window', async () => {
-    const events = new ControllableEventSource();
-    let fetchCalls = 0;
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async () => {
-        fetchCalls += 1;
-        return new Response(
-          JSON.stringify({ method: 'thread/list', ok: true, result: { threads: [] } })
-        );
-      }) as typeof fetch,
-    });
-    const unsubscribe = client.subscribe(() => undefined);
-    events.open();
-
-    const invalidated = client.request({ method: 'thread/list' });
-    const rejected = expect(invalidated).rejects.toThrow(
-      'Browser event subscription changed before request'
-    );
-    queueMicrotask(() => {
-      queueMicrotask(() => {
-        events.fail(new Event('error'));
-        events.open();
-      });
-    });
-    await rejected;
-    expect(fetchCalls).toBe(0);
-
-    events.emitSync({ streamId: 'stream-1', cursor: 2 });
-    await client.request({ method: 'thread/list' });
-    expect(fetchCalls).toBe(1);
-    unsubscribe();
-  });
-
-  it('does not POST an open-generation request invalidated in the outer-await disconnect window', async () => {
-    const events = new ControllableEventSource();
-    let fetchCalls = 0;
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async () => {
-        fetchCalls += 1;
-        return new Response('{}');
-      }) as typeof fetch,
-    });
-    const unsubscribe = client.subscribe(() => undefined);
-    events.open();
-
-    const invalidated = client.request({ method: 'thread/list' });
-    const rejected = expect(invalidated).rejects.toThrow(
-      'Browser event subscription changed before request'
-    );
-    queueMicrotask(() => {
-      queueMicrotask(() => {
-        unsubscribe();
-        events.open();
-      });
-    });
-    await rejected;
-
-    expect(fetchCalls).toBe(0);
-  });
-
-  it('disconnect rejects pending browser readiness and stale open cannot revive it', async () => {
-    const events = new ControllableEventSource();
-    const statuses: string[] = [];
-    const notifications: string[] = [];
-    let fetchCalls = 0;
-    const client = new BrowserAppServerTransportClient({
-      createEventSource: () => events,
-      fetch: (async () => {
-        fetchCalls += 1;
-        return new Response('{}');
-      }) as typeof fetch,
-      onSubscriptionStatus: (status: string) => statuses.push(status),
-    });
-    const unsubscribe = client.subscribe((notification) => notifications.push(notification.type));
-    const pending = client.request({ method: 'thread/list' });
-    const rejected = expect(pending).rejects.toThrow('Browser event subscription disconnected');
-    unsubscribe();
-    await rejected;
-    events.open();
-    events.emitNotification({
-      type: 'thread/started',
-      thread: { id: 'stale-thread', status: 'idle', turns: [], items: [] },
-    });
-
-    expect(fetchCalls).toBe(0);
-    expect(statuses).toEqual(['disconnected']);
-    expect(notifications).toEqual([]);
-  });
-
-  it('connects through real transport and projects streamed turn notifications', async () => {
-    const server = new AppServer({
-      threadManagerOptions: {
-        generateThreadId: sequence('thread'),
-        generateRunId: sequence('run'),
-        generateTurnId: sequence('turn'),
-        generateItemId: sequence('item'),
-        clock: () => 1000,
-        runtimeFactory: () => ({
-          model: {
-            async *generate() {
-              yield { type: 'text.delta', text: 'Hel' };
-              yield { type: 'text.delta', text: 'lo' };
-              yield { type: 'message.completed', content: 'Hello' };
-            },
-          } satisfies ModelGateway,
-        }),
-      },
-    });
-    const transport = await serveAppServerHttpTransport({ appServer: server });
-    const client = new HttpAppServerClient({
-      baseUrl: transport.url,
-      capability: transport.capability,
-    });
+  it('switches projects through an authoritative snapshot without stale notification leakage', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE), project(PROJECT_TWO)]);
     const webUi = new WebUiClient({ client });
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+    client.emit(PROJECT_ONE, itemNotification('local'));
+    const staleListener = client.lastListener;
+    const nextRead = client.deferNext('thread/read');
 
-    try {
-      await webUi.connect();
-      expect(webUi.getSnapshot().connection.status).toBe('connected');
-      expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-1');
-
-      await webUi.submitMessage('Hello');
-      await waitForStatus(webUi, 'connected');
-
-      const snapshot = webUi.getSnapshot();
-      expect(snapshot.state.currentThread?.status).toBe('idle');
-      expect([...snapshot.state.timelineRows]).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: 'user', content: 'Hello' }),
-          expect.objectContaining({ type: 'assistant', content: 'Hello' }),
-        ])
-      );
-    } finally {
-      webUi.disconnect();
-      await transport.close();
-    }
-  });
-
-  it('shows failed and disconnected states outside the item projection', async () => {
-    const client = new RecordingClient();
-    const webUi = new WebUiClient({ client });
-
-    await webUi.connect();
-    await webUi.submitMessage('fail');
-    client.emit({
-      type: 'turn/failed',
-      threadId: 'thread-1',
-      turn: {
-        id: 'turn-1',
-        runId: 'run-1',
-        status: 'failed',
-        itemIds: [],
-      },
-      error: {
-        code: 'MODEL_FAILED',
-        message: 'model failed',
-      },
-    });
-
-    expect(webUi.getSnapshot()).toEqual(
-      expect.objectContaining({
-        connection: {
-          mode: 'real',
-          status: 'failed',
-          message: 'model failed',
-        },
-        state: expect.objectContaining({
-          currentThread: expect.objectContaining({ status: 'failed' }),
+    const switching = webUi.connect({ projectId: PROJECT_TWO, threadId: 'thread-2' });
+    expect([...webUi.getSnapshot().state.items]).toEqual([]);
+    staleListener?.({ projectId: PROJECT_ONE, notification: itemNotification('stale') });
+    client.emit(PROJECT_ONE, itemNotification('foreign'));
+    await waitFor(() => client.subscribeCalls === 2);
+    client.emit(PROJECT_TWO, itemNotification('buffered', 'thread-2'));
+    await waitFor(() => client.requests.at(-1)?.method === 'thread/read');
+    nextRead.resolve(
+      success('thread/read', {
+        thread: thread('thread-2', {
+          items: [protocolItem('authoritative', 1, 'user.message.completed')],
         }),
       })
     );
+    await switching;
+
+    expect([...webUi.getSnapshot().state.items].map((item) => item.id)).toEqual([
+      'authoritative',
+      'buffered',
+    ]);
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-2');
+    expect(client.activeSubscriptions).toBe(1);
+  });
+
+  it('adds projectId and idempotency keys to thread, turn, and approval mutations', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
+    const webUi = new WebUiClient({ client });
+    await webUi.connect({ projectId: PROJECT_ONE });
+    await webUi.startThread();
+    await webUi.submitMessage('hello');
+    await webUi.interruptThread();
+    await webUi.retryTurn('turn-1');
+    await webUi.resolveApproval(
+      { approvalId: 'approval-1', threadId: 'thread-1', turnId: 'turn-1' },
+      'decline'
+    );
+
+    for (const request of client.requests.filter((entry) => isScopedMethod(entry.method))) {
+      expect(request.params.projectId).toBe(PROJECT_ONE);
+    }
+    for (const request of client.requests.filter((entry) => isMutation(entry.method))) {
+      expect(request.params.idempotencyKey).toEqual(expect.any(String));
+    }
+  });
+
+  it('disconnects the stream and ignores a captured stale callback', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
+    const webUi = new WebUiClient({ client });
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+    const stale = client.lastListener;
 
     webUi.disconnect();
+    stale?.({ projectId: PROJECT_ONE, notification: itemNotification('stale') });
 
-    expect(webUi.getSnapshot().connection).toEqual({
-      mode: 'real',
-      status: 'disconnected',
-    });
+    expect(webUi.getSnapshot().connection.status).toBe('disconnected');
+    expect([...webUi.getSnapshot().state.items]).toEqual([]);
+    expect(client.activeSubscriptions).toBe(0);
   });
 
-  it('derives connection from an authoritative reset when a terminal event was missed', async () => {
-    const client = new RecordingClient();
+  it('rejects superseded connect completions and keeps the newer project lifecycle', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE), project(PROJECT_TWO)]);
+    const firstList = client.deferNext('project/list');
+    const secondList = client.deferNext('project/list');
     const webUi = new WebUiClient({ client });
-    await webUi.connect();
-    await webUi.submitMessage('running');
-    expect(webUi.getSnapshot().connection.status).toBe('running');
+    const stale = webUi.connect({ projectId: PROJECT_ONE });
+    const current = webUi.connect({ projectId: PROJECT_TWO, threadId: 'thread-2' });
 
-    client.emit({
-      type: 'sync/reset',
-      threads: [
-        {
-          id: 'thread-1',
-          status: 'idle',
-          turns: [{ id: 'turn-1', runId: 'run-1', status: 'completed', itemIds: ['item-1'] }],
-          items: [protocolItem('item-1', 1, 'turn.completed')],
-        },
-      ],
-    });
+    secondList.resolve(success('project/list', { projects: client.projects }));
+    await current;
+    firstList.resolve(success('project/list', { projects: client.projects }));
 
-    expect(webUi.getSnapshot().connection).toEqual({ mode: 'real', status: 'connected' });
-    expect(webUi.getSnapshot().state.currentThread?.status).toBe('idle');
-  });
-
-  it('derives connection across multi-thread reset, thread switch, and missing current thread', async () => {
-    const client = new RecordingClient();
-    const webUi = new WebUiClient({ client });
-    await webUi.connect();
-    await webUi.submitMessage('running');
-
-    client.emit({
-      type: 'sync/reset',
-      threads: [
-        { id: 'thread-2', status: 'running', turns: [], items: [] },
-        { id: 'thread-1', status: 'idle', turns: [], items: [] },
-      ],
-    });
-    expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-1');
-    expect(webUi.getSnapshot().connection.status).toBe('connected');
-
-    client.emit({
-      type: 'turn/started',
-      threadId: 'thread-1',
-      turn: { id: 'turn-2', runId: 'run-2', status: 'inProgress', itemIds: [] },
-    });
-    client.emit({
-      type: 'thread/started',
-      thread: { id: 'thread-2', status: 'idle', turns: [], items: [] },
-    });
+    await expect(stale).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
     expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-2');
-    expect(webUi.getSnapshot().connection.status).toBe('connected');
-
-    client.emit({
-      type: 'turn/started',
-      threadId: 'thread-2',
-      turn: { id: 'turn-3', runId: 'run-3', status: 'inProgress', itemIds: [] },
-    });
-    client.emit({
-      type: 'sync/reset',
-      threads: [{ id: 'thread-1', status: 'idle', turns: [], items: [] }],
-    });
-    expect(webUi.getSnapshot().state.currentThread).toBeUndefined();
-    expect(webUi.getSnapshot().connection).toEqual({ mode: 'real', status: 'connected' });
+    expect(client.activeSubscriptions).toBe(1);
   });
 
-  it('derives the failed connection message from an authoritative reset turn', async () => {
-    const client = new RecordingClient();
+  it('cancels stale public start and resume loads across lifecycle replacement', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
     const webUi = new WebUiClient({ client });
-    await webUi.connect();
-    client.emit({
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+    expect(client.subscribeCalls).toBe(1);
+    const staleCreate = client.deferNext('thread/create');
+    const start = webUi.startThread();
+    webUi.disconnect();
+    staleCreate.resolve(success('thread/create', { thread: thread('stale') }));
+    await expect(start).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
+
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-2' });
+    expect(client.subscribeCalls).toBe(2);
+    const staleRead = client.deferNext('thread/read');
+    const resume = webUi.resumeThread('thread-3');
+    webUi.dispose();
+    staleRead.resolve(success('thread/read', { thread: thread('stale') }));
+    await expect(resume).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
+    expect(client.activeSubscriptions).toBe(0);
+  });
+
+  it('does not publish repeated identical create or read snapshots', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
+    const webUi = new WebUiClient({ client });
+    let calls = 0;
+    webUi.subscribe(() => (calls += 1));
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+    const connected = webUi.getSnapshot();
+    const connectedCalls = calls;
+
+    await webUi.startThread();
+    await webUi.resumeThread('thread-1');
+
+    expect(webUi.getSnapshot()).toBe(connected);
+    expect(calls).toBe(connectedCalls);
+  });
+
+  it('does not publish duplicate terminal notifications', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
+    const webUi = new WebUiClient({ client });
+    let calls = 0;
+    webUi.subscribe(() => (calls += 1));
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+    const completed = completedNotification('turn-1');
+    client.emit(PROJECT_ONE, completed);
+    const snapshot = webUi.getSnapshot();
+    const completedCalls = calls;
+
+    client.emit(PROJECT_ONE, completed);
+
+    expect(webUi.getSnapshot()).toBe(snapshot);
+    expect(calls).toBe(completedCalls);
+  });
+
+  it('submits a project-scoped turn and projects its immediate start notification once', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
+    const webUi = new WebUiClient({ client });
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+
+    await webUi.submitMessage(' hello ');
+
+    const request = client.requests.at(-1);
+    expect(request).toMatchObject({
+      method: 'turn/start',
+      params: { projectId: PROJECT_ONE, threadId: 'thread-1', input: 'hello' },
+    });
+    expect(webUi.getSnapshot().connection.status).toBe('running');
+  });
+
+  it('allows the same project-scoped approval to be retried after rejection', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
+    const webUi = new WebUiClient({ client });
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+    client.rejectNext('approval/resolve', 'stale approval');
+    const approval = { approvalId: 'approval-7', threadId: 'thread-1', turnId: 'turn-9' };
+
+    await expect(webUi.resolveApproval(approval, 'approveOnce')).rejects.toThrow('stale approval');
+    await expect(webUi.resolveApproval(approval, 'approveOnce')).resolves.toBeUndefined();
+
+    const requests = client.requests.filter((entry) => entry.method === 'approval/resolve');
+    expect(requests).toHaveLength(2);
+    expect(requests.every((entry) => entry.params.projectId === PROJECT_ONE)).toBe(true);
+  });
+
+  it('sends project-scoped interrupt and retry commands for the active thread', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
+    const webUi = new WebUiClient({ client });
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+
+    await webUi.interruptThread();
+    await webUi.retryTurn('turn-9');
+
+    expect(client.requests.slice(-2)).toEqual([
+      expect.objectContaining({
+        method: 'turn/interrupt',
+        params: expect.objectContaining({ projectId: PROJECT_ONE, threadId: 'thread-1' }),
+      }),
+      expect.objectContaining({
+        method: 'turn/retry',
+        params: expect.objectContaining({
+          projectId: PROJECT_ONE,
+          threadId: 'thread-1',
+          turnId: 'turn-9',
+        }),
+      }),
+    ]);
+  });
+
+  it('lists and reads threads only through the selected project', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
+    const webUi = new WebUiClient({ client });
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+
+    await expect(webUi.listThreads()).resolves.toHaveLength(2);
+    await webUi.resumeThread('thread-2');
+
+    expect(client.requests.slice(-2)).toEqual([
+      { method: 'thread/list', params: { projectId: PROJECT_ONE } },
+      { method: 'thread/read', params: { projectId: PROJECT_ONE, threadId: 'thread-2' } },
+    ]);
+
+    const unexpected = client.deferNext('thread/list');
+    const listing = webUi.listThreads();
+    unexpected.resolve(success('project/list', { projects: client.projects }));
+    await expect(listing).rejects.toThrow('Expected thread/list response, received project/list');
+  });
+
+  it('derives connection and projection from an authoritative selected-project reset', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
+    const webUi = new WebUiClient({ client });
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+    client.emit(PROJECT_ONE, {
       type: 'sync/reset',
       threads: [
-        {
-          id: 'thread-1',
+        thread('thread-1', {
           status: 'failed',
           turns: [
             {
@@ -758,8 +645,7 @@ describe('Web UI client', () => {
               error: { message: 'snapshot failure' },
             },
           ],
-          items: [],
-        },
+        }),
       ],
     });
 
@@ -770,461 +656,145 @@ describe('Web UI client', () => {
     });
   });
 
-  it('resumes an existing thread by reading it through the client', async () => {
-    const client = new RecordingClient();
+  it('keeps no-op actions silent and exposes rejected runtime actions as failures', async () => {
+    const client = new FakeAgentAppClient([project(PROJECT_ONE)]);
     const webUi = new WebUiClient({ client });
-
-    await webUi.connect({ threadId: 'thread-1' });
-
-    expect(webUi.getSnapshot()).toEqual(
-      expect.objectContaining({
-        connection: { mode: 'real', status: 'connected' },
-        state: expect.objectContaining({
-          currentThread: {
-            id: 'thread-1',
-            status: 'idle',
-            turns: [],
-          },
-        }),
-      })
-    );
-    expect(client.requests.map((request) => request.method)).toEqual(['thread/read']);
-  });
-
-  it('owns one stream across start, resume, reconnect, disconnect, and disposal', async () => {
-    const client = new RecordingClient();
-    const webUi = new WebUiClient({ client });
-
-    await webUi.connect();
-    await webUi.startThread();
-    await webUi.resumeThread('thread-1');
-    expect(client.activeSubscriptions).toBe(1);
-    expect(client.subscribeCalls).toBe(1);
-
-    await webUi.connect({ threadId: 'thread-1' });
-    expect(client.activeSubscriptions).toBe(1);
-    expect(client.subscribeCalls).toBe(2);
-    expect(client.unsubscribeCalls).toBe(1);
-
-    webUi.disconnect();
-    webUi.disconnect();
-    webUi.dispose();
-    expect(client.activeSubscriptions).toBe(0);
-    expect(client.unsubscribeCalls).toBe(2);
-  });
-
-  it('does not publish repeated identical start or resume snapshots', async () => {
-    const client = new RecordingClient();
-    const webUi = new WebUiClient({ client });
-    let listenerCalls = 0;
-    webUi.subscribe(() => {
-      listenerCalls += 1;
-    });
-    await webUi.connect();
-    const connectedSnapshot = webUi.getSnapshot();
-    const connectedCalls = listenerCalls;
-
-    await webUi.startThread();
-    expect(webUi.getSnapshot()).toBe(connectedSnapshot);
-    expect(listenerCalls).toBe(connectedCalls);
-
-    await webUi.resumeThread('thread-1');
-    expect(webUi.getSnapshot()).toBe(connectedSnapshot);
-    expect(listenerCalls).toBe(connectedCalls);
-  });
-
-  it('does not publish duplicate terminal notifications', async () => {
-    const client = new RecordingClient();
-    const webUi = new WebUiClient({ client });
-    let calls = 0;
-    webUi.subscribe(() => {
-      calls += 1;
-    });
-    await webUi.connect();
-    const completed = {
-      type: 'turn/completed' as const,
-      threadId: 'thread-1',
-      turn: { id: 'turn-1', runId: 'run-1', status: 'completed' as const, itemIds: [] },
-    };
-    client.emit(completed);
-    const snapshot = webUi.getSnapshot();
-    const callsAfterCompletion = calls;
-    client.emit(completed);
-    expect(webUi.getSnapshot()).toBe(snapshot);
-    expect(calls).toBe(callsAfterCompletion);
-  });
-
-  it('keeps stale connect completions from reviving a disconnected or newer lifecycle', async () => {
-    const client = new DeferredConnectClient();
-    const webUi = new WebUiClient({ client });
-
-    const stale = webUi.connect();
-    webUi.disconnect();
-    client.resolveNext();
-    await expect(stale).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
-    expect(webUi.getSnapshot().connection.status).toBe('disconnected');
-    expect(client.activeSubscriptions).toBe(0);
-
-    const first = webUi.connect();
-    const second = webUi.connect({ threadId: 'thread-2' });
-    client.resolveNext('thread-1');
-    client.resolveNext('thread-2');
-    await expect(first).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
-    await expect(second).resolves.toBeUndefined();
-    expect(webUi.getSnapshot().connection).toEqual({ mode: 'real', status: 'connected' });
-    expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-2');
-    expect(client.activeSubscriptions).toBe(1);
-    webUi.dispose();
-  });
-
-  it('cancels stale public start and resume loads across lifecycle replacement', async () => {
-    const client = new DeferredConnectClient();
-    const webUi = new WebUiClient({ client });
-    const initial = webUi.connect();
-    client.resolveNext('thread-1');
-    await initial;
-
-    const staleStart = webUi.startThread();
-    webUi.disconnect();
-    client.resolveNext('stale-start');
-    await expect(staleStart).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
-    expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-1');
-
-    const reconnect = webUi.connect({ threadId: 'thread-2' });
-    client.resolveNext('thread-2');
-    await reconnect;
-    const staleResume = webUi.resumeThread('thread-1');
-    const replacement = webUi.connect({ threadId: 'thread-3' });
-    client.resolveNext('stale-resume');
-    client.resolveNext('thread-3');
-    await expect(staleResume).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
-    await expect(replacement).resolves.toBeUndefined();
-    expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-3');
-
-    const staleReplacement = webUi.resumeThread('thread-1');
-    webUi.dispose();
-    client.resolveNext('late-after-dispose');
-    await expect(staleReplacement).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
-  });
-
-  it('submits the approval tuple supplied by the pending approval row', async () => {
-    const client = new RecordingClient();
-    const webUi = new WebUiClient({ client });
-
-    await webUi.resolveApproval(
-      { approvalId: 'approval-7', threadId: 'thread-4', turnId: 'turn-9' },
-      'decline'
-    );
-
-    expect(client.requests.at(-1)).toEqual({
-      method: 'approval/resolve',
-      params: {
-        approvalId: 'approval-7',
-        threadId: 'thread-4',
-        turnId: 'turn-9',
-        decision: 'decline',
-      },
-    });
-  });
-
-  it('allows the same approval action to be retried after a protocol rejection', async () => {
-    const client = new RejectOnceApprovalClient();
-    const webUi = new WebUiClient({ client });
-    const approval = { approvalId: 'approval-7', threadId: 'thread-4', turnId: 'turn-9' };
-
-    await expect(webUi.resolveApproval(approval, 'approveOnce')).rejects.toThrow('stale approval');
-    await expect(webUi.resolveApproval(approval, 'approveOnce')).resolves.toBeUndefined();
-
-    expect(client.requests).toEqual([
-      { method: 'approval/resolve', params: { ...approval, decision: 'approveOnce' } },
-      { method: 'approval/resolve', params: { ...approval, decision: 'approveOnce' } },
-    ]);
-  });
-
-  it('keeps no-op actions silent and exposes rejected runtime actions as connection failures', async () => {
-    const client = new RecordingClient();
-    const webUi = new WebUiClient({ client });
-    const demoUi = new WebUiClient({ client, mode: 'demo' });
-
-    expect(demoUi.getSnapshot().connection.mode).toBe('demo');
-
     await webUi.submitMessage('   ');
     await webUi.interruptThread();
     await webUi.retryTurn();
     expect(client.requests).toEqual([]);
 
-    await webUi.connect();
-    client.reject('turn/start', 'turn start rejected');
+    await webUi.connect({ projectId: PROJECT_ONE, threadId: 'thread-1' });
+    client.rejectNext('turn/start', 'turn start rejected');
     await expect(webUi.submitMessage('start')).rejects.toThrow('turn start rejected');
     expect(webUi.getSnapshot().connection).toMatchObject({
       status: 'failed',
       message: 'turn start rejected',
     });
-
-    client.reject('turn/interrupt', 'interrupt rejected');
-    await expect(webUi.interruptThread()).rejects.toThrow('interrupt rejected');
-    client.reject('turn/retry', 'retry rejected');
-    await expect(webUi.retryTurn('turn-1')).rejects.toThrow('retry rejected');
-  });
-
-  it('rejects unexpected list responses instead of treating another operation as a thread list', async () => {
-    const webUi = new WebUiClient({
-      client: {
-        async request() {
-          return {
-            method: 'thread/start',
-            ok: true,
-            result: { thread: { id: 'thread-1', status: 'idle', turns: [], items: [] } },
-          } as AppServerResponse;
-        },
-        subscribe() {
-          return () => undefined;
-        },
-      },
-    });
-
-    await expect(webUi.listThreads()).rejects.toThrow(
-      'Expected thread/list response, received thread/start'
-    );
-  });
-
-  it('sends successful interrupt and retry commands for the active thread', async () => {
-    const client = new RecordingClient();
-    const webUi = new WebUiClient({ client });
-
-    await webUi.connect();
-    await webUi.interruptThread();
-    await webUi.retryTurn('turn-9');
-
-    expect(client.requests.slice(-2)).toEqual([
-      { method: 'turn/interrupt', params: { threadId: 'thread-1' } },
-      { method: 'turn/retry', params: { threadId: 'thread-1', turnId: 'turn-9' } },
-    ]);
   });
 });
 
-function sequence(prefix: string): () => string {
-  let nextId = 0;
+class BrowserHarness {
+  readonly events = new ControllableEventSource();
+  readonly requests: AgentAppRequest[] = [];
+  readonly requestUrls: string[] = [];
+  eventUrl?: string;
 
-  return () => `${prefix}-${++nextId}`;
-}
+  constructor(
+    private readonly responder: (request: AgentAppRequest) => Promise<Response> | Response = (
+      request
+    ) => defaultHttpResponse(request)
+  ) {}
 
-async function waitForStatus(
-  client: WebUiClient,
-  status: ReturnType<WebUiClient['getSnapshot']>['connection']['status']
-): Promise<void> {
-  if (client.getSnapshot().connection.status === status) return;
-
-  await new Promise<void>((resolve, reject) => {
-    let unsubscribe: () => void = () => undefined;
-    const timeout = setTimeout(() => {
-      unsubscribe();
-      reject(new Error(`Timed out waiting for ${status}`));
-    }, 1_000);
-    unsubscribe = client.subscribe((snapshot) => {
-      if (snapshot.connection.status === status) {
-        clearTimeout(timeout);
-        unsubscribe();
-        resolve();
-      }
+  client(
+    options: {
+      readonly onSubscriptionStatus?: (
+        status: 'connected' | 'disconnected' | 'failed',
+        error?: unknown
+      ) => void;
+    } = {}
+  ): BrowserAgentAppTransportClient {
+    return new BrowserAgentAppTransportClient({
+      fetch: (async (input, init) => {
+        this.requestUrls.push(String(input));
+        const request = JSON.parse(String(init?.body)) as AgentAppRequest;
+        this.requests.push(request);
+        return await this.responder(request);
+      }) as typeof fetch,
+      createEventSource: (url) => {
+        this.eventUrl = url;
+        return this.events;
+      },
+      onSubscriptionStatus: options.onSubscriptionStatus,
     });
-  });
+  }
+
+  clearRequests(): void {
+    this.requests.splice(0);
+    this.requestUrls.splice(0);
+  }
 }
 
-class RecordingClient implements AppServerClient {
-  private listener?: AppServerNotificationListener;
+class FakeAgentAppClient implements AgentAppClient {
+  readonly requests: AgentAppRequest[] = [];
+  readonly projects: ProjectSnapshot[];
   activeSubscriptions = 0;
   subscribeCalls = 0;
-  unsubscribeCalls = 0;
-  readonly requests: Parameters<AppServerClient['request']>[0][] = [];
-  private readonly rejections = new Map<string, string>();
+  lastListener?: AgentAppNotificationListener;
+  private readonly listeners = new Set<AgentAppNotificationListener>();
+  private readonly deferred = new Map<
+    AgentAppMethod,
+    Array<ReturnType<typeof deferred<AgentAppResponse>>>
+  >();
+  private readonly rejections = new Map<AgentAppMethod, string[]>();
 
-  reject(method: string, message: string): void {
-    this.rejections.set(method, message);
+  constructor(projects: readonly ProjectSnapshot[]) {
+    this.projects = [...projects];
   }
 
-  request(request: Parameters<AppServerClient['request']>[0]) {
+  deferNext(method: AgentAppMethod): ReturnType<typeof deferred<AgentAppResponse>> {
+    const value = deferred<AgentAppResponse>();
+    const queue = this.deferred.get(method) ?? [];
+    queue.push(value);
+    this.deferred.set(method, queue);
+    return value;
+  }
+
+  rejectNext(method: AgentAppMethod, message: string): void {
+    const queue = this.rejections.get(method) ?? [];
+    queue.push(message);
+    this.rejections.set(method, queue);
+  }
+
+  async request(request: AgentAppRequest): Promise<AgentAppResponse> {
+    assertProjectScope(request);
     this.requests.push(request);
-    const message = this.rejections.get(request.method);
-    if (message) {
-      return Promise.resolve({
-        method: request.method,
-        ok: false,
-        error: { code: 'REJECTED', message },
-      } as AppServerResponse);
-    }
+    const deferredQueue = this.deferred.get(request.method);
+    const pending = deferredQueue?.shift();
+    if (pending) return await pending.promise;
+    const rejection = this.rejections.get(request.method)?.shift();
+    if (rejection) return failure(request.method, 'INVALID_REQUEST', rejection);
 
-    if (request.method === 'thread/start') {
-      return Promise.resolve({
-        method: 'thread/start',
-        ok: true,
-        result: {
-          thread: {
-            id: 'thread-1',
-            status: 'idle',
-            turns: [],
-            items: [],
-          },
-        },
-      } as const);
+    if (request.method === 'project/list')
+      return success(request.method, { projects: this.projects });
+    if (request.method === 'project/create') {
+      const created = project('created-project', String(request.params.name ?? 'Created'));
+      this.projects.push(created);
+      return success(request.method, { project: created });
     }
-
-    if (request.method === 'thread/read') {
-      return Promise.resolve({
-        method: 'thread/read',
-        ok: true,
-        result: {
-          thread: {
-            id: 'thread-1',
-            status: 'idle',
-            turns: [],
-            items: [],
-          },
-        },
-      } as const);
-    }
-
+    if (request.method === 'thread/list')
+      return success(request.method, { threads: [thread('thread-1'), thread('thread-2')] });
+    if (request.method === 'thread/read')
+      return success(request.method, { thread: thread(String(request.params.threadId)) });
+    if (request.method === 'thread/create')
+      return success(request.method, { thread: thread('thread-1') });
     if (request.method === 'turn/start') {
-      this.emit({
+      this.emit(String(request.params.projectId), {
         type: 'turn/started',
-        threadId: 'thread-1',
-        turn: {
-          id: 'turn-1',
-          runId: 'run-1',
-          status: 'inProgress',
-          itemIds: [],
-        },
+        threadId: String(request.params.threadId),
+        turn: turn('turn-1', 'inProgress'),
       });
-
-      return Promise.resolve({
-        method: 'turn/start',
-        ok: true,
-        result: {
-          turn: {
-            id: 'turn-1',
-            runId: 'run-1',
-            status: 'inProgress',
-            itemIds: [],
-          },
-        },
-      } as const);
+      return success(request.method, { turn: turn('turn-1', 'inProgress') });
     }
-
-    if (request.method === 'turn/interrupt' || request.method === 'turn/retry') {
-      return Promise.resolve({
-        method: request.method,
-        ok: true,
-        result: {
-          turn: {
-            id: 'turn-1',
-            runId: 'run-1',
-            status: request.method === 'turn/retry' ? 'inProgress' : 'canceled',
-            itemIds: [],
-          },
-        },
-      } as AppServerResponse);
-    }
-
-    if (request.method === 'approval/resolve') {
-      const params = request.params as {
-        readonly approvalId: string;
-        readonly decision: 'approveOnce' | 'decline';
-      };
-      return Promise.resolve({
-        method: 'approval/resolve',
-        ok: true,
-        result: {
-          approvalId: params.approvalId,
-          decision: params.decision,
-        },
-      } as const);
-    }
-
-    return Promise.resolve({
-      method: request.method,
-      ok: false,
-      error: {
-        code: 'UNKNOWN_METHOD',
-        message: `Unknown method ${request.method}`,
-      },
-    } as const);
+    return success(request.method, { ok: true });
   }
 
-  subscribe(listener: AppServerNotificationListener): AppServerSubscription {
-    this.listener = listener;
+  subscribe(listener: AgentAppNotificationListener): AgentAppSubscription {
+    this.listeners.add(listener);
+    this.lastListener = listener;
+    this.activeSubscriptions += 1;
     this.subscribeCalls += 1;
-    this.activeSubscriptions += 1;
-
+    let active = true;
     return () => {
-      this.listener = undefined;
+      if (!active) return;
+      active = false;
+      this.listeners.delete(listener);
       this.activeSubscriptions -= 1;
-      this.unsubscribeCalls += 1;
     };
   }
 
-  emit(notification: Parameters<AppServerNotificationListener>[0]): void {
-    this.listener?.(notification);
-  }
-}
-
-class RejectOnceApprovalClient implements AppServerClient {
-  readonly requests: AppServerRequestInput[] = [];
-  private attempts = 0;
-
-  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
-    this.requests.push(request);
-    this.attempts += 1;
-    if (this.attempts === 1) {
-      return {
-        method: 'approval/resolve',
-        ok: false,
-        error: { code: 'STALE', message: 'stale approval' },
-      };
-    }
-    const params = request.params as {
-      readonly approvalId: string;
-      readonly decision: 'approveOnce' | 'decline';
-    };
-    return {
-      method: 'approval/resolve',
-      ok: true,
-      result: { approvalId: params.approvalId, decision: params.decision },
-    };
-  }
-
-  subscribe(_listener: AppServerNotificationListener): AppServerSubscription {
-    return () => undefined;
-  }
-}
-class DeferredConnectClient implements AppServerClient {
-  private readonly pending: Array<(threadId: string) => void> = [];
-  activeSubscriptions = 0;
-
-  request(request: AppServerRequestInput): Promise<AppServerResponse> {
-    return new Promise((resolve) => {
-      this.pending.push((threadId) =>
-        resolve({
-          method: request.method,
-          ok: true,
-          result: { thread: { id: threadId, status: 'idle', turns: [], items: [] } },
-        } as AppServerResponse)
-      );
-    });
-  }
-
-  resolveNext(threadId = 'thread-1'): void {
-    this.pending.shift()?.(threadId);
-  }
-
-  subscribe(_listener: AppServerNotificationListener): AppServerSubscription {
-    this.activeSubscriptions += 1;
-    let closed = false;
-    return () => {
-      if (!closed) {
-        closed = true;
-        this.activeSubscriptions -= 1;
-      }
-    };
+  emit(projectId: string, notification: AgentAppNotification): void {
+    this.listeners.forEach((listener) => listener({ projectId, notification }));
   }
 }
 
@@ -1233,7 +803,6 @@ class RecordingEventSource {
   onerror: ((event: Event) => void) | null = null;
 
   addEventListener(_type: string, _listener: (event: MessageEvent<string>) => void): void {}
-
   close(): void {}
 }
 
@@ -1241,16 +810,11 @@ class ControllableEventSource extends RecordingEventSource {
   private notificationListener?: (event: MessageEvent<string>) => void;
   private resetListener?: (event: MessageEvent<string>) => void;
   private syncListener?: (event: MessageEvent<string>) => void;
-  closed = false;
 
   override addEventListener(type: string, listener: (event: MessageEvent<string>) => void): void {
     if (type === 'notification') this.notificationListener = listener;
     if (type === 'reset') this.resetListener = listener;
     if (type === 'sync') this.syncListener = listener;
-  }
-
-  override close(): void {
-    this.closed = true;
   }
 
   open(): void {
@@ -1261,42 +825,48 @@ class ControllableEventSource extends RecordingEventSource {
     this.onerror?.(event);
   }
 
-  emitNotification(notification: Parameters<AppServerNotificationListener>[0]): void {
-    this.notificationListener?.({ data: JSON.stringify(notification) } as MessageEvent<string>);
+  emitNotification(projectId: string, notification: AgentAppNotification): void {
+    this.notificationListener?.({
+      data: JSON.stringify({ projectId, notification }),
+    } as MessageEvent<string>);
   }
 
-  emitReset(checkpoint: { readonly streamId: string; readonly cursor: number }): void {
-    this.resetListener?.({ data: JSON.stringify(checkpoint) } as MessageEvent<string>);
+  emitReset(cursor: number): void {
+    this.resetListener?.({
+      data: JSON.stringify({ streamId: 'stream', cursor }),
+    } as MessageEvent<string>);
   }
 
-  emitSync(checkpoint: { readonly streamId: string; readonly cursor: number }): void {
-    this.syncListener?.({ data: JSON.stringify(checkpoint) } as MessageEvent<string>);
+  emitSync(cursor: number): void {
+    this.syncListener?.({
+      data: JSON.stringify({ streamId: 'stream', cursor }),
+    } as MessageEvent<string>);
   }
 }
 
-class SnapshotHandoffClient implements AppServerClient {
-  private listener?: AppServerNotificationListener;
-  private readonly response = deferred<import('../src/product/index.js').ThreadSnapshot>();
+function project(id: string, name = id): ProjectSnapshot {
+  return {
+    id,
+    name,
+    rootPath: `/${id}`,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    status: 'active',
+    policy: {
+      maxConcurrentAgents: 2,
+      maxThreadDepth: 4,
+      agentCanCreateThreads: true,
+      agentCanMessagePeers: true,
+    },
+  };
+}
 
-  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
-    const thread = await this.response.promise;
-    return { method: request.method, ok: true, result: { thread } } as AppServerResponse;
-  }
+function thread(id: string, overrides: Partial<ThreadSnapshot> = {}): ThreadSnapshot {
+  return { id, status: 'idle', turns: [], items: [], ...overrides };
+}
 
-  subscribe(listener: AppServerNotificationListener): AppServerSubscription {
-    this.listener = listener;
-    return () => {
-      this.listener = undefined;
-    };
-  }
-
-  emit(notification: Parameters<AppServerNotificationListener>[0]): void {
-    this.listener?.(notification);
-  }
-
-  resolveSnapshot(snapshot: import('../src/product/index.js').ThreadSnapshot): void {
-    this.response.resolve(snapshot);
-  }
+function turn(id: string, status: 'inProgress' | 'completed' | 'failed' | 'canceled') {
+  return { id, runId: `run-${id}`, status, itemIds: [] } as const;
 }
 
 function protocolItem(id: string, seq: number, type: string) {
@@ -1311,17 +881,110 @@ function protocolItem(id: string, seq: number, type: string) {
   };
 }
 
+function itemNotification(id: string, threadId = 'thread-1'): AgentAppNotification {
+  return {
+    type: 'item/appended',
+    threadId,
+    turnId: 'turn-1',
+    item: protocolItem(id, 2, 'assistant.message.completed'),
+  };
+}
+
+function approvalNotification(id: string): AgentAppNotification {
+  return {
+    type: 'approval/requested',
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    approvalId: id,
+    item: protocolItem('approval-item', 3, 'approval.requested'),
+  };
+}
+
+function completedNotification(id: string): AgentAppNotification {
+  return {
+    type: 'turn/completed',
+    threadId: 'thread-1',
+    turn: turn(id, 'completed'),
+  };
+}
+
+function request(method: AgentAppMethod, params: JsonObject): AgentAppRequest {
+  return { method, params };
+}
+
+function threadListRequest(projectId = PROJECT_ONE): AgentAppRequest {
+  return request('thread/list', { projectId });
+}
+
+function threadCreateRequest(projectId = PROJECT_ONE): AgentAppRequest {
+  return request('thread/create', { projectId, idempotencyKey: `create-${projectId}` });
+}
+
+function projectReadRequest(projectId = PROJECT_ONE): AgentAppRequest {
+  return request('project/read', { projectId });
+}
+
+function success(method: AgentAppMethod, result: Record<string, unknown>): AgentAppResponse {
+  return { method, ok: true, result };
+}
+
+function failure(
+  method: AgentAppMethod,
+  code: 'INVALID_REQUEST',
+  message: string
+): AgentAppResponse {
+  return { method, ok: false, error: { code, message } };
+}
+
+function successResponse(method: AgentAppMethod, result: Record<string, unknown>): Response {
+  return new Response(JSON.stringify(success(method, result)));
+}
+
+function defaultHttpResponse(request: AgentAppRequest): Response {
+  if (request.method === 'thread/list') return successResponse(request.method, { threads: [] });
+  if (request.method === 'project/read')
+    return successResponse(request.method, { project: project(String(request.params.projectId)) });
+  return successResponse(request.method, { thread: thread('thread-1') });
+}
+
 function threadListResponse(threadId: string): Response {
-  return new Response(
-    JSON.stringify({
-      method: 'thread/list',
-      ok: true,
-      result: {
-        threads: [{ id: threadId, status: 'idle', turns: [], items: [] }],
-        persistenceFailures: [],
-      },
-    })
-  );
+  return successResponse('thread/list', { threads: [thread(threadId)] });
+}
+
+function assertProjectScope(request: AgentAppRequest): void {
+  if (!isScopedMethod(request.method)) return;
+  if (typeof request.params.projectId !== 'string' || request.params.projectId.length === 0) {
+    throw new Error(`${request.method} missing projectId`);
+  }
+}
+
+function isScopedMethod(method: AgentAppMethod): boolean {
+  return method !== 'project/list' && method !== 'project/create';
+}
+
+function isMutation(method: AgentAppMethod): boolean {
+  return [
+    'project/create',
+    'project/update',
+    'project/archive',
+    'thread/create',
+    'thread/send',
+    'thread/cancel',
+    'thread/archive',
+    'thread/handoff',
+    'turn/start',
+    'turn/interrupt',
+    'turn/retry',
+    'approval/resolve',
+  ].includes(method);
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await Promise.resolve();
+  }
+  throw new Error('Condition did not settle');
 }
 
 function deferred<T>() {
