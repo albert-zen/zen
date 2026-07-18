@@ -18,7 +18,7 @@ integration. Workers implement one issue only.
 
 | Backlog | Ready | In Progress | Agent Review | Rework | Integrated                      | Complete                        | Blocked |
 | ------- | ----- | ----------- | ------------ | ------ | ------------------------------- | ------------------------------- | ------- |
-| -       | -     | -           | -            | -      | 003<br>004<br>005<br>006<br>007 | 001<br>002<br>008<br>009<br>010 | -       |
+| -       | -     | -           | -            | -      | 003<br>004<br>005<br>006<br>007<br>008<br>009<br>010 | 001<br>002 | -       |
 
 ## Issue Register
 
@@ -31,14 +31,14 @@ integration. Workers implement one issue only.
 | long-term-optimization-005 | Integrated | 002, 003                   | `codex/long-term-optimization-005 @ 8654cf10b2bc0b7a884ca5105a4a8487740f4dfc`                |            6 |            6 | `docs/implementation/long-term-optimization-005-evidence.md`                |
 | long-term-optimization-006 | Integrated | 001-005                    | `codex/long-term-optimization-006 @ b62873bd3aa216f56d870c072f651ab2dbcd074a`                |            2 |            2 | `docs/implementation/long-term-optimization-006-evidence.md`                |
 | long-term-optimization-007 | Integrated | 006                        | `codex/long-term-optimization-007 @ bf795d40a3669d925eb95933b484290709099e0c`                |           32 |           27 | `docs/implementation/long-term-optimization-007-evidence.md`                |
-| long-term-optimization-008 | Complete   | 007                        | `codex/long-term-optimization-global-remediation @ 984d0448ef5843e069ee73bcaf20ea04417d1b20` |            3 |            3 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
-| long-term-optimization-009 | Complete   | 008 implementation         | `codex/long-term-optimization-global-remediation @ 984d0448ef5843e069ee73bcaf20ea04417d1b20` |            3 |            3 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
-| long-term-optimization-010 | Complete   | 009 resource serialization | `codex/long-term-optimization-global-remediation @ 984d0448ef5843e069ee73bcaf20ea04417d1b20` |            3 |            3 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| long-term-optimization-008 | Integrated | 007                        | `codex/long-term-optimization @ 2df7fef3b09f41c39fb6813f27485482ed708a46`                    |            4 |            3 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| long-term-optimization-009 | Integrated | 008 implementation         | `codex/long-term-optimization @ 2df7fef3b09f41c39fb6813f27485482ed708a46`                    |            4 |            3 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| long-term-optimization-010 | Integrated | 009 resource serialization | `codex/long-term-optimization @ 2df7fef3b09f41c39fb6813f27485482ed708a46`                    |            4 |            3 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
 
-Issues 008, 009, and 010 are `Complete` in the agent review lifecycle and Ready
-for Integration at verified code revision
-`984d0448ef5843e069ee73bcaf20ea04417d1b20`. They are not `Integrated`;
-canonical integration remains manager-owned.
+Issues 008, 009, and 010 are `Integrated` in canonical branch
+`codex/long-term-optimization` at merge commit
+`2df7fef3b09f41c39fb6813f27485482ed708a46`. Their prior strict-pass review
+evidence remains at `984d0448ef5843e069ee73bcaf20ea04417d1b20`.
 
 ## Global Remediation DAG
 
@@ -52,11 +52,10 @@ flowchart LR
   C --> D["Fresh Standards and Spec review"]
 ```
 
-The serialized implementation and fresh review are complete. Issues 008, 009,
-and 010 are Ready for Integration, but no canonical integration is recorded.
-The program and remediation wave remain open until manager-owned canonical
-integration and its integration gates complete. Acceptance criteria and
-append-only worker and review notes are recorded in
+The serialized implementation, fresh review, canonical integration, and
+manager-owned integration gate are complete. The global remediation wave and
+its program are complete. Acceptance criteria and append-only worker and review
+notes are recorded in
 [`docs/implementation/long-term-optimization-global-remediation-evidence.md`](long-term-optimization-global-remediation-evidence.md).
 
 ## State Transitions
@@ -180,8 +179,8 @@ required worker return, readiness, and review fields from
 - [x] Wave 5: 007 implemented, reviewed through the strict loop, and integrated.
 - [x] Global remediation: 008, 009, and 010 implemented and received a fresh
       STRICT PASS at `984d0448ef5843e069ee73bcaf20ea04417d1b20`.
-- [ ] Global remediation: integrate the reviewed branch into canonical and run
-      the manager-owned integration gates.
+- [x] Global remediation: integrated into canonical and manager-owned
+      integration gate passed at `2df7fef3b09f41c39fb6813f27485482ed708a46`.
 
 ## Wave Review Register
 
@@ -192,7 +191,7 @@ required worker return, readiness, and review fields from
 | Wave 3             | Complete              | STRICT PASS | STRICT PASS | `6b1ea5c1e87c713f16a2cd54d6e236d0a135d5f7` | `docs/implementation/long-term-optimization-review.md`                      |
 | Wave 4             | Complete              | STRICT PASS | STRICT PASS | `0fd30da99ac2ad0f506e456ec66cecd2eb736313` | `docs/implementation/long-term-optimization-review.md`                      |
 | Wave 5             | Integrated            | STRICT PASS | STRICT PASS | `54dd2c5799c203b4de4c092cac4dcb3126143d46` | `docs/implementation/long-term-optimization-007-evidence.md`                |
-| Global remediation | Ready for Integration | STRICT PASS | STRICT PASS | `984d0448ef5843e069ee73bcaf20ea04417d1b20` | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| Global remediation | Integrated            | STRICT PASS | STRICT PASS | `2df7fef3b09f41c39fb6813f27485482ed708a46` | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
 
 ## Final Completion Gate
 
@@ -204,5 +203,17 @@ required worker return, readiness, and review fields from
 - [ ] Final findings return to the owning workers or integration worker, and
       each fix is reviewed by a brand-new clean reviewer until no blocking or
       reasonable non-blocking suggestions remain.
-- [ ] Full `npm run check` passes.
+- [x] Full `npm run check` passes at
+      `2df7fef3b09f41c39fb6813f27485482ed708a46`.
 - [ ] All issues are `Complete` in the State Board and Issue Register.
+
+## Global Remediation Canonical Integration
+
+The integration worker merged
+`codex/long-term-optimization-global-remediation` into
+`codex/long-term-optimization` with `--no-ff` at
+`2df7fef3b09f41c39fb6813f27485482ed708a46`. The final full `npm run check`
+passed, so issues 008, 009, and 010 transitioned from `Complete / Ready for
+Integration` to `Integrated`. The global remediation wave and program are
+complete. Full gate and hygiene evidence is append-only in
+[`docs/implementation/long-term-optimization-global-remediation-evidence.md`](long-term-optimization-global-remediation-evidence.md).
