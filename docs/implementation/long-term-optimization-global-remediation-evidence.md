@@ -288,3 +288,119 @@ exact OS-temp directories with allowlisted prefixes and zero live references;
 literal-path cleanup was attempted after parent/prefix validation but blocked by
 execution policy before deletion. The 4582 historical baseline and all other
 temporary directories were untouched; final count is 4588.
+
+## Codex Review Note
+
+Round: 2
+Issue: global remediation review of long-term-optimization-008/009/010
+Reviewer context: fresh independent review of head
+`160046e4ab2f65142204b5bc0f76f513cff85095`
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-global-remediation`
+Base revision/diff scope:
+`606a6198c7a9a3263e55d06bef35b3c4e8fd2148..160046e4ab2f65142204b5bc0f76f513cff85095`
+Standards Review blocking: P1-1 model and tool calls lacked a synchronous
+effect-permission fence after their final durable start Items; P1-2 browser
+reset obligation could be cleared by phase/generation transitions after a
+failed resnapshot; P1-3 session completion waiters settled by thread instead of
+response turn id and lacked bounded early-terminal binding; P1-4 authoritative
+snapshots did not rederive Web UI connection state; P1-5 production signal
+listeners were removed before graceful shutdown settled; P1-6 transport
+quiescence did not own incomplete request bodies/sockets and could hang close.
+Standards Review non-blocking: none.
+Standards Review missing evidence: historical pre-review RED execution is not
+retained as a verifiable artifact. This is not a code blocker, and no historical
+log is reconstructed or fabricated.
+Spec Review blocking: the same six P1 findings violate the effect-before-
+durability, reconnect recovery, per-turn completion, snapshot authority,
+aggregate shutdown, and bounded transport-close acceptance criteria.
+Spec Review non-blocking: none.
+Spec Review missing evidence: the prior 11-file summary reported 151 tests, but
+the manager-confirmed exact reviewer command ran 149 tests. Test temp teardown
+was also missing for exact roots created by `app-server-journal.test.ts` and
+`local-tool-runtime.test.ts`.
+Local tracker state decision: Rework for 008, 009, and 010.
+State decision reason: all six P1 findings and the exact-root teardown finding
+are reproducible and require the original implementation worker.
+
+## Codex Worker Note
+
+Round: 3
+Issue: global remediation rework for long-term-optimization-008/009/010
+Local tracker state transition: Rework -> In Progress -> Agent Review for all
+three issues; one new independent fresh review remains required
+Branch: `codex/long-term-optimization-global-remediation`
+PR URL: not configured; local-branch mode
+Base revision/diff scope:
+`160046e4ab2f65142204b5bc0f76f513cff85095..3dd3f40f76782fa02b576d15af5e472f4807808d`
+Summary of behavior delivered: a shared synchronous effect-permission fence now
+guards eager model/tool invocation after durable start Items. Browser reset debt
+uses monotonic versions independent of phase/generation and clears only after a
+current authoritative snapshot and buffered replay install. Session waiters bind
+to response turn ids with a bounded transient early-terminal cache. Web UI
+connection derives from authoritative snapshots. Production signal listeners
+remain installed through aggregate shutdown. HTTP transport owns request phases
+and sockets so quiescence terminates only incomplete ingress while dispatched
+requests and SSE remain until their owning shutdown phase.
+Final scope summary: the six accepted P1 findings, exact temp teardown P2, and
+the stale Web proxy SSE-control assertions discovered during related validation.
+No compatibility layer, second Item source, timeout weakening, remote push, or
+Linear update was added.
+Changed files/modules: kernel model/tool effect boundary; browser transport and
+Web UI/session presentation; Node HTTP transport and production composition;
+focused tests including journal/local-tool teardown and Web proxy protocol
+assertions.
+Tests added/updated: eager model/tool invocation counters including hook path;
+failed/repeated reset debt and stale generation; concurrent per-turn waiters,
+terminal-before-bind, reset/replacement cleanup; idle/running/failed/no-current/
+multi-thread connection derivation; deferred signal-listener lifetime; real
+partial-body socket close, dispatched request preservation, and SSE preservation;
+exact-root temp cleanup.
+Acceptance criteria status: all accepted P1 and P2 criteria pass. ItemList
+remains the sole domain state source; replay/cursor data and the bounded waiter
+cache are transport/request-race coordination only.
+Commands run and results: six exact RED regressions failed at the reviewed head
+as expected (P1-1 ran two tests; P1-2 through P1-6 each ran one) with the
+reviewed side effect/race observed. The same six commands passed after the fix.
+The touched suite passed 8 files/112 tests. The exact corrected reviewer command
+was:
+`npm test -- test/app-server-journal.test.ts test/approval-runtime.test.ts test/agent-loop.test.ts test/hook-runtime.test.ts test/thread-manager.test.ts test/web-ui-state.test.ts test/web-ui-client.test.ts test/agent-interaction-session.test.ts test/app-server-transport.test.ts test/production-composition.test.ts test/app-server-cli.test.ts`.
+The manager-confirmed reviewed-head result was 11 files/149 tests, correcting the
+retained Round 2 text that says 151; the unchanged old text is intentionally
+preserved. With this round's added tests, the exact command passed 11 files/163
+tests in 7.68s (8.665s outer measurement). A broader kernel combination passed
+11 files/166 tests; Web proxy protocol tests passed 4/4. Core and Web typechecks,
+touched ESLint and Prettier, core and Web builds, `git diff --check`, and one
+forbidden-operation audit passed.
+Validation log paths: console evidence summarized here; no retained standalone
+log files. There is no verifiable historical RED artifact for the pre-review
+implementation, and none was invented. This remediation's RED/GREEN results are
+direct command observations only.
+Required check status or local-check handoff reason: all manager-requested
+targeted, combined, type, lint, format, build, diff, and audit gates pass. Full
+`npm run check`, coverage, acceptance/E2E, and real launchers were not run by
+instruction and remain for integration.
+Evidence links/paths:
+`docs/implementation/long-term-optimization-global-remediation-evidence.md` and
+`docs/implementation/long-term-optimization-tracker.md`.
+Decisions made: use one synchronous abort permission check immediately adjacent
+to external effect evaluation; model reset obligation as monotonic debt; keep
+early terminals only while an unbound waiter exists and cap them by unbound
+waiter count; preserve dispatched HTTP/SSE ownership while terminating
+transport-owned ingress.
+Standards notes: no quality gate or timeout was weakened. No arbitrary Node
+kill, broad temp delete, `process.exit`, remote push, or canonical-worktree edit
+was performed.
+Reviewer notes: fresh review should replay all six exact regressions and inspect
+the reset debt version checks, waiter cache bound, signal listener disposal, and
+socket phase ownership.
+Open questions: none.
+Known residual risks: independent fresh review and integration-only full gates.
+Blocker or context escalation details: none. Every Node/browser command began
+and ended with zero attributable worker Node processes. The four teardown
+prefixes held the exact same pre/post set (2194 entries, SHA-256
+`A3384751CCBF4AE1EBE62D743A4EB2E2A93A22BF89D4A3E8CD90FBCFAE93B285`) across
+the touched suite; the exact reviewer and proxy prefix sets were also unchanged.
+Only exact roots returned and registered by the current test were removed. All
+historical directories, including the manager-designated 37 unknown roots, were
+left untouched.
