@@ -551,3 +551,32 @@ integration. The 28 canonical residue roots and all other historical temp roots
 remain intentionally untouched.
 Blocker or context escalation details: no blocker. No process was killed and no
 broad, wildcard, prefix-scan, or one-off historical temp deletion was used.
+
+## Codex Review Note
+
+Round: 1
+Issue: long-term-optimization-011 deterministic journal fixture cleanup
+Reviewer context: fresh independent review of head
+`f017ba432b49a71ce06115bd9e5333608433a345`
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-global-remediation`
+Base revision/diff scope: canonical hygiene evidence
+`786228f6494c0c8c318c187675eec31067545b1f`; ISSUE-011 implementation and
+evidence through `f017ba432b49a71ce06115bd9e5333608433a345`
+Standards Review blocking: none. STRICT PASS; no functional or test-hygiene
+finding.
+Standards Review non-blocking: none.
+Standards Review missing evidence: none.
+Spec Review blocking: none. The reviewer independently verified all 28 retained
+roots as seven fixture signatures repeated four times with 44 total files, and
+confirmed exact-root registration, direct OS-temp and prefix guards, and
+aggregate-safe teardown.
+Spec Review non-blocking: none.
+Spec Review missing evidence: none.
+Reviewer-verified commands/evidence: two independent
+`npm test -- test/thread-journal.test.ts` rounds passed 9/9 tests with identical
+pre/post temporary-path hashes and delta +0/-0. TypeScript, touched ESLint,
+Prettier, and `git diff --check` passed.
+Local tracker state decision: Complete / Ready for Integration; not Integrated.
+State decision reason: fresh review found no functional, safety, or hygiene
+finding. Manager-owned canonical merge and program closeout remain pending.
