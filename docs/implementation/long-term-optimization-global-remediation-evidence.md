@@ -464,3 +464,118 @@ Reviewer notes: source strict closeout at `e96a7f1be9ff08a438bed343939c8d13cb5b1
 Open questions: none.
 Known residual risks: exact temporary-directory residue is retained because it lacks sufficient ownership proof for safe deletion. The 28 new paths are `C:\Users\two-one\AppData\Local\Temp\zen-journal-0tQYYQ`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-0Zvvhu`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-1ekkaa`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-63umry`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-70LgCE`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-75uUii`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-7w60NL`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-bBk0xX`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-bKQ1yT`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-ByXnbE`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-czXa64`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-dfDYdM`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-dHZlTn`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-dtecyx`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-EYgLoi`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-irmO2r`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-Ix41Oa`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-JDBNmK`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-K5Qq6i`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-mdHDGk`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-n3nv1A`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-O8OZiX`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-p3Vnwp`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-UNT090`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-UwTLvf`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-vCJQP3`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-xomDzG`, and `C:\Users\two-one\AppData\Local\Temp\zen-journal-zCwPYF`. They were created in four seven-directory batches during the Vitest and coverage runs and contain only `thread-*.jsonl` journal fixtures; no attributable Node/Chromium process was live at census. They are test-generated but lack a safe, exact ownership/reclamation record, so none was removed. Historical directories, including the manager-designated 37 unknown roots, were untouched.
 Blocker or context escalation details: pre-gate allowable temporary-directory baseline was 1446 paths with SHA-256 `08D14F3E0AAFF1E39E1957A23CFC2C4BDC946FEBF8ADBCCDEB64212407CE3465`; post-gate set was 1474 paths with SHA-256 `DAF6F9D4B24BBC0796D9E0577A91A0517A9998E2D8306C7356EF65DC9097B34A`, delta +28/-0. The exact attributable runtime process set was 0 before and after, SHA-256 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+## ISSUE-011 Acceptance Criteria
+
+- [x] Each `thread-journal` fixture root is the resolved exact path returned by
+      the current test process's `mkdtempSync` call and is registered before use.
+- [x] Teardown validates that each registered root is directly under the OS
+      temp root and has a non-empty `zen-journal-*` leaf before using the exact
+      literal path. It performs no wildcard or historical-prefix deletion.
+- [x] `afterEach` attempts every registered root on passing and failing test
+      paths, aggregates cleanup failures, and never deletes an unregistered root.
+- [x] Two serialized `thread-journal` runs and one complete unit-test run retain
+      identical pre/post `zen-journal-*` path sets and SHA-256 hashes.
+- [x] The canonical 28-directory residue remains untouched as retained evidence.
+      ISSUE-011 changes test infrastructure only and does not alter integrated
+      008-010 product behavior.
+
+## Codex Worker Note
+
+Round: 1
+Issue: long-term-optimization-011 deterministic journal fixture cleanup
+Local tracker state transition: Rework -> In Progress -> Agent Review
+Branch: `codex/long-term-optimization-global-remediation`
+PR URL: not configured; local-branch mode and no remote push
+Base revision/diff scope: canonical hygiene evidence
+`786228f6494c0c8c318c187675eec31067545b1f`; worker implementation
+`e96a7f1be9ff08a438bed343939c8d13cb5b16ee..84a94213ca457b750e74b563734b7fbe997e909d`
+Summary of behavior delivered: `thread-journal` fixtures now register each
+resolved exact root returned by `mkdtempSync`. Vitest `afterEach` validates the
+OS-temp parent and `zen-journal-` leaf, then removes only those registered
+literal paths while retaining every cleanup failure in an `AggregateError`.
+Final scope summary: test-infrastructure teardown only. No product source,
+integrated 008-010 behavior, timeout, gate, journal implementation, or historical
+temporary directory was changed.
+Changed files/modules: `test/thread-journal.test.ts`; tracker and this append-only
+evidence document.
+Tests added/updated: the existing 9-test `FileThreadJournal` suite now owns its
+seven per-run fixture roots through exact per-test teardown; no test was removed
+or weakened.
+Acceptance criteria status: all ISSUE-011 criteria pass. Cleanup is limited to
+roots registered by the current test module process, checks direct OS-temp
+parentage and a non-empty fixed prefix, uses no scan or wildcard for deletion,
+and runs through Vitest `afterEach` on pass/fail paths.
+Commands run and results: the canonical `npm run check` recorded at
+`786228f6494c0c8c318c187675eec31067545b1f` functionally passed 35 files/343
+unit tests, coverage, builds, and 2/2 E2E tests but its hygiene census changed
+from 1446 paths (`08D14F3E0AAFF1E39E1957A23CFC2C4BDC946FEBF8ADBCCDEB64212407CE3465`)
+to 1474 (`DAF6F9D4B24BBC0796D9E0577A91A0517A9998E2D8306C7356EF65DC9097B34A`),
+delta +28/-0. After this fix,
+`npm test -- test/thread-journal.test.ts` passed twice, each at 1 file/9 tests:
+round 1 took 1.80s Vitest/2.774s outer and round 2 took 1.47s/2.453s. Each
+round retained 1299 exact `zen-journal-*` paths with identical pre/post SHA-256
+`133FD81B08650A50A51A515DD6123B8283A0EAB76310BCFDD55F21FDB3D3EB36`,
+delta +0/-0. One exact `npm test` passed 35 files/343 tests in 169.32s
+(170.259s outer) with the same 1299-path hash before and after, delta +0/-0,
+and attributable Node/browser process counts 0 before and after.
+`npm exec prettier -- --check test/thread-journal.test.ts`,
+`npm exec eslint -- test/thread-journal.test.ts`, `npm run typecheck`, and
+`git diff --check` passed.
+Validation log paths: console evidence summarized here; no standalone log file.
+Required check status or local-check handoff reason: all manager-requested
+targeted, complete-unit, format, lint, type, diff, process, and exact journal
+census checks pass. Build, coverage, E2E, real launchers, and full
+`npm run check` were not run by instruction.
+Evidence links/paths:
+`docs/implementation/long-term-optimization-global-remediation-evidence.md`,
+`docs/implementation/long-term-optimization-tracker.md`, and canonical evidence
+revision `786228f6494c0c8c318c187675eec31067545b1f`.
+Decisions made: keep ownership local to the creating test process and fail the
+test if any exact-root validation or removal fails; preserve all pre-existing
+temporary directories as evidence rather than using a one-off cleanup.
+Standards notes: read-only inspection confirmed all 28 canonical residue roots
+are direct OS-temp `zen-journal-*` directories with no child directories and 44
+total `thread-*.jsonl` files. The seven filename signatures each occur exactly
+four times and map to the seven fixture tests: `thread/a`; `a/b` plus `a?b`;
+`slow` plus `fast`; `healthy`; `recover`, `corrupt`, plus `valid`; `bulk`; and
+`unicode`. Record counts and the one intentionally invalid interior corruption
+line also match those tests. This establishes attribution without relying on
+the prefix alone. None of those 28 roots was deleted or modified.
+Reviewer notes: fresh review should inspect exact-root registration and safety
+guards, exercise teardown on a failing test path if needed, and recheck a
+targeted census without deleting retained residue.
+Open questions: none.
+Known residual risks: ISSUE-011 still requires fresh review and manager-owned
+integration. The 28 canonical residue roots and all other historical temp roots
+remain intentionally untouched.
+Blocker or context escalation details: no blocker. No process was killed and no
+broad, wildcard, prefix-scan, or one-off historical temp deletion was used.
+
+## Codex Review Note
+
+Round: 1
+Issue: long-term-optimization-011 deterministic journal fixture cleanup
+Reviewer context: fresh independent review of head
+`f017ba432b49a71ce06115bd9e5333608433a345`
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-global-remediation`
+Base revision/diff scope: canonical hygiene evidence
+`786228f6494c0c8c318c187675eec31067545b1f`; ISSUE-011 implementation and
+evidence through `f017ba432b49a71ce06115bd9e5333608433a345`
+Standards Review blocking: none. STRICT PASS; no functional or test-hygiene
+finding.
+Standards Review non-blocking: none.
+Standards Review missing evidence: none.
+Spec Review blocking: none. The reviewer independently verified all 28 retained
+roots as seven fixture signatures repeated four times with 44 total files, and
+confirmed exact-root registration, direct OS-temp and prefix guards, and
+aggregate-safe teardown.
+Spec Review non-blocking: none.
+Spec Review missing evidence: none.
+Reviewer-verified commands/evidence: two independent
+`npm test -- test/thread-journal.test.ts` rounds passed 9/9 tests with identical
+pre/post temporary-path hashes and delta +0/-0. TypeScript, touched ESLint,
+Prettier, and `git diff --check` passed.
+Local tracker state decision: Complete / Ready for Integration; not Integrated.
+State decision reason: fresh review found no functional, safety, or hygiene
+finding. Manager-owned canonical merge and program closeout remain pending.

@@ -16,9 +16,9 @@ integration. Workers implement one issue only.
 
 ## State Board
 
-| Backlog | Ready | In Progress | Agent Review | Rework | Integrated                      | Complete                        | Blocked |
-| ------- | ----- | ----------- | ------------ | ------ | ------------------------------- | ------------------------------- | ------- |
-| -       | -     | -           | -            | -      | 003<br>004<br>005<br>006<br>007<br>008<br>009<br>010 | 001<br>002 | -       |
+| Backlog | Ready | In Progress | Agent Review | Rework | Integrated                                           | Complete          | Blocked |
+| ------- | ----- | ----------- | ------------ | ------ | ---------------------------------------------------- | ----------------- | ------- |
+| -       | -     | -           | -            | -      | 003<br>004<br>005<br>006<br>007<br>008<br>009<br>010 | 001<br>002<br>011 | -       |
 
 ## Issue Register
 
@@ -34,6 +34,7 @@ integration. Workers implement one issue only.
 | long-term-optimization-008 | Integrated | 007                        | `codex/long-term-optimization @ 2df7fef3b09f41c39fb6813f27485482ed708a46`                    |            4 |            3 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
 | long-term-optimization-009 | Integrated | 008 implementation         | `codex/long-term-optimization @ 2df7fef3b09f41c39fb6813f27485482ed708a46`                    |            4 |            3 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
 | long-term-optimization-010 | Integrated | 009 resource serialization | `codex/long-term-optimization @ 2df7fef3b09f41c39fb6813f27485482ed708a46`                    |            4 |            3 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| long-term-optimization-011 | Complete   | 008-010                    | `codex/long-term-optimization-global-remediation @ f017ba432b49a71ce06115bd9e5333608433a345` |            1 |            1 | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
 
 Issues 008, 009, and 010 are `Integrated` in canonical branch
 `codex/long-term-optimization` at merge commit
@@ -57,6 +58,16 @@ manager-owned integration gate are complete. The global remediation wave and
 its program are complete. Acceptance criteria and append-only worker and review
 notes are recorded in
 [`docs/implementation/long-term-optimization-global-remediation-evidence.md`](long-term-optimization-global-remediation-evidence.md).
+
+## ISSUE-011 Test Hygiene Tail
+
+`long-term-optimization-011` provides deterministic cleanup for journal test
+fixtures after the integrated 008-010 product work. It changes test
+infrastructure only and does not reopen or alter the integrated product
+semantics. The manager-recorded canonical hygiene residue placed 011 in
+`Rework`; Worker Round 1 and fresh Review Round 1 are complete. ISSUE-011 is
+Ready for Integration at `f017ba432b49a71ce06115bd9e5333608433a345` but is
+not `Integrated`. Program closeout waits for the manager-owned canonical merge.
 
 ## State Transitions
 
@@ -181,6 +192,10 @@ required worker return, readiness, and review fields from
       STRICT PASS at `984d0448ef5843e069ee73bcaf20ea04417d1b20`.
 - [x] Global remediation: integrated into canonical and manager-owned
       integration gate passed at `2df7fef3b09f41c39fb6813f27485482ed708a46`.
+- [x] ISSUE-011: deterministic journal fixture cleanup received a fresh STRICT
+      PASS at `f017ba432b49a71ce06115bd9e5333608433a345`.
+- [ ] ISSUE-011: merge the reviewed test-hygiene tail into canonical and record
+      program closeout without changing the 008-010 product behavior.
 
 ## Wave Review Register
 
@@ -192,6 +207,7 @@ required worker return, readiness, and review fields from
 | Wave 4             | Complete              | STRICT PASS | STRICT PASS | `0fd30da99ac2ad0f506e456ec66cecd2eb736313` | `docs/implementation/long-term-optimization-review.md`                      |
 | Wave 5             | Integrated            | STRICT PASS | STRICT PASS | `54dd2c5799c203b4de4c092cac4dcb3126143d46` | `docs/implementation/long-term-optimization-007-evidence.md`                |
 | Global remediation | Integrated            | STRICT PASS | STRICT PASS | `2df7fef3b09f41c39fb6813f27485482ed708a46` | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
+| ISSUE-011 hygiene  | Ready for Integration | STRICT PASS | STRICT PASS | `f017ba432b49a71ce06115bd9e5333608433a345` | `docs/implementation/long-term-optimization-global-remediation-evidence.md` |
 
 ## Final Completion Gate
 
