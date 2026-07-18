@@ -122,3 +122,15 @@ export {
   ThreadToolRuntime,
   threadToolDefinitions,
 } from './thread-tool-runtime.js';
+export type {
+  AgentAppError,
+  AgentAppErrorCode,
+  AgentAppMethod,
+  AgentAppNotification,
+  AgentAppNotificationEnvelope,
+  AgentAppRequest,
+  AgentAppResponse,
+} from './agent-app-protocol.js';
+export { parseAgentAppRequest } from './agent-app-protocol.js';
+export type { AgentAppServerOptions, ProjectRuntime } from './agent-app-server.js';
+export { AgentAppServer } from './agent-app-server.js';

@@ -1,0 +1,132 @@
+import type { JsonObject, JsonValue, ProjectSnapshot } from './index.js';
+
+export type AgentAppErrorCode =
+  | 'PROJECT_NOT_FOUND'
+  | 'PROJECT_ARCHIVED'
+  | 'THREAD_NOT_FOUND'
+  | 'POLICY_DENIED'
+  | 'IDEMPOTENCY_CONFLICT'
+  | 'WAIT_CYCLE'
+  | 'RESOURCE_EXHAUSTED'
+  | 'PERSISTENCE_FAILURE'
+  | 'INVALID_REQUEST'
+  | 'SERVER_CLOSING';
+export type AgentAppError = {
+  readonly code: AgentAppErrorCode;
+  readonly message: string;
+  readonly details?: JsonValue;
+};
+export type AgentAppMethod =
+  | 'project/create'
+  | 'project/list'
+  | 'project/read'
+  | 'project/update'
+  | 'project/archive'
+  | 'thread/create'
+  | 'thread/list'
+  | 'thread/read'
+  | 'thread/send'
+  | 'thread/wait'
+  | 'thread/cancel'
+  | 'thread/archive'
+  | 'thread/handoff'
+  | 'turn/start'
+  | 'turn/interrupt'
+  | 'turn/retry'
+  | 'approval/resolve';
+export type AgentAppRequest = { readonly method: AgentAppMethod; readonly params: JsonObject };
+export type AgentAppResponse =
+  | {
+      readonly method: AgentAppMethod;
+      readonly ok: true;
+      readonly result: Readonly<Record<string, unknown>>;
+    }
+  | { readonly method: string; readonly ok: false; readonly error: AgentAppError };
+export type AgentAppNotificationEnvelope = {
+  readonly projectId: string;
+  readonly notification: AgentAppNotification;
+};
+export type AgentAppNotification = { readonly type: string; readonly [key: string]: unknown };
+
+const projectScoped = new Set<AgentAppMethod>([
+  'project/read',
+  'project/update',
+  'project/archive',
+  'thread/create',
+  'thread/list',
+  'thread/read',
+  'thread/send',
+  'thread/wait',
+  'thread/cancel',
+  'thread/archive',
+  'thread/handoff',
+  'turn/start',
+  'turn/interrupt',
+  'turn/retry',
+  'approval/resolve',
+]);
+const mutations = new Set<AgentAppMethod>([
+  'project/create',
+  'project/update',
+  'project/archive',
+  'thread/create',
+  'thread/send',
+  'thread/cancel',
+  'thread/archive',
+  'thread/handoff',
+  'turn/start',
+  'turn/interrupt',
+  'turn/retry',
+  'approval/resolve',
+]);
+export function parseAgentAppRequest(value: unknown): AgentAppRequest {
+  if (
+    !isRecord(value) ||
+    typeof value.method !== 'string' ||
+    !isMethod(value.method) ||
+    !isRecord(value.params)
+  )
+    throw new Error('Invalid AgentApp request');
+  const params = value.params as JsonObject;
+  if (projectScoped.has(value.method) && !nonEmpty(params.projectId))
+    throw new Error('projectId is required');
+  if (mutations.has(value.method) && !nonEmpty(params.idempotencyKey))
+    throw new Error('idempotencyKey is required');
+  if (
+    value.method.startsWith('thread/') ||
+    value.method.startsWith('turn/') ||
+    value.method === 'approval/resolve'
+  ) {
+    if (!nonEmpty(params.threadId) && !['thread/create', 'thread/list'].includes(value.method))
+      throw new Error('threadId is required');
+  }
+  return { method: value.method, params };
+}
+function isMethod(value: string): value is AgentAppMethod {
+  return [
+    'project/create',
+    'project/list',
+    'project/read',
+    'project/update',
+    'project/archive',
+    'thread/create',
+    'thread/list',
+    'thread/read',
+    'thread/send',
+    'thread/wait',
+    'thread/cancel',
+    'thread/archive',
+    'thread/handoff',
+    'turn/start',
+    'turn/interrupt',
+    'turn/retry',
+    'approval/resolve',
+  ].includes(value);
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function nonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+export type AgentAppProjectResult = { readonly project: ProjectSnapshot };

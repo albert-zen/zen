@@ -60,3 +60,11 @@
 - Hygiene census: the Node PID set was unchanged; exact
   `zen-agent-app-project-*` and `zen-agent-app-coordination-*` temporary-root
   deltas were both zero.
+
+## APP-005A
+
+- Added independent `AgentApp*` project-scoped protocol validation and a lazy,
+  injectable `AgentAppServer`/`ProjectRuntime` product composition.
+- This transition commit deliberately leaves the legacy single-project protocol
+  and its consumers untouched. APP-005B performs their removal and migration.
+- Targeted protocol/server tests and main typecheck passed.
