@@ -404,3 +404,39 @@ the touched suite; the exact reviewer and proxy prefix sets were also unchanged.
 Only exact roots returned and registered by the current test were removed. All
 historical directories, including the manager-designated 37 unknown roots, were
 left untouched.
+
+## Codex Review Note
+
+Round: 3
+Issue: global remediation fresh review of long-term-optimization-008/009/010
+Reviewer context: fresh independent review of head
+`984d0448ef5843e069ee73bcaf20ea04417d1b20`
+Reviewer edits: none
+Reviewed branch: `codex/long-term-optimization-global-remediation`
+Base revision/diff scope:
+`606a6198c7a9a3263e55d06bef35b3c4e8fd2148..984d0448ef5843e069ee73bcaf20ea04417d1b20`,
+including focused re-review of
+`160046e4ab2f65142204b5bc0f76f513cff85095..984d0448ef5843e069ee73bcaf20ea04417d1b20`
+Standards Review blocking: none. STRICT PASS; P0/P1/P2 findings are 0. The
+reviewer individually reverified all six Round 2 findings and all three global
+remediation objectives.
+Standards Review non-blocking: none.
+Standards Review missing evidence: none. The absence of a verifiable historical
+pre-review RED artifact remains accurately disclosed; no historical log was
+reconstructed or fabricated.
+Spec Review blocking: none. STRICT PASS for ISSUE-008 durability before
+activation, ISSUE-009 lossless snapshot/stream handoff, and ISSUE-010 aggregate
+production shutdown.
+Spec Review non-blocking: none.
+Spec Review missing evidence: none.
+Reviewer-verified commands/evidence: the exact related combination command
+recorded in Worker Round 3 passed 11 files/163 tests; focused effect-boundary
+coverage passed 15 tests; exact temp-teardown coverage passed 17 tests in each
+of two repeated rounds. Main and Web typechecks, touched lint, Prettier, and
+`git diff --check` passed. Final attributable process count was 0 and the exact
+allowlisted temporary-directory baseline delta was 0.
+Local tracker state decision: Complete / Ready for Integration for 008, 009,
+and 010; not Integrated.
+State decision reason: fresh review found no P0, P1, or P2 findings after
+criterion-by-criterion verification. Canonical integration and program/wave
+completion remain manager-owned and are not recorded by this review.
