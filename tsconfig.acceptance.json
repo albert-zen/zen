@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "dist/acceptance",
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["acceptance/**/*.ts"]
+}

@@ -1,173 +1,159 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from 'vitest';
 
 import {
   appendModelResponseItems,
   InMemoryItemList,
   OpenAiCompatibleModelGateway,
   type ModelEvent,
-  type ModelGateway
-} from "../src/index.js";
+  type ModelGateway,
+} from './test-exports.js';
 
-describe("appendModelResponseItems", () => {
-  it("appends streamed text deltas as trace items targeting the assistant response", async () => {
+describe('appendModelResponseItems', () => {
+  it('appends streamed text deltas as trace items targeting the assistant response', async () => {
     const items = createItems();
     const model = fakeModel([
-      { type: "text.delta", text: "Hel" },
-      { type: "text.delta", text: "lo" },
-      { type: "message.completed", content: "Hello" }
+      { type: 'text.delta', text: 'Hel' },
+      { type: 'text.delta', text: 'lo' },
+      { type: 'message.completed', content: 'Hello' },
     ]);
 
     await appendModelResponseItems({
       itemList: items,
       model,
       context: { parts: [] },
-      runId: "run-1",
-      turnId: "turn-1"
+      runId: 'run-1',
+      turnId: 'turn-1',
     });
 
     const snapshot = items.getItems();
-    const assistantStarted = snapshot.find(
-      (item) => item.type === "assistant.message.started"
-    );
-    const deltas = snapshot.filter(
-      (item) => item.type === "assistant.message.delta"
-    );
+    const assistantStarted = snapshot.find((item) => item.type === 'assistant.message.started');
+    const deltas = snapshot.filter((item) => item.type === 'assistant.message.delta');
 
     expect(assistantStarted).toBeDefined();
     expect(deltas).toEqual([
       expect.objectContaining({
         targetId: assistantStarted?.id,
-        visibility: "trace",
-        payload: { delta: "Hel", index: 0 }
+        visibility: 'trace',
+        payload: { delta: 'Hel', index: 0 },
       }),
       expect.objectContaining({
         targetId: assistantStarted?.id,
-        visibility: "trace",
-        payload: { delta: "lo", index: 1 }
-      })
+        visibility: 'trace',
+        payload: { delta: 'lo', index: 1 },
+      }),
     ]);
   });
 
-  it("uses completed output as authoritative instead of reconstructing from deltas", async () => {
+  it('uses completed output as authoritative instead of reconstructing from deltas', async () => {
     const items = createItems();
     const model = fakeModel([
-      { type: "text.delta", text: "Hel" },
-      { type: "text.delta", text: "lo" },
-      { type: "message.completed", content: "Goodbye" }
+      { type: 'text.delta', text: 'Hel' },
+      { type: 'text.delta', text: 'lo' },
+      { type: 'message.completed', content: 'Goodbye' },
     ]);
 
     await appendModelResponseItems({
       itemList: items,
       model,
       context: { parts: [] },
-      runId: "run-1",
-      turnId: "turn-1"
+      runId: 'run-1',
+      turnId: 'turn-1',
     });
 
-    expect(
-      items
-        .getItems()
-        .filter((item) => item.type === "assistant.message.completed")
-    ).toEqual([
+    expect(items.getItems().filter((item) => item.type === 'assistant.message.completed')).toEqual([
       expect.objectContaining({
-        payload: { content: "Goodbye" }
-      })
+        payload: { content: 'Goodbye' },
+      }),
     ]);
   });
 
-  it("appends an assistant error item and completed request item when the model fails", async () => {
+  it('appends an assistant error item and completed request item when the model fails', async () => {
     const items = createItems();
     const model: ModelGateway = {
       async *generate() {
-        yield { type: "text.delta", text: "partial" };
-        throw new Error("fake model failed");
-      }
+        yield { type: 'text.delta', text: 'partial' };
+        throw new Error('fake model failed');
+      },
     };
 
     await appendModelResponseItems({
       itemList: items,
       model,
       context: { parts: [] },
-      runId: "run-1",
-      turnId: "turn-1"
+      runId: 'run-1',
+      turnId: 'turn-1',
     });
 
     const snapshot = items.getItems();
-    const requestStarted = snapshot.find(
-      (item) => item.type === "model.request.started"
-    );
-    const assistantStarted = snapshot.find(
-      (item) => item.type === "assistant.message.started"
-    );
+    const requestStarted = snapshot.find((item) => item.type === 'model.request.started');
+    const assistantStarted = snapshot.find((item) => item.type === 'assistant.message.started');
 
     expect(snapshot).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: "assistant.message.error",
+          type: 'assistant.message.error',
           causeId: requestStarted?.id,
           targetId: assistantStarted?.id,
-          visibility: "trace",
+          visibility: 'trace',
           payload: {
-            message: "fake model failed",
-            cause: { name: "Error", message: "fake model failed" }
-          }
+            message: 'fake model failed',
+            cause: { name: 'Error', message: 'fake model failed' },
+          },
         }),
         expect.objectContaining({
-          type: "model.request.completed",
+          type: 'model.request.completed',
           causeId: requestStarted?.id,
-          visibility: "trace",
-          payload: { status: "error" }
-        })
+          visibility: 'trace',
+          payload: { status: 'error' },
+        }),
       ])
     );
   });
 
-  it("converts emitted model error events into assistant error items", async () => {
+  it('converts emitted model error events into assistant error items', async () => {
     const items = createItems();
-    const model = fakeModel([
-      { type: "error", error: "provider returned an error" }
-    ]);
+    const model = fakeModel([{ type: 'error', error: 'provider returned an error' }]);
 
     await appendModelResponseItems({
       itemList: items,
       model,
       context: { parts: [] },
-      runId: "run-1",
-      turnId: "turn-1"
+      runId: 'run-1',
+      turnId: 'turn-1',
     });
 
     expect(items.getItems()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: "assistant.message.error",
-          visibility: "trace",
+          type: 'assistant.message.error',
+          visibility: 'trace',
           payload: {
-            message: "provider returned an error",
-            cause: "provider returned an error"
-          }
+            message: 'provider returned an error',
+            cause: 'provider returned an error',
+          },
         }),
         expect.objectContaining({
-          type: "model.request.completed",
-          payload: { status: "error" }
-        })
+          type: 'model.request.completed',
+          payload: { status: 'error' },
+        }),
       ])
     );
   });
 
-  it("appends request lifecycle items around model generation", async () => {
+  it('appends request lifecycle items around model generation', async () => {
     const items = createItems();
     const context = {
-      parts: [{ type: "message" as const, role: "user" as const, content: "Hi" }]
+      parts: [{ type: 'message' as const, role: 'user' as const, content: 'Hi' }],
     };
-    const options = { model: "fake-model", temperature: 0 };
+    const options = { model: 'fake-model', temperature: 0 };
     let observedContext: unknown;
     let observedOptions: unknown;
     const model: ModelGateway = {
       async *generate(receivedContext, receivedOptions) {
         observedContext = receivedContext;
         observedOptions = receivedOptions;
-        yield { type: "message.completed", content: "Hello" };
-      }
+        yield { type: 'message.completed', content: 'Hello' };
+      },
     };
 
     await appendModelResponseItems({
@@ -175,52 +161,82 @@ describe("appendModelResponseItems", () => {
       model,
       context,
       options,
-      runId: "run-1",
-      turnId: "turn-1"
+      runId: 'run-1',
+      turnId: 'turn-1',
     });
 
     expect(observedContext).toBe(context);
     expect(observedOptions).toBe(options);
     expect(items.getItems().map((item) => item.type)).toEqual([
-      "model.request.started",
-      "assistant.message.started",
-      "assistant.message.completed",
-      "model.request.completed"
+      'model.request.started',
+      'assistant.message.started',
+      'assistant.message.completed',
+      'model.request.completed',
     ]);
     expect(items.getItems()).toEqual([
       expect.objectContaining({
-        id: "item-1",
-        type: "model.request.started",
-        visibility: "trace",
-        payload: { options, contextPartCount: 1 }
+        id: 'item-1',
+        type: 'model.request.started',
+        visibility: 'trace',
+        payload: { options, contextPartCount: 1 },
       }),
       expect.objectContaining({
-        id: "item-2",
-        type: "assistant.message.started",
-        causeId: "item-1",
-        visibility: "trace"
+        id: 'item-2',
+        type: 'assistant.message.started',
+        causeId: 'item-1',
+        visibility: 'trace',
       }),
       expect.objectContaining({
-        id: "item-3",
-        type: "assistant.message.completed",
-        causeId: "item-1",
-        targetId: "item-2",
-        payload: { content: "Hello" }
+        id: 'item-3',
+        type: 'assistant.message.completed',
+        causeId: 'item-1',
+        targetId: 'item-2',
+        payload: { content: 'Hello' },
       }),
       expect.objectContaining({
-        id: "item-4",
-        type: "model.request.completed",
-        causeId: "item-1",
-        targetId: "item-3",
-        visibility: "trace",
-        payload: { status: "completed" }
-      })
+        id: 'item-4',
+        type: 'model.request.completed',
+        causeId: 'item-1',
+        targetId: 'item-3',
+        visibility: 'trace',
+        payload: { status: 'completed' },
+      }),
     ]);
+  });
+
+  it('does not evaluate an eager model gateway after the durable start boundary aborts', async () => {
+    const items = createItems();
+    const controller = new AbortController();
+    let modelInvocations = 0;
+    const model: ModelGateway = {
+      generate() {
+        modelInvocations += 1;
+        return fakeModel([]).generate({ parts: [] });
+      },
+    };
+
+    await expect(
+      appendModelResponseItems({
+        itemList: items,
+        appendItem: async (input) => {
+          const item = items.append(input);
+          if (input.type === 'assistant.message.started') controller.abort();
+          return item;
+        },
+        model,
+        context: { parts: [] },
+        signal: controller.signal,
+        runId: 'run-1',
+        turnId: 'turn-1',
+      })
+    ).rejects.toThrow('Async iterator consumption aborted');
+
+    expect(modelInvocations).toBe(0);
   });
 });
 
-describe("OpenAiCompatibleModelGateway", () => {
-  it("sends only compiled context messages without injecting a hidden system prompt", async () => {
+describe('OpenAiCompatibleModelGateway', () => {
+  it('sends only compiled context messages without injecting a hidden system prompt', async () => {
     const originalFetch = globalThis.fetch;
     const requests: unknown[] = [];
     globalThis.fetch = (async (_input, init) => {
@@ -229,9 +245,9 @@ describe("OpenAiCompatibleModelGateway", () => {
       return new Response(
         new ReadableStream({
           start(controller) {
-            controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+            controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
             controller.close();
-          }
+          },
         }),
         { status: 200 }
       );
@@ -239,17 +255,17 @@ describe("OpenAiCompatibleModelGateway", () => {
 
     try {
       const gateway = new OpenAiCompatibleModelGateway({
-        baseUrl: "https://provider.test/v1",
-        apiKey: "test-key",
-        model: "test-model"
+        baseUrl: 'https://provider.test/v1',
+        apiKey: 'test-key',
+        model: 'test-model',
       });
 
       await collect(
         gateway.generate({
           parts: [
-            { type: "message", role: "system", content: "You are Zen." },
-            { type: "message", role: "user", content: "Hello" }
-          ]
+            { type: 'message', role: 'system', content: 'You are Zen.' },
+            { type: 'message', role: 'user', content: 'Hello' },
+          ],
         })
       );
       await collect(gateway.generate({ parts: [] }));
@@ -257,20 +273,20 @@ describe("OpenAiCompatibleModelGateway", () => {
       expect(requests).toEqual([
         expect.objectContaining({
           messages: [
-            { role: "system", content: "You are Zen." },
-            { role: "user", content: "Hello" }
-          ]
+            { role: 'system', content: 'You are Zen.' },
+            { role: 'user', content: 'Hello' },
+          ],
         }),
         expect.objectContaining({
-          messages: []
-        })
+          messages: [],
+        }),
       ]);
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  it("preserves streamed tool call ids when later provider deltas send empty ids", async () => {
+  it('preserves streamed tool call ids when later provider deltas send empty ids', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
       new Response(
@@ -285,13 +301,13 @@ describe("OpenAiCompatibleModelGateway", () => {
                       tool_calls: [
                         {
                           index: 0,
-                          id: "functions.shell:0",
-                          function: { name: "shell", arguments: "" }
-                        }
-                      ]
-                    }
-                  }
-                ]
+                          id: 'functions.shell:0',
+                          function: { name: 'shell', arguments: '' },
+                        },
+                      ],
+                    },
+                  },
+                ],
               },
               {
                 choices: [
@@ -300,13 +316,13 @@ describe("OpenAiCompatibleModelGateway", () => {
                       tool_calls: [
                         {
                           index: 0,
-                          id: "",
-                          function: { arguments: "{\"command\"" }
-                        }
-                      ]
-                    }
-                  }
-                ]
+                          id: '',
+                          function: { arguments: '{"command"' },
+                        },
+                      ],
+                    },
+                  },
+                ],
               },
               {
                 choices: [
@@ -315,48 +331,46 @@ describe("OpenAiCompatibleModelGateway", () => {
                       tool_calls: [
                         {
                           index: 0,
-                          id: "",
-                          function: { arguments: ":\"Write-Output probe\"}" }
-                        }
-                      ]
-                    }
-                  }
-                ]
-              }
+                          id: '',
+                          function: { arguments: ':"Write-Output probe"}' },
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
             ];
 
             for (const chunk of chunks) {
-              controller.enqueue(
-                encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
-              );
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
             }
 
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
             controller.close();
-          }
+          },
         }),
         { status: 200 }
       )) as typeof fetch;
 
     try {
       const gateway = new OpenAiCompatibleModelGateway({
-        baseUrl: "https://provider.test/v1",
-        apiKey: "test-key",
-        model: "test-model"
+        baseUrl: 'https://provider.test/v1',
+        apiKey: 'test-key',
+        model: 'test-model',
       });
 
       await expect(collect(gateway.generate({ parts: [] }))).resolves.toEqual([
         {
-          type: "message.completed",
-          content: "",
+          type: 'message.completed',
+          content: '',
           toolCalls: [
             {
-              id: "functions.shell:0",
-              name: "shell",
-              input: { command: "Write-Output probe" }
-            }
-          ]
-        }
+              id: 'functions.shell:0',
+              name: 'shell',
+              input: { command: 'Write-Output probe' },
+            },
+          ],
+        },
       ]);
     } finally {
       globalThis.fetch = originalFetch;
@@ -370,7 +384,7 @@ function createItems(): InMemoryItemList {
       let nextId = 0;
       return () => `item-${++nextId}`;
     })(),
-    clock: () => 1000
+    clock: () => 1000,
   });
 }
 
@@ -378,7 +392,7 @@ function fakeModel(events: readonly ModelEvent[]): ModelGateway {
   return {
     async *generate() {
       yield* events;
-    }
+    },
   };
 }
 

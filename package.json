@@ -3,31 +3,77 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/kernel/index.d.ts",
+      "default": "./dist/kernel/index.js"
+    },
+    "./product": {
+      "types": "./dist/product/index.d.ts",
+      "default": "./dist/product/index.js"
+    },
+    "./node": {
+      "types": "./dist/adapters/node/index.d.ts",
+      "default": "./dist/adapters/node/index.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation/index.d.ts",
+      "default": "./dist/presentation/index.js"
+    },
+    "./tui": {
+      "types": "./dist/tui/index.d.ts",
+      "default": "./dist/tui/index.js"
+    }
+  },
+  "imports": {
+    "#zen/node": "./src/adapters/node/index.ts",
+    "#zen/product": "./src/product/index.ts",
+    "#zen/presentation": "./src/presentation/index.ts"
+  },
   "scripts": {
-    "app-server": "npm run build && node dist/app-server-cli.js",
+    "app-server": "npm run build && node dist/adapters/node/app-server-cli.js",
     "build": "tsc -p tsconfig.build.json",
-    "dogfood:alb-94": "npm run build && node docs/implementation/alb-94-dogfood-acceptance.mjs",
-    "test": "vitest run",
+    "build:acceptance": "tsc -p tsconfig.acceptance.json",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run typecheck:web && npm test && npm run build && npm run build:acceptance && npm run web:build && npm run coverage && npm run e2e",
+    "coverage": "npm run coverage:kernel && npm run coverage:product && npm run coverage:presentation",
+    "coverage:kernel": "node scripts/run-coverage.mjs kernel",
+    "coverage:presentation": "node scripts/run-coverage.mjs presentation",
+    "coverage:product": "node scripts/run-coverage.mjs product",
+    "dogfood:alb-94": "npm run build && npm run build:acceptance && node docs/implementation/alb-94-dogfood-acceptance.mjs",
+    "e2e": "node scripts/run-e2e.mjs",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
+    "lint": "eslint .",
+    "test": "vitest run --pool=forks --fileParallelism=false",
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
-    "tui": "npm run build && node dist/cli.js",
-    "web": "npm run build && node dist/web-dev-cli.js",
+    "tui": "npm run build && node dist/tui/cli.js",
+    "web": "npm run build && node dist/adapters/node/web-dev-cli.js",
     "web:build": "vite build --config web/vite.config.ts",
     "web:dev": "vite --config web/vite.config.ts --host 127.0.0.1"
   },
   "bin": {
-    "zen-app-server": "dist/app-server-cli.js",
-    "zen-web": "dist/web-dev-cli.js",
-    "zen": "dist/cli.js"
+    "zen-app-server": "dist/adapters/node/app-server-cli.js",
+    "zen-web": "dist/adapters/node/web-dev-cli.js",
+    "zen": "dist/tui/cli.js"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/vite": "^4.3.0",
     "@types/node": "^25.9.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^10.7.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.9.5",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.64.0",
     "vite": "^8.0.16",
     "vitest": "^4.1.7"
   },
