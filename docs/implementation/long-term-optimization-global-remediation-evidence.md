@@ -229,3 +229,62 @@ Blocker or context escalation details: none. Final ISSUE-010 Node test commands
 started and ended with zero attributable Node/browser processes and produced
 zero `zen-*` OS-temp delta from the 4582 historical-directory baseline. No
 process or temporary path was removed.
+
+## Codex Worker Note
+
+Round: 2
+Issue: global remediation fresh-review findings for 008/009/010
+Local tracker state transition: Agent Review -> Rework -> Agent Review; all
+three issues remain batched for one independent fresh review
+Branch: `codex/long-term-optimization-global-remediation`
+PR URL: not configured; local-branch mode
+Base revision/diff scope: `99f082dc3bbbe7e6880df039afcddfaf9af3abd6..8c4d8b59a451077f528a821e3ef1586d37b5d201`
+Summary of behavior delivered: the cross-issue audit closed three blocking
+boundaries. HookRuntime now preserves the injected durable Item appender for
+normal, hook-effect, and hook-error Items; authoritative empty resets clear
+stale projection state and terminal reset snapshots settle the exact pending
+session turn; production signal handlers are installed before the first
+resource acquisition and stop later startup stages after a signal.
+Final scope summary: bounded fresh-review remediation only; no unrelated
+refactor or protocol state source was added.
+Changed files/modules: production composition; AgentLoop/HookRuntime and kernel
+exports; InteractionProjection/AgentInteractionSession; focused tests.
+Tests added/updated: hook-enabled injected-appender failure with `toolCalls=0`;
+empty reset clearing stale state; terminal reset settling a bound submit waiter;
+SIGTERM during transport acquisition preventing Vite acquisition while closing
+all already-owned resources.
+Acceptance criteria status: the 008 hook/effect boundary, 009 reset recovery,
+and 010 startup-signal ownership findings are fixed. A proposed observer-error
+change was rejected during review because ItemList observer failure occurs after
+the Item is committed and the existing FIFO contract intentionally executes it;
+the async commit barrier remains the durability acknowledgement.
+Commands run and results: corrected RED failed 3/70 tests across four files for
+the hook appender, empty reset, and terminal waiter behaviors. Focused fixes
+passed 4 files/69 tests in 2.31s and 6 files/65 tests in 2.90s. Final serialized
+cross-issue suite passed 11 files/151 tests in 4.97s. Core and Web typechecks,
+touched-file ESLint and Prettier checks, build, and `git diff --check` passed.
+Validation log paths: console evidence summarized here; no separate log file.
+Required check status or local-check handoff reason: targeted cross-issue tests
+and static/build gates pass. Full `npm run check`, coverage, browser E2E,
+acceptance/Web builds, and real launchers remain reserved for integration per
+manager instruction.
+Evidence links/paths:
+`docs/implementation/long-term-optimization-global-remediation-evidence.md`
+Decisions made: keep one appender authoritative through hooks; bind completion
+waiters to the turn id returned by the request and reconcile against ItemList
+snapshots; install signal observation before ownership acquisition without
+racing or abandoning in-flight factory results.
+Standards notes: ItemList remains the sole source of truth; transport replay is
+delivery history only; no sleep/timeout/gate weakening, `process.exit`, or kill
+path was introduced.
+Reviewer notes: independent fresh review should recheck hook-effect append
+ordering, reset reconciliation for missing/failed turns, and signal arrival
+during each acquisition await.
+Open questions: none.
+Known residual risks: independent fresh review and integration-only gates remain.
+Blocker or context escalation details: none. All final test commands ended with
+zero attributable Node/browser processes. Two FileThreadJournal runs created six
+exact OS-temp directories with allowlisted prefixes and zero live references;
+literal-path cleanup was attempted after parent/prefix validation but blocked by
+execution policy before deletion. The 4582 historical baseline and all other
+temporary directories were untouched; final count is 4588.
