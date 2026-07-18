@@ -125,7 +125,48 @@ describe('production composition shutdown', () => {
     expect(vite.close).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps both signal handlers installed until an idempotent shutdown settles', async () => {
+    const signals = new FakeSignalSource();
+    const ready = deferred<void>();
+    const closeStarted = deferred<void>();
+    const releaseClose = deferred<void>();
+    const order: string[] = [];
+    const appServer = fakeAppServer(order);
+    appServer.close.mockImplementation(async () => {
+      order.push('appServer.close');
+      closeStarted.resolve();
+      await releaseClose.promise;
+    });
+    const transport = fakeTransport(order);
+    const running = runAppServerCliComposition({
+      credentialMode: {
+        type: 'provided',
+        capability: 'provided-capability-0123456789-abcdef-0123456789',
+      },
+      signalSource: signals,
+      createAppServer: async () => appServer,
+      createTransport: async () => transport,
+      onListening: () => ready.resolve(),
+    });
+
+    await ready.promise;
+    signals.emit('SIGINT');
+    await closeStarted.promise;
+    expect(signals.listenerCount('SIGINT')).toBe(1);
+    expect(signals.listenerCount('SIGTERM')).toBe(1);
+    signals.emit('SIGTERM');
+    signals.emit('SIGINT');
+    expect(appServer.close).toHaveBeenCalledTimes(1);
+
+    releaseClose.resolve();
+    await running;
+    expect(signals.listenerCount('SIGINT')).toBe(0);
+    expect(signals.listenerCount('SIGTERM')).toBe(0);
+    expect(transport.close).toHaveBeenCalledTimes(1);
+  });
+
   it('drains every acquired resource when web startup fails', async () => {
+    const signals = new FakeSignalSource();
     const order: string[] = [];
     const appServer = fakeAppServer(order);
     const transport = fakeTransport(order);
@@ -141,7 +182,7 @@ describe('production composition shutdown', () => {
 
     await expect(
       runWebDevCliComposition({
-        signalSource: new FakeSignalSource(),
+        signalSource: signals,
         createAppServer: async () => appServer,
         createTransport: async () => transport,
         createVite: async () => vite,
@@ -151,6 +192,8 @@ describe('production composition shutdown', () => {
     expect(order.slice(0, 3)).toEqual(['vite.listen', 'transport.quiesce', 'appServer.close']);
     expect(transport.close).toHaveBeenCalledTimes(1);
     expect(vite.close).toHaveBeenCalledTimes(1);
+    expect(signals.listenerCount('SIGINT')).toBe(0);
+    expect(signals.listenerCount('SIGTERM')).toBe(0);
   });
 
   it('captures a startup signal before acquiring later web resources', async () => {
@@ -370,33 +413,45 @@ class ReplayFaultJournal extends RecordingJournal {
 }
 
 class FakeSignalSource implements ShutdownSignalSource {
-  private readonly listeners = new Map<string, Set<(value?: unknown) => void>>();
+  private readonly listeners = new Map<
+    string,
+    Set<{ readonly listener: (value?: unknown) => void; readonly once: boolean }>
+  >();
 
   once(event: 'SIGINT' | 'SIGTERM', listener: () => void): void {
-    const once = () => {
-      this.off(event, once);
-      listener();
-    };
-    this.add(event, once);
+    this.add(event, listener, true);
   }
 
-  on(event: 'message', listener: (message: unknown) => void): void {
-    this.add(event, listener);
+  on(event: 'SIGINT' | 'SIGTERM', listener: () => void): void;
+  on(event: 'message', listener: (message: unknown) => void): void;
+  on(event: string, listener: (value?: unknown) => void): void {
+    this.add(event, listener, false);
   }
 
   off(event: 'SIGINT' | 'SIGTERM', listener: () => void): void;
   off(event: 'message', listener: (message: unknown) => void): void;
   off(event: string, listener: (value?: unknown) => void): void {
-    this.listeners.get(event)?.delete(listener);
+    const entries = this.listeners.get(event);
+    for (const entry of entries ?? []) {
+      if (entry.listener === listener) entries?.delete(entry);
+    }
   }
 
   emit(event: 'SIGINT' | 'SIGTERM'): void {
-    for (const listener of [...(this.listeners.get(event) ?? [])]) listener();
+    const entries = this.listeners.get(event);
+    for (const entry of [...(entries ?? [])]) {
+      if (entry.once) entries?.delete(entry);
+      entry.listener();
+    }
   }
 
-  private add(event: string, listener: (value?: unknown) => void): void {
+  listenerCount(event: 'SIGINT' | 'SIGTERM'): number {
+    return this.listeners.get(event)?.size ?? 0;
+  }
+
+  private add(event: string, listener: (value?: unknown) => void, once: boolean): void {
     const listeners = this.listeners.get(event) ?? new Set();
-    listeners.add(listener);
+    listeners.add({ listener, once });
     this.listeners.set(event, listeners);
   }
 }

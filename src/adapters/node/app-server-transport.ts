@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import type { ProxyOptions } from 'vite';
 
 import type {
@@ -50,6 +50,12 @@ const REQUEST_PATH = '/request';
 const EVENTS_PATH = '/events';
 const MAX_REQUEST_BODY_BYTES = 1_000_000;
 const MIN_CAPABILITY_BYTES = 32;
+
+type TransportRequestState = {
+  readonly request: IncomingMessage;
+  readonly response: ServerResponse;
+  phase: 'ingress' | 'dispatched' | 'stream';
+};
 
 export function createAppServerHttpProxy(
   target: string,
@@ -136,10 +142,19 @@ export async function serveAppServerHttpTransport(
     options.eventReplayLimit ?? 1_024
   );
   const eventStreams = new Map<ServerResponse, AppServerSubscription>();
+  const requests = new Set<TransportRequestState>();
+  const sockets = new Set<Socket>();
   let accepting = true;
   const server = createServer((request, response) => {
+    const requestState: TransportRequestState = { request, response, phase: 'ingress' };
+    requests.add(requestState);
+    const releaseRequest = () => requests.delete(requestState);
+    response.once('finish', releaseRequest);
+    response.once('close', releaseRequest);
     void (async () => {
       if (!accepting) {
+        response.shouldKeepAlive = false;
+        response.once('finish', () => request.socket.destroy());
         sendJson(response, 503, {
           method: 'transport/request',
           ok: false,
@@ -162,11 +177,14 @@ export async function serveAppServerHttpTransport(
       }
 
       if (request.method === 'POST' && url.pathname === REQUEST_PATH) {
-        await handleRequest(options.appServer, request, response);
+        await handleRequest(options.appServer, request, response, () => {
+          requestState.phase = 'dispatched';
+        });
         return;
       }
 
       if (request.method === 'GET' && url.pathname === EVENTS_PATH) {
+        requestState.phase = 'stream';
         const unsubscribe = handleEventStream(
           notificationStream,
           request,
@@ -196,6 +214,10 @@ export async function serveAppServerHttpTransport(
     })().catch((cause: unknown) => {
       response.destroy(cause instanceof Error ? cause : new Error(String(cause)));
     });
+  });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
   });
 
   try {
@@ -227,6 +249,7 @@ export async function serveAppServerHttpTransport(
 
   const quiesce = (): Promise<void> => {
     accepting = false;
+    abortIncompleteIngress(requests, sockets);
     return Promise.resolve();
   };
 
@@ -251,7 +274,12 @@ export async function serveAppServerHttpTransport(
     streamTasks.push(Promise.resolve().then(() => notificationStream.close()));
 
     const streamResults = await Promise.allSettled(streamTasks);
-    const serverResult = await Promise.allSettled([closeHttpServer(server)]);
+    abortIncompleteIngress(requests, sockets);
+    server.closeIdleConnections();
+    const serverResult = await Promise.allSettled([
+      closeHttpServer(server),
+      waitForSocketSetToDrain(sockets),
+    ]);
     const failures = [...streamResults, ...serverResult].flatMap((result) =>
       result.status === 'rejected' ? [result.reason] : []
     );
@@ -576,7 +604,8 @@ async function waitForReconnect(signal: AbortSignal): Promise<void> {
 async function handleRequest(
   appServer: AppServerClient,
   request: IncomingMessage,
-  response: ServerResponse
+  response: ServerResponse,
+  onDispatch: () => void
 ): Promise<void> {
   const parsed = await readRequestJson(request);
 
@@ -592,6 +621,7 @@ async function handleRequest(
     return;
   }
 
+  onDispatch();
   try {
     const result = await appServer.request(parsed.value as AppServerRequestInput);
 
@@ -605,6 +635,43 @@ async function handleRequest(
         message: 'App Server request failed',
       },
     });
+  }
+}
+
+function abortIncompleteIngress(
+  requests: ReadonlySet<TransportRequestState>,
+  sockets: ReadonlySet<Socket>
+): void {
+  const productOwnedSockets = new Set(
+    [...requests]
+      .filter((state) => state.phase === 'dispatched' || state.phase === 'stream')
+      .map((state) => state.request.socket)
+  );
+  for (const state of requests) {
+    if (
+      state.phase !== 'ingress' ||
+      state.response.writableEnded ||
+      productOwnedSockets.has(state.request.socket)
+    ) {
+      continue;
+    }
+    state.request.socket.destroy();
+  }
+  for (const socket of sockets) {
+    if (!productOwnedSockets.has(socket)) socket.destroy();
+  }
+}
+
+async function waitForSocketSetToDrain(sockets: ReadonlySet<Socket>): Promise<void> {
+  while (sockets.size > 0) {
+    await Promise.all(
+      [...sockets].map(
+        (socket) =>
+          new Promise<void>((resolve) => {
+            socket.once('close', resolve);
+          })
+      )
+    );
   }
 }
 

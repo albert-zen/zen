@@ -4,6 +4,7 @@ import {
   consumeAbortableAsyncIterator,
   isAsyncIteratorAbortedError,
 } from './abortable-async-iterator.js';
+import { assertEffectPermitted } from './effect-permission.js';
 
 export type ModelOptions = Readonly<Record<string, unknown>>;
 
@@ -85,51 +86,49 @@ export async function appendModelResponseItems(
   let deltaIndex = 0;
 
   try {
-    await consumeAbortableAsyncIterator(
-      input.model.generate(input.context, input.options, input.signal),
-      input.signal,
-      async (event) => {
-        if (event.type === 'text.delta') {
-          await appendItem({
-            type: 'assistant.message.delta',
-            runId: input.runId,
-            turnId: input.turnId,
-            causeId: requestStarted.id,
-            targetId: assistantStarted.id,
-            visibility: 'trace',
-            payload: { delta: event.text, index: deltaIndex++ },
-          });
-        }
-
-        if (event.type === 'message.completed') {
-          const payload: Record<string, unknown> = { content: event.content };
-
-          if (event.toolCalls) {
-            payload.toolCalls = event.toolCalls;
-          }
-
-          completed = await appendRequired(appendItem, {
-            type: 'assistant.message.completed',
-            runId: input.runId,
-            turnId: input.turnId,
-            causeId: requestStarted.id,
-            targetId: assistantStarted.id,
-            payload,
-          });
-        }
-
-        if (event.type === 'error') {
-          error = await appendAssistantError(
-            appendItem,
-            input,
-            requestStarted,
-            assistantStarted,
-            event.error
-          );
-          return false;
-        }
+    assertEffectPermitted(input.signal);
+    const events = input.model.generate(input.context, input.options, input.signal);
+    await consumeAbortableAsyncIterator(events, input.signal, async (event) => {
+      if (event.type === 'text.delta') {
+        await appendItem({
+          type: 'assistant.message.delta',
+          runId: input.runId,
+          turnId: input.turnId,
+          causeId: requestStarted.id,
+          targetId: assistantStarted.id,
+          visibility: 'trace',
+          payload: { delta: event.text, index: deltaIndex++ },
+        });
       }
-    );
+
+      if (event.type === 'message.completed') {
+        const payload: Record<string, unknown> = { content: event.content };
+
+        if (event.toolCalls) {
+          payload.toolCalls = event.toolCalls;
+        }
+
+        completed = await appendRequired(appendItem, {
+          type: 'assistant.message.completed',
+          runId: input.runId,
+          turnId: input.turnId,
+          causeId: requestStarted.id,
+          targetId: assistantStarted.id,
+          payload,
+        });
+      }
+
+      if (event.type === 'error') {
+        error = await appendAssistantError(
+          appendItem,
+          input,
+          requestStarted,
+          assistantStarted,
+          event.error
+        );
+        return false;
+      }
+    });
   } catch (caughtError) {
     if (isAsyncIteratorAbortedError(caughtError)) throw caughtError;
     error = await appendAssistantError(

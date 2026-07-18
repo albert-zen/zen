@@ -129,6 +129,7 @@ describe('Web development App Server proxy', () => {
       },
     } satisfies AppServerClient;
     const proxy = await startProxy(appServer);
+    const transportSubscriptionCount = subscriptionCount;
 
     try {
       const cases: readonly {
@@ -204,7 +205,8 @@ describe('Web development App Server proxy', () => {
       }
 
       expect(requestCount).toBe(0);
-      expect(subscriptionCount).toBe(0);
+      expect(transportSubscriptionCount).toBe(1);
+      expect(subscriptionCount).toBe(transportSubscriptionCount);
     } finally {
       await proxy.close();
     }
@@ -469,15 +471,23 @@ async function readSseNotification(response: Response): Promise<unknown> {
       }
 
       buffer += decoder.decode(result.value, { stream: true }).replaceAll('\r\n', '\n');
-
-      for (const event of buffer.split('\n\n')) {
+      let separator = buffer.indexOf('\n\n');
+      while (separator >= 0) {
+        const event = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        separator = buffer.indexOf('\n\n');
+        const eventType = event
+          .split('\n')
+          .find((line) => line.startsWith('event:'))
+          ?.slice('event:'.length)
+          .trim();
         const data = event
           .split('\n')
           .filter((line) => line.startsWith('data:'))
           .map((line) => line.slice('data:'.length).trimStart())
           .join('\n');
 
-        if (data) {
+        if (eventType === 'notification' && data) {
           return JSON.parse(data) as unknown;
         }
       }

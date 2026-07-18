@@ -331,6 +331,115 @@ describe('Web UI client', () => {
     unsubscribe();
   });
 
+  it('retains reset debt across a failed resnapshot and requires a later successful snapshot', async () => {
+    const events = new ControllableEventSource();
+    const secondSnapshot = deferred<Response>();
+    const postedMethods: string[] = [];
+    let listAttempts = 0;
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as AppServerRequestInput;
+        postedMethods.push(request.method);
+        if (request.method === 'thread/list') {
+          listAttempts += 1;
+          if (listAttempts === 1) return new Response('resnapshot failed', { status: 503 });
+          return await secondSnapshot.promise;
+        }
+        return new Response(
+          JSON.stringify({
+            method: request.method,
+            ok: true,
+            result: { thread: { id: 'new', status: 'idle', turns: [], items: [] } },
+          })
+        );
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    events.open();
+    events.fail(new Event('first-disconnect'));
+    const firstEffect = client.request({ method: 'thread/start' });
+    events.open();
+    events.emitReset({ streamId: 'stream-2', cursor: 9 });
+    events.emitReset({ streamId: 'stream-2', cursor: 9 });
+    events.emitSync({ streamId: 'stream-2', cursor: 9 });
+    await expect(firstEffect).rejects.toThrow('Reconnect resnapshot failed');
+
+    events.fail(new Event('retry-disconnect'));
+    const secondEffect = client.request({ method: 'thread/start' });
+    events.open();
+    events.emitSync({ streamId: 'stream-2', cursor: 10 });
+    await Promise.resolve();
+    expect(postedMethods).toEqual(['thread/list', 'thread/list']);
+
+    secondSnapshot.resolve(
+      new Response(
+        JSON.stringify({
+          method: 'thread/list',
+          ok: true,
+          result: { threads: [], persistenceFailures: [] },
+        })
+      )
+    );
+    await secondEffect;
+    expect(postedMethods).toEqual(['thread/list', 'thread/list', 'thread/start']);
+    unsubscribe();
+  });
+
+  it('ignores an old generation resnapshot and installs only the current reset snapshot', async () => {
+    const events = new ControllableEventSource();
+    const firstSnapshot = deferred<Response>();
+    const secondSnapshot = deferred<Response>();
+    const snapshots = [firstSnapshot, secondSnapshot];
+    const postedMethods: string[] = [];
+    const installedThreadIds: string[] = [];
+    const client = new BrowserAppServerTransportClient({
+      createEventSource: () => events,
+      fetch: (async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as AppServerRequestInput;
+        postedMethods.push(request.method);
+        if (request.method === 'thread/list') return await snapshots.shift()!.promise;
+        return new Response(
+          JSON.stringify({
+            method: request.method,
+            ok: true,
+            result: { thread: { id: 'effect', status: 'idle', turns: [], items: [] } },
+          })
+        );
+      }) as typeof fetch,
+    });
+    const unsubscribe = client.subscribe((notification) => {
+      if (notification.type === 'sync/reset') {
+        installedThreadIds.push(...notification.threads.map((thread) => thread.id));
+      }
+    });
+    events.open();
+    events.fail(new Event('first-disconnect'));
+    events.open();
+    events.emitReset({ streamId: 'stream-2', cursor: 1 });
+    events.emitSync({ streamId: 'stream-2', cursor: 1 });
+    await Promise.resolve();
+
+    events.fail(new Event('second-disconnect'));
+    const effect = client.request({ method: 'thread/start' });
+    events.open();
+    events.emitReset({ streamId: 'stream-3', cursor: 2 });
+    events.emitSync({ streamId: 'stream-3', cursor: 2 });
+    await Promise.resolve();
+    expect(postedMethods).toEqual(['thread/list', 'thread/list']);
+
+    firstSnapshot.resolve(threadListResponse('stale-thread'));
+    await Promise.resolve();
+    expect(installedThreadIds).toEqual([]);
+    expect(postedMethods).toEqual(['thread/list', 'thread/list']);
+
+    secondSnapshot.resolve(threadListResponse('current-thread'));
+    await effect;
+    expect(installedThreadIds).toEqual(['current-thread']);
+    expect(postedMethods).toEqual(['thread/list', 'thread/list', 'thread/start']);
+    unsubscribe();
+  });
+
   it('rejects an open-generation request invalidated synchronously by reconnect', async () => {
     const events = new ControllableEventSource();
     let fetchCalls = 0;
@@ -563,6 +672,101 @@ describe('Web UI client', () => {
     expect(webUi.getSnapshot().connection).toEqual({
       mode: 'real',
       status: 'disconnected',
+    });
+  });
+
+  it('derives connection from an authoritative reset when a terminal event was missed', async () => {
+    const client = new RecordingClient();
+    const webUi = new WebUiClient({ client });
+    await webUi.connect();
+    await webUi.submitMessage('running');
+    expect(webUi.getSnapshot().connection.status).toBe('running');
+
+    client.emit({
+      type: 'sync/reset',
+      threads: [
+        {
+          id: 'thread-1',
+          status: 'idle',
+          turns: [{ id: 'turn-1', runId: 'run-1', status: 'completed', itemIds: ['item-1'] }],
+          items: [protocolItem('item-1', 1, 'turn.completed')],
+        },
+      ],
+    });
+
+    expect(webUi.getSnapshot().connection).toEqual({ mode: 'real', status: 'connected' });
+    expect(webUi.getSnapshot().state.currentThread?.status).toBe('idle');
+  });
+
+  it('derives connection across multi-thread reset, thread switch, and missing current thread', async () => {
+    const client = new RecordingClient();
+    const webUi = new WebUiClient({ client });
+    await webUi.connect();
+    await webUi.submitMessage('running');
+
+    client.emit({
+      type: 'sync/reset',
+      threads: [
+        { id: 'thread-2', status: 'running', turns: [], items: [] },
+        { id: 'thread-1', status: 'idle', turns: [], items: [] },
+      ],
+    });
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-1');
+    expect(webUi.getSnapshot().connection.status).toBe('connected');
+
+    client.emit({
+      type: 'turn/started',
+      threadId: 'thread-1',
+      turn: { id: 'turn-2', runId: 'run-2', status: 'inProgress', itemIds: [] },
+    });
+    client.emit({
+      type: 'thread/started',
+      thread: { id: 'thread-2', status: 'idle', turns: [], items: [] },
+    });
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-2');
+    expect(webUi.getSnapshot().connection.status).toBe('connected');
+
+    client.emit({
+      type: 'turn/started',
+      threadId: 'thread-2',
+      turn: { id: 'turn-3', runId: 'run-3', status: 'inProgress', itemIds: [] },
+    });
+    client.emit({
+      type: 'sync/reset',
+      threads: [{ id: 'thread-1', status: 'idle', turns: [], items: [] }],
+    });
+    expect(webUi.getSnapshot().state.currentThread).toBeUndefined();
+    expect(webUi.getSnapshot().connection).toEqual({ mode: 'real', status: 'connected' });
+  });
+
+  it('derives the failed connection message from an authoritative reset turn', async () => {
+    const client = new RecordingClient();
+    const webUi = new WebUiClient({ client });
+    await webUi.connect();
+    client.emit({
+      type: 'sync/reset',
+      threads: [
+        {
+          id: 'thread-1',
+          status: 'failed',
+          turns: [
+            {
+              id: 'turn-1',
+              runId: 'run-1',
+              status: 'failed',
+              itemIds: [],
+              error: { message: 'snapshot failure' },
+            },
+          ],
+          items: [],
+        },
+      ],
+    });
+
+    expect(webUi.getSnapshot().connection).toEqual({
+      mode: 'real',
+      status: 'failed',
+      message: 'snapshot failure',
     });
   });
 
@@ -1105,6 +1309,19 @@ function protocolItem(id: string, seq: number, type: string) {
     turnId: 'turn-1',
     payload: {},
   };
+}
+
+function threadListResponse(threadId: string): Response {
+  return new Response(
+    JSON.stringify({
+      method: 'thread/list',
+      ok: true,
+      result: {
+        threads: [{ id: threadId, status: 'idle', turns: [], items: [] }],
+        persistenceFailures: [],
+      },
+    })
+  );
 }
 
 function deferred<T>() {

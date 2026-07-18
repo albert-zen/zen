@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { connect } from 'node:net';
+import { once } from 'node:events';
 
 import {
+  AggregateProductionShutdown,
   AgentInteractionSession,
   AppServer,
   type AppServerClient,
@@ -106,6 +109,132 @@ describe('App Server HTTP transport', () => {
     const secondClose = transport.close();
     expect(secondClose).toBe(firstClose);
     await firstClose;
+  });
+
+  it('closes a partial authenticated request body within the transport shutdown budget', async () => {
+    let requestCount = 0;
+    const appServer = {
+      async request() {
+        requestCount += 1;
+        return {
+          method: 'thread/list',
+          ok: true as const,
+          result: { threads: [], persistenceFailures: [] },
+        };
+      },
+      subscribe() {
+        return () => undefined;
+      },
+    } satisfies AppServerClient;
+    const transport = await serveAppServerHttpTransport({
+      appServer,
+      capability: TEST_CAPABILITY,
+    });
+    const target = new URL(transport.url);
+    const socket = connect({ host: target.hostname, port: Number(target.port) });
+    const socketErrors: Error[] = [];
+    socket.on('error', (error) => socketErrors.push(error));
+    let shutdownSettled = false;
+
+    try {
+      await once(socket, 'connect');
+      socket.write(
+        [
+          'POST /request HTTP/1.1',
+          `Host: ${target.host}`,
+          `Authorization: Bearer ${TEST_CAPABILITY}`,
+          'Content-Type: application/json',
+          'Content-Length: 128',
+          '',
+          '{"method":"thread/list"',
+        ].join('\r\n')
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const shutdown = new AggregateProductionShutdown({
+        ingress: [{ name: 'transport ingress', close: () => transport.quiesce() }],
+        edge: [{ name: 'transport edge', close: () => transport.close() }],
+      });
+      await expect(settlesWithin(shutdown.close(), 250)).resolves.toBeUndefined();
+      shutdownSettled = true;
+      if (!socket.destroyed) await once(socket, 'close');
+
+      expect(socket.destroyed).toBe(true);
+      expect(socketErrors.every((error) => 'code' in error && error.code === 'ECONNRESET')).toBe(
+        true
+      );
+      expect(requestCount).toBe(0);
+    } finally {
+      if (!shutdownSettled) socket.destroy();
+      await transport.close();
+    }
+  });
+
+  it('allows an already dispatched request to finish after ingress quiesces', async () => {
+    const dispatched = createDeferred<void>();
+    const release = createDeferred<void>();
+    const appServer = {
+      async request() {
+        dispatched.resolve();
+        await release.promise;
+        return {
+          method: 'thread/list',
+          ok: true as const,
+          result: { threads: [], persistenceFailures: [] },
+        };
+      },
+      subscribe() {
+        return () => undefined;
+      },
+    } satisfies AppServerClient;
+    const transport = await serveAppServerHttpTransport({
+      appServer,
+      capability: TEST_CAPABILITY,
+    });
+
+    try {
+      const pending = fetch(new URL('/request', transport.url), {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${TEST_CAPABILITY}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ method: 'thread/list' }),
+      });
+      await dispatched.promise;
+      await transport.quiesce();
+      release.resolve();
+
+      const response = await pending;
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ method: 'thread/list', ok: true });
+    } finally {
+      release.resolve();
+      await transport.close();
+    }
+  });
+
+  it('keeps an established SSE stream alive until edge close after quiesce', async () => {
+    const appServer = new PushAppServerClient();
+    const transport = await serveAppServerHttpTransport({
+      appServer,
+      capability: TEST_CAPABILITY,
+    });
+    const stream = await openEventStream(transport.url);
+
+    try {
+      await stream.next('sync');
+      await transport.quiesce();
+      appServer.emit(itemNotification('item-after-quiesce', 1));
+      const notification = await stream.next('notification');
+
+      expect(JSON.parse(notification.data)).toMatchObject({
+        item: { id: 'item-after-quiesce' },
+      });
+    } finally {
+      stream.abort();
+      await transport.close();
+    }
   });
 
   it('unsubscribes when transport startup cannot bind', async () => {
@@ -835,6 +964,20 @@ function createDeferred<T>() {
   });
 
   return { promise, resolve, reject };
+}
+
+async function settlesWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 async function listenWithPlainTextResponse(): Promise<{

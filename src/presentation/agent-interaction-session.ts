@@ -68,6 +68,7 @@ export type AgentInteractionSessionListener = (event: AgentInteractionSessionEve
 
 type CompletionWaiter = {
   readonly promise: Promise<void>;
+  readonly turnId: string | undefined;
   bindTurn(turnId: string): void;
   reconcile(thread: ThreadSnapshot | undefined): void;
   resolve(): void;
@@ -75,11 +76,15 @@ type CompletionWaiter = {
   discard(): void;
 };
 
+type CompletionTerminal =
+  { readonly type: 'completed' } | { readonly type: 'failed'; readonly error: Error };
+
 export class AgentInteractionSession {
   private readonly projection = new InteractionProjection();
   private subscription?: AppServerSubscription;
   private readonly listeners: AgentInteractionSessionListener[] = [];
   private readonly completionWaiters = new Map<string, Set<CompletionWaiter>>();
+  private readonly earlyCompletionTerminals = new Map<string, Map<string, CompletionTerminal>>();
   private disposed = false;
   private snapshotHandoff?: SessionSnapshotHandoff;
 
@@ -314,10 +319,11 @@ export class AgentInteractionSession {
     this.subscription?.();
     this.subscription = undefined;
     const error = new AgentInteractionSessionDisposedError();
-    this.completionWaiters.forEach((waiters) => {
-      [...waiters].forEach((waiter) => waiter.reject(error));
-    });
+    this.completionWaiters.forEach((waiters) =>
+      [...waiters].forEach((waiter) => waiter.reject(error))
+    );
     this.completionWaiters.clear();
+    this.earlyCompletionTerminals.clear();
     this.listeners.splice(0);
   }
 
@@ -357,14 +363,41 @@ export class AgentInteractionSession {
   }
 
   private applyNotification(notification: Parameters<AppServerNotificationListener>[0]): void {
+    const previousThreadId = this.projection.getSnapshot().currentThread?.id;
     const previousRows = this.projection.getSnapshot().timelineRows;
     const previousRowKeys = new Set(previousRows.map(toTimelineRowKey));
     const changed = this.projection.apply(notification);
+    if (
+      notification.type === 'thread/started' &&
+      previousThreadId &&
+      notification.thread.id !== previousThreadId
+    ) {
+      this.rejectCompletionWaitersForThread(
+        previousThreadId,
+        new Error(`Thread replaced before turn completion: ${previousThreadId}`)
+      );
+    }
     if (notification.type === 'sync/reset') {
+      this.earlyCompletionTerminals.clear();
       for (const [threadId, waiters] of [...this.completionWaiters]) {
         const thread = notification.threads.find((candidate) => candidate.id === threadId);
-        for (const waiter of [...waiters]) waiter.reconcile(thread);
+        for (const waiter of [...waiters]) {
+          if (waiter.turnId) {
+            waiter.reconcile(thread);
+          } else {
+            waiter.reject(new Error(`Recovery occurred before turn binding: ${threadId}`));
+          }
+        }
       }
+    }
+    if (notification.type === 'turn/completed' || notification.type === 'turn/failed') {
+      this.recordCompletionTerminal(
+        notification.threadId,
+        notification.turn.id,
+        notification.type === 'turn/failed'
+          ? { type: 'failed', error: new Error(notification.error.message) }
+          : { type: 'completed' }
+      );
     }
     if (!changed) return;
     const snapshot = this.getSnapshot();
@@ -375,16 +408,7 @@ export class AgentInteractionSession {
     if (nextRows.length > 0) {
       this.emit({ type: 'rows', rows: nextRows, snapshot });
     }
-
     this.emit({ type: 'state', snapshot });
-    if (notification.type === 'turn/completed' || notification.type === 'turn/failed') {
-      const waiters = [...(this.completionWaiters.get(notification.threadId) ?? [])];
-      waiters.forEach((waiter) =>
-        notification.type === 'turn/failed'
-          ? waiter.reject(new Error(notification.error.message))
-          : waiter.resolve()
-      );
-    }
   }
 
   private beginSnapshotHandoff(): SessionSnapshotHandoff {
@@ -395,6 +419,13 @@ export class AgentInteractionSession {
 
   private installSnapshot(snapshot: ThreadSnapshot, handoff: SessionSnapshotHandoff): boolean {
     if (this.snapshotHandoff !== handoff) throw new AgentInteractionSessionDisposedError();
+    const previousThreadId = this.projection.getSnapshot().currentThread?.id;
+    if (previousThreadId && previousThreadId !== snapshot.id) {
+      this.rejectCompletionWaitersForThread(
+        previousThreadId,
+        new Error(`Thread replaced before turn completion: ${previousThreadId}`)
+      );
+    }
     const changed = this.projection.replaceSnapshot(snapshot);
     this.snapshotHandoff = undefined;
     for (const notification of handoff.notifications) this.applyNotification(notification);
@@ -427,6 +458,7 @@ export class AgentInteractionSession {
     const remove = () => {
       waiters.delete(waiter);
       if (waiters.size === 0) this.completionWaiters.delete(threadId);
+      this.pruneEarlyCompletionTerminals(threadId);
     };
     const settle = (action: () => void) => {
       if (settled) return;
@@ -455,8 +487,21 @@ export class AgentInteractionSession {
     };
     const waiter: CompletionWaiter = {
       promise,
+      get turnId() {
+        return expectedTurnId;
+      },
       bindTurn: (turnId) => {
         expectedTurnId = turnId;
+        const terminal = this.takeEarlyCompletionTerminal(threadId, turnId);
+        this.pruneEarlyCompletionTerminals(threadId);
+        if (terminal?.type === 'completed') {
+          settle(resolvePromise);
+          return;
+        }
+        if (terminal?.type === 'failed') {
+          settle(() => rejectPromise(terminal.error));
+          return;
+        }
         reconcile();
       },
       reconcile: (thread) => {
@@ -472,6 +517,55 @@ export class AgentInteractionSession {
     waiters.add(waiter);
     this.completionWaiters.set(threadId, waiters);
     return waiter;
+  }
+
+  private recordCompletionTerminal(
+    threadId: string,
+    turnId: string,
+    terminal: CompletionTerminal
+  ): void {
+    const waiters = [...(this.completionWaiters.get(threadId) ?? [])];
+    const matching = waiters.filter((waiter) => waiter.turnId === turnId);
+    for (const waiter of matching) {
+      if (terminal.type === 'failed') {
+        waiter.reject(terminal.error);
+      } else {
+        waiter.resolve();
+      }
+    }
+
+    const unboundCount = waiters.filter((waiter) => waiter.turnId === undefined).length;
+    if (unboundCount === 0) return;
+    const terminals = this.earlyCompletionTerminals.get(threadId) ?? new Map();
+    if (!terminals.has(turnId) && terminals.size >= unboundCount) {
+      const oldest = terminals.keys().next().value as string | undefined;
+      if (oldest) terminals.delete(oldest);
+    }
+    terminals.set(turnId, terminal);
+    this.earlyCompletionTerminals.set(threadId, terminals);
+  }
+
+  private takeEarlyCompletionTerminal(
+    threadId: string,
+    turnId: string
+  ): CompletionTerminal | undefined {
+    const terminals = this.earlyCompletionTerminals.get(threadId);
+    const terminal = terminals?.get(turnId);
+    terminals?.delete(turnId);
+    if (terminals?.size === 0) this.earlyCompletionTerminals.delete(threadId);
+    return terminal;
+  }
+
+  private pruneEarlyCompletionTerminals(threadId: string): void {
+    const hasUnboundWaiter = [...(this.completionWaiters.get(threadId) ?? [])].some(
+      (waiter) => waiter.turnId === undefined
+    );
+    if (!hasUnboundWaiter) this.earlyCompletionTerminals.delete(threadId);
+  }
+
+  private rejectCompletionWaitersForThread(threadId: string, cause: Error): void {
+    for (const waiter of [...(this.completionWaiters.get(threadId) ?? [])]) waiter.reject(cause);
+    this.earlyCompletionTerminals.delete(threadId);
   }
 
   private emit(event: AgentInteractionSessionEvent): void {

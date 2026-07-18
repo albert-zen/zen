@@ -52,7 +52,7 @@ export class AggregateProductionShutdown {
 }
 
 export interface ShutdownSignalSource {
-  once(event: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
+  on(event: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
   on(event: 'message', listener: (message: unknown) => void): unknown;
   off(event: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
   off(event: 'message', listener: (message: unknown) => void): unknown;
@@ -117,8 +117,6 @@ export async function runAppServerCliComposition(
   } catch (cause) {
     hasPrimaryFailure = true;
     primaryFailure = cause;
-  } finally {
-    shutdownSignal.cancel();
   }
 
   const shutdown = new AggregateProductionShutdown({
@@ -141,7 +139,11 @@ export async function runAppServerCliComposition(
     ],
   });
 
-  await finishComposition(hasPrimaryFailure, primaryFailure, shutdown);
+  try {
+    await finishComposition(hasPrimaryFailure, primaryFailure, shutdown);
+  } finally {
+    shutdownSignal.dispose();
+  }
 }
 
 export type ViteServerOwner = {
@@ -183,8 +185,6 @@ export async function runWebDevCliComposition(options: WebDevCliCompositionOptio
   } catch (cause) {
     hasPrimaryFailure = true;
     primaryFailure = cause;
-  } finally {
-    shutdownSignal.cancel();
   }
 
   const shutdown = new AggregateProductionShutdown({
@@ -200,7 +200,11 @@ export async function runWebDevCliComposition(options: WebDevCliCompositionOptio
     ],
   });
 
-  await finishComposition(hasPrimaryFailure, primaryFailure, shutdown);
+  try {
+    await finishComposition(hasPrimaryFailure, primaryFailure, shutdown);
+  } finally {
+    shutdownSignal.dispose();
+  }
 }
 
 async function settlePhase(
@@ -250,13 +254,16 @@ async function finishComposition(
 function createShutdownSignalWaiter(
   source: ShutdownSignalSource,
   acceptParentMessage: boolean
-): { readonly promise: Promise<void>; readonly requested: boolean; cancel(): void } {
+): { readonly promise: Promise<void>; readonly requested: boolean; dispose(): void } {
   let settled = false;
+  let disposed = false;
   let resolvePromise!: () => void;
   const promise = new Promise<void>((resolve) => {
     resolvePromise = resolve;
   });
-  const cancel = () => {
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
     source.off('SIGINT', shutdown);
     source.off('SIGTERM', shutdown);
     if (acceptParentMessage) source.off('message', shutdownFromParent);
@@ -264,7 +271,6 @@ function createShutdownSignalWaiter(
   const shutdown = () => {
     if (settled) return;
     settled = true;
-    cancel();
     resolvePromise();
   };
   const shutdownFromParent = (message: unknown) => {
@@ -278,8 +284,8 @@ function createShutdownSignalWaiter(
     }
   };
 
-  source.once('SIGINT', shutdown);
-  source.once('SIGTERM', shutdown);
+  source.on('SIGINT', shutdown);
+  source.on('SIGTERM', shutdown);
   if (acceptParentMessage) source.on('message', shutdownFromParent);
 
   return {
@@ -287,11 +293,7 @@ function createShutdownSignalWaiter(
     get requested() {
       return settled;
     },
-    cancel() {
-      if (settled) return;
-      settled = true;
-      cancel();
-    },
+    dispose,
   };
 }
 

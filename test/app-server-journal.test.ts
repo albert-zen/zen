@@ -1,8 +1,8 @@
 import { mkdtempSync } from 'node:fs';
-import { appendFile, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { basename, dirname, join, resolve } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   AppServer,
   ApprovalBroker,
@@ -14,6 +14,25 @@ import {
   type ThreadJournalReplay,
 } from './test-exports.js';
 import type { Item } from '../src/kernel/item-list.js';
+
+const journalTempPrefixes = [
+  'zen-replay-failure-',
+  'zen-close-barrier-',
+  'zen-tool-interrupt-',
+] as const;
+const journalTempRoots = new Set<string>();
+
+afterEach(async () => {
+  const roots = [...journalTempRoots];
+  journalTempRoots.clear();
+  const results = await Promise.allSettled(
+    roots.map(async (root) => await rm(root, { recursive: true, force: true }))
+  );
+  const failures = results.flatMap((result) =>
+    result.status === 'rejected' ? [result.reason] : []
+  );
+  if (failures.length > 0) throw new AggregateError(failures, 'Journal test temp cleanup failed');
+});
 
 describe('AppServer journal commits', () => {
   it('publishes terminal lifecycle only after that thread flushes', async () => {
@@ -376,7 +395,7 @@ describe('AppServer journal commits', () => {
   });
 
   it('lists valid replayed threads and reports a corrupt journal', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'zen-replay-failure-'));
+    const dir = createJournalTempRoot('zen-replay-failure-');
     const journal = new FileThreadJournal({ dir });
     await journal.create('valid', createdItem('valid'));
     await journal.close();
@@ -411,7 +430,7 @@ describe('AppServer journal commits', () => {
   });
 
   it('closes an abort-insensitive model iterator without persisting its late value', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'zen-close-barrier-'));
+    const dir = createJournalTempRoot('zen-close-barrier-');
     const pending = pendingIterator<{ readonly type: 'text.delta'; readonly text: string }>();
     const journal = new FileThreadJournal({ dir });
     const broker = new ApprovalBroker();
@@ -471,7 +490,7 @@ describe('AppServer journal commits', () => {
   });
 
   it('interrupts an abort-insensitive tool iterator without accepting its late value', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'zen-tool-interrupt-'));
+    const dir = createJournalTempRoot('zen-tool-interrupt-');
     const pending = pendingIterator<{ readonly type: 'output.delta'; readonly delta: string }>();
     const journal = new FileThreadJournal({ dir });
     const server = new AppServer({
@@ -519,6 +538,17 @@ describe('AppServer journal commits', () => {
     expect(replay.items.some((item) => item.type === 'turn.canceled')).toBe(true);
   });
 });
+
+function createJournalTempRoot(prefix: (typeof journalTempPrefixes)[number]): string {
+  if (!journalTempPrefixes.includes(prefix)) throw new Error(`Unexpected temp prefix: ${prefix}`);
+  const tempParent = resolve(tmpdir());
+  const root = resolve(mkdtempSync(join(tempParent, prefix)));
+  if (dirname(root) !== tempParent || !basename(root).startsWith(prefix)) {
+    throw new Error(`Unsafe journal test temp root: ${root}`);
+  }
+  journalTempRoots.add(root);
+  return root;
+}
 
 class TerminalBarrierJournal implements ThreadJournal {
   terminalFlushStarted = false;

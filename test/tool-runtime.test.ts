@@ -279,6 +279,57 @@ describe('appendToolExecutionItems', () => {
     ]);
   });
 
+  it('does not evaluate an eager tool runtime after hooked durable start aborts', async () => {
+    const items = createItems();
+    const assistant = appendAssistantToolCall(items);
+    const controller = new AbortController();
+    let hookInvocations = 0;
+    let toolInvocations = 0;
+    const hooks = new HookRuntime({
+      itemList: items,
+      hooks: {
+        beforeToolCall({ call }) {
+          hookInvocations += 1;
+          return {
+            decision: {
+              type: 'replace',
+              call: { ...call, input: { city: 'Beijing' } },
+            },
+          };
+        },
+      },
+    });
+    const runtime: ToolRuntime = {
+      execute() {
+        toolInvocations += 1;
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'result.completed' as const, content: 'unexpected' };
+          },
+        };
+      },
+    };
+
+    await expect(
+      appendToolExecutionItems({
+        itemList: items,
+        appendItem: async (input) => {
+          const item = items.append(input);
+          if (input.type === 'tool.call.started') controller.abort();
+          return item;
+        },
+        toolRuntime: runtime,
+        assistantItem: assistant,
+        hookRuntime: hooks,
+        signal: controller.signal,
+      })
+    ).rejects.toThrow('Async iterator consumption aborted');
+
+    expect(hookInvocations).toBe(1);
+    expect(toolInvocations).toBe(0);
+    expect(items.getItems().map((item) => item.type)).toContain('hook.effect');
+  });
+
   it('does not start malformed or already-aborted tool work', async () => {
     const items = createItems();
     const controller = new AbortController();
