@@ -1,8 +1,8 @@
 import { mkdtempSync } from 'node:fs';
-import { appendFile, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { basename, dirname, join, resolve } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   FileThreadJournal,
   ThreadJournalCorruptionError,
@@ -10,6 +10,28 @@ import {
   type ThreadJournalFileSystem,
 } from './test-exports.js';
 import type { Item } from '../src/kernel/item-list.js';
+
+const JOURNAL_FIXTURE_PREFIX = 'zen-journal-';
+const OS_TEMP_ROOT = resolve(tmpdir());
+const journalFixtureRoots = new Set<string>();
+
+afterEach(async () => {
+  const failures: unknown[] = [];
+  try {
+    for (const root of journalFixtureRoots) {
+      try {
+        assertJournalFixtureRoot(root);
+        await rm(root, { recursive: true, force: true });
+      } catch (cause) {
+        failures.push(cause);
+      }
+    }
+  } finally {
+    journalFixtureRoots.clear();
+  }
+  if (failures.length > 0)
+    throw new AggregateError(failures, 'Failed to remove exact journal fixture roots');
+});
 
 describe('FileThreadJournal', () => {
   it('preserves non-Error journal failure text for actionable callers', () => {
@@ -181,7 +203,19 @@ function item(type: string, threadId: string, seq: number, payload: unknown = {}
   };
 }
 function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'zen-journal-'));
+  const root = resolve(mkdtempSync(join(OS_TEMP_ROOT, JOURNAL_FIXTURE_PREFIX)));
+  assertJournalFixtureRoot(root);
+  journalFixtureRoots.add(root);
+  return root;
+}
+function assertJournalFixtureRoot(root: string): void {
+  const leaf = basename(root);
+  if (
+    dirname(root) !== OS_TEMP_ROOT ||
+    !leaf.startsWith(JOURNAL_FIXTURE_PREFIX) ||
+    leaf.length === JOURNAL_FIXTURE_PREFIX.length
+  )
+    throw new Error(`Refusing to remove unsafe journal fixture root: ${root}`);
 }
 function journalPath(dir: string, id: string): string {
   return join(dir, `thread-${Buffer.from(id).toString('base64url')}.jsonl`);
