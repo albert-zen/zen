@@ -464,6 +464,7 @@ Reviewer notes: source strict closeout at `e96a7f1be9ff08a438bed343939c8d13cb5b1
 Open questions: none.
 Known residual risks: exact temporary-directory residue is retained because it lacks sufficient ownership proof for safe deletion. The 28 new paths are `C:\Users\two-one\AppData\Local\Temp\zen-journal-0tQYYQ`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-0Zvvhu`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-1ekkaa`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-63umry`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-70LgCE`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-75uUii`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-7w60NL`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-bBk0xX`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-bKQ1yT`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-ByXnbE`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-czXa64`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-dfDYdM`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-dHZlTn`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-dtecyx`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-EYgLoi`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-irmO2r`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-Ix41Oa`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-JDBNmK`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-K5Qq6i`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-mdHDGk`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-n3nv1A`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-O8OZiX`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-p3Vnwp`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-UNT090`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-UwTLvf`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-vCJQP3`, `C:\Users\two-one\AppData\Local\Temp\zen-journal-xomDzG`, and `C:\Users\two-one\AppData\Local\Temp\zen-journal-zCwPYF`. They were created in four seven-directory batches during the Vitest and coverage runs and contain only `thread-*.jsonl` journal fixtures; no attributable Node/Chromium process was live at census. They are test-generated but lack a safe, exact ownership/reclamation record, so none was removed. Historical directories, including the manager-designated 37 unknown roots, were untouched.
 Blocker or context escalation details: pre-gate allowable temporary-directory baseline was 1446 paths with SHA-256 `08D14F3E0AAFF1E39E1957A23CFC2C4BDC946FEBF8ADBCCDEB64212407CE3465`; post-gate set was 1474 paths with SHA-256 `DAF6F9D4B24BBC0796D9E0577A91A0517A9998E2D8306C7356EF65DC9097B34A`, delta +28/-0. The exact attributable runtime process set was 0 before and after, SHA-256 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+
 ## ISSUE-011 Acceptance Criteria
 
 - [x] Each `thread-journal` fixture root is the resolved exact path returned by
@@ -579,3 +580,27 @@ Prettier, and `git diff --check` passed.
 Local tracker state decision: Complete / Ready for Integration; not Integrated.
 State decision reason: fresh review found no functional, safety, or hygiene
 finding. Manager-owned canonical merge and program closeout remain pending.
+
+## Codex Worker Note
+
+Round: 2
+Issue: canonical integration of long-term-optimization-011 deterministic journal fixture cleanup
+Local tracker state transition: Complete / Ready for Integration -> Integrated
+Branch: `codex/long-term-optimization`
+PR URL: not configured; local-branch mode and no remote push
+Base revision/diff scope: canonical parent `786228f6494c0c8c318c187675eec31067545b1f`; final ISSUE-011 strict-pass source `366badfb6941ea1b7acab7f0ff125412447cc578`; canonical merge commit `db8dc541fad07fbebd078abbbd455903a95d2075`
+Summary of behavior delivered: merged the reviewed test-only journal fixture teardown into canonical while preserving all prior 008-010 integration and append-only evidence history.
+Final scope summary: manager-owned ISSUE-011 canonical integration, one complete unit suite, targeted format/lint/type/diff gates, exact process/temp census, and program-final closeout documentation.
+Changed files/modules: merge introduced `test/thread-journal.test.ts` plus the source tracker/evidence tail; this closeout changes only `docs/implementation/long-term-optimization-tracker.md` and this evidence document.
+Tests added/updated: no additional tests during integration; the merged fixture teardown covers the existing 9-test `FileThreadJournal` suite.
+Acceptance criteria status: all ISSUE-011 criteria remain covered by the fresh STRICT PASS review. The canonical 35-file/343-test suite passed with exact zero journal residue delta, so ISSUE-011 is Integrated and the program is finally closed.
+Commands run and results: `git merge --no-ff codex/long-term-optimization-global-remediation` completed at `db8dc541fad07fbebd078abbbd455903a95d2075` after preserving both sides of the append-only documentation conflict. One exact `npm test` passed 35 files/343 tests in 144.66 seconds Vitest time and 145.696 seconds outer time. `npm exec prettier -- --check test/thread-journal.test.ts`, `npm exec eslint -- test/thread-journal.test.ts`, `npm run typecheck`, and `git diff --check` passed.
+Validation log paths: console evidence summarized here; no standalone log file.
+Required check status or local-check handoff reason: PASS. The full `npm run check` at parent `786228f6494c0c8c318c187675eec31067545b1f` remains the authoritative product release gate. Per manager instruction, build, coverage, E2E, audit, and full check were not repeated for this test/docs-only tail.
+Evidence links/paths: `docs/implementation/long-term-optimization-global-remediation-evidence.md` and `docs/implementation/long-term-optimization-tracker.md`.
+Decisions made: retain all historical and canonical 28-directory residue; accept integration only after the exact journal set, total allowlisted set, and attributable process set remained unchanged around the complete unit suite.
+Standards notes: no reset, rebase, force operation, process kill, `taskkill`, wildcard deletion, broad deletion, timeout weakening, or remote push was used.
+Reviewer notes: source Review Round 1 at `f017ba432b49a71ce06115bd9e5333608433a345` and final source closeout `366badfb6941ea1b7acab7f0ff125412447cc578` remain in canonical history.
+Open questions: none.
+Known residual risks: the prior 28 canonical `zen-journal-*` residue directories and all historical temporary directories remain intentionally untouched; ISSUE-011 produced no new residue in canonical validation.
+Blocker or context escalation details: none. Before and after `npm test`, the exact `zen-journal-*` set remained 1299 paths with SHA-256 `133FD81B08650A50A51A515DD6123B8283A0EAB76310BCFDD55F21FDB3D3EB36`, delta +0/-0. The five-prefix allowlisted temporary-directory set remained 1474 paths with SHA-256 `DAF6F9D4B24BBC0796D9E0577A91A0517A9998E2D8306C7356EF65DC9097B34A`, delta +0/-0. The exact attributable Node/browser process set was 0 before and after with empty-set SHA-256 `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
