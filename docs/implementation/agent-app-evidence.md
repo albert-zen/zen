@@ -33,3 +33,14 @@
 - Final test count: 2 files and 13 tests passed.
 - Hygiene census: pre/post Node PID set unchanged; exact
   `zen-agent-app-project-*` temporary-root delta is zero.
+
+## APP-003
+
+- Product coordination uses an explicit project-scoped envelope rather than
+  overloading kernel Items whose `runId` and `turnId` are execution scoped.
+- `ProjectCoordinator` owns one ThreadManager runtime per Project, rebuilds
+  mailbox and idempotency projections from coordination Items, and activates a
+  target turn only after durable `thread.message.sent` then delivery facts.
+- `FileProjectCoordinationJournal` is a single explicit append-only JSONL file
+  with tail serialization, sync-before-return, schema/version validation, and
+  fail-closed replay.

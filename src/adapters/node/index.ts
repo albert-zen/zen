@@ -26,6 +26,11 @@ export {
   FileProjectRegistry,
   canonicalizeWindowsProjectRootPath,
 } from './file-project-registry.js';
+export type {
+  FileProjectCoordinationJournalOptions,
+  ProjectCoordinationFileSystem,
+} from './file-project-coordination-journal.js';
+export { FileProjectCoordinationJournal } from './file-project-coordination-journal.js';
 export type { LocalToolRuntimeOptions } from './local-tool-runtime.js';
 export { LocalToolRuntime, localToolDefinitions } from './local-tool-runtime.js';
 export type { ModelProviderConfig, ModelProviderConfigOptions } from './model-provider-config.js';

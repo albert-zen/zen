@@ -83,3 +83,28 @@ export type {
   ProjectUpdateInput,
 } from './project-manager.js';
 export { ProjectManager } from './project-manager.js';
+export type {
+  ProjectCoordinationAppendInput,
+  ProjectCoordinationItem,
+  ProjectCoordinationItemType,
+  ProjectCoordinationJournal,
+} from './project-coordination.js';
+export {
+  cloneCoordinationItem,
+  InMemoryProjectCoordinationJournal,
+  ProjectCoordinationJournalCorruptionError,
+  ProjectCoordinationList,
+} from './project-coordination.js';
+export type {
+  CreateProjectThreadInput,
+  ProjectCoordinatorOptions,
+  ProjectThreadStatus,
+  ProjectThreadSummary,
+  SendThreadMessageInput,
+  ThreadMessageResult,
+} from './project-coordinator.js';
+export {
+  ProjectCoordinator,
+  ProjectIdempotencyConflictError,
+  ThreadMailbox,
+} from './project-coordinator.js';
