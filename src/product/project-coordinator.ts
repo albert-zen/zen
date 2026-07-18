@@ -36,6 +36,7 @@ export type CreateProjectThreadInput = {
   readonly projectId: string;
   readonly sourceThreadId?: string;
   readonly objective?: string;
+  readonly modelProfile?: string;
   readonly idempotencyKey: string;
   readonly parentItemId?: string;
   readonly causeItemId?: string;
@@ -153,7 +154,7 @@ export class ProjectCoordinator {
         result,
         depth,
         parentThreadId: input.sourceThreadId,
-        modelProfile: project.policy.defaultModelProfile,
+        modelProfile: input.modelProfile ?? project.policy.defaultModelProfile,
         objective: input.objective,
       },
     });

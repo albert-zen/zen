@@ -5,27 +5,60 @@ import type {
   AgentAppRequest,
   AgentAppResponse,
   AgentAppSubscription,
+  ProjectSnapshot,
+  ProtocolItem,
+  ThreadSnapshot,
+  TurnSnapshot,
 } from '#zen/product';
-import type { ProtocolItem, ThreadSnapshot, TurnSnapshot } from '#zen/product';
 
+type DemoThread = {
+  id: string;
+  projectId: string;
+  objective: string;
+  parentThreadId?: string;
+  modelProfile?: string;
+  depth: number;
+  status:
+    'queued' | 'running' | 'waiting' | 'blocked' | 'completed' | 'failed' | 'canceled' | 'archived';
+  turns: TurnSnapshot[];
+  items: ProtocolItem[];
+};
+
+const policy = {
+  maxConcurrentAgents: 3,
+  maxThreadDepth: 4,
+  defaultModelProfile: 'balanced',
+  agentCanCreateThreads: true,
+  agentCanMessagePeers: true,
+};
+
+/** Browser-only fixture for workspace visual and component verification. */
 export function createBrowserDemoAppServer(): AgentAppClient {
-  const project = { id: 'demo-project', name: 'Demo project', rootPath: '/demo', status: 'active' };
-  let activeThreadId: string | undefined;
-  let nextThread = 1;
-  let nextRun = 1;
-  let nextTurn = 1;
-  let nextItem = 1;
-  const threadsById = new Map<string, MutableThread>();
+  const projects: ProjectSnapshot[] = [
+    project('demo-project-alpha', 'Kernel migration', '/demo/kernel'),
+    project('demo-project-beta', 'Release coordination', '/demo/release'),
+  ];
+  const threads = new Map<string, DemoThread>();
   const listeners = new Set<AgentAppNotificationListener>();
+  let next = 1;
 
-  seedThread(
-    'Map the item-first kernel',
-    'The UI should make item append order visible without making trace rows dominate.'
-  );
-  seedThread(
-    'Run a shell smoke test',
-    'The shell workbench row should collapse noisy output but keep stdout easy to inspect.'
-  );
+  const root = createThread('demo-project-alpha', 'Map the item-first kernel');
+  const childA = createThread('demo-project-alpha', 'Review projection boundaries', root.id);
+  const childB = createThread('demo-project-alpha', 'Verify notification handoff', root.id);
+  const release = createThread('demo-project-beta', 'Prepare release checklist');
+  append(childA, 'assistant.message.completed', {
+    content: 'Review is ready for the parent thread.',
+  });
+  append(childB, 'thread.wait.started', { threadIds: [childA.id], mode: 'all' });
+  childB.status = 'waiting';
+  append(root, 'thread.handoff', {
+    sourceThreadId: root.id,
+    targetThreadId: childA.id,
+    correlationId: 'demo-review-1',
+  });
+  append(release, 'assistant.message.completed', {
+    content: 'Release work is queued for the next operator.',
+  });
 
   return {
     subscribe(listener): AgentAppSubscription {
@@ -33,269 +66,210 @@ export function createBrowserDemoAppServer(): AgentAppClient {
       return () => listeners.delete(listener);
     },
     async request(request: AgentAppRequest): Promise<AgentAppResponse> {
-      if (request.method === 'project/list') {
-        return { method: 'project/list', ok: true, result: { projects: [project] } };
-      }
+      const params = object(request.params);
+      if (request.method === 'project/list') return ok(request.method, { projects });
       if (request.method === 'project/create') {
-        return { method: 'project/create', ok: true, result: { project } };
+        const created = project(`demo-project-${next++}`, text(params.name), text(params.rootPath));
+        projects.push(created);
+        return ok(request.method, { project: created });
       }
-      if (!request.method.startsWith('project/') && request.params.projectId !== project.id) {
-        return {
-          method: request.method,
-          ok: false,
-          error: { code: 'PROJECT_NOT_FOUND', message: 'Unknown demo project' },
+      const projectId = text(params.projectId);
+      const currentProject = projects.find((entry) => entry.id === projectId);
+      if (!currentProject) return fail(request.method, 'PROJECT_NOT_FOUND', 'Unknown demo project');
+      if (request.method === 'project/read') return ok(request.method, { project: currentProject });
+      if (request.method === 'project/update') {
+        const updated = {
+          ...currentProject,
+          ...(typeof params.name === 'string' ? { name: params.name } : {}),
+          ...(typeof params.rootPath === 'string' ? { rootPath: params.rootPath } : {}),
         };
+        projects.splice(projects.indexOf(currentProject), 1, updated);
+        return ok(request.method, { project: updated });
       }
-      if (
-        request.method === 'project/read' ||
-        request.method === 'project/update' ||
-        request.method === 'project/archive'
-      ) {
-        return { method: request.method, ok: true, result: { project } };
+      if (request.method === 'project/archive') {
+        const archived = { ...currentProject, status: 'archived' as const };
+        projects.splice(projects.indexOf(currentProject), 1, archived);
+        return ok(request.method, { project: archived });
       }
+      if (request.method === 'thread/list')
+        return ok(request.method, { threads: list(projectId), persistenceFailures: [] });
       if (request.method === 'thread/create') {
-        const thread = startThread();
-        return { method: 'thread/create', ok: true, result: { thread: snapshot(thread.id) } };
+        const created = createThread(
+          projectId,
+          typeof params.objective === 'string' ? params.objective : 'Untitled thread',
+          optional(params.sourceThreadId),
+          optional(params.modelProfile)
+        );
+        emit(projectId, { type: 'thread/started', thread: snapshot(created) });
+        return ok(request.method, { thread: snapshot(created) });
       }
-
-      if (request.method === 'thread/list') {
-        return {
-          method: 'thread/list',
-          ok: true,
-          result: {
-            threads: [...threadsById.keys()].map((id) => snapshot(id)),
-            persistenceFailures: [],
-          },
-        };
-      }
-
-      if (request.method === 'thread/read') {
-        const params = readParams(request.params);
-        activeThreadId = readString(params, 'threadId');
-        return {
-          method: 'thread/read',
-          ok: true,
-          result: { thread: snapshot(activeThreadId) },
-        };
-      }
-
+      const thread = threads.get(text(params.threadId));
+      if (!thread || thread.projectId !== projectId)
+        return fail(request.method, 'THREAD_NOT_FOUND', 'Unknown demo thread');
+      if (request.method === 'thread/read') return ok(request.method, { thread: snapshot(thread) });
       if (request.method === 'turn/start') {
-        const params = readParams(request.params);
-        activeThreadId = readString(params, 'threadId');
-        await runTurn(String(params.input ?? ''));
-        return {
-          method: 'turn/start',
-          ok: true,
-          result: { turn: cloneTurn(thread().turns.at(-1) ?? emptyTurn()) },
-        };
+        const turn = turnFor(thread);
+        thread.status = 'running';
+        emit(projectId, { type: 'turn/started', threadId: thread.id, turn });
+        append(thread, 'user.message.completed', { content: String(params.input ?? '') }, turn);
+        append(
+          thread,
+          'assistant.message.completed',
+          { content: `Demo agent recorded the human turn and will coordinate follow-up work.` },
+          turn
+        );
+        thread.status = 'completed';
+        const completed = { ...turn, status: 'completed' as const, itemIds: [...turn.itemIds] };
+        thread.turns.splice(thread.turns.indexOf(turn), 1, completed);
+        emit(projectId, { type: 'turn/completed', threadId: thread.id, turn: completed });
+        return ok(request.method, { turn: completed });
       }
-
-      if (request.method === 'turn/interrupt') {
-        return {
-          method: 'turn/interrupt',
-          ok: true,
-          result: { turn: cloneTurn(thread().turns.at(-1) ?? emptyTurn()) },
-        };
+      if (request.method === 'thread/cancel') {
+        thread.status = 'canceled';
+        append(thread, 'thread.canceled', { threadId: thread.id });
+        return ok(request.method, { ok: true });
       }
-
-      if (request.method === 'turn/retry') {
-        await runTurn('Retry the previous request');
-        return {
-          method: 'turn/retry',
-          ok: true,
-          result: { turn: cloneTurn(thread().turns.at(-1) ?? emptyTurn()) },
-        };
+      if (request.method === 'thread/archive') {
+        thread.status = 'archived';
+        append(thread, 'thread.archived', { threadId: thread.id });
+        return ok(request.method, { ok: true });
       }
-
-      return {
-        method: request.method,
-        ok: false,
-        error: { code: 'INVALID_REQUEST', message: `Unknown method ${request.method}` },
-      };
+      if (request.method === 'thread/wait') {
+        thread.status = 'waiting';
+        append(thread, 'thread.wait.started', {
+          threadIds: strings(params.threadIds),
+          mode: optional(params.mode) ?? 'all',
+        });
+        return ok(request.method, { wait: { status: 'waiting' } });
+      }
+      if (request.method === 'thread/handoff') {
+        append(thread, 'thread.handoff', {
+          sourceThreadId: optional(params.sourceThreadId) ?? '',
+          targetThreadId: thread.id,
+          correlationId: `handoff-${next++}`,
+          content: optional(params.content) ?? '',
+        });
+        return ok(request.method, { handoff: { ok: true } });
+      }
+      return fail(request.method, 'INVALID_REQUEST', `Unsupported demo request: ${request.method}`);
     },
   };
 
-  function seedThread(user: string, assistant: string): void {
-    const seeded = startThread(false);
-    const turn = newTurn();
-    seeded.turns.push(turn);
-    append('run.started', turn, {}, seeded);
-    append('turn.started', turn, {}, seeded);
-    append('user.message.completed', turn, { content: user }, seeded);
-    append('assistant.message.completed', turn, { content: assistant }, seeded);
-    append('turn.completed', turn, { status: 'completed' }, seeded);
-    append('run.completed', turn, { status: 'completed' }, seeded);
-    turn.status = 'completed';
-    seeded.status = 'idle';
-  }
-
-  function startThread(emitStarted = true): MutableThread {
-    const current: MutableThread = {
-      id: `demo-thread-${nextThread++}`,
-      status: 'idle',
+  function createThread(
+    projectId: string,
+    objective: string,
+    parentThreadId?: string,
+    modelProfile?: string
+  ): DemoThread {
+    const parent = parentThreadId ? threads.get(parentThreadId) : undefined;
+    const thread: DemoThread = {
+      id: `demo-thread-${next++}`,
+      projectId,
+      objective,
+      parentThreadId,
+      modelProfile: modelProfile ?? policy.defaultModelProfile,
+      depth: (parent?.depth ?? -1) + 1,
+      status: 'queued',
       turns: [],
       items: [],
     };
-    threadsById.set(current.id, current);
-    activeThreadId = current.id;
-    if (emitStarted) {
-      emit({ type: 'thread/started', thread: snapshot(current.id) });
-    }
-    return current;
-  }
-
-  async function runTurn(input: string): Promise<void> {
-    const current = thread();
-    const turn = newTurn();
-    current.status = 'running';
-    current.turns.push(turn);
-    emit({ type: 'turn/started', threadId: current.id, turn: cloneTurn(turn) });
-
-    append('run.started', turn, {});
-    append('turn.started', turn, {});
-    append('user.message.completed', turn, { content: input });
-    append('model.request.started', turn, { contextPartCount: current.items.length });
-
-    if (input.toLowerCase().includes('shell')) {
-      append('assistant.message.completed', turn, { content: 'Running a demo shell command.' });
-      append('model.request.completed', turn, { status: 'completed' });
-      const shell = append('tool.call.started', turn, {
-        toolCallId: 'demo-shell',
-        toolName: 'shell',
-        input: { command: 'echo zen' },
-      });
-      append(
-        'tool.result.completed',
-        turn,
-        {
-          toolCallId: 'demo-shell',
-          toolName: 'shell',
-          content: { exitCode: 0, stdout: 'zen\n', stderr: '' },
-        },
-        current,
-        shell.id
-      );
-      append('assistant.message.completed', turn, {
-        content: 'The demo shell command completed.',
-      });
-      completeTurn(turn);
-      return;
-    }
-
-    append('assistant.message.completed', turn, { content: `Demo response to: ${input}` });
-    append('model.request.completed', turn, { status: 'completed' });
-    completeTurn(turn);
-  }
-
-  function completeTurn(turn: MutableTurn): void {
-    append('turn.completed', turn, { status: 'completed' });
-    append('run.completed', turn, { status: 'completed' });
-    turn.status = 'completed';
-    thread().status = 'idle';
-    emit({ type: 'turn/completed', threadId: thread().id, turn: cloneTurn(turn) });
+    threads.set(thread.id, thread);
+    append(thread, 'thread.created', { objective });
+    return thread;
   }
 
   function append(
+    thread: DemoThread,
     type: string,
-    turn: MutableTurn,
     payload: ProtocolItem['payload'],
-    targetThread = thread(),
-    targetId?: string
-  ): ProtocolItem {
+    currentTurn?: TurnSnapshot
+  ): void {
     const item: ProtocolItem = {
-      id: `demo-item-${nextItem++}`,
+      id: `demo-item-${next++}`,
       type,
       createdAtMs: Date.now(),
-      seq: targetThread.items.length + 1,
-      runId: turn.runId,
-      turnId: turn.id,
-      targetId,
+      seq: thread.items.length + 1,
+      runId: currentTurn?.runId ?? `demo-run-${next}`,
+      turnId: currentTurn?.id ?? `demo-turn-${next}`,
       payload,
     };
-    targetThread.items.push(item);
-    turn.itemIds.push(item.id);
-    if (targetThread.id === activeThreadId) {
-      emit({ type: 'item/appended', threadId: targetThread.id, turnId: turn.id, item });
-    }
-    return item;
+    thread.items.push(item);
+    if (currentTurn) (currentTurn.itemIds as string[]).push(item.id);
+    emit(thread.projectId, {
+      type: 'item/appended',
+      threadId: thread.id,
+      turnId: item.turnId,
+      item,
+    });
   }
 
-  function newTurn(): MutableTurn {
-    return {
-      id: `demo-turn-${nextTurn++}`,
-      runId: `demo-run-${nextRun++}`,
+  function turnFor(thread: DemoThread): TurnSnapshot {
+    const turn: TurnSnapshot = {
+      id: `demo-turn-${next++}`,
+      runId: `demo-run-${next++}`,
       status: 'inProgress',
       itemIds: [],
     };
+    thread.turns.push(turn);
+    return turn;
   }
 
-  function emptyTurn(): MutableTurn {
+  function list(projectId: string) {
+    return [...threads.values()]
+      .filter((thread) => thread.projectId === projectId)
+      .map((thread) => ({
+        projectId,
+        threadId: thread.id,
+        objective: thread.objective,
+        parentThreadId: thread.parentThreadId,
+        depth: thread.depth,
+        status: thread.status,
+        modelProfile: thread.modelProfile,
+      }));
+  }
+
+  function snapshot(thread: DemoThread): ThreadSnapshot {
     return {
-      id: 'demo-turn-empty',
-      runId: 'demo-run-empty',
-      status: 'canceled',
-      itemIds: [],
+      id: thread.id,
+      status:
+        thread.status === 'running' ? 'running' : thread.status === 'failed' ? 'failed' : 'idle',
+      turns: thread.turns.map((turn) => ({ ...turn, itemIds: [...turn.itemIds] })),
+      items: thread.items.map((item) => ({ ...item })),
     };
   }
 
-  function thread(): MutableThread {
-    if (!activeThreadId || !threadsById.has(activeThreadId)) {
-      return startThread(false);
-    }
-    return threadsById.get(activeThreadId)!;
-  }
-
-  function snapshot(threadId: string): ThreadSnapshot {
-    const current = threadsById.get(threadId);
-    if (!current) {
-      throw new Error(`Unknown demo thread ${threadId}`);
-    }
-    return {
-      id: current.id,
-      status: current.status,
-      turns: current.turns.map(cloneTurn),
-      items: current.items.map((item) => structuredClone(item)),
-    };
-  }
-
-  function emit(notification: { readonly type: string; readonly [key: string]: unknown }): void {
-    listeners.forEach((listener) =>
-      listener({ projectId: project.id, notification: notification as AgentAppNotification })
-    );
+  function emit(projectId: string, notification: AgentAppNotification): void {
+    listeners.forEach((listener) => listener({ projectId, notification }));
   }
 }
 
-type MutableThread = {
-  id: string;
-  status: ThreadSnapshot['status'];
-  turns: MutableTurn[];
-  items: ProtocolItem[];
-};
-
-type MutableTurn = {
-  id: string;
-  runId: string;
-  status: TurnSnapshot['status'];
-  itemIds: string[];
-};
-
-function cloneTurn(turn: MutableTurn): TurnSnapshot {
-  return {
-    ...turn,
-    itemIds: [...turn.itemIds],
-  };
+function project(id: string, name: string, rootPath: string): ProjectSnapshot {
+  return { id, name, rootPath, createdAtMs: 0, updatedAtMs: 0, status: 'active', policy };
 }
 
-function readParams(params: unknown): Readonly<Record<string, unknown>> {
-  return typeof params === 'object' && params !== null && !Array.isArray(params)
-    ? (params as Readonly<Record<string, unknown>>)
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
     : {};
 }
-
-function readString(params: Readonly<Record<string, unknown>>, key: string): string {
-  const value = params[key];
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`Missing ${key}`);
-  }
-  return value;
+function text(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value : 'Untitled';
+}
+function optional(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+function strings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+}
+function ok(method: string, result: Record<string, unknown>): AgentAppResponse {
+  return { method: method as never, ok: true, result };
+}
+function fail(
+  method: string,
+  code: 'PROJECT_NOT_FOUND' | 'THREAD_NOT_FOUND' | 'INVALID_REQUEST',
+  message: string
+): AgentAppResponse {
+  return { method, ok: false, error: { code, message } };
 }

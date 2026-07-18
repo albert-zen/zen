@@ -111,3 +111,41 @@
 - Hygiene census: no process was terminated; the exact
   `zen-agent-app-*` temporary-root census was empty after validation. No broad
   temporary-directory cleanup was performed.
+
+## APP-006
+
+- Branch: `codex/agent-app`; base: `57e862c540b6b60bb891397fa050fd0d4e7ef463`.
+- Presentation: added `AgentWorkspaceClient`, a generation-guarded,
+  `useSyncExternalStore`-ready Project/Thread snapshot projection. Project
+  switches clear the selected Thread projection before loading the new Project;
+  stale loads raise `WebUiLifecycleCanceledError`; subscriptions add agent-created
+  Threads immediately.
+- Web: replaced the single-thread shell-oriented workspace with split Project
+  navigator, Thread navigator, timeline/composer, and accessible modal modules.
+  The interface has no terminal, editor, file tree, manual diff, or source-control
+  workbench. It supports deep links and browser navigation, project/thread create,
+  archive/cancel/handoff, responsive mobile views, and no-project creation.
+- Demo: two projects, a parent with two children, wait and handoff coordination
+  facts, and model-profile summaries are available through the Agent App fixture.
+- Tests added: `test/agent-workspace-client.test.ts` and updated
+  `test/workspace-lifecycle.test.tsx`; serial targeted run passed 2 files and 6
+  tests. It covers no-project bootstrap/create, project isolation, child-thread
+  notification, idempotent command shape, stale selection, dialog Escape, and
+  mobile view smoke coverage.
+- Validation passed: Prettier check, ESLint, core/Web TypeScript checks, core
+  build, Web build, and `git diff --check`. Full check, coverage, and E2E were
+  intentionally not run.
+- Known test-contract gap: the pre-existing `test/web-ui-client.test.ts` retains
+  the removed single-project AppServer request shape (no `projectId` and no
+  `project/list` fixture). Its 32 legacy expectations fail against the APP-005C
+  Agent App protocol before APP-006 UI behavior is reached; it was not changed
+  because APP-006 must not restore the deprecated protocol surface.
+
+## Codex Worker Note
+
+Round: 1
+
+- APP-006 complete on `codex/agent-app`; local-only workflow, no GitHub push.
+- APP-007 remains Pending. No intermediate review is required by this wave.
+- Residual risk: APP-009 should replace or retire the legacy single-project WebUi
+  client characterization fixture as part of the protocol/E2E fixture refresh.

@@ -5,16 +5,16 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type {
-  AppServerClient,
-  AppServerNotificationListener,
-  AppServerRequestInput,
-  AppServerResponse,
-  AppServerSubscription,
+  AgentAppClient,
+  AgentAppNotificationListener,
+  AgentAppRequest,
+  AgentAppResponse,
+  ProjectSnapshot,
 } from './test-exports.js';
-import { WebUiClient } from './test-exports.js';
+import { AgentWorkspaceClient } from './test-exports.js';
 import { AgentWorkspace } from '../web/src/workspace.tsx';
 
-describe('AgentWorkspace lifecycle', () => {
+describe('AgentWorkspace', () => {
   let root: Root | undefined;
   let container: HTMLDivElement | undefined;
 
@@ -25,79 +25,65 @@ describe('AgentWorkspace lifecycle', () => {
     container = undefined;
   });
 
-  it('owns one stream through StrictMode initial connect, reconnect, mode switch, and unmount', async () => {
-    const clients: Array<{
-      readonly mode: 'real' | 'demo';
-      readonly transport: WorkspaceTransport;
-    }> = [];
-    const createClient = (mode: 'real' | 'demo') => {
-      const transport = new WorkspaceTransport();
-      clients.push({ mode, transport });
-      return new WebUiClient({ client: transport, mode });
-    };
+  it('offers project creation from an empty bootstrap and closes the dialog with Escape', async () => {
+    const transport = new WorkspaceTransport();
     container = document.createElement('div');
     document.body.append(container);
     root = createRoot(container);
-
     await act(async () => {
       root?.render(
-        React.createElement(
-          React.StrictMode,
-          undefined,
-          React.createElement(AgentWorkspace, { createClient, initialMode: 'real' })
-        )
+        <AgentWorkspace createClient={() => new AgentWorkspaceClient({ client: transport })} />
       );
     });
-    expect(activeStreams(clients)).toBe(1);
 
-    await act(async () => {
-      (container?.querySelector('#connect') as HTMLButtonElement).click();
-    });
-    expect(activeStreams(clients)).toBe(1);
-
-    await act(async () => {
-      const mode = container?.querySelector('#runtime-mode') as HTMLSelectElement;
-      mode.value = 'demo';
-      mode.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(activeStreams(clients.filter((entry) => entry.mode === 'real'))).toBe(0);
-    expect(activeStreams(clients.filter((entry) => entry.mode === 'demo'))).toBe(1);
-
-    await act(async () => root?.unmount());
-    root = undefined;
-    expect(activeStreams(clients)).toBe(0);
+    const create = container.querySelector('[aria-label="Create project"]') as HTMLButtonElement;
+    await act(async () => create.click());
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () =>
+      container
+        ?.querySelector('[role="dialog"]')
+        ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    );
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.querySelector('.grid-cols-3')).not.toBeNull();
   });
 });
 
-function activeStreams(clients: readonly { readonly transport: WorkspaceTransport }[]): number {
-  return clients.reduce((total, entry) => total + entry.transport.activeSubscriptions, 0);
-}
-
-class WorkspaceTransport implements AppServerClient {
-  activeSubscriptions = 0;
-
-  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
-    if (request.method === 'thread/list') {
-      return { method: 'thread/list', ok: true, result: { threads: [], persistenceFailures: [] } };
+class WorkspaceTransport implements AgentAppClient {
+  private listener?: AgentAppNotificationListener;
+  private projects: ProjectSnapshot[] = [];
+  async request(request: AgentAppRequest): Promise<AgentAppResponse> {
+    if (request.method === 'project/list')
+      return success(request.method, { projects: this.projects });
+    if (request.method === 'project/create') {
+      const project: ProjectSnapshot = {
+        id: 'project-1',
+        name: 'Created',
+        rootPath: '/created',
+        createdAtMs: 0,
+        updatedAtMs: 0,
+        status: 'active',
+        policy: {
+          maxConcurrentAgents: 2,
+          maxThreadDepth: 4,
+          agentCanCreateThreads: true,
+          agentCanMessagePeers: true,
+        },
+      };
+      this.projects = [project];
+      return success(request.method, { project });
     }
-    if (request.method === 'thread/start' || request.method === 'thread/read') {
-      return {
-        method: request.method,
-        ok: true,
-        result: { thread: { id: 'thread-1', status: 'idle', turns: [], items: [] } },
-      } as AppServerResponse;
-    }
+    if (request.method === 'thread/list') return success(request.method, { threads: [] });
     throw new Error(`Unexpected request: ${request.method}`);
   }
-
-  subscribe(_listener: AppServerNotificationListener): AppServerSubscription {
-    this.activeSubscriptions += 1;
-    let closed = false;
+  subscribe(listener: AgentAppNotificationListener) {
+    this.listener = listener;
     return () => {
-      if (!closed) {
-        closed = true;
-        this.activeSubscriptions -= 1;
-      }
+      this.listener = undefined;
     };
   }
+}
+
+function success(method: string, result: Record<string, unknown>): AgentAppResponse {
+  return { method: method as never, ok: true, result };
 }

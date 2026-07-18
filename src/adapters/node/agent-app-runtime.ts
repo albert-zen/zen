@@ -162,6 +162,7 @@ class NodeProjectRuntime implements ProjectRuntime {
           projectId: this.project.id,
           sourceThreadId: optionalText(params.sourceThreadId),
           objective: optionalText(params.objective),
+          modelProfile: optionalText(params.modelProfile),
           idempotencyKey: requiredText(params.idempotencyKey, 'idempotencyKey'),
         });
         return success(request.method, {

@@ -46,3 +46,11 @@ export {
   WebUiClient,
   WebUiLifecycleCanceledError,
 } from './web-ui-client.js';
+export type {
+  AgentWorkspaceClientListener,
+  AgentWorkspaceClientOptions,
+  AgentWorkspaceSnapshot,
+  WorkspaceThread,
+  WorkspaceThreadStatus,
+} from './agent-workspace-client.js';
+export { AgentWorkspaceClient } from './agent-workspace-client.js';
