@@ -92,6 +92,7 @@ export type {
 export {
   ProjectCoordinator,
   ProjectIdempotencyConflictError,
+  ProjectResourceError,
   ThreadMailbox,
 } from './project-coordinator.js';
 export type { WaitMode, WaitResult } from './wait-graph.js';

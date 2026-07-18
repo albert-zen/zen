@@ -5,6 +5,14 @@ export type ProjectStatus = 'active' | 'archived';
 export type ProjectPolicy = {
   readonly maxConcurrentAgents: number;
   readonly maxThreadDepth: number;
+  /** Total durable threads, including terminal history. */
+  readonly maxThreads?: number;
+  /** Durable messages that have not reached an activation fence. */
+  readonly maxQueuedMessages?: number;
+  readonly maxWaitTargets?: number;
+  readonly maxMessageBytes?: number;
+  /** Number of settled idempotency records retained for replay. */
+  readonly idempotencyRetention?: number;
   readonly defaultModelProfile?: string;
   readonly agentCanCreateThreads: boolean;
   readonly agentCanMessagePeers: boolean;

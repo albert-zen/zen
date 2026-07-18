@@ -13,7 +13,7 @@ No Linear mutation is performed for this local wave.
 | APP-005C | Complete | Migrated public client/transport, web bootstrap/demo, and production CLI composition to Agent App.             |
 | APP-006  | Complete | Project/thread control-plane UI and presentation projection committed locally.                                 |
 | APP-007  | Complete | Thin Electron desktop shell, same-origin static host, and bounded platform bridge committed locally.           |
-| APP-008  | Pending  | Cross-cutting after coordination/UI work.                                                                      |
+| APP-008  | Complete | Trusted capability context, bounded resource policy, recovery facts, and input hardening completed locally.   |
 | APP-009  | Pending  | Depends on all implementation work.                                                                            |
 | APP-010  | Pending  | Global review/remediation after APP-009.                                                                       |
 

@@ -147,12 +147,21 @@ function isProjectPolicy(value: unknown): value is ProjectPolicy {
     isRecord(value) &&
     isPositiveInteger(value.maxConcurrentAgents) &&
     isPositiveInteger(value.maxThreadDepth) &&
+    optionalPositiveInteger(value.maxThreads) &&
+    optionalPositiveInteger(value.maxQueuedMessages) &&
+    optionalPositiveInteger(value.maxWaitTargets) &&
+    optionalPositiveInteger(value.maxMessageBytes) &&
+    optionalPositiveInteger(value.idempotencyRetention) &&
     typeof value.agentCanCreateThreads === 'boolean' &&
     typeof value.agentCanMessagePeers === 'boolean' &&
     (value.defaultModelProfile === undefined ||
       (typeof value.defaultModelProfile === 'string' &&
         value.defaultModelProfile.trim().length > 0))
   );
+}
+
+function optionalPositiveInteger(value: unknown): boolean {
+  return value === undefined || isPositiveInteger(value);
 }
 
 function isPositiveInteger(value: unknown): value is number {

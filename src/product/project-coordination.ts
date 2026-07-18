@@ -4,16 +4,19 @@ export type ProjectCoordinationItemType =
   | 'project.thread.created'
   | 'thread.message.sent'
   | 'thread.message.delivered'
+  | 'thread.message.activated'
   | 'thread.message.failed'
   | 'agent.lease.queued'
   | 'agent.lease.granted'
   | 'agent.lease.released'
+  | 'agent.lease.recovered'
   | 'thread.wait.started'
   | 'thread.wait.resolved'
   | 'thread.wait.failed'
   | 'thread.canceled'
   | 'thread.archived'
-  | 'thread.handoff';
+  | 'thread.handoff'
+  | 'coordination.idempotency.compacted';
 
 /** Project-scoped coordination facts intentionally do not impersonate kernel Items. */
 export type ProjectCoordinationItem = {

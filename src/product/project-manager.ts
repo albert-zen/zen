@@ -31,6 +31,11 @@ export type ProjectManagerOptions = {
 const DEFAULT_PROJECT_POLICY: ProjectPolicy = {
   maxConcurrentAgents: 2,
   maxThreadDepth: 4,
+  maxThreads: 100,
+  maxQueuedMessages: 100,
+  maxWaitTargets: 16,
+  maxMessageBytes: 16_384,
+  idempotencyRetention: 1_000,
   agentCanCreateThreads: true,
   agentCanMessagePeers: true,
 };
@@ -60,12 +65,16 @@ export class ProjectManager {
     const loaded = await manager.registry.load();
 
     for (const project of loaded) {
-      assertStoredProject(project);
-      if (manager.projects.has(project.id)) {
-        throw new Error(`Duplicate project id in registry: ${project.id}`);
+      const normalized: ProjectRecord = {
+        ...project,
+        policy: validatePolicy(project.policy),
+      };
+      assertStoredProject(normalized);
+      if (manager.projects.has(normalized.id)) {
+        throw new Error(`Duplicate project id in registry: ${normalized.id}`);
       }
-      manager.assertRootAvailable(project.rootPath, project.id);
-      manager.projects.set(project.id, cloneProjectRecord(project));
+      manager.assertRootAvailable(normalized.rootPath, normalized.id);
+      manager.projects.set(normalized.id, cloneProjectRecord(normalized));
     }
 
     return manager;
@@ -215,6 +224,17 @@ function validatePolicy(value: ProjectPolicy): ProjectPolicy {
   if (!isPositiveInteger(value.maxThreadDepth)) {
     throw new Error('Project policy maxThreadDepth must be a positive integer');
   }
+  for (const key of [
+    'maxThreads',
+    'maxQueuedMessages',
+    'maxWaitTargets',
+    'maxMessageBytes',
+    'idempotencyRetention',
+  ] as const) {
+    if (value[key] !== undefined && !isPositiveInteger(value[key])) {
+      throw new Error(`Project policy ${key} must be a positive integer`);
+    }
+  }
   if (
     typeof value.agentCanCreateThreads !== 'boolean' ||
     typeof value.agentCanMessagePeers !== 'boolean'
@@ -230,6 +250,11 @@ function validatePolicy(value: ProjectPolicy): ProjectPolicy {
   return {
     maxConcurrentAgents: value.maxConcurrentAgents,
     maxThreadDepth: value.maxThreadDepth,
+    maxThreads: value.maxThreads ?? DEFAULT_PROJECT_POLICY.maxThreads,
+    maxQueuedMessages: value.maxQueuedMessages ?? DEFAULT_PROJECT_POLICY.maxQueuedMessages,
+    maxWaitTargets: value.maxWaitTargets ?? DEFAULT_PROJECT_POLICY.maxWaitTargets,
+    maxMessageBytes: value.maxMessageBytes ?? DEFAULT_PROJECT_POLICY.maxMessageBytes,
+    idempotencyRetention: value.idempotencyRetention ?? DEFAULT_PROJECT_POLICY.idempotencyRetention,
     ...(value.defaultModelProfile === undefined
       ? {}
       : { defaultModelProfile: value.defaultModelProfile.trim() }),

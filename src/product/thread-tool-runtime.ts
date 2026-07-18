@@ -8,6 +8,16 @@ import { AgentScheduler } from './agent-scheduler.js';
 import { ProjectCoordinator } from './project-coordinator.js';
 
 export type ThreadCapability =
+  | 'createChildThread'
+  | 'messageChild'
+  | 'messagePeer'
+  | 'interruptPeer'
+  | 'cancelThread'
+  | 'archiveThread'
+  | 'handoffThread'
+  | 'readProjectThreads';
+
+type ThreadToolName =
   | 'thread.create'
   | 'thread.list'
   | 'thread.read'
@@ -18,6 +28,8 @@ export type ThreadCapability =
   | 'thread.handoff';
 
 export type ThreadToolExecutionContext = {
+  /** Only the server/runtime creates this value. Tool payload is never authority. */
+  readonly actor?: 'human' | 'agent';
   readonly projectId: string;
   readonly sourceThreadId: string;
   readonly capabilities: ReadonlySet<ThreadCapability>;
@@ -34,7 +46,7 @@ export type ThreadToolRuntimeOptions = {
 
 export class ThreadToolError extends Error {
   constructor(
-    readonly code: 'INVALID_INPUT' | 'FORBIDDEN' | 'NOT_FOUND' | 'CONFLICT',
+    readonly code: 'INVALID_INPUT' | 'FORBIDDEN' | 'NOT_FOUND' | 'CONFLICT' | 'RESOURCE_EXHAUSTED',
     message: string
   ) {
     super(message);
@@ -85,7 +97,7 @@ export class ThreadToolRuntime implements ToolRuntime {
       const execution = this.resolveExecutionContext(context);
       if (!execution)
         throw new ThreadToolError('FORBIDDEN', 'Thread tool execution context is unavailable');
-      requireCapability(execution, call.name);
+      requireCapability(execution, call.name, objectInput(call.input), this.coordinator);
       const result = await this.dispatch(
         call.name,
         objectInput(call.input),
@@ -99,7 +111,7 @@ export class ThreadToolRuntime implements ToolRuntime {
   }
 
   private async dispatch(
-    name: ThreadCapability,
+    name: ThreadToolName,
     input: Readonly<Record<string, unknown>>,
     execution: ThreadToolExecutionContext,
     signal?: AbortSignal
@@ -135,6 +147,10 @@ export class ThreadToolRuntime implements ToolRuntime {
       });
     }
     if (name === 'thread.wait') {
+      await this.coordinator.assertWaitWithinLimit(
+        execution.projectId,
+        requiredStringArray(input.threadIds, 'threadIds')
+      );
       return await this.scheduler.waitFor({
         projectId: execution.projectId,
         threadId: execution.sourceThreadId,
@@ -169,7 +185,7 @@ export class ThreadToolRuntime implements ToolRuntime {
   }
 }
 
-function toolDefinition(name: ThreadCapability, required: readonly string[]) {
+function toolDefinition(name: ThreadToolName, required: readonly string[]) {
   return {
     type: 'function' as const,
     function: {
@@ -193,17 +209,52 @@ function toolDefinition(name: ThreadCapability, required: readonly string[]) {
   };
 }
 
-function isThreadTool(name: string): name is ThreadCapability {
+function isThreadTool(name: string): name is ThreadToolName {
   return threadToolDefinitions.some((definition) => definition.function.name === name);
 }
 
 function requireCapability(
   context: ThreadToolExecutionContext,
-  capability: ThreadCapability
+  tool: string,
+  input: Readonly<Record<string, unknown>>,
+  coordinator: ProjectCoordinator
 ): void {
+  const capability = capabilityForTool(context, tool, input, coordinator);
   if (!context.capabilities.has(capability)) {
     throw new ThreadToolError('FORBIDDEN', `Capability denied: ${capability}`);
   }
+}
+
+function capabilityForTool(
+  context: ThreadToolExecutionContext,
+  tool: string,
+  input: Readonly<Record<string, unknown>>,
+  coordinator: ProjectCoordinator
+): ThreadCapability {
+  if (tool === 'thread.create') return 'createChildThread';
+  if (tool === 'thread.list' || tool === 'thread.read') return 'readProjectThreads';
+  if (tool === 'thread.wait') return 'readProjectThreads';
+  if (tool === 'thread.cancel' || tool === 'thread.archive' || tool === 'thread.handoff') {
+    const target = requiredString(input.threadId, 'threadId');
+    if (target === context.sourceThreadId) {
+      throw new ThreadToolError(
+        'FORBIDDEN',
+        'Agents cannot terminate or hand off their active thread'
+      );
+    }
+    return tool === 'thread.cancel'
+      ? 'cancelThread'
+      : tool === 'thread.archive'
+        ? 'archiveThread'
+        : 'handoffThread';
+  }
+  const target = requiredString(input.threadId, 'threadId');
+  const relation = coordinator.relation(context.projectId, context.sourceThreadId, target);
+  if (relation === 'ancestor' || relation === 'self') {
+    throw new ThreadToolError('FORBIDDEN', 'Agents cannot message themselves or ancestors');
+  }
+  if (input.interrupt === true) return 'interruptPeer';
+  return relation === 'child' ? 'messageChild' : 'messagePeer';
 }
 
 function objectInput(value: unknown): Readonly<Record<string, unknown>> {
@@ -236,7 +287,8 @@ function requiredStringArray(value: unknown, label: string): readonly string[] {
   if (
     !Array.isArray(value) ||
     value.length === 0 ||
-    value.some((entry) => typeof entry !== 'string')
+    value.some((entry) => typeof entry !== 'string') ||
+    new Set(value).size !== value.length
   ) {
     throw new ThreadToolError('INVALID_INPUT', `${label} must be a non-empty string array`);
   }

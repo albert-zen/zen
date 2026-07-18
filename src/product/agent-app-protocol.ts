@@ -107,6 +107,7 @@ export function parseAgentAppRequest(value: unknown): AgentAppRequest {
     (value.id !== undefined && !nonEmpty(value.id))
   )
     throw new Error('Invalid AgentApp request');
+  assertSafeJson(value);
   const params = value.params as JsonObject;
   if (projectScoped.has(value.method) && !nonEmpty(params.projectId))
     throw new Error('projectId is required');
@@ -121,6 +122,43 @@ export function parseAgentAppRequest(value: unknown): AgentAppRequest {
       throw new Error('threadId is required');
   }
   return { ...(value.id === undefined ? {} : { id: value.id }), method: value.method, params };
+}
+
+const MAX_REQUEST_BYTES = 65_536;
+const MAX_JSON_DEPTH = 4;
+
+function assertSafeJson(value: unknown, depth = 0): asserts value is JsonValue {
+  if (depth > MAX_JSON_DEPTH) throw new Error('Request JSON depth exceeded');
+  if (value === null || typeof value === 'boolean') return;
+  if (typeof value === 'string') {
+    if (Buffer.byteLength(value, 'utf8') > MAX_REQUEST_BYTES)
+      throw new Error('Request JSON size exceeded');
+    return;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('Request JSON must be finite');
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => assertSafeJson(entry, depth + 1));
+    return;
+  }
+  if (!isRecord(value)) throw new Error('Request JSON is invalid');
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === '__proto__' || key === 'prototype' || key === 'constructor') {
+      throw new Error('Request JSON contains unsafe key');
+    }
+    assertSafeJson(entry, depth + 1);
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error('Request JSON is invalid');
+  }
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_REQUEST_BYTES) {
+    throw new Error('Request JSON size exceeded');
+  }
 }
 function isMethod(value: string): value is AgentAppMethod {
   return [

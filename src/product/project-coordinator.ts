@@ -71,6 +71,17 @@ export class ProjectIdempotencyConflictError extends Error {
   }
 }
 
+export class ProjectResourceError extends Error {
+  readonly code = 'RESOURCE_EXHAUSTED' as const;
+  constructor(
+    readonly resource: string,
+    message: string
+  ) {
+    super(message);
+    this.name = 'ProjectResourceError';
+  }
+}
+
 export class ProjectCoordinator {
   private readonly projectManager: Pick<ProjectManager, 'read'>;
   private readonly journal: ProjectCoordinationJournal;
@@ -78,6 +89,7 @@ export class ProjectCoordinator {
   private readonly list: ProjectCoordinationList;
   private readonly managers = new Map<string, ThreadManager>();
   private readonly deliveryTails = new Map<string, Promise<void>>();
+  private mutationTail: Promise<void> = Promise.resolve();
   private closed = false;
 
   private constructor(
@@ -116,12 +128,31 @@ export class ProjectCoordinator {
   async recover(projectId: string): Promise<void> {
     const project = await this.activeProject(projectId);
     this.managerFor(project);
+    for (const grant of this.unreleasedLeases(projectId)) {
+      await this.record({
+        type: 'agent.lease.recovered',
+        projectId,
+        targetThreadId: grant.targetThreadId,
+        causeId: grant.id,
+        payload: { recoveredFromLeaseItemId: grant.id },
+      });
+    }
     for (const summary of this.listThreadSummaries(projectId)) {
       await this.deliverNext(projectId, summary.threadId);
     }
   }
 
   async createThread(input: CreateProjectThreadInput): Promise<{ readonly threadId: string }> {
+    return await this.mutate(async () => {
+      const result = await this.createThreadNow(input);
+      await this.compactIdempotency(input.projectId);
+      return result;
+    });
+  }
+
+  private async createThreadNow(
+    input: CreateProjectThreadInput
+  ): Promise<{ readonly threadId: string }> {
     const project = await this.activeProject(input.projectId);
     const digest = stableDigest({ type: 'project.thread.created', ...input });
     const replay = this.replayCommand<{ readonly threadId: string }>(
@@ -131,6 +162,11 @@ export class ProjectCoordinator {
       'project.thread.created'
     );
     if (replay) return replay;
+    if (
+      this.listThreadSummaries(input.projectId).length >= requiredLimit(project.policy.maxThreads)
+    ) {
+      throw new ProjectResourceError('maxThreads', 'Project maxThreads exceeded');
+    }
     const parent = input.sourceThreadId
       ? this.threadSummary(input.projectId, input.sourceThreadId)
       : undefined;
@@ -162,6 +198,14 @@ export class ProjectCoordinator {
   }
 
   async sendMessage(input: SendThreadMessageInput): Promise<ThreadMessageResult> {
+    return await this.mutate(async () => {
+      const result = await this.sendMessageNow(input);
+      await this.compactIdempotency(input.projectId);
+      return result;
+    });
+  }
+
+  private async sendMessageNow(input: SendThreadMessageInput): Promise<ThreadMessageResult> {
     const project = await this.activeProject(input.projectId);
     const digest = stableDigest({ type: 'thread.message.sent', ...input });
     const replay = this.replayCommand<ThreadMessageResult>(
@@ -171,6 +215,15 @@ export class ProjectCoordinator {
       'thread.message.sent'
     );
     if (replay) return replay;
+    if (Buffer.byteLength(input.content, 'utf8') > requiredLimit(project.policy.maxMessageBytes)) {
+      throw new ProjectResourceError('maxMessageBytes', 'Project maxMessageBytes exceeded');
+    }
+    if (
+      this.pendingMessages(input.projectId, input.targetThreadId).length >=
+      requiredLimit(project.policy.maxQueuedMessages)
+    ) {
+      throw new ProjectResourceError('maxQueuedMessages', 'Project maxQueuedMessages exceeded');
+    }
     this.assertThreadUsable(input.projectId, input.sourceThreadId);
     this.assertThreadUsable(input.projectId, input.targetThreadId);
     if (!project.policy.agentCanMessagePeers) {
@@ -213,6 +266,17 @@ export class ProjectCoordinator {
     readonly threadId: string;
     readonly idempotencyKey: string;
   }): Promise<void> {
+    await this.mutate(async () => {
+      await this.archiveThreadNow(input);
+      await this.compactIdempotency(input.projectId);
+    });
+  }
+
+  private async archiveThreadNow(input: {
+    readonly projectId: string;
+    readonly threadId: string;
+    readonly idempotencyKey: string;
+  }): Promise<void> {
     await this.activeProject(input.projectId);
     this.assertKnownThread(input.projectId, input.threadId);
     const digest = stableDigest({ type: 'thread.archived', ...input });
@@ -228,6 +292,17 @@ export class ProjectCoordinator {
   }
 
   async cancelThread(input: {
+    readonly projectId: string;
+    readonly threadId: string;
+    readonly idempotencyKey: string;
+  }): Promise<void> {
+    await this.mutate(async () => {
+      await this.cancelThreadNow(input);
+      await this.compactIdempotency(input.projectId);
+    });
+  }
+
+  private async cancelThreadNow(input: {
     readonly projectId: string;
     readonly threadId: string;
     readonly idempotencyKey: string;
@@ -248,6 +323,20 @@ export class ProjectCoordinator {
   }
 
   async handoff(input: {
+    readonly projectId: string;
+    readonly sourceThreadId: string;
+    readonly targetThreadId: string;
+    readonly content: string;
+    readonly idempotencyKey: string;
+  }): Promise<{ readonly handoffItemId: string }> {
+    return await this.mutate(async () => {
+      const result = await this.handoffNow(input);
+      await this.compactIdempotency(input.projectId);
+      return result;
+    });
+  }
+
+  private async handoffNow(input: {
     readonly projectId: string;
     readonly sourceThreadId: string;
     readonly targetThreadId: string;
@@ -308,6 +397,26 @@ export class ProjectCoordinator {
       .map((item) => this.threadSummary(projectId, item.targetThreadId ?? ''));
   }
 
+  relation(
+    projectId: string,
+    sourceThreadId: string,
+    targetThreadId: string
+  ): 'self' | 'child' | 'ancestor' | 'peer' {
+    if (sourceThreadId === targetThreadId) return 'self';
+    const source = this.threadSummary(projectId, sourceThreadId);
+    const target = this.threadSummary(projectId, targetThreadId);
+    if (target.parentThreadId === source.threadId) return 'child';
+    if (source.parentThreadId === target.threadId) return 'ancestor';
+    return 'peer';
+  }
+
+  async assertWaitWithinLimit(projectId: string, targets: readonly string[]): Promise<void> {
+    const project = await this.activeProject(projectId);
+    if (targets.length > requiredLimit(project.policy.maxWaitTargets)) {
+      throw new ProjectResourceError('maxWaitTargets', 'Project maxWaitTargets exceeded');
+    }
+  }
+
   readThread(projectId: string, threadId: string): ThreadSnapshot {
     this.assertThreadUsable(projectId, threadId);
     return this.managerForExisting(projectId).readThread(threadId);
@@ -339,17 +448,24 @@ export class ProjectCoordinator {
       if (manager.readThread(threadId).status === 'running') return;
       const pending = this.pendingMessages(projectId, threadId)[0];
       if (!pending) return;
-      const delivered = await this.record({
-        type: 'thread.message.delivered',
-        projectId,
-        sourceThreadId: pending.sourceThreadId,
-        targetThreadId: threadId,
-        messageId: pending.messageId,
-        correlationId: pending.correlationId,
-        parentId: pending.parentId,
-        causeId: pending.id,
-        payload: { sentItemId: pending.id },
-      });
+      const previousDelivery = this.list
+        .getItems(projectId)
+        .find(
+          (item) => item.type === 'thread.message.delivered' && item.messageId === pending.messageId
+        );
+      const delivered =
+        previousDelivery ??
+        (await this.record({
+          type: 'thread.message.delivered',
+          projectId,
+          sourceThreadId: pending.sourceThreadId,
+          targetThreadId: threadId,
+          messageId: pending.messageId,
+          correlationId: pending.correlationId,
+          parentId: pending.parentId,
+          causeId: pending.id,
+          payload: { sentItemId: pending.id },
+        }));
       const turnInput: import('./app-server-protocol.js').JsonValue = {
         type: 'thread.message',
         messageId: pending.messageId ?? null,
@@ -361,6 +477,16 @@ export class ProjectCoordinator {
         input: turnInput,
       });
       deliveredItemId = delivered.id;
+      const activation = await this.record({
+        type: 'thread.message.activated',
+        projectId,
+        sourceThreadId: pending.sourceThreadId,
+        targetThreadId: threadId,
+        messageId: pending.messageId,
+        correlationId: pending.correlationId,
+        causeId: delivered.id,
+        payload: { deliveredItemId: delivered.id, turnId: prepared.turn.id },
+      });
       void prepared.activate().catch(async (error: unknown) => {
         await this.record({
           type: 'thread.message.failed',
@@ -368,7 +494,7 @@ export class ProjectCoordinator {
           sourceThreadId: pending.sourceThreadId,
           targetThreadId: threadId,
           messageId: pending.messageId,
-          causeId: delivered.id,
+          causeId: activation.id,
           payload: { message: readMessage(error) },
         });
       });
@@ -387,7 +513,7 @@ export class ProjectCoordinator {
       items
         .filter(
           (item) =>
-            (item.type === 'thread.message.delivered' || item.type === 'thread.message.failed') &&
+            (item.type === 'thread.message.activated' || item.type === 'thread.message.failed') &&
             item.messageId
         )
         .map((item) => item.messageId ?? '')
@@ -426,9 +552,18 @@ export class ProjectCoordinator {
     digest: string,
     type: ProjectCoordinationItemType
   ): T | undefined {
+    const compacted = new Set(
+      this.list
+        .getItems(projectId)
+        .filter((item) => item.type === 'coordination.idempotency.compacted')
+        .flatMap((item) => readStringArray(item.payload.commandItemIds))
+    );
     const match = this.list
       .getItems(projectId)
-      .find((item) => item.type === type && item.idempotencyKey === idempotencyKey);
+      .find(
+        (item) =>
+          item.type === type && item.idempotencyKey === idempotencyKey && !compacted.has(item.id)
+      );
     if (!match) return undefined;
     if (match.payload.commandDigest !== digest) {
       throw new ProjectIdempotencyConflictError(projectId, idempotencyKey);
@@ -447,6 +582,63 @@ export class ProjectCoordinator {
     await this.journal.append(item);
     this.list.commit(item);
     return item;
+  }
+
+  /** Journal facts are retained; only the replay projection is bounded. */
+  private async compactIdempotency(projectId: string): Promise<void> {
+    const project = await this.activeProject(projectId);
+    const retention = requiredLimit(project.policy.idempotencyRetention);
+    const items = this.list.getItems(projectId);
+    const alreadyCompacted = new Set(
+      items
+        .filter((item) => item.type === 'coordination.idempotency.compacted')
+        .flatMap((item) => readStringArray(item.payload.commandItemIds))
+    );
+    const settledMessageIds = new Set(
+      items
+        .filter(
+          (item) =>
+            (item.type === 'thread.message.activated' || item.type === 'thread.message.failed') &&
+            item.messageId !== undefined
+        )
+        .map((item) => item.messageId ?? '')
+    );
+    const pendingSentIds = new Set(
+      items
+        .filter(
+          (item) =>
+            item.type === 'thread.message.sent' &&
+            item.messageId !== undefined &&
+            !settledMessageIds.has(item.messageId)
+        )
+        .map((item) => item.id)
+    );
+    const candidates = items.filter(
+      (item) =>
+        item.idempotencyKey !== undefined &&
+        !alreadyCompacted.has(item.id) &&
+        !pendingSentIds.has(item.id)
+    );
+    const expired = candidates.slice(0, Math.max(0, candidates.length - retention));
+    if (expired.length === 0) return;
+    await this.record({
+      type: 'coordination.idempotency.compacted',
+      projectId,
+      payload: {
+        commandItemIds: expired.map((item) => item.id),
+        idempotencyKeys: expired.map((item) => item.idempotencyKey ?? ''),
+        retained: retention,
+      },
+    });
+  }
+
+  private async mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutationTail.then(operation);
+    this.mutationTail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return await result;
   }
 
   private managerFor(project: ProjectSnapshot): ThreadManager {
@@ -491,6 +683,7 @@ export class ProjectCoordinator {
     const last = items.at(-1);
     if (last?.type === 'thread.wait.started') return 'waiting';
     if (last?.type === 'agent.lease.granted') return 'running';
+    if (last?.type === 'agent.lease.recovered') return 'queued';
     if (last?.type === 'agent.lease.queued') return 'queued';
     return 'queued';
   }
@@ -498,6 +691,21 @@ export class ProjectCoordinator {
   private interruptIfRunning(projectId: string, threadId: string): void {
     const manager = this.managerForExisting(projectId);
     if (manager.readThread(threadId).status === 'running') manager.interruptTurn(threadId);
+  }
+
+  private unreleasedLeases(projectId: string): readonly ProjectCoordinationItem[] {
+    const released = new Set(
+      this.list
+        .getItems(projectId)
+        .filter(
+          (item) => item.type === 'agent.lease.released' || item.type === 'agent.lease.recovered'
+        )
+        .map((item) => item.causeId)
+        .filter((itemId): itemId is string => itemId !== undefined)
+    );
+    return this.list
+      .getItems(projectId)
+      .filter((item) => item.type === 'agent.lease.granted' && !released.has(item.id));
   }
 }
 
@@ -535,6 +743,17 @@ function readMessage(cause: unknown): string {
 function readMessageContent(value: unknown): string {
   if (typeof value !== 'string') throw new Error('Invalid durable thread message content');
   return value;
+}
+
+function requiredLimit(value: number | undefined): number {
+  if (!value || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error('Project policy resource limit is invalid');
+  }
+  return value;
+}
+
+function readStringArray(value: unknown): readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string') ? value : [];
 }
 
 function defaultId(): string {

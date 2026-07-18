@@ -229,3 +229,46 @@ Round: 1
 - Local-only workflow: no Linear mutation, no intermediate review, and no
   GitHub push. Electron packaging is blocked only by the recorded transient
   TLS download failure; APP-009 owns package smoke/retry work.
+
+## APP-008
+
+- Capability boundary: `ThreadToolRuntime` accepts only runtime-injected actor
+  context. Tool payload cannot select project, source thread, or capabilities.
+  Capability checks distinguish child/peer messaging and reject agent self or
+  ancestor control paths before coordinator mutation.
+- Resource boundary: Project policy now normalizes bounded total threads,
+  queued messages, wait targets, message bytes, and idempotency retention.
+  Coordinator mutations serialize limit checks before coordination journal
+  appends and return typed `RESOURCE_EXHAUSTED` failures. The UI compactly
+  exposes the thread/depth/concurrency policy summary.
+- Recovery: coordination replay records stale granted leases as recovered,
+  continues sent-but-not-activated delivery, and preserves a durable delivery
+  then activation fence. Idempotency retention is represented by deterministic
+  compaction Items; pending delivery facts are excluded from compaction.
+- Input/security: Agent App JSON input has bounded recursive validation and
+  rejects non-finite values, unsafe prototype keys, excess depth, and excess
+  byte size. Existing desktop/static-host and lifecycle regressions remain in
+  the focused suite.
+- Tests: `test/app-008-policy.test.ts` adds injected-context forgery,
+  thread/message resource exhaustion, and malformed JSON assertions. Serial
+  targeted validation passed nine test files / 35 tests, including coordinator,
+  scheduler, server/runtime, journal, desktop lifecycle, and static host.
+
+## Codex Worker Note
+
+Round: 1
+
+- APP-008 complete on `codex/agent-app`; APP-009 remains Pending.
+- Local-only workflow: no Linear mutation, no intermediate review, and no
+  GitHub push. Full check, coverage, E2E, and package operations were not run;
+  APP-009 owns those broader gates.
+
+## Codex Worker Note
+
+Round: 2
+
+- Completion validation passed: serial focused Vitest, Prettier check, ESLint,
+  core/Web TypeScript checks, core/Web/desktop builds, `npm audit
+  --audit-level=low`, and `git diff --check`.
+- No Linear mutation, external push, full check, coverage, E2E, or package
+  command was run. This remains a local `codex/agent-app` implementation.

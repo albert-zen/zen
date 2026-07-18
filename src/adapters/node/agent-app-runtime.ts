@@ -194,10 +194,12 @@ class NodeProjectRuntime implements ProjectRuntime {
         return success(request.method, { message: result });
       }
       if (request.method === 'thread/wait') {
+        const targets = requiredTextArray(params.threadIds, 'threadIds');
+        await this.coordinator.assertWaitWithinLimit(this.project.id, targets);
         const result = await this.scheduler.waitFor({
           projectId: this.project.id,
           threadId: requiredText(params.threadId, 'threadId'),
-          targets: requiredTextArray(params.threadIds, 'threadIds'),
+          targets,
           mode: params.mode === 'any' ? 'any' : params.mode === 'all' ? 'all' : invalidMode(),
         });
         return success(request.method, { wait: result });
@@ -288,6 +290,7 @@ function createProjectThreadRuntimeFactory(
       coordinator: coordinator(),
       scheduler,
       resolveExecutionContext: () => ({
+        actor: 'agent',
         projectId: project.id,
         sourceThreadId: thread.id,
         capabilities: threadCapabilities(project),
@@ -333,15 +336,15 @@ function threadCapabilities(
   project: ProjectSnapshot
 ): ReadonlySet<import('../../product/index.js').ThreadCapability> {
   const capabilities: import('../../product/index.js').ThreadCapability[] = [
-    'thread.list',
-    'thread.read',
-    'thread.wait',
-    'thread.cancel',
-    'thread.archive',
-    'thread.handoff',
+    'readProjectThreads',
+    'cancelThread',
+    'archiveThread',
+    'handoffThread',
   ];
-  if (project.policy.agentCanCreateThreads) capabilities.push('thread.create');
-  if (project.policy.agentCanMessagePeers) capabilities.push('thread.send');
+  if (project.policy.agentCanCreateThreads) capabilities.push('createChildThread');
+  if (project.policy.agentCanMessagePeers) {
+    capabilities.push('messageChild', 'messagePeer', 'interruptPeer');
+  }
   return new Set(capabilities);
 }
 

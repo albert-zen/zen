@@ -94,7 +94,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElem
         </div>
         <div className="truncate text-xs text-zinc-400">
           {snapshot.selectedProject
-            ? `${snapshot.threads.filter((thread) => thread.status === 'running').length} active agents · ${snapshot.threads.length} threads · ${snapshot.selectedProject.policy.maxConcurrentAgents} concurrent`
+            ? `${snapshot.threads.filter((thread) => thread.status === 'running').length} active agents · ${snapshot.threads.length}/${snapshot.selectedProject.policy.maxThreads ?? 'unbounded'} threads · ${snapshot.selectedProject.policy.maxConcurrentAgents} concurrent · depth ${snapshot.selectedProject.policy.maxThreadDepth}`
             : snapshot.connection.status}
         </div>
       </header>
