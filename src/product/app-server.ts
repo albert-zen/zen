@@ -28,6 +28,8 @@ export type AppServerOptions = {
   readonly threadJournal?: ThreadJournal;
   readonly approvalBroker?: ApprovalBroker;
   readonly persistenceFailures?: readonly ThreadPersistenceFailure[];
+  /** Allows an outer product runtime to share a manager with its coordinator. */
+  readonly createThreadManager?: (options: ThreadManagerOptions) => ThreadManager;
 };
 
 export type AppServerSubscription = () => void;
@@ -53,7 +55,7 @@ export class AppServer implements AppServerClient {
   constructor(options: AppServerOptions = {}) {
     this.threadJournal = options.threadJournal;
     this.approvalBroker = options.approvalBroker ?? new ApprovalBroker();
-    this.threadManager = new ThreadManager({
+    const threadManagerOptions: ThreadManagerOptions = {
       ...options.threadManagerOptions,
       repairOnLoad: false,
       persistenceFailures: options.persistenceFailures,
@@ -67,7 +69,10 @@ export class AppServer implements AppServerClient {
       },
       itemCommitBarrier: async (threadId) => await this.settleThread(threadId),
       approvalBroker: this.approvalBroker,
-    });
+    };
+    this.threadManager = options.createThreadManager
+      ? options.createThreadManager(threadManagerOptions)
+      : new ThreadManager(threadManagerOptions);
     this.threadManager.observe((event) => {
       this.queueEvent(event);
     });

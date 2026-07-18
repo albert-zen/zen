@@ -19,6 +19,8 @@ export type AppServerHttpTransportOptions = {
   readonly host?: string;
   readonly port?: number;
   readonly eventReplayLimit?: number;
+  /** Optional protocol parser used before dispatch.  Transport stays protocol-neutral. */
+  readonly parseRequest?: (value: unknown) => unknown;
 };
 
 export type AppServerHttpTransport = {
@@ -177,9 +179,15 @@ export async function serveAppServerHttpTransport(
       }
 
       if (request.method === 'POST' && url.pathname === REQUEST_PATH) {
-        await handleRequest(options.appServer, request, response, () => {
-          requestState.phase = 'dispatched';
-        });
+        await handleRequest(
+          options.appServer,
+          request,
+          response,
+          () => {
+            requestState.phase = 'dispatched';
+          },
+          options.parseRequest
+        );
         return;
       }
 
@@ -605,7 +613,8 @@ async function handleRequest(
   appServer: AppServerClient,
   request: IncomingMessage,
   response: ServerResponse,
-  onDispatch: () => void
+  onDispatch: () => void,
+  parseRequest?: (value: unknown) => unknown
 ): Promise<void> {
   const parsed = await readRequestJson(request);
 
@@ -621,9 +630,24 @@ async function handleRequest(
     return;
   }
 
+  let input = parsed.value;
+  try {
+    input = parseRequest?.(input) ?? input;
+  } catch (cause) {
+    sendJson(response, 400, {
+      method: 'transport/request',
+      ok: false,
+      error: {
+        code: 'INVALID_REQUEST',
+        message: cause instanceof Error ? cause.message : 'Invalid transport request',
+      },
+    });
+    return;
+  }
+
   onDispatch();
   try {
-    const result = await appServer.request(parsed.value as AppServerRequestInput);
+    const result = await appServer.request(input as AppServerRequestInput);
 
     sendJson(response, 200, result);
   } catch {

@@ -16,6 +16,8 @@ export {
   serveAppServerHttpTransport,
   createAppServerHttpProxy,
 } from './app-server-transport.js';
+export type { AgentAppHttpTransport, AgentAppHttpTransportOptions } from './agent-app-transport.js';
+export { readAgentAppNotification, serveAgentAppHttpTransport } from './agent-app-transport.js';
 export type { FileThreadJournalOptions, ThreadJournalFileSystem } from './file-thread-journal.js';
 export { FileThreadJournal } from './file-thread-journal.js';
 export type {
@@ -31,6 +33,16 @@ export type {
   ProjectCoordinationFileSystem,
 } from './file-project-coordination-journal.js';
 export { FileProjectCoordinationJournal } from './file-project-coordination-journal.js';
+export type { AgentAppProjectRuntimeFactoryOptions } from './agent-app-runtime.js';
+export { createAgentAppProjectRuntimeFactory, projectRuntimeDirectory } from './agent-app-runtime.js';
+export type {
+  AgentAppProductionComposition,
+  AgentAppServerConfiguration,
+} from './agent-app-production.js';
+export {
+  createAgentAppProductionComposition,
+  createAgentAppServer,
+} from './agent-app-production.js';
 export type { LocalToolRuntimeOptions } from './local-tool-runtime.js';
 export { LocalToolRuntime, localToolDefinitions } from './local-tool-runtime.js';
 export type { ModelProviderConfig, ModelProviderConfigOptions } from './model-provider-config.js';
@@ -44,6 +56,7 @@ export type { ProviderBackedAppServerOptions } from './provider-runtime.js';
 export {
   createProviderBackedAppServer,
   createProviderThreadRuntimeFactory,
+  replayThreadJournal,
 } from './provider-runtime.js';
 export type {
   AggregateProductionShutdownOptions,

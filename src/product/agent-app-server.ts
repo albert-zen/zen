@@ -29,7 +29,9 @@ export class AgentAppServer {
   async request(value: unknown): Promise<AgentAppResponse> {
     if (this.closing) return error('SERVER_CLOSING', 'Agent App Server is closing');
     try {
-      return await this.dispatch(parseAgentAppRequest(value));
+      const request = parseAgentAppRequest(value);
+      const response = await this.dispatch(request);
+      return request.id === undefined ? response : { ...response, id: request.id };
     } catch (cause) {
       return error(code(cause), cause instanceof Error ? cause.message : String(cause));
     }
@@ -63,7 +65,15 @@ export class AgentAppServer {
       return {
         method: request.method,
         ok: true,
-        result: { project: await this.options.projectManager.update(text(p.projectId), {}) },
+        result: {
+          project: await this.options.projectManager.update(text(p.projectId), {
+            ...(typeof p.name === 'string' ? { name: p.name } : {}),
+            ...(typeof p.rootPath === 'string' ? { rootPath: p.rootPath } : {}),
+            ...(isRecord(p.policy)
+              ? { policy: p.policy as import('./project-registry.js').ProjectPolicy }
+              : {}),
+          }),
+        },
       };
     if (request.method === 'project/archive') {
       const id = text(p.projectId);
@@ -106,6 +116,9 @@ export class AgentAppServer {
 function text(value: unknown): string {
   if (typeof value !== 'string' || !value) throw new Error('Invalid string param');
   return value;
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 function error(
   code: import('./agent-app-protocol.js').AgentAppErrorCode,

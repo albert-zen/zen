@@ -28,25 +28,7 @@ export async function createProviderBackedAppServer(
 ): Promise<AppServer> {
   const threadJournal = options.threadJournal ?? new FileThreadJournal();
   try {
-    const replay = await threadJournal.replay();
-    const initialThreads = replay
-      .filter(
-        (result): result is Extract<typeof result, { type: 'success' }> => result.type === 'success'
-      )
-      .map((result) => toThreadSnapshot({ threadId: result.threadId, items: result.items }));
-    const persistenceFailures = replay.flatMap((result): readonly ThreadPersistenceFailure[] =>
-      result.type === 'failure'
-        ? [
-            {
-              code: 'THREAD_JOURNAL_CORRUPTION',
-              message: result.error.message,
-              path: result.path,
-              recordNumber: result.error.recordNumber,
-              threadId: result.threadId,
-            },
-          ]
-        : []
-    );
+    const { initialThreads, persistenceFailures } = await replayThreadJournal(threadJournal);
 
     return new AppServer({
       ...options.appServerOptions,
@@ -70,6 +52,33 @@ export async function createProviderBackedAppServer(
     }
     throw cause;
   }
+}
+
+export async function replayThreadJournal(threadJournal: ThreadJournal): Promise<{
+  readonly initialThreads: readonly ReturnType<typeof toThreadSnapshot>[];
+  readonly persistenceFailures: readonly ThreadPersistenceFailure[];
+}> {
+  const replay = await threadJournal.replay();
+  return {
+    initialThreads: replay
+      .filter(
+        (result): result is Extract<typeof result, { type: 'success' }> => result.type === 'success'
+      )
+      .map((result) => toThreadSnapshot({ threadId: result.threadId, items: result.items })),
+    persistenceFailures: replay.flatMap((result): readonly ThreadPersistenceFailure[] =>
+      result.type === 'failure'
+        ? [
+            {
+              code: 'THREAD_JOURNAL_CORRUPTION',
+              message: result.error.message,
+              path: result.path,
+              recordNumber: result.error.recordNumber,
+              threadId: result.threadId,
+            },
+          ]
+        : []
+    ),
+  };
 }
 
 export function createProviderThreadRuntimeFactory(

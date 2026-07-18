@@ -34,14 +34,24 @@ export type AgentAppMethod =
   | 'turn/interrupt'
   | 'turn/retry'
   | 'approval/resolve';
-export type AgentAppRequest = { readonly method: AgentAppMethod; readonly params: JsonObject };
+export type AgentAppRequest = {
+  readonly id?: string;
+  readonly method: AgentAppMethod;
+  readonly params: JsonObject;
+};
 export type AgentAppResponse =
   | {
+      readonly id?: string;
       readonly method: AgentAppMethod;
       readonly ok: true;
       readonly result: Readonly<Record<string, unknown>>;
     }
-  | { readonly method: string; readonly ok: false; readonly error: AgentAppError };
+  | {
+      readonly id?: string;
+      readonly method: string;
+      readonly ok: false;
+      readonly error: AgentAppError;
+    };
 export type AgentAppNotificationEnvelope = {
   readonly projectId: string;
   readonly notification: AgentAppNotification;
@@ -84,7 +94,8 @@ export function parseAgentAppRequest(value: unknown): AgentAppRequest {
     !isRecord(value) ||
     typeof value.method !== 'string' ||
     !isMethod(value.method) ||
-    !isRecord(value.params)
+    !isRecord(value.params) ||
+    (value.id !== undefined && !nonEmpty(value.id))
   )
     throw new Error('Invalid AgentApp request');
   const params = value.params as JsonObject;
@@ -100,7 +111,7 @@ export function parseAgentAppRequest(value: unknown): AgentAppRequest {
     if (!nonEmpty(params.threadId) && !['thread/create', 'thread/list'].includes(value.method))
       throw new Error('threadId is required');
   }
-  return { method: value.method, params };
+  return { ...(value.id === undefined ? {} : { id: value.id }), method: value.method, params };
 }
 function isMethod(value: string): value is AgentAppMethod {
   return [

@@ -25,7 +25,7 @@ export type ProjectThreadSummary = {
 };
 
 export type ProjectCoordinatorOptions = {
-  readonly projectManager: ProjectManager;
+  readonly projectManager: Pick<ProjectManager, 'read'>;
   readonly journal?: ProjectCoordinationJournal;
   readonly createThreadManager: (project: ProjectSnapshot) => ThreadManager;
   readonly generateId?: IdGenerator;
@@ -71,7 +71,7 @@ export class ProjectIdempotencyConflictError extends Error {
 }
 
 export class ProjectCoordinator {
-  private readonly projectManager: ProjectManager;
+  private readonly projectManager: Pick<ProjectManager, 'read'>;
   private readonly journal: ProjectCoordinationJournal;
   private readonly createThreadManager: ProjectCoordinatorOptions['createThreadManager'];
   private readonly list: ProjectCoordinationList;
@@ -109,6 +109,15 @@ export class ProjectCoordinator {
 
   listCoordinationItems(projectId?: string): readonly ProjectCoordinationItem[] {
     return this.list.getItems(projectId);
+  }
+
+  /** Rebuild the in-memory manager for a durably known project before serving it. */
+  async recover(projectId: string): Promise<void> {
+    const project = await this.activeProject(projectId);
+    this.managerFor(project);
+    for (const summary of this.listThreadSummaries(projectId)) {
+      await this.deliverNext(projectId, summary.threadId);
+    }
   }
 
   async createThread(input: CreateProjectThreadInput): Promise<{ readonly threadId: string }> {

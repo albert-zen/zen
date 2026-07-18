@@ -68,3 +68,20 @@
 - This transition commit deliberately leaves the legacy single-project protocol
   and its consumers untouched. APP-005B performs their removal and migration.
 - Targeted protocol/server tests and main typecheck passed.
+
+## APP-005B
+
+- Agent App HTTP/SSE is a thin adapter over the existing capability-authenticated,
+  quiesce-aware transport. It uses 005A's parser before dispatch, preserves the
+  project notification envelope, and shares one application cursor/replay stream.
+- Node composition accepts an explicit app-data root and registry path. Each
+  registry-known project gets a base64url-encoded fixed subdirectory containing
+  separate thread and coordination journals; no project data directories are scanned.
+- The project runtime shares a ThreadManager between AppServer and coordinator,
+  recovers both journals at startup, injects trusted project/thread authority into
+  the eight thread tools, and combines them with local tools in a CompositeToolRuntime.
+- Validation: Prettier check, targeted ESLint, main and web TypeScript checks,
+  production build, and serial targeted Vitest passed: 4 files, 32 tests. Full
+  check, coverage, and E2E were intentionally not run.
+- Hygiene census: the integration tests remove only their exact mkdtemp roots;
+  no processes were terminated and no broad temporary-directory cleanup was run.

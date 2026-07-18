@@ -32,6 +32,8 @@ export type {
   ToolRuntimeEvent,
 } from './tool-runtime.js';
 export { appendToolExecutionItems } from './tool-runtime.js';
+export type { ToolRuntimeRoute } from './composite-tool-runtime.js';
+export { CompositeToolRuntime } from './composite-tool-runtime.js';
 export type {
   BeforeToolCallHookContext,
   HookBlockDecision,
