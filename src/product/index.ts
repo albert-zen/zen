@@ -64,3 +64,22 @@ export type {
 export { ThreadManager } from './thread-manager.js';
 export type { ThreadJournal, ThreadJournalReplay } from './thread-journal.js';
 export { ThreadJournalCorruptionError, ThreadJournalError } from './thread-journal.js';
+export type {
+  ProjectId,
+  ProjectPolicy,
+  ProjectRecord,
+  ProjectRegistry,
+  ProjectSnapshot,
+  ProjectStatus,
+} from './project-registry.js';
+export {
+  cloneProjectRecord,
+  InMemoryProjectRegistry,
+  ProjectRegistryCorruptionError,
+} from './project-registry.js';
+export type {
+  ProjectCreateInput,
+  ProjectManagerOptions,
+  ProjectUpdateInput,
+} from './project-manager.js';
+export { ProjectManager } from './project-manager.js';

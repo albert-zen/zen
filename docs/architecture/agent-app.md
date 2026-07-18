@@ -46,6 +46,14 @@ message identity and becomes visible at a turn boundary by default. An explicit
 interrupt may preempt the current turn. Both enqueue and delivery results are
 Items linked to their cause; a mailbox has no independent message store.
 
+## Idempotency
+
+Mutating AppServer operations will carry an idempotency key scoped to the
+Project and command type. Retrying a completed create, send, handoff, or
+delivery returns the durable Item-derived result rather than performing a
+second action. Registry writes serialize so retry and recovery paths have a
+single durable order.
+
 ## Scheduler And Wait Graph
 
 `AgentScheduler` will grant replaceable executor leases under Project policy.

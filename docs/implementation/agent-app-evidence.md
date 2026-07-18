@@ -17,4 +17,19 @@
 
 ## APP-002
 
-Pending implementation and targeted verification.
+- Product: `ProjectManager` with injected clock, ID generator, and root
+  canonicalizer; immutable snapshots; create/list/read/update/archive; policy
+  validation; and serialize-before-publish persistence behavior.
+- Registries: product `InMemoryProjectRegistry`; Node `FileProjectRegistry`
+  with one explicit app-data JSON path, versioned schema validation, fail-closed
+  corruption handling, serialized writes, and temp-write plus rename.
+- Tests: `test/project-manager.test.ts` covers CRUD/archive, validation,
+  canonical collision, immutability, persistence failure, restart, corruption,
+  file-write ordering, and the Windows canonicalizer.
+- Validation: `npx prettier --write` for changed files; targeted `npx eslint`;
+  `npm run typecheck`; `npm run build`; and serial targeted Vitest for project
+  and module boundaries all passed. No full `npm run check`, coverage, or E2E
+  command was run.
+- Final test count: 2 files and 13 tests passed.
+- Hygiene census: pre/post Node PID set unchanged; exact
+  `zen-agent-app-project-*` temporary-root delta is zero.

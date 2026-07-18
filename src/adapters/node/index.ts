@@ -18,6 +18,14 @@ export {
 } from './app-server-transport.js';
 export type { FileThreadJournalOptions, ThreadJournalFileSystem } from './file-thread-journal.js';
 export { FileThreadJournal } from './file-thread-journal.js';
+export type {
+  FileProjectRegistryOptions,
+  ProjectRegistryFileSystem,
+} from './file-project-registry.js';
+export {
+  FileProjectRegistry,
+  canonicalizeWindowsProjectRootPath,
+} from './file-project-registry.js';
 export type { LocalToolRuntimeOptions } from './local-tool-runtime.js';
 export { LocalToolRuntime, localToolDefinitions } from './local-tool-runtime.js';
 export type { ModelProviderConfig, ModelProviderConfigOptions } from './model-provider-config.js';
