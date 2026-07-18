@@ -163,6 +163,10 @@ export type AppServerResponse =
 
 export type AppServerNotification =
   | {
+      readonly type: 'sync/reset';
+      readonly threads: readonly ThreadSnapshot[];
+    }
+  | {
       readonly type: 'thread/started';
       readonly thread: ThreadSnapshot;
     }

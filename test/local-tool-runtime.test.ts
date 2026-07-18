@@ -1,10 +1,27 @@
 import { mkdtempSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { basename, dirname, join, resolve } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { LocalToolRuntime, localToolDefinitions } from './test-exports.js';
 import { ApprovalBroker } from './test-exports.js';
+
+const localToolTempPrefix = 'zen-tools-';
+const localToolTempRoots = new Set<string>();
+
+afterEach(async () => {
+  const roots = [...localToolTempRoots];
+  localToolTempRoots.clear();
+  const results = await Promise.allSettled(
+    roots.map(async (root) => await rm(root, { recursive: true, force: true }))
+  );
+  const failures = results.flatMap((result) =>
+    result.status === 'rejected' ? [result.reason] : []
+  );
+  if (failures.length > 0)
+    throw new AggregateError(failures, 'Local tool test temp cleanup failed');
+});
 
 describe('LocalToolRuntime', () => {
   it('exposes shell as the only local workspace tool', () => {
@@ -12,7 +29,7 @@ describe('LocalToolRuntime', () => {
   });
 
   it('runs shell commands in the workspace and returns command output', async () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'zen-tools-'));
+    const cwd = createLocalToolTempRoot();
     const { runtime, broker } = createApprovedRuntime(cwd);
 
     await expect(runTool(runtime, broker, 'shell', { command: 'Write-Output ok' })).resolves.toBe(
@@ -21,7 +38,7 @@ describe('LocalToolRuntime', () => {
   });
 
   it('returns non-zero shell exits as normal tool results with stderr evidence', async () => {
-    const { runtime, broker } = createApprovedRuntime(mkdtempSync(join(tmpdir(), 'zen-tools-')));
+    const { runtime, broker } = createApprovedRuntime(createLocalToolTempRoot());
 
     await expect(
       runTool(runtime, broker, 'shell', {
@@ -31,7 +48,7 @@ describe('LocalToolRuntime', () => {
   });
 
   it('preserves comments, quotes, multiline blocks, and marker-like user output', async () => {
-    const { runtime, broker } = createApprovedRuntime(mkdtempSync(join(tmpdir(), 'zen-tools-')));
+    const { runtime, broker } = createApprovedRuntime(createLocalToolTempRoot());
     const result = await runTool(runtime, broker, 'shell', {
       command:
         'Write-Output ok # trailing comment\n& { Write-Output "{ quoted zen-local-marker-like }" }',
@@ -43,7 +60,7 @@ describe('LocalToolRuntime', () => {
   });
 
   it('streams shell stdout and stderr before the command completes', async () => {
-    const { runtime, broker } = createApprovedRuntime(mkdtempSync(join(tmpdir(), 'zen-tools-')));
+    const { runtime, broker } = createApprovedRuntime(createLocalToolTempRoot());
     const execution = runtime.execute(
       {
         id: 'call-shell',
@@ -97,7 +114,7 @@ describe('LocalToolRuntime', () => {
   });
 
   it('cancels a running shell command through the tool execution signal', async () => {
-    const { runtime, broker } = createApprovedRuntime(mkdtempSync(join(tmpdir(), 'zen-tools-')));
+    const { runtime, broker } = createApprovedRuntime(createLocalToolTempRoot());
     const controller = new AbortController();
     const execution = runtime.execute(
       {
@@ -137,7 +154,7 @@ describe('LocalToolRuntime', () => {
 
   it('reports unknown tool names as tool errors', async () => {
     const runtime = new LocalToolRuntime({
-      cwd: mkdtempSync(join(tmpdir(), 'zen-tools-')),
+      cwd: createLocalToolTempRoot(),
     });
 
     const events = await collect(
@@ -152,6 +169,16 @@ describe('LocalToolRuntime', () => {
     ]);
   });
 });
+
+function createLocalToolTempRoot(): string {
+  const tempParent = resolve(tmpdir());
+  const root = resolve(mkdtempSync(join(tempParent, localToolTempPrefix)));
+  if (dirname(root) !== tempParent || !basename(root).startsWith(localToolTempPrefix)) {
+    throw new Error(`Unsafe local tool test temp root: ${root}`);
+  }
+  localToolTempRoots.add(root);
+  return root;
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

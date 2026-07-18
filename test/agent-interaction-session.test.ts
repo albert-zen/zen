@@ -16,6 +16,172 @@ import {
 } from './test-exports.js';
 
 describe('AgentInteractionSession', () => {
+  it('replays notifications that arrive while the startup snapshot is in flight', async () => {
+    const client = new SessionHandoffClient();
+    const session = new AgentInteractionSession({ client });
+    const starting = session.start();
+    client.emit({
+      type: 'item/appended',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: sessionItem('item-2', 2),
+    });
+    client.resolveList({
+      id: 'thread-1',
+      status: 'running',
+      turns: [],
+      items: [sessionItem('item-1', 1)],
+    });
+
+    const snapshot = await starting;
+
+    expect([...(snapshot.thread?.items ?? [])].map((item) => item.id)).toEqual([
+      'item-1',
+      'item-2',
+    ]);
+    session.dispose();
+  });
+
+  it('settles a submit waiter from an authoritative reconnect snapshot', async () => {
+    const client = new DeferredSessionClient(threadSnapshot());
+    const session = new AgentInteractionSession({ client });
+    await session.start();
+    const observed = session.submit('finish while offline').then(
+      () => 'resolved' as const,
+      () => 'rejected' as const
+    );
+    await client.waitForTurnRequest();
+
+    client.emit({
+      type: 'sync/reset',
+      threads: [
+        {
+          id: 'thread-1',
+          status: 'idle',
+          turns: [{ id: 'turn-2', runId: 'run-2', status: 'completed', itemIds: ['terminal-1'] }],
+          items: [sessionItem('terminal-1', 1)],
+        },
+      ],
+    });
+    await Promise.resolve();
+    const waiterCount = session.getPendingCompletionWaiterCountForTest();
+    if (waiterCount > 0) session.dispose();
+
+    expect(await observed).toBe('resolved');
+    expect(waiterCount).toBe(0);
+    session.dispose();
+  });
+
+  it('settles concurrent submit waiters only for their bound turn', async () => {
+    const client = new ConcurrentSubmitClient();
+    const session = new AgentInteractionSession({ client });
+    await session.start();
+    let secondSettled = false;
+    const first = session.submit('first');
+    const second = session.submit('second').finally(() => {
+      secondSettled = true;
+    });
+    await client.waitForTurnRequests(2);
+    client.resolveTurnRequest(0, 'turn-1');
+    client.resolveTurnRequest(1, 'turn-2');
+    await Promise.resolve();
+
+    client.emit({
+      type: 'turn/completed',
+      threadId: 'thread-1',
+      turn: { id: 'turn-1', runId: 'run-1', status: 'completed', itemIds: [] },
+    });
+    await first;
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+
+    client.emit({
+      type: 'turn/completed',
+      threadId: 'thread-1',
+      turn: { id: 'turn-2', runId: 'run-2', status: 'completed', itemIds: [] },
+    });
+    await second;
+    expect(session.getPendingCompletionWaiterCountForTest()).toBe(0);
+    session.dispose();
+  });
+
+  it('caches a terminal by turn id until its response binds the waiter', async () => {
+    const client = new ConcurrentSubmitClient();
+    const session = new AgentInteractionSession({ client });
+    await session.start();
+    const pending = session.submit('terminal before response');
+    await client.waitForTurnRequests(1);
+    client.emit({
+      type: 'turn/completed',
+      threadId: 'thread-1',
+      turn: { id: 'turn-1', runId: 'run-1', status: 'completed', itemIds: [] },
+    });
+    client.resolveTurnRequest(0, 'turn-1');
+
+    await pending;
+    expect(session.getPendingCompletionWaiterCountForTest()).toBe(0);
+    session.dispose();
+  });
+
+  it('does not apply an early terminal to a response for another turn', async () => {
+    const client = new ConcurrentSubmitClient();
+    const session = new AgentInteractionSession({ client });
+    await session.start();
+    let settled = false;
+    const pending = session.submit('bind another turn').finally(() => {
+      settled = true;
+    });
+    await client.waitForTurnRequests(1);
+    client.emit({
+      type: 'turn/completed',
+      threadId: 'thread-1',
+      turn: { id: 'turn-1', runId: 'run-1', status: 'completed', itemIds: [] },
+    });
+    client.resolveTurnRequest(0, 'turn-2');
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    client.emit({
+      type: 'turn/completed',
+      threadId: 'thread-1',
+      turn: { id: 'turn-2', runId: 'run-2', status: 'completed', itemIds: [] },
+    });
+    await pending;
+    session.dispose();
+  });
+
+  it('rejects a bound waiter when a different thread snapshot replaces it', async () => {
+    const client = new ConcurrentSubmitClient();
+    const session = new AgentInteractionSession({ client });
+    await session.start();
+    const pending = session.submit('replace thread');
+    await client.waitForTurnRequests(1);
+    client.resolveTurnRequest(0, 'turn-1');
+    await Promise.resolve();
+    client.emit({
+      type: 'thread/started',
+      thread: { id: 'thread-2', status: 'idle', turns: [], items: [] },
+    });
+
+    await expect(pending).rejects.toThrow('Thread replaced before turn completion');
+    expect(session.getPendingCompletionWaiterCountForTest()).toBe(0);
+    session.dispose();
+  });
+
+  it('rejects an unbound waiter when an authoritative reset invalidates response binding', async () => {
+    const client = new ConcurrentSubmitClient();
+    const session = new AgentInteractionSession({ client });
+    await session.start();
+    const pending = session.submit('reset before response');
+    await client.waitForTurnRequests(1);
+    client.emit({ type: 'sync/reset', threads: [threadSnapshot()] });
+    client.resolveTurnRequest(0, 'turn-1');
+
+    await expect(pending).rejects.toThrow('Recovery occurred before turn binding');
+    expect(session.getPendingCompletionWaiterCountForTest()).toBe(0);
+    session.dispose();
+  });
+
   it('discards a submit waiter when turn/start rejects', async () => {
     const client = new DeferredSessionClient(threadSnapshot(), {
       turnFailure: new Error('submit request failed'),
@@ -362,4 +528,97 @@ class DeferredSessionClient implements AppServerClient {
     this.pendingTurnReject?.(cause);
     this.pendingTurnReject = undefined;
   }
+}
+
+class ConcurrentSubmitClient implements AppServerClient {
+  private readonly listeners = new Set<AppServerNotificationListener>();
+  private readonly turnRequests: Array<(turnId: string) => void> = [];
+
+  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    if (request.method === 'thread/list') {
+      return {
+        method: 'thread/list',
+        ok: true,
+        result: { threads: [threadSnapshot()], persistenceFailures: [] },
+      };
+    }
+    if (request.method !== 'turn/start') throw new Error(`Unexpected request: ${request.method}`);
+    return await new Promise<AppServerResponse>((resolve) => {
+      this.turnRequests.push((turnId) =>
+        resolve({
+          method: 'turn/start',
+          ok: true,
+          result: {
+            turn: { id: turnId, runId: `run-${turnId.at(-1)}`, status: 'inProgress', itemIds: [] },
+          },
+        })
+      );
+    });
+  }
+
+  subscribe(listener: AppServerNotificationListener): AppServerSubscription {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  emit(notification: Parameters<AppServerNotificationListener>[0]): void {
+    this.listeners.forEach((listener) => listener(notification));
+  }
+
+  resolveTurnRequest(index: number, turnId: string): void {
+    this.turnRequests[index]?.(turnId);
+  }
+
+  async waitForTurnRequests(count: number): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (this.turnRequests.length === count) return;
+      await Promise.resolve();
+    }
+    throw new Error(`Timed out waiting for ${count} turn requests`);
+  }
+}
+
+class SessionHandoffClient implements AppServerClient {
+  private listener?: AppServerNotificationListener;
+  private resolveListRequest!: (snapshot: ThreadSnapshot) => void;
+  private readonly listRequest = new Promise<ThreadSnapshot>((resolve) => {
+    this.resolveListRequest = resolve;
+  });
+
+  async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    if (request.method !== 'thread/list') throw new Error(`Unexpected request: ${request.method}`);
+    const snapshot = await this.listRequest;
+    return {
+      method: 'thread/list',
+      ok: true,
+      result: { threads: [snapshot], persistenceFailures: [] },
+    };
+  }
+
+  subscribe(listener: AppServerNotificationListener): AppServerSubscription {
+    this.listener = listener;
+    return () => {
+      this.listener = undefined;
+    };
+  }
+
+  emit(notification: Parameters<AppServerNotificationListener>[0]): void {
+    this.listener?.(notification);
+  }
+
+  resolveList(snapshot: ThreadSnapshot): void {
+    this.resolveListRequest(snapshot);
+  }
+}
+
+function sessionItem(id: string, seq: number) {
+  return {
+    id,
+    type: 'assistant.message.completed',
+    createdAtMs: seq,
+    seq,
+    runId: 'run-1',
+    turnId: 'turn-1',
+    payload: { content: id },
+  };
 }

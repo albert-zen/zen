@@ -32,3 +32,18 @@ export {
   createProviderBackedAppServer,
   createProviderThreadRuntimeFactory,
 } from './provider-runtime.js';
+export type {
+  AggregateProductionShutdownOptions,
+  AppServerCliCompositionOptions,
+  OwnedAppServer,
+  ShutdownSignalSource,
+  ShutdownTask,
+  ViteServerOwner,
+  WebDevCliCompositionOptions,
+} from './production-composition.js';
+export {
+  AggregateProductionShutdown,
+  ProductionResourceShutdownError,
+  runAppServerCliComposition,
+  runWebDevCliComposition,
+} from './production-composition.js';

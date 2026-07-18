@@ -203,6 +203,36 @@ describe('appendModelResponseItems', () => {
       }),
     ]);
   });
+
+  it('does not evaluate an eager model gateway after the durable start boundary aborts', async () => {
+    const items = createItems();
+    const controller = new AbortController();
+    let modelInvocations = 0;
+    const model: ModelGateway = {
+      generate() {
+        modelInvocations += 1;
+        return fakeModel([]).generate({ parts: [] });
+      },
+    };
+
+    await expect(
+      appendModelResponseItems({
+        itemList: items,
+        appendItem: async (input) => {
+          const item = items.append(input);
+          if (input.type === 'assistant.message.started') controller.abort();
+          return item;
+        },
+        model,
+        context: { parts: [] },
+        signal: controller.signal,
+        runId: 'run-1',
+        turnId: 'turn-1',
+      })
+    ).rejects.toThrow('Async iterator consumption aborted');
+
+    expect(modelInvocations).toBe(0);
+  });
 });
 
 describe('OpenAiCompatibleModelGateway', () => {

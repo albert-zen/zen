@@ -322,7 +322,14 @@ export class InteractionProjection {
   }
 
   replaceSnapshot(snapshot: ThreadSnapshot, notify = true): boolean {
-    const next = createStateFromSnapshot(snapshot, this.sequenceMetrics);
+    return this.replaceState(createStateFromSnapshot(snapshot, this.sequenceMetrics), notify);
+  }
+
+  private clearSnapshot(): boolean {
+    return this.replaceState(createStateFromParts(undefined, [], this.sequenceMetrics));
+  }
+
+  private replaceState(next: WebUiState, notify = true): boolean {
     if (sameState(this.snapshot, next)) {
       return false;
     }
@@ -332,6 +339,13 @@ export class InteractionProjection {
   }
 
   apply(notification: AppServerNotification): boolean {
+    if (notification.type === 'sync/reset') {
+      const currentThreadId = this.snapshot.currentThread?.id;
+      const thread = currentThreadId
+        ? notification.threads.find((candidate) => candidate.id === currentThreadId)
+        : notification.threads[0];
+      return thread ? this.replaceSnapshot(thread) : this.clearSnapshot();
+    }
     if (notification.type === 'thread/started') {
       return this.replaceSnapshot(notification.thread);
     }

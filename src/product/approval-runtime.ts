@@ -18,8 +18,12 @@ export interface PolicyRuntime {
 }
 
 export type ApprovalDecision =
-  | { readonly type: 'approveOnce'; readonly reason?: string }
-  | { readonly type: 'decline'; readonly reason?: string };
+  | {
+      readonly type: 'approveOnce';
+      readonly reason?: string;
+      readonly resolutionRecorded?: boolean;
+    }
+  | { readonly type: 'decline'; readonly reason?: string; readonly resolutionRecorded?: boolean };
 
 export type ApprovalRequest = {
   readonly id: string;
@@ -41,6 +45,12 @@ export type ApprovalResolveInput = {
   readonly threadId: string;
   readonly turnId: string;
   readonly decision: ApprovalDecision;
+};
+
+export type PreparedApprovalResolution = {
+  readonly request: ApprovalRequest;
+  commit(options?: { readonly resolutionRecorded?: boolean }): void;
+  abandon(reason: string): void;
 };
 
 export type ApprovalBrokerOptions = { readonly generateId?: () => string };
@@ -71,6 +81,12 @@ export class ApprovalBroker {
   }
 
   resolve(input: ApprovalResolveInput): ApprovalRequest {
+    const prepared = this.prepareResolve(input);
+    prepared.commit();
+    return prepared.request;
+  }
+
+  prepareResolve(input: ApprovalResolveInput): PreparedApprovalResolution {
     const pending = this.pending.get(input.approvalId);
     if (!pending)
       throw new Error(`Unknown or already resolved approval request: ${input.approvalId}`);
@@ -78,8 +94,21 @@ export class ApprovalBroker {
       throw new Error(`Approval request tuple does not match: ${input.approvalId}`);
     }
     this.pending.delete(input.approvalId);
-    pending.resolve(input.decision);
-    return pending.request;
+    let committed = false;
+    const deliver = (decision: ApprovalDecision) => {
+      if (committed) return;
+      committed = true;
+      pending.resolve(decision);
+    };
+    return {
+      request: pending.request,
+      commit: (options = {}) =>
+        deliver({
+          ...input.decision,
+          ...(options.resolutionRecorded ? { resolutionRecorded: true } : {}),
+        }),
+      abandon: (reason) => deliver({ type: 'decline', reason, resolutionRecorded: true }),
+    };
   }
 
   declineTurn(threadId: string, turnId: string, reason: string): readonly ApprovalRequest[] {
@@ -140,7 +169,14 @@ export class PolicyToolRuntime implements ToolRuntime {
     });
     yield { type: 'approval.requested', request: toToolApprovalRequest(pending.request) };
     const decision = await pending.decision;
-    yield { type: 'approval.resolved', request: toToolApprovalRequest(pending.request), decision };
+    const publicDecision = toPublicApprovalDecision(decision);
+    if (!decision.resolutionRecorded) {
+      yield {
+        type: 'approval.resolved',
+        request: toToolApprovalRequest(pending.request),
+        decision: publicDecision,
+      };
+    }
     if (decision.type === 'approveOnce') {
       yield* this.options.toolRuntime.execute(call, context);
       return;
@@ -150,6 +186,13 @@ export class PolicyToolRuntime implements ToolRuntime {
       error: new ToolApprovalDeniedError(decision.reason ?? 'approval declined'),
     };
   }
+}
+
+export function toPublicApprovalDecision(decision: ApprovalDecision): ApprovalDecision {
+  return {
+    type: decision.type,
+    ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+  };
 }
 
 export function toToolApprovalRequest(request: ApprovalRequest) {

@@ -46,7 +46,7 @@ export class AppServer implements AppServerClient {
   private readonly listeners: AppServerNotificationListener[] = [];
   private readonly eventTails = new Map<string, Promise<void>>();
   private readonly eventOperations = new Map<string, Promise<void>>();
-  private readonly eventFailures = new Map<string, unknown>();
+  private persistenceFailure?: ThreadPersistenceOperationError;
   private lifecycle: 'open' | 'closing' | 'closed' = 'open';
   private closePromise?: Promise<void>;
 
@@ -65,6 +65,7 @@ export class AppServer implements AppServerClient {
           item: toProtocolItem(item),
         });
       },
+      itemCommitBarrier: async (threadId) => await this.settleThread(threadId),
       approvalBroker: this.approvalBroker,
     });
     this.threadManager.observe((event) => {
@@ -82,6 +83,13 @@ export class AppServer implements AppServerClient {
   }
 
   async request(request: AppServerRequestInput): Promise<AppServerResponse> {
+    if (this.persistenceFailure) {
+      return {
+        method: request.method,
+        ok: false,
+        error: toRequestError(this.persistenceFailure),
+      };
+    }
     if (this.lifecycle !== 'open') {
       return {
         method: request.method,
@@ -126,6 +134,7 @@ export class AppServer implements AppServerClient {
     }
 
     if (request.method === 'thread/list') {
+      await this.settleAllThreads();
       return {
         method: 'thread/list',
         ok: true,
@@ -144,12 +153,18 @@ export class AppServer implements AppServerClient {
         modelOptions: isJsonObject(params.modelOptions) ? params.modelOptions : undefined,
       };
 
-      const turn = this.threadManager.enqueueTurn(turnInput);
-      await this.settleThread(turnInput.threadId);
+      const prepared = this.threadManager.prepareTurn(turnInput);
+      try {
+        await this.settleThread(turnInput.threadId);
+      } catch (cause) {
+        prepared.abandon();
+        throw cause;
+      }
+      void prepared.activate().catch(() => undefined);
       return {
         method: 'turn/start',
         ok: true,
-        result: { turn },
+        result: { turn: prepared.turn },
       };
     }
 
@@ -176,12 +191,18 @@ export class AppServer implements AppServerClient {
         modelOptions: isJsonObject(params.modelOptions) ? params.modelOptions : undefined,
       };
 
-      const turn = this.threadManager.retryTurn(retryInput);
-      await this.settleThread(retryInput.threadId);
+      const prepared = this.threadManager.prepareRetry(retryInput);
+      try {
+        await this.settleThread(retryInput.threadId);
+      } catch (cause) {
+        prepared.abandon();
+        throw cause;
+      }
+      void prepared.activate().catch(() => undefined);
       return {
         method: 'turn/retry',
         ok: true,
-        result: { turn },
+        result: { turn: prepared.turn },
       };
     }
 
@@ -194,7 +215,14 @@ export class AppServer implements AppServerClient {
         turnId: readRequiredString(params, 'turnId'),
         decision: { type: decision },
       };
-      this.approvalBroker.resolve(input);
+      const prepared = this.approvalBroker.prepareResolve(input);
+      try {
+        await this.threadManager.recordApprovalResolution(prepared.request, input.decision);
+        prepared.commit({ resolutionRecorded: true });
+      } catch (cause) {
+        prepared.abandon('Persistence unavailable');
+        throw cause;
+      }
       return {
         method: 'approval/resolve',
         ok: true,
@@ -220,10 +248,19 @@ export class AppServer implements AppServerClient {
   }
 
   private async closeAfterProducerBarrier(): Promise<void> {
+    const failures: unknown[] = [];
+
     try {
-      await this.threadManager.shutdown();
-      await Promise.all([...this.eventTails.values()]);
-      await this.threadJournal?.close();
+      await settleCloseStage([this.threadManager.shutdown()], failures);
+      await settleCloseStage([...this.eventTails.values()], failures);
+      await settleCloseStage(
+        this.threadJournal ? [Promise.resolve().then(() => this.threadJournal!.close())] : [],
+        failures
+      );
+
+      if (failures.length > 0) {
+        throw new AggregateError(failures, 'AppServer close failed');
+      }
     } finally {
       this.lifecycle = 'closed';
     }
@@ -237,13 +274,12 @@ export class AppServer implements AppServerClient {
     const threadId = event.type === 'thread/started' ? event.thread.id : event.threadId;
     const previous = this.eventTails.get(threadId) ?? Promise.resolve();
     const next = previous.then(async () => {
-      const failure = this.eventFailures.get(threadId);
-      if (failure) throw failure;
+      if (this.persistenceFailure) throw this.persistenceFailure;
       try {
         await this.commitAndPublish(event);
       } catch (cause) {
         const failure = new ThreadPersistenceOperationError(threadId, cause);
-        this.eventFailures.set(threadId, failure);
+        this.tripPersistenceFailure(failure);
         throw failure;
       }
     });
@@ -256,6 +292,18 @@ export class AppServer implements AppServerClient {
 
   private async settleThread(threadId: string): Promise<void> {
     await (this.eventOperations.get(threadId) ?? Promise.resolve());
+    if (this.persistenceFailure) throw this.persistenceFailure;
+  }
+
+  private async settleAllThreads(): Promise<void> {
+    await Promise.all([...this.eventOperations.values()]);
+    if (this.persistenceFailure) throw this.persistenceFailure;
+  }
+
+  private tripPersistenceFailure(failure: ThreadPersistenceOperationError): void {
+    if (this.persistenceFailure) return;
+    this.persistenceFailure = failure;
+    this.threadManager.failStop();
   }
 
   private async commitAndPublish(event: ThreadManagerEvent): Promise<void> {
@@ -354,6 +402,23 @@ class KnownThreadJournalCorruptionError extends Error {
   constructor(readonly failure: ThreadPersistenceFailure) {
     super(failure.message);
   }
+}
+
+async function settleCloseStage(
+  tasks: readonly Promise<unknown>[],
+  failures: unknown[]
+): Promise<void> {
+  const results = await Promise.allSettled(tasks);
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      failures.push(...flattenAggregateError(result.reason));
+    }
+  }
+}
+
+function flattenAggregateError(cause: unknown): readonly unknown[] {
+  if (!(cause instanceof AggregateError)) return [cause];
+  return cause.errors.flatMap((nested) => flattenAggregateError(nested));
 }
 
 class ThreadPersistenceOperationError extends Error {

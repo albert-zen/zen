@@ -37,6 +37,7 @@ export type {
   HookBlockDecision,
   HookDecision,
   HookHandlers,
+  HookItemAppender,
   HookItemDecision,
   HookName,
   HookReplaceDecision,

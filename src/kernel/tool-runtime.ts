@@ -4,6 +4,7 @@ import {
   consumeAbortableAsyncIterator,
   isAsyncIteratorAbortedError,
 } from './abortable-async-iterator.js';
+import { assertEffectPermitted } from './effect-permission.js';
 
 export type ToolCallPayload = {
   readonly id: string;
@@ -123,83 +124,81 @@ export async function appendToolExecutionItems(
     started.push(startedItem);
 
     try {
-      await consumeAbortableAsyncIterator(
-        input.toolRuntime.execute(call, {
-          threadId: input.threadId ?? '',
-          runId: input.assistantItem.runId,
-          turnId: input.assistantItem.turnId,
-          signal: input.signal,
-          assistantItem: input.assistantItem,
-          startedItem,
-        }),
-        input.signal,
-        async (event) => {
-          if (event.type === 'approval.requested') {
-            await appendRequired(appendItem, {
-              type: 'approval.requested',
-              runId: input.assistantItem.runId,
-              turnId: input.assistantItem.turnId,
-              causeId: startedItem.id,
-              targetId: startedItem.id,
-              visibility: 'trace',
-              payload: approvalRequestPayload(event.request),
-            });
-          }
+      assertEffectPermitted(input.signal);
+      const events = input.toolRuntime.execute(call, {
+        threadId: input.threadId ?? '',
+        runId: input.assistantItem.runId,
+        turnId: input.assistantItem.turnId,
+        signal: input.signal,
+        assistantItem: input.assistantItem,
+        startedItem,
+      });
+      await consumeAbortableAsyncIterator(events, input.signal, async (event) => {
+        if (event.type === 'approval.requested') {
+          await appendRequired(appendItem, {
+            type: 'approval.requested',
+            runId: input.assistantItem.runId,
+            turnId: input.assistantItem.turnId,
+            causeId: startedItem.id,
+            targetId: startedItem.id,
+            visibility: 'trace',
+            payload: approvalRequestPayload(event.request),
+          });
+        }
 
-          if (event.type === 'approval.resolved') {
-            await appendRequired(appendItem, {
-              type: 'approval.resolved',
-              runId: input.assistantItem.runId,
-              turnId: input.assistantItem.turnId,
-              causeId: startedItem.id,
-              targetId: startedItem.id,
-              visibility: 'trace',
-              payload: {
-                ...approvalRequestPayload(event.request),
-                decision: event.decision.type,
-                ...(event.decision.reason === undefined ? {} : { reason: event.decision.reason }),
-              },
-            });
-          }
+        if (event.type === 'approval.resolved') {
+          await appendRequired(appendItem, {
+            type: 'approval.resolved',
+            runId: input.assistantItem.runId,
+            turnId: input.assistantItem.turnId,
+            causeId: startedItem.id,
+            targetId: startedItem.id,
+            visibility: 'trace',
+            payload: {
+              ...approvalRequestPayload(event.request),
+              decision: event.decision.type,
+              ...(event.decision.reason === undefined ? {} : { reason: event.decision.reason }),
+            },
+          });
+        }
 
-          if (event.type === 'output.delta') {
-            await appendItem({
-              type: 'tool.output.delta',
+        if (event.type === 'output.delta') {
+          await appendItem({
+            type: 'tool.output.delta',
+            runId: input.assistantItem.runId,
+            turnId: input.assistantItem.turnId,
+            causeId: startedItem.id,
+            targetId: startedItem.id,
+            visibility: 'trace',
+            payload: {
+              ...createToolCallPayload(call),
+              delta: event.delta,
+              index: deltaIndex++,
+            },
+          });
+        }
+
+        if (event.type === 'result.completed') {
+          completed.push(
+            await appendRequired(appendItem, {
+              type: 'tool.result.completed',
               runId: input.assistantItem.runId,
               turnId: input.assistantItem.turnId,
               causeId: startedItem.id,
               targetId: startedItem.id,
-              visibility: 'trace',
               payload: {
                 ...createToolCallPayload(call),
-                delta: event.delta,
-                index: deltaIndex++,
+                content: event.content,
               },
-            });
-          }
-
-          if (event.type === 'result.completed') {
-            completed.push(
-              await appendRequired(appendItem, {
-                type: 'tool.result.completed',
-                runId: input.assistantItem.runId,
-                turnId: input.assistantItem.turnId,
-                causeId: startedItem.id,
-                targetId: startedItem.id,
-                payload: {
-                  ...createToolCallPayload(call),
-                  content: event.content,
-                },
-              })
-            );
-          }
-
-          if (event.type === 'error') {
-            errors.push(await appendToolError(appendItem, startedItem, call, event.error));
-            return false;
-          }
+            })
+          );
         }
-      );
+
+        if (event.type === 'error') {
+          errors.push(await appendToolError(appendItem, startedItem, call, event.error));
+          return false;
+        }
+      });
     } catch (caughtError) {
       if (isAsyncIteratorAbortedError(caughtError)) throw caughtError;
       errors.push(await appendToolError(appendItem, startedItem, call, caughtError));

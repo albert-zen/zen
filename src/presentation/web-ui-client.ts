@@ -50,6 +50,7 @@ export class WebUiClient {
   private connection: WebUiConnectionState;
   private snapshot: WebUiClientSnapshot;
   private lifecycleGeneration = 0;
+  private snapshotHandoff?: SnapshotHandoff;
 
   constructor(options: WebUiClientOptions) {
     this.client = options.client;
@@ -77,8 +78,11 @@ export class WebUiClient {
     const generation = ++this.lifecycleGeneration;
     this.disconnectFromServerOnly();
     this.setConnection({ status: 'connecting' });
+    const handoff = this.beginSnapshotHandoff(generation);
     this.unsubscribeFromServer = this.client.subscribe((notification) => {
-      if (generation === this.lifecycleGeneration) this.applyNotification(notification);
+      if (generation === this.lifecycleGeneration) {
+        this.receiveNotification(notification);
+      }
     });
 
     try {
@@ -89,10 +93,11 @@ export class WebUiClient {
           : { method: 'thread/start' },
         options.threadId ? 'thread/read' : 'thread/start'
       );
-      const projectionChanged = this.projection.replaceSnapshot(thread);
-      const connectionChanged = this.updateConnection({ status: 'connected' });
+      const projectionChanged = this.installSnapshot(thread, handoff);
+      const connectionChanged = this.deriveConnectionFromProjection();
       if (projectionChanged || connectionChanged) this.refreshSnapshot();
     } catch (cause) {
+      this.cancelSnapshotHandoff(handoff);
       if (generation === this.lifecycleGeneration) this.fail(cause);
       throw cause;
     }
@@ -100,6 +105,7 @@ export class WebUiClient {
 
   disconnect(): void {
     this.lifecycleGeneration += 1;
+    this.snapshotHandoff = undefined;
     this.disconnectFromServerOnly();
     this.setConnection({ status: 'disconnected' });
   }
@@ -110,13 +116,21 @@ export class WebUiClient {
   }
 
   async startThread(): Promise<void> {
-    const thread = await this.requestThread(
-      this.lifecycleGeneration,
-      { method: 'thread/start' },
-      'thread/start'
-    );
-    if (this.projection.replaceSnapshot(thread)) {
-      this.refreshSnapshot();
+    const handoff = this.beginSnapshotHandoff(this.lifecycleGeneration);
+    try {
+      const thread = await this.requestThread(
+        this.lifecycleGeneration,
+        { method: 'thread/start' },
+        'thread/start'
+      );
+      const projectionChanged = this.installSnapshot(thread, handoff);
+      const connectionChanged = this.deriveConnectionFromProjection();
+      if (projectionChanged || connectionChanged) {
+        this.refreshSnapshot();
+      }
+    } catch (cause) {
+      this.cancelSnapshotHandoff(handoff);
+      throw cause;
     }
   }
 
@@ -135,13 +149,21 @@ export class WebUiClient {
   }
 
   async resumeThread(threadId: string): Promise<void> {
-    const thread = await this.requestThread(
-      this.lifecycleGeneration,
-      { method: 'thread/read', params: { threadId } },
-      'thread/read'
-    );
-    if (this.projection.replaceSnapshot(thread)) {
-      this.refreshSnapshot();
+    const handoff = this.beginSnapshotHandoff(this.lifecycleGeneration);
+    try {
+      const thread = await this.requestThread(
+        this.lifecycleGeneration,
+        { method: 'thread/read', params: { threadId } },
+        'thread/read'
+      );
+      const projectionChanged = this.installSnapshot(thread, handoff);
+      const connectionChanged = this.deriveConnectionFromProjection();
+      if (projectionChanged || connectionChanged) {
+        this.refreshSnapshot();
+      }
+    } catch (cause) {
+      this.cancelSnapshotHandoff(handoff);
+      throw cause;
     }
   }
 
@@ -233,16 +255,64 @@ export class WebUiClient {
   }
 
   private applyNotification(notification: AppServerNotification): void {
+    const previousThreadId = this.projection.getSnapshot().currentThread?.id;
     const projectionChanged = this.projection.apply(notification);
     const connectionChanged =
-      notification.type === 'turn/started'
-        ? this.updateConnection({ status: 'running', message: undefined })
-        : notification.type === 'turn/completed'
-          ? this.updateConnection({ status: 'connected', message: undefined })
-          : notification.type === 'turn/failed'
-            ? this.updateConnection({ status: 'failed', message: notification.error.message })
-            : false;
+      notification.type === 'sync/reset' ||
+      (notification.type === 'thread/started' && notification.thread.id !== previousThreadId)
+        ? this.deriveConnectionFromProjection()
+        : notification.type === 'turn/started'
+          ? this.updateConnection({ status: 'running', message: undefined })
+          : notification.type === 'turn/completed'
+            ? this.updateConnection({ status: 'connected', message: undefined })
+            : notification.type === 'turn/failed'
+              ? this.updateConnection({ status: 'failed', message: notification.error.message })
+              : false;
     if (projectionChanged || connectionChanged) this.refreshSnapshot();
+  }
+
+  private deriveConnectionFromProjection(): boolean {
+    const thread = this.projection.getSnapshot().currentThread;
+    if (!thread || thread.status === 'idle') {
+      return this.updateConnection({ status: 'connected', message: undefined });
+    }
+    if (thread.status === 'running') {
+      return this.updateConnection({ status: 'running', message: undefined });
+    }
+    return this.updateConnection({
+      status: 'failed',
+      message: readThreadFailureMessage(thread),
+    });
+  }
+
+  private beginSnapshotHandoff(generation: number): SnapshotHandoff {
+    const handoff = { generation, notifications: [] } satisfies SnapshotHandoff;
+    this.snapshotHandoff = handoff;
+    return handoff;
+  }
+
+  private receiveNotification(notification: AppServerNotification): void {
+    if (this.snapshotHandoff) {
+      this.snapshotHandoff.notifications.push(notification);
+      return;
+    }
+    this.applyNotification(notification);
+  }
+
+  private installSnapshot(snapshot: ThreadSnapshot, handoff: SnapshotHandoff): boolean {
+    if (this.snapshotHandoff !== handoff || handoff.generation !== this.lifecycleGeneration) {
+      throw new WebUiLifecycleCanceledError();
+    }
+    let changed = this.projection.replaceSnapshot(snapshot);
+    this.snapshotHandoff = undefined;
+    for (const notification of handoff.notifications) {
+      changed = this.projection.apply(notification) || changed;
+    }
+    return changed;
+  }
+
+  private cancelSnapshotHandoff(handoff: SnapshotHandoff): void {
+    if (this.snapshotHandoff === handoff) this.snapshotHandoff = undefined;
   }
 
   private fail(cause: unknown): void {
@@ -354,14 +424,23 @@ export class BrowserAppServerTransportClient implements AppServerClient {
       active: true,
       generation: 0,
       gate: createBrowserSubscriptionGate(),
+      resetVersion: 0,
+      installedResetVersion: 0,
+      pendingNotifications: [],
     };
     this.subscriptions.add(subscription);
 
     events.onopen = () => {
       if (!subscription.active) return;
-      subscription.phase = 'open';
-      subscription.gate.resolve();
-      this.onSubscriptionStatus?.('connected');
+      if (subscription.phase === 'connecting') {
+        subscription.phase = 'open';
+        subscription.gate.resolve();
+        this.onSubscriptionStatus?.('connected');
+        return;
+      }
+      if (subscription.phase === 'reconnecting') {
+        subscription.phase = 'recovering';
+      }
     };
     events.onerror = (event) => {
       if (!subscription.active) return;
@@ -369,11 +448,29 @@ export class BrowserAppServerTransportClient implements AppServerClient {
       subscription.generation += 1;
       subscription.phase = 'reconnecting';
       subscription.gate = createBrowserSubscriptionGate();
+      if (!hasBrowserResetDebt(subscription)) subscription.pendingNotifications = [];
       this.onSubscriptionStatus?.('failed', event);
     };
     events.addEventListener('notification', (event) => {
-      if (!subscription.active || subscription.phase !== 'open') return;
-      listener(JSON.parse(event.data) as AppServerNotification);
+      if (!subscription.active) return;
+      const notification = JSON.parse(event.data) as AppServerNotification;
+      if (subscription.phase === 'recovering') {
+        if (hasBrowserResetDebt(subscription)) {
+          subscription.pendingNotifications.push(notification);
+        } else {
+          listener(notification);
+        }
+        return;
+      }
+      if (subscription.phase === 'open') listener(notification);
+    });
+    events.addEventListener('reset', () => {
+      if (!subscription.active) return;
+      subscription.resetVersion += 1;
+    });
+    events.addEventListener('sync', () => {
+      if (!subscription.active || subscription.phase !== 'recovering') return;
+      void this.completeRecovery(subscription, listener);
     });
 
     return () => {
@@ -386,6 +483,73 @@ export class BrowserAppServerTransportClient implements AppServerClient {
       events.close();
       this.onSubscriptionStatus?.('disconnected');
     };
+  }
+
+  private async completeRecovery(
+    subscription: BrowserSubscriptionState,
+    listener: AppServerNotificationListener
+  ): Promise<void> {
+    const generation = subscription.generation;
+    const gate = subscription.gate;
+    const resetVersion = subscription.resetVersion;
+    try {
+      let resetThreads: readonly ThreadSnapshot[] | undefined;
+      if (resetVersion > subscription.installedResetVersion) {
+        resetThreads = await this.readRecoverySnapshots();
+      }
+      if (
+        !subscription.active ||
+        subscription.phase !== 'recovering' ||
+        subscription.generation !== generation ||
+        subscription.gate !== gate ||
+        subscription.resetVersion !== resetVersion
+      ) {
+        return;
+      }
+      if (resetThreads) listener({ type: 'sync/reset', threads: resetThreads });
+      if (
+        !subscription.active ||
+        subscription.phase !== 'recovering' ||
+        subscription.generation !== generation ||
+        subscription.gate !== gate ||
+        subscription.resetVersion !== resetVersion
+      ) {
+        return;
+      }
+      for (const notification of subscription.pendingNotifications) listener(notification);
+      subscription.pendingNotifications = [];
+      if (resetThreads) subscription.installedResetVersion = resetVersion;
+      if (hasBrowserResetDebt(subscription)) return;
+      subscription.phase = 'open';
+      gate.resolve();
+      this.onSubscriptionStatus?.('connected');
+    } catch (cause) {
+      if (subscription.active && subscription.generation === generation) {
+        subscription.phase = 'failed';
+        gate.reject(new Error(`Reconnect resnapshot failed: ${readErrorMessage(cause)}`));
+        this.onSubscriptionStatus?.('failed', cause);
+      }
+    }
+  }
+
+  private async readRecoverySnapshots(): Promise<readonly ThreadSnapshot[]> {
+    const response = await this.fetchImpl('/request', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ method: 'thread/list' }),
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${body}`);
+    }
+    const result = JSON.parse(body) as AppServerResponse;
+    if (!result.ok || result.method !== 'thread/list') {
+      throw new Error(result.ok ? `Unexpected ${result.method}` : result.error.message);
+    }
+    return result.result.threads;
   }
 
   private async withSubscriptionsReady<T>(operation: () => Promise<T>): Promise<T> {
@@ -413,7 +577,8 @@ export class BrowserAppServerTransportClient implements AppServerClient {
   }
 }
 
-type BrowserSubscriptionPhase = 'connecting' | 'open' | 'reconnecting' | 'closed';
+type BrowserSubscriptionPhase =
+  'connecting' | 'open' | 'reconnecting' | 'recovering' | 'failed' | 'closed';
 
 type BrowserSubscriptionGate = {
   readonly promise: Promise<void>;
@@ -426,6 +591,18 @@ type BrowserSubscriptionState = {
   active: boolean;
   generation: number;
   gate: BrowserSubscriptionGate;
+  resetVersion: number;
+  installedResetVersion: number;
+  pendingNotifications: AppServerNotification[];
+};
+
+function hasBrowserResetDebt(subscription: BrowserSubscriptionState): boolean {
+  return subscription.resetVersion > subscription.installedResetVersion;
+}
+
+type SnapshotHandoff = {
+  readonly generation: number;
+  readonly notifications: AppServerNotification[];
 };
 
 function createBrowserSubscriptionGate(): BrowserSubscriptionGate {
@@ -459,4 +636,14 @@ function readErrorMessage(cause: unknown): string {
 
 function sameConnection(left: WebUiConnectionState, right: WebUiConnectionState): boolean {
   return left.status === right.status && left.mode === right.mode && left.message === right.message;
+}
+
+function readThreadFailureMessage(thread: NonNullable<WebUiState['currentThread']>): string {
+  const error = [...thread.turns].reverse().find((turn) => turn.status === 'failed')?.error;
+  if (typeof error === 'string' && error.length > 0) return error;
+  if (typeof error === 'object' && error !== null && !Array.isArray(error)) {
+    const message = error.message;
+    if (typeof message === 'string' && message.length > 0) return message;
+  }
+  return error === undefined ? 'Thread failed' : JSON.stringify(error);
 }

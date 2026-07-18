@@ -8,6 +8,54 @@ import {
 } from '../src/presentation/web-ui-state.js';
 
 describe('web ui state projection', () => {
+  it('keeps reset snapshots and duplicate replay notifications idempotent by Item id', () => {
+    const first = item({ id: 'item-1', seq: 1 });
+    const second = item({ id: 'item-2', seq: 2 });
+    const projection = new InteractionProjection({
+      id: 'thread-1',
+      status: 'running',
+      turns: [],
+      items: [first],
+    });
+    projection.apply({
+      type: 'sync/reset',
+      threads: [
+        {
+          id: 'thread-1',
+          status: 'running',
+          turns: [],
+          items: [first],
+        },
+      ],
+    });
+    const replay = {
+      type: 'item/appended' as const,
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: second,
+    };
+    projection.apply(replay);
+    projection.apply(replay);
+
+    expect([...projection.getSnapshot().items].map((entry) => entry.id)).toEqual([
+      'item-1',
+      'item-2',
+    ]);
+  });
+
+  it('clears stale state when an authoritative reset no longer contains the current thread', () => {
+    const projection = new InteractionProjection({
+      id: 'thread-1',
+      status: 'running',
+      turns: [],
+      items: [item({ id: 'stale-item', seq: 1 })],
+    });
+
+    expect(projection.apply({ type: 'sync/reset', threads: [] })).toBe(true);
+    expect(projection.getSnapshot()).toMatchObject({ currentThread: undefined });
+    expect([...projection.getSnapshot().items]).toEqual([]);
+  });
+
   it('caches snapshots and processes 1k/5k ordered appends with constant work and no sequence copies', () => {
     const projection = new InteractionProjection({
       id: 'thread-1',
