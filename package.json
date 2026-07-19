@@ -43,6 +43,7 @@
     "desktop:dist": "npm run desktop:build && electron-builder --publish never",
     "desktop:inspect": "node scripts/inspect-desktop-package.mjs",
     "desktop:pack": "npm run desktop:build && electron-builder --dir",
+    "desktop:verify-render": "node scripts/verify-desktop-render.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"desktop/**/*.ts\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"desktop/**/*.ts\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
     "lint": "eslint .",

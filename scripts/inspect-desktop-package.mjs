@@ -22,6 +22,7 @@ const RETIRED_MODULES = [
   'tui-legacy-client',
   'wait-graph',
 ];
+const REQUIRED_ENTRIES = ['desktop-dist/main.js', 'desktop-dist/preload.js', 'web-dist/index.html'];
 
 export function findForbiddenAsarEntries(entries) {
   return entries.filter((entry) => {
@@ -36,6 +37,11 @@ export function findForbiddenAsarEntries(entries) {
   });
 }
 
+export function findMissingRequiredAsarEntries(entries) {
+  const normalized = new Set(entries.map(normalizeEntry));
+  return REQUIRED_ENTRIES.filter((entry) => !normalized.has(entry));
+}
+
 export async function inspectDesktopPackage(asarPath) {
   const resolved = resolve(asarPath);
   await access(resolved);
@@ -44,7 +50,15 @@ export async function inspectDesktopPackage(asarPath) {
   if (forbidden.length > 0) {
     throw new Error(`Forbidden desktop package entries:\n${forbidden.join('\n')}`);
   }
+  const missing = findMissingRequiredAsarEntries(entries);
+  if (missing.length > 0) {
+    throw new Error(`Missing desktop package entries:\n${missing.join('\n')}`);
+  }
   return { entries: entries.length, asarPath: resolved };
+}
+
+function normalizeEntry(entry) {
+  return entry.replaceAll('\\', '/').replace(/^\/+/, '').toLowerCase();
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

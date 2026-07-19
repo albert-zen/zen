@@ -1,5 +1,28 @@
 # Agent App Evidence
 
+## Packaged Render Hotfix (2026-07-19)
+
+- The prior packaged smoke was insufficient: it proved only that the Electron
+  process started and exited. It did not inspect the rendered document. The
+  shipped static host therefore returned `Not found` without failing the gate.
+- Root cause: Vite used the repository root with `web/index.html` as its input,
+  producing `web-dist/web/index.html`, while the Electron static host correctly
+  required `web-dist/index.html` as the SPA entry document.
+- Fix: the Vite application root is now `web/`, and the generated production
+  entry is `web-dist/index.html`. Package inspection fails unless the root Web
+  document and both Electron entrypoints exist in ASAR.
+- Regression gates: static-host/package tests passed `2` files / `7` tests;
+  Web TypeScript and ESLint passed; a clean unsigned NSIS build completed; and
+  the final ASAR passed all hygiene and required-entry checks with `127`
+  entries.
+- Real packaged UI verification now launches the exact built executable through
+  Playwright, waits for `Zen control plane`, requires Project/Thread/Create
+  Project content, rejects a `Not found` body, checks horizontal overflow, and
+  captures
+  `docs/implementation/artifacts/agent-app/agent-app-packaged-fixed.png`.
+  Final verification loaded `http://127.0.0.1:<ephemeral>/` with title
+  `Zen Agent` and viewport/scroll width `1267/1267`.
+
 ## APP-010 Final Blocker Close (2026-07-19)
 
 - Restart recovery: file-backed close/reopen tests prove one durably activated

@@ -1,5 +1,6 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
 import { consumeAppServerClientHandoff, createAgentAppHttpProxy } from '#zen/node';
@@ -8,16 +9,14 @@ const defaultProxyTarget = process.env.ZEN_APP_SERVER_URL ?? 'http://127.0.0.1:3
 
 export default defineConfig(async ({ command }) => {
   const proxy = command === 'serve' ? await readAuthenticatedProxy() : undefined;
+  const workspaceRoot = process.cwd();
 
   return {
-    root: process.cwd(),
+    root: resolve(workspaceRoot, 'web'),
     plugins: [react(), tailwindcss()],
     build: {
-      outDir: 'web-dist',
+      outDir: resolve(workspaceRoot, 'web-dist'),
       emptyOutDir: true,
-      rollupOptions: {
-        input: 'web/index.html',
-      },
     },
     server: {
       cors: false,

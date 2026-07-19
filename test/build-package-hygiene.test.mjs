@@ -4,7 +4,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { cleanGeneratedOutputs } from '../scripts/clean-generated-outputs.mjs';
-import { findForbiddenAsarEntries } from '../scripts/inspect-desktop-package.mjs';
+import {
+  findForbiddenAsarEntries,
+  findMissingRequiredAsarEntries,
+} from '../scripts/inspect-desktop-package.mjs';
 
 const roots = [];
 
@@ -58,6 +61,13 @@ describe('production build and package hygiene', () => {
     ];
 
     expect(findForbiddenAsarEntries([...forbidden, ...required])).toEqual(forbidden);
+  });
+
+  it('requires the desktop entrypoints and root web document', () => {
+    const required = ['/desktop-dist/main.js', '/desktop-dist/preload.js', '/web-dist/index.html'];
+
+    expect(findMissingRequiredAsarEntries(required)).toEqual([]);
+    expect(findMissingRequiredAsarEntries(required.slice(0, 2))).toEqual(['web-dist/index.html']);
   });
 });
 
