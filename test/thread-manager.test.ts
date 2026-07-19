@@ -1087,7 +1087,7 @@ describe('ThreadManager', () => {
     ]);
   });
 
-  it('repairs queued and running turns from items while ignoring snapshot lifecycle fields', () => {
+  it('preserves durable queued turns and repairs only stale running turns', () => {
     const manager = new ThreadManager({
       generateItemId: sequence('repair-item'),
       clock: () => 2000,
@@ -1134,23 +1134,19 @@ describe('ThreadManager', () => {
 
     const snapshot = manager.readThread('thread-1');
 
-    expect(snapshot.status).toBe('failed');
+    expect(snapshot.status).toBe('running');
     expect(snapshot.turns).toEqual([
       {
         id: 'turn-1',
         runId: 'run-1',
-        status: 'failed',
-        itemIds: ['item-1', 'repair-item-1'],
-        error: {
-          code: 'TURN_REPAIRED_ON_STARTUP',
-          message: 'Turn was still in progress when the previous process stopped',
-        },
+        status: 'queued',
+        itemIds: ['item-1'],
       },
       {
         id: 'turn-2',
         runId: 'run-2',
         status: 'failed',
-        itemIds: ['item-2', 'item-3', 'repair-item-2'],
+        itemIds: ['item-2', 'item-3', 'repair-item-1'],
         error: {
           code: 'TURN_REPAIRED_ON_STARTUP',
           message: 'Turn was still in progress when the previous process stopped',
@@ -1161,7 +1157,7 @@ describe('ThreadManager', () => {
       snapshot.items
         .filter((item) => item.type === 'turn.repaired')
         .map((item) => readPayloadProperty(item.payload, 'previousStatus'))
-    ).toEqual(['queued', 'inProgress']);
+    ).toEqual(['inProgress']);
   });
 
   it('derives persisted failure messages from lifecycle facts instead of stale turn snapshots', () => {

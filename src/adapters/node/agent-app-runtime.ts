@@ -294,8 +294,17 @@ class NodeProjectRuntime implements ProjectRuntime {
           }),
         });
       }
+      if (request.method === 'turn/start') {
+        this.coordinator.assertThreadAcceptsNewTurn(
+          this.state.current.id,
+          requiredText(params.threadId, 'threadId')
+        );
+        return (await this.appServer.request({
+          method: request.method,
+          params,
+        })) as AgentAppResponse;
+      }
       if (
-        request.method === 'turn/start' ||
         request.method === 'turn/interrupt' ||
         request.method === 'turn/retry' ||
         request.method === 'approval/resolve'
@@ -344,6 +353,7 @@ class NodeProjectRuntime implements ProjectRuntime {
     }
     const policy = context.executionProject.policy;
     const source = context.sourceThreadId;
+    this.coordinator.assertThreadExecutable(context.projectId, source);
     const suppliedSource = request.params.sourceThreadId;
     if (suppliedSource !== undefined && suppliedSource !== source) {
       throw new Error('Agent source thread authority mismatch');
@@ -505,7 +515,8 @@ function runtimeErrorCode(cause: unknown): import('../../product/index.js').Agen
     message.includes('policy') ||
     message.includes('permitted') ||
     message.includes('authority mismatch') ||
-    message.startsWith('Agents cannot')
+    message.startsWith('Agents cannot') ||
+    message.includes('thread is canceled')
   )
     return 'POLICY_DENIED';
   if (message.includes('journal') || message.includes('Persistence')) return 'PERSISTENCE_FAILURE';

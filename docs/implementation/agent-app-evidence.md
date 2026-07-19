@@ -1,5 +1,44 @@
 # Agent App Evidence
 
+## APP-010 Final Blocker Close (2026-07-19)
+
+- Restart recovery: file-backed close/reopen tests prove one durably activated
+  message Turn and one resolved-wait continuation are each re-enqueued exactly
+  once by a fresh Coordinator/ThreadManager. Durable queued Turns survive;
+  only stale `inProgress` Turns receive interruption repair.
+- Cancellation and handoff: cancellation runs no Executor while the projection
+  remains canceled. A later authorized UI Turn or Agent handoff persists normal
+  command/Turn facts, projects queued before execution, and resumes the same
+  durable conversation. Canceled Agent sources are denied. A crash between the
+  outer handoff command and nested message is reconciled by fresh journals,
+  command store, Coordinator, and Server with one nested message, one Executor,
+  and one outer result.
+- Idempotency: identical concurrent request payloads coalesce; a different
+  payload using the same project/method/key conflicts before sharing the
+  in-flight Promise.
+- Product cleanup: obsolete TUI/demo README commands and the unreachable demo
+  runtime/test were removed. Production builds first clean only fixed generated
+  directories, preserving runtime data; the clean desktop ASAR has `128`
+  entries and no denied TUI/session/demo/test/journal/secret output. Executor
+  dependencies (`provider-runtime`, local tools, production composition, and
+  internal App Server protocol modules) remain packaged as required.
+- Functional gates: blocker/build hygiene/module-boundary tests passed `3`
+  files / `13` tests; the focused durability/scheduler/ledger/coordinator suite
+  passed `8` / `57` after replacing one obsolete queued-Turn repair assertion;
+  real HTTP/SSE/reconnect/backpressure passed `4` / `28`; desktop
+  origin/lifecycle tests passed `5` / `13`; and the three real Playwright
+  Project/Thread workflows passed. TypeScript passed and the clean desktop pack
+  rebuilt successfully.
+- Packaged usability: one hidden isolated-data auto-quit launch of
+  `release/win-unpacked/Zen Agent.exe` exited `0` as owned PID `36344`; the
+  exact packaged executable and worker-attributable Node/Electron/Zen Agent
+  censuses are zero afterward. No NSIS rebuild was needed.
+- Per the final usability-first direction, coverage thresholds, full
+  `npm run check`, and audit were not rerun. An already-running product coverage
+  attempt had `377/378` tests pass and stopped on the pre-existing
+  `LocalToolRuntime` five-second shell timeout; no timeout, threshold, skip, or
+  retry was added.
+
 ## APP-010 Consolidated Remediation
 
 - Current state: **Complete**. The authoritative model is App Server-first:
@@ -19,14 +58,14 @@
 | --- | ------------------ | --------------------------------------------------------------------------------------------------------- |
 | 1   | Accepted, narrowed | Scheduler now governs short-lived Turn Executors; idle Threads and durable waits hold zero slots.         |
 | 2   | Accepted           | Transitive ancestor control is denied across send, interrupt, cancel, archive, and handoff.               |
-| 3   | Accepted           | Archive durably fences queued/running execution, preserves readable history, and disables UI writes.     |
+| 3   | Accepted           | Archive durably fences queued/running execution, preserves readable history, and disables UI writes.      |
 | 4   | Accepted           | Thread/Turn journal barriers precede coordination references, with injected failure/restart coverage.     |
 | 5   | Accepted           | A durable project-scoped command/result ledger replays completion and reports pending recovery safely.    |
 | 6   | Accepted           | Desktop bearer injection requires exact Host/Origin/fetch metadata, method, and content type.             |
 | 7   | Accepted, narrowed | Immutable root plus next-Turn runtime snapshots replace runtime/UI divergence without resident Agents.    |
 | 8   | Accepted           | Project identity stores absolute host-real paths with Windows case normalization before collision checks. |
 | 9   | Accepted           | Retired TUI/bin/session/projectless Node client and obsolete in-memory WaitGraph surfaces were removed.   |
-| 10  | Accepted           | SSE subscribers use bounded buffering and isolate/disconnect slow consumers.                             |
+| 10  | Accepted           | SSE subscribers use bounded buffering and isolate/disconnect slow consumers.                              |
 | 11  | Accepted           | Server close attempts every runtime open/close and reports one aggregate failure.                         |
 | 12  | Accepted           | Production defaults use OS app-data/state; repository `.zen/` is ignored.                                 |
 

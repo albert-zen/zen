@@ -708,9 +708,7 @@ export class ThreadManager {
     };
 
     for (const turn of this.snapshotThread(thread).turns) {
-      if (turn.status !== 'inProgress' && turn.status !== 'queued') {
-        continue;
-      }
+      if (turn.status !== 'inProgress') continue;
 
       thread.itemList.append({
         type: 'turn.repaired',

@@ -29,8 +29,8 @@
   },
   "scripts": {
     "app-server": "npm run build && node dist/adapters/node/app-server-cli.js",
-    "build": "tsc -p tsconfig.build.json",
-    "build:acceptance": "tsc -p tsconfig.acceptance.json",
+    "build": "node scripts/clean-generated-outputs.mjs production && tsc -p tsconfig.build.json",
+    "build:acceptance": "node scripts/clean-generated-outputs.mjs acceptance && tsc -p tsconfig.acceptance.json",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run typecheck:web && tsc -p tsconfig.desktop.json --noEmit && npm test && npm run build && npm run build:acceptance && npm run web:build && tsc -p tsconfig.desktop.json && npm run coverage && npm run e2e",
     "coverage": "npm run coverage:kernel && npm run coverage:product && npm run coverage:presentation",
     "coverage:kernel": "node scripts/run-coverage.mjs kernel",
@@ -41,6 +41,7 @@
     "desktop:build": "npm run build && npm run web:build && tsc -p tsconfig.desktop.json",
     "desktop:dev": "npm run desktop:build && electron .",
     "desktop:dist": "npm run desktop:build && electron-builder --publish never",
+    "desktop:inspect": "node scripts/inspect-desktop-package.mjs",
     "desktop:pack": "npm run desktop:build && electron-builder --dir",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"desktop/**/*.ts\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"desktop/**/*.ts\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
@@ -57,6 +58,7 @@
     "zen-web": "dist/adapters/node/web-dev-cli.js"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/vite": "^4.3.0",
@@ -99,7 +101,8 @@
       "dist/**",
       "web-dist/**",
       "desktop-dist/**",
-      "package.json"
+      "package.json",
+      "!node_modules/**"
     ],
     "win": {
       "target": [

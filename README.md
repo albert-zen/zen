@@ -3,7 +3,7 @@
 Zen is an item-first agent kernel and a local multi-agent Project/Thread control plane.
 
 The core design keeps `ItemList` as the source of truth. The agent loop appends
-items, and product layers such as the App Server, TUI, Web UI, durable store,
+items, and product layers such as the Agent App Server, Web UI, durable store,
 model provider adapter, and shell runtime project from that item history.
 
 ## Status
@@ -14,9 +14,8 @@ Zen currently includes:
 - OpenAI-compatible model provider support
 - shell-first local `ToolRuntime`
 - durable local thread store
-- App Server request/notification protocol
-- local HTTP/SSE App Server transport
-- terminal UI
+- project-scoped Agent App request/notification protocol
+- local HTTP/SSE Agent App transport
 - static Web UI client
 - Project/Thread coordination with durable local journals, policy limits, and agent thread tools
 - thin Electron host for the same HTTP/SSE App Server protocol
@@ -29,12 +28,6 @@ Install dependencies:
 
 ```powershell
 npm ci
-```
-
-Run the TUI:
-
-```powershell
-npm run tui
 ```
 
 Run the Web product with its trusted same-origin proxy:
@@ -83,10 +76,11 @@ npm run desktop:pack
 development artifacts and are unsigned; publishing is explicitly disabled, so
 release signing and updates are not configured in this wave.
 
-Local project metadata and coordination journals live under the application
-data root (`.zen` for the standalone CLI; Electron's user-data location for the
-desktop app). The browser renderer receives no App Server capability and uses
-only same-origin `/request` and `/events` routes.
+Local project metadata and coordination journals live under the OS application
+data/state boundary. `ZEN_APP_DATA_ROOT` may override that boundary only with an
+absolute path. Production state never defaults to the repository. The browser
+renderer receives no App Server capability and uses only same-origin `/request`
+and `/events` routes.
 
 The Web browser only calls same-origin `/request` and `/events` routes. The
 Node/Vite process creates and injects the App Server capability; browser code
@@ -165,9 +159,9 @@ npm run web:dev
 ```
 
 Vite atomically claims and deletes the handoff before serving browser traffic.
-A custom Node client can instead pass the result of
-`consumeAppServerClientHandoff(path)` from `dist/app-server-config.js` to
-`HttpAppServerClient`.
+The handoff reader is available to trusted Node hosts as the
+`consumeAppServerClientHandoff` export from `zen-kernel/node`; it is not a
+browser API or a retired projectless client session.
 
 Provided capability mode uses the same secret in the standalone server and a
 trusted Node client or standalone Vite process:

@@ -1,5 +1,5 @@
 import type { Clock, IdGenerator } from '../kernel/index.js';
-import type { ThreadSnapshot } from './app-server-protocol.js';
+import type { JsonValue, ThreadSnapshot } from './app-server-protocol.js';
 import type { ProjectSnapshot } from './project-registry.js';
 import { ProjectManager } from './project-manager.js';
 import {
@@ -10,7 +10,7 @@ import {
   type ProjectCoordinationItemType,
   type ProjectCoordinationJournal,
 } from './project-coordination.js';
-import { ThreadManager, type ThreadManagerObserver } from './thread-manager.js';
+import { ThreadManager, type PreparedTurn, type ThreadManagerObserver } from './thread-manager.js';
 
 export type ProjectThreadStatus =
   'queued' | 'running' | 'waiting' | 'blocked' | 'completed' | 'failed' | 'canceled' | 'archived';
@@ -99,6 +99,7 @@ export class ProjectCoordinator {
   private readonly list: ProjectCoordinationList;
   private readonly managers = new Map<string, ThreadManager>();
   private readonly deliveryTails = new Map<string, Promise<void>>();
+  private readonly activatedTurns = new Set<string>();
   private mutationTail: Promise<void> = Promise.resolve();
   private closed = false;
 
@@ -161,6 +162,8 @@ export class ProjectCoordinator {
         payload: { recoveredFromLeaseItemId: grant.id },
       });
     }
+    await this.recoverPendingHandoffs(projectId);
+    this.resumeDurableTurnActivations(projectId);
     for (const wait of this.unresolvedWaits(projectId)) await this.tryWakeWait(project, wait);
     for (const summary of this.listThreadSummaries(projectId)) {
       await this.deliverNext(projectId, summary.threadId);
@@ -277,7 +280,7 @@ export class ProjectCoordinator {
     ) {
       throw new ProjectResourceError('maxQueuedMessages', 'Project maxQueuedMessages exceeded');
     }
-    this.assertThreadUsable(input.projectId, input.sourceThreadId);
+    this.assertThreadExecutable(input.projectId, input.sourceThreadId);
     this.assertThreadUsable(input.projectId, input.targetThreadId);
     const messageId = defaultId();
     const sent = await this.record({
@@ -415,7 +418,7 @@ export class ProjectCoordinator {
     readonly idempotencyKey: string;
   }): Promise<{ readonly handoffItemId: string }> {
     await this.activeProject(input.projectId);
-    this.assertThreadUsable(input.projectId, input.sourceThreadId);
+    this.assertThreadExecutable(input.projectId, input.sourceThreadId);
     this.assertThreadUsable(input.projectId, input.targetThreadId);
     const digest = stableDigest({ type: 'thread.handoff', ...input });
     const existing = this.commandItem(
@@ -458,6 +461,15 @@ export class ProjectCoordinator {
     const result = { handoffItemId: command.id };
     await this.recordCommandResult(command, result);
     return result;
+  }
+
+  private async recoverPendingHandoffs(projectId: string): Promise<void> {
+    const pending = this.list
+      .getItems(projectId)
+      .filter((item) => item.type === 'thread.handoff' && this.commandResult(item) === undefined);
+    for (const command of pending) {
+      await this.completeHandoff(command, readMessageContent(command.payload.content));
+    }
   }
 
   threadSummary(projectId: string, threadId: string): ProjectThreadSummary {
@@ -523,7 +535,7 @@ export class ProjectCoordinator {
   }> {
     return await this.mutate(async () => {
       const project = await this.activeProject(input.projectId);
-      this.assertThreadUsable(input.projectId, input.sourceThreadId);
+      this.assertThreadExecutable(input.projectId, input.sourceThreadId);
       await this.assertWaitWithinLimit(input.projectId, input.targetThreadIds);
       if (
         input.targetThreadIds.length === 0 ||
@@ -624,6 +636,10 @@ export class ProjectCoordinator {
     if (status === 'canceled') throw new Error(`Project thread is canceled: ${threadId}`);
   }
 
+  assertThreadAcceptsNewTurn(projectId: string, threadId: string): void {
+    this.assertThreadUsable(projectId, threadId);
+  }
+
   async recordLifecycle(
     type: Exclude<
       ProjectCoordinationItemType,
@@ -696,7 +712,7 @@ export class ProjectCoordinator {
         prepared.abandon();
         throw cause;
       }
-      void prepared.activate().catch(async (error: unknown) => {
+      this.activatePreparedTurn(projectId, threadId, prepared, async (error: unknown) => {
         await this.record({
           type: 'thread.message.failed',
           projectId,
@@ -714,6 +730,105 @@ export class ProjectCoordinator {
     );
     await next;
     return deliveredItemId;
+  }
+
+  private resumeDurableTurnActivations(projectId: string): void {
+    const items = this.list.getItems(projectId);
+    for (const activation of items.filter((item) => item.type === 'thread.message.activated')) {
+      const threadId = activation.targetThreadId;
+      const turnId = readOptionalString(activation.payload.turnId);
+      const sent = items.find(
+        (item) => item.type === 'thread.message.sent' && item.messageId === activation.messageId
+      );
+      if (!threadId || !turnId || !sent) {
+        throw new Error(`Invalid durable message activation: ${activation.id}`);
+      }
+      this.resumeQueuedTurn(
+        projectId,
+        threadId,
+        turnId,
+        `message:${sent.messageId ?? sent.id}`,
+        {
+          type: 'thread.message',
+          messageId: sent.messageId ?? null,
+          sourceThreadId: sent.sourceThreadId ?? null,
+          content: readMessageContent(sent.payload.content),
+        },
+        async (cause) => {
+          await this.record({
+            type: 'thread.message.failed',
+            projectId,
+            sourceThreadId: sent.sourceThreadId,
+            targetThreadId: threadId,
+            messageId: sent.messageId,
+            causeId: activation.id,
+            payload: { message: readMessage(cause) },
+          });
+        }
+      );
+    }
+    for (const resolution of items.filter((item) => item.type === 'thread.wait.resolved')) {
+      const threadId = resolution.targetThreadId;
+      const turnId = readOptionalString(resolution.payload.continuationTurnId);
+      const waitItemId = resolution.causeId;
+      if (!threadId || !turnId || !waitItemId) {
+        throw new Error(`Invalid durable wait resolution: ${resolution.id}`);
+      }
+      this.resumeQueuedTurn(
+        projectId,
+        threadId,
+        turnId,
+        `wait-continuation:${waitItemId}`,
+        {
+          type: 'thread.wait.continuation',
+          waitItemId,
+          results: readJsonValue(resolution.payload.results, 'wait results'),
+        },
+        async (cause) => {
+          await this.record({
+            type: 'thread.wait.failed',
+            projectId,
+            targetThreadId: threadId,
+            causeId: waitItemId,
+            payload: { reason: readMessage(cause), continuationTurnId: turnId },
+          });
+        }
+      );
+    }
+  }
+
+  private resumeQueuedTurn(
+    projectId: string,
+    threadId: string,
+    turnId: string,
+    commandId: string,
+    input: JsonValue,
+    onFailure: (cause: unknown) => Promise<void>
+  ): void {
+    const manager = this.managerForExisting(projectId);
+    const turn = manager.readThread(threadId).turns.find((candidate) => candidate.id === turnId);
+    if (turn?.status !== 'queued') return;
+    const prepared = manager.prepareTurn({ threadId, commandId, input });
+    if (prepared.turn.id !== turnId) {
+      prepared.abandon();
+      throw new Error(`Durable Turn activation mismatch: ${turnId}`);
+    }
+    this.activatePreparedTurn(projectId, threadId, prepared, onFailure);
+  }
+
+  private activatePreparedTurn(
+    projectId: string,
+    threadId: string,
+    prepared: PreparedTurn,
+    onFailure: (cause: unknown) => Promise<void>
+  ): void {
+    const key = `${projectId}\u0000${threadId}\u0000${prepared.turn.id}`;
+    if (this.activatedTurns.has(key)) {
+      prepared.abandon();
+      return;
+    }
+    this.activatedTurns.add(key);
+    void prepared.activate().catch(onFailure);
   }
 
   private pendingMessages(projectId: string, threadId: string): readonly ProjectCoordinationItem[] {
@@ -898,21 +1013,29 @@ export class ProjectCoordinator {
   private statusFor(projectId: string, threadId: string): ProjectThreadStatus {
     const items = this.list.getItems(projectId).filter((item) => item.targetThreadId === threadId);
     if (items.some((item) => item.type === 'thread.archived')) return 'archived';
-    if (items.some((item) => item.type === 'thread.canceled')) return 'canceled';
-    const last = items.at(-1);
-    if (last?.type === 'thread.execution.settled') {
-      const status = readOptionalString(last.payload.status);
-      if (status === 'completed' || status === 'failed' || status === 'canceled') return status;
+    for (const item of [...items].reverse()) {
+      if (item.type === 'thread.canceled') return 'canceled';
+      if (item.type === 'thread.execution.settled' || item.type === 'agent.lease.released') {
+        const status = readOptionalString(item.payload.status);
+        if (status === 'completed' || status === 'failed' || status === 'canceled') return status;
+      }
+      if (item.type === 'thread.wait.started') return 'waiting';
+      if (
+        item.type === 'thread.wait.woken' ||
+        item.type === 'thread.wait.resolved' ||
+        item.type === 'thread.message.sent' ||
+        item.type === 'thread.message.delivered' ||
+        item.type === 'thread.message.activated' ||
+        item.type === 'agent.lease.queued' ||
+        item.type === 'project.thread.created'
+      ) {
+        return 'queued';
+      }
+      if (item.type === 'agent.lease.granted') return 'running';
+      if (item.type === 'agent.lease.recovered' || item.type === 'thread.message.failed') {
+        return 'failed';
+      }
     }
-    if (last?.type === 'thread.wait.started') return 'waiting';
-    if (last?.type === 'thread.wait.woken') return 'queued';
-    if (last?.type === 'agent.lease.granted') return 'running';
-    if (last?.type === 'agent.lease.released') {
-      const status = readOptionalString(last.payload.status);
-      if (status === 'completed' || status === 'failed' || status === 'canceled') return status;
-    }
-    if (last?.type === 'agent.lease.recovered') return 'failed';
-    if (last?.type === 'agent.lease.queued') return 'queued';
     return 'queued';
   }
 
@@ -1047,7 +1170,7 @@ export class ProjectCoordinator {
       prepared.abandon();
       throw cause;
     }
-    void prepared.activate().catch(async (cause: unknown) => {
+    this.activatePreparedTurn(project.id, sourceThreadId, prepared, async (cause: unknown) => {
       await this.record({
         type: 'thread.wait.failed',
         projectId: project.id,
@@ -1128,6 +1251,24 @@ function requiredLimit(value: number | undefined): number {
 
 function readStringArray(value: unknown): readonly string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string') ? value : [];
+}
+
+function readJsonValue(value: unknown, label: string): JsonValue {
+  if (isJsonValue(value)) return value;
+  throw new Error(`Invalid durable ${label}`);
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return typeof value === 'object' && value !== null && Object.values(value).every(isJsonValue);
 }
 
 function defaultId(): string {

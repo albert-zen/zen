@@ -98,7 +98,7 @@ function isInternalLegacyRuntimeImport(from: Group, to: Group, specifier: string
   return (
     to === 'product' &&
     from === 'adapters/node' &&
-    /^\.\.\/.*product\/(app-server|app-server-protocol|demo-runtime)\.js$/u.test(specifier)
+    /^\.\.\/.*product\/(app-server|app-server-protocol)\.js$/u.test(specifier)
   );
 }
 

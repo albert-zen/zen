@@ -34,7 +34,10 @@ export type AgentAppServerOptions = {
 export class AgentAppServer {
   private readonly runtimes = new Map<string, Promise<ProjectRuntime>>();
   private readonly projectTails = new Map<string, Promise<void>>();
-  private readonly inflightCommands = new Map<string, Promise<AgentAppResponse>>();
+  private readonly inflightCommands = new Map<
+    string,
+    { readonly digest: string; readonly promise: Promise<AgentAppResponse> }
+  >();
   private readonly listeners = new Set<(n: AgentAppNotificationEnvelope) => void>();
   private readonly commandLedger: ProjectCommandLedger;
   private closing = false;
@@ -81,30 +84,39 @@ export class AgentAppServer {
       typeof request.params.projectId === 'string' ? request.params.projectId : 'agent-app';
     const key = String(request.params.idempotencyKey);
     const identity = `${scope}\u0000${request.method}\u0000${key}`;
+    const digest = stableDigest({ method: request.method, params: request.params });
     const inflight = this.inflightCommands.get(identity);
-    if (inflight) return await inflight;
-    const operation = this.executeMutationOnce(request, scope, key, context);
-    this.inflightCommands.set(identity, operation);
+    if (inflight) {
+      if (inflight.digest !== digest) {
+        throw new ProjectCommandConflictError(scope, request.method, key);
+      }
+      return await inflight.promise;
+    }
+    const operation = this.executeMutationOnce(request, scope, key, digest, context);
+    this.inflightCommands.set(identity, { digest, promise: operation });
     try {
       return await operation;
     } finally {
-      if (this.inflightCommands.get(identity) === operation) this.inflightCommands.delete(identity);
+      if (this.inflightCommands.get(identity)?.promise === operation) {
+        this.inflightCommands.delete(identity);
+      }
     }
   }
   private async executeMutationOnce(
     request: AgentAppRequest,
     scope: string,
     key: string,
+    digest: string,
     context: AgentAppRequestContext
   ): Promise<AgentAppResponse> {
     const started = await this.commandLedger.begin({
       scope,
       method: request.method,
       idempotencyKey: key,
-      digest: stableDigest({ method: request.method, params: request.params }),
+      digest,
     });
     if (started.state === 'completed') return started.response;
-    if (started.state === 'pending') {
+    if (started.state === 'pending' && request.method !== 'thread/handoff') {
       return error('COMMAND_PENDING', `Command outcome is pending recovery: ${request.method}`);
     }
     let response: AgentAppResponse;
