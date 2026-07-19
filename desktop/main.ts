@@ -101,8 +101,12 @@ async function runDesktop(): Promise<void> {
         console.error('Zen renderer process exited', details.reason)
       );
       window.on('unresponsive', () => console.error('Zen renderer is unresponsive'));
-      window.once('ready-to-show', () => window.show());
+      window.once('ready-to-show', () => {
+        if (process.env.ZEN_DESKTOP_HIDE !== '1') window.show();
+      });
       await window.loadURL(staticHost.url);
+      const autoQuitMs = Number(process.env.ZEN_DESKTOP_AUTO_QUIT_MS);
+      if (Number.isSafeInteger(autoQuitMs) && autoQuitMs > 0) setTimeout(shutdown, autoQuitMs);
       return {
         close: () => {
           if (!window.isDestroyed()) window.destroy();

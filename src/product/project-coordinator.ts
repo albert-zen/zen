@@ -22,6 +22,7 @@ export type ProjectThreadSummary = {
   readonly status: ProjectThreadStatus;
   readonly parentThreadId?: string;
   readonly modelProfile?: string;
+  readonly objective?: string;
 };
 
 export type ProjectCoordinatorOptions = {
@@ -386,6 +387,7 @@ export class ProjectCoordinator {
       depth: readNumber(payload.depth),
       parentThreadId: readOptionalString(payload.parentThreadId),
       modelProfile: readOptionalString(payload.modelProfile),
+      objective: readOptionalString(payload.objective),
       status: this.statusFor(projectId, threadId),
     };
   }

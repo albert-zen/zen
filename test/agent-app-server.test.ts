@@ -20,6 +20,17 @@ describe('AgentApp protocol', () => {
       method: 'project/list',
       params: { limit: 10 },
     });
+    for (const request of [
+      null,
+      { method: 'unknown', params: {} },
+      { method: 'project/create', params: { name: 'x' } },
+      { method: 'project/create', params: { name: 'x', rootPath: 'C:\\x' } },
+      { method: 'project/list', params: {}, id: '' },
+      { method: 'project/list', params: { nested: { one: { two: { three: { four: 1 } } } } } },
+      { method: 'project/list', params: { constructor: 'unsafe' } },
+    ]) {
+      expect(() => parseAgentAppRequest(request)).toThrow();
+    }
   });
 });
 
@@ -72,6 +83,63 @@ describe('AgentAppServer', () => {
     await fixture.server.close();
     await fixture.server.close();
     expect(fixture.closed).toEqual([id]);
+  });
+
+  it('maps project lookup failures, supports update/read/list, and rejects requests after close', async () => {
+    const fixture = await createFixture();
+    await expect(
+      fixture.server.request({ method: 'project/read', params: { projectId: 'missing' } })
+    ).resolves.toMatchObject({ ok: false, error: { code: 'PROJECT_NOT_FOUND' } });
+    const created = await fixture.server.request(projectCreate('One', 'C:\\one', 'one'));
+    if (!created.ok) throw new Error('project create failed');
+    const id = projectId(created);
+    await expect(
+      fixture.server.request({
+        method: 'project/update',
+        params: { projectId: id, name: 'Renamed', idempotencyKey: 'update' },
+      })
+    ).resolves.toMatchObject({ ok: true, result: { project: { name: 'Renamed' } } });
+    await expect(
+      fixture.server.request({ method: 'project/read', params: { projectId: id } })
+    ).resolves.toMatchObject({ ok: true, result: { project: { id } } });
+    await expect(
+      fixture.server.request({ method: 'project/list', params: {} })
+    ).resolves.toMatchObject({
+      ok: true,
+      result: { projects: [{ id }] },
+    });
+    await fixture.server.close();
+    await expect(
+      fixture.server.request({ method: 'project/list', params: {} })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'SERVER_CLOSING' },
+    });
+  });
+
+  it('returns typed request errors for invalid project input and preserves request ids', async () => {
+    const fixture = await createFixture();
+    await expect(
+      fixture.server.request({
+        id: 'bad-create',
+        method: 'project/create',
+        params: { name: '', rootPath: 'C:\\root', idempotencyKey: 'bad' },
+      })
+    ).resolves.toMatchObject({ ok: false, error: { code: 'INVALID_REQUEST' } });
+    const created = await fixture.server.request({
+      id: 'create-id',
+      method: 'project/create',
+      params: { name: 'One', rootPath: 'C:\\one', idempotencyKey: 'one' },
+    });
+    expect(created).toMatchObject({ ok: true, id: 'create-id' });
+    if (!created.ok) throw new Error('project create failed');
+    const id = projectId(created);
+    await expect(
+      fixture.server.request({
+        method: 'project/update',
+        params: { projectId: id, rootPath: 'C:\\renamed', policy: [], idempotencyKey: 'update' },
+      })
+    ).resolves.toMatchObject({ ok: true, result: { project: { rootPath: 'C:\\renamed' } } });
   });
 });
 

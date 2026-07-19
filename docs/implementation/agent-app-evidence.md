@@ -1,5 +1,70 @@
 # Agent App Evidence
 
+## APP-009 Final Integration Gate
+
+- Current state: **Complete**. APP-010 remains Pending. The final serialized
+  `npm run check` exited `0`, followed by `npm audit` with zero vulnerabilities.
+- Test migration: serial `npm test` passed with `49` files and `401` tests
+  after replacing retired single-thread dogfood and CLI contract assertions with
+  the Project-first protocol. Vitest is explicitly constrained to one fork
+  worker (`--maxWorkers=1`) after investigating an earlier worker-exit report.
+- Browser E2E: `npm run e2e` passed with real production composition,
+  authenticated HTTP/SSE transport, and same-origin Vite proxy. It covers
+  first-project creation, parent thread/human turn, deep link/refresh/back,
+  and typed invalid-request no-side-effect behavior. Representative real
+  screenshots are written by the workflow to
+  `docs/implementation/artifacts/agent-app/` at 1440x900, 1728x1000, and
+  390x844. A subsequent complete gate exposed an invalid Playwright locator
+  assertion (`expect(locator).evaluate`); the assertion was corrected to
+  evaluate first and assert the boolean. The final full gate ran all three
+  real HTTP/SSE workflows successfully.
+- Product repair: `ProjectThreadSummary` now projects the durable thread
+  objective, so the Project/Threads/Thread UI shows operator-supplied work
+  intent rather than only opaque thread IDs.
+- Coverage: standalone serial gates pass without threshold changes or source
+  exclusions: kernel `88.07/82.01/92.07/88.92`, product
+  `87.23/80.61/90.37/90.17`, and presentation
+  `91.00/80.11/94.13/92.75` (statements/branches/functions/lines). The product
+  and presentation branch thresholds are now both at least `80%`.
+- Packaging: `npm run desktop:pack` passed. `npm run desktop:dist` now uses
+  `electron-builder --publish never` plus explicit `build.publish: null`, and
+  completed with exit `0`, producing
+  `release/Zen Agent-0.0.0-x64.exe`, its `.blockmap`, and
+  `release/win-unpacked/Zen Agent.exe`. ASAR inspection found `dist`,
+  `web-dist`, `desktop-dist`, and dependency licenses; prohibited tests,
+  `.git`, coverage, journals, and secrets matched zero paths.
+- Packaged smoke: two serial hidden auto-quit launches of the unpacked exe
+  exited `0` (PIDs `1332` and `15136`), each used an isolated temporary app-data
+  root that was removed, and both observed `Zen Agent.exe` census `0` before
+  and after.
+- Full-gate history: the first final `npm run check` passed formatting, lint,
+  core/Web/desktop typechecks, `49` Vitest files / `401` tests, all builds, and
+  all three coverage gates, then failed its first E2E test only because of the
+  locator assertion API described above. After correcting that test, the next
+  full check again passed formatting, lint, types, `49`/`401`, and all builds,
+  then failed kernel coverage when
+  `test/local-tool-runtime.test.ts > runs shell commands in the workspace and
+  returns command output` exceeded Vitest's existing `5000ms` timeout. The
+  timeout was not changed, skipped, or retried inside Vitest. An immediately
+  following standalone serial kernel coverage run passed `49`/`401`; this
+  indicated resource-sensitive cleanup work rather than a confirmed leak. The
+  normal-exit owned-process path was then narrowed from global Windows process
+  enumeration to the captured ownership tree and its direct children, while
+  retaining two independent snapshots and identity/parent-chain verification.
+  Kernel coverage passed three serial repetitions (`49` files / `401` tests),
+  each with zero test-owned process and `zen-agent-app-*` residue. The single
+  subsequent full gate exited `0`: format, lint, main/Web/desktop typechecks,
+  `49` files / `401` tests, core/acceptance/Web/desktop builds, all three
+  coverage groups, and the three real E2E workflows passed.
+- Hygiene: `.zen` resolved exactly to
+  `D:\desktop\zen-agent-app-worker\.zen`, contained only test/CLI-created
+  project journals, and was removed after verification. No broad process kill
+  or temporary-directory delete occurred. The externally reported attributable
+  Node/Electron/Zen Agent census is `0`. The final gate's worktree `.zen` was
+  re-verified and removed; known `zen-agent-app-*`, `zen-desktop-*`, and
+  `zen-agent-smoke-*` temporary-root counts are zero. The existing
+  `zen-tools-*` baseline remained `1657` and was not broadly deleted.
+
 ## APP-001
 
 - Base: `446ed0f4b750f049ab8f0179d7308cce7e1050eb`.

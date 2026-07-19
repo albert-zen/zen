@@ -84,15 +84,15 @@ export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElem
       .catch((cause) => setError(readError(cause)));
 
   return (
-    <div className="grid h-dvh min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-zinc-950 text-zinc-100">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-4 py-2">
+    <div className="grid h-dvh min-h-0 max-w-full grid-rows-[auto_minmax(0,1fr)] overflow-x-hidden bg-zinc-950 text-zinc-100">
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-zinc-800 px-4 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <div className="grid h-7 w-7 place-items-center rounded-md bg-teal-400 text-xs font-black text-zinc-950">
             Z
           </div>
           <div className="truncate text-sm font-bold">Zen control plane</div>
         </div>
-        <div className="truncate text-xs text-zinc-400">
+        <div className="w-full text-xs leading-5 text-zinc-400 sm:w-auto sm:max-w-[60%] sm:text-right">
           {snapshot.selectedProject
             ? `${snapshot.threads.filter((thread) => thread.status === 'running').length} active agents · ${snapshot.threads.length}/${snapshot.selectedProject.policy.maxThreads ?? 'unbounded'} threads · ${snapshot.selectedProject.policy.maxConcurrentAgents} concurrent · depth ${snapshot.selectedProject.policy.maxThreadDepth}`
             : snapshot.connection.status}
@@ -106,7 +106,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElem
           {error}
         </div>
       ) : null}
-      <div className="grid min-h-0 grid-cols-[220px_300px_minmax(0,1fr)] max-md:grid-cols-1">
+      <div className="grid min-h-0 grid-cols-[220px_300px_minmax(0,1fr)] max-md:grid-cols-1 max-md:pb-14">
         <div className={mobileView === 'projects' ? 'min-h-0' : 'hidden min-h-0 md:block'}>
           <ProjectNavigator
             projects={snapshot.projects}

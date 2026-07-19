@@ -46,7 +46,9 @@ export function ProjectNavigator(props: {
                   className="min-w-0 flex-1 rounded-md px-2 py-2 text-left hover:bg-zinc-800"
                 >
                   <div className="truncate text-sm font-semibold text-zinc-100">{project.name}</div>
-                  <div className="truncate text-xs text-zinc-500">{project.rootPath}</div>
+                  <div className="truncate text-xs text-zinc-500" title={project.rootPath}>
+                    {project.rootPath}
+                  </div>
                 </button>
                 {active ? (
                   <Button

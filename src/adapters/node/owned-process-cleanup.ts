@@ -168,7 +168,7 @@ export class OwnedProcessTree {
     readonly [readonly OwnedProcessIdentity[], readonly OwnedProcessIdentity[]]
   > {
     if (this.operations.snapshots) return this.operations.snapshots();
-    if (!this.operations.list) return listWindowsProcessSnapshots();
+    if (!this.operations.list) return listWindowsProcessSnapshotsForTree(this.ancestry);
     return Promise.all([this.list(), this.list()]);
   }
 
@@ -259,6 +259,48 @@ async function listWindowsProcessSnapshots(): Promise<
     '-Command',
     command,
   ]);
+  if (!output) return [[], []];
+  const parsed = JSON.parse(output) as {
+    first?: OwnedProcessIdentity | readonly OwnedProcessIdentity[];
+    second?: OwnedProcessIdentity | readonly OwnedProcessIdentity[];
+  };
+  const normalize = (value: OwnedProcessIdentity | readonly OwnedProcessIdentity[] | undefined) =>
+    !value ? [] : Array.isArray(value) ? value : [value];
+  return [normalize(parsed.first), normalize(parsed.second)];
+}
+
+/**
+ * The production cleanup path only needs identities on the captured ownership
+ * chain and their direct children. Keeping both observations constrained avoids
+ * serializing every Windows process after an otherwise completed shell call.
+ */
+async function listWindowsProcessSnapshotsForTree(
+  ancestry: ReadonlyMap<string, Candidate>
+): Promise<readonly [readonly OwnedProcessIdentity[], readonly OwnedProcessIdentity[]]> {
+  if (process.platform !== 'win32') return [[], []];
+  const pids = [...new Set([...ancestry.values()].map(({ identity }) => identity.pid))];
+  if (pids.length === 0) return [[], []];
+  const filter = pids
+    .flatMap((pid) => [`ProcessId = ${pid}`, `ParentProcessId = ${pid}`])
+    .join(' OR ');
+  const projection =
+    '[PSCustomObject]@{ pid = $_.ProcessId; parentPid = $_.ParentProcessId; createdAt = $_.CreationDate.ToUniversalTime().ToString("o"); creationToken = ([DateTimeOffset]$_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds().ToString(); executable = $_.ExecutablePath; commandLine = $_.CommandLine }';
+  const command =
+    `$one=Get-CimInstance Win32_Process -Filter '${filter}' | ForEach-Object { ${projection} };` +
+    `$two=Get-CimInstance Win32_Process -Filter '${filter}' | ForEach-Object { ${projection} };` +
+    '[PSCustomObject]@{ first=@($one); second=@($two) } | ConvertTo-Json -Compress';
+  const output = await execFileText('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    command,
+  ]);
+  return parseWindowsProcessSnapshots(output);
+}
+
+function parseWindowsProcessSnapshots(
+  output: string
+): readonly [readonly OwnedProcessIdentity[], readonly OwnedProcessIdentity[]] {
   if (!output) return [[], []];
   const parsed = JSON.parse(output) as {
     first?: OwnedProcessIdentity | readonly OwnedProcessIdentity[];

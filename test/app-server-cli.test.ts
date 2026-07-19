@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { consumeAppServerClientHandoff } from '../src/adapters/node/app-server-config.js';
-import { HttpAppServerClient, type AppServerNotification } from './test-exports.js';
+import { HttpAppServerClient } from './test-exports.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -160,20 +160,27 @@ describe('standalone App Server CLI', () => {
         code: 'ENOENT',
       });
 
-      const notifications: AppServerNotification[] = [];
       const client = new HttpAppServerClient(clientOptions);
-      const unsubscribe = client.subscribe((notification) => {
-        notifications.push(notification);
-      });
+      const unsubscribe = client.subscribe(() => undefined);
 
       try {
-        const response = await client.request({ method: 'thread/start' });
+        const project = await client.request({
+          method: 'project/create',
+          params: {
+            name: 'CLI transport project',
+            rootPath: root,
+            idempotencyKey: 'project-create',
+          },
+        });
+        expect(project).toMatchObject({ method: 'project/create', ok: true });
+        const projectId = (project as unknown as { result: { project: { id: string } } }).result
+          .project.id;
+        const response = await client.request({
+          method: 'thread/create',
+          params: { projectId, idempotencyKey: 'thread-create', objective: 'CLI fixture' },
+        });
 
-        expect(response).toEqual(expect.objectContaining({ method: 'thread/start', ok: true }));
-        await waitForNotification(
-          notifications,
-          (notification) => notification.type === 'thread/started'
-        );
+        expect(response).toEqual(expect.objectContaining({ method: 'thread/create', ok: true }));
       } finally {
         unsubscribe();
       }
@@ -313,19 +320,4 @@ async function waitForExit(child: ChildProcess): Promise<void> {
       resolve();
     });
   });
-}
-
-async function waitForNotification(
-  notifications: readonly AppServerNotification[],
-  predicate: (notification: AppServerNotification) => boolean
-): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (notifications.some(predicate)) {
-      return;
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-
-  throw new Error('Timed out waiting for App Server notification');
 }

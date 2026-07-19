@@ -31,6 +31,24 @@ describe('AgentScheduler', () => {
     await scheduler.release(other);
     expect((await waiting).lease.threadId).toBe('waiter');
   });
+
+  it('emits lease lifecycle events and rejects queued leases on close', async () => {
+    const events: string[] = [];
+    const scheduler = new AgentScheduler({
+      maxConcurrentAgents: () => 1,
+      onEvent: (event) => {
+        events.push(event.type);
+      },
+    });
+    const lease = await scheduler.acquire('project', 'active');
+    const queued = scheduler.acquire('project', 'queued');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await scheduler.close();
+    await expect(queued).rejects.toThrow('closed');
+    await expect(scheduler.acquire('project', 'after-close')).rejects.toThrow('closed');
+    await scheduler.release(lease);
+    expect(events).toEqual(expect.arrayContaining(['agent.lease.queued', 'agent.lease.granted']));
+  });
 });
 
 describe('WaitGraph', () => {
@@ -49,6 +67,30 @@ describe('WaitGraph', () => {
     expect(() => graph.wait({ source: 'third', targets: ['first'], mode: 'all' })).toThrow(
       WaitCycleError
     );
+  });
+
+  it('rejects invalid, aborted, canceled, and disposed waits without retaining edges', async () => {
+    const graph = new WaitGraph();
+    expect(() => graph.wait({ source: 'a', targets: [], mode: 'all' })).toThrow('at least one');
+    expect(() => graph.wait({ source: 'a', targets: ['b', 'b'], mode: 'all' })).toThrow('unique');
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(
+      graph.wait({ source: 'aborted', targets: ['target'], mode: 'all', signal: aborted.signal })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    const cancel = graph.wait({ source: 'cancel-source', targets: ['cancel-target'], mode: 'all' });
+    graph.cancelThread('cancel-target');
+    await expect(cancel).rejects.toThrow('canceled');
+    const disposable = graph.wait({
+      source: 'dispose-source',
+      targets: ['dispose-target'],
+      mode: 'all',
+    });
+    graph.dispose();
+    await expect(disposable).rejects.toThrow('disposed');
+    const resolved = graph.wait({ source: 'a', targets: ['b'], mode: 'all' });
+    graph.settle('b', { threadId: 'b', status: 'completed' });
+    await expect(resolved).resolves.toMatchObject({ threadId: 'b' });
   });
 });
 

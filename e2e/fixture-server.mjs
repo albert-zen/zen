@@ -1,55 +1,41 @@
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { createServer as createViteServer } from 'vite';
 
-import { serveAppServerHttpTransport } from '../dist/adapters/node/app-server-transport.js';
-import { AppServer, PolicyToolRuntime } from '../dist/product/index.js';
+import {
+  createAgentAppProductionComposition,
+  serveAgentAppHttpTransport,
+} from '../dist/adapters/node/index.js';
 
+/** A real Project-first App Server behind the browser's same-origin proxy. */
 export async function startFixtureServer() {
-  const progress = new ProgressGate();
-  const executedCommands = [];
-  const nextThreadId = sequence('thread-e2e');
-  const nextRunId = sequence('run-e2e');
-  const nextTurnId = sequence('turn-e2e');
-  const nextItemId = sequence('item-e2e');
-  const appServer = new AppServer({
-    threadManagerOptions: {
-      generateThreadId: nextThreadId,
-      generateRunId: nextRunId,
-      generateTurnId: nextTurnId,
-      generateItemId: nextItemId,
-      clock: (() => {
-        let timestamp = 1_000;
-        return () => timestamp++;
-      })(),
-      runtimeFactory: ({ approvalBroker }) => ({
-        model: createFixtureModel(progress),
-        toolRuntime: new PolicyToolRuntime({
-          approvalBroker,
-          policy: {
-            evaluate: () => ({
-              type: 'needsApproval',
-              reason: 'Fixture shell command requires approval',
-            }),
-          },
-          toolRuntime: {
-            async *execute(call) {
-              executedCommands.push(call);
-              yield {
-                type: 'output.delta',
-                delta: { stream: 'stdout', chunk: 'fixture shell executed' },
-              };
-              yield { type: 'result.completed', content: 'fixture command completed' };
-            },
-          },
-        }),
-      }),
-    },
+  const root = await mkdtemp(join(tmpdir(), 'zen-agent-app-e2e-'));
+  const projectRoot = join(root, 'workspace');
+  await mkdir(projectRoot, { recursive: true });
+  const execution = [];
+  const composition = await createAgentAppProductionComposition({
+    appDataRoot: join(root, 'app-data'),
+    createModel: () => ({
+      async *generate(context) {
+        execution.push(context);
+        const user = [...context.parts].reverse().find((part) => part.type === 'user');
+        yield {
+          type: 'message.completed',
+          content: `Completed: ${typeof user?.content === 'string' ? user.content : 'thread turn'}`,
+        };
+      },
+    }),
   });
   let transport;
   let vite;
   const environment = saveProxyEnvironment();
-
   try {
-    transport = await serveAppServerHttpTransport({ appServer, port: 0 });
+    transport = await serveAgentAppHttpTransport({
+      agentAppServer: composition.agentAppServer,
+      port: 0,
+    });
     process.env.ZEN_APP_SERVER_URL = transport.url;
     process.env.ZEN_APP_SERVER_CAPABILITY = transport.capability;
     delete process.env.ZEN_APP_SERVER_CAPABILITY_HANDOFF;
@@ -60,107 +46,49 @@ export async function startFixtureServer() {
     });
     await vite.listen();
   } catch (cause) {
-    await closeFixtureResources({ vite, transport, appServer });
+    await closeFixtureResources({ vite, transport, composition, root });
     throw cause;
   } finally {
     restoreProxyEnvironment(environment);
   }
-
   const address = vite.httpServer?.address();
   if (!address || typeof address === 'string') {
-    await closeFixtureResources({ vite, transport, appServer });
+    await closeFixtureResources({ vite, transport, composition, root });
     throw new Error('Vite fixture did not expose a TCP address');
   }
-
   return {
     origin: `http://127.0.0.1:${address.port}`,
-    progress,
-    executionCount: () => executedCommands.length,
+    projectRoot,
+    executionCount: () => execution.length,
+    async request(body) {
+      const response = await fetch(new URL('/request', transport.url), {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${transport.capability}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      return { status: response.status, body: await response.json() };
+    },
     async close() {
-      await closeFixtureResources({ vite, transport, appServer });
+      await closeFixtureResources({ vite, transport, composition, root });
     },
   };
 }
 
-export async function closeFixtureResources({ vite, transport, appServer }) {
-  const results = await Promise.allSettled([vite?.close(), transport?.close(), appServer?.close()]);
+export async function closeFixtureResources({ vite, transport, composition, appServer, root }) {
+  const results = await Promise.allSettled([
+    vite?.close(),
+    transport?.close(),
+    composition?.close() ?? appServer?.close(),
+  ]);
+  if (root) await rm(root, { recursive: true, force: true });
   const failures = results
     .filter((result) => result.status === 'rejected')
     .map((result) => result.reason);
-
-  if (failures.length > 0) {
+  if (failures.length)
     throw new AggregateError(failures, 'Failed to close deterministic E2E fixture resources');
-  }
-}
-
-function createFixtureModel(progress) {
-  let callCount = 0;
-
-  return {
-    async *generate(context) {
-      callCount += 1;
-      if (callCount === 1) {
-        yield { type: 'text.delta', text: 'Streamed assistant progress' };
-        await progress.pause();
-        yield {
-          type: 'message.completed',
-          content: 'Assistant is requesting shell approval',
-          toolCalls: [
-            {
-              id: 'fixture-shell-call',
-              name: 'shell',
-              input: { command: 'fixture-safe-command' },
-            },
-          ],
-        };
-        return;
-      }
-
-      const executed = context.parts.some((part) => part.type === 'toolResult');
-      yield {
-        type: 'message.completed',
-        content: executed ? 'Approved command complete' : 'Declined command was not executed',
-      };
-    },
-  };
-}
-
-class ProgressGate {
-  #pending = [];
-  #waiters = [];
-
-  async pause() {
-    const deferred = createDeferred();
-    this.#pending.push(deferred);
-    this.#waiters.shift()?.resolve();
-    await deferred.promise;
-  }
-
-  async waitForPending() {
-    if (this.#pending.length > 0) return;
-    const deferred = createDeferred();
-    this.#waiters.push(deferred);
-    await deferred.promise;
-  }
-
-  releaseNext() {
-    const deferred = this.#pending.shift();
-    if (!deferred) throw new Error('No streamed progress is waiting for release');
-    deferred.resolve();
-  }
-}
-
-function createDeferred() {
-  let resolve;
-  const promise = new Promise((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
-function sequence(prefix) {
-  let next = 1;
-  return () => `${prefix}-${next++}`;
 }
 
 function saveProxyEnvironment() {

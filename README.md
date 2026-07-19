@@ -1,6 +1,6 @@
 # Zen
 
-Zen is an item-first agent kernel and local coding-agent runtime.
+Zen is an item-first agent kernel and a local multi-agent Project/Thread control plane.
 
 The core design keeps `ItemList` as the source of truth. The agent loop appends
 items, and product layers such as the App Server, TUI, Web UI, durable store,
@@ -18,6 +18,8 @@ Zen currently includes:
 - local HTTP/SSE App Server transport
 - terminal UI
 - static Web UI client
+- Project/Thread coordination with durable local journals, policy limits, and agent thread tools
+- thin Electron host for the same HTTP/SSE App Server protocol
 - interrupt, retry, and thread resume flows
 - repeatable dogfood acceptance scenario
 
@@ -40,6 +42,16 @@ Run the Web product with its trusted same-origin proxy:
 ```powershell
 npm run web
 ```
+
+The product is a control plane for multi-agent work: create a Project, create
+parent/child Threads, send objectives, observe Item-derived activity, then
+handoff, cancel, archive, or wait on coordinated work. It intentionally has no
+terminal, editor, file tree, diff viewer, or source-control workbench.
+
+Agent executors receive explicit `thread.create`, `thread.list`, `thread.read`,
+`thread.send`, `thread.wait`, `thread.cancel`, `thread.archive`, and
+`thread.handoff` tools. Project policy bounds depth, concurrency, messages,
+and retained idempotency facts; UI input never grants executor authority.
 
 ## Desktop Development
 
@@ -68,8 +80,13 @@ npm run desktop:pack
 ```
 
 `npm run desktop:dist` creates the default x64 NSIS artifact. These are
-development artifacts and are unsigned; release signing and updates are not
-configured in this wave.
+development artifacts and are unsigned; publishing is explicitly disabled, so
+release signing and updates are not configured in this wave.
+
+Local project metadata and coordination journals live under the application
+data root (`.zen` for the standalone CLI; Electron's user-data location for the
+desktop app). The browser renderer receives no App Server capability and uses
+only same-origin `/request` and `/events` routes.
 
 The Web browser only calls same-origin `/request` and `/events` routes. The
 Node/Vite process creates and injects the App Server capability; browser code

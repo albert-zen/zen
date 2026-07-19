@@ -9,7 +9,14 @@ if (!groups.has(group)) {
 
 const child = spawn(
   process.execPath,
-  ['node_modules/vitest/vitest.mjs', 'run', '--coverage', '--pool=forks', '--fileParallelism=false'],
+  [
+    'node_modules/vitest/vitest.mjs',
+    'run',
+    '--coverage',
+    '--pool=forks',
+    '--fileParallelism=false',
+    '--maxWorkers=1'
+  ],
   {
     cwd: process.cwd(),
     env: { ...process.env, COVERAGE_GROUP: group },
