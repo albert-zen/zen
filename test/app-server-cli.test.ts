@@ -106,6 +106,7 @@ describe('standalone App Server CLI', () => {
       ...process.env,
       ZEN_APP_SERVER_CAPABILITY_DIR: handoffDirectory,
       ZEN_APP_SERVER_PORT: '0',
+      ZEN_APP_DATA_ROOT: join(root, 'app-data'),
       ZEN_MODEL_PROVIDER_CONFIG: configPath,
     };
     delete env.ZEN_APP_SERVER_CAPABILITY;
@@ -222,6 +223,7 @@ async function startGeneratedCapabilityCli(label: string): Promise<{
     ...process.env,
     ZEN_APP_SERVER_CAPABILITY_DIR: handoffDirectory,
     ZEN_APP_SERVER_PORT: '0',
+    ZEN_APP_DATA_ROOT: join(root, 'app-data'),
     ZEN_MODEL_PROVIDER_CONFIG: configPath,
   };
   delete env.ZEN_APP_SERVER_CAPABILITY;

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -19,6 +19,8 @@ describe('Agent App Node integration', () => {
     const firstEvents = new AbortController();
 
     try {
+      await mkdir(join(root, 'one'));
+      await mkdir(join(root, 'two'));
       const one = await request(transport.url, transport.capability, {
         method: 'project/create',
         params: { name: 'One', rootPath: join(root, 'one'), idempotencyKey: 'one' },
@@ -86,6 +88,7 @@ describe('Agent App Node integration', () => {
     const root = await mkdtemp(join(tmpdir(), 'zen-agent-app-worker-'));
     let projectIdValue = '';
     try {
+      await mkdir(join(root, 'workspace'));
       const first = await createAgentAppProductionComposition({ appDataRoot: root });
       const created = await first.agentAppServer.request({
         method: 'project/create',
@@ -146,6 +149,7 @@ describe('Agent App Node integration', () => {
       },
     });
     try {
+      await mkdir(join(root, 'workspace'));
       const project = await composition.agentAppServer.request({
         method: 'project/create',
         params: { name: 'Tools', rootPath: join(root, 'workspace'), idempotencyKey: 'project' },

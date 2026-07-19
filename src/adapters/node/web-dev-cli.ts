@@ -2,8 +2,8 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { createServer as createViteServer } from 'vite';
-import { join } from 'node:path';
 
+import { resolveAgentAppDataRoot } from './app-data-root.js';
 import {
   assertLoopbackBindAllowed,
   DEFAULT_APP_SERVER_HOST,
@@ -25,7 +25,7 @@ assertLoopbackBindAllowed(host, allowRemoteBind, 'Non-loopback Zen Web');
 await runWebDevCliComposition({
   signalSource: process,
   createAppServer: async () =>
-    (await createAgentAppProductionComposition({ appDataRoot: join(process.cwd(), '.zen') }))
+    (await createAgentAppProductionComposition({ appDataRoot: resolveAgentAppDataRoot() }))
       .agentAppServer,
   createTransport: async (appServer) =>
     await serveAgentAppHttpTransport({

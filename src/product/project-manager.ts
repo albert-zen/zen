@@ -17,7 +17,6 @@ export type ProjectCreateInput = {
 
 export type ProjectUpdateInput = {
   readonly name?: string;
-  readonly rootPath?: string;
   readonly policy?: ProjectPolicy;
 };
 
@@ -25,11 +24,11 @@ export type ProjectManagerOptions = {
   readonly registry?: ProjectRegistry;
   readonly generateId?: IdGenerator;
   readonly clock?: Clock;
-  readonly rootPathNormalizer?: (rootPath: string) => string;
+  readonly rootPathNormalizer?: (rootPath: string) => string | Promise<string>;
 };
 
 const DEFAULT_PROJECT_POLICY: ProjectPolicy = {
-  maxConcurrentAgents: 2,
+  maxActiveExecutions: 2,
   maxThreadDepth: 4,
   maxThreads: 100,
   maxQueuedMessages: 100,
@@ -45,7 +44,7 @@ export class ProjectManager {
   private readonly registry: ProjectRegistry;
   private readonly generateId: IdGenerator;
   private readonly clock: Clock;
-  private readonly rootPathNormalizer: (rootPath: string) => string;
+  private readonly rootPathNormalizer: (rootPath: string) => string | Promise<string>;
   private writeTail: Promise<void> = Promise.resolve();
 
   private constructor(options: Required<ProjectManagerOptions>) {
@@ -65,8 +64,10 @@ export class ProjectManager {
     const loaded = await manager.registry.load();
 
     for (const project of loaded) {
+      const normalizedRoot = await manager.normalizeRootPath(project.rootPath);
       const normalized: ProjectRecord = {
         ...project,
+        rootPath: normalizedRoot,
         policy: validatePolicy(project.policy),
       };
       assertStoredProject(normalized);
@@ -83,7 +84,7 @@ export class ProjectManager {
   async create(input: ProjectCreateInput): Promise<ProjectSnapshot> {
     return await this.enqueue(async () => {
       const name = validateName(input.name);
-      const rootPath = validateRootPath(input.rootPath);
+      const rootPath = await this.normalizeRootPath(input.rootPath);
       this.assertRootAvailable(rootPath);
       const id = this.generateUniqueId();
       const now = this.clock();
@@ -115,13 +116,9 @@ export class ProjectManager {
     return await this.enqueue(async () => {
       const current = this.projectFor(id);
       const name = input.name === undefined ? current.name : validateName(input.name);
-      const rootPath =
-        input.rootPath === undefined ? current.rootPath : validateRootPath(input.rootPath);
-      this.assertRootAvailable(rootPath, id);
       const updated: ProjectRecord = {
         ...current,
         name,
-        rootPath,
         policy: input.policy === undefined ? { ...current.policy } : validatePolicy(input.policy),
         updatedAtMs: this.clock(),
       };
@@ -175,20 +172,19 @@ export class ProjectManager {
   }
 
   private assertRootAvailable(rootPath: string, excludeId?: ProjectId): void {
-    const canonical = this.canonicalRoot(rootPath);
     for (const project of this.projects.values()) {
-      if (project.id !== excludeId && this.canonicalRoot(project.rootPath) === canonical) {
+      if (project.id !== excludeId && project.rootPath === rootPath) {
         throw new Error(`Project root path is already assigned: ${rootPath}`);
       }
     }
   }
 
-  private canonicalRoot(rootPath: string): string {
-    const canonical = this.rootPathNormalizer(rootPath);
+  private async normalizeRootPath(rootPath: string): Promise<string> {
+    const canonical = await this.rootPathNormalizer(validateRootPath(rootPath));
     if (typeof canonical !== 'string' || canonical.trim().length === 0) {
       throw new Error('Project root path normalizer returned an invalid path');
     }
-    return canonical;
+    return validateRootPath(canonical);
   }
 
   private generateUniqueId(): ProjectId {
@@ -218,8 +214,8 @@ function validateRootPath(value: string): string {
 }
 
 function validatePolicy(value: ProjectPolicy): ProjectPolicy {
-  if (!isPositiveInteger(value.maxConcurrentAgents)) {
-    throw new Error('Project policy maxConcurrentAgents must be a positive integer');
+  if (!isPositiveInteger(value.maxActiveExecutions)) {
+    throw new Error('Project policy maxActiveExecutions must be a positive integer');
   }
   if (!isPositiveInteger(value.maxThreadDepth)) {
     throw new Error('Project policy maxThreadDepth must be a positive integer');
@@ -248,7 +244,7 @@ function validatePolicy(value: ProjectPolicy): ProjectPolicy {
     throw new Error('Project policy defaultModelProfile must be a non-empty string when set');
   }
   return {
-    maxConcurrentAgents: value.maxConcurrentAgents,
+    maxActiveExecutions: value.maxActiveExecutions,
     maxThreadDepth: value.maxThreadDepth,
     maxThreads: value.maxThreads ?? DEFAULT_PROJECT_POLICY.maxThreads,
     maxQueuedMessages: value.maxQueuedMessages ?? DEFAULT_PROJECT_POLICY.maxQueuedMessages,

@@ -81,7 +81,7 @@ test('keeps project selection isolated across deep links and refresh', async ({ 
     method: 'project/create',
     params: {
       name: 'Second project',
-      rootPath: `${fixture.projectRoot}-two`,
+      rootPath: fixture.secondProjectRoot,
       idempotencyKey: 'second',
     },
   });

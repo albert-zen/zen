@@ -30,6 +30,7 @@ export type AgentRunInput = {
 export type AgentRunResult = {
   readonly items: readonly Item[];
   readonly finalContext: ModelContext;
+  readonly yielded: boolean;
 };
 
 export class AgentLoop {
@@ -81,6 +82,7 @@ export class AgentLoop {
     });
 
     let shouldContinue = true;
+    let yielded = false;
 
     while (shouldContinue) {
       throwIfAborted(input.signal);
@@ -101,7 +103,7 @@ export class AgentLoop {
         continue;
       }
 
-      await appendToolExecutionItems({
+      const tools = await appendToolExecutionItems({
         itemList: this.itemList,
         threadId: input.threadId,
         appendItem: (item) => this.append(item),
@@ -110,11 +112,30 @@ export class AgentLoop {
         hookRuntime: this.hookRuntime,
         signal: input.signal,
       });
+      if (tools.yielded) {
+        yielded = true;
+        shouldContinue = false;
+      }
     }
 
     throwIfAborted(input.signal);
 
-    if (!hasTurnFailure(this.itemList.getItems(), input.turnId)) {
+    if (yielded) {
+      await this.append({
+        type: 'turn.yielded',
+        runId: input.runId,
+        turnId: input.turnId,
+        visibility: 'trace',
+        payload: { status: 'waiting' },
+      });
+      await this.append({
+        type: 'run.completed',
+        runId: input.runId,
+        turnId: input.turnId,
+        visibility: 'trace',
+        payload: { status: 'yielded' },
+      });
+    } else if (!hasTurnFailure(this.itemList.getItems(), input.turnId)) {
       await this.append({
         type: 'turn.completed',
         runId: input.runId,
@@ -136,6 +157,7 @@ export class AgentLoop {
     return {
       items,
       finalContext: this.contextCompiler.compile(items),
+      yielded,
     };
   }
 

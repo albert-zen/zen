@@ -48,6 +48,17 @@ export type {
   TurnStartInput,
 } from './thread-manager.js';
 export { ThreadManager } from './thread-manager.js';
+export type {
+  ProjectCommandBegin,
+  ProjectCommandRecord,
+  ProjectCommandState,
+  ProjectCommandStore,
+} from './project-command-ledger.js';
+export {
+  InMemoryProjectCommandStore,
+  ProjectCommandConflictError,
+  ProjectCommandLedger,
+} from './project-command-ledger.js';
 export type { ThreadJournal, ThreadJournalReplay } from './thread-journal.js';
 export { ThreadJournalCorruptionError, ThreadJournalError } from './thread-journal.js';
 export type {
@@ -87,6 +98,7 @@ export type {
   ProjectThreadStatus,
   ProjectThreadSummary,
   SendThreadMessageInput,
+  StartThreadWaitInput,
   ThreadMessageResult,
 } from './project-coordinator.js';
 export {
@@ -95,12 +107,9 @@ export {
   ProjectResourceError,
   ThreadMailbox,
 } from './project-coordinator.js';
-export type { WaitMode, WaitResult } from './wait-graph.js';
-export { WaitCycleError, WaitGraph } from './wait-graph.js';
 export type { AgentLease, AgentSchedulerEvent, AgentSchedulerOptions } from './agent-scheduler.js';
 export { AgentScheduler } from './agent-scheduler.js';
 export type {
-  ThreadCapability,
   ThreadToolExecutionContext,
   ThreadToolRuntimeOptions,
 } from './thread-tool-runtime.js';
@@ -122,5 +131,9 @@ export type {
   AgentAppSubscription,
 } from './agent-app-protocol.js';
 export { parseAgentAppRequest } from './agent-app-protocol.js';
-export type { AgentAppServerOptions, ProjectRuntime } from './agent-app-server.js';
+export type {
+  AgentAppRequestContext,
+  AgentAppServerOptions,
+  ProjectRuntime,
+} from './agent-app-server.js';
 export { AgentAppServer } from './agent-app-server.js';

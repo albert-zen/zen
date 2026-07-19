@@ -22,6 +22,7 @@ export type AppServerHttpTransportOptions = {
   readonly host?: string;
   readonly port?: number;
   readonly eventReplayLimit?: number;
+  readonly eventSubscriberBufferLimit?: number;
   /** Optional protocol parser used before dispatch.  Transport stays protocol-neutral. */
   readonly parseRequest?: (value: unknown) => unknown;
 };
@@ -204,7 +205,8 @@ export async function serveAppServerHttpTransport(
             const streamUnsubscribe = eventStreams.get(streamResponse);
             eventStreams.delete(streamResponse);
             streamUnsubscribe?.();
-          }
+          },
+          options.eventSubscriberBufferLimit ?? 128
         );
         eventStreams.set(response, unsubscribe);
         request.on('close', () => {
@@ -706,22 +708,80 @@ function handleEventStream(
   notificationStream: NotificationReplayStream,
   request: IncomingMessage,
   response: ServerResponse,
-  onClose: (response: ServerResponse) => void
+  onClose: (response: ServerResponse) => void,
+  bufferLimit: number
 ): AppServerSubscription {
+  if (!Number.isSafeInteger(bufferLimit) || bufferLimit < 1) {
+    throw new Error('SSE subscriber buffer limit must be a positive integer');
+  }
   response.writeHead(200, {
     'cache-control': 'no-cache, no-transform',
     connection: 'keep-alive',
     'content-type': 'text/event-stream; charset=utf-8',
   });
-  response.write(': connected\n\n');
+  let unsubscribe: AppServerSubscription = () => undefined;
+  const writer = new BoundedSseWriter(response, bufferLimit, () => {
+    queueMicrotask(() => {
+      unsubscribe();
+      onClose(response);
+      response.destroy(new Error('SSE slow consumer disconnected'));
+    });
+  });
+  writer.write(': connected\n\n');
 
-  const unsubscribe = notificationStream.subscribe(request.headers['last-event-id'], (event) => {
-    response.write(toServerSentEvent(event));
+  unsubscribe = notificationStream.subscribe(request.headers['last-event-id'], (event) => {
+    writer.write(toServerSentEvent(event));
   });
 
   response.on('close', () => onClose(response));
 
-  return unsubscribe;
+  return () => {
+    writer.close();
+    unsubscribe();
+  };
+}
+
+export class BoundedSseWriter {
+  private readonly pending: string[] = [];
+  private blocked = false;
+  private closed = false;
+
+  constructor(
+    private readonly response: ServerResponse,
+    private readonly limit: number,
+    private readonly onOverflow: () => void
+  ) {}
+
+  write(value: string): void {
+    if (this.closed) return;
+    if (this.blocked) {
+      this.pending.push(value);
+      if (this.pending.length > this.limit) {
+        this.closed = true;
+        this.pending.length = 0;
+        this.onOverflow();
+      }
+      return;
+    }
+    if (!this.response.write(value)) {
+      this.blocked = true;
+      this.response.once('drain', () => this.flush());
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+    this.pending.length = 0;
+  }
+
+  private flush(): void {
+    if (this.closed) return;
+    this.blocked = false;
+    while (this.pending.length > 0 && !this.blocked) {
+      const next = this.pending.shift();
+      if (next !== undefined) this.write(next);
+    }
+  }
 }
 
 type NotificationStreamRecord = {

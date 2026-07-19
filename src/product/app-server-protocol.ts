@@ -5,7 +5,7 @@ export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { readonly [key: string]: JsonValue };
 
 export type ThreadStatus = 'idle' | 'running' | 'failed';
-export type TurnStatus = 'queued' | 'inProgress' | 'completed' | 'failed' | 'canceled';
+export type TurnStatus = 'queued' | 'inProgress' | 'waiting' | 'completed' | 'failed' | 'canceled';
 export type ApprovalDecision = 'approveOnce' | 'decline';
 
 export type ProtocolItem = {
@@ -316,6 +316,10 @@ function lifecycleStatus(type: string): TurnStatus | undefined {
 
   if (type === 'turn.completed') {
     return 'completed';
+  }
+
+  if (type === 'turn.yielded') {
+    return 'waiting';
   }
 
   if (type === 'turn.failed' || type === 'turn.repaired') {

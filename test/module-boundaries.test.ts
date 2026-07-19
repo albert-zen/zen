@@ -4,7 +4,7 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const root = resolve(import.meta.dirname, '..');
-const groups = ['kernel', 'product', 'adapters/node', 'presentation', 'tui'] as const;
+const groups = ['kernel', 'product', 'adapters/node', 'presentation'] as const;
 type Group = (typeof groups)[number];
 
 const allowed: Record<Group, readonly Group[]> = {
@@ -12,7 +12,6 @@ const allowed: Record<Group, readonly Group[]> = {
   product: ['kernel', 'product'],
   'adapters/node': ['kernel', 'product', 'adapters/node'],
   presentation: ['kernel', 'product', 'presentation'],
-  tui: ['kernel', 'product', 'presentation', 'tui', 'adapters/node'],
 };
 
 describe('module boundaries', () => {
@@ -43,7 +42,6 @@ describe('module boundaries', () => {
       './product',
       './node',
       './presentation',
-      './tui',
     ]);
     expect(packageJson.exports['.'].default).toBe('./dist/kernel/index.js');
     for (const entry of Object.values(packageJson.exports)) {
@@ -99,7 +97,7 @@ describe('module boundaries', () => {
 function isInternalLegacyRuntimeImport(from: Group, to: Group, specifier: string): boolean {
   return (
     to === 'product' &&
-    (from === 'adapters/node' || from === 'tui') &&
+    from === 'adapters/node' &&
     /^\.\.\/.*product\/(app-server|app-server-protocol|demo-runtime)\.js$/u.test(specifier)
   );
 }

@@ -9,6 +9,7 @@ import {
   threadToolDefinitions,
   type AgentAppNotification,
   type AgentAppRequest,
+  type AgentAppRequestContext,
   type AgentAppResponse,
   type ProjectRuntime,
   type ProjectSnapshot,
@@ -38,7 +39,13 @@ export type AgentAppProjectRuntimeFactoryOptions = {
     project: ProjectSnapshot,
     toolDefinitions: readonly { readonly function: { readonly name: string } }[]
   ) => ModelGateway;
+  readonly requestAgentApp?: (
+    request: AgentAppRequest,
+    context: Extract<AgentAppRequestContext, { readonly actor: 'agent' }>
+  ) => Promise<AgentAppResponse>;
 };
+
+type ProjectRuntimeState = { current: ProjectSnapshot };
 
 export function createAgentAppProjectRuntimeFactory(
   options: AgentAppProjectRuntimeFactoryOptions
@@ -70,7 +77,7 @@ class NodeProjectRuntime implements ProjectRuntime {
   private closePromise?: Promise<void>;
 
   private constructor(
-    private readonly project: ProjectSnapshot,
+    private readonly state: ProjectRuntimeState,
     private readonly appServer: AppServer,
     private readonly coordinator: ProjectCoordinator,
     private readonly scheduler: AgentScheduler
@@ -81,6 +88,7 @@ class NodeProjectRuntime implements ProjectRuntime {
     appDataRoot: string,
     options: AgentAppProjectRuntimeFactoryOptions
   ): Promise<NodeProjectRuntime> {
+    const state: ProjectRuntimeState = { current: project };
     const directory = projectRuntimeDirectory(appDataRoot, project.id);
     const threadJournal = new FileThreadJournal({ dir: join(directory, 'threads') });
     const coordinationJournal = new FileProjectCoordinationJournal({
@@ -88,32 +96,65 @@ class NodeProjectRuntime implements ProjectRuntime {
     });
     let coordinator: ProjectCoordinator | undefined;
     const scheduler = new AgentScheduler({
-      maxConcurrentAgents: (projectId) => {
+      maxActiveExecutions: (projectId) => {
         if (projectId !== project.id) throw new Error('Unexpected project scheduler request');
-        return project.policy.maxConcurrentAgents;
+        return state.current.policy.maxActiveExecutions;
       },
       onEvent: async (event) => {
         await coordinator?.recordLifecycle(event.type, {
           projectId: event.projectId,
           targetThreadId: event.threadId,
-          payload: { targets: event.targets ?? [] },
+          payload: {
+            ...(event.leaseId ? { leaseId: event.leaseId } : {}),
+            ...(event.status ? { status: event.status } : {}),
+            turnId: event.turnId,
+          },
         });
       },
     });
     try {
       const { initialThreads, persistenceFailures } = await replayThreadJournal(threadJournal);
       let manager: ThreadManager | undefined;
-      const runtimeFactory = createProjectThreadRuntimeFactory(
-        project,
-        scheduler,
-        () => coordinator!,
-        options
-      );
+      const executionProjects = new Map<string, ProjectSnapshot>();
+      const runtimeFactory = createProjectThreadRuntimeFactory(state, executionProjects, options);
       const appServer = new AppServer({
         threadJournal,
         persistenceFailures,
         createThreadManager: (managerOptions) => {
-          manager = new ThreadManager({ ...managerOptions, initialThreads, runtimeFactory });
+          manager = new ThreadManager({
+            ...managerOptions,
+            initialThreads,
+            runtimeFactory,
+            acquireExecutionLease: async ({ threadId, turnId, signal }) => {
+              const lease = await scheduler.acquire(project.id, threadId, turnId, signal);
+              executionProjects.set(turnId, state.current);
+              return {
+                settle: async (turn) => {
+                  executionProjects.delete(turnId);
+                  const failures: unknown[] = [];
+                  if (
+                    turn.status === 'completed' ||
+                    turn.status === 'failed' ||
+                    turn.status === 'canceled'
+                  ) {
+                    await coordinator!
+                      .recordExecutionSettled({
+                        projectId: project.id,
+                        threadId,
+                        turnId,
+                        status: turn.status,
+                      })
+                      .catch((cause: unknown) => failures.push(cause));
+                  }
+                  await scheduler
+                    .release(lease, turn.status)
+                    .catch((cause: unknown) => failures.push(cause));
+                  if (failures.length > 0)
+                    throw new AggregateError(failures, 'Turn execution settlement failed');
+                },
+              };
+            },
+          });
           return manager;
         },
       });
@@ -121,7 +162,7 @@ class NodeProjectRuntime implements ProjectRuntime {
         projectManager: {
           read: async (id) => {
             if (id !== project.id) throw new Error(`Unknown project: ${id}`);
-            return project;
+            return state.current;
           },
         },
         journal: coordinationJournal,
@@ -130,8 +171,24 @@ class NodeProjectRuntime implements ProjectRuntime {
           return manager;
         },
       });
+      for (const thread of manager?.listThreads() ?? []) await manager?.flushThread(thread.id);
       await coordinator.recover(project.id);
-      return new NodeProjectRuntime(project, appServer, coordinator, scheduler);
+      for (const thread of manager?.listThreads() ?? []) {
+        const latest = thread.turns.at(-1);
+        if (
+          latest?.status === 'completed' ||
+          latest?.status === 'failed' ||
+          latest?.status === 'canceled'
+        ) {
+          await coordinator.recordExecutionSettled({
+            projectId: project.id,
+            threadId: thread.id,
+            turnId: latest.id,
+            status: latest.status,
+          });
+        }
+      }
+      return new NodeProjectRuntime(state, appServer, coordinator, scheduler);
     } catch (cause) {
       const results = await Promise.allSettled([
         scheduler.close(),
@@ -153,38 +210,42 @@ class NodeProjectRuntime implements ProjectRuntime {
     return this.appServer.subscribe(listener);
   }
 
-  async request(request: AgentAppRequest): Promise<AgentAppResponse> {
+  async request(
+    request: AgentAppRequest,
+    context: AgentAppRequestContext
+  ): Promise<AgentAppResponse> {
     if (this.closed) return failure(request.method, 'SERVER_CLOSING', 'Project runtime is closing');
     const params = request.params;
     try {
+      if (context.actor === 'agent') this.authorizeAgentRequest(request, context);
       if (request.method === 'thread/create') {
         const created = await this.coordinator.createThread({
-          projectId: this.project.id,
+          projectId: this.state.current.id,
           sourceThreadId: optionalText(params.sourceThreadId),
           objective: optionalText(params.objective),
           modelProfile: optionalText(params.modelProfile),
           idempotencyKey: requiredText(params.idempotencyKey, 'idempotencyKey'),
         });
         return success(request.method, {
-          thread: this.coordinator.readThread(this.project.id, created.threadId),
+          thread: this.coordinator.readThread(this.state.current.id, created.threadId),
         });
       }
       if (request.method === 'thread/list') {
         return success(request.method, {
-          threads: this.coordinator.listThreadSummaries(this.project.id),
+          threads: this.coordinator.listThreadSummaries(this.state.current.id),
         });
       }
       if (request.method === 'thread/read') {
         return success(request.method, {
           thread: this.coordinator.readThread(
-            this.project.id,
+            this.state.current.id,
             requiredText(params.threadId, 'threadId')
           ),
         });
       }
       if (request.method === 'thread/send') {
         const result = await this.coordinator.sendMessage({
-          projectId: this.project.id,
+          projectId: this.state.current.id,
           sourceThreadId: requiredText(params.sourceThreadId, 'sourceThreadId'),
           targetThreadId: requiredText(params.threadId, 'threadId'),
           content: requiredText(params.content, 'content'),
@@ -195,27 +256,29 @@ class NodeProjectRuntime implements ProjectRuntime {
       }
       if (request.method === 'thread/wait') {
         const targets = requiredTextArray(params.threadIds, 'threadIds');
-        await this.coordinator.assertWaitWithinLimit(this.project.id, targets);
-        const result = await this.scheduler.waitFor({
-          projectId: this.project.id,
-          threadId: requiredText(params.threadId, 'threadId'),
-          targets,
+        const result = await this.coordinator.startWait({
+          projectId: this.state.current.id,
+          sourceThreadId: requiredText(params.threadId, 'threadId'),
+          targetThreadIds: targets,
           mode: params.mode === 'any' ? 'any' : params.mode === 'all' ? 'all' : invalidMode(),
+          idempotencyKey: requiredText(params.idempotencyKey, 'idempotencyKey'),
         });
         return success(request.method, { wait: result });
       }
       if (request.method === 'thread/cancel') {
+        const threadId = requiredText(params.threadId, 'threadId');
         await this.coordinator.cancelThread({
-          projectId: this.project.id,
-          threadId: requiredText(params.threadId, 'threadId'),
+          projectId: this.state.current.id,
+          threadId,
           idempotencyKey: requiredText(params.idempotencyKey, 'idempotencyKey'),
         });
         return success(request.method, { ok: true });
       }
       if (request.method === 'thread/archive') {
+        const threadId = requiredText(params.threadId, 'threadId');
         await this.coordinator.archiveThread({
-          projectId: this.project.id,
-          threadId: requiredText(params.threadId, 'threadId'),
+          projectId: this.state.current.id,
+          threadId,
           idempotencyKey: requiredText(params.idempotencyKey, 'idempotencyKey'),
         });
         return success(request.method, { ok: true });
@@ -223,7 +286,7 @@ class NodeProjectRuntime implements ProjectRuntime {
       if (request.method === 'thread/handoff') {
         return success(request.method, {
           handoff: await this.coordinator.handoff({
-            projectId: this.project.id,
+            projectId: this.state.current.id,
             sourceThreadId: requiredText(params.sourceThreadId, 'sourceThreadId'),
             targetThreadId: requiredText(params.threadId, 'threadId'),
             content: requiredText(params.content, 'content'),
@@ -237,6 +300,10 @@ class NodeProjectRuntime implements ProjectRuntime {
         request.method === 'turn/retry' ||
         request.method === 'approval/resolve'
       ) {
+        this.coordinator.assertThreadExecutable(
+          this.state.current.id,
+          requiredText(params.threadId, 'threadId')
+        );
         return (await this.appServer.request({
           method: request.method,
           params,
@@ -253,6 +320,56 @@ class NodeProjectRuntime implements ProjectRuntime {
         runtimeErrorCode(cause),
         cause instanceof Error ? cause.message : String(cause)
       );
+    }
+  }
+
+  async update(project: ProjectSnapshot): Promise<void> {
+    if (project.id !== this.state.current.id || project.rootPath !== this.state.current.rootPath) {
+      throw new Error('Project runtime identity cannot change');
+    }
+    this.state.current = project;
+    await this.scheduler.refresh(project.id);
+  }
+
+  private authorizeAgentRequest(
+    request: AgentAppRequest,
+    context: Extract<AgentAppRequestContext, { readonly actor: 'agent' }>
+  ): void {
+    if (
+      context.projectId !== this.state.current.id ||
+      context.executionProject.id !== this.state.current.id ||
+      request.params.projectId !== context.projectId
+    ) {
+      throw new Error('Agent project authority mismatch');
+    }
+    const policy = context.executionProject.policy;
+    const source = context.sourceThreadId;
+    const suppliedSource = request.params.sourceThreadId;
+    if (suppliedSource !== undefined && suppliedSource !== source) {
+      throw new Error('Agent source thread authority mismatch');
+    }
+    if (request.method === 'thread/create' && !policy.agentCanCreateThreads) {
+      throw new Error('Agent thread creation is not permitted by captured execution policy');
+    }
+    if (request.method === 'thread/send' || request.method === 'thread/handoff') {
+      if (!policy.agentCanMessagePeers) {
+        throw new Error('Agent thread messaging is not permitted by captured execution policy');
+      }
+    }
+    if (
+      request.method === 'thread/send' ||
+      request.method === 'thread/cancel' ||
+      request.method === 'thread/archive' ||
+      request.method === 'thread/handoff'
+    ) {
+      const target = requiredText(request.params.threadId, 'threadId');
+      const relation = this.coordinator.relation(context.projectId, source, target);
+      if (relation === 'self' || relation === 'ancestor') {
+        throw new Error('Agents cannot control or message their active thread or an ancestor');
+      }
+    }
+    if (request.method === 'thread/wait' && request.params.threadId !== source) {
+      throw new Error('Agent wait source authority mismatch');
     }
   }
 
@@ -279,21 +396,28 @@ class NodeProjectRuntime implements ProjectRuntime {
 }
 
 function createProjectThreadRuntimeFactory(
-  project: ProjectSnapshot,
-  scheduler: AgentScheduler,
-  coordinator: () => ProjectCoordinator,
+  state: ProjectRuntimeState,
+  executionProjects: ReadonlyMap<string, ProjectSnapshot>,
   options: AgentAppProjectRuntimeFactoryOptions
 ): ThreadRuntimeFactory {
-  return ({ thread, approvalBroker }) => {
+  return ({ thread, turn, approvalBroker }) => {
+    const project = executionProjects.get(turn.id) ?? state.current;
     const local = new LocalToolRuntime({ cwd: project.rootPath, approvalBroker });
     const threadTools = new ThreadToolRuntime({
-      coordinator: coordinator(),
-      scheduler,
+      request: async (request, execution) => {
+        if (!options.requestAgentApp) throw new Error('Agent App command path is unavailable');
+        return await options.requestAgentApp(request, {
+          actor: 'agent',
+          projectId: project.id,
+          sourceThreadId: thread.id,
+          executionProject: project,
+          signal: execution.signal,
+        });
+      },
       resolveExecutionContext: () => ({
         actor: 'agent',
         projectId: project.id,
         sourceThreadId: thread.id,
-        capabilities: threadCapabilities(project),
       }),
     });
     const toolRuntime = new CompositeToolRuntime([
@@ -330,22 +454,6 @@ function createConfiguredModel(
     defaultParams: config.params,
     tools: [...threadToolDefinitions, ...localToolDefinitions],
   });
-}
-
-function threadCapabilities(
-  project: ProjectSnapshot
-): ReadonlySet<import('../../product/index.js').ThreadCapability> {
-  const capabilities: import('../../product/index.js').ThreadCapability[] = [
-    'readProjectThreads',
-    'cancelThread',
-    'archiveThread',
-    'handoffThread',
-  ];
-  if (project.policy.agentCanCreateThreads) capabilities.push('createChildThread');
-  if (project.policy.agentCanMessagePeers) {
-    capabilities.push('messageChild', 'messagePeer', 'interruptPeer');
-  }
-  return new Set(capabilities);
 }
 
 function success(
@@ -393,7 +501,13 @@ function runtimeErrorCode(cause: unknown): import('../../product/index.js').Agen
   if (message.includes('Unknown project') || message.includes('Unknown project thread'))
     return 'THREAD_NOT_FOUND';
   if (message.includes('idempotency conflict')) return 'IDEMPOTENCY_CONFLICT';
-  if (message.includes('policy') || message.includes('permitted')) return 'POLICY_DENIED';
+  if (
+    message.includes('policy') ||
+    message.includes('permitted') ||
+    message.includes('authority mismatch') ||
+    message.startsWith('Agents cannot')
+  )
+    return 'POLICY_DENIED';
   if (message.includes('journal') || message.includes('Persistence')) return 'PERSISTENCE_FAILURE';
   return 'INVALID_REQUEST';
 }

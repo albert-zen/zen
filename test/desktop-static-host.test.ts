@@ -28,8 +28,61 @@ describe('desktop static host', () => {
       const route = await fetch(new URL('/projects/one', host.url));
       expect(await route.text()).toContain('<div id="root"></div>');
 
-      const api = await fetch(new URL('/request', host.url), { method: 'POST' });
+      const api = await fetch(new URL('/request', host.url), {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: host.url,
+          'sec-fetch-site': 'same-origin',
+        },
+        body: '{}',
+      });
       expect(api.status).toBe(502);
+    } finally {
+      await host.close();
+    }
+  });
+
+  it('rejects forged authority, cross-origin fetch metadata, preflight, and non-json mutation', async () => {
+    const root = await fixtureRoot(roots);
+    const host = await serveDesktopStaticHost({
+      staticRoot: root,
+      apiTarget: 'http://127.0.0.1:1',
+      capability: 'a'.repeat(32),
+    });
+    try {
+      const cases = [
+        { method: 'OPTIONS', headers: {} },
+        { method: 'POST', headers: { origin: 'https://attacker.invalid' } },
+        {
+          method: 'POST',
+          headers: {
+            origin: host.url,
+            'sec-fetch-site': 'cross-site',
+            'content-type': 'application/json',
+          },
+        },
+        {
+          method: 'POST',
+          headers: {
+            origin: host.url,
+            'sec-fetch-site': 'same-origin',
+            'content-type': 'text/plain',
+          },
+        },
+      ] as const;
+      for (const input of cases) {
+        const response = await fetch(new URL('/request', host.url), input);
+        expect(response.status).toBe(403);
+      }
+      expect(
+        await rawStatus(host.url, {
+          Host: 'attacker.invalid',
+          Origin: host.url,
+          'Sec-Fetch-Site': 'same-origin',
+          'Content-Type': 'application/json',
+        })
+      ).toBe(403);
     } finally {
       await host.close();
     }
@@ -50,4 +103,26 @@ async function fixtureRoot(roots: string[]): Promise<string> {
   await (await import('node:fs/promises')).mkdir(join(root, 'assets'));
   await writeFile(join(root, 'assets', 'app.js'), 'console.log(1)');
   return root;
+}
+
+async function rawStatus(url: string, headers: Record<string, string>): Promise<number> {
+  const { request } = await import('node:http');
+  const target = new URL('/request', url);
+  return await new Promise<number>((resolve, reject) => {
+    const outgoing = request(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        method: 'POST',
+        headers,
+      },
+      (response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      }
+    );
+    outgoing.once('error', reject);
+    outgoing.end('{}');
+  });
 }

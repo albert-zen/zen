@@ -22,8 +22,10 @@ export function ThreadView(props: {
   onHandoff: () => void;
 }): React.ReactElement {
   const [input, setInput] = React.useState('');
+  const readOnly = props.summary?.status === 'archived' || props.summary?.status === 'canceled';
   const enabled =
     !!props.thread &&
+    !readOnly &&
     (props.connection.status === 'connected' || props.connection.status === 'running');
   const rows = [...props.state.timelineRows].filter((row) => row.type !== 'trace');
   const submit = async (event: React.FormEvent) => {
@@ -53,6 +55,7 @@ export function ThreadView(props: {
               title="Handoff thread"
               size="icon"
               variant="subtle"
+              disabled={readOnly}
               onClick={props.onHandoff}
             >
               <CornerUpRight className="h-4 w-4" />
@@ -62,6 +65,7 @@ export function ThreadView(props: {
               title="Cancel thread"
               size="icon"
               variant="subtle"
+              disabled={readOnly}
               onClick={props.onCancel}
             >
               <Square className="h-4 w-4" />
@@ -71,6 +75,7 @@ export function ThreadView(props: {
               title="Archive thread"
               size="icon"
               variant="subtle"
+              disabled={readOnly}
               onClick={props.onArchive}
             >
               <Archive className="h-4 w-4" />
@@ -90,6 +95,13 @@ export function ThreadView(props: {
         </div>
       </section>
       <div className="border-t border-zinc-800 px-5 py-3">
+        {readOnly ? (
+          <div className="mx-auto mb-2 w-full max-w-4xl text-xs font-medium text-zinc-400">
+            {props.summary?.status === 'archived'
+              ? 'Archived history is read-only.'
+              : 'Canceled thread history is read-only.'}
+          </div>
+        ) : null}
         <form
           onSubmit={(event) => void submit(event)}
           className="mx-auto grid w-full max-w-4xl grid-cols-[minmax(0,1fr)_auto] items-end gap-2"
@@ -99,7 +111,13 @@ export function ThreadView(props: {
             rows={2}
             value={input}
             disabled={!enabled}
-            placeholder={props.thread ? 'Message this thread' : 'Select a thread'}
+            placeholder={
+              readOnly
+                ? `${props.summary?.status === 'archived' ? 'Archived' : 'Canceled'} thread is read-only`
+                : props.thread
+                  ? 'Message this thread'
+                  : 'Select a thread'
+            }
             onChange={(event) => setInput(event.target.value)}
           />
           <Button type="submit" variant="primary" disabled={!enabled || !input.trim()}>

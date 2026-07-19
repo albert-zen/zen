@@ -4,18 +4,8 @@ import type {
   ToolRuntime,
   ToolRuntimeEvent,
 } from '../kernel/index.js';
-import { AgentScheduler } from './agent-scheduler.js';
-import { ProjectCoordinator } from './project-coordinator.js';
-
-export type ThreadCapability =
-  | 'createChildThread'
-  | 'messageChild'
-  | 'messagePeer'
-  | 'interruptPeer'
-  | 'cancelThread'
-  | 'archiveThread'
-  | 'handoffThread'
-  | 'readProjectThreads';
+import type { JsonObject } from './app-server-protocol.js';
+import type { AgentAppRequest, AgentAppResponse } from './agent-app-protocol.js';
 
 type ThreadToolName =
   | 'thread.create'
@@ -32,12 +22,13 @@ export type ThreadToolExecutionContext = {
   readonly actor?: 'human' | 'agent';
   readonly projectId: string;
   readonly sourceThreadId: string;
-  readonly capabilities: ReadonlySet<ThreadCapability>;
 };
 
 export type ThreadToolRuntimeOptions = {
-  readonly coordinator: ProjectCoordinator;
-  readonly scheduler: AgentScheduler;
+  readonly request: (
+    request: AgentAppRequest,
+    context: ThreadToolExecutionContext & { readonly signal?: AbortSignal }
+  ) => Promise<AgentAppResponse>;
   readonly resolveExecutionContext: (
     context: ToolExecutionContext
   ) => ThreadToolExecutionContext | undefined;
@@ -59,21 +50,19 @@ export const threadToolDefinitions = [
   toolDefinition('thread.list', []),
   toolDefinition('thread.read', ['threadId']),
   toolDefinition('thread.send', ['threadId', 'content', 'idempotencyKey']),
-  toolDefinition('thread.wait', ['threadIds', 'mode']),
+  toolDefinition('thread.wait', ['threadIds', 'mode', 'idempotencyKey']),
   toolDefinition('thread.cancel', ['threadId', 'idempotencyKey']),
   toolDefinition('thread.archive', ['threadId', 'idempotencyKey']),
   toolDefinition('thread.handoff', ['threadId', 'content', 'idempotencyKey']),
 ] as const;
 
 export class ThreadToolRuntime implements ToolRuntime {
-  private readonly coordinator: ProjectCoordinator;
-  private readonly scheduler: AgentScheduler;
+  private readonly request: ThreadToolRuntimeOptions['request'];
   private readonly resolveExecutionContext: ThreadToolRuntimeOptions['resolveExecutionContext'];
   private readonly fallback?: ToolRuntime;
 
   constructor(options: ThreadToolRuntimeOptions) {
-    this.coordinator = options.coordinator;
-    this.scheduler = options.scheduler;
+    this.request = options.request;
     this.resolveExecutionContext = options.resolveExecutionContext;
     this.fallback = options.fallback;
   }
@@ -97,14 +86,16 @@ export class ThreadToolRuntime implements ToolRuntime {
       const execution = this.resolveExecutionContext(context);
       if (!execution)
         throw new ThreadToolError('FORBIDDEN', 'Thread tool execution context is unavailable');
-      requireCapability(execution, call.name, objectInput(call.input), this.coordinator);
       const result = await this.dispatch(
         call.name,
         objectInput(call.input),
         execution,
         context.signal
       );
-      yield { type: 'result.completed', content: result };
+      yield {
+        type: call.name === 'thread.wait' ? 'execution.yielded' : 'result.completed',
+        content: result,
+      };
     } catch (error) {
       yield { type: 'error', error };
     }
@@ -116,72 +107,70 @@ export class ThreadToolRuntime implements ToolRuntime {
     execution: ThreadToolExecutionContext,
     signal?: AbortSignal
   ): Promise<unknown> {
+    const params = { projectId: execution.projectId } as Record<string, unknown>;
     if (name === 'thread.create') {
-      return await this.coordinator.createThread({
-        projectId: execution.projectId,
-        sourceThreadId: execution.sourceThreadId,
-        objective: optionalString(input.objective, 'objective'),
-        idempotencyKey: requiredString(input.idempotencyKey, 'idempotencyKey'),
-      });
+      params.sourceThreadId = execution.sourceThreadId;
+      params.objective = optionalString(input.objective, 'objective');
+      params.idempotencyKey = requiredString(input.idempotencyKey, 'idempotencyKey');
+      return await this.call(name, params, execution, signal);
     }
-    if (name === 'thread.list') return this.coordinator.listThreadSummaries(execution.projectId);
+    if (name === 'thread.list') return await this.call(name, params, execution, signal);
     if (name === 'thread.read') {
-      const snapshot = this.coordinator.readThread(
-        execution.projectId,
-        requiredString(input.threadId, 'threadId')
-      );
-      return {
-        id: snapshot.id,
-        status: snapshot.status,
-        turns: snapshot.turns.map((turn) => ({ id: turn.id, status: turn.status })),
-      };
+      params.threadId = requiredString(input.threadId, 'threadId');
+      return await this.call(name, params, execution, signal);
     }
     if (name === 'thread.send') {
-      return await this.coordinator.sendMessage({
-        projectId: execution.projectId,
-        sourceThreadId: execution.sourceThreadId,
-        targetThreadId: requiredString(input.threadId, 'threadId'),
-        content: requiredString(input.content, 'content'),
-        idempotencyKey: requiredString(input.idempotencyKey, 'idempotencyKey'),
-        interrupt: optionalBoolean(input.interrupt, 'interrupt') ?? false,
-      });
+      params.sourceThreadId = execution.sourceThreadId;
+      params.threadId = requiredString(input.threadId, 'threadId');
+      params.content = requiredString(input.content, 'content');
+      params.idempotencyKey = requiredString(input.idempotencyKey, 'idempotencyKey');
+      params.interrupt = optionalBoolean(input.interrupt, 'interrupt') ?? false;
+      return await this.call(name, params, execution, signal);
     }
     if (name === 'thread.wait') {
-      await this.coordinator.assertWaitWithinLimit(
-        execution.projectId,
-        requiredStringArray(input.threadIds, 'threadIds')
-      );
-      return await this.scheduler.waitFor({
-        projectId: execution.projectId,
-        threadId: execution.sourceThreadId,
-        targets: requiredStringArray(input.threadIds, 'threadIds'),
-        mode: requiredMode(input.mode),
-        signal,
-      });
+      params.threadId = execution.sourceThreadId;
+      params.threadIds = requiredStringArray(input.threadIds, 'threadIds');
+      params.mode = requiredMode(input.mode);
+      params.idempotencyKey = requiredString(input.idempotencyKey, 'idempotencyKey');
+      return await this.call(name, params, execution, signal);
     }
     if (name === 'thread.cancel') {
-      await this.coordinator.cancelThread({
-        projectId: execution.projectId,
-        threadId: requiredString(input.threadId, 'threadId'),
-        idempotencyKey: requiredString(input.idempotencyKey, 'idempotencyKey'),
-      });
-      return { ok: true };
+      params.threadId = requiredString(input.threadId, 'threadId');
+      params.idempotencyKey = requiredString(input.idempotencyKey, 'idempotencyKey');
+      return await this.call(name, params, execution, signal);
     }
     if (name === 'thread.archive') {
-      await this.coordinator.archiveThread({
-        projectId: execution.projectId,
-        threadId: requiredString(input.threadId, 'threadId'),
-        idempotencyKey: requiredString(input.idempotencyKey, 'idempotencyKey'),
-      });
-      return { ok: true };
+      params.threadId = requiredString(input.threadId, 'threadId');
+      params.idempotencyKey = requiredString(input.idempotencyKey, 'idempotencyKey');
+      return await this.call(name, params, execution, signal);
     }
-    return await this.coordinator.handoff({
-      projectId: execution.projectId,
-      sourceThreadId: execution.sourceThreadId,
-      targetThreadId: requiredString(input.threadId, 'threadId'),
-      content: requiredString(input.content, 'content'),
-      idempotencyKey: requiredString(input.idempotencyKey, 'idempotencyKey'),
-    });
+    params.sourceThreadId = execution.sourceThreadId;
+    params.threadId = requiredString(input.threadId, 'threadId');
+    params.content = requiredString(input.content, 'content');
+    params.idempotencyKey = requiredString(input.idempotencyKey, 'idempotencyKey');
+    return await this.call(name, params, execution, signal);
+  }
+
+  private async call(
+    method: ThreadToolName,
+    params: Record<string, unknown>,
+    execution: ThreadToolExecutionContext,
+    signal?: AbortSignal
+  ): Promise<unknown> {
+    const response = await this.request(
+      {
+        method: method.replace('.', '/') as AgentAppRequest['method'],
+        params: params as JsonObject,
+      },
+      { ...execution, signal }
+    );
+    if (!response.ok) {
+      throw new ThreadToolError(
+        response.error.code === 'RESOURCE_EXHAUSTED' ? 'RESOURCE_EXHAUSTED' : 'FORBIDDEN',
+        response.error.message
+      );
+    }
+    return response.result;
   }
 }
 
@@ -211,50 +200,6 @@ function toolDefinition(name: ThreadToolName, required: readonly string[]) {
 
 function isThreadTool(name: string): name is ThreadToolName {
   return threadToolDefinitions.some((definition) => definition.function.name === name);
-}
-
-function requireCapability(
-  context: ThreadToolExecutionContext,
-  tool: string,
-  input: Readonly<Record<string, unknown>>,
-  coordinator: ProjectCoordinator
-): void {
-  const capability = capabilityForTool(context, tool, input, coordinator);
-  if (!context.capabilities.has(capability)) {
-    throw new ThreadToolError('FORBIDDEN', `Capability denied: ${capability}`);
-  }
-}
-
-function capabilityForTool(
-  context: ThreadToolExecutionContext,
-  tool: string,
-  input: Readonly<Record<string, unknown>>,
-  coordinator: ProjectCoordinator
-): ThreadCapability {
-  if (tool === 'thread.create') return 'createChildThread';
-  if (tool === 'thread.list' || tool === 'thread.read') return 'readProjectThreads';
-  if (tool === 'thread.wait') return 'readProjectThreads';
-  if (tool === 'thread.cancel' || tool === 'thread.archive' || tool === 'thread.handoff') {
-    const target = requiredString(input.threadId, 'threadId');
-    if (target === context.sourceThreadId) {
-      throw new ThreadToolError(
-        'FORBIDDEN',
-        'Agents cannot terminate or hand off their active thread'
-      );
-    }
-    return tool === 'thread.cancel'
-      ? 'cancelThread'
-      : tool === 'thread.archive'
-        ? 'archiveThread'
-        : 'handoffThread';
-  }
-  const target = requiredString(input.threadId, 'threadId');
-  const relation = coordinator.relation(context.projectId, context.sourceThreadId, target);
-  if (relation === 'ancestor' || relation === 'self') {
-    throw new ThreadToolError('FORBIDDEN', 'Agents cannot message themselves or ancestors');
-  }
-  if (input.interrupt === true) return 'interruptPeer';
-  return relation === 'child' ? 'messageChild' : 'messagePeer';
 }
 
 function objectInput(value: unknown): Readonly<Record<string, unknown>> {

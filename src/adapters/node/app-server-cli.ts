@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { join } from 'node:path';
-
+import { resolveAgentAppDataRoot } from './app-data-root.js';
 import { createAgentAppProductionComposition } from './agent-app-production.js';
 import { serveAgentAppHttpTransport } from './agent-app-transport.js';
 import { runAgentAppCliComposition } from './production-composition.js';
@@ -25,7 +24,7 @@ await runAgentAppCliComposition({
   credentialMode,
   signalSource: process,
   createAppServer: async () =>
-    (await createAgentAppProductionComposition({ appDataRoot: join(process.cwd(), '.zen') }))
+    (await createAgentAppProductionComposition({ appDataRoot: resolveAgentAppDataRoot() }))
       .agentAppServer,
   createTransport: async (appServer, capability) =>
     await serveAgentAppHttpTransport({

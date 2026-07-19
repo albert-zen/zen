@@ -7,6 +7,7 @@ import {
   ProjectManager,
   ThreadManager,
   ThreadMailbox,
+  type Item,
   type ProjectCoordinationJournal,
 } from './test-exports.js';
 
@@ -94,10 +95,10 @@ describe('ProjectCoordinator and ThreadMailbox', () => {
     ).rejects.toBeInstanceOf(ProjectIdempotencyConflictError);
   });
 
-  it('enforces project boundaries, archive state, capability, and depth', async () => {
+  it('enforces project boundaries, archive state, and depth independent of caller authority', async () => {
     const fixture = await createFixture({
       policy: {
-        maxConcurrentAgents: 1,
+        maxActiveExecutions: 1,
         maxThreadDepth: 1,
         agentCanCreateThreads: false,
         agentCanMessagePeers: false,
@@ -108,22 +109,27 @@ describe('ProjectCoordinator and ThreadMailbox', () => {
       idempotencyKey: 'root',
     });
 
+    const child = await fixture.coordinator.createThread({
+      projectId: fixture.projectId,
+      sourceThreadId: root.threadId,
+      idempotencyKey: 'child',
+    });
     await expect(
       fixture.coordinator.createThread({
         projectId: fixture.projectId,
-        sourceThreadId: root.threadId,
-        idempotencyKey: 'child',
+        sourceThreadId: child.threadId,
+        idempotencyKey: 'grandchild',
       })
-    ).rejects.toThrow('not permitted');
+    ).rejects.toThrow('maxThreadDepth');
     await expect(
       fixture.mailbox.send({
         projectId: fixture.projectId,
         sourceThreadId: root.threadId,
-        targetThreadId: root.threadId,
-        content: 'peer',
-        idempotencyKey: 'peer',
+        targetThreadId: child.threadId,
+        content: 'human command path remains authorized',
+        idempotencyKey: 'message',
       })
-    ).rejects.toThrow('not permitted');
+    ).resolves.toMatchObject({ targetThreadId: child.threadId });
 
     await fixture.coordinator.archiveThread({
       projectId: fixture.projectId,
@@ -164,12 +170,102 @@ describe('ProjectCoordinator and ThreadMailbox', () => {
     ).rejects.toThrow('injected coordination failure');
     expect(fixture.runtimeCalls()).toBe(0);
   });
+
+  it('recovers one prepared Thread after a thread-journal barrier crash', async () => {
+    const journal = new InMemoryProjectCoordinationJournal();
+    let failBarrier = true;
+    const fixture = await createFixture({
+      journal,
+      itemCommitBarrier: async () => {
+        if (failBarrier) throw new Error('injected thread barrier failure');
+      },
+    });
+
+    await expect(
+      fixture.coordinator.createThread({
+        projectId: fixture.projectId,
+        idempotencyKey: 'prepared-crash',
+      })
+    ).rejects.toThrow('injected thread barrier failure');
+    const prepared = fixture.coordinator
+      .listCoordinationItems(fixture.projectId)
+      .find((item) => item.type === 'project.thread.prepared');
+    expect(prepared?.targetThreadId).toBeTruthy();
+    expect(
+      fixture.coordinator
+        .listCoordinationItems(fixture.projectId)
+        .some((item) => item.type === 'project.thread.created')
+    ).toBe(false);
+
+    failBarrier = false;
+    const recovered = await ProjectCoordinator.open({
+      projectManager: fixture.projects,
+      journal,
+      createThreadManager: () => fixture.threadManager,
+      generateId: sequence('recovered-coordination'),
+      clock: () => 1001,
+    });
+    await recovered.recover(fixture.projectId);
+    expect(recovered.listThreadSummaries(fixture.projectId)).toEqual([
+      expect.objectContaining({ threadId: prepared?.targetThreadId }),
+    ]);
+    await expect(
+      recovered.createThread({
+        projectId: fixture.projectId,
+        idempotencyKey: 'prepared-crash',
+      })
+    ).resolves.toEqual({ threadId: prepared?.targetThreadId });
+  });
+
+  it('does not claim message activation before the queued Turn barrier and resumes on recovery', async () => {
+    let failBarrier = false;
+    const fixture = await createFixture({
+      itemCommitBarrier: async () => {
+        if (failBarrier) throw new Error('injected turn barrier failure');
+      },
+    });
+    const source = await fixture.coordinator.createThread({
+      projectId: fixture.projectId,
+      idempotencyKey: 'barrier-source',
+    });
+    const target = await fixture.coordinator.createThread({
+      projectId: fixture.projectId,
+      idempotencyKey: 'barrier-target',
+    });
+
+    failBarrier = true;
+    await expect(
+      fixture.mailbox.send({
+        projectId: fixture.projectId,
+        sourceThreadId: source.threadId,
+        targetThreadId: target.threadId,
+        content: 'resume after crash',
+        idempotencyKey: 'barrier-message',
+      })
+    ).rejects.toThrow('injected turn barrier failure');
+    expect(
+      fixture.coordinator
+        .listCoordinationItems(fixture.projectId)
+        .some((item) => item.type === 'thread.message.activated')
+    ).toBe(false);
+    expect(fixture.runtimeCalls()).toBe(0);
+
+    failBarrier = false;
+    await fixture.coordinator.recover(fixture.projectId);
+    expect(
+      fixture.coordinator
+        .listCoordinationItems(fixture.projectId)
+        .filter((item) => item.type === 'thread.message.activated')
+    ).toHaveLength(1);
+    await expect.poll(fixture.runtimeCalls).toBe(1);
+  });
 });
 
 async function createFixture(
   options: {
     readonly journal?: ProjectCoordinationJournal;
     readonly policy?: Parameters<ProjectManager['create']>[0]['policy'];
+    readonly itemCommitBarrier?: (threadId: string, item: Item) => Promise<void>;
   } = {}
 ): Promise<{
   readonly projectId: string;
@@ -177,6 +273,7 @@ async function createFixture(
   readonly mailbox: ThreadMailbox;
   readonly threadManager: ThreadManager;
   readonly runtimeCalls: () => number;
+  readonly projects: ProjectManager;
 }> {
   let runtimeCalls = 0;
   const projects = await ProjectManager.open({
@@ -208,6 +305,7 @@ async function createFixture(
             },
           },
         }),
+        itemCommitBarrier: options.itemCommitBarrier,
       });
       return threadManager;
     },
@@ -223,6 +321,7 @@ async function createFixture(
       return threadManager;
     },
     runtimeCalls: () => runtimeCalls,
+    projects,
   };
 }
 

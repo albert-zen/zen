@@ -13,7 +13,9 @@ import {
 export async function startFixtureServer() {
   const root = await mkdtemp(join(tmpdir(), 'zen-agent-app-e2e-'));
   const projectRoot = join(root, 'workspace');
+  const secondProjectRoot = join(root, 'workspace-two');
   await mkdir(projectRoot, { recursive: true });
+  await mkdir(secondProjectRoot, { recursive: true });
   const execution = [];
   const composition = await createAgentAppProductionComposition({
     appDataRoot: join(root, 'app-data'),
@@ -59,6 +61,7 @@ export async function startFixtureServer() {
   return {
     origin: `http://127.0.0.1:${address.port}`,
     projectRoot,
+    secondProjectRoot,
     executionCount: () => execution.length,
     async request(body) {
       const response = await fetch(new URL('/request', transport.url), {

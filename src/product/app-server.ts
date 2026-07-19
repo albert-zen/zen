@@ -156,6 +156,7 @@ export class AppServer implements AppServerClient {
         threadId: readRequiredString(params, 'threadId'),
         input: readJsonValue(params.input),
         modelOptions: isJsonObject(params.modelOptions) ? params.modelOptions : undefined,
+        commandId: typeof params.idempotencyKey === 'string' ? params.idempotencyKey : undefined,
       };
 
       const prepared = this.threadManager.prepareTurn(turnInput);
@@ -194,6 +195,7 @@ export class AppServer implements AppServerClient {
         turnId:
           typeof params.turnId === 'string' && params.turnId.length > 0 ? params.turnId : undefined,
         modelOptions: isJsonObject(params.modelOptions) ? params.modelOptions : undefined,
+        commandId: typeof params.idempotencyKey === 'string' ? params.idempotencyKey : undefined,
       };
 
       const prepared = this.threadManager.prepareRetry(retryInput);

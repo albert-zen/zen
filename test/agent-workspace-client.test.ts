@@ -287,7 +287,7 @@ function project(id: string, name: string): ProjectSnapshot {
     updatedAtMs: 0,
     status: 'active',
     policy: {
-      maxConcurrentAgents: 2,
+      maxActiveExecutions: 2,
       maxThreadDepth: 4,
       agentCanCreateThreads: true,
       agentCanMessagePeers: true,

@@ -145,7 +145,7 @@ function decodeProjectRecord(value: unknown, path: string): ProjectRecord {
 function isProjectPolicy(value: unknown): value is ProjectPolicy {
   return (
     isRecord(value) &&
-    isPositiveInteger(value.maxConcurrentAgents) &&
+    isPositiveInteger(value.maxActiveExecutions) &&
     isPositiveInteger(value.maxThreadDepth) &&
     optionalPositiveInteger(value.maxThreads) &&
     optionalPositiveInteger(value.maxQueuedMessages) &&

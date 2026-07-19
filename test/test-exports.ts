@@ -4,7 +4,6 @@ export * from '../src/kernel/index.js';
 export * from '../src/product/index.js';
 export * from '../src/adapters/node/index.js';
 export * from '../src/presentation/index.js';
-export * from '../src/tui/index.js';
 // Legacy runtime characterization tests remain internal-only during protocol
 // migration; no package entry point re-exports these symbols.
 export * from '../src/product/app-server.js';

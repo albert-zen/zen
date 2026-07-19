@@ -632,6 +632,24 @@ describe('owned E2E supervisor', () => {
     }
   });
 
+  it('treats a Windows path case alias as the same confined ownership root', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'zen-e2e-supervisor-'));
+    const root = path.join(directory, 'runs');
+    const aliasedRoot = process.platform === 'win32' ? root.toUpperCase() : root;
+    const dead = leaseOwner(952);
+    try {
+      const stale = await ownedE2eSupervisorTesting.createRunStore(
+        aliasedRoot,
+        'zen-e2e-path-case',
+        { captureLeaseOwner: async () => dead }
+      );
+      await ownedE2eSupervisorTesting.reclaimStaleRuns(aliasedRoot, async () => []);
+      await expect(readdir(stale.runDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await removeOwnedTestDirectory(directory, undefined, { list: async () => [] });
+    }
+  });
+
   it('retains a paused writer during clear, then clears after release and revision revalidation', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const entered = deferred();

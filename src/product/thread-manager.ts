@@ -54,18 +54,25 @@ export type ThreadManagerOptions = {
   readonly itemCommitBarrier?: (threadId: string, item: Item) => Promise<void>;
   readonly persistenceFailures?: readonly import('./app-server-protocol.js').ThreadPersistenceFailure[];
   readonly approvalBroker?: ApprovalBroker;
+  readonly acquireExecutionLease?: (input: {
+    readonly threadId: string;
+    readonly turnId: string;
+    readonly signal: AbortSignal;
+  }) => Promise<{ settle(turn: TurnSnapshot): Promise<void> }>;
 };
 
 export type TurnStartInput = {
   readonly threadId: string;
   readonly input: JsonValue;
   readonly modelOptions?: ModelOptions;
+  readonly commandId?: string;
 };
 
 export type TurnRetryInput = {
   readonly threadId: string;
   readonly turnId?: string;
   readonly modelOptions?: ModelOptions;
+  readonly commandId?: string;
 };
 
 export type PreparedTurn = {
@@ -119,6 +126,7 @@ export class ThreadManager {
   private readonly approvalBroker?: ApprovalBroker;
   private readonly persistenceObserver?: ThreadManagerOptions['persistenceObserver'];
   private readonly itemCommitBarrier?: ThreadManagerOptions['itemCommitBarrier'];
+  private readonly acquireExecutionLease?: ThreadManagerOptions['acquireExecutionLease'];
   private readonly pendingTurnActivations = new Set<() => void>();
   private readonly persistenceFailuresByThread = new Map<
     string,
@@ -138,6 +146,7 @@ export class ThreadManager {
     this.approvalBroker = options.approvalBroker;
     this.persistenceObserver = options.persistenceObserver;
     this.itemCommitBarrier = options.itemCommitBarrier;
+    this.acquireExecutionLease = options.acquireExecutionLease;
     this.persistenceFailures = [...(options.persistenceFailures ?? [])];
     for (const failure of this.persistenceFailures) {
       if (failure.threadId) this.persistenceFailuresByThread.set(failure.threadId, failure);
@@ -161,8 +170,12 @@ export class ThreadManager {
     };
   }
 
-  startThread(): ThreadSnapshot {
-    const id = this.generateUniqueThreadId();
+  reserveThreadId(): string {
+    return this.generateUniqueThreadId();
+  }
+
+  startThread(id = this.generateUniqueThreadId()): ThreadSnapshot {
+    if (this.threads.has(id)) throw new Error(`Thread already exists: ${id}`);
     const created: Item = {
       id: `thread-created:${id}`,
       type: 'thread.created',
@@ -199,6 +212,24 @@ export class ThreadManager {
 
   listThreads(): readonly ThreadSnapshot[] {
     return [...this.threads.values()].map((thread) => this.snapshotThread(thread));
+  }
+
+  async flushThread(threadId: string): Promise<void> {
+    const thread = this.getThread(threadId);
+    const item = thread.itemList.getItems().at(-1);
+    if (item) await this.itemCommitBarrier?.(threadId, item);
+  }
+
+  async fenceThread(threadId: string): Promise<ThreadSnapshot> {
+    const thread = this.getThread(threadId);
+    const active = this.activeTurns.get(threadId);
+    if (active) active.controller.abort();
+    const cancellable = this.snapshotThread(thread).turns.filter(
+      (turn) => turn.status === 'queued' || turn.id === active?.turnId
+    );
+    await Promise.all(cancellable.map(async (turn) => await this.cancelTurn(thread, turn)));
+    await this.flushThread(threadId);
+    return this.snapshotThread(thread);
   }
 
   loadThread(snapshot: ThreadSnapshot, options: { readonly emit?: boolean } = {}): ThreadSnapshot {
@@ -377,6 +408,7 @@ export class ThreadManager {
       threadId: thread.id,
       input: readUserInputForTurn(thread, retrySource),
       modelOptions: input.modelOptions,
+      commandId: input.commandId,
     };
   }
 
@@ -387,6 +419,32 @@ export class ThreadManager {
     if (this.closing) throw new Error('Thread manager is closing');
     const thread = this.getThread(input.threadId);
     const current = this.snapshotThread(thread);
+    if (input.commandId) {
+      const queued = thread.itemList
+        .getItems()
+        .find(
+          (item) =>
+            item.type === 'turn.queued' &&
+            readObjectProperty(item.payload, 'commandId') === input.commandId
+        );
+      if (queued) {
+        const existing = this.getTurnSnapshot(thread, queued.turnId);
+        const previousInput = readObjectProperty(queued.payload, 'input');
+        if (JSON.stringify(previousInput) !== JSON.stringify(input.input)) {
+          throw new Error(`Turn command idempotency conflict: ${input.commandId}`);
+        }
+        if (existing.status !== 'queued') {
+          return {
+            preparation: {
+              turn: existing,
+              activate: async () => this.getTurnSnapshot(thread, existing.id),
+              abandon: () => undefined,
+            },
+          };
+        }
+        return { preparation: this.createActivationPreparation(thread, existing.id, input) };
+      }
+    }
     const turnId = generateUniqueId(
       this.generateTurnId,
       new Set(current.turns.map((turn) => turn.id))
@@ -395,6 +453,41 @@ export class ThreadManager {
       this.generateRunId,
       new Set(current.turns.map((turn) => turn.runId))
     );
+    const reservation = this.reserveTurnActivation(thread, turnId, input);
+    let appendError: unknown;
+    try {
+      this.appendQueuedTurn(thread, turnId, runId, input.input, input.commandId);
+    } catch (cause) {
+      appendError = cause;
+    }
+    try {
+      return {
+        preparation: this.preparedTurn(thread, turnId, reservation),
+        ...(appendError === undefined ? {} : { appendError }),
+      };
+    } catch (cause) {
+      reservation.abandon();
+      throw appendError ?? cause;
+    }
+  }
+
+  private createActivationPreparation(
+    thread: ThreadState,
+    turnId: string,
+    input: TurnStartInput
+  ): PreparedTurn {
+    return this.preparedTurn(thread, turnId, this.reserveTurnActivation(thread, turnId, input));
+  }
+
+  private reserveTurnActivation(
+    thread: ThreadState,
+    turnId: string,
+    input: TurnStartInput
+  ): {
+    readonly completion: Promise<TurnSnapshot>;
+    readonly activate: () => void;
+    readonly abandon: () => void;
+  } {
     let activate!: (value: boolean) => void;
     const activation = new Promise<boolean>((resolve) => {
       activate = resolve;
@@ -408,28 +501,31 @@ export class ThreadManager {
       activate(false);
     };
     this.pendingTurnActivations.add(abandon);
-    let appendError: unknown;
-    try {
-      this.appendQueuedTurn(thread, turnId, runId, input.input);
-    } catch (cause) {
-      appendError = cause;
-    }
-    const turn = this.getTurnSnapshot(thread, turnId);
-
     return {
-      preparation: {
-        turn,
-        activate: () => {
-          if (state === 'pending') {
-            state = 'active';
-            this.pendingTurnActivations.delete(abandon);
-            activate(true);
-          }
-          return completion;
-        },
-        abandon,
+      completion,
+      activate: () => {
+        if (state === 'pending') {
+          state = 'active';
+          this.pendingTurnActivations.delete(abandon);
+          activate(true);
+        }
       },
-      appendError,
+      abandon,
+    };
+  }
+
+  private preparedTurn(
+    thread: ThreadState,
+    turnId: string,
+    reservation: ReturnType<ThreadManager['reserveTurnActivation']>
+  ): PreparedTurn {
+    return {
+      turn: this.getTurnSnapshot(thread, turnId),
+      activate: () => {
+        reservation.activate();
+        return reservation.completion;
+      },
+      abandon: reservation.abandon,
     };
   }
 
@@ -437,14 +533,15 @@ export class ThreadManager {
     thread: ThreadState,
     turnId: string,
     runId: string,
-    input: JsonValue
+    input: JsonValue,
+    commandId?: string
   ): void {
     thread.itemList.append({
       type: 'turn.queued',
       runId,
       turnId,
       visibility: 'trace',
-      payload: { input },
+      payload: { input, ...(commandId ? { commandId } : {}) },
     });
   }
 
@@ -484,6 +581,7 @@ export class ThreadManager {
     input: TurnStartInput
   ): Promise<TurnSnapshot> {
     const existing = this.getTurnSnapshot(thread, turnId);
+    if (isTerminalTurnStatus(existing.status)) return existing;
     if (this.closing) {
       return isTerminalTurnStatus(existing.status)
         ? existing
@@ -493,7 +591,13 @@ export class ThreadManager {
 
     this.activeTurns.set(thread.id, { turnId, controller });
 
+    let lease: { settle(turn: TurnSnapshot): Promise<void> } | undefined;
     try {
+      lease = await this.acquireExecutionLease?.({
+        threadId: thread.id,
+        turnId,
+        signal: controller.signal,
+      });
       const turn = this.getTurnSnapshot(thread, turnId);
       const runtime = this.runtimeFactory({
         thread: toThreadRecord(thread),
@@ -513,6 +617,15 @@ export class ThreadManager {
       });
 
       const terminal = this.getTurnSnapshot(thread, turn.id);
+
+      if (result.yielded && terminal.status === 'waiting') {
+        this.emit({
+          type: 'turn/completed',
+          threadId: thread.id,
+          turn: terminal,
+        });
+        return terminal;
+      }
 
       if (terminal.status === 'completed') {
         this.emit({
@@ -567,6 +680,7 @@ export class ThreadManager {
         details: serializeError(cause),
       });
     } finally {
+      if (lease) await lease.settle(this.getTurnSnapshot(thread, turnId));
       if (this.activeTurns.get(thread.id)?.turnId === turnId) {
         this.activeTurns.delete(thread.id);
       }
@@ -832,7 +946,9 @@ function isRecoverableTurnStatus(status: TurnStatus): boolean {
 }
 
 function isTerminalTurnStatus(status: TurnStatus): boolean {
-  return status === 'completed' || status === 'failed' || status === 'canceled';
+  return (
+    status === 'waiting' || status === 'completed' || status === 'failed' || status === 'canceled'
+  );
 }
 
 function readUserInputForTurn(thread: ThreadState, turn: TurnSnapshot): JsonValue {

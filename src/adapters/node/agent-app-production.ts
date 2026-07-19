@@ -1,6 +1,14 @@
+import { realpath } from 'node:fs/promises';
+import { platform } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { AgentAppServer, ProjectManager } from '../../product/index.js';
+import {
+  AgentAppServer,
+  ProjectCommandLedger,
+  ProjectManager,
+  type AgentAppResponse,
+} from '../../product/index.js';
+import { FileProjectCommandStore } from './file-project-command-store.js';
 import { FileProjectRegistry } from './file-project-registry.js';
 import {
   createAgentAppProjectRuntimeFactory,
@@ -37,14 +45,20 @@ export async function createAgentAppProductionComposition(
     registry: new FileProjectRegistry({
       filePath: options.registryPath ?? join(appDataRoot, 'projects.json'),
     }),
-    rootPathNormalizer: (rootPath) => resolve(rootPath),
+    rootPathNormalizer: canonicalizeProjectRootPath,
   });
-  const agentAppServer = new AgentAppServer({
+  const commandLedger = await ProjectCommandLedger.open(
+    new FileProjectCommandStore(join(appDataRoot, 'commands.json'))
+  );
+  const agentAppServer: AgentAppServer = new AgentAppServer({
     projectManager,
+    commandLedger,
     createRuntime: createAgentAppProjectRuntimeFactory({
       appDataRoot,
       config: options.config,
       createModel: options.createModel,
+      requestAgentApp: async (request, context): Promise<AgentAppResponse> =>
+        await agentAppServer.requestFromAgent(request, context),
     }),
   });
   let closePromise: Promise<void> | undefined;
@@ -56,4 +70,9 @@ export async function createAgentAppProductionComposition(
       return closePromise;
     },
   };
+}
+
+export async function canonicalizeProjectRootPath(rootPath: string): Promise<string> {
+  const canonical = await realpath(resolve(rootPath));
+  return platform() === 'win32' ? canonical.toLowerCase() : canonical;
 }

@@ -10,6 +10,7 @@ export type AgentAppErrorCode =
   | 'WAIT_CYCLE'
   | 'RESOURCE_EXHAUSTED'
   | 'PERSISTENCE_FAILURE'
+  | 'COMMAND_PENDING'
   | 'INVALID_REQUEST'
   | 'SERVER_CLOSING';
 export type AgentAppError = {
@@ -90,6 +91,7 @@ const mutations = new Set<AgentAppMethod>([
   'project/archive',
   'thread/create',
   'thread/send',
+  'thread/wait',
   'thread/cancel',
   'thread/archive',
   'thread/handoff',
@@ -98,6 +100,9 @@ const mutations = new Set<AgentAppMethod>([
   'turn/retry',
   'approval/resolve',
 ]);
+export function isAgentAppMutation(method: AgentAppMethod): boolean {
+  return mutations.has(method);
+}
 export function parseAgentAppRequest(value: unknown): AgentAppRequest {
   if (
     !isRecord(value) ||

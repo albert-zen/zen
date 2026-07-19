@@ -4,7 +4,6 @@ import { once } from 'node:events';
 
 import {
   AggregateProductionShutdown,
-  AgentInteractionSession,
   AppServer,
   type AppServerClient,
   type AppServerNotification,
@@ -706,42 +705,6 @@ describe('App Server HTTP transport', () => {
       expect(read.result.thread.items.map((item) => item.type)).not.toContain('tool.error');
     } finally {
       unsubscribe();
-      await transport.close();
-    }
-  });
-
-  it('lets an AppServerClient consumer resume a listed thread through transport', async () => {
-    const server = createServer();
-    const transport = await serveAppServerHttpTransport({ appServer: server });
-    const client = new HttpAppServerClient({
-      baseUrl: transport.url,
-      capability: transport.capability,
-    });
-    const session = new AgentInteractionSession({ client });
-
-    try {
-      const start = await client.request({ method: 'thread/start' });
-
-      if (!start.ok || start.method !== 'thread/start') {
-        throw new Error('thread/start failed');
-      }
-
-      const threads = await session.listThreads();
-      const resumed = await session.resumeThread(threads[0]?.id ?? '');
-
-      expect(threads).toEqual([
-        {
-          id: start.result.thread.id,
-          status: 'idle',
-          turns: 0,
-          items: 0,
-        },
-      ]);
-      expect({ ...resumed.thread, items: [...(resumed.thread?.items ?? [])] }).toEqual(
-        start.result.thread
-      );
-    } finally {
-      session.dispose();
       await transport.close();
     }
   });

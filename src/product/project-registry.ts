@@ -3,7 +3,8 @@ export type ProjectId = string;
 export type ProjectStatus = 'active' | 'archived';
 
 export type ProjectPolicy = {
-  readonly maxConcurrentAgents: number;
+  /** Maximum simultaneously executing Turns/Agent Executors. Threads consume no lease while idle. */
+  readonly maxActiveExecutions: number;
   readonly maxThreadDepth: number;
   /** Total durable threads, including terminal history. */
   readonly maxThreads?: number;

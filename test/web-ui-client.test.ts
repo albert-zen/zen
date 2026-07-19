@@ -625,6 +625,16 @@ describe('project-scoped WebUiClient', () => {
     const listing = webUi.listThreads();
     unexpected.resolve(success('project/list', { projects: client.projects }));
     await expect(listing).rejects.toThrow('Expected thread/list response, received project/list');
+
+    client.rejectNext('thread/read', 'archived thread is read-only');
+    await expect(webUi.resumeThread('thread-2')).rejects.toThrow('archived thread is read-only');
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-2');
+
+    const unexpectedRead = client.deferNext('thread/read');
+    const resuming = webUi.resumeThread('thread-1');
+    unexpectedRead.resolve(success('thread/list', { threads: [] }));
+    await expect(resuming).rejects.toThrow('Expected thread/read response, received thread/list');
+    expect(webUi.getSnapshot().state.currentThread?.id).toBe('thread-2');
   });
 
   it('derives connection and projection from an authoritative selected-project reset', async () => {
@@ -853,7 +863,7 @@ function project(id: string, name = id): ProjectSnapshot {
     updatedAtMs: 1,
     status: 'active',
     policy: {
-      maxConcurrentAgents: 2,
+      maxActiveExecutions: 2,
       maxThreadDepth: 4,
       agentCanCreateThreads: true,
       agentCanMessagePeers: true,
@@ -969,6 +979,7 @@ function isMutation(method: AgentAppMethod): boolean {
     'project/archive',
     'thread/create',
     'thread/send',
+    'thread/wait',
     'thread/cancel',
     'thread/archive',
     'thread/handoff',

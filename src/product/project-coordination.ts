@@ -1,6 +1,7 @@
 import type { Clock, IdGenerator } from '../kernel/index.js';
 
 export type ProjectCoordinationItemType =
+  | 'project.thread.prepared'
   | 'project.thread.created'
   | 'thread.message.sent'
   | 'thread.message.delivered'
@@ -13,9 +14,12 @@ export type ProjectCoordinationItemType =
   | 'thread.wait.started'
   | 'thread.wait.resolved'
   | 'thread.wait.failed'
+  | 'thread.wait.woken'
+  | 'thread.execution.settled'
   | 'thread.canceled'
   | 'thread.archived'
   | 'thread.handoff'
+  | 'coordination.command.completed'
   | 'coordination.idempotency.compacted';
 
 /** Project-scoped coordination facts intentionally do not impersonate kernel Items. */

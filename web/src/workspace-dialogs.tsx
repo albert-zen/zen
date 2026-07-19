@@ -30,7 +30,7 @@ export function ProjectDialog(props: {
               name,
               rootPath,
               policy: {
-                maxConcurrentAgents: 2,
+                maxActiveExecutions: 2,
                 maxThreadDepth: 4,
                 agentCanCreateThreads: true,
                 agentCanMessagePeers: true,

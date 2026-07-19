@@ -50,11 +50,17 @@ export type ToolErrorEvent = {
   readonly error: unknown;
 };
 
+export type ToolExecutionYieldedEvent = {
+  readonly type: 'execution.yielded';
+  readonly content: unknown;
+};
+
 export type ToolRuntimeEvent =
   | ToolOutputDeltaEvent
   | ToolApprovalRequestedEvent
   | ToolApprovalResolvedEvent
   | ToolResultCompletedEvent
+  | ToolExecutionYieldedEvent
   | ToolErrorEvent;
 
 export type ToolExecutionContext = {
@@ -86,6 +92,7 @@ export type ToolExecutionItems = {
   readonly started: readonly Item[];
   readonly completed: readonly Item[];
   readonly errors: readonly Item[];
+  readonly yielded?: Item;
 };
 
 export async function appendToolExecutionItems(
@@ -95,6 +102,7 @@ export async function appendToolExecutionItems(
   const started: Item[] = [];
   const completed: Item[] = [];
   const errors: Item[] = [];
+  let yielded: Item | undefined;
 
   for (const requestedCall of readToolCalls(input.assistantItem.payload)) {
     if (input.signal?.aborted) {
@@ -194,6 +202,23 @@ export async function appendToolExecutionItems(
           );
         }
 
+        if (event.type === 'execution.yielded') {
+          yielded = await appendRequired(appendItem, {
+            type: 'tool.result.completed',
+            runId: input.assistantItem.runId,
+            turnId: input.assistantItem.turnId,
+            causeId: startedItem.id,
+            targetId: startedItem.id,
+            payload: {
+              ...createToolCallPayload(call),
+              content: event.content,
+              executionYielded: true,
+            },
+          });
+          completed.push(yielded);
+          return false;
+        }
+
         if (event.type === 'error') {
           errors.push(await appendToolError(appendItem, startedItem, call, event.error));
           return false;
@@ -207,9 +232,10 @@ export async function appendToolExecutionItems(
     if (input.signal?.aborted) {
       break;
     }
+    if (yielded) break;
   }
 
-  return { started, completed, errors };
+  return { started, completed, errors, ...(yielded ? { yielded } : {}) };
 }
 
 function approvalRequestPayload(

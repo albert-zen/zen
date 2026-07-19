@@ -1,9 +1,76 @@
 # Agent App Evidence
 
+## APP-010 Consolidated Remediation
+
+- Current state: **Complete**. The authoritative model is App Server-first:
+  both humans and Agents persist Project/Thread commands through the same
+  authorization, idempotency, durability, and scheduling pipeline. A Thread is
+  durable conversation history, never a resident Agent or process. Only a
+  short-lived Turn Executor holds one `maxActiveExecutions` scheduler slot.
+- Execution semantics: a Turn/Command is durable before scheduler admission;
+  queued Turns remain durable; wait persists its dependency and yields the
+  current slot; wake creates a separately scheduled continuation Turn.
+  Cancellation fences queued/running Turn work without deleting Thread
+  history. Project root is immutable, while model, permissions, and concurrency
+  updates are captured atomically by the next granted Turn and do not alter an
+  active Turn's captured policy.
+
+| #   | Decision           | Validated remediation                                                                                     |
+| --- | ------------------ | --------------------------------------------------------------------------------------------------------- |
+| 1   | Accepted, narrowed | Scheduler now governs short-lived Turn Executors; idle Threads and durable waits hold zero slots.         |
+| 2   | Accepted           | Transitive ancestor control is denied across send, interrupt, cancel, archive, and handoff.               |
+| 3   | Accepted           | Archive durably fences queued/running execution, preserves readable history, and disables UI writes.     |
+| 4   | Accepted           | Thread/Turn journal barriers precede coordination references, with injected failure/restart coverage.     |
+| 5   | Accepted           | A durable project-scoped command/result ledger replays completion and reports pending recovery safely.    |
+| 6   | Accepted           | Desktop bearer injection requires exact Host/Origin/fetch metadata, method, and content type.             |
+| 7   | Accepted, narrowed | Immutable root plus next-Turn runtime snapshots replace runtime/UI divergence without resident Agents.    |
+| 8   | Accepted           | Project identity stores absolute host-real paths with Windows case normalization before collision checks. |
+| 9   | Accepted           | Retired TUI/bin/session/projectless Node client and obsolete in-memory WaitGraph surfaces were removed.   |
+| 10  | Accepted           | SSE subscribers use bounded buffering and isolate/disconnect slow consumers.                             |
+| 11  | Accepted           | Server close attempts every runtime open/close and reports one aggregate failure.                         |
+| 12  | Accepted           | Production defaults use OS app-data/state; repository `.zen/` is ignored.                                 |
+
+- Targeted verification: APP-010 command/execution/HTTP-SSE/backpressure tests
+  passed `4` files / `13` tests; durability and recovery passed `3` / `33`;
+  presentation project/reset/error/archive tests passed `3` / `44`; the true
+  loopback multi-project/multi-thread HTTP/SSE execution test passed `1` / `1`;
+  and hostile desktop origin tests passed `1` / `3`.
+- Coverage passed without threshold, exclusion, skip, retry, or timeout changes:
+  kernel `89.52/82.98/94.05/90.10`, product
+  `88.53/80.05/93.83/91.19`, and presentation
+  `92.10/80.38/96.03/93.73` (statements/branches/functions/lines).
+- Final serialized gate: the single final `npm run check` exited `0` after
+  formatting, lint, main/Web/desktop typechecks, `51` Vitest files / `372`
+  tests, core/acceptance/Web/desktop builds, all three coverage groups, and
+  `3` real Playwright HTTP/SSE workflows. `npm audit --audit-level=low`
+  reported zero vulnerabilities.
+- Desktop release evidence: hostile-origin tests passed; `desktop:pack` and
+  unpublished unsigned NSIS `desktop:dist` passed. The installer is
+  Authenticode `NotSigned`. ASAR contains `4,235` entries with required
+  `dist`, `web-dist`, `desktop-dist`, and `package.json`; prohibited tests,
+  `.git`, coverage, `.zen`, journals, secrets, TUI, retired session, and
+  WaitGraph paths matched zero. Packaged bins are only `zen-app-server` and
+  `zen-web`.
+- Packaged smoke: two serial hidden auto-quit launches exited `0` (PIDs `23572`
+  and `28340`), each used and removed one exact isolated app-data root, and
+  each left zero exact packaged-executable processes.
+- One gate exposed a concrete Windows hygiene defect outside product behavior:
+  strict string-case comparison could reject a realpath-equivalent ownership
+  terminal after rename. The supervisor now preserves realpath/symlink
+  confinement while comparing Windows path identity case-insensitively; its
+  `42`-test regression suite passed.
+- Final hygiene: exact `zen-agent-app-*`, `zen-agent-app-e2e-*`, `zen-e2e-*`,
+  `zen-desktop-*`, and `zen-agent-smoke-*` temporary-root counts are zero;
+  worktree `.zen`, coverage, and Playwright test-results are absent; the exact
+  attributable Node/Electron/Zen Agent process census is zero. No broad process
+  kill or unverified temporary-directory deletion was used.
+- Release blockers: none.
+
 ## APP-009 Final Integration Gate
 
-- Current state: **Complete**. APP-010 remains Pending. The final serialized
-  `npm run check` exited `0`, followed by `npm audit` with zero vulnerabilities.
+- Historical APP-009 state: **Complete**. APP-010 was Pending at that gate. The
+  final serialized `npm run check` exited `0`, followed by `npm audit` with zero
+  vulnerabilities.
 - Test migration: serial `npm test` passed with `49` files and `401` tests
   after replacing retired single-thread dogfood and CLI contract assertions with
   the Project-first protocol. Vitest is explicitly constrained to one fork
@@ -112,10 +179,9 @@
 
 ## APP-004
 
-- `AgentScheduler` applies per-project FIFO concurrency, releases leases during
-  waits, and reacquires only after event-driven wait settlement.
-- `WaitGraph` supports `any` and `all`, rejects cycle paths before adding an
-  edge, and cleans waiting state on cancellation/disposal.
+- Historical APP-004 used per-project FIFO leases and an in-memory `WaitGraph`.
+  APP-010 supersedes and removes that model: durable wait ends its Turn and a
+  durable wake creates a distinct continuation Turn that re-enters scheduling.
 - `ThreadToolRuntime` exposes the eight provider-neutral thread tools with
   strict schemas, typed errors, execution-context authority, and an optional
   fallback runtime for existing local tools.

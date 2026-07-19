@@ -52,6 +52,7 @@ export async function serveDesktopStaticHost(
   const sockets = new Set<Socket>();
   const responses = new Set<ServerResponse>();
   let accepting = true;
+  let expectedAuthority = '';
   let closePromise: Promise<void> | undefined;
 
   const server = createServer((request, response) => {
@@ -75,8 +76,17 @@ export async function serveDesktopStaticHost(
       send(response, 503, 'Desktop host is shutting down');
       return;
     }
-    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? host}`);
+    if (request.headers.host !== expectedAuthority) {
+      send(response, 403, 'Forbidden host');
+      return;
+    }
+    const origin = `http://${expectedAuthority}`;
+    const url = new URL(request.url ?? '/', origin);
     if (API_PATHS.has(url.pathname)) {
+      if (!isTrustedApiRequest(request, url.pathname, origin)) {
+        send(response, 403, 'Forbidden API request');
+        return;
+      }
       proxyAgentAppRequest(request, response, apiTarget, options.capability);
       return;
     }
@@ -105,6 +115,7 @@ export async function serveDesktopStaticHost(
   });
 
   const address = server.address() as AddressInfo;
+  expectedAuthority = `${address.address}:${address.port}`;
   return {
     url: `http://${address.address}:${address.port}`,
     quiesce: async () => {
@@ -150,13 +161,25 @@ function proxyAgentAppRequest(
   target: URL,
   capability: string
 ): void {
+  const forwardedHeaders = { ...incoming.headers };
+  for (const name of [
+    'authorization',
+    'connection',
+    'host',
+    'origin',
+    'proxy-authorization',
+    'sec-fetch-site',
+    'upgrade',
+  ]) {
+    delete forwardedHeaders[name];
+  }
   const request = requestHttp(
     target,
     {
       method: incoming.method,
       path: incoming.url,
       headers: {
-        ...incoming.headers,
+        ...forwardedHeaders,
         authorization: `Bearer ${capability}`,
         host: target.host,
       },
@@ -171,6 +194,29 @@ function proxyAgentAppRequest(
   });
   outgoing.once('close', () => request.destroy());
   incoming.pipe(request);
+}
+
+function isTrustedApiRequest(
+  request: IncomingMessage,
+  pathname: string,
+  expectedOrigin: string
+): boolean {
+  if (request.method === 'OPTIONS' || request.headers['sec-fetch-site'] !== 'same-origin') {
+    return false;
+  }
+  const origin = request.headers.origin;
+  if (origin !== undefined && origin !== expectedOrigin) return false;
+  if (pathname === '/request') {
+    if (request.method !== 'POST' || origin !== expectedOrigin) return false;
+    const contentType = request.headers['content-type'];
+    return (
+      typeof contentType === 'string' &&
+      contentType.split(';', 1)[0]?.trim().toLowerCase() === 'application/json'
+    );
+  }
+  if (request.method !== 'GET') return false;
+  const accept = request.headers.accept;
+  return typeof accept === 'string' && accept.toLowerCase().includes('text/event-stream');
 }
 
 function serveFile(response: ServerResponse, path: string, head: boolean): void {

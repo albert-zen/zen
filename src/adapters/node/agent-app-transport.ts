@@ -1,11 +1,4 @@
-import type {
-  AgentAppClient,
-  AgentAppNotificationEnvelope,
-  AgentAppNotificationListener,
-  AgentAppRequest,
-  AgentAppResponse,
-  AgentAppSubscription,
-} from '../../product/index.js';
+import type { AgentAppClient, AgentAppRequest } from '../../product/index.js';
 import { parseAgentAppRequest } from '../../product/index.js';
 import type { AppServerClient } from '../../product/app-server.js';
 import type {
@@ -15,8 +8,6 @@ import type {
 import {
   serveAppServerHttpTransport,
   createAppServerHttpProxy,
-  HttpAppServerClient,
-  type HttpAppServerClientOptions,
   type AppServerHttpTransport,
   type AppServerHttpTransportOptions,
 } from './app-server-transport.js';
@@ -34,30 +25,6 @@ export type AgentAppHttpTransportOptions = Omit<
 };
 
 export type AgentAppHttpTransport = AppServerHttpTransport;
-
-export type AgentAppTransportClientOptions = HttpAppServerClientOptions;
-
-/**
- * The legacy HTTP client supplies the transport lifecycle, replay, and reset
- * gate.  This adapter makes the project envelope the only public payload.
- */
-export class AgentAppTransportClient implements AgentAppClient {
-  private readonly client: HttpAppServerClient;
-
-  constructor(options: AgentAppTransportClientOptions) {
-    this.client = new HttpAppServerClient(options);
-  }
-
-  async request(request: AgentAppRequest): Promise<AgentAppResponse> {
-    return (await this.client.request(request)) as unknown as AgentAppResponse;
-  }
-
-  subscribe(listener: AgentAppNotificationListener): AgentAppSubscription {
-    return this.client.subscribe((notification) =>
-      listener(readAgentAppNotification(notification))
-    );
-  }
-}
 
 export function createAgentAppHttpProxy(target: string, capability: string) {
   return createAppServerHttpProxy(target, capability);
@@ -83,19 +50,4 @@ export async function serveAgentAppHttpTransport(
     appServer,
     parseRequest: parseAgentAppRequest,
   });
-}
-
-export function readAgentAppNotification(value: unknown): AgentAppNotificationEnvelope {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    !('projectId' in value) ||
-    typeof value.projectId !== 'string' ||
-    !('notification' in value) ||
-    typeof value.notification !== 'object' ||
-    value.notification === null
-  ) {
-    throw new Error('Invalid Agent App notification envelope');
-  }
-  return value as AgentAppNotificationEnvelope;
 }

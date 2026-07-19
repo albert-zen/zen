@@ -2,20 +2,20 @@
 
 No Linear mutation is performed for this local wave.
 
-| ID       | State    | Notes                                                                                                          |
-| -------- | -------- | -------------------------------------------------------------------------------------------------------------- |
-| APP-001  | Complete | PRD, architecture, DAG, tracker, and evidence committed locally.                                               |
-| APP-002  | Complete | Project aggregate, memory registry, and atomic JSON registry committed locally.                                |
-| APP-003  | Complete | Coordination envelope, durable journal, mailbox, and projection committed locally.                             |
-| APP-004  | Complete | FIFO leases, event-driven wait graph, and provider-neutral thread tools committed locally.                     |
-| APP-005  | Complete | 005A/B/005C now expose only the project-scoped Agent App remote protocol.                                      |
-| APP-005B | Complete | Shared HTTP/SSE transport adapter, Node project runtime factory, and production composition committed locally. |
-| APP-005C | Complete | Migrated public client/transport, web bootstrap/demo, and production CLI composition to Agent App.             |
-| APP-006  | Complete | Project/thread control-plane UI and presentation projection committed locally.                                 |
-| APP-007  | Complete | Thin Electron desktop shell, same-origin static host, and bounded platform bridge committed locally.           |
-| APP-008  | Complete | Trusted capability context, bounded resource policy, recovery facts, and input hardening completed locally.   |
-| APP-009  | Complete | Final serialized check, coverage, real HTTP/SSE E2E, desktop package smoke, audit, and hygiene gates passed locally. |
-| APP-010  | Pending  | Global review/remediation after APP-009.                                                                       |
+| ID       | State       | Notes                                                                                                                |
+| -------- | ----------- | -------------------------------------------------------------------------------------------------------------------- |
+| APP-001  | Complete    | PRD, architecture, DAG, tracker, and evidence committed locally.                                                     |
+| APP-002  | Complete    | Project aggregate, memory registry, and atomic JSON registry committed locally.                                      |
+| APP-003  | Complete    | Coordination envelope, durable journal, mailbox, and projection committed locally.                                   |
+| APP-004  | Complete    | Initial scheduler/thread tools; APP-010 supersedes the retired in-memory wait model.                                 |
+| APP-005  | Complete    | 005A/B/005C now expose only the project-scoped Agent App remote protocol.                                            |
+| APP-005B | Complete    | Shared HTTP/SSE transport adapter, Node project runtime factory, and production composition committed locally.       |
+| APP-005C | Complete    | Migrated public client/transport, web bootstrap/demo, and production CLI composition to Agent App.                   |
+| APP-006  | Complete    | Project/thread control-plane UI and presentation projection committed locally.                                       |
+| APP-007  | Complete    | Thin Electron desktop shell, same-origin static host, and bounded platform bridge committed locally.                 |
+| APP-008  | Complete    | Trusted capability context, bounded resource policy, recovery facts, and input hardening completed locally.          |
+| APP-009  | Complete    | Final serialized check, coverage, real HTTP/SSE E2E, desktop package smoke, audit, and hygiene gates passed locally. |
+| APP-010  | Complete    | Consolidated remediation and serialized release gates passed locally; no release blocker remains.                    |
 
 ## State Discipline
 
@@ -23,6 +23,40 @@ Local states mirror the repository workflow: Pending, In Progress, Complete,
 Blocked. Worker progress is retained in this append-only artifact while Linear
 is intentionally untouched. APP-010 is the only planned review gate for this
 wave.
+
+## APP-010 Global Review Matrix
+
+| #   | Decision           | Rationale / required architecture                                                                                                                                                                                                                                                  |
+| --- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Accepted, narrowed | The real defect is a disconnected Turn-execution gate. Every persisted Turn must acquire a short-lived scheduler lease before creating an Executor, and terminal/yield facts settle it. Thread-owned or wait-retained leases are explicitly rejected.                              |
+| 2   | Accepted           | `relation` only recognizes an immediate parent/child and cancel/archive/handoff skip relation checks. Authorization must use transitive ancestry for every agent target mutation.                                                                                                  |
+| 3   | Accepted           | Archive is write-only in the coordination projection while direct turn routes remain executable. Archived history must remain readable and archive must durably fence active/queued work first.                                                                                    |
+| 4   | Accepted           | Thread creation and queued message turns are published to the thread journal asynchronously before coordination facts reference them. Explicit thread-journal barriers and replay validation are required.                                                                         |
+| 5   | Accepted           | Protocol idempotency is mostly syntactic, and an interrupted coordinator command can be repeated. Add a durable command/result projection at the Agent App boundary and resumable coordinator command facts.                                                                       |
+| 6   | Accepted           | The desktop host is a bearer-injecting proxy without an exact authority/origin boundary. Reject forged Host/Origin/fetch metadata, preflight, methods, and content types before proxying.                                                                                          |
+| 7   | Accepted, narrowed | Root is immutable. Mutable model/permission/concurrency updates atomically replace the Project runtime snapshot; the next scheduler grant captures it while active Turns retain their prior snapshot. Closing the whole runtime or creating resident Thread agents is unnecessary. |
+| 8   | Accepted           | Production only applies `path.resolve`; it does not resolve filesystem aliases or normalize Windows case. Creation stores an absolute host-canonical real path before collision checks.                                                                                            |
+| 9   | Accepted           | The Node reset callback is projectless and the package still exports the retired terminal UI. Keep only Agent App project-scoped transport and remove TUI/bin surfaces.                                                                                                            |
+| 10  | Accepted           | SSE writes ignore backpressure. Each subscriber needs a bounded queue and deterministic disconnect/replay when the bound is exceeded.                                                                                                                                              |
+| 11  | Accepted           | Server close discards runtime-open and runtime-close failures. Close remains best effort but throws one aggregate after every resource has been attempted.                                                                                                                         |
+| 12  | Accepted           | CLI/Web default to repository `.zen`. Runtime state belongs in an OS application-data root; `.zen/` is also ignored as defense in depth.                                                                                                                                           |
+
+The review's P1/P2 labels are advisory. APP-010 treats findings 1-7 as release
+blockers because they violate execution, authority, durability, or desktop
+security invariants. Findings 8-12 are accepted hardening and product-surface
+corrections and are included in the same release gate.
+
+## APP-010 Authoritative Execution Model
+
+- Thread is durable conversation state and consumes zero scheduler resources
+  while idle.
+- Turn/Command persistence precedes scheduling; `maxActiveExecutions` counts
+  only currently running short-lived Executors.
+- UI and Agent callers use the same App Server command ledger, authorization,
+  durability barriers, and scheduling path.
+- Wait durably yields; wake creates a separately scheduled continuation Turn.
+- Root is immutable; mutable policy is captured atomically per newly granted
+  Turn and never retroactively changes active execution.
 
 ## APP-005C Migration Repair
 
@@ -66,3 +100,18 @@ Round: APP-009 completion
   test app-data directory was removed, no broad cleanup or arbitrary process
   termination was used, and final attributable Node/Electron/Zen Agent census
   is zero.
+
+## Codex Worker Note
+
+Round: APP-010 completion
+
+- All twelve global findings were independently validated. Findings 1 and 7
+  were accepted with the authoritative Turn/Executor narrowing; the remaining
+  ten were accepted. No thread-resident Agent model or compatibility shim was
+  introduced.
+- Targeted architecture, durability/recovery, HTTP/SSE, presentation, desktop
+  security, packaging, unsigned NSIS, ASAR hygiene, and two packaged auto-quit
+  smokes passed. The one final serialized `npm run check` passed `51` files /
+  `372` tests, all builds, coverage, and Playwright; audit reported zero
+  vulnerabilities.
+- APP-010 is Complete. No push was performed.

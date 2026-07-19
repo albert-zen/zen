@@ -1,5 +1,5 @@
 import { mkdtempSync } from 'node:fs';
-import { readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import {
   ProjectManager,
   ProjectRegistryCorruptionError,
   canonicalizeWindowsProjectRootPath,
+  canonicalizeProjectRootPath,
   type ProjectPolicy,
   type ProjectRecord,
   type ProjectRegistry,
@@ -44,16 +45,16 @@ describe('ProjectManager', () => {
       policy: defaultPolicy(),
     });
 
-    (created as { name: string; policy: { maxConcurrentAgents: number } }).name = 'mutated';
-    (created as { policy: { maxConcurrentAgents: number } }).policy.maxConcurrentAgents = 99;
+    (created as { name: string; policy: { maxActiveExecutions: number } }).name = 'mutated';
+    (created as { policy: { maxActiveExecutions: number } }).policy.maxActiveExecutions = 99;
     expect(await manager.read('project-1')).toMatchObject({
       name: 'Zen App',
-      policy: { maxConcurrentAgents: 2 },
+      policy: { maxActiveExecutions: 2 },
     });
 
     const updated = await manager.update('project-1', {
       name: 'Zen App Control Plane',
-      policy: { ...defaultPolicy(), maxConcurrentAgents: 3, defaultModelProfile: 'balanced' },
+      policy: { ...defaultPolicy(), maxActiveExecutions: 3, defaultModelProfile: 'balanced' },
     });
     const archived = await manager.archive('project-1');
 
@@ -93,6 +94,24 @@ describe('ProjectManager', () => {
 
     await expect(manager.create({ name: 'Second', rootPath: 'c:\\work\\zen' })).rejects.toThrow(
       'root path is already assigned'
+    );
+  });
+
+  it('stores real absolute production roots before durable collision checks', async () => {
+    const root = createTempRoot();
+    const workspace = join(root, 'workspace');
+    await mkdir(workspace);
+    const manager = await ProjectManager.open({
+      registry: new InMemoryProjectRegistry(),
+      generateId: sequence('project'),
+      rootPathNormalizer: canonicalizeProjectRootPath,
+    });
+    const created = await manager.create({ name: 'Canonical', rootPath: workspace });
+    const alias = join(workspace, '..', 'workspace');
+
+    expect(created.rootPath).toBe(await canonicalizeProjectRootPath(alias));
+    await expect(manager.create({ name: 'Alias', rootPath: alias })).rejects.toThrow(
+      'already assigned'
     );
   });
 
@@ -185,7 +204,7 @@ describe('FileProjectRegistry', () => {
 
 function defaultPolicy(): ProjectPolicy {
   return {
-    maxConcurrentAgents: 2,
+    maxActiveExecutions: 2,
     maxThreadDepth: 4,
     agentCanCreateThreads: true,
     agentCanMessagePeers: true,

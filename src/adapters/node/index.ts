@@ -5,17 +5,9 @@ export {
   consumeAppServerClientHandoff,
   publishAppServerClientHandoff,
 } from './app-server-config.js';
-export type {
-  AgentAppHttpTransport,
-  AgentAppHttpTransportOptions,
-  AgentAppTransportClientOptions,
-} from './agent-app-transport.js';
-export {
-  AgentAppTransportClient,
-  createAgentAppHttpProxy,
-  readAgentAppNotification,
-  serveAgentAppHttpTransport,
-} from './agent-app-transport.js';
+export { resolveAgentAppDataRoot } from './app-data-root.js';
+export type { AgentAppHttpTransport, AgentAppHttpTransportOptions } from './agent-app-transport.js';
+export { createAgentAppHttpProxy, serveAgentAppHttpTransport } from './agent-app-transport.js';
 export type { FileThreadJournalOptions, ThreadJournalFileSystem } from './file-thread-journal.js';
 export { FileThreadJournal } from './file-thread-journal.js';
 export type {
@@ -31,6 +23,8 @@ export type {
   ProjectCoordinationFileSystem,
 } from './file-project-coordination-journal.js';
 export { FileProjectCoordinationJournal } from './file-project-coordination-journal.js';
+export type { ProjectCommandStoreFileSystem } from './file-project-command-store.js';
+export { FileProjectCommandStore } from './file-project-command-store.js';
 export type { AgentAppProjectRuntimeFactoryOptions } from './agent-app-runtime.js';
 export {
   createAgentAppProjectRuntimeFactory,
@@ -43,6 +37,7 @@ export type {
 export {
   createAgentAppProductionComposition,
   createAgentAppServer,
+  canonicalizeProjectRootPath,
 } from './agent-app-production.js';
 export type { LocalToolRuntimeOptions } from './local-tool-runtime.js';
 export { LocalToolRuntime, localToolDefinitions } from './local-tool-runtime.js';
@@ -55,7 +50,6 @@ export type { OpenAiCompatibleModelGatewayOptions } from './openai-compatible-mo
 export { OpenAiCompatibleModelGateway } from './openai-compatible-model-gateway.js';
 export type { ProviderBackedAppServerOptions } from './provider-runtime.js';
 export { createProviderThreadRuntimeFactory, replayThreadJournal } from './provider-runtime.js';
-export { createLegacyTuiClient } from './tui-legacy-client.js';
 export type {
   AggregateProductionShutdownOptions,
   AgentAppCliCompositionOptions,

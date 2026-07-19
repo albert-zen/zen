@@ -1,16 +1,4 @@
 export type {
-  AgentRecoverableTurn,
-  AgentInteractionSessionEvent,
-  AgentInteractionSessionListener,
-  AgentInteractionSessionOptions,
-  AgentInteractionSnapshot,
-  AgentThreadListEntry,
-} from './agent-interaction-session.js';
-export {
-  AgentInteractionSession,
-  AgentInteractionSessionDisposedError,
-} from './agent-interaction-session.js';
-export type {
   ApprovalPendingTimelineRow,
   ApprovalResolvedTimelineRow,
   AssistantProgressTimelineRow,

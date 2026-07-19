@@ -62,6 +62,15 @@ export type ThreadMessageResult = {
   readonly targetThreadId: string;
 };
 
+export type StartThreadWaitInput = {
+  readonly projectId: string;
+  readonly sourceThreadId: string;
+  readonly targetThreadIds: readonly string[];
+  readonly mode: 'any' | 'all';
+  readonly idempotencyKey: string;
+  readonly parentItemId?: string;
+};
+
 export class ProjectIdempotencyConflictError extends Error {
   constructor(
     readonly projectId: string,
@@ -128,7 +137,21 @@ export class ProjectCoordinator {
   /** Rebuild the in-memory manager for a durably known project before serving it. */
   async recover(projectId: string): Promise<void> {
     const project = await this.activeProject(projectId);
-    this.managerFor(project);
+    const manager = this.managerFor(project);
+    for (const prepared of this.preparedThreads(projectId)) {
+      await this.materializePreparedThread(project, prepared);
+    }
+    const managerIds = new Set(manager.listThreads().map((thread) => thread.id));
+    const coordinationIds = new Set(
+      this.listThreadSummaries(projectId).map((thread) => thread.threadId)
+    );
+    const unexplained = [...managerIds].filter((threadId) => !coordinationIds.has(threadId));
+    const missing = [...coordinationIds].filter((threadId) => !managerIds.has(threadId));
+    if (unexplained.length > 0 || missing.length > 0) {
+      throw new Error(
+        `Cross-journal thread reference mismatch: unexplained=${unexplained.join(',')} missing=${missing.join(',')}`
+      );
+    }
     for (const grant of this.unreleasedLeases(projectId)) {
       await this.record({
         type: 'agent.lease.recovered',
@@ -138,6 +161,7 @@ export class ProjectCoordinator {
         payload: { recoveredFromLeaseItemId: grant.id },
       });
     }
+    for (const wait of this.unresolvedWaits(projectId)) await this.tryWakeWait(project, wait);
     for (const summary of this.listThreadSummaries(projectId)) {
       await this.deliverNext(projectId, summary.threadId);
     }
@@ -155,14 +179,14 @@ export class ProjectCoordinator {
     input: CreateProjectThreadInput
   ): Promise<{ readonly threadId: string }> {
     const project = await this.activeProject(input.projectId);
-    const digest = stableDigest({ type: 'project.thread.created', ...input });
-    const replay = this.replayCommand<{ readonly threadId: string }>(
+    const digest = stableDigest({ type: 'project.thread.prepared', ...input });
+    const existing = this.commandItem(
       input.projectId,
       input.idempotencyKey,
       digest,
-      'project.thread.created'
+      'project.thread.prepared'
     );
-    if (replay) return replay;
+    if (existing) return await this.materializePreparedThread(project, existing);
     if (
       this.listThreadSummaries(input.projectId).length >= requiredLimit(project.policy.maxThreads)
     ) {
@@ -171,30 +195,54 @@ export class ProjectCoordinator {
     const parent = input.sourceThreadId
       ? this.threadSummary(input.projectId, input.sourceThreadId)
       : undefined;
-    if (input.sourceThreadId && !project.policy.agentCanCreateThreads) {
-      throw new Error('Agent thread creation is not permitted by project policy');
-    }
     const depth = (parent?.depth ?? -1) + 1;
     if (depth > project.policy.maxThreadDepth) throw new Error('Project maxThreadDepth exceeded');
-    const thread = this.managerFor(project).startThread();
-    const result = { threadId: thread.id };
-    await this.record({
-      type: 'project.thread.created',
+    const threadId = this.managerFor(project).reserveThreadId();
+    const prepared = await this.record({
+      type: 'project.thread.prepared',
       projectId: input.projectId,
       sourceThreadId: input.sourceThreadId,
-      targetThreadId: thread.id,
+      targetThreadId: threadId,
       idempotencyKey: input.idempotencyKey,
       parentId: input.parentItemId,
       causeId: input.causeItemId,
       payload: {
         commandDigest: digest,
-        result,
         depth,
         parentThreadId: input.sourceThreadId,
         modelProfile: input.modelProfile ?? project.policy.defaultModelProfile,
         objective: input.objective,
       },
     });
+    return await this.materializePreparedThread(project, prepared);
+  }
+
+  private async materializePreparedThread(
+    project: ProjectSnapshot,
+    prepared: ProjectCoordinationItem
+  ): Promise<{ readonly threadId: string }> {
+    const threadId = prepared.targetThreadId;
+    if (!threadId) throw new Error(`Prepared thread is missing its target: ${prepared.id}`);
+    const manager = this.managerFor(project);
+    if (!manager.listThreads().some((thread) => thread.id === threadId)) {
+      manager.startThread(threadId);
+    }
+    await manager.flushThread(threadId);
+    const created = this.list
+      .getItems(project.id)
+      .find((item) => item.type === 'project.thread.created' && item.causeId === prepared.id);
+    const result = { threadId };
+    if (!created) {
+      await this.record({
+        type: 'project.thread.created',
+        projectId: project.id,
+        sourceThreadId: prepared.sourceThreadId,
+        targetThreadId: threadId,
+        causeId: prepared.id,
+        payload: { ...prepared.payload, result, preparedItemId: prepared.id },
+      });
+      await this.recordCommandResult(prepared, result);
+    }
     return result;
   }
 
@@ -209,13 +257,17 @@ export class ProjectCoordinator {
   private async sendMessageNow(input: SendThreadMessageInput): Promise<ThreadMessageResult> {
     const project = await this.activeProject(input.projectId);
     const digest = stableDigest({ type: 'thread.message.sent', ...input });
-    const replay = this.replayCommand<ThreadMessageResult>(
+    const existing = this.commandItem(
       input.projectId,
       input.idempotencyKey,
       digest,
       'thread.message.sent'
     );
-    if (replay) return replay;
+    if (existing) {
+      const replay = this.commandResult<ThreadMessageResult>(existing);
+      if (replay) return replay;
+      return await this.resumeSentMessage(existing);
+    }
     if (Buffer.byteLength(input.content, 'utf8') > requiredLimit(project.policy.maxMessageBytes)) {
       throw new ProjectResourceError('maxMessageBytes', 'Project maxMessageBytes exceeded');
     }
@@ -227,12 +279,6 @@ export class ProjectCoordinator {
     }
     this.assertThreadUsable(input.projectId, input.sourceThreadId);
     this.assertThreadUsable(input.projectId, input.targetThreadId);
-    if (!project.policy.agentCanMessagePeers) {
-      throw new Error('Agent peer messaging is not permitted by project policy');
-    }
-    if (input.interrupt && !project.policy.agentCanMessagePeers) {
-      throw new Error('Explicit interrupt is not permitted by project policy');
-    }
     const messageId = defaultId();
     const sent = await this.record({
       type: 'thread.message.sent',
@@ -258,7 +304,22 @@ export class ProjectCoordinator {
       deliveredItemId,
       targetThreadId: input.targetThreadId,
     };
-    await this.attachResult(sent.id, result);
+    await this.recordCommandResult(sent, result);
+    return result;
+  }
+
+  private async resumeSentMessage(sent: ProjectCoordinationItem): Promise<ThreadMessageResult> {
+    if (!sent.targetThreadId || !sent.messageId) {
+      throw new Error(`Invalid pending message command: ${sent.id}`);
+    }
+    const deliveredItemId = await this.deliverNext(sent.projectId, sent.targetThreadId);
+    const result: ThreadMessageResult = {
+      messageId: sent.messageId,
+      sentItemId: sent.id,
+      deliveredItemId,
+      targetThreadId: sent.targetThreadId,
+    };
+    await this.recordCommandResult(sent, result);
     return result;
   }
 
@@ -278,11 +339,12 @@ export class ProjectCoordinator {
     readonly threadId: string;
     readonly idempotencyKey: string;
   }): Promise<void> {
-    await this.activeProject(input.projectId);
+    const project = await this.activeProject(input.projectId);
     this.assertKnownThread(input.projectId, input.threadId);
     const digest = stableDigest({ type: 'thread.archived', ...input });
     if (this.replayCommand<void>(input.projectId, input.idempotencyKey, digest, 'thread.archived'))
       return;
+    await this.managerForExisting(input.projectId).fenceThread(input.threadId);
     await this.record({
       type: 'thread.archived',
       projectId: input.projectId,
@@ -290,6 +352,7 @@ export class ProjectCoordinator {
       idempotencyKey: input.idempotencyKey,
       payload: { commandDigest: digest, result: {} },
     });
+    await this.wakeWaitersFor(project, input.threadId);
   }
 
   async cancelThread(input: {
@@ -308,11 +371,12 @@ export class ProjectCoordinator {
     readonly threadId: string;
     readonly idempotencyKey: string;
   }): Promise<void> {
-    await this.activeProject(input.projectId);
+    const project = await this.activeProject(input.projectId);
     this.assertKnownThread(input.projectId, input.threadId);
     const digest = stableDigest({ type: 'thread.canceled', ...input });
     if (this.replayCommand<void>(input.projectId, input.idempotencyKey, digest, 'thread.canceled'))
       return;
+    await this.managerForExisting(input.projectId).fenceThread(input.threadId);
     await this.record({
       type: 'thread.canceled',
       projectId: input.projectId,
@@ -320,7 +384,13 @@ export class ProjectCoordinator {
       idempotencyKey: input.idempotencyKey,
       payload: { commandDigest: digest, result: {} },
     });
-    this.interruptIfRunning(input.projectId, input.threadId);
+    await this.recordExecutionSettledNow({
+      projectId: input.projectId,
+      threadId: input.threadId,
+      turnId: `thread-cancel:${input.idempotencyKey}`,
+      status: 'canceled',
+    });
+    await this.wakeWaitersFor(project, input.threadId);
   }
 
   async handoff(input: {
@@ -348,13 +418,17 @@ export class ProjectCoordinator {
     this.assertThreadUsable(input.projectId, input.sourceThreadId);
     this.assertThreadUsable(input.projectId, input.targetThreadId);
     const digest = stableDigest({ type: 'thread.handoff', ...input });
-    const replay = this.replayCommand<{ readonly handoffItemId: string }>(
+    const existing = this.commandItem(
       input.projectId,
       input.idempotencyKey,
       digest,
       'thread.handoff'
     );
-    if (replay) return replay;
+    if (existing) {
+      const replay = this.commandResult<{ readonly handoffItemId: string }>(existing);
+      if (replay) return replay;
+      return await this.completeHandoff(existing, input.content);
+    }
     const item = await this.record({
       type: 'thread.handoff',
       projectId: input.projectId,
@@ -363,15 +437,26 @@ export class ProjectCoordinator {
       idempotencyKey: input.idempotencyKey,
       payload: { commandDigest: digest, content: input.content },
     });
-    const result = { handoffItemId: item.id };
-    await this.record({
-      type: 'thread.handoff',
-      projectId: input.projectId,
-      sourceThreadId: input.sourceThreadId,
-      targetThreadId: input.targetThreadId,
-      causeId: item.id,
-      payload: { result },
+    return await this.completeHandoff(item, input.content);
+  }
+
+  private async completeHandoff(
+    command: ProjectCoordinationItem,
+    content: string
+  ): Promise<{ readonly handoffItemId: string }> {
+    if (!command.sourceThreadId || !command.targetThreadId || !command.idempotencyKey) {
+      throw new Error(`Invalid pending handoff command: ${command.id}`);
+    }
+    await this.sendMessageNow({
+      projectId: command.projectId,
+      sourceThreadId: command.sourceThreadId,
+      targetThreadId: command.targetThreadId,
+      content,
+      idempotencyKey: `${command.idempotencyKey}:handoff-message`,
+      causeItemId: command.id,
     });
+    const result = { handoffItemId: command.id };
+    await this.recordCommandResult(command, result);
     return result;
   }
 
@@ -403,13 +488,26 @@ export class ProjectCoordinator {
     projectId: string,
     sourceThreadId: string,
     targetThreadId: string
-  ): 'self' | 'child' | 'ancestor' | 'peer' {
+  ): 'self' | 'child' | 'descendant' | 'ancestor' | 'peer' {
     if (sourceThreadId === targetThreadId) return 'self';
     const source = this.threadSummary(projectId, sourceThreadId);
     const target = this.threadSummary(projectId, targetThreadId);
     if (target.parentThreadId === source.threadId) return 'child';
-    if (source.parentThreadId === target.threadId) return 'ancestor';
+    if (this.hasAncestor(projectId, target, source.threadId)) return 'descendant';
+    if (this.hasAncestor(projectId, source, target.threadId)) return 'ancestor';
     return 'peer';
+  }
+
+  private hasAncestor(projectId: string, start: ProjectThreadSummary, ancestorId: string): boolean {
+    let current = start.parentThreadId;
+    const seen = new Set<string>();
+    while (current) {
+      if (current === ancestorId) return true;
+      if (seen.has(current)) throw new Error(`Project thread ancestry cycle: ${current}`);
+      seen.add(current);
+      current = this.threadSummary(projectId, current).parentThreadId;
+    }
+    return false;
   }
 
   async assertWaitWithinLimit(projectId: string, targets: readonly string[]): Promise<void> {
@@ -419,9 +517,111 @@ export class ProjectCoordinator {
     }
   }
 
+  async startWait(input: StartThreadWaitInput): Promise<{
+    readonly waitItemId: string;
+    readonly status: 'waiting' | 'woken';
+  }> {
+    return await this.mutate(async () => {
+      const project = await this.activeProject(input.projectId);
+      this.assertThreadUsable(input.projectId, input.sourceThreadId);
+      await this.assertWaitWithinLimit(input.projectId, input.targetThreadIds);
+      if (
+        input.targetThreadIds.length === 0 ||
+        new Set(input.targetThreadIds).size !== input.targetThreadIds.length
+      ) {
+        throw new Error('Thread wait targets must be a non-empty unique list');
+      }
+      for (const target of input.targetThreadIds) {
+        this.assertKnownThread(input.projectId, target);
+        if (target === input.sourceThreadId) throw new Error('Thread cannot wait on itself');
+      }
+      this.assertNoWaitCycle(input.projectId, input.sourceThreadId, input.targetThreadIds);
+      const digest = stableDigest({ type: 'thread.wait.started', ...input });
+      const existing = this.commandItem(
+        input.projectId,
+        input.idempotencyKey,
+        digest,
+        'thread.wait.started'
+      );
+      const wait =
+        existing ??
+        (await this.record({
+          type: 'thread.wait.started',
+          projectId: input.projectId,
+          targetThreadId: input.sourceThreadId,
+          idempotencyKey: input.idempotencyKey,
+          parentId: input.parentItemId,
+          payload: {
+            commandDigest: digest,
+            targets: [...input.targetThreadIds],
+            mode: input.mode,
+          },
+        }));
+      await this.tryWakeWait(project, wait);
+      const woken = this.waitResolution(input.projectId, wait.id) !== undefined;
+      const result = {
+        waitItemId: wait.id,
+        status: woken ? ('woken' as const) : ('waiting' as const),
+      };
+      await this.recordCommandResult(wait, result);
+      return result;
+    });
+  }
+
+  async recordExecutionSettled(input: {
+    readonly projectId: string;
+    readonly threadId: string;
+    readonly turnId: string;
+    readonly status: 'completed' | 'failed' | 'canceled';
+  }): Promise<void> {
+    await this.mutate(async () => {
+      await this.recordExecutionSettledNow(input);
+      const project = await this.activeProject(input.projectId);
+      await this.wakeWaitersFor(project, input.threadId);
+    });
+  }
+
+  private async recordExecutionSettledNow(input: {
+    readonly projectId: string;
+    readonly threadId: string;
+    readonly turnId: string;
+    readonly status: 'completed' | 'failed' | 'canceled';
+  }): Promise<void> {
+    const duplicate = this.list
+      .getItems(input.projectId)
+      .some(
+        (item) =>
+          item.type === 'thread.execution.settled' &&
+          item.targetThreadId === input.threadId &&
+          item.payload.turnId === input.turnId
+      );
+    if (!duplicate) {
+      await this.record({
+        type: 'thread.execution.settled',
+        projectId: input.projectId,
+        targetThreadId: input.threadId,
+        payload: { turnId: input.turnId, status: input.status },
+      });
+    }
+  }
+
+  private async wakeWaitersFor(project: ProjectSnapshot, threadId: string): Promise<void> {
+    for (const wait of this.unresolvedWaits(project.id)) {
+      if (readStringArray(wait.payload.targets).includes(threadId)) {
+        await this.tryWakeWait(project, wait);
+      }
+    }
+  }
+
   readThread(projectId: string, threadId: string): ThreadSnapshot {
-    this.assertThreadUsable(projectId, threadId);
+    this.assertKnownThread(projectId, threadId);
     return this.managerForExisting(projectId).readThread(threadId);
+  }
+
+  assertThreadExecutable(projectId: string, threadId: string): void {
+    this.assertThreadUsable(projectId, threadId);
+    const status = this.threadSummary(projectId, threadId).status;
+    if (status === 'canceled') throw new Error(`Project thread is canceled: ${threadId}`);
   }
 
   async recordLifecycle(
@@ -431,7 +631,7 @@ export class ProjectCoordinator {
     >,
     input: Omit<ProjectCoordinationAppendInput, 'type'>
   ): Promise<ProjectCoordinationItem> {
-    return await this.record({ ...input, type });
+    return await this.mutate(async () => await this.record({ ...input, type }));
   }
 
   async close(): Promise<void> {
@@ -447,7 +647,6 @@ export class ProjectCoordinator {
     let deliveredItemId: string | undefined;
     const next = previous.then(async () => {
       const manager = this.managerForExisting(projectId);
-      if (manager.readThread(threadId).status === 'running') return;
       const pending = this.pendingMessages(projectId, threadId)[0];
       if (!pending) return;
       const previousDelivery = this.list
@@ -477,18 +676,26 @@ export class ProjectCoordinator {
       const prepared = manager.prepareTurn({
         threadId,
         input: turnInput,
+        commandId: `message:${pending.messageId ?? pending.id}`,
       });
-      deliveredItemId = delivered.id;
-      const activation = await this.record({
-        type: 'thread.message.activated',
-        projectId,
-        sourceThreadId: pending.sourceThreadId,
-        targetThreadId: threadId,
-        messageId: pending.messageId,
-        correlationId: pending.correlationId,
-        causeId: delivered.id,
-        payload: { deliveredItemId: delivered.id, turnId: prepared.turn.id },
-      });
+      let activation: ProjectCoordinationItem;
+      try {
+        await manager.flushThread(threadId);
+        deliveredItemId = delivered.id;
+        activation = await this.record({
+          type: 'thread.message.activated',
+          projectId,
+          sourceThreadId: pending.sourceThreadId,
+          targetThreadId: threadId,
+          messageId: pending.messageId,
+          correlationId: pending.correlationId,
+          causeId: delivered.id,
+          payload: { deliveredItemId: delivered.id, turnId: prepared.turn.id },
+        });
+      } catch (cause) {
+        prepared.abandon();
+        throw cause;
+      }
       void prepared.activate().catch(async (error: unknown) => {
         await this.record({
           type: 'thread.message.failed',
@@ -529,31 +736,36 @@ export class ProjectCoordinator {
     );
   }
 
-  private async attachResult(itemId: string, result: ThreadMessageResult): Promise<void> {
-    const item = this.list.getItems().find((candidate) => candidate.id === itemId);
-    if (!item) throw new Error(`Missing coordination item: ${itemId}`);
-    const replacement = {
-      ...item,
-      payload: { ...item.payload, result },
-    };
-    // Result projection remains in the sent fact; journal append preserves an auditable update fact.
+  private async recordCommandResult(item: ProjectCoordinationItem, result: unknown): Promise<void> {
+    if (this.commandResult(item) !== undefined) return;
     await this.record({
-      type: 'thread.handoff',
+      type: 'coordination.command.completed',
       projectId: item.projectId,
       sourceThreadId: item.sourceThreadId,
       targetThreadId: item.targetThreadId,
       messageId: item.messageId,
       causeId: item.id,
-      payload: { result, sentSnapshot: replacement.payload },
+      payload: { result },
     });
   }
 
-  private replayCommand<T>(
+  private commandResult<T>(item: ProjectCoordinationItem): T | undefined {
+    const inline = item.payload.result as T | undefined;
+    if (inline !== undefined) return inline;
+    return this.list
+      .getItems(item.projectId)
+      .find(
+        (candidate) =>
+          candidate.type === 'coordination.command.completed' && candidate.causeId === item.id
+      )?.payload.result as T | undefined;
+  }
+
+  private commandItem(
     projectId: string,
     idempotencyKey: string,
     digest: string,
     type: ProjectCoordinationItemType
-  ): T | undefined {
+  ): ProjectCoordinationItem | undefined {
     const compacted = new Set(
       this.list
         .getItems(projectId)
@@ -566,16 +778,21 @@ export class ProjectCoordinator {
         (item) =>
           item.type === type && item.idempotencyKey === idempotencyKey && !compacted.has(item.id)
       );
-    if (!match) return undefined;
-    if (match.payload.commandDigest !== digest) {
+    if (match && match.payload.commandDigest !== digest) {
       throw new ProjectIdempotencyConflictError(projectId, idempotencyKey);
     }
-    const result = match.payload.result as T | undefined;
-    if (result !== undefined) return result;
-    return this.list
-      .getItems(projectId)
-      .find((item) => item.type === 'thread.handoff' && item.causeId === match.id)?.payload
-      .result as T | undefined;
+    return match;
+  }
+
+  private replayCommand<T>(
+    projectId: string,
+    idempotencyKey: string,
+    digest: string,
+    type: ProjectCoordinationItemType
+  ): T | undefined {
+    const match = this.commandItem(projectId, idempotencyKey, digest, type);
+    if (!match) return undefined;
+    return this.commandResult<T>(match);
   }
 
   private async record(input: ProjectCoordinationAppendInput): Promise<ProjectCoordinationItem> {
@@ -683,9 +900,18 @@ export class ProjectCoordinator {
     if (items.some((item) => item.type === 'thread.archived')) return 'archived';
     if (items.some((item) => item.type === 'thread.canceled')) return 'canceled';
     const last = items.at(-1);
+    if (last?.type === 'thread.execution.settled') {
+      const status = readOptionalString(last.payload.status);
+      if (status === 'completed' || status === 'failed' || status === 'canceled') return status;
+    }
     if (last?.type === 'thread.wait.started') return 'waiting';
+    if (last?.type === 'thread.wait.woken') return 'queued';
     if (last?.type === 'agent.lease.granted') return 'running';
-    if (last?.type === 'agent.lease.recovered') return 'queued';
+    if (last?.type === 'agent.lease.released') {
+      const status = readOptionalString(last.payload.status);
+      if (status === 'completed' || status === 'failed' || status === 'canceled') return status;
+    }
+    if (last?.type === 'agent.lease.recovered') return 'failed';
     if (last?.type === 'agent.lease.queued') return 'queued';
     return 'queued';
   }
@@ -702,12 +928,158 @@ export class ProjectCoordinator {
         .filter(
           (item) => item.type === 'agent.lease.released' || item.type === 'agent.lease.recovered'
         )
-        .map((item) => item.causeId)
-        .filter((itemId): itemId is string => itemId !== undefined)
+        .map((item) => readOptionalString(item.payload.leaseId))
+        .filter((leaseId): leaseId is string => leaseId !== undefined)
     );
     return this.list
       .getItems(projectId)
-      .filter((item) => item.type === 'agent.lease.granted' && !released.has(item.id));
+      .filter(
+        (item) =>
+          item.type === 'agent.lease.granted' &&
+          !released.has(readOptionalString(item.payload.leaseId) ?? '')
+      );
+  }
+
+  private preparedThreads(projectId: string): readonly ProjectCoordinationItem[] {
+    const completed = new Set(
+      this.list
+        .getItems(projectId)
+        .filter((item) => item.type === 'project.thread.created' && item.causeId)
+        .map((item) => item.causeId ?? '')
+    );
+    return this.list
+      .getItems(projectId)
+      .filter((item) => item.type === 'project.thread.prepared' && !completed.has(item.id));
+  }
+
+  private unresolvedWaits(projectId: string): readonly ProjectCoordinationItem[] {
+    const resolved = new Set(
+      this.list
+        .getItems(projectId)
+        .filter(
+          (item) =>
+            (item.type === 'thread.wait.resolved' || item.type === 'thread.wait.failed') &&
+            item.causeId
+        )
+        .map((item) => item.causeId ?? '')
+    );
+    return this.list
+      .getItems(projectId)
+      .filter((item) => item.type === 'thread.wait.started' && !resolved.has(item.id));
+  }
+
+  private waitResolution(
+    projectId: string,
+    waitItemId: string
+  ): ProjectCoordinationItem | undefined {
+    return this.list
+      .getItems(projectId)
+      .find(
+        (item) =>
+          (item.type === 'thread.wait.resolved' || item.type === 'thread.wait.failed') &&
+          item.causeId === waitItemId
+      );
+  }
+
+  private async tryWakeWait(
+    project: ProjectSnapshot,
+    wait: ProjectCoordinationItem
+  ): Promise<void> {
+    if (this.waitResolution(project.id, wait.id)) return;
+    const sourceThreadId = wait.targetThreadId;
+    if (!sourceThreadId) throw new Error(`Wait is missing its source thread: ${wait.id}`);
+    const source = this.threadSummary(project.id, sourceThreadId);
+    if (source.status === 'archived' || source.status === 'canceled') {
+      await this.record({
+        type: 'thread.wait.failed',
+        projectId: project.id,
+        targetThreadId: sourceThreadId,
+        causeId: wait.id,
+        payload: { reason: `source-${source.status}` },
+      });
+      return;
+    }
+    const targets = readStringArray(wait.payload.targets);
+    const results = targets.flatMap((threadId) => {
+      const status = this.threadSummary(project.id, threadId).status;
+      return status === 'completed' ||
+        status === 'failed' ||
+        status === 'canceled' ||
+        status === 'archived'
+        ? [{ threadId, status }]
+        : [];
+    });
+    const mode = wait.payload.mode === 'any' ? 'any' : 'all';
+    if (
+      (mode === 'any' && results.length === 0) ||
+      (mode === 'all' && results.length !== targets.length)
+    ) {
+      return;
+    }
+    const manager = this.managerFor(project);
+    const prepared = manager.prepareTurn({
+      threadId: sourceThreadId,
+      commandId: `wait-continuation:${wait.id}`,
+      input: {
+        type: 'thread.wait.continuation',
+        waitItemId: wait.id,
+        results,
+      },
+    });
+    let resolved: ProjectCoordinationItem;
+    try {
+      await manager.flushThread(sourceThreadId);
+      resolved = await this.record({
+        type: 'thread.wait.resolved',
+        projectId: project.id,
+        targetThreadId: sourceThreadId,
+        causeId: wait.id,
+        payload: { targets, mode, results, continuationTurnId: prepared.turn.id },
+      });
+      await this.record({
+        type: 'thread.wait.woken',
+        projectId: project.id,
+        targetThreadId: sourceThreadId,
+        causeId: resolved.id,
+        payload: { waitItemId: wait.id, continuationTurnId: prepared.turn.id },
+      });
+    } catch (cause) {
+      prepared.abandon();
+      throw cause;
+    }
+    void prepared.activate().catch(async (cause: unknown) => {
+      await this.record({
+        type: 'thread.wait.failed',
+        projectId: project.id,
+        targetThreadId: sourceThreadId,
+        causeId: wait.id,
+        payload: { reason: readMessage(cause), continuationTurnId: prepared.turn.id },
+      });
+    });
+  }
+
+  private assertNoWaitCycle(
+    projectId: string,
+    sourceThreadId: string,
+    targetThreadIds: readonly string[]
+  ): void {
+    const edges = new Map<string, readonly string[]>();
+    for (const wait of this.unresolvedWaits(projectId)) {
+      if (wait.targetThreadId)
+        edges.set(wait.targetThreadId, readStringArray(wait.payload.targets));
+    }
+    edges.set(sourceThreadId, targetThreadIds);
+    const reaches = (current: string, target: string, seen: Set<string>): boolean => {
+      if (current === target) return true;
+      if (seen.has(current)) return false;
+      seen.add(current);
+      return (edges.get(current) ?? []).some((next) => reaches(next, target, seen));
+    };
+    for (const target of targetThreadIds) {
+      if (reaches(target, sourceThreadId, new Set())) {
+        throw new Error(`Thread wait cycle: ${sourceThreadId} -> ${target}`);
+      }
+    }
   }
 }
 

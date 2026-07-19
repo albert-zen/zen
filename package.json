@@ -20,10 +20,6 @@
     "./presentation": {
       "types": "./dist/presentation/index.d.ts",
       "default": "./dist/presentation/index.js"
-    },
-    "./tui": {
-      "types": "./dist/tui/index.d.ts",
-      "default": "./dist/tui/index.js"
     }
   },
   "imports": {
@@ -52,15 +48,13 @@
     "test": "vitest run --pool=forks --fileParallelism=false --maxWorkers=1",
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
-    "tui": "npm run build && node dist/tui/cli.js",
     "web": "npm run build && node dist/adapters/node/web-dev-cli.js",
     "web:build": "vite build --config web/vite.config.ts",
     "web:dev": "vite --config web/vite.config.ts --host 127.0.0.1"
   },
   "bin": {
     "zen-app-server": "dist/adapters/node/app-server-cli.js",
-    "zen-web": "dist/adapters/node/web-dev-cli.js",
-    "zen": "dist/tui/cli.js"
+    "zen-web": "dist/adapters/node/web-dev-cli.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

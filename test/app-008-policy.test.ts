@@ -8,6 +8,7 @@ import {
   ThreadManager,
   ThreadToolRuntime,
   parseAgentAppRequest,
+  type AgentAppRequest,
   type ThreadToolExecutionContext,
 } from './test-exports.js';
 
@@ -26,13 +27,20 @@ describe('APP-008 trusted actor and resource boundaries', () => {
       actor: 'agent',
       projectId: fixture.project.id,
       sourceThreadId: parent.threadId,
-      capabilities: new Set(['messageChild']),
     };
+    const requests: Array<{ request: AgentAppRequest; context: ThreadToolExecutionContext }> = [];
     const runtime = new ThreadToolRuntime({
-      coordinator: fixture.coordinator,
-      scheduler: fixture.scheduler,
+      request: async (request, context) => {
+        requests.push({ request, context });
+        return {
+          method: request.method,
+          ok: false,
+          error: { code: 'POLICY_DENIED', message: 'peer messaging denied' },
+        };
+      },
       resolveExecutionContext: () => execution,
     });
+    const coordinationCount = fixture.coordinator.listCoordinationItems(fixture.project.id).length;
 
     const events = await collect(
       runtime.execute(
@@ -58,7 +66,25 @@ describe('APP-008 trusted actor and resource boundaries', () => {
         error: expect.objectContaining({ code: 'FORBIDDEN' }),
       }),
     ]);
-    expect(fixture.coordinator.listCoordinationItems(fixture.project.id)).toHaveLength(2);
+    expect(requests).toEqual([
+      {
+        request: {
+          method: 'thread/send',
+          params: {
+            projectId: fixture.project.id,
+            sourceThreadId: parent.threadId,
+            threadId: peer.threadId,
+            content: 'forged project and source are ignored',
+            idempotencyKey: 'forged',
+            interrupt: false,
+          },
+        },
+        context: execution,
+      },
+    ]);
+    expect(fixture.coordinator.listCoordinationItems(fixture.project.id)).toHaveLength(
+      coordinationCount
+    );
   });
 
   it('enforces thread and message budgets before creating durable facts', async () => {
@@ -67,6 +93,7 @@ describe('APP-008 trusted actor and resource boundaries', () => {
       projectId: fixture.project.id,
       idempotencyKey: 'first',
     });
+    const coordinationCount = fixture.coordinator.listCoordinationItems(fixture.project.id).length;
 
     await expect(
       fixture.coordinator.createThread({ projectId: fixture.project.id, idempotencyKey: 'second' })
@@ -80,7 +107,9 @@ describe('APP-008 trusted actor and resource boundaries', () => {
         idempotencyKey: 'large',
       })
     ).rejects.toMatchObject({ code: 'RESOURCE_EXHAUSTED' });
-    expect(fixture.coordinator.listCoordinationItems(fixture.project.id)).toHaveLength(1);
+    expect(fixture.coordinator.listCoordinationItems(fixture.project.id)).toHaveLength(
+      coordinationCount
+    );
   });
 
   it('rejects oversized, deeply nested, and prototype-polluting protocol input', () => {
@@ -116,7 +145,7 @@ async function createFixture(
     name: 'Project',
     rootPath: 'C:\\project',
     policy: {
-      maxConcurrentAgents: 1,
+      maxActiveExecutions: 1,
       maxThreadDepth: 4,
       maxThreads: limits.maxThreads ?? 10,
       maxQueuedMessages: 10,
@@ -140,11 +169,9 @@ async function createFixture(
     createThreadManager: () => manager,
     generateId: sequence('coordination'),
   });
-  const { AgentScheduler } = await import('./test-exports.js');
   return {
     project,
     coordinator,
-    scheduler: new AgentScheduler({ maxConcurrentAgents: () => 1 }),
   };
 }
 

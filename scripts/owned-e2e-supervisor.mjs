@@ -734,12 +734,20 @@ function confinedLedgerRoot(manifestPath) {
   return root;
 }
 
+function sameCanonicalPath(left, right) {
+  const normalize = (value) => {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(left) === normalize(right);
+}
+
 async function assertConfinedLedgerRoot(ledgerRoot, { create = false } = {}) {
   try {
     const stats = await fs.lstat(ledgerRoot);
     if (!stats.isDirectory() || stats.isSymbolicLink())
       throw new Error('Ownership ledger root is not a real directory');
-    if ((await fs.realpath(ledgerRoot)) !== ledgerRoot)
+    if (!sameCanonicalPath(await fs.realpath(ledgerRoot), ledgerRoot))
       throw new Error('Ownership ledger root resolves outside its expected path');
   } catch (cause) {
     if (!(cause && typeof cause === 'object' && cause.code === 'ENOENT') || !create) throw cause;
@@ -957,7 +965,7 @@ async function assertConfinedRunDirectory(runDirectory) {
     throw new Error(
       `Ownership run directory ${path.basename(runDirectory)} is not a real directory`
     );
-  if ((await fs.realpath(runDirectory)) !== runDirectory)
+  if (!sameCanonicalPath(await fs.realpath(runDirectory), runDirectory))
     throw new Error(
       `Ownership run directory ${path.basename(runDirectory)} resolves outside its expected path`
     );
@@ -1064,7 +1072,7 @@ async function assertConfinedCreatingDirectory(directory) {
   const stats = await fs.lstat(directory);
   if (!stats.isDirectory() || stats.isSymbolicLink())
     throw new Error(`Incomplete ownership run ${path.basename(directory)} is not a real directory`);
-  if ((await fs.realpath(directory)) !== directory)
+  if (!sameCanonicalPath(await fs.realpath(directory), directory))
     throw new Error(
       `Incomplete ownership run ${path.basename(directory)} resolves outside its expected path`
     );
@@ -1078,7 +1086,7 @@ async function assertConfinedTerminalDirectory(directory) {
   const stats = await fs.lstat(directory);
   if (!stats.isDirectory() || stats.isSymbolicLink())
     throw new Error(`Ownership terminal ${path.basename(directory)} is not a real directory`);
-  if ((await fs.realpath(directory)) !== directory)
+  if (!sameCanonicalPath(await fs.realpath(directory), directory))
     throw new Error(
       `Ownership terminal ${path.basename(directory)} resolves outside its expected path`
     );

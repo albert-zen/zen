@@ -137,9 +137,65 @@ describe('AgentAppServer', () => {
     await expect(
       fixture.server.request({
         method: 'project/update',
-        params: { projectId: id, rootPath: 'C:\\renamed', policy: [], idempotencyKey: 'update' },
+        params: { projectId: id, rootPath: 'C:\\renamed', idempotencyKey: 'update' },
       })
-    ).resolves.toMatchObject({ ok: true, result: { project: { rootPath: 'C:\\renamed' } } });
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: expect.stringContaining('immutable') },
+    });
+    await expect(
+      fixture.server.request({ method: 'project/read', params: { projectId: id } })
+    ).resolves.toMatchObject({ ok: true, result: { project: { rootPath: 'C:\\one' } } });
+  });
+
+  it('aggregates runtime startup and close failures after attempting every resource', async () => {
+    const manager = await ProjectManager.open({
+      registry: new InMemoryProjectRegistry(),
+      generateId: sequence('project'),
+    });
+    const closeFailure = await manager.create({ name: 'Close failure', rootPath: 'C:\\close' });
+    const openFailure = await manager.create({ name: 'Open failure', rootPath: 'C:\\open' });
+    const opening = deferred<ProjectRuntime>();
+    let openRequested = false;
+    const server = new AgentAppServer({
+      projectManager: manager,
+      createRuntime: async (project) => {
+        if (project.id === openFailure.id) {
+          openRequested = true;
+          return await opening.promise;
+        }
+        return {
+          async request(request) {
+            return { method: request.method, ok: true, result: { threads: [] } };
+          },
+          async update() {},
+          observe: () => () => undefined,
+          async close() {
+            throw new Error('injected runtime close failure');
+          },
+        };
+      },
+    });
+    await server.request({
+      method: 'thread/list',
+      params: { projectId: closeFailure.id, limit: 10 },
+    });
+    const failedRequest = server.request({
+      method: 'thread/list',
+      params: { projectId: openFailure.id, limit: 10 },
+    });
+    await expect.poll(() => openRequested).toBe(true);
+    const closing = server.close();
+    opening.reject(new Error('injected runtime startup failure'));
+
+    await expect(closing).rejects.toMatchObject({
+      name: 'AggregateError',
+      errors: [
+        expect.objectContaining({ message: 'injected runtime startup failure' }),
+        expect.objectContaining({ message: 'injected runtime close failure' }),
+      ],
+    });
+    await expect(failedRequest).resolves.toMatchObject({ ok: false });
   });
 });
 
@@ -188,6 +244,7 @@ async function createFixture() {
           listeners.set(project.id, listener);
           return () => listeners.delete(project.id);
         },
+        async update() {},
         async close() {
           closed.push(project.id);
         },
@@ -210,4 +267,14 @@ async function createFixture() {
 function sequence(prefix: string): () => string {
   let value = 0;
   return () => `${prefix}-${++value}`;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (cause: unknown) => void;
+  const promise = new Promise<T>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }

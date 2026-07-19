@@ -1,162 +1,106 @@
-import { WaitGraph, type WaitMode, type WaitResult } from './wait-graph.js';
+import type { TurnStatus } from './app-server-protocol.js';
 
 export type AgentLease = {
   readonly id: string;
   readonly projectId: string;
   readonly threadId: string;
+  readonly turnId: string;
 };
 
 export type AgentSchedulerOptions = {
-  readonly maxConcurrentAgents: (projectId: string) => number;
+  readonly maxActiveExecutions: (projectId: string) => number;
   readonly onEvent?: (event: AgentSchedulerEvent) => Promise<void> | void;
 };
 
 export type AgentSchedulerEvent = {
-  readonly type:
-    | 'agent.lease.queued'
-    | 'agent.lease.granted'
-    | 'agent.lease.released'
-    | 'thread.wait.started'
-    | 'thread.wait.resolved'
-    | 'thread.wait.failed';
+  readonly type: 'agent.lease.queued' | 'agent.lease.granted' | 'agent.lease.released';
   readonly projectId: string;
   readonly threadId: string;
-  readonly targets?: readonly string[];
+  readonly turnId: string;
+  readonly leaseId?: string;
+  readonly status?: TurnStatus;
 };
 
+type PendingExecution = {
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly resolve: (lease: AgentLease) => void;
+  readonly reject: (cause: unknown) => void;
+  readonly signal?: AbortSignal;
+  abort?: () => void;
+};
+
+/** Resource governor for short-lived Turn executors. Idle Threads never enter this class. */
 export class AgentScheduler {
-  private readonly maxConcurrentAgents: AgentSchedulerOptions['maxConcurrentAgents'];
-  private readonly onEvent?: AgentSchedulerOptions['onEvent'];
-  private readonly queues = new Map<
-    string,
-    Array<{
-      threadId: string;
-      resolve: (lease: AgentLease) => void;
-      reject: (cause: unknown) => void;
-    }>
-  >();
+  private readonly queues = new Map<string, PendingExecution[]>();
   private readonly active = new Map<string, Map<string, AgentLease>>();
-  private readonly waitGraph = new WaitGraph();
   private nextId = 1;
   private closed = false;
 
-  constructor(options: AgentSchedulerOptions) {
-    this.maxConcurrentAgents = options.maxConcurrentAgents;
-    this.onEvent = options.onEvent;
-  }
+  constructor(private readonly options: AgentSchedulerOptions) {}
 
-  async acquire(projectId: string, threadId: string): Promise<AgentLease> {
+  async acquire(
+    projectId: string,
+    threadId: string,
+    turnId: string,
+    signal?: AbortSignal
+  ): Promise<AgentLease> {
     if (this.closed) throw new Error('Agent scheduler is closed');
-    await this.emit({ type: 'agent.lease.queued', projectId, threadId });
+    if (signal?.aborted) throw new DOMException('Turn execution acquisition aborted', 'AbortError');
+    await this.emit({ type: 'agent.lease.queued', projectId, threadId, turnId });
     return await new Promise<AgentLease>((resolve, reject) => {
       const queue = this.queues.get(projectId) ?? [];
-      queue.push({ threadId, resolve, reject });
+      const pending: PendingExecution = { threadId, turnId, resolve, reject, signal };
+      if (signal) {
+        pending.abort = () => {
+          const index = queue.indexOf(pending);
+          if (index >= 0) queue.splice(index, 1);
+          reject(new DOMException('Turn execution acquisition aborted', 'AbortError'));
+        };
+        signal.addEventListener('abort', pending.abort, { once: true });
+      }
+      queue.push(pending);
       this.queues.set(projectId, queue);
       void this.pump(projectId);
     });
   }
 
-  async release(lease: AgentLease): Promise<void> {
+  async release(lease: AgentLease, status: TurnStatus): Promise<void> {
     const active = this.active.get(lease.projectId);
     if (!active?.delete(lease.id)) return;
     await this.emit({
       type: 'agent.lease.released',
       projectId: lease.projectId,
       threadId: lease.threadId,
+      turnId: lease.turnId,
+      leaseId: lease.id,
+      status,
     });
     await this.pump(lease.projectId);
   }
 
-  async wait(
-    lease: AgentLease,
-    targets: readonly string[],
-    mode: WaitMode,
-    signal?: AbortSignal
-  ): Promise<{ readonly lease: AgentLease; readonly result: WaitResult }> {
-    await this.release(lease);
-    await this.emit({
-      type: 'thread.wait.started',
-      projectId: lease.projectId,
-      threadId: lease.threadId,
-      targets,
-    });
-    try {
-      const result = await this.waitGraph.wait({
-        source: scoped(lease.projectId, lease.threadId),
-        targets: targets.map((target) => scoped(lease.projectId, target)),
-        mode,
-        signal,
-      });
-      await this.emit({
-        type: 'thread.wait.resolved',
-        projectId: lease.projectId,
-        threadId: lease.threadId,
-        targets,
-      });
-      return { lease: await this.acquire(lease.projectId, lease.threadId), result };
-    } catch (cause) {
-      await this.emit({
-        type: 'thread.wait.failed',
-        projectId: lease.projectId,
-        threadId: lease.threadId,
-        targets,
-      });
-      throw cause;
-    }
+  activeExecutionCount(projectId: string): number {
+    return this.active.get(projectId)?.size ?? 0;
   }
 
-  async waitFor(input: {
-    readonly projectId: string;
-    readonly threadId: string;
-    readonly targets: readonly string[];
-    readonly mode: WaitMode;
-    readonly signal?: AbortSignal;
-  }): Promise<WaitResult> {
-    await this.emit({
-      type: 'thread.wait.started',
-      projectId: input.projectId,
-      threadId: input.threadId,
-      targets: input.targets,
-    });
-    try {
-      const result = await this.waitGraph.wait({
-        source: scoped(input.projectId, input.threadId),
-        targets: input.targets.map((target) => scoped(input.projectId, target)),
-        mode: input.mode,
-        signal: input.signal,
-      });
-      await this.emit({
-        type: 'thread.wait.resolved',
-        projectId: input.projectId,
-        threadId: input.threadId,
-        targets: input.targets,
-      });
-      return result;
-    } catch (cause) {
-      await this.emit({
-        type: 'thread.wait.failed',
-        projectId: input.projectId,
-        threadId: input.threadId,
-        targets: input.targets,
-      });
-      throw cause;
-    }
+  queuedExecutionCount(projectId: string): number {
+    return this.queues.get(projectId)?.length ?? 0;
   }
 
-  settle(projectId: string, result: WaitResult): void {
-    this.waitGraph.settle(scoped(projectId, result.threadId), result);
-  }
-
-  cancel(projectId: string, threadId: string): void {
-    this.waitGraph.cancelThread(scoped(projectId, threadId));
+  /** Re-evaluate queued Turns after an atomic Project execution-policy update. */
+  async refresh(projectId: string): Promise<void> {
+    if (this.closed) throw new Error('Agent scheduler is closed');
+    await this.pump(projectId);
   }
 
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.waitGraph.dispose();
     for (const queue of this.queues.values()) {
-      for (const pending of queue) pending.reject(new Error('Agent scheduler is closed'));
+      for (const pending of queue) {
+        pending.signal?.removeEventListener('abort', pending.abort!);
+        pending.reject(new Error('Agent scheduler is closed'));
+      }
     }
     this.queues.clear();
     this.active.clear();
@@ -166,25 +110,42 @@ export class AgentScheduler {
     const active = this.active.get(projectId) ?? new Map<string, AgentLease>();
     this.active.set(projectId, active);
     const queue = this.queues.get(projectId) ?? [];
-    while (!this.closed && active.size < this.maxConcurrentAgents(projectId) && queue.length > 0) {
+    while (
+      !this.closed &&
+      active.size < this.options.maxActiveExecutions(projectId) &&
+      queue.length > 0
+    ) {
       const pending = queue.shift();
       if (!pending) return;
+      pending.signal?.removeEventListener('abort', pending.abort!);
+      if (pending.signal?.aborted) {
+        pending.reject(new DOMException('Turn execution acquisition aborted', 'AbortError'));
+        continue;
+      }
       const lease: AgentLease = {
-        id: `lease-${this.nextId++}`,
+        id: `execution-${this.nextId++}`,
         projectId,
         threadId: pending.threadId,
+        turnId: pending.turnId,
       };
       active.set(lease.id, lease);
-      await this.emit({ type: 'agent.lease.granted', projectId, threadId: lease.threadId });
-      pending.resolve(lease);
+      try {
+        await this.emit({
+          type: 'agent.lease.granted',
+          projectId,
+          threadId: lease.threadId,
+          turnId: lease.turnId,
+          leaseId: lease.id,
+        });
+        pending.resolve(lease);
+      } catch (cause) {
+        active.delete(lease.id);
+        pending.reject(cause);
+      }
     }
   }
 
   private async emit(event: AgentSchedulerEvent): Promise<void> {
-    await this.onEvent?.(event);
+    await this.options.onEvent?.(event);
   }
-}
-
-function scoped(projectId: string, threadId: string): string {
-  return `${projectId}:${threadId}`;
 }

@@ -25,7 +25,7 @@ type DemoThread = {
 };
 
 const policy = {
-  maxConcurrentAgents: 3,
+  maxActiveExecutions: 3,
   maxThreadDepth: 4,
   defaultModelProfile: 'balanced',
   agentCanCreateThreads: true,
