@@ -35,19 +35,25 @@ export {
 } from './approval-runtime.js';
 export { DEFAULT_ZEN_SYSTEM_PROMPT } from './system-prompt.js';
 export type {
+  ThreadRuntime,
+  ThreadRuntimeFactory,
+  ThreadRuntimeFactoryInput,
+  TurnExecutor,
+  TurnExecutorInput,
+  TurnExecutorResult,
+} from './turn-executor.js';
+export type {
   ThreadManagerEvent,
   ThreadManagerObserver,
   ThreadManagerOptions,
   PreparedTurn,
   ThreadRecord,
-  ThreadRuntime,
-  ThreadRuntimeFactory,
-  ThreadRuntimeFactoryInput,
   TurnRecord,
   TurnRetryInput,
   TurnStartInput,
 } from './thread-manager.js';
 export { ThreadManager } from './thread-manager.js';
+export { hasTurnExecutor } from './turn-executor.js';
 export type {
   ProjectCommandBegin,
   ProjectCommandRecord,
@@ -134,6 +140,7 @@ export { parseAgentAppRequest } from './agent-app-protocol.js';
 export type {
   AgentAppRequestContext,
   AgentAppServerOptions,
+  ProviderControl,
   ProjectRuntime,
 } from './agent-app-server.js';
 export { AgentAppServer } from './agent-app-server.js';

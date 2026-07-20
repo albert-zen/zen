@@ -24,16 +24,15 @@ import {
 import { FileProjectCoordinationJournal } from './file-project-coordination-journal.js';
 import { FileThreadJournal } from './file-thread-journal.js';
 import { LocalToolRuntime, localToolDefinitions } from './local-tool-runtime.js';
-import {
-  loadModelProviderConfig,
-  type ModelProviderConfigOptions,
-} from './model-provider-config.js';
-import { OpenAiCompatibleModelGateway } from './openai-compatible-model-gateway.js';
+import type { ModelProviderConfigOptions } from './model-provider-config.js';
+import { CodexProviderService } from './codex-provider-service.js';
+import { CodexTurnExecutor } from './codex-turn-executor.js';
 import { replayThreadJournal } from './provider-runtime.js';
 
 export type AgentAppProjectRuntimeFactoryOptions = {
   /** Explicit application-data root; project discovery is always registry-driven. */
   readonly appDataRoot: string;
+  /** Retained for explicit createModel extension hosts. */
   readonly config?: ModelProviderConfigOptions;
   readonly createModel?: (
     project: ProjectSnapshot,
@@ -43,6 +42,8 @@ export type AgentAppProjectRuntimeFactoryOptions = {
     request: AgentAppRequest,
     context: Extract<AgentAppRequestContext, { readonly actor: 'agent' }>
   ) => Promise<AgentAppResponse>;
+  /** Production owns this once for every Agent App Server process. */
+  readonly codexProviderService?: CodexProviderService;
 };
 
 type ProjectRuntimeState = { current: ProjectSnapshot };
@@ -116,7 +117,12 @@ class NodeProjectRuntime implements ProjectRuntime {
       const { initialThreads, persistenceFailures } = await replayThreadJournal(threadJournal);
       let manager: ThreadManager | undefined;
       const executionProjects = new Map<string, ProjectSnapshot>();
-      const runtimeFactory = createProjectThreadRuntimeFactory(state, executionProjects, options);
+      const runtimeFactory = createProjectThreadRuntimeFactory(
+        state,
+        executionProjects,
+        options,
+        (threadId) => coordinator?.threadSummary(project.id, threadId).modelProfile
+      );
       const appServer = new AppServer({
         threadJournal,
         persistenceFailures,
@@ -408,11 +414,11 @@ class NodeProjectRuntime implements ProjectRuntime {
 function createProjectThreadRuntimeFactory(
   state: ProjectRuntimeState,
   executionProjects: ReadonlyMap<string, ProjectSnapshot>,
-  options: AgentAppProjectRuntimeFactoryOptions
+  options: AgentAppProjectRuntimeFactoryOptions,
+  resolveThreadModelProfile: (threadId: string) => string | undefined
 ): ThreadRuntimeFactory {
   return ({ thread, turn, approvalBroker }) => {
     const project = executionProjects.get(turn.id) ?? state.current;
-    const local = new LocalToolRuntime({ cwd: project.rootPath, approvalBroker });
     const threadTools = new ThreadToolRuntime({
       request: async (request, execution) => {
         if (!options.requestAgentApp) throw new Error('Agent App command path is unavailable');
@@ -430,6 +436,22 @@ function createProjectThreadRuntimeFactory(
         sourceThreadId: thread.id,
       }),
     });
+    if (!options.createModel) {
+      if (!options.codexProviderService) {
+        throw new Error('CodexProviderService is required when createModel is absent');
+      }
+      return {
+        executor: new CodexTurnExecutor({
+          provider: options.codexProviderService,
+          cwd: project.rootPath,
+          model: resolveThreadModelProfile(thread.id) ?? project.policy.defaultModelProfile,
+          threadTools,
+          threadToolDefinitions,
+          approvalBroker,
+        }),
+      };
+    }
+    const local = new LocalToolRuntime({ cwd: project.rootPath, approvalBroker });
     const toolRuntime = new CompositeToolRuntime([
       {
         matches: (call: ToolCallPayload) =>
@@ -443,27 +465,11 @@ function createProjectThreadRuntimeFactory(
       },
     ]);
     return {
-      model:
-        options.createModel?.(project, [...threadToolDefinitions, ...localToolDefinitions]) ??
-        createConfiguredModel(project, options),
+      model: options.createModel(project, [...threadToolDefinitions, ...localToolDefinitions]),
       toolRuntime,
       systemPrompt: DEFAULT_ZEN_SYSTEM_PROMPT,
     };
   };
-}
-
-function createConfiguredModel(
-  project: ProjectSnapshot,
-  options: AgentAppProjectRuntimeFactoryOptions
-): ModelGateway {
-  const config = loadModelProviderConfig(options.config);
-  return new OpenAiCompatibleModelGateway({
-    baseUrl: config.baseUrl,
-    apiKey: config.apiKey,
-    model: project.policy.defaultModelProfile ?? config.modelId,
-    defaultParams: config.params,
-    tools: [...threadToolDefinitions, ...localToolDefinitions],
-  });
 }
 
 function success(

@@ -9,7 +9,7 @@ import {
   toProtocolItem,
   toThreadSnapshot,
 } from './app-server-protocol.js';
-import { AgentLoop, type AgentLoopOptions, type ContextCompiler } from '../kernel/index.js';
+import { AgentLoop, type AgentLoopOptions } from '../kernel/index.js';
 import {
   InMemoryItemList,
   type Clock,
@@ -23,23 +23,22 @@ import {
   type ApprovalDecision,
   type ApprovalRequest,
 } from './approval-runtime.js';
+import {
+  type AgentLoopThreadRuntime,
+  hasTurnExecutor,
+  type ThreadRuntime,
+  type ThreadRuntimeFactory,
+  type TurnExecutorResult,
+} from './turn-executor.js';
 
 export type { ModelGateway, ModelOptions, ToolRuntime };
-
-export type ThreadRuntime = {
-  readonly model: ModelGateway;
-  readonly toolRuntime?: ToolRuntime;
-  readonly contextCompiler?: ContextCompiler;
-  readonly systemPrompt?: string;
-};
-
-export type ThreadRuntimeFactoryInput = {
-  readonly thread: ThreadRecord;
-  readonly turn: TurnRecord;
-  readonly approvalBroker?: ApprovalBroker;
-};
-
-export type ThreadRuntimeFactory = (input: ThreadRuntimeFactoryInput) => ThreadRuntime;
+export type {
+  ThreadRuntime,
+  ThreadRuntimeFactory,
+  ThreadRuntimeFactoryInput,
+  TurnExecutorInput,
+  TurnExecutorResult,
+} from './turn-executor.js';
 
 export type ThreadManagerOptions = {
   readonly generateThreadId?: IdGenerator;
@@ -48,8 +47,10 @@ export type ThreadManagerOptions = {
   readonly generateItemId?: IdGenerator;
   readonly clock?: Clock;
   readonly runtimeFactory?: ThreadRuntimeFactory;
-  readonly initialThreads?: readonly ThreadSnapshot[];
+  /** Durable hydration records. Public ThreadSnapshots remain structurally compatible. */
+  readonly initialThreads?: readonly ThreadRecord[];
   readonly repairOnLoad?: boolean;
+  /** Receives items that require persistence but are not necessarily client-visible. */
   readonly persistenceObserver?: (threadId: string, item: Item) => void;
   readonly itemCommitBarrier?: (threadId: string, item: Item) => Promise<void>;
   readonly persistenceFailures?: readonly import('./app-server-protocol.js').ThreadPersistenceFailure[];
@@ -152,8 +153,8 @@ export class ThreadManager {
       if (failure.threadId) this.persistenceFailuresByThread.set(failure.threadId, failure);
     }
 
-    for (const snapshot of options.initialThreads ?? []) {
-      this.loadThread(snapshot, { emit: false });
+    for (const record of options.initialThreads ?? []) {
+      this.loadThread(record, { emit: false });
     }
     if (options.repairOnLoad ?? true) this.repairLoadedThreads();
   }
@@ -232,8 +233,8 @@ export class ThreadManager {
     return this.snapshotThread(thread);
   }
 
-  loadThread(snapshot: ThreadSnapshot, options: { readonly emit?: boolean } = {}): ThreadSnapshot {
-    const thread = this.createThreadState(snapshot);
+  loadThread(record: ThreadRecord, options: { readonly emit?: boolean } = {}): ThreadSnapshot {
+    const thread = this.createThreadState(record);
 
     this.threads.set(thread.id, thread);
     this.attachItemObserver(thread);
@@ -604,17 +605,7 @@ export class ThreadManager {
         turn,
         approvalBroker: this.approvalBroker,
       });
-      const loop = new AgentLoop(
-        createAgentLoopOptions(thread, runtime, (item) => this.appendItem(thread, item))
-      );
-      const result = await loop.run({
-        threadId: thread.id,
-        input: input.input,
-        runId: turn.runId,
-        turnId: turn.id,
-        modelOptions: input.modelOptions,
-        signal: controller.signal,
-      });
+      const result = await this.executeTurn(thread, turn, input, runtime, controller.signal);
 
       const terminal = this.getTurnSnapshot(thread, turn.id);
 
@@ -641,11 +632,7 @@ export class ThreadManager {
         return await this.cancelTurn(thread, turn);
       }
 
-      const failureItem = result.items.find(
-        (item) =>
-          item.turnId === turn.id &&
-          (item.type === 'assistant.message.error' || item.type === 'tool.error')
-      );
+      const failureItem = readTurnFailureItem(thread.itemList.getItems(), turn.id);
 
       if (failureItem) {
         return await this.failTurn(thread, turn, {
@@ -687,14 +674,47 @@ export class ThreadManager {
     }
   }
 
-  private createThreadState(snapshot: ThreadSnapshot): ThreadState {
-    const existingItemIds = new Set(snapshot.items.map((item) => item.id));
+  private async executeTurn(
+    thread: ThreadState,
+    turn: TurnSnapshot,
+    input: TurnStartInput,
+    runtime: ThreadRuntime,
+    signal: AbortSignal
+  ): Promise<TurnExecutorResult> {
+    if (hasTurnExecutor(runtime)) {
+      return await runtime.executor.run({
+        threadSnapshot: this.snapshotThread(thread),
+        threadRecord: toThreadRecord(thread),
+        turnSnapshot: turn,
+        turnRecord: turn,
+        input: input.input,
+        modelOptions: input.modelOptions,
+        signal,
+        appendItem: (item) => this.appendItem(thread, item),
+      });
+    }
+
+    const loop = new AgentLoop(
+      createAgentLoopOptions(thread, runtime, (item) => this.appendItem(thread, item))
+    );
+    return await loop.run({
+      threadId: thread.id,
+      input: input.input,
+      runId: turn.runId,
+      turnId: turn.id,
+      modelOptions: input.modelOptions,
+      signal,
+    });
+  }
+
+  private createThreadState(record: ThreadRecord): ThreadState {
+    const existingItemIds = new Set(record.items.map((item) => item.id));
     const thread: ThreadState = {
-      id: snapshot.id,
+      id: record.id,
       itemList: new InMemoryItemList({
         generateId: createUniqueIdGenerator(this.generateItemId, existingItemIds),
         clock: this.clock,
-        initialItems: snapshot.items.map((item) => ({ ...item })),
+        initialItems: record.items.map((item) => ({ ...item })),
       }),
     };
 
@@ -728,6 +748,7 @@ export class ThreadManager {
   private attachItemObserver(thread: ThreadState): void {
     thread.itemList.observe((item) => {
       if (item.visibility === 'internal') {
+        this.persistenceObserver?.(thread.id, item);
         return;
       }
 
@@ -966,6 +987,14 @@ function readUserInputForTurn(thread: ThreadState, turn: TurnSnapshot): JsonValu
   return input;
 }
 
+function readTurnFailureItem(items: readonly Item[], turnId: string): Item | undefined {
+  return items.find(
+    (item) =>
+      item.turnId === turnId &&
+      (item.type === 'assistant.message.error' || item.type === 'tool.error')
+  );
+}
+
 function readObjectProperty(payload: unknown, key: string): unknown {
   if (typeof payload === 'object' && payload !== null && key in payload) {
     return payload[key as keyof typeof payload];
@@ -992,7 +1021,7 @@ function isJsonValue(value: unknown): value is JsonValue {
 
 function createAgentLoopOptions(
   thread: ThreadState,
-  runtime: ThreadRuntime,
+  runtime: AgentLoopThreadRuntime,
   appendItem: NonNullable<AgentLoopOptions['appendItem']>
 ): AgentLoopOptions {
   return {

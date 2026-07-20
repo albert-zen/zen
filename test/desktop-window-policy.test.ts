@@ -11,6 +11,7 @@ describe('desktop window policy', () => {
       webSecurity: true,
     });
     expect(createWindowOptions('C:\\app\\preload.js').show).toBe(false);
+    expect(createWindowOptions('C:\\app\\preload.js').title).toBe('ZenX');
   });
 
   it('denies navigation and only delegates external http(s) popups', async () => {

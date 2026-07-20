@@ -31,7 +31,7 @@ export function createWindowOptions(preload: string): {
     minHeight: 600,
     minWidth: 900,
     show: false,
-    title: 'Zen Agent',
+    title: 'ZenX',
     width: 1280,
     webPreferences: {
       contextIsolation: true,

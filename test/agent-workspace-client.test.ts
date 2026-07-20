@@ -33,8 +33,11 @@ describe('AgentWorkspaceClient', () => {
     await client.selectProject('p2');
 
     expect(client.getSnapshot().selectedProject?.id).toBe('p2');
-    expect(client.getSnapshot().selectedThread?.id).toBe('two');
+    expect(client.getSnapshot().selectedThread).toBeUndefined();
     expect(client.getSnapshot().threads.map((thread) => thread.id)).toEqual(['two']);
+
+    await client.selectThread('two');
+    expect(client.getSnapshot().selectedThread?.id).toBe('two');
   });
 
   it('adds agent-created child threads from notifications without a local domain copy', async () => {
@@ -48,24 +51,33 @@ describe('AgentWorkspaceClient', () => {
     expect(client.getSnapshot().threads.map((entry) => entry.id)).toEqual(['child', 'parent']);
   });
 
-  it('uses project-scoped idempotent commands for create, send, cancel, archive, and handoff', async () => {
+  it('uses project-scoped idempotent commands for create, send, interrupt, cancel, archive, and handoff', async () => {
     const transport = new WorkspaceTransport([project('p1', 'One')]);
     transport.threads.set('p1', [summary('parent', 'p1'), summary('target', 'p1')]);
     const client = new AgentWorkspaceClient({ client: transport });
     await client.connect({ projectId: 'p1', threadId: 'parent' });
 
-    await client.createThread({
-      objective: 'Child',
-      parentThreadId: 'parent',
-      modelProfile: 'reviewer',
-    });
-    await client.sendHumanTurn('Hello');
+    await client.createThread(
+      {
+        objective: 'Child',
+        parentThreadId: 'parent',
+        modelProfile: 'reviewer',
+      },
+      'create-operation'
+    );
+    await client.sendHumanTurn('Hello', 'turn-operation');
+    await client.interruptTurn('interrupt-operation');
     await client.handoff('target', 'Please review');
+    await client.resolveApproval(
+      { approvalId: 'approval-1', threadId: 'created-thread', turnId: 'turn-1' },
+      'approveOnce'
+    );
     await client.cancelThread();
     await client.archiveThread();
 
     for (const request of transport.requests.filter(
       (entry) =>
+        entry.method !== 'provider/read' &&
         entry.method !== 'project/list' &&
         entry.method !== 'thread/list' &&
         entry.method !== 'thread/read'
@@ -75,7 +87,28 @@ describe('AgentWorkspaceClient', () => {
     }
     expect(
       transport.requests.find((entry) => entry.method === 'thread/create')?.params
-    ).toMatchObject({ sourceThreadId: 'parent', modelProfile: 'reviewer' });
+    ).toMatchObject({
+      sourceThreadId: 'parent',
+      modelProfile: 'reviewer',
+      idempotencyKey: 'create-operation',
+    });
+    expect(transport.requests.find((entry) => entry.method === 'turn/start')?.params).toMatchObject(
+      {
+        idempotencyKey: 'turn-operation',
+      }
+    );
+    expect(
+      transport.requests.find((entry) => entry.method === 'turn/interrupt')?.params
+    ).toMatchObject({ idempotencyKey: 'interrupt-operation' });
+    expect(
+      transport.requests.find((entry) => entry.method === 'approval/resolve')?.params
+    ).toMatchObject({
+      projectId: 'p1',
+      threadId: 'created-thread',
+      turnId: 'turn-1',
+      approvalId: 'approval-1',
+      decision: 'approveOnce',
+    });
   });
 
   it('rejects stale select completions after a project lifecycle replacement', async () => {
@@ -91,6 +124,41 @@ describe('AgentWorkspaceClient', () => {
 
     await expect(stale).rejects.toBeInstanceOf(WebUiLifecycleCanceledError);
     expect(client.getSnapshot().selectedProject?.id).toBe('p2');
+  });
+
+  it('reuses explicit operation keys after committed responses are lost', async () => {
+    const transport = new WorkspaceTransport([project('p1', 'One')]);
+    transport.threads.set('p1', [summary('parent', 'p1')]);
+    transport.loseCreateResponseOnce = true;
+    transport.loseTurnResponseOnce = true;
+    const client = new AgentWorkspaceClient({ client: transport });
+    await client.connect({ projectId: 'p1', threadId: 'parent' });
+
+    const createInput = { objective: 'Retry-safe thread' };
+    await expect(client.createThread(createInput, 'stable-create')).rejects.toThrow(
+      'thread/create response lost'
+    );
+    await expect(client.createThread(createInput, 'stable-create')).resolves.toMatchObject({
+      id: 'created-thread',
+    });
+
+    await expect(client.sendHumanTurn('Retry-safe Turn', 'stable-turn')).rejects.toThrow(
+      'turn/start response lost'
+    );
+    await expect(client.sendHumanTurn('Retry-safe Turn', 'stable-turn')).resolves.toBeUndefined();
+
+    expect(transport.threadCreateCommits).toBe(1);
+    expect(transport.turnStartCommits).toBe(1);
+    expect(
+      transport.requests
+        .filter((request) => request.method === 'thread/create')
+        .map((request) => request.params.idempotencyKey)
+    ).toEqual(['stable-create', 'stable-create']);
+    expect(
+      transport.requests
+        .filter((request) => request.method === 'turn/start')
+        .map((request) => request.params.idempotencyKey)
+    ).toEqual(['stable-turn', 'stable-turn']);
   });
 
   it('projects lifecycle/reset notifications and supports update, wait, archive, and disconnect', async () => {
@@ -203,6 +271,7 @@ describe('AgentWorkspaceClient', () => {
     const client = new AgentWorkspaceClient({ client: transport });
     await client.connect({ projectId: 'p1' });
     await expect(client.cancelThread()).rejects.toThrow('Select a thread first');
+    await expect(client.interruptTurn()).rejects.toThrow('Select a thread first');
   });
 
   it('restores a running selected thread as an active connection', async () => {
@@ -213,6 +282,68 @@ describe('AgentWorkspaceClient', () => {
     await client.connect({ projectId: 'p1', threadId: 'parent' });
     expect(client.getSnapshot().connection.status).toBe('running');
   });
+
+  it('loads sanitized provider status independently from Project navigation', async () => {
+    const transport = new WorkspaceTransport([project('p1', 'One')]);
+    transport.providerStatus = providerStatus({
+      account: {
+        state: 'authenticated',
+        account: {
+          type: 'chatgpt',
+          email: 'user@example.test',
+          planType: 'pro',
+          accessToken: 'must-not-reach-presentation',
+        },
+      },
+    });
+    const client = new AgentWorkspaceClient({ client: transport });
+
+    await client.connect({ projectId: 'p1' });
+
+    expect(client.getSnapshot().selectedProject?.id).toBe('p1');
+    expect(client.getSnapshot().provider).toMatchObject({
+      state: 'ready',
+      cli: { state: 'ready' },
+      account: {
+        state: 'authenticated',
+        email: 'user@example.test',
+        plan: 'pro',
+      },
+      models: { items: [{ id: 'gpt-5.4', displayName: 'GPT-5.4' }] },
+    });
+    expect(JSON.stringify(client.getSnapshot().provider)).not.toContain('must-not-reach');
+  });
+
+  it('keeps provider failures nonblocking and uses idempotent login controls', async () => {
+    const transport = new WorkspaceTransport([project('p1', 'One')]);
+    transport.failProviderRead = true;
+    const client = new AgentWorkspaceClient({ client: transport });
+
+    await client.connect({ projectId: 'p1' });
+    expect(client.getSnapshot()).toMatchObject({
+      connection: { status: 'connected' },
+      selectedProject: { id: 'p1' },
+      provider: { state: 'error', error: 'Codex CLI unavailable' },
+    });
+
+    transport.failProviderRead = false;
+    await client.refreshProvider();
+    await client.startProviderLogin('chatgptDeviceCode');
+    expect(client.getSnapshot().provider.login).toMatchObject({
+      type: 'chatgptDeviceCode',
+      loginId: 'login-device',
+      userCode: 'ZX-1234',
+    });
+    await client.cancelProviderLogin();
+    await client.logoutProvider();
+
+    for (const request of transport.requests.filter((entry) =>
+      ['provider/login/start', 'provider/login/cancel', 'provider/logout'].includes(entry.method)
+    )) {
+      expect(request.params).toHaveProperty('idempotencyKey');
+      expect(request.params).not.toHaveProperty('projectId');
+    }
+  });
 });
 
 class WorkspaceTransport implements AgentAppClient {
@@ -222,6 +353,15 @@ class WorkspaceTransport implements AgentAppClient {
   deferThreadListFor?: string;
   invalidResponseFor?: string;
   threadStatus: ThreadSnapshot['status'] = 'idle';
+  providerStatus: Record<string, unknown> = providerStatus();
+  failProviderRead = false;
+  loseCreateResponseOnce = false;
+  loseTurnResponseOnce = false;
+  threadCreateCommits = 0;
+  turnStartCommits = 0;
+  private readonly createdThreadsByKey = new Map<string, ThreadSnapshot>();
+  private readonly turnsByKey = new Map<string, NonNullable<ThreadSnapshot['turns'][number]>>();
+  private readonly lostResponses = new Set<string>();
   private deferred?: () => void;
   constructor(private readonly projects: ProjectSnapshot[]) {}
 
@@ -229,6 +369,30 @@ class WorkspaceTransport implements AgentAppClient {
     this.requests.push(request);
     if (request.method === this.invalidResponseFor) return response('wrong', {});
     const params = request.params as Record<string, unknown>;
+    if (request.method === 'provider/read' || request.method === 'provider/refresh') {
+      if (this.failProviderRead) return failure(request.method, 'Codex CLI unavailable');
+      return response(request.method, { status: this.providerStatus });
+    }
+    if (request.method === 'provider/login/start') {
+      return response(request.method, {
+        result:
+          params.type === 'chatgptDeviceCode'
+            ? {
+                type: 'chatgptDeviceCode',
+                loginId: 'login-device',
+                verificationUrl: 'https://auth.example/device',
+                userCode: 'ZX-1234',
+              }
+            : {
+                type: 'chatgpt',
+                loginId: 'login-browser',
+                authUrl: 'https://auth.example/login',
+              },
+      });
+    }
+    if (request.method === 'provider/login/cancel')
+      return response(request.method, { result: { status: 'canceled' } });
+    if (request.method === 'provider/logout') return response(request.method, { result: {} });
     if (request.method === 'project/list')
       return response(request.method, { projects: this.projects });
     if (request.method === 'project/create') {
@@ -258,12 +422,55 @@ class WorkspaceTransport implements AgentAppClient {
       return response(request.method, {
         thread: { ...thread(String(params.threadId)), status: this.threadStatus },
       });
-    if (request.method === 'thread/create')
-      return response(request.method, { thread: thread('created-thread') });
-    if (request.method === 'turn/start')
-      return response(request.method, {
-        turn: { id: 'turn', runId: 'run', status: 'inProgress', itemIds: [] },
-      });
+    if (request.method === 'thread/create') {
+      const key = String(params.idempotencyKey);
+      let created = this.createdThreadsByKey.get(key);
+      if (!created) {
+        this.threadCreateCommits += 1;
+        created = thread(
+          this.threadCreateCommits === 1
+            ? 'created-thread'
+            : `created-thread-${this.threadCreateCommits}`
+        );
+        this.createdThreadsByKey.set(key, created);
+        const projectId = String(params.projectId);
+        const list = this.threads.get(projectId) ?? [];
+        this.threads.set(projectId, [
+          ...list,
+          summary(
+            created.id,
+            projectId,
+            typeof params.modelProfile === 'string' ? params.modelProfile : undefined
+          ),
+        ]);
+      }
+      const lossKey = `thread/create:${key}`;
+      if (this.loseCreateResponseOnce && !this.lostResponses.has(lossKey)) {
+        this.lostResponses.add(lossKey);
+        throw new Error('thread/create response lost');
+      }
+      return response(request.method, { thread: created });
+    }
+    if (request.method === 'turn/start') {
+      const key = String(params.idempotencyKey);
+      let turn = this.turnsByKey.get(key);
+      if (!turn) {
+        this.turnStartCommits += 1;
+        turn = {
+          id: this.turnStartCommits === 1 ? 'turn' : `turn-${this.turnStartCommits}`,
+          runId: 'run',
+          status: 'inProgress',
+          itemIds: [],
+        };
+        this.turnsByKey.set(key, turn);
+      }
+      const lossKey = `turn/start:${key}`;
+      if (this.loseTurnResponseOnce && !this.lostResponses.has(lossKey)) {
+        this.lostResponses.add(lossKey);
+        throw new Error('turn/start response lost');
+      }
+      return response(request.method, { turn });
+    }
     return response(request.method, { ok: true });
   }
   subscribe(listener: (value: AgentAppNotificationEnvelope) => void) {
@@ -294,12 +501,42 @@ function project(id: string, name: string): ProjectSnapshot {
     },
   };
 }
-function summary(threadId: string, projectId: string) {
-  return { threadId, projectId, depth: 0, status: 'queued', modelProfile: 'balanced' };
+function summary(threadId: string, projectId: string, modelProfile?: string) {
+  return {
+    threadId,
+    projectId,
+    depth: 0,
+    status: 'queued',
+    ...(modelProfile ? { modelProfile } : {}),
+  };
 }
 function thread(id: string): ThreadSnapshot {
   return { id, status: 'idle', turns: [], items: [] };
 }
 function response(method: string, result: Record<string, unknown>): AgentAppResponse {
   return { method: method as never, ok: true, result };
+}
+
+function failure(method: string, message: string): AgentAppResponse {
+  return { method, ok: false, error: { code: 'INVALID_REQUEST', message } };
+}
+
+function providerStatus(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    state: 'ready',
+    cli: { state: 'ready', command: 'codex' },
+    account: { state: 'unauthenticated', requiresOpenaiAuth: true },
+    models: {
+      state: 'ready',
+      items: [
+        {
+          id: 'gpt-5.4',
+          model: 'gpt-5.4',
+          displayName: 'GPT-5.4',
+          hidden: false,
+        },
+      ],
+    },
+    ...overrides,
+  };
 }

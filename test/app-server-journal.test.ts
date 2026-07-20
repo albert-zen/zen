@@ -9,9 +9,12 @@ import {
   FileThreadJournal,
   PolicyToolRuntime,
   createProviderBackedAppServer,
+  replayThreadJournal,
   type AppServerNotification,
+  type ThreadRecord,
   type ThreadJournal,
   type ThreadJournalReplay,
+  type TurnExecutorInput,
 } from './test-exports.js';
 import type { Item } from '../src/kernel/item-list.js';
 
@@ -35,6 +38,115 @@ afterEach(async () => {
 });
 
 describe('AppServer journal commits', () => {
+  it('commits internal items without publishing them and restores them in the internal record', async () => {
+    const internalCommit = deferred<void>();
+    const journal = new InternalBarrierJournal(internalCommit.promise);
+    const notifications: AppServerNotification[] = [];
+    let internalAppendReturned = false;
+    const server = new AppServer({
+      threadJournal: journal,
+      threadManagerOptions: {
+        generateThreadId: sequence('thread'),
+        generateRunId: sequence('run'),
+        generateTurnId: sequence('turn'),
+        generateItemId: sequence('item'),
+        clock: () => 1000,
+        runtimeFactory: () => ({
+          executor: {
+            async run(input: TurnExecutorInput) {
+              await appendExecutorStarted(input);
+              await input.appendItem({
+                type: 'internal.codex.provider-thread',
+                runId: input.turnSnapshot.runId,
+                turnId: input.turnSnapshot.id,
+                visibility: 'internal',
+                payload: { providerThreadId: 'provider-thread-1' },
+              });
+              internalAppendReturned = true;
+              await appendExecutorCompleted(input);
+              return { yielded: false };
+            },
+          },
+        }),
+      },
+    });
+    server.subscribe((notification) => notifications.push(notification));
+    const started = await server.request({ method: 'thread/start' });
+    if (!started.ok || started.method !== 'thread/start') throw new Error('thread start failed');
+    const threadId = started.result.thread.id;
+    const terminal = waitForTerminal(server, threadId);
+
+    await server.request({ method: 'turn/start', params: { threadId, input: 'first' } });
+    await waitFor(() => journal.internalAppendStarted);
+
+    expect(internalAppendReturned).toBe(false);
+    expect(notificationItemTypes(notifications)).not.toContain('internal.codex.provider-thread');
+
+    internalCommit.resolve();
+    await terminal;
+    expect(internalAppendReturned).toBe(true);
+    expect(journal.items.map((item) => item.type)).toContain('internal.codex.provider-thread');
+    expect(notificationItemTypes(notifications)).not.toContain('internal.codex.provider-thread');
+
+    const read = await server.request({ method: 'thread/read', params: { threadId } });
+    if (!read.ok || read.method !== 'thread/read') throw new Error('thread read failed');
+    expect(read.result.thread.items.map((item) => item.type)).not.toContain(
+      'internal.codex.provider-thread'
+    );
+    await server.close();
+
+    const replay = await replayThreadJournal(journal);
+    const restoredRecord = replay.initialThreads[0];
+    if (!restoredRecord) throw new Error('thread did not replay');
+    expect(restoredRecord.items.map((item) => item.type)).toContain(
+      'internal.codex.provider-thread'
+    );
+    let executionRecord: ThreadRecord | undefined;
+    const reloadedNotifications: AppServerNotification[] = [];
+    const reloaded = new AppServer({
+      threadJournal: journal,
+      threadManagerOptions: {
+        initialThreads: [restoredRecord],
+        generateRunId: sequence('reloaded-run'),
+        generateTurnId: sequence('reloaded-turn'),
+        generateItemId: sequence('reloaded-item'),
+        clock: () => 2000,
+        runtimeFactory: ({ thread }) => {
+          executionRecord = thread;
+          return {
+            executor: {
+              async run(input: TurnExecutorInput) {
+                await appendExecutorStarted(input);
+                await appendExecutorCompleted(input);
+                return { yielded: false };
+              },
+            },
+          };
+        },
+      },
+    });
+    reloaded.subscribe((notification) => reloadedNotifications.push(notification));
+
+    const reloadedRead = await reloaded.request({ method: 'thread/read', params: { threadId } });
+    if (!reloadedRead.ok || reloadedRead.method !== 'thread/read') {
+      throw new Error('reloaded thread read failed');
+    }
+    expect(reloadedRead.result.thread.items.map((item) => item.type)).not.toContain(
+      'internal.codex.provider-thread'
+    );
+    const reloadedTerminal = waitForTerminal(reloaded, threadId);
+    await reloaded.request({ method: 'turn/start', params: { threadId, input: 'second' } });
+    await reloadedTerminal;
+
+    expect(executionRecord?.items.map((item) => item.type)).toContain(
+      'internal.codex.provider-thread'
+    );
+    expect(notificationItemTypes(reloadedNotifications)).not.toContain(
+      'internal.codex.provider-thread'
+    );
+    await reloaded.close();
+  });
+
   it('publishes terminal lifecycle only after that thread flushes', async () => {
     const terminalFlush = deferred<void>();
     const journal = new TerminalBarrierJournal(terminalFlush.promise);
@@ -570,6 +682,42 @@ class TerminalBarrierJournal implements ThreadJournal {
   async close(): Promise<void> {}
 }
 
+class InternalBarrierJournal implements ThreadJournal {
+  readonly items: Item[] = [];
+  internalAppendStarted = false;
+
+  constructor(private readonly internalCommit: Promise<void>) {}
+
+  async create(_threadId: string, item: Item): Promise<void> {
+    this.items.push(item);
+  }
+
+  async append(_threadId: string, item: Item): Promise<void> {
+    if (item.visibility === 'internal') {
+      this.internalAppendStarted = true;
+      await this.internalCommit;
+    }
+    this.items.push(item);
+  }
+
+  async flush(_threadId: string): Promise<void> {}
+
+  async replay(): Promise<readonly ThreadJournalReplay[]> {
+    return this.items.length === 0
+      ? []
+      : [
+          {
+            type: 'success',
+            threadId: 'thread-1',
+            path: 'memory://thread-1',
+            items: [...this.items],
+          },
+        ];
+  }
+
+  async close(): Promise<void> {}
+}
+
 class FaultJournal implements ThreadJournal {
   terminalFlushAttempted = false;
   private terminalSeen = false;
@@ -656,6 +804,46 @@ function deferred<T>() {
     resolve = innerResolve;
   });
   return { promise, resolve };
+}
+
+async function appendExecutorStarted(input: TurnExecutorInput): Promise<void> {
+  await input.appendItem({
+    type: 'run.started',
+    runId: input.turnSnapshot.runId,
+    turnId: input.turnSnapshot.id,
+    visibility: 'trace',
+    payload: {},
+  });
+  await input.appendItem({
+    type: 'turn.started',
+    runId: input.turnSnapshot.runId,
+    turnId: input.turnSnapshot.id,
+    visibility: 'trace',
+    payload: {},
+  });
+}
+
+async function appendExecutorCompleted(input: TurnExecutorInput): Promise<void> {
+  await input.appendItem({
+    type: 'turn.completed',
+    runId: input.turnSnapshot.runId,
+    turnId: input.turnSnapshot.id,
+    visibility: 'trace',
+    payload: { status: 'completed' },
+  });
+  await input.appendItem({
+    type: 'run.completed',
+    runId: input.turnSnapshot.runId,
+    turnId: input.turnSnapshot.id,
+    visibility: 'trace',
+    payload: { status: 'completed' },
+  });
+}
+
+function notificationItemTypes(notifications: readonly AppServerNotification[]): readonly string[] {
+  return notifications.flatMap((notification) =>
+    notification.type === 'item/appended' ? [notification.item.type] : []
+  );
 }
 function pendingIterator<T>() {
   const nextStarted = deferred<void>();

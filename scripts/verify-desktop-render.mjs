@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 
 export async function verifyDesktopRender(options = {}) {
-  const executablePath = resolve(options.executablePath ?? 'release/win-unpacked/Zen Agent.exe');
+  const executablePath = resolve(options.executablePath ?? 'release/win-unpacked/ZenX.exe');
   const screenshotPath = options.screenshotPath ? resolve(options.screenshotPath) : undefined;
   const profileRoot = await mkdtemp(join(tmpdir(), 'zen-desktop-render-'));
   const environment = { ...process.env };
@@ -22,7 +22,7 @@ export async function verifyDesktopRender(options = {}) {
   try {
     const window = await application.firstWindow();
     await window.waitForLoadState('domcontentloaded');
-    await window.getByText('Zen control plane', { exact: true }).waitFor({ timeout: 30_000 });
+    await window.locator('header').getByText('ZenX', { exact: true }).waitFor({ timeout: 30_000 });
 
     const body = await window.locator('body').innerText();
     const normalizedBody = body.toLowerCase();

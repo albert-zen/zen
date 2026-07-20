@@ -95,6 +95,46 @@ describe('ProjectCoordinator and ThreadMailbox', () => {
     ).rejects.toBeInstanceOf(ProjectIdempotencyConflictError);
   });
 
+  it('stores only explicit Thread model overrides across Project default updates', async () => {
+    const fixture = await createFixture({
+      policy: {
+        maxActiveExecutions: 2,
+        maxThreadDepth: 4,
+        defaultModelProfile: 'model-a',
+        agentCanCreateThreads: true,
+        agentCanMessagePeers: true,
+      },
+    });
+    const inherited = await fixture.coordinator.createThread({
+      projectId: fixture.projectId,
+      idempotencyKey: 'inherited',
+    });
+    const explicit = await fixture.coordinator.createThread({
+      projectId: fixture.projectId,
+      modelProfile: 'model-pinned',
+      idempotencyKey: 'explicit',
+    });
+
+    expect(
+      fixture.coordinator.threadSummary(fixture.projectId, inherited.threadId)
+    ).not.toHaveProperty('modelProfile');
+    expect(fixture.coordinator.threadSummary(fixture.projectId, explicit.threadId)).toMatchObject({
+      modelProfile: 'model-pinned',
+    });
+
+    const project = await fixture.projects.read(fixture.projectId);
+    await fixture.projects.update(fixture.projectId, {
+      policy: { ...project.policy, defaultModelProfile: 'model-b' },
+    });
+
+    expect(
+      fixture.coordinator.threadSummary(fixture.projectId, inherited.threadId)
+    ).not.toHaveProperty('modelProfile');
+    expect(fixture.coordinator.threadSummary(fixture.projectId, explicit.threadId)).toMatchObject({
+      modelProfile: 'model-pinned',
+    });
+  });
+
   it('enforces project boundaries, archive state, and depth independent of caller authority', async () => {
     const fixture = await createFixture({
       policy: {

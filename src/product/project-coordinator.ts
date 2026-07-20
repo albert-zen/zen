@@ -213,7 +213,7 @@ export class ProjectCoordinator {
         commandDigest: digest,
         depth,
         parentThreadId: input.sourceThreadId,
-        modelProfile: input.modelProfile ?? project.policy.defaultModelProfile,
+        ...(input.modelProfile ? { modelProfile: input.modelProfile } : {}),
         objective: input.objective,
       },
     });
@@ -478,12 +478,13 @@ export class ProjectCoordinator {
       .find((item) => item.type === 'project.thread.created' && item.targetThreadId === threadId);
     if (!created) throw new Error(`Unknown project thread: ${threadId}`);
     const payload = created.payload;
+    const modelProfile = readOptionalString(payload.modelProfile);
     return {
       projectId,
       threadId,
       depth: readNumber(payload.depth),
       parentThreadId: readOptionalString(payload.parentThreadId),
-      modelProfile: readOptionalString(payload.modelProfile),
+      ...(modelProfile ? { modelProfile } : {}),
       objective: readOptionalString(payload.objective),
       status: this.statusFor(projectId, threadId),
     };

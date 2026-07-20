@@ -3,6 +3,7 @@ import type {
   AgentAppNotification,
   AgentAppResponse,
   AgentAppSubscription,
+  ApprovalDecision,
   ProjectSnapshot,
   ThreadSnapshot,
 } from '../product/index.js';
@@ -26,8 +27,47 @@ export type WorkspaceThread = {
   readonly snapshot?: ThreadSnapshot;
 };
 
+export type WorkspaceProviderModel = {
+  readonly id: string;
+  readonly model: string;
+  readonly displayName: string;
+  readonly hidden: boolean;
+};
+
+export type WorkspaceProviderLogin =
+  | { readonly type: 'chatgpt'; readonly loginId: string; readonly authUrl: string }
+  | {
+      readonly type: 'chatgptDeviceCode';
+      readonly loginId: string;
+      readonly verificationUrl: string;
+      readonly userCode: string;
+    };
+
+export type WorkspaceProviderStatus = {
+  readonly state: 'idle' | 'ready' | 'error' | 'closed';
+  readonly refreshing: boolean;
+  readonly cli: {
+    readonly state: 'idle' | 'ready' | 'error' | 'closed';
+    readonly command?: string;
+  };
+  readonly account: {
+    readonly state: 'unknown' | 'authenticated' | 'unauthenticated';
+    readonly type?: string;
+    readonly email?: string;
+    readonly plan?: string;
+    readonly requiresOpenaiAuth?: boolean;
+  };
+  readonly models: {
+    readonly state: 'unknown' | 'ready';
+    readonly items: readonly WorkspaceProviderModel[];
+  };
+  readonly login?: WorkspaceProviderLogin;
+  readonly error?: string;
+};
+
 export type AgentWorkspaceSnapshot = {
   readonly connection: WebUiConnectionState;
+  readonly provider: WorkspaceProviderStatus;
   readonly projects: readonly ProjectSnapshot[];
   readonly selectedProject?: ProjectSnapshot;
   readonly threads: readonly WorkspaceThread[];
@@ -48,6 +88,7 @@ export class AgentWorkspaceClient {
   private readonly listeners = new Set<AgentWorkspaceClientListener>();
   private readonly client: AgentAppClient;
   private connection: WebUiConnectionState;
+  private provider: WorkspaceProviderStatus = emptyProviderStatus();
   private projects: readonly ProjectSnapshot[] = [];
   private selectedProject?: ProjectSnapshot;
   private threads: readonly WorkspaceThread[] = [];
@@ -55,6 +96,7 @@ export class AgentWorkspaceClient {
   private snapshot: AgentWorkspaceSnapshot;
   private unsubscribe?: AgentAppSubscription;
   private generation = 0;
+  private providerGeneration = 0;
 
   constructor(options: AgentWorkspaceClientOptions) {
     this.client = options.client;
@@ -78,6 +120,7 @@ export class AgentWorkspaceClient {
     const generation = this.replaceLifecycle();
     this.connection = { ...this.connection, status: 'connecting', message: undefined };
     this.publish();
+    const providerLoad = this.loadProviderStatus('provider/read', false);
     try {
       await this.loadProjects(generation);
       const project =
@@ -95,6 +138,8 @@ export class AgentWorkspaceClient {
     } catch (cause) {
       if (generation === this.generation) this.fail(cause);
       throw cause;
+    } finally {
+      await providerLoad;
     }
   }
 
@@ -107,8 +152,37 @@ export class AgentWorkspaceClient {
   }
 
   dispose(): void {
+    this.providerGeneration += 1;
     this.disconnect();
     this.listeners.clear();
+  }
+
+  async refreshProvider(): Promise<void> {
+    await this.loadProviderStatus('provider/refresh', true);
+  }
+
+  async startProviderLogin(type: 'chatgpt' | 'chatgptDeviceCode'): Promise<WorkspaceProviderLogin> {
+    const response = await this.providerMutation('provider/login/start', { type });
+    const login = readProviderLogin(response);
+    this.provider = { ...this.provider, login, error: undefined };
+    this.publish();
+    return login;
+  }
+
+  async cancelProviderLogin(): Promise<void> {
+    const login = this.provider.login;
+    if (!login) return;
+    await this.providerMutation('provider/login/cancel', { loginId: login.loginId });
+    this.provider = { ...this.provider, login: undefined, error: undefined };
+    this.publish();
+    await this.loadProviderStatus('provider/refresh', false);
+  }
+
+  async logoutProvider(): Promise<void> {
+    await this.providerMutation('provider/logout', {});
+    this.provider = { ...this.provider, login: undefined, error: undefined };
+    this.publish();
+    await this.loadProviderStatus('provider/refresh', false);
   }
 
   async selectProject(projectId: string, threadId?: string): Promise<void> {
@@ -184,11 +258,14 @@ export class AgentWorkspaceClient {
     this.publish();
   }
 
-  async createThread(input: {
-    readonly objective: string;
-    readonly parentThreadId?: string;
-    readonly modelProfile?: string;
-  }): Promise<ThreadSnapshot> {
+  async createThread(
+    input: {
+      readonly objective: string;
+      readonly parentThreadId?: string;
+      readonly modelProfile?: string;
+    },
+    operationKey?: string
+  ): Promise<ThreadSnapshot> {
     const generation = this.generation;
     const projectId = this.requireProjectId();
     const thread = readThread(
@@ -197,7 +274,7 @@ export class AgentWorkspaceClient {
         objective: input.objective,
         ...(input.parentThreadId ? { sourceThreadId: input.parentThreadId } : {}),
         ...(input.modelProfile ? { modelProfile: input.modelProfile } : {}),
-        idempotencyKey: this.idempotencyKey(),
+        idempotencyKey: operationKey ?? this.idempotencyKey(),
       }),
       'thread/create'
     );
@@ -208,7 +285,7 @@ export class AgentWorkspaceClient {
     return thread;
   }
 
-  async sendHumanTurn(input: string): Promise<void> {
+  async sendHumanTurn(input: string, operationKey?: string): Promise<void> {
     const trimmed = input.trim();
     if (!trimmed) return;
     const projectId = this.requireProjectId();
@@ -219,8 +296,20 @@ export class AgentWorkspaceClient {
       projectId,
       threadId,
       input: trimmed,
-      idempotencyKey: this.idempotencyKey(),
+      idempotencyKey: operationKey ?? this.idempotencyKey(),
     });
+  }
+
+  async interruptTurn(operationKey?: string): Promise<void> {
+    const projectId = this.requireProjectId();
+    await this.request('turn/interrupt', {
+      projectId,
+      threadId: this.requireThreadId(),
+      idempotencyKey: operationKey ?? this.idempotencyKey(),
+    });
+    this.connection = { ...this.connection, status: 'connected', message: undefined };
+    this.publish();
+    await this.refreshThreads();
   }
 
   async cancelThread(): Promise<void> {
@@ -254,6 +343,18 @@ export class AgentWorkspaceClient {
       idempotencyKey: this.idempotencyKey(),
     });
     await this.refreshThreads();
+  }
+
+  async resolveApproval(
+    approval: { readonly approvalId: string; readonly threadId: string; readonly turnId: string },
+    decision: ApprovalDecision
+  ): Promise<void> {
+    await this.request('approval/resolve', {
+      projectId: this.requireProjectId(),
+      ...approval,
+      decision,
+      idempotencyKey: this.idempotencyKey(),
+    });
   }
 
   private async activateProject(
@@ -293,7 +394,7 @@ export class AgentWorkspaceClient {
     const response = await this.request('thread/list', { projectId });
     this.assertCurrent(generation);
     this.threads = readThreads(response);
-    const selected = threadId ?? this.threads[0]?.id;
+    const selected = threadId;
     if (!selected) return;
     const thread = readThread(
       await this.request('thread/read', { projectId, threadId: selected }),
@@ -365,6 +466,58 @@ export class AgentWorkspaceClient {
     this.projects = response.result.projects as readonly ProjectSnapshot[];
   }
 
+  private async loadProviderStatus(
+    method: 'provider/read' | 'provider/refresh',
+    propagateError: boolean
+  ): Promise<void> {
+    const generation = ++this.providerGeneration;
+    this.provider = { ...this.provider, refreshing: true, error: undefined };
+    this.publish();
+    try {
+      const response = await this.client.request({ method, params: {} });
+      if (!response.ok || response.method !== method) {
+        throw new Error(response.ok ? `Unexpected ${response.method}` : response.error.message);
+      }
+      const next = readProviderStatus(response);
+      if (generation !== this.providerGeneration) return;
+      this.provider = {
+        ...next,
+        refreshing: false,
+        ...(next.account.state === 'authenticated' ? {} : { login: this.provider.login }),
+      };
+      this.publish();
+    } catch (cause) {
+      if (generation === this.providerGeneration) {
+        this.provider = {
+          ...this.provider,
+          state: 'error',
+          refreshing: false,
+          cli: { ...this.provider.cli, state: 'error' },
+          error: readError(cause),
+        };
+        this.publish();
+      }
+      if (propagateError) throw cause;
+    }
+  }
+
+  private async providerMutation(
+    method: 'provider/login/start' | 'provider/login/cancel' | 'provider/logout',
+    params: Record<string, unknown>
+  ): Promise<AgentAppResponse> {
+    const response = await this.client.request({
+      method,
+      params: { ...params, idempotencyKey: this.idempotencyKey() } as never,
+    });
+    if (!response.ok || response.method !== method) {
+      const error = response.ok ? `Unexpected ${response.method}` : response.error.message;
+      this.provider = { ...this.provider, error };
+      this.publish();
+      throw new Error(error);
+    }
+    return response;
+  }
+
   private async threadCommand(method: 'thread/cancel' | 'thread/archive'): Promise<void> {
     const projectId = this.requireProjectId();
     await this.request(method, {
@@ -421,6 +574,7 @@ export class AgentWorkspaceClient {
   private materialize(): AgentWorkspaceSnapshot {
     return {
       connection: this.connection,
+      provider: this.provider,
       projects: this.projects,
       selectedProject: this.selectedProject,
       threads: this.threads,
@@ -432,6 +586,121 @@ export class AgentWorkspaceClient {
   private idempotencyKey(): string {
     return globalThis.crypto?.randomUUID?.() ?? `workspace-${Date.now()}-${Math.random()}`;
   }
+}
+
+function emptyProviderStatus(): WorkspaceProviderStatus {
+  return {
+    state: 'idle',
+    refreshing: false,
+    cli: { state: 'idle' },
+    account: { state: 'unknown' },
+    models: { state: 'unknown', items: [] },
+  };
+}
+
+function readProviderStatus(response: AgentAppResponse): WorkspaceProviderStatus {
+  if (!response.ok || !isRecord(response.result.status)) {
+    throw new Error(response.ok ? 'Invalid provider status' : response.error.message);
+  }
+  const status = response.result.status;
+  const cli = readRecord(status.cli, 'provider CLI status');
+  const accountStatus = readRecord(status.account, 'provider account status');
+  const models = readRecord(status.models, 'provider model status');
+  const account = isRecord(accountStatus.account) ? accountStatus.account : undefined;
+  if (!Array.isArray(models.items)) throw new Error('Invalid provider model list');
+  return {
+    state: readEnum(status.state, ['idle', 'ready', 'error', 'closed'], 'provider state'),
+    refreshing: false,
+    cli: {
+      state: readEnum(cli.state, ['idle', 'ready', 'error', 'closed'], 'provider CLI state'),
+      ...(typeof cli.command === 'string' ? { command: cli.command } : {}),
+    },
+    account: {
+      state: readEnum(
+        accountStatus.state,
+        ['unknown', 'authenticated', 'unauthenticated'],
+        'provider account state'
+      ),
+      ...(account && typeof account.type === 'string' ? { type: account.type } : {}),
+      ...(account && typeof account.email === 'string' ? { email: account.email } : {}),
+      ...(account ? readAccountPlan(account) : {}),
+      ...(typeof accountStatus.requiresOpenaiAuth === 'boolean'
+        ? { requiresOpenaiAuth: accountStatus.requiresOpenaiAuth }
+        : {}),
+    },
+    models: {
+      state: readEnum(models.state, ['unknown', 'ready'], 'provider model state'),
+      items: models.items.map(readProviderModel),
+    },
+    ...(typeof status.error === 'string' ? { error: status.error } : {}),
+  };
+}
+
+function readProviderLogin(response: AgentAppResponse): WorkspaceProviderLogin {
+  if (!response.ok || !isRecord(response.result.result)) {
+    throw new Error(response.ok ? 'Invalid provider login result' : response.error.message);
+  }
+  const result = response.result.result;
+  if (
+    result.type === 'chatgpt' &&
+    typeof result.loginId === 'string' &&
+    typeof result.authUrl === 'string'
+  ) {
+    return { type: result.type, loginId: result.loginId, authUrl: result.authUrl };
+  }
+  if (
+    result.type === 'chatgptDeviceCode' &&
+    typeof result.loginId === 'string' &&
+    typeof result.verificationUrl === 'string' &&
+    typeof result.userCode === 'string'
+  ) {
+    return {
+      type: result.type,
+      loginId: result.loginId,
+      verificationUrl: result.verificationUrl,
+      userCode: result.userCode,
+    };
+  }
+  throw new Error('Invalid provider login result');
+}
+
+function readProviderModel(value: unknown): WorkspaceProviderModel {
+  const model = readRecord(value, 'provider model');
+  if (
+    typeof model.id !== 'string' ||
+    typeof model.model !== 'string' ||
+    typeof model.displayName !== 'string' ||
+    typeof model.hidden !== 'boolean'
+  ) {
+    throw new Error('Invalid provider model');
+  }
+  return {
+    id: model.id,
+    model: model.model,
+    displayName: model.displayName,
+    hidden: model.hidden,
+  };
+}
+
+function readAccountPlan(account: Record<string, unknown>): { readonly plan?: string } {
+  for (const key of ['plan', 'planType', 'subscriptionPlan']) {
+    if (typeof account[key] === 'string') return { plan: account[key] };
+  }
+  return {};
+}
+
+function readRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`Invalid ${label}`);
+  return value;
+}
+
+function readEnum<const T extends string>(value: unknown, values: readonly T[], label: string): T {
+  if (typeof value === 'string' && values.includes(value as T)) return value as T;
+  throw new Error(`Invalid ${label}`);
+}
+
+function readError(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function readProject(response: AgentAppResponse, method: string): ProjectSnapshot {

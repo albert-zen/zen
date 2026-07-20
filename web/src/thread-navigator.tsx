@@ -12,39 +12,57 @@ export function ThreadNavigator(props: {
   onCreate: () => void;
 }): React.ReactElement {
   return (
-    <aside className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] border-r border-zinc-800 bg-zinc-900">
-      <header className="border-b border-zinc-800 px-4 py-3">
+    <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-zinc-900">
+      <header className="flex items-center justify-between border-b border-zinc-800 px-3 py-3">
         <div className="text-xs font-bold uppercase tracking-[0.08em] text-zinc-400">Threads</div>
-      </header>
-      <div className="p-2">
-        <Button className="w-full justify-start" variant="ghost" onClick={props.onCreate}>
+        <Button
+          aria-label="New thread"
+          title="New thread"
+          size="icon"
+          variant="subtle"
+          onClick={props.onCreate}
+        >
           <Plus className="h-4 w-4" />
-          New thread
         </Button>
-      </div>
-      <nav aria-label="Threads" className="min-h-0 overflow-auto px-2 pb-3">
+      </header>
+      <nav aria-label="Threads" className="min-h-0 overflow-auto p-2">
+        {props.threads.length === 0 ? (
+          <div className="grid gap-3 px-2 py-8 text-center">
+            <p className="text-sm text-zinc-500">No threads yet.</p>
+            <Button variant="ghost" onClick={props.onCreate}>
+              <Plus className="h-4 w-4" />
+              Start a thread
+            </Button>
+          </div>
+        ) : null}
         {props.threads.map((thread) => (
           <button
             key={thread.id}
             type="button"
             aria-current={thread.id === props.selectedThreadId ? 'page' : undefined}
             onClick={() => props.onSelect(thread.id)}
-            style={{ marginLeft: `${Math.min(thread.depth, 3) * 12}px` }}
             className={cn(
-              'mb-1 grid w-[calc(100%-36px)] min-w-0 gap-1 rounded-md border border-transparent px-3 py-2 text-left hover:bg-zinc-800',
+              'mb-1 grid w-full min-w-0 gap-1 rounded-md border border-transparent px-3 py-2 text-left hover:bg-zinc-800',
               thread.id === props.selectedThreadId && 'border-zinc-700 bg-zinc-800'
             )}
           >
-            <div className="truncate text-sm font-semibold text-zinc-100">
-              {thread.objective ?? thread.id}
+            <div className="flex min-w-0 items-center gap-2">
+              {thread.depth > 0 ? (
+                <span aria-hidden className="text-[10px] uppercase text-teal-400">
+                  child
+                </span>
+              ) : null}
+              <div className="truncate text-sm font-semibold text-zinc-100">
+                {thread.objective ?? thread.id}
+              </div>
             </div>
             <div className="flex min-w-0 items-center justify-between gap-2 text-xs text-zinc-400">
-              <span className="truncate">{thread.modelProfile ?? 'default'}</span>
+              <span className="truncate">{thread.modelProfile ?? 'project default'}</span>
               <span className="shrink-0 capitalize">{thread.status}</span>
             </div>
           </button>
         ))}
       </nav>
-    </aside>
+    </section>
   );
 }

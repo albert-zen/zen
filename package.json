@@ -91,10 +91,10 @@
   },
   "build": {
     "appId": "com.zen.agent",
-    "productName": "Zen Agent",
+    "productName": "ZenX",
     "publish": null,
     "asar": true,
-    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "artifactName": "ZenX-${version}-${arch}.${ext}",
     "directories": {
       "output": "release"
     },

@@ -24,9 +24,16 @@ assertLoopbackBindAllowed(host, allowRemoteBind, 'Non-loopback Zen Web');
 
 await runWebDevCliComposition({
   signalSource: process,
-  createAppServer: async () =>
-    (await createAgentAppProductionComposition({ appDataRoot: resolveAgentAppDataRoot() }))
-      .agentAppServer,
+  createAppServer: async () => {
+    const composition = await createAgentAppProductionComposition({
+      appDataRoot: resolveAgentAppDataRoot(),
+    });
+    return {
+      request: composition.agentAppServer.request.bind(composition.agentAppServer),
+      subscribe: composition.agentAppServer.subscribe.bind(composition.agentAppServer),
+      close: composition.close,
+    };
+  },
   createTransport: async (appServer) =>
     await serveAgentAppHttpTransport({
       agentAppServer: appServer as import('../../product/index.js').AgentAppClient,

@@ -24,6 +24,11 @@ export type AgentAppMethod =
   | 'project/read'
   | 'project/update'
   | 'project/archive'
+  | 'provider/read'
+  | 'provider/refresh'
+  | 'provider/login/start'
+  | 'provider/login/cancel'
+  | 'provider/logout'
   | 'thread/create'
   | 'thread/list'
   | 'thread/read'
@@ -89,6 +94,9 @@ const mutations = new Set<AgentAppMethod>([
   'project/create',
   'project/update',
   'project/archive',
+  'provider/login/start',
+  'provider/login/cancel',
+  'provider/logout',
   'thread/create',
   'thread/send',
   'thread/wait',
@@ -172,6 +180,11 @@ function isMethod(value: string): value is AgentAppMethod {
     'project/read',
     'project/update',
     'project/archive',
+    'provider/read',
+    'provider/refresh',
+    'provider/login/start',
+    'provider/login/cancel',
+    'provider/logout',
     'thread/create',
     'thread/list',
     'thread/read',

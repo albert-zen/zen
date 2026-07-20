@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { FolderKanban, MessagesSquare, PanelRight } from 'lucide-react';
+import { CircleUserRound, MessagesSquare, PanelRight } from 'lucide-react';
 
 import {
   AgentWorkspaceClient,
@@ -11,11 +11,17 @@ import { createBrowserDemoAppServer } from './demo-app-server';
 import { ProjectNavigator } from './project-navigator';
 import { ThreadNavigator } from './thread-navigator';
 import { ThreadView } from './thread-view';
-import { HandoffDialog, ProjectDialog, ThreadDialog } from './workspace-dialogs';
+import {
+  HandoffDialog,
+  ProjectDialog,
+  ProjectSettingsDialog,
+  ProviderDialog,
+  ThreadDialog,
+} from './workspace-dialogs';
 
 type RuntimeMode = 'real' | 'demo';
-type MobileView = 'projects' | 'threads' | 'thread';
-type Dialog = 'project' | 'thread' | 'handoff' | undefined;
+type MobileView = 'threads' | 'thread';
+type Dialog = 'project' | 'settings' | 'provider' | 'thread' | 'handoff' | undefined;
 
 export type AgentWorkspaceProps = {
   readonly createClient?: (mode: RuntimeMode) => AgentWorkspaceClient;
@@ -85,17 +91,29 @@ export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElem
 
   return (
     <div className="grid h-dvh min-h-0 max-w-full grid-rows-[auto_minmax(0,1fr)] overflow-x-hidden bg-zinc-950 text-zinc-100">
-      <header className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-zinc-800 px-4 py-2">
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-zinc-800 px-4 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <div className="grid h-7 w-7 place-items-center rounded-md bg-teal-400 text-xs font-black text-zinc-950">
-            Z
+            ZX
           </div>
-          <div className="truncate text-sm font-bold">Zen control plane</div>
+          <div className="truncate text-sm font-bold">ZenX</div>
         </div>
-        <div className="w-full text-xs leading-5 text-zinc-400 sm:w-auto sm:max-w-[60%] sm:text-right">
-          {snapshot.selectedProject
-            ? `${snapshot.threads.filter((thread) => thread.status === 'running').length} active executions · ${snapshot.threads.length}/${snapshot.selectedProject.policy.maxThreads ?? 'unbounded'} threads`
-            : snapshot.connection.status}
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="hidden text-xs leading-5 text-zinc-400 sm:block">
+            {resourceSummary(snapshot)}
+          </div>
+          <Button
+            type="button"
+            variant="subtle"
+            aria-label="Provider account"
+            title="Provider account"
+            className="max-w-56"
+            onClick={() => setDialog('provider')}
+          >
+            <span aria-hidden className={`h-2 w-2 rounded-full ${providerIndicator(snapshot)}`} />
+            <CircleUserRound className="h-4 w-4" />
+            <span className="truncate">{providerLabel(snapshot)}</span>
+          </Button>
         </div>
       </header>
       {error ? (
@@ -106,39 +124,51 @@ export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElem
           {error}
         </div>
       ) : null}
-      <div className="grid min-h-0 grid-cols-[220px_300px_minmax(0,1fr)] max-md:grid-cols-1 max-md:pb-14">
-        <div className={mobileView === 'projects' ? 'min-h-0' : 'hidden min-h-0 md:block'}>
+      <div className="grid min-h-0 grid-cols-[300px_minmax(0,1fr)] max-md:grid-cols-1 max-md:pb-14">
+        <aside
+          className={
+            mobileView === 'threads'
+              ? 'grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r border-zinc-800 bg-zinc-900'
+              : 'hidden min-h-0 md:grid md:grid-rows-[auto_minmax(0,1fr)] md:border-r md:border-zinc-800 md:bg-zinc-900'
+          }
+        >
           <ProjectNavigator
             projects={snapshot.projects}
             selectedProjectId={snapshot.selectedProject?.id}
             onSelect={selectProject}
             onCreate={() => setDialog('project')}
+            onSettings={() => setDialog('settings')}
             onArchive={() => {
               if (window.confirm('Archive this project?')) invoke(() => client.archiveProject());
             }}
           />
-        </div>
-        <div className={mobileView === 'threads' ? 'min-h-0' : 'hidden min-h-0 md:block'}>
           <ThreadNavigator
             threads={snapshot.threads}
             selectedThreadId={snapshot.selectedThread?.id}
             onSelect={selectThread}
             onCreate={() => setDialog('thread')}
           />
-        </div>
+        </aside>
         <div className={mobileView === 'thread' ? 'min-h-0' : 'hidden min-h-0 md:block'}>
           {snapshot.selectedProject ? (
             <ThreadView
+              key={`${snapshot.selectedProject.id}:${snapshot.selectedThread?.id ?? 'none'}`}
               connection={snapshot.connection}
+              project={snapshot.selectedProject}
               thread={snapshot.selectedThread}
               summary={selectedSummary}
               state={snapshot.state}
-              onSend={(input) =>
-                client.sendHumanTurn(input).then(() => updateUrl(client.getSnapshot()))
+              providerAuthenticated={snapshot.provider.account.state === 'authenticated'}
+              onOpenProvider={() => setDialog('provider')}
+              onResolveApproval={(approval, decision) => client.resolveApproval(approval, decision)}
+              onSend={(input, operationKey) =>
+                client
+                  .sendHumanTurn(input, operationKey)
+                  .then(() => updateUrl(client.getSnapshot()))
               }
-              onCancel={() => {
-                if (window.confirm('Cancel this thread?')) invoke(() => client.cancelThread());
-              }}
+              onInterrupt={(operationKey) =>
+                client.interruptTurn(operationKey).then(() => updateUrl(client.getSnapshot()))
+              }
               onArchive={() => {
                 if (window.confirm('Archive this thread?')) invoke(() => client.archiveThread());
               }}
@@ -154,6 +184,9 @@ export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElem
                 <Button variant="primary" onClick={() => setDialog('project')}>
                   Create project
                 </Button>
+                {snapshot.provider.account.state !== 'authenticated' ? (
+                  <ProviderSetupCallout onOpen={() => setDialog('provider')} />
+                ) : null}
               </div>
             </main>
           )}
@@ -161,14 +194,8 @@ export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElem
       </div>
       <nav
         aria-label="Mobile workspace views"
-        className="fixed bottom-0 left-0 right-0 grid grid-cols-3 border-t border-zinc-800 bg-zinc-950 p-1 md:hidden"
+        className="fixed bottom-0 left-0 right-0 grid grid-cols-2 border-t border-zinc-800 bg-zinc-950 p-1 md:hidden"
       >
-        <MobileTab
-          label="Projects"
-          icon={<FolderKanban className="h-4 w-4" />}
-          active={mobileView === 'projects'}
-          onClick={() => setMobileView('projects')}
-        />
         <MobileTab
           label="Threads"
           icon={<MessagesSquare className="h-4 w-4" />}
@@ -183,25 +210,65 @@ export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElem
         />
       </nav>
       <ProjectDialog
+        key={dialog === 'project' ? 'project-open' : 'project-closed'}
         open={dialog === 'project'}
+        models={snapshot.provider.models.items}
         onClose={() => setDialog(undefined)}
         onSubmit={async (input) => {
           await client.createProject(input);
           setDialog(undefined);
+          setMobileView('threads');
           updateUrl(client.getSnapshot());
         }}
       />
+      {snapshot.selectedProject ? (
+        <ProjectSettingsDialog
+          key={`${snapshot.selectedProject.id}:${dialog === 'settings' ? 'open' : 'closed'}`}
+          open={dialog === 'settings'}
+          project={snapshot.selectedProject}
+          models={snapshot.provider.models.items}
+          onClose={() => setDialog(undefined)}
+          onSubmit={async (input) => {
+            await client.updateProject(input);
+            setDialog(undefined);
+            updateUrl(client.getSnapshot());
+          }}
+        />
+      ) : null}
       <ThreadDialog
+        key={dialog === 'thread' ? 'thread-open' : 'thread-closed'}
         open={dialog === 'thread'}
         threads={snapshot.threads}
+        models={snapshot.provider.models.items}
+        projectDefaultModelProfile={snapshot.selectedProject?.policy.defaultModelProfile}
         onClose={() => setDialog(undefined)}
-        onSubmit={async (input) => {
-          await client.createThread(input);
+        onCreate={async (input, operationKey) => {
+          await client.createThread(input, operationKey);
+          updateUrl(client.getSnapshot());
+          const threadId = client.getSnapshot().selectedThread?.id;
+          if (!threadId) throw new Error('Thread was created but could not be selected');
+          return threadId;
+        }}
+        onStart={async (input, operationKey) => {
+          await client.sendHumanTurn(input, operationKey);
           setDialog(undefined);
           updateUrl(client.getSnapshot());
         }}
       />
+      <ProviderDialog
+        key={dialog === 'provider' ? 'provider-open' : 'provider-closed'}
+        open={dialog === 'provider'}
+        provider={snapshot.provider}
+        onClose={() => setDialog(undefined)}
+        onRefresh={() => client.refreshProvider()}
+        onStartLogin={async (type) => {
+          await client.startProviderLogin(type);
+        }}
+        onCancelLogin={() => client.cancelProviderLogin()}
+        onLogout={() => client.logoutProvider()}
+      />
       <HandoffDialog
+        key={dialog === 'handoff' ? 'handoff-open' : 'handoff-closed'}
         open={dialog === 'handoff'}
         source={snapshot.selectedThread}
         threads={snapshot.threads}
@@ -244,6 +311,49 @@ function createWorkspaceClient(mode: RuntimeMode): AgentWorkspaceClient {
     client: mode === 'demo' ? createBrowserDemoAppServer() : new BrowserAgentAppTransportClient({}),
   });
 }
+
+function ProviderSetupCallout({ onOpen }: { onOpen: () => void }): React.ReactElement {
+  return (
+    <div className="mt-3 grid gap-2 rounded-md border border-amber-900/70 bg-amber-950/20 p-3 text-left">
+      <div className="text-sm font-semibold text-amber-100">Connect ChatGPT to run agent Turns</div>
+      <div className="text-xs leading-5 text-amber-200/70">
+        Project navigation and history remain available without an account.
+      </div>
+      <Button type="button" variant="ghost" onClick={onOpen}>
+        Set up provider
+      </Button>
+    </div>
+  );
+}
+
+function resourceSummary(snapshot: AgentWorkspaceSnapshot): string {
+  if (!snapshot.selectedProject) return snapshot.connection.status;
+  const active = snapshot.threads.filter((thread) => thread.status === 'running').length;
+  const count = snapshot.threads.length;
+  const limit = snapshot.selectedProject.policy.maxThreads;
+  const threads = limit
+    ? `${count} of ${limit} threads`
+    : `${count} ${count === 1 ? 'thread' : 'threads'}`;
+  return active ? `${active} running · ${threads}` : threads;
+}
+
+function providerLabel(snapshot: AgentWorkspaceSnapshot): string {
+  const provider = snapshot.provider;
+  if (provider.error || provider.state === 'error') return 'Provider error';
+  if (provider.account.state === 'authenticated') {
+    return provider.account.email ?? 'ChatGPT connected';
+  }
+  if (provider.refreshing) return 'Checking provider';
+  return 'Connect ChatGPT';
+}
+
+function providerIndicator(snapshot: AgentWorkspaceSnapshot): string {
+  const provider = snapshot.provider;
+  if (provider.error || provider.state === 'error') return 'bg-rose-400';
+  if (provider.account.state === 'authenticated') return 'bg-emerald-400';
+  return 'bg-amber-400';
+}
+
 function updateUrl(snapshot: AgentWorkspaceSnapshot): void {
   const url = new URL(window.location.href);
   if (snapshot.selectedProject) url.searchParams.set('project', snapshot.selectedProject.id);

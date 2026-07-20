@@ -91,6 +91,40 @@ describe('owned E2E supervisor', () => {
     });
   });
 
+  it('bounds parent traversal when a Windows PID 0 snapshot points to itself', async () => {
+    await withManifest(async ({ manifestPath, marker }) => {
+      const idle = {
+        ...ownedEntry({ marker, pid: 0, parentPid: 0, parentChain: [] }),
+        commandLine: undefined,
+      };
+      const root = ownedEntry({
+        marker,
+        pid: 12,
+        parentPid: idle.pid,
+        parentChain: [{ pid: idle.pid, creationToken: idle.creationToken }],
+      });
+      const processes = new Map([
+        [idle.pid, idle],
+        [root.pid, root],
+      ]);
+      const terminated = [];
+      await writeManifest(manifestPath, marker, [root]);
+
+      await cleanupOwnedManifest({
+        manifestPath,
+        list: async () => [...processes.values()],
+        terminate: async (entry) => {
+          terminated.push(entry.pid);
+          processes.delete(entry.pid);
+        },
+      });
+
+      expect(terminated).toEqual([root.pid]);
+      expect(processes.has(idle.pid)).toBe(true);
+      await expect(readLedger(manifestPath)).resolves.toContain('"entries":[]');
+    });
+  });
+
   it('discovers and cleans a marked process appearing only in the second supervisor view', async () => {
     await withManifest(async ({ manifestPath, marker }) => {
       const root = ownedEntry({ marker, pid: 13, parentPid: 1, parentChain: [] });

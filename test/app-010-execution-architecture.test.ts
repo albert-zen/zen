@@ -332,6 +332,19 @@ describe('APP-010 authoritative Turn execution architecture', () => {
       const oldThreadId = await createThread(fixture, 'old');
       const nextThreadId = await createThread(fixture, 'next');
       peerThreadId = await createThread(fixture, 'peer');
+      const threadList = await fixture.composition.agentAppServer.request({
+        method: 'thread/list',
+        params: { projectId: fixture.project.id },
+      });
+      expect(
+        resultArray(threadList, 'threads').find(
+          (thread) =>
+            typeof thread === 'object' &&
+            thread !== null &&
+            'threadId' in thread &&
+            thread.threadId === nextThreadId
+        )
+      ).not.toHaveProperty('modelProfile');
       await startTurn(fixture, oldThreadId, 'old-active', 'old-turn');
       await expect.poll(() => active).toBe(1);
       await startTurn(fixture, nextThreadId, 'new-next', 'next-turn');

@@ -335,7 +335,12 @@ export class AppServer implements AppServerClient {
   }
 
   private publish(event: ThreadManagerEvent): void {
-    if (event.type === 'item/appended' && event.item.type === 'thread.created') return;
+    if (
+      event.type === 'item/appended' &&
+      (event.item.type === 'thread.created' || event.item.visibility === 'internal')
+    ) {
+      return;
+    }
     this.listeners.forEach((listener) => listener(event));
   }
 }

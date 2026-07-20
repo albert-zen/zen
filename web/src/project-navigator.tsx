@@ -1,5 +1,5 @@
 import type * as React from 'react';
-import { Archive, MoreHorizontal, Plus } from 'lucide-react';
+import { Archive, Plus, Settings2 } from 'lucide-react';
 
 import type { ProjectSnapshot } from '#zen/product';
 import { Button } from './components/ui/button';
@@ -9,12 +9,18 @@ export function ProjectNavigator(props: {
   selectedProjectId?: string;
   onSelect: (id: string) => void;
   onCreate: () => void;
+  onSettings: () => void;
   onArchive: () => void;
 }): React.ReactElement {
+  const selectedProject = props.projects.find((project) => project.id === props.selectedProjectId);
+  const activeProjects = props.projects.filter((project) => project.status === 'active');
+
   return (
-    <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r border-zinc-800 bg-zinc-950">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-3 py-3">
-        <div className="text-xs font-bold uppercase tracking-[0.08em] text-zinc-400">Projects</div>
+    <section className="border-b border-zinc-800 bg-zinc-950 px-3 py-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-zinc-500">
+          Project
+        </div>
         <Button
           aria-label="Create project"
           title="Create project"
@@ -24,49 +30,47 @@ export function ProjectNavigator(props: {
         >
           <Plus className="h-4 w-4" />
         </Button>
-      </header>
-      <nav aria-label="Projects" className="min-h-0 overflow-auto p-2">
-        {props.projects
-          .filter((project) => project.status === 'active')
-          .map((project) => {
-            const active = project.id === props.selectedProjectId;
-            return (
-              <div
-                key={project.id}
-                className={
-                  active
-                    ? 'mb-1 flex items-center gap-1 rounded-md bg-zinc-800 p-1'
-                    : 'mb-1 flex items-center gap-1 p-1'
-                }
-              >
-                <button
-                  type="button"
-                  aria-current={active ? 'page' : undefined}
-                  onClick={() => props.onSelect(project.id)}
-                  className="min-w-0 flex-1 rounded-md px-2 py-2 text-left hover:bg-zinc-800"
-                >
-                  <div className="truncate text-sm font-semibold text-zinc-100">{project.name}</div>
-                  <div className="truncate text-xs text-zinc-500" title={project.rootPath}>
-                    {project.rootPath}
-                  </div>
-                </button>
-                {active ? (
-                  <Button
-                    aria-label="Archive current project"
-                    title="Archive current project"
-                    size="icon"
-                    variant="subtle"
-                    onClick={props.onArchive}
-                  >
-                    <Archive className="h-3.5 w-3.5" />
-                  </Button>
-                ) : (
-                  <MoreHorizontal aria-hidden className="mr-2 h-4 w-4 text-zinc-600" />
-                )}
-              </div>
-            );
-          })}
-      </nav>
-    </aside>
+      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1">
+        <select
+          aria-label="Select project"
+          value={props.selectedProjectId ?? ''}
+          onChange={(event) => {
+            if (event.target.value) props.onSelect(event.target.value);
+          }}
+          className="h-9 min-w-0 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-sm font-semibold text-zinc-100 outline-none focus:border-teal-400"
+        >
+          {!selectedProject ? <option value="">Select a project</option> : null}
+          {activeProjects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
+        <Button
+          aria-label="Project settings"
+          title="Project settings"
+          size="icon"
+          variant="subtle"
+          disabled={!selectedProject}
+          onClick={props.onSettings}
+        >
+          <Settings2 className="h-4 w-4" />
+        </Button>
+        <Button
+          aria-label="Archive current project"
+          title="Archive current project"
+          size="icon"
+          variant="subtle"
+          disabled={!selectedProject}
+          onClick={props.onArchive}
+        >
+          <Archive className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="mt-2 truncate text-xs text-zinc-500" title={selectedProject?.rootPath}>
+        {selectedProject?.rootPath ?? 'Choose a project to view its threads'}
+      </div>
+    </section>
   );
 }

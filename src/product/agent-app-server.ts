@@ -1,4 +1,5 @@
 import { ProjectManager } from './project-manager.js';
+import type { JsonObject, JsonValue } from './app-server-protocol.js';
 import type { ProjectSnapshot } from './project-registry.js';
 import {
   isAgentAppMutation,
@@ -26,10 +27,18 @@ export type AgentAppRequestContext =
       readonly executionProject: ProjectSnapshot;
       readonly signal?: AbortSignal;
     };
+export interface ProviderControl {
+  read(): Promise<JsonValue>;
+  refresh(): Promise<JsonValue>;
+  loginStart(input: JsonObject): Promise<JsonValue>;
+  loginCancel(input: JsonObject): Promise<JsonValue>;
+  logout(input: JsonObject): Promise<JsonValue>;
+}
 export type AgentAppServerOptions = {
   readonly projectManager: ProjectManager;
   readonly createRuntime: (project: ProjectSnapshot) => Promise<ProjectRuntime>;
   readonly commandLedger?: ProjectCommandLedger;
+  readonly providerControl?: ProviderControl;
 };
 export class AgentAppServer {
   private readonly runtimes = new Map<string, Promise<ProjectRuntime>>();
@@ -80,11 +89,17 @@ export class AgentAppServer {
     request: AgentAppRequest,
     context: AgentAppRequestContext
   ): Promise<AgentAppResponse> {
-    const scope =
-      typeof request.params.projectId === 'string' ? request.params.projectId : 'agent-app';
+    const scope = request.method.startsWith('provider/')
+      ? 'provider'
+      : typeof request.params.projectId === 'string'
+        ? request.params.projectId
+        : 'agent-app';
     const key = String(request.params.idempotencyKey);
+    const params = request.method.startsWith('provider/')
+      ? providerParams(request.params)
+      : request.params;
     const identity = `${scope}\u0000${request.method}\u0000${key}`;
-    const digest = stableDigest({ method: request.method, params: request.params });
+    const digest = stableDigest({ method: request.method, params });
     const inflight = this.inflightCommands.get(identity);
     if (inflight) {
       if (inflight.digest !== digest) {
@@ -141,6 +156,7 @@ export class AgentAppServer {
     if (context.actor === 'agent' && !request.method.startsWith('thread/')) {
       return error('POLICY_DENIED', 'Agents may only use thread coordination methods');
     }
+    if (request.method.startsWith('provider/')) return await this.dispatchProvider(request);
     if (request.method === 'project/create')
       return {
         method: request.method,
@@ -202,6 +218,56 @@ export class AgentAppServer {
     if (project.status === 'archived')
       return error('PROJECT_ARCHIVED', `Project is archived: ${project.id}`);
     return await (await this.runtime(project)).request(request, context);
+  }
+  private async dispatchProvider(request: AgentAppRequest): Promise<AgentAppResponse> {
+    const provider = this.options.providerControl;
+    if (!provider) {
+      return {
+        method: request.method,
+        ok: false,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: `Unsupported provider control method: ${request.method}`,
+        },
+      };
+    }
+    const params = providerParams(request.params);
+    if (request.method === 'provider/read') {
+      return {
+        method: request.method,
+        ok: true,
+        result: { status: toJsonValue(await provider.read()) },
+      };
+    }
+    if (request.method === 'provider/refresh') {
+      return {
+        method: request.method,
+        ok: true,
+        result: { status: toJsonValue(await provider.refresh()) },
+      };
+    }
+    if (request.method === 'provider/login/start') {
+      return {
+        method: request.method,
+        ok: true,
+        result: { result: toJsonValue(await provider.loginStart(params)) },
+      };
+    }
+    if (request.method === 'provider/login/cancel') {
+      return {
+        method: request.method,
+        ok: true,
+        result: { result: toJsonValue(await provider.loginCancel(params)) },
+      };
+    }
+    if (request.method === 'provider/logout') {
+      return {
+        method: request.method,
+        ok: true,
+        result: { result: toJsonValue(await provider.logout(params)) },
+      };
+    }
+    return error('INVALID_REQUEST', `Unsupported provider control method: ${request.method}`);
   }
   private runtime(project: ProjectSnapshot): Promise<ProjectRuntime> {
     let runtime = this.runtimes.get(project.id);
@@ -266,6 +332,24 @@ function text(value: unknown): string {
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function providerParams(value: JsonObject): JsonObject {
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => key !== 'idempotencyKey' && key !== 'projectId')
+  ) as JsonObject;
+}
+function toJsonValue(value: unknown): JsonValue {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (Array.isArray(value)) return value.map((entry) => toJsonValue(entry));
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, toJsonValue(entry)])
+    ) as JsonObject;
+  }
+  return null;
 }
 function error(
   code: import('./agent-app-protocol.js').AgentAppErrorCode,

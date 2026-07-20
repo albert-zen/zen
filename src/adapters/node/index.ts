@@ -48,6 +48,51 @@ export {
 } from './model-provider-config.js';
 export type { OpenAiCompatibleModelGatewayOptions } from './openai-compatible-model-gateway.js';
 export { OpenAiCompatibleModelGateway } from './openai-compatible-model-gateway.js';
+export type {
+  CodexAccount,
+  CodexAppServerCancelLoginResult,
+  CodexAppServerChildFactory,
+  CodexAppServerCommandDiscoveryOptions,
+  CodexAppServerCommandResolver,
+  CodexAppServerClientOptions,
+  CodexAppServerDynamicToolSpec,
+  CodexAppServerDynamicToolOutput,
+  CodexAppServerDynamicToolOutputContentItem,
+  CodexAppServerExit,
+  CodexAppServerLoginInput,
+  CodexAppServerLoginResult,
+  CodexAppServerLineTransport,
+  CodexAppServerNotification,
+  CodexAppServerRequestHandler,
+  CodexAppServerRequestHandlerResult,
+  CodexAppServerServerRequest,
+  CodexAppServerResumeThreadInput,
+  CodexAppServerStartThreadInput,
+  CodexAppServerStartTurnInput,
+  CodexAppServerThreadResult,
+  CodexAppServerTurnResult,
+  CodexInputItem,
+  CodexModel,
+} from './codex-app-server-client.js';
+export {
+  CodexAppServerClosedError,
+  CodexAppServerClient,
+  CodexAppServerProtocolError,
+  CodexAppServerRequestError,
+  CodexAppServerTimeoutError,
+  DEFAULT_CODEX_APP_SERVER_REQUEST_TIMEOUT_MS,
+  DEFAULT_CODEX_APP_SERVER_STARTUP_TIMEOUT_MS,
+  resolveCodexAppServerCommand,
+} from './codex-app-server-client.js';
+export type {
+  CodexProviderClient,
+  CodexProviderClientFactory,
+  CodexProviderServiceOptions,
+  CodexProviderStatus,
+} from './codex-provider-service.js';
+export { CodexProviderService } from './codex-provider-service.js';
+export type { CodexTurnExecutorOptions } from './codex-turn-executor.js';
+export { CodexTurnExecutor } from './codex-turn-executor.js';
 export type { ProviderBackedAppServerOptions } from './provider-runtime.js';
 export { createProviderThreadRuntimeFactory, replayThreadJournal } from './provider-runtime.js';
 export type {

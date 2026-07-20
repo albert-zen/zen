@@ -423,8 +423,10 @@ function isInHistoricalInterval(child, anchor, processes) {
 function readParentChain(current, processes) {
   const byPid = new Map(processes.map((candidate) => [candidate.pid, candidate]));
   const chain = [];
+  const visited = new Set([current.pid]);
   let parent = byPid.get(current.parentPid);
-  while (parent) {
+  while (parent && !visited.has(parent.pid)) {
+    visited.add(parent.pid);
     chain.push({ pid: parent.pid, creationToken: creationToken(parent) });
     parent = byPid.get(parent.parentPid);
   }

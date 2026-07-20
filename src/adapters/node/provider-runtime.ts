@@ -3,6 +3,7 @@ import {
   toThreadSnapshot,
   type ThreadJournal,
   type ThreadPersistenceFailure,
+  type ThreadRecord,
   type ThreadRuntime,
   type ThreadRuntimeFactory,
 } from '../../product/index.js';
@@ -54,7 +55,7 @@ export async function createProviderBackedAppServer(
 }
 
 export async function replayThreadJournal(threadJournal: ThreadJournal): Promise<{
-  readonly initialThreads: readonly ReturnType<typeof toThreadSnapshot>[];
+  readonly initialThreads: readonly ThreadRecord[];
   readonly persistenceFailures: readonly ThreadPersistenceFailure[];
 }> {
   const replay = await threadJournal.replay();
@@ -63,7 +64,10 @@ export async function replayThreadJournal(threadJournal: ThreadJournal): Promise
       .filter(
         (result): result is Extract<typeof result, { type: 'success' }> => result.type === 'success'
       )
-      .map((result) => toThreadSnapshot({ threadId: result.threadId, items: result.items })),
+      .map((result) => ({
+        ...toThreadSnapshot({ threadId: result.threadId, items: result.items }),
+        items: result.items,
+      })),
     persistenceFailures: replay.flatMap((result): readonly ThreadPersistenceFailure[] =>
       result.type === 'failure'
         ? [
