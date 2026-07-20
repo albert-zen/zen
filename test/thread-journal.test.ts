@@ -9,7 +9,7 @@ import {
   ThreadJournalError,
   type ThreadJournalFileSystem,
 } from './test-exports.js';
-import type { Item } from '../src/kernel/item-list.js';
+import type { Item } from '../packages/framework/src/kernel/item-list.js';
 
 const JOURNAL_FIXTURE_PREFIX = 'zen-journal-';
 const OS_TEMP_ROOT = resolve(tmpdir());

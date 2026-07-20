@@ -216,17 +216,17 @@ This keeps the system queryable and replayable without creating parallel abstrac
 
 Initial hook points:
 
-| Hook | Purpose |
-| --- | --- |
-| `onItemAppending` | Observe or validate an item before it is appended |
-| `onItemAppended` | Observe an appended item for trace, UI, metrics, or persistence adapters |
-| `beforeContextCompile` | Add or suppress items before context compilation |
-| `afterContextCompile` | Inspect or transform compiled model context |
-| `beforeModelRequest` | Modify model request options or append diagnostic items |
-| `onModelEvent` | Convert streaming model events into items |
-| `beforeToolCall` | Approve, block, rewrite, or route a tool call |
-| `afterToolResult` | Inspect or transform tool result items |
-| `onRunFinished` | Emit summary, metrics, or external trace output |
+| Hook                   | Purpose                                                                  |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `onItemAppending`      | Observe or validate an item before it is appended                        |
+| `onItemAppended`       | Observe an appended item for trace, UI, metrics, or persistence adapters |
+| `beforeContextCompile` | Add or suppress items before context compilation                         |
+| `afterContextCompile`  | Inspect or transform compiled model context                              |
+| `beforeModelRequest`   | Modify model request options or append diagnostic items                  |
+| `onModelEvent`         | Convert streaming model events into items                                |
+| `beforeToolCall`       | Approve, block, rewrite, or route a tool call                            |
+| `afterToolResult`      | Inspect or transform tool result items                                   |
+| `onRunFinished`        | Emit summary, metrics, or external trace output                          |
 
 The exact names can change, but the boundary should stay explicit.
 
@@ -266,25 +266,27 @@ For a future resume flow, the outer runtime can load persisted items and seed a 
 
 ## System Map
 
-## Module Groups And Entry Points
+## Workspace Packages And Entry Points
 
-The package has five explicit module groups. The package root is the kernel
-only; product and edge integrations use named subpaths rather than reaching
-into another group's source files.
+The npm workspace separates reusable framework behavior from executable and UI
+applications. The framework package root is kernel-only; product and edge
+integrations use named subpaths rather than physical source imports.
 
 ```text
-zen-kernel (.)          -> src/kernel/index.ts
-zen-kernel/product      -> src/product/index.ts
-zen-kernel/node         -> src/adapters/node/index.ts
-zen-kernel/presentation -> src/presentation/index.ts
-zen-kernel/tui          -> src/tui/index.ts
+@zen/framework              -> packages/framework/src/kernel/index.ts
+@zen/framework/product      -> packages/framework/src/product/index.ts
+@zen/framework/node         -> packages/framework/src/adapters/node/index.ts
+@zen/framework/presentation -> packages/framework/src/presentation/index.ts
+@zen/cli                    -> apps/cli/src/{app-server-cli,web-dev-cli}.ts
+@zen/web                    -> apps/web/src/main.tsx
+@zen/zenx                   -> apps/zenx/src/main.ts
 ```
 
 ```text
-kernel <- product <- adapters/node
-   ^        ^
-   |        +--- presentation <- tui
-   +-------------------------^
+kernel <- product <- adapters/node <- cli
+   ^        ^               ^
+   |        +--- presentation <- web
+   +----------------------------- zenx
 ```
 
 - `kernel` contains ItemList/retention, AgentLoop, context/hooks, neutral
@@ -293,12 +295,18 @@ kernel <- product <- adapters/node
   the ThreadJournal port and replay/error contracts.
 - `adapters/node` owns filesystem journaling, shell/provider/configuration,
   HTTP/proxy transport, and Node process composition.
-- `presentation` owns the interaction projection, browser transport/client,
-  and interaction session shared by Web and terminal consumers.
-- `tui` owns terminal rendering and commands. It consumes public group APIs.
+- `presentation` owns the interaction projection and browser transport/client.
+- `apps/cli` owns executable startup while reusing Node adapter composition.
+- `apps/web` owns the React application and its Vite build output.
+- `apps/zenx` owns the Electron host and assembled desktop package output.
 
-The dogfood executable is an `acceptance/` artifact built by
-`tsconfig.acceptance.json`; it is deliberately excluded from production
+All production hosts resolve durable state through
+`@zen/framework/node`'s `resolveAgentAppDataRoot()`. This keeps CLI, Web, and
+desktop surfaces on the same OS state boundary and the same absolute
+`ZEN_APP_DATA_ROOT` override.
+
+The dogfood executable remains a cross-cutting `acceptance/` artifact built by
+`tsconfig.acceptance.json`; it is deliberately excluded from framework
 declarations.
 
 ```text

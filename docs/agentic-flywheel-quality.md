@@ -13,9 +13,9 @@ Every worker handoff must record these checks in the latest `## Codex Worker Not
 - Broad gate status when available.
 - Explanation for skipped gates.
 - Known residual risks.
-- Whether this is local-branch mode or GitHub PR mode.
+- GitHub PR URL, commit hash, and required check results.
 
-Current local-branch mode does not require GitHub PR checks because this repo has no remote. After GitHub is configured, workers must not move an issue to `Agent Review` until the PR exists and required checks pass.
+Workers must not move an issue to `Agent Review` until the branch is pushed to `https://github.com/albert-zen/zen.git`, the GitHub PR exists, and required checks pass.
 
 ## Local Validation Fallback
 
@@ -95,4 +95,3 @@ codex/alb-73-item-list
 ## No Gate Weakening
 
 Agents must not weaken, skip, disable, or relax CI, lint, formatter, typecheck, review, or readiness gates to finish work. If a gate is wrong or flaky, create or link a follow-up issue and keep the current issue out of `Agent Review` unless the manager explicitly accepts the risk.
-

@@ -48,15 +48,13 @@ mise exec -- mix symphony.preflight.windows D:/desktop/zen/WORKFLOW.zen.reviewer
 .\scripts\stop-windows-native.ps1 -PidFile "$env:LOCALAPPDATA\Symphony\agent-flywheel\symphony.reviewer.pid.json" -Force
 ```
 
-## Local-Branch Mode Notes
+## Windows Worktree And GitHub Delivery Notes
 
-This repo has no GitHub remote yet. Workers therefore push local branches back to the local repo and reviewers inspect those branches. When a GitHub remote is added, update both workflow files:
+The canonical GitHub origin is `https://github.com/albert-zen/zen.git`. Windows workers and reviewers continue to use dedicated local worktrees under `D:/desktop/zen-workspaces`, while delivery uses the GitHub PR and required-check handoff:
 
-- change `hooks.after_create` clone URL to the canonical GitHub URL,
-- require PR creation,
-- set `codex.review_readiness_repository`,
-- add required GitHub checks,
-- update `docs/agentic-flywheel-quality.md`.
+- workers push `codex/<linear-id>-<short-topic>` branches to the canonical origin,
+- workers open a GitHub PR and record its URL, commit, validation, acceptance, and required-check evidence in Linear,
+- reviewers inspect the PR, required checks, branch diff, and Linear evidence before accepting the handoff.
 
 ## Safety
 
@@ -64,4 +62,3 @@ This repo has no GitHub remote yet. Workers therefore push local branches back t
 - Do not point Symphony workspaces at your normal checkout.
 - Keep `agent.max_concurrent_agents: 1` until the loop is proven.
 - Keep secrets in environment variables, never workflow files.
-

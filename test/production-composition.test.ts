@@ -5,7 +5,7 @@ import {
   runAppServerCliComposition,
   runWebDevCliComposition,
   type ShutdownSignalSource,
-} from '../src/adapters/node/production-composition.js';
+} from '../packages/framework/src/adapters/node/production-composition.js';
 import {
   AppServer,
   ApprovalBroker,
@@ -15,7 +15,7 @@ import {
   type ThreadJournal,
   type ThreadJournalReplay,
 } from './test-exports.js';
-import type { Item } from '../src/kernel/item-list.js';
+import type { Item } from '../packages/framework/src/kernel/item-list.js';
 
 describe('production composition shutdown', () => {
   it('wires SIGINT through ingress quiesce, real AppServer drain, and edge close', async () => {

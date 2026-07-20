@@ -3,8 +3,17 @@ import { fileURLToPath } from 'node:url';
 import { isAbsolute, relative, resolve } from 'node:path';
 
 const OUTPUTS = {
-  production: ['dist', 'web-dist', 'desktop-dist', 'release'],
-  acceptance: ['dist/acceptance'],
+  production: [
+    'packages/framework/dist',
+    'apps/cli/dist',
+    'apps/web/dist',
+    'apps/zenx/dist',
+    'apps/zenx/release',
+    'apps/imzen/dist',
+    'acceptance/dist',
+  ],
+  acceptance: ['acceptance/dist'],
+  package: ['dist'],
 };
 
 export async function cleanGeneratedOutputs(root, mode) {

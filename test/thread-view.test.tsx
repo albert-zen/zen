@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createWebUiState } from './test-exports.js';
-import { ThreadView } from '../web/src/thread-view.tsx';
+import { ThreadView } from '../apps/web/src/thread-view.tsx';
 
 describe('ThreadView', () => {
   let root: Root | undefined;

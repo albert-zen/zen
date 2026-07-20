@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Item, ItemAppendInput, ToolRuntime } from '../src/kernel/index.js';
+import type { Item, ItemAppendInput, ToolRuntime } from '../packages/framework/src/kernel/index.js';
 import {
   ApprovalBroker,
   DEFAULT_ZEN_SYSTEM_PROMPT,
@@ -8,17 +8,17 @@ import {
   type ThreadRecord,
   type TurnExecutorInput,
   type TurnRecord,
-} from '../src/product/index.js';
+} from '../packages/framework/src/product/index.js';
 import type {
   CodexAppServerNotification,
   CodexAppServerRequestHandler,
-} from '../src/adapters/node/codex-app-server-client.js';
+} from '../packages/framework/src/adapters/node/codex-app-server-client.js';
 import {
   CodexAppServerClosedError,
   CodexProviderService,
   type CodexProviderClient,
-} from '../src/adapters/node/index.js';
-import { CodexTurnExecutor } from '../src/adapters/node/codex-turn-executor.js';
+} from '../packages/framework/src/adapters/node/index.js';
+import { CodexTurnExecutor } from '../packages/framework/src/adapters/node/codex-turn-executor.js';
 
 describe('CodexTurnExecutor', () => {
   it('creates one durable handle, streams completion, unloads it, and resumes it on the next Zen turn', async () => {

@@ -16,7 +16,7 @@ import {
   type ThreadJournalReplay,
   type TurnExecutorInput,
 } from './test-exports.js';
-import type { Item } from '../src/kernel/item-list.js';
+import type { Item } from '../packages/framework/src/kernel/item-list.js';
 
 const journalTempPrefixes = [
   'zen-replay-failure-',

@@ -4,6 +4,8 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const root = resolve(import.meta.dirname, '..');
+const frameworkRoot = resolve(root, 'packages/framework');
+const sourceRoot = resolve(frameworkRoot, 'src');
 const groups = ['kernel', 'product', 'adapters/node', 'presentation'] as const;
 type Group = (typeof groups)[number];
 
@@ -18,12 +20,10 @@ describe('module boundaries', () => {
   it('uses explicit group entrypoints for cross-group production imports', () => {
     for (const sourceFile of sourceFiles()) {
       const from = groupFor(sourceFile);
-      const imports = importsOf(sourceFile);
-
-      for (const specifier of imports) {
+      for (const specifier of importsOf(sourceFile)) {
         if (!specifier.startsWith('.')) continue;
         const target = resolveModule(sourceFile, specifier);
-        if (!target || !target.startsWith(resolve(root, 'src'))) continue;
+        if (!target?.startsWith(sourceRoot)) continue;
         const to = groupFor(target);
         expect(allowed[from]).toContain(to);
         if (from !== to && !isInternalLegacyRuntimeImport(from, to, specifier)) {
@@ -33,10 +33,10 @@ describe('module boundaries', () => {
     }
   });
 
-  it('keeps the root package surface kernel-only and publishes all group subpaths', () => {
-    const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
-      exports: Record<string, { types: string; default: string }>;
-    };
+  it('publishes the framework kernel and named group subpaths', () => {
+    const packageJson = JSON.parse(
+      readFileSync(resolve(frameworkRoot, 'package.json'), 'utf8')
+    ) as { exports: Record<string, { types: string; default: string }> };
     expect(Object.keys(packageJson.exports)).toEqual([
       '.',
       './product',
@@ -50,25 +50,56 @@ describe('module boundaries', () => {
     }
   });
 
-  it('keeps acceptance outside production declarations and Web imports on approved aliases', () => {
-    const build = JSON.parse(readFileSync(resolve(root, 'tsconfig.build.json'), 'utf8')) as {
-      exclude: string[];
-    };
-    expect(build.exclude).toContain('acceptance/**/*.ts');
+  it('keeps package ownership explicit across Web and CLI imports', () => {
+    const frameworkBuild = JSON.parse(
+      readFileSync(resolve(frameworkRoot, 'tsconfig.build.json'), 'utf8')
+    ) as { include: string[] };
+    expect(frameworkBuild.include).toEqual(['src/**/*.ts']);
     assertWebImports(webBrowserSourceFiles(), 'browser');
-    assertWebImports([resolve(root, 'web/vite.config.ts')], 'vite');
+    assertWebImports([resolve(root, 'apps/web/vite.config.ts')], 'vite');
+    for (const cliFile of ts.sys.readDirectory(resolve(root, 'apps/cli/src'), ['.ts'], undefined, [
+      '**/*.ts',
+    ])) {
+      expect(importsOf(cliFile).filter((specifier) => specifier.startsWith('@zen/'))).toEqual(
+        expect.arrayContaining(['@zen/framework/node', '@zen/framework/product'])
+      );
+    }
   });
 
-  it('rejects a direct adapter implementation import from Web code', () => {
+  it('keeps Web independent from ZenX implementation sources and browser demos', () => {
+    const webFiles = webBrowserSourceFiles();
+    const webSpecifiers = webFiles.flatMap((path) => importsOf(path));
+    expect(webSpecifiers.some((specifier) => specifier.includes('apps/zenx'))).toBe(false);
+    expect(webFiles.some((path) => path.endsWith('demo-app-server.ts'))).toBe(false);
+
+    const workspace = readFileSync(resolve(root, 'apps/web/src/workspace.tsx'), 'utf8');
+    expect(workspace).not.toMatch(/mode=demo|createBrowserDemoAppServer|RuntimeMode/u);
+  });
+
+  it('publishes the desktop bridge contract from presentation', () => {
+    const presentation = readFileSync(resolve(sourceRoot, 'presentation/index.ts'), 'utf8');
+    const bridge = readFileSync(resolve(sourceRoot, 'presentation/desktop-bridge.ts'), 'utf8');
+    const ipc = readFileSync(resolve(root, 'apps/zenx/src/ipc.ts'), 'utf8');
+    const desktopDeclaration = readFileSync(resolve(root, 'apps/web/src/desktop.d.ts'), 'utf8');
+
+    expect(presentation).toContain("'./desktop-bridge.js'");
+    expect(bridge).toMatch(/export type DesktopNotification/u);
+    expect(bridge).toMatch(/export type ZenDesktopBridge/u);
+    expect(ipc).toContain("'@zen/framework/presentation'");
+    expect(desktopDeclaration).toContain("'@zen/framework/presentation'");
+    expect(desktopDeclaration).not.toContain('apps/zenx/src');
+  });
+
+  it('rejects direct framework implementation imports from Web code', () => {
     expect(() =>
-      assertWebSpecifiers(['../src/adapters/node/app-server-transport.js'], 'browser')
-    ).toThrow('must not reference a physical src path');
+      assertWebSpecifiers(['../../../packages/framework/src/adapters/node/index.js'], 'browser')
+    ).toThrow('must not reference a physical framework src path');
   });
 
   it('keeps the removed single-project remote protocol out of public entrypoints', () => {
-    const product = readFileSync(resolve(root, 'src/product/index.ts'), 'utf8');
-    const node = readFileSync(resolve(root, 'src/adapters/node/index.ts'), 'utf8');
-    const presentation = readFileSync(resolve(root, 'src/presentation/index.ts'), 'utf8');
+    const product = readFileSync(resolve(sourceRoot, 'product/index.ts'), 'utf8');
+    const node = readFileSync(resolve(sourceRoot, 'adapters/node/index.ts'), 'utf8');
+    const presentation = readFileSync(resolve(sourceRoot, 'presentation/index.ts'), 'utf8');
     const removedNames = [
       'AppServerRequest',
       'AppServerResponse',
@@ -104,12 +135,12 @@ function isInternalLegacyRuntimeImport(from: Group, to: Group, specifier: string
 
 function sourceFiles(): readonly string[] {
   return groups.flatMap((group) =>
-    ts.sys.readDirectory(resolve(root, 'src', group), ['.ts'], undefined, ['**/*.ts'])
+    ts.sys.readDirectory(resolve(sourceRoot, group), ['.ts'], undefined, ['**/*.ts'])
   );
 }
 
 function webBrowserSourceFiles(): readonly string[] {
-  return ts.sys.readDirectory(resolve(root, 'web/src'), ['.ts', '.tsx'], undefined, [
+  return ts.sys.readDirectory(resolve(root, 'apps/web/src'), ['.ts', '.tsx'], undefined, [
     '**/*.ts',
     '**/*.tsx',
   ]);
@@ -120,16 +151,18 @@ function assertWebImports(paths: readonly string[], kind: 'browser' | 'vite'): v
 }
 
 function assertWebSpecifiers(specifiers: readonly string[], kind: 'browser' | 'vite'): void {
+  const allowed =
+    kind === 'browser'
+      ? ['@zen/framework/product', '@zen/framework/presentation']
+      : ['@zen/framework/node'];
   for (const specifier of specifiers) {
-    if (specifier.includes('/src/') || specifier.startsWith('../src/')) {
-      throw new Error(`Web ${kind} import must not reference a physical src path: ${specifier}`);
+    if (specifier.includes('packages/framework/src')) {
+      throw new Error(
+        `Web ${kind} import must not reference a physical framework src path: ${specifier}`
+      );
     }
-    if (specifier.startsWith('#zen/')) {
-      const allowedAliases =
-        kind === 'browser' ? ['#zen/product', '#zen/presentation'] : ['#zen/node'];
-      if (!allowedAliases.includes(specifier)) {
-        throw new Error(`Web ${kind} import uses an unapproved Zen alias: ${specifier}`);
-      }
+    if (specifier.startsWith('@zen/framework') && !allowed.includes(specifier)) {
+      throw new Error(`Web ${kind} import uses an unapproved framework entrypoint: ${specifier}`);
     }
   }
 }
@@ -147,8 +180,9 @@ function importsOf(path: string): readonly string[] {
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier &&
       ts.isStringLiteral(node.moduleSpecifier)
-    )
+    ) {
       values.push(node.moduleSpecifier.text);
+    }
   });
   return values;
 }
@@ -165,6 +199,6 @@ function resolveModule(from: string, specifier: string): string | undefined {
 }
 
 function groupFor(path: string): Group {
-  const relative = path.slice(resolve(root, 'src').length + 1).replaceAll('\\', '/');
+  const relative = path.slice(sourceRoot.length + 1).replaceAll('\\', '/');
   return groups.find((group) => relative === group || relative.startsWith(`${group}/`)) ?? 'kernel';
 }

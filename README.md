@@ -19,6 +19,7 @@ Zen currently includes:
 - static Web UI client
 - Project/Thread coordination with durable local journals, policy limits, and agent thread tools
 - thin Electron host for the same HTTP/SSE App Server protocol
+- QQ-backed IMZen gateway over the same Project/Thread protocol
 - interrupt, retry, and thread resume flows
 - repeatable dogfood acceptance scenario
 
@@ -51,17 +52,18 @@ and retained idempotency facts; UI input never grants executor authority.
 Build the local Electron desktop application:
 
 ```powershell
-npm run desktop:build
+npm run zenx:build
 ```
 
 Run the built desktop application locally:
 
 ```powershell
-npm run desktop:dev
+npm run zenx:dev
 ```
 
 The desktop main process starts the project-scoped Agent App HTTP/SSE transport
-on loopback and serves `web-dist` from a same-origin static host. The renderer
+on loopback and serves the Web build assembled under `apps/zenx/dist/web` from
+a same-origin static host. The renderer
 only uses Agent App `/request` and `/events`; the transport capability remains
 in the main-process proxy. Electron exposes only directory selection and a
 bounded native-notification bridge to the Web UI.
@@ -69,15 +71,66 @@ bounded native-notification bridge to the Web UI.
 Create an unsigned unpacked Windows artifact with:
 
 ```powershell
-npm run desktop:pack
+npm run zenx:pack
 ```
 
-`npm run desktop:dist` creates the default x64 NSIS artifact. These are
+`npm run zenx:dist` creates the default x64 NSIS artifact. These are
 development artifacts and are unsigned; publishing is explicitly disabled, so
 release signing and updates are not configured in this wave.
 
-Local project metadata and coordination journals live under the OS application
-data/state boundary. `ZEN_APP_DATA_ROOT` may override that boundary only with an
+## IMZen QQ Gateway
+
+IMZen is an independent client of an already-running Zen App Server. It never
+creates a Project from QQ and never calls the model/provider runtime directly.
+Create the target Project in ZenX first, then start the standalone App Server
+with a provided capability and give IMZen the same URL and capability:
+
+```powershell
+$env:ZEN_APP_SERVER_URL = "http://127.0.0.1:3000"
+$env:ZEN_APP_SERVER_CAPABILITY = "<same capability used by the App Server>"
+$env:IMZEN_PROJECT_ROOT = "D:\path\to\existing\project"
+$env:IMZEN_QQ_SECRET_FILE = "D:\private\qqbotSecret.json"
+npm run imzen:start
+```
+
+The external credential file has this shape and is never copied into the
+repository or IMZen state:
+
+```json
+{
+  "appid": 123456789,
+  "appsecret": "..."
+}
+```
+
+Set `IMZEN_ALLOWED_USER_IDS` to a comma-separated QQ open-id allowlist. Without
+an allowlist, the first startup prints a one-time `/pair <code>` command;
+ordinary messages remain unauthorized until that exact command is received.
+QQ conversations bind to durable Zen Threads, and pending replies resume after
+an IMZen restart with stable App Server and QQ idempotency keys.
+
+On Windows, the managed live command builds both packages, starts a dedicated
+loopback App Server, registers this repository as a Project through that App
+Server, connects QQ, and records only verified process identities (never the
+capability or QQ credential) under the application data directory:
+
+```powershell
+npm run imzen:live -- start -SecretFile "D:\private\qqbotSecret.json"
+npm run imzen:live -- status
+npm run imzen:live -- stop
+```
+
+Repeated `start` calls reuse the registered pair instead of accumulating Node
+processes. `stop` verifies PID, creation time, executable, and command line,
+then requests IMZen shutdown first and waits for it before requesting App Server
+shutdown. It force-stops only a still-running, verified owned tree after the
+bounded graceful wait expires. The v2 live descriptor records the two per-run
+shutdown marker paths and process identities, never the capability or QQ
+credential.
+
+Local project metadata and coordination journals live under one canonical OS
+application data/state boundary shared by the CLI, Web host, ZenX, and other
+desktop hosts. `ZEN_APP_DATA_ROOT` may override that boundary only with an
 absolute path. Production state never defaults to the repository. The browser
 renderer receives no App Server capability and uses only same-origin `/request`
 and `/events` routes.
@@ -105,9 +158,9 @@ Install the Playwright Chromium browser once before the browser gate:
 npx playwright install chromium
 ```
 
-The configured `origin` is a local workspace path. This program uses local
-branches and local review; no GitHub PR/check handoff is part of this workflow
-yet.
+The canonical `origin` is `https://github.com/albert-zen/zen.git`. Agent workers
+push scoped `codex/<linear-id>-<topic>` branches, open GitHub pull requests, and
+hand off only after required checks and recorded review evidence are complete.
 
 Run the dogfood acceptance scenario:
 
@@ -160,7 +213,7 @@ npm run web:dev
 
 Vite atomically claims and deletes the handoff before serving browser traffic.
 The handoff reader is available to trusted Node hosts as the
-`consumeAppServerClientHandoff` export from `zen-kernel/node`; it is not a
+`consumeAppServerClientHandoff` export from `@zen/framework/node`; it is not a
 browser API or a retired projectless client session.
 
 Provided capability mode uses the same secret in the standalone server and a
@@ -193,9 +246,19 @@ $env:ZEN_WEB_ALLOW_REMOTE = "1"
 
 ## Architecture
 
+The npm workspace is split by runtime ownership:
+
+- `packages/framework`: `@zen/framework` kernel, product, presentation, and Node adapters
+- `apps/cli`: `@zen/cli` App Server and Web development executables
+- `apps/web`: `@zen/web` React application
+- `apps/zenx`: `@zen/zenx` Electron desktop host
+- `apps/imzen`: `@zen/imzen` QQ gateway client
+
 Start with:
 
 - `docs/architecture.md`
+- `docs/architecture/monorepo.md`
+- `docs/prd/imzen.md`
 - `docs/design-intent.md`
 - `docs/prd/coding-agent-productization.md`
 - `docs/implementation/alb-94-dogfood-acceptance.md`

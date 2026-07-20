@@ -7,7 +7,7 @@ import {
   resolveCodexAppServerCommand,
   type CodexAppServerChildFactory,
   type CodexAppServerLineTransport,
-} from '../src/adapters/node/codex-app-server-client.js';
+} from '../packages/framework/src/adapters/node/codex-app-server-client.js';
 
 describe('CodexAppServerClient', () => {
   it('initializes an owned stdio child, reuses ChatGPT account state, and paginates models', async () => {

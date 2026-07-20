@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { resolveStaticRequest, serveDesktopStaticHost } from '../desktop/static-host.js';
+import { resolveStaticRequest, serveDesktopStaticHost } from '../apps/zenx/src/static-host.js';
 
 describe('desktop static host', () => {
   const roots: string[] = [];

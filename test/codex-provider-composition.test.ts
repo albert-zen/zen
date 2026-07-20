@@ -15,7 +15,7 @@ import type {
   CodexAppServerStartTurnInput,
   CodexAppServerThreadResult,
   CodexAppServerTurnResult,
-} from '../src/adapters/node/codex-app-server-client.js';
+} from '../packages/framework/src/adapters/node/codex-app-server-client.js';
 import {
   CodexProviderService,
   createAgentAppProductionComposition,

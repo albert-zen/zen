@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { createDesktopBridge, registerDesktopIpc, validateNotification } from '../desktop/ipc.js';
+import type { ZenDesktopBridge } from '@zen/framework/presentation';
+import {
+  createDesktopBridge,
+  registerDesktopIpc,
+  validateNotification,
+} from '../apps/zenx/src/ipc.js';
 
 describe('desktop IPC bridge', () => {
   it('exposes only picker and bounded notification capabilities', async () => {
     const invocations: unknown[][] = [];
-    const bridge = createDesktopBridge({
+    const bridge: ZenDesktopBridge = createDesktopBridge({
       invoke: async (...args: unknown[]) => {
         invocations.push(args);
         return args[0] === 'zenDesktop:pickProjectDirectory' ? 'C:\\work' : undefined;

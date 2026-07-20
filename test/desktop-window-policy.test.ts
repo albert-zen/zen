@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createWindowOptions, installWindowPolicy } from '../desktop/window-policy.js';
+import { createWindowOptions, installWindowPolicy } from '../apps/zenx/src/window-policy.js';
 
 describe('desktop window policy', () => {
   it('uses the required hardened BrowserWindow options', () => {

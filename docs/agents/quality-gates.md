@@ -8,19 +8,19 @@ Worker/reviewer note and state-transition discipline is part of the quality gate
 
 ## Commands
 
-| Gate             | Command                                                          | Required? | Notes                                                                                         |
-| ---------------- | ---------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------- |
-| Format           | `npm run format:check`                                           | yes       | Prettier checks source, tests, configs, Web, acceptance, and E2E code.                        |
-| Lint             | `npm run lint`                                                   | yes       | ESLint flat config with TypeScript-aware production/Web rules and React Hooks rules.          |
-| Typecheck        | `npm run typecheck && npm run typecheck:web`                     | yes       | Core and Web TypeScript checks.                                                               |
-| Unit/integration | `npm test`                                                       | yes       | Serialized Vitest suite for deterministic Windows execution.                                  |
-| Builds           | `npm run build && npm run build:acceptance && npm run web:build` | yes       | Production, acceptance, and Web builds.                                                       |
-| Coverage         | `npm run coverage`                                               | yes       | Each kernel/product/presentation group needs 85% statements/functions/lines and 80% branches. |
-| E2E/browser      | `npm run e2e`                                                    | yes       | Playwright Chromium real-proxy workflow. Run `npx playwright install chromium` once first.    |
-| Release gate     | `npm run check`                                                  | yes       | Fail-fast sequence of every gate above.                                                       |
-| Commit message   | Manual review                                                    | yes       | Must follow `docs/agents/engineering-standards.md`.                                           |
-| Worker note      | Local append-only evidence document                              | yes       | Required before `Agent Review`.                                                               |
-| Review note      | Local append-only evidence document                              | yes       | Required before `Integrated`, `Rework`, `Needs Human Context`, or `Blocked`.                  |
+| Gate             | Command                                     | Required? | Notes                                                                                         |
+| ---------------- | ------------------------------------------- | --------- | --------------------------------------------------------------------------------------------- |
+| Format           | `npm run format:check`                      | yes       | Prettier checks source, tests, configs, Web, acceptance, and E2E code.                        |
+| Lint             | `npm run lint`                              | yes       | ESLint flat config with TypeScript-aware production/Web rules and React Hooks rules.          |
+| Typecheck        | `npm run typecheck`                         | yes       | Root integration and all workspace TypeScript checks.                                         |
+| Unit/integration | `npm test`                                  | yes       | Serialized Vitest suite for deterministic Windows execution.                                  |
+| Builds           | `npm run build && npm run build:acceptance` | yes       | Framework, CLI, Web, ZenX, and acceptance builds.                                             |
+| Coverage         | `npm run coverage`                          | yes       | Each kernel/product/presentation group needs 85% statements/functions/lines and 80% branches. |
+| E2E/browser      | `npm run e2e`                               | yes       | Playwright Chromium real-proxy workflow. Run `npx playwright install chromium` once first.    |
+| Release gate     | `npm run check`                             | yes       | Fail-fast sequence of every gate above.                                                       |
+| Commit message   | Manual review                               | yes       | Must follow `docs/agents/engineering-standards.md`.                                           |
+| Worker note      | Local append-only evidence document         | yes       | Required before `Agent Review`.                                                               |
+| Review note      | Local append-only evidence document         | yes       | Required before `Integrated`, `Rework`, `Needs Human Context`, or `Blocked`.                  |
 
 ## Evidence
 

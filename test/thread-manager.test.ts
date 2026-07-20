@@ -5,7 +5,7 @@ import {
   type ModelGateway,
   type ThreadManagerEvent,
   type ToolRuntime,
-} from '../src/product/thread-manager.js';
+} from '../packages/framework/src/product/thread-manager.js';
 
 describe('ThreadManager', () => {
   it('starts a thread with an empty item snapshot', () => {

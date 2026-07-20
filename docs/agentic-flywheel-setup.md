@@ -24,18 +24,15 @@ The canonical state machine and role boundaries live under `docs/agents/`. The q
 - Reviewer workflow: `WORKFLOW.zen.reviewer.windows.md`
 - Linear mirror: https://linear.app/alberts-house/document/agentic-flywheel-workflows-edf09c019de8
 
-## Current Mode: Windows Local Branch
+## Current Mode: Windows Worktrees With GitHub Delivery
 
-This repo does not yet have a GitHub remote. Until one exists:
+The canonical GitHub origin is `https://github.com/albert-zen/zen.git`. Workers and reviewers still use isolated Windows workspaces, but delivery uses the GitHub PR and required-check handoff:
 
-- Workers clone from `D:/desktop/zen`.
+- Worker workspaces live under `D:/desktop/zen-workspaces/worker` and reviewer workspaces under `D:/desktop/zen-workspaces/reviewer`.
 - Workers create local branches named `codex/<linear-id>-<short-topic>`.
-- Workers push those branches to the local repo origin.
-- Workers record branch, commit, validation, and acceptance status in Linear.
-- Reviewers fetch the local branch and inspect branch diffs plus Linear evidence.
-- `Agent Review` does not require a GitHub PR yet, but it does require a branch and validation evidence.
-
-After a GitHub remote is configured, update the workflows to require PR creation and required checks before `Agent Review`.
+- Workers push those branches to the canonical origin, open a GitHub PR, and record the branch, commit, PR, required checks, validation, and acceptance status in Linear.
+- Reviewers inspect the GitHub PR, required checks, branch diff, and Linear evidence.
+- `Agent Review` requires the PR to exist and required checks to pass, in addition to branch and validation evidence.
 
 ## The Loop
 

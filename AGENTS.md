@@ -28,9 +28,9 @@ This repo uses a Canvas-driven, Linear-backed agentic workflow.
 
 ## Current Automation Mode
 
-This repo currently has no GitHub remote. Symphony workflows are configured for Windows local-branch mode:
+The canonical GitHub origin is `https://github.com/albert-zen/zen.git`. Symphony workflows use Windows isolated workspaces with GitHub PR and required-check handoff:
 
-- Worker workspaces clone from `D:/desktop/zen`.
-- Workers push local branches back to the local repo.
-- Reviewers inspect local branch diffs and Linear evidence.
-- GitHub PR/check handoff becomes required after a canonical remote is configured.
+- Worker workspaces run under `D:/desktop/zen-workspaces/worker`.
+- Workers create `codex/<linear-id>-<short-topic>` branches and push them to the canonical origin.
+- Workers open a GitHub PR and record the PR, commit, required checks, validation, and acceptance evidence.
+- Reviewers inspect the PR, required checks, branch diff, and Linear evidence before handoff.

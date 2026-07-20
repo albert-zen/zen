@@ -3,8 +3,8 @@
 ## System Goal
 
 Zen is a platform built around one Zen App Server system of record. Zen CLI/TUI,
-ZenX desktop/web, and future IM Zen all operate Project and Thread exclusively
-through that server.
+ZenX desktop/web, and IMZen all operate Project and Thread exclusively through
+that server.
 
 The architecture exists to keep the product explainable:
 
@@ -34,6 +34,8 @@ The architecture exists to keep the product explainable:
 9. Provider access is routed through official adapter paths only.
 10. The system must not offer a direct provider bypass from any client surface.
 11. Item history must remain sufficient to reconstruct the durable work trail.
+12. External gateways may persist edge recovery state, but they never become an
+    alternate Project, Thread, Turn, Item, provider, or runtime authority.
 
 ## Domain Model
 
@@ -101,7 +103,7 @@ Clients are intentionally narrow:
 
 - Zen CLI/TUI
 - ZenX desktop/web
-- future IM Zen
+- IMZen QQ gateway
 
 Clients send commands and render projections. They do not own the canonical
 domain state.
@@ -229,15 +231,32 @@ CLI/TUI must use the same App Server protocol, persistence, idempotency, and
 permission path as ZenX for project creation, thread creation, message
 submission, and turn execution.
 
-### Future IM Zen
+### IMZen QQ Gateway
 
-IM Zen is a future gateway into the same platform.
+IMZen is a QQ gateway client into the same platform. It translates authorized
+QQ messages into App Server commands and delivers completed Turn output back to
+QQ while preserving the same SSOT and Item history.
 
-It should translate IM messages into server-owned Project, Thread, and Turn
-actions while preserving the same SSOT and event history.
+IMZen selects an existing Project; it never creates one from QQ. Its only
+external-to-Zen association is a QQ-conversation-to-Thread binding. The binding
+records the Project id needed for Project-scoped Thread calls, but QQ channels
+and users are not Project identities.
 
-IM messages must also travel through the same server-side protocol and
-permissions path rather than a dedicated bypass channel.
+The gateway may durably retain pairing ownership, conversation bindings, and
+pending external delivery. Pending jobs remain until QQ accepts delivery and
+use stable idempotency derived from the QQ message id across App Server and QQ
+retries. This edge state does not replace server-owned Project, Thread, Turn, or
+Item state.
+
+Authorization is deny-by-default: use an explicit QQ user allowlist, or, when
+the allowlist is empty, require exact one-time pairing before accepting ordinary
+messages. QQ traffic is restricted to official HTTPS REST and trusted QQ WSS
+endpoints. Remote App Server traffic uses HTTPS; loopback HTTP is allowed for a
+same-machine deployment.
+
+IM messages travel through the same server-side protocol and permission path as
+other clients. IMZen cannot call a provider, model, tool runtime, scheduler, or
+Project runtime directly.
 
 ## Roadmap
 
@@ -276,11 +295,27 @@ permissions path rather than a dedicated bypass channel.
 - Multi-account support.
 - Better account routing and policy separation.
 
-### Phase 5: IM Gateway
+### Phase 5: IM Gateway - Current Initial QQ Vertical Slice
 
-- Map IM channels into Projects and Threads.
-- Preserve the same server ownership and Item trail.
-- Keep channel-specific quirks isolated from the core domain model.
+The current implementation work is the initial QQ vertical slice in
+`apps/imzen`. This roadmap marker records implementation scope, not verified
+feature completeness or production readiness.
+
+- Connect QQ direct and group-at messages through official HTTPS/WSS endpoints.
+- Select an existing active Project and bind each QQ conversation to one Thread.
+- Route message work only through capability-authenticated App Server requests.
+- Derive stable Turn and QQ delivery idempotency from the QQ message id.
+- Persist pairing ownership, conversation bindings, and pending external
+  delivery so restart can resume the same work.
+- Deny access by default through an explicit allowlist or one-time pairing.
+- Keep QQ-specific parsing, retry, and delivery behavior isolated in IMZen.
+- Keep provider and runtime creation exclusively in the App Server composition.
+- Keep IMZen startup/shutdown ownership limited to its QQ gateway, bridge, and
+  pending workers; it does not own the external App Server.
+
+Live QQ verification, packaging, service supervision, monitoring, network-fault
+evidence, and broader IM-provider support remain follow-on work until separately
+verified.
 
 ## Acceptance Criteria
 
@@ -308,6 +343,13 @@ permissions path rather than a dedicated bypass channel.
 - ZenX short-term UX includes one Project switcher, one Thread sidebar,
   prompt-first create/run, and provider/account/model selection.
 - A folder-backed Project does not require a mandatory manual Project name.
+- IMZen selects an existing Project and never creates a Project from QQ.
+- IMZen stores QQ-conversation-to-Thread bindings and durable edge delivery
+  state without becoming a second Zen SSOT.
+- Duplicate QQ messages retain stable App Server and QQ delivery idempotency.
+- QQ ingress is deny-by-default and restricted to official HTTPS/WSS endpoints.
+- IMZen has no direct provider or runtime bypass and does not own App Server
+  startup or shutdown.
 
 ## Open Questions
 

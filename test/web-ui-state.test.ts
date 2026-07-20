@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ThreadSnapshot } from '../src/product/app-server-protocol.js';
+import type { ThreadSnapshot } from '../packages/framework/src/product/app-server-protocol.js';
 import {
   applyAgentAppNotification,
   createWebUiState,
   InteractionProjection,
-} from '../src/presentation/web-ui-state.js';
+} from '../packages/framework/src/presentation/web-ui-state.js';
 
 describe('web ui state projection', () => {
   it('keeps reset snapshots and duplicate replay notifications idempotent by Item id', () => {
@@ -966,6 +966,73 @@ describe('web ui state projection', () => {
           runId: 'run-1',
           status: 'completed',
           itemIds: ['item-1'],
+        },
+      ],
+    });
+  });
+
+  it('adopts an initial turn, ignores foreign turns, and preserves sibling turn state', () => {
+    let state = createWebUiState();
+    state = applyAgentAppNotification(state, {
+      type: 'turn/started',
+      threadId: 'thread-1',
+      turn: {
+        id: 'turn-1',
+        runId: 'run-1',
+        status: 'inProgress',
+        itemIds: [],
+      },
+    });
+    const beforeForeignTurn = state;
+
+    state = applyAgentAppNotification(state, {
+      type: 'turn/started',
+      threadId: 'thread-2',
+      turn: {
+        id: 'foreign-turn',
+        runId: 'foreign-run',
+        status: 'inProgress',
+        itemIds: [],
+      },
+    });
+    expect(state).toBe(beforeForeignTurn);
+
+    state = applyAgentAppNotification(state, {
+      type: 'turn/started',
+      threadId: 'thread-1',
+      turn: {
+        id: 'turn-2',
+        runId: 'run-2',
+        status: 'inProgress',
+        itemIds: [],
+      },
+    });
+    state = applyAgentAppNotification(state, {
+      type: 'turn/completed',
+      threadId: 'thread-1',
+      turn: {
+        id: 'turn-1',
+        runId: 'run-1',
+        status: 'completed',
+        itemIds: ['item-1'],
+      },
+    });
+
+    expect(state.currentThread).toEqual({
+      id: 'thread-1',
+      status: 'running',
+      turns: [
+        {
+          id: 'turn-1',
+          runId: 'run-1',
+          status: 'completed',
+          itemIds: ['item-1'],
+        },
+        {
+          id: 'turn-2',
+          runId: 'run-2',
+          status: 'inProgress',
+          itemIds: [],
         },
       ],
     });

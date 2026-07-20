@@ -10,12 +10,12 @@ import {
   ApprovalBroker,
   PolicyToolRuntime,
   type PolicyRuntime,
-} from '../src/product/approval-runtime.js';
+} from '../packages/framework/src/product/approval-runtime.js';
 import type {
   ToolCallPayload,
   ToolExecutionContext,
   ToolRuntime,
-} from '../src/kernel/tool-runtime.js';
+} from '../packages/framework/src/kernel/tool-runtime.js';
 
 describe('PolicyToolRuntime', () => {
   it('delegates allowed tool calls to the wrapped runtime', async () => {

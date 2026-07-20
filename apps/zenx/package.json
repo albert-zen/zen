@@ -1,0 +1,45 @@
+{
+  "name": "@zen/zenx",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node ../../scripts/clean-generated-outputs.mjs package && tsc -p tsconfig.build.json && node scripts/copy-web.mjs",
+    "dev": "electron .",
+    "dist": "electron-builder --publish never",
+    "pack": "electron-builder --dir",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@zen/framework": "0.0.0"
+  },
+  "devDependencies": {
+    "electron": "43.1.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.zen.agent",
+    "productName": "ZenX",
+    "publish": null,
+    "asar": true,
+    "artifactName": "ZenX-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

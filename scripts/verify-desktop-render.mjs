@@ -6,10 +6,13 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 
 export async function verifyDesktopRender(options = {}) {
-  const executablePath = resolve(options.executablePath ?? 'release/win-unpacked/ZenX.exe');
+  const executablePath = resolve(
+    options.executablePath ?? 'apps/zenx/release/win-unpacked/ZenX.exe'
+  );
   const screenshotPath = options.screenshotPath ? resolve(options.screenshotPath) : undefined;
   const profileRoot = await mkdtemp(join(tmpdir(), 'zen-desktop-render-'));
   const environment = { ...process.env };
+  environment.ZEN_APP_DATA_ROOT = join(profileRoot, 'app-data');
   delete environment.ZEN_DESKTOP_AUTO_QUIT_MS;
   delete environment.ZEN_DESKTOP_HIDE;
 

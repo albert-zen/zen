@@ -6,7 +6,7 @@ import {
   OwnedProcessTree,
   ownedProcessTesting,
   type OwnedProcessIdentity,
-} from '../src/adapters/node/owned-process-cleanup.js';
+} from '../packages/framework/src/adapters/node/owned-process-cleanup.js';
 
 describe('OwnedProcessTree', () => {
   it('terminates an exact owned snapshot leaf-first', async () => {

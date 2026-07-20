@@ -18,7 +18,15 @@ afterEach(async () => {
 describe('production build and package hygiene', () => {
   it('removes only fixed generated directories and preserves runtime data', async () => {
     const root = await temporaryRoot();
-    for (const output of ['dist', 'web-dist', 'desktop-dist', 'release']) {
+    const outputs = [
+      'packages/framework/dist',
+      'apps/cli/dist',
+      'apps/web/dist',
+      'apps/zenx/dist',
+      'apps/zenx/release',
+      'acceptance/dist',
+    ];
+    for (const output of outputs) {
       await mkdir(join(root, output), { recursive: true });
       await writeFile(join(root, output, 'stale-output.js'), 'stale');
     }
@@ -27,7 +35,7 @@ describe('production build and package hygiene', () => {
 
     await cleanGeneratedOutputs(root, 'production');
 
-    for (const output of ['dist', 'web-dist', 'desktop-dist', 'release']) {
+    for (const output of outputs) {
       await expect(stat(join(root, output))).rejects.toMatchObject({ code: 'ENOENT' });
     }
     await expect(stat(join(root, '.zen', 'projects.json'))).resolves.toBeDefined();
@@ -35,7 +43,8 @@ describe('production build and package hygiene', () => {
 
   it('rejects a generated-output path that is not a real directory', async () => {
     const root = await temporaryRoot();
-    await writeFile(join(root, 'dist'), 'not a generated directory');
+    await mkdir(join(root, 'packages', 'framework'), { recursive: true });
+    await writeFile(join(root, 'packages', 'framework', 'dist'), 'not a generated directory');
     await expect(cleanGeneratedOutputs(root, 'production')).rejects.toThrow(
       'must be a real directory'
     );
@@ -53,21 +62,29 @@ describe('production build and package hygiene', () => {
       '/node_modules/lucide-react/dist/esm/icons/terminal.mjs',
     ];
     const required = [
-      '/dist/adapters/node/provider-runtime.js',
-      '/dist/adapters/node/local-tool-runtime.js',
-      '/dist/adapters/node/production-composition.js',
-      '/dist/product/app-server.js',
-      '/dist/product/app-server-protocol.js',
+      '/node_modules/@zen/framework/dist/adapters/node/provider-runtime.js',
+      '/node_modules/@zen/framework/dist/adapters/node/local-tool-runtime.js',
+      '/node_modules/@zen/framework/dist/adapters/node/production-composition.js',
+      '/node_modules/@zen/framework/dist/product/app-server.js',
+      '/node_modules/@zen/framework/dist/product/app-server-protocol.js',
     ];
 
     expect(findForbiddenAsarEntries([...forbidden, ...required])).toEqual(forbidden);
   });
 
   it('requires the desktop entrypoints and root web document', () => {
-    const required = ['/desktop-dist/main.js', '/desktop-dist/preload.js', '/web-dist/index.html'];
+    const required = [
+      '/dist/main.js',
+      '/dist/preload.js',
+      '/dist/web/index.html',
+      '/node_modules/@zen/framework/dist/adapters/node/index.js',
+    ];
 
     expect(findMissingRequiredAsarEntries(required)).toEqual([]);
-    expect(findMissingRequiredAsarEntries(required.slice(0, 2))).toEqual(['web-dist/index.html']);
+    expect(findMissingRequiredAsarEntries(required.slice(0, 2))).toEqual([
+      'dist/web/index.html',
+      'node_modules/@zen/framework/dist/adapters/node/index.js',
+    ]);
   });
 });
 

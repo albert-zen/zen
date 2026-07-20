@@ -1,12 +1,14 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
     "noEmit": true,
-    "skipLibCheck": true,
-    "types": ["node"]
+    "baseUrl": ".",
+    "paths": {
+      "@zen/framework": ["packages/framework/src/kernel/index.ts"],
+      "@zen/framework/node": ["packages/framework/src/adapters/node/index.ts"],
+      "@zen/framework/presentation": ["packages/framework/src/presentation/index.ts"],
+      "@zen/framework/product": ["packages/framework/src/product/index.ts"]
+    }
   },
-  "include": ["src/**/*.ts", "acceptance/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": ["acceptance/**/*.ts", "test/**/*.ts", "playwright.config.ts", "vitest.config.ts"]
 }

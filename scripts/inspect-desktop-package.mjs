@@ -22,7 +22,12 @@ const RETIRED_MODULES = [
   'tui-legacy-client',
   'wait-graph',
 ];
-const REQUIRED_ENTRIES = ['desktop-dist/main.js', 'desktop-dist/preload.js', 'web-dist/index.html'];
+const REQUIRED_ENTRIES = [
+  'dist/main.js',
+  'dist/preload.js',
+  'dist/web/index.html',
+  'node_modules/@zen/framework/dist/adapters/node/index.js',
+];
 
 export function findForbiddenAsarEntries(entries) {
   return entries.filter((entry) => {
@@ -63,7 +68,7 @@ function normalizeEntry(entry) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const result = await inspectDesktopPackage(
-    process.argv[2] ?? 'release/win-unpacked/resources/app.asar'
+    process.argv[2] ?? 'apps/zenx/release/win-unpacked/resources/app.asar'
   );
   console.log(`Inspected ${result.entries} ASAR entries: ${result.asarPath}`);
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { acquireSingleInstance } from '../desktop/instance-policy.js';
+import { acquireSingleInstance } from '../apps/zenx/src/instance-policy.js';
 
 describe('single instance policy', () => {
   it('quits startup ownership when another instance already owns the lock', () => {

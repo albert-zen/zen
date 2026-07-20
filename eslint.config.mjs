@@ -5,7 +5,16 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['coverage/', 'desktop-dist/', 'dist/', 'node_modules/', 'release/', 'web-dist/'],
+    ignores: [
+      '**/coverage/',
+      '**/dist/',
+      '**/node_modules/',
+      '**/release/',
+      'desktop-dist/',
+      'dist/',
+      'release/',
+      'web-dist/',
+    ],
   },
   js.configs.recommended,
   {
@@ -26,8 +35,7 @@ export default tseslint.config(
   },
   {
     files: [
-      'src/adapters/node/app-server-transport.ts',
-      'src/tui/tui-engine.ts',
+      'packages/framework/src/adapters/node/app-server-transport.ts',
       'test/virtual-terminal.ts',
     ],
     rules: {
@@ -36,7 +44,13 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/**/*.ts', 'web/**/*.{ts,tsx}'],
+    files: [
+      'packages/framework/src/**/*.ts',
+      'apps/cli/src/**/*.ts',
+      'apps/web/**/*.{ts,tsx}',
+      'apps/zenx/src/**/*.ts',
+      'apps/imzen/{src,test}/**/*.ts',
+    ],
     languageOptions: {
       globals: {
         ...globals.browser,

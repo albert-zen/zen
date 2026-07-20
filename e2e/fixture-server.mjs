@@ -7,7 +7,7 @@ import { createServer as createViteServer } from 'vite';
 import {
   createAgentAppProductionComposition,
   serveAgentAppHttpTransport,
-} from '../dist/adapters/node/index.js';
+} from '@zen/framework/node';
 
 /** A real Project-first App Server behind the browser's same-origin proxy. */
 export async function startFixtureServer() {
@@ -42,7 +42,7 @@ export async function startFixtureServer() {
     process.env.ZEN_APP_SERVER_CAPABILITY = transport.capability;
     delete process.env.ZEN_APP_SERVER_CAPABILITY_HANDOFF;
     vite = await createViteServer({
-      configFile: 'web/vite.config.ts',
+      configFile: 'apps/web/vite.config.ts',
       logLevel: 'error',
       server: { host: '127.0.0.1', port: 0, strictPort: true },
     });

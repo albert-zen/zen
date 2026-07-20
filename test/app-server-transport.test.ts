@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
 import { connect } from 'node:net';
-import { once } from 'node:events';
+import { getEventListeners, once } from 'node:events';
 
 import {
   AggregateProductionShutdown,
@@ -384,6 +389,151 @@ describe('App Server HTTP transport', () => {
       });
     } finally {
       await transport.close();
+    }
+  });
+
+  it('rejects redirects before request or event data can cross to a second origin', async () => {
+    let destinationRequests = 0;
+    const eventFailed = createDeferred<void>();
+    const destination = await listenWithHttpHandler((_request, response) => {
+      destinationRequests += 1;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          method: 'thread/list',
+          ok: true,
+          result: { threads: [], persistenceFailures: [] },
+        })
+      );
+    });
+    const redirect = await listenWithHttpHandler((_request, response) => {
+      response.writeHead(307, { location: new URL('/request', destination.url).toString() });
+      response.end();
+    });
+    const client = new HttpAppServerClient({
+      baseUrl: redirect.url,
+      capability: TEST_CAPABILITY,
+      onSubscriptionError: () => eventFailed.resolve(),
+    });
+
+    try {
+      await expect(client.request({ method: 'thread/list' })).rejects.toThrow();
+      const unsubscribe = client.subscribe(() => undefined);
+      await eventFailed.promise;
+      unsubscribe();
+      expect(destinationRequests).toBe(0);
+    } finally {
+      await client.close();
+      await redirect.close();
+      await destination.close();
+    }
+  });
+
+  it('times out a request when an injected fetch never settles', async () => {
+    let requestSignal: AbortSignal | undefined;
+    const fetchImpl = ((_input, init) => {
+      requestSignal = init?.signal ?? undefined;
+      return new Promise<Response>(() => undefined);
+    }) as typeof fetch;
+    const client = new HttpAppServerClient({
+      baseUrl: 'http://127.0.0.1:1',
+      capability: TEST_CAPABILITY,
+      fetch: fetchImpl,
+      requestTimeoutMs: 20,
+    });
+
+    try {
+      await expect(
+        settlesWithin(client.request({ method: 'thread/list' }), 250)
+      ).rejects.toMatchObject({
+        name: 'AppServerTransportError',
+        code: 'HTTP_REQUEST_TIMEOUT',
+      });
+      expect(requestSignal?.aborted).toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('closes promptly and aborts request and SSE fetches even when fetch ignores abort', async () => {
+    let requestSignal: AbortSignal | undefined;
+    let eventSignal: AbortSignal | undefined;
+    const fetchImpl = ((input, init) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === '/request') requestSignal = init?.signal ?? undefined;
+      if (pathname === '/events') {
+        eventSignal = init?.signal ?? undefined;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(sseControl('sync', 'stream:0', 0)));
+            },
+          })
+        );
+      }
+      return new Promise<Response>(() => undefined);
+    }) as typeof fetch;
+    const client = new HttpAppServerClient({
+      baseUrl: 'http://127.0.0.1:1',
+      capability: TEST_CAPABILITY,
+      fetch: fetchImpl,
+      requestTimeoutMs: 10_000,
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+    const request = client.request({ method: 'thread/list' });
+
+    try {
+      await waitUntil(() => requestSignal !== undefined && eventSignal !== undefined);
+      await expect(settlesWithin(client.close(), 100)).resolves.toBeUndefined();
+      await expect(settlesWithin(request, 100)).rejects.toMatchObject({
+        name: 'AppServerTransportError',
+        code: 'CLIENT_CLOSED',
+      });
+      expect(requestSignal?.aborted).toBe(true);
+      expect(eventSignal?.aborted).toBe(true);
+    } finally {
+      unsubscribe();
+      await client.close();
+    }
+  });
+
+  it('releases subscription listeners after ignored SSE connection fetches time out', async () => {
+    const controllers: AbortController[] = [];
+    const NativeAbortController = globalThis.AbortController;
+    class TrackingAbortController extends NativeAbortController {
+      constructor() {
+        super();
+        controllers.push(this);
+      }
+    }
+    vi.stubGlobal('AbortController', TrackingAbortController);
+
+    const threeTimeouts = createDeferred<void>();
+    let timeoutCount = 0;
+    const fetchImpl = (() => new Promise<Response>(() => undefined)) as typeof fetch;
+    const client = new HttpAppServerClient({
+      baseUrl: 'http://127.0.0.1:1',
+      capability: TEST_CAPABILITY,
+      fetch: fetchImpl,
+      requestTimeoutMs: 10,
+      onSubscriptionError(error) {
+        if (error.code !== 'SSE_CONNECT_TIMEOUT') return;
+        timeoutCount += 1;
+        if (timeoutCount === 3) threeTimeouts.resolve();
+      },
+    });
+    const unsubscribe = client.subscribe(() => undefined);
+
+    try {
+      await settlesWithin(threeTimeouts.promise, 1_000);
+      await Promise.resolve();
+      const subscriptionSignal = controllers[0]?.signal;
+      expect(subscriptionSignal).toBeDefined();
+      expect(getEventListeners(subscriptionSignal!, 'abort')).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      await client.close();
+      vi.unstubAllGlobals();
     }
   });
 
@@ -918,6 +1068,14 @@ async function waitForNotification(
   throw new Error('Timed out waiting for notification');
 }
 
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error('Timed out waiting for condition');
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (cause?: unknown) => void;
@@ -977,6 +1135,40 @@ async function listenWithPlainTextResponse(): Promise<{
             return;
           }
 
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+async function listenWithHttpHandler(
+  handler: (request: IncomingMessage, response: ServerResponse) => void
+): Promise<{ readonly url: string; close(): Promise<void> }> {
+  const httpServer = createHttpServer(handler);
+
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(0, '127.0.0.1', () => {
+      httpServer.off('error', reject);
+      resolve();
+    });
+  });
+
+  const address = httpServer.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('HTTP test server did not bind to a TCP port');
+  }
+
+  return {
+    url: `http://${address.address}:${address.port}`,
+    async close() {
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((cause) => {
+          if (cause) {
+            reject(cause);
+            return;
+          }
           resolve();
         });
       });

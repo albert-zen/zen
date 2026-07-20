@@ -23,7 +23,7 @@ test('creates a project, parent thread, and human objective through the real Age
     const url = new URL(request.url());
     if (url.pathname === '/request' || url.pathname === '/events') appRequests.push(url.href);
   });
-  await page.goto(`${fixture.origin}/web/`);
+  await page.goto(fixture.origin);
   const ownerMarker = process.env.ZEN_E2E_RUN_MARKER;
   if (ownerMarker) {
     const owned = await findOwnedProcesses(ownerMarker);
@@ -34,26 +34,29 @@ test('creates a project, parent thread, and human objective through the real Age
   await expect(page.getByRole('heading', { name: 'Create a project' })).toBeVisible();
   await page.getByRole('button', { name: 'Create project', exact: true }).last().click();
   const dialog = page.getByRole('dialog', { name: 'Create project' });
-  await dialog.getByLabel('Name').fill('E2E project');
-  await dialog.getByLabel('Root path').fill(fixture.projectRoot);
-  await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+  await dialog.getByRole('textbox', { name: /^Project directory/u }).fill(fixture.projectRoot);
+  await dialog.getByRole('textbox', { name: /^Project name/u }).fill('E2E project');
+  await dialog.getByRole('button', { name: 'Create project', exact: true }).click();
   await expect(
-    page.getByRole('navigation', { name: 'Projects' }).getByText('E2E project', { exact: true })
-  ).toBeVisible();
+    page.getByRole('combobox', { name: 'Select project' }).locator('option:checked')
+  ).toHaveText('E2E project');
 
-  await page.getByRole('button', { name: 'New thread' }).click();
+  await page
+    .getByRole('navigation', { name: 'Threads' })
+    .getByRole('button', { name: 'Start a thread' })
+    .click();
   const threadDialog = page.getByRole('dialog', { name: 'New thread' });
-  await threadDialog.getByLabel('Objective').fill('Parent objective');
-  await threadDialog.getByRole('button', { name: 'Create', exact: true }).click();
+  await threadDialog.getByLabel('What should the agent work on?').fill('Parent objective');
+  await threadDialog.getByRole('button', { name: 'Start Turn', exact: true }).click();
   await expect(
     page.getByRole('navigation', { name: 'Threads' }).getByText('Parent objective', { exact: true })
   ).toBeVisible();
   await page.getByLabel('Message selected thread').fill('Human objective');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(
-    page.getByRole('main').getByText('Completed: thread turn', { exact: true })
+    page.getByRole('main').getByText('Completed: thread turn', { exact: true }).last()
   ).toBeVisible();
-  expect(fixture.executionCount()).toBe(1);
+  expect(fixture.executionCount()).toBe(2);
   expect(appRequests.every((url) => new URL(url).origin === fixture.origin)).toBe(true);
   const artifacts = join(process.cwd(), 'docs', 'implementation', 'artifacts', 'agent-app');
   await mkdir(artifacts, { recursive: true });
@@ -92,9 +95,9 @@ test('keeps project selection isolated across deep links and refresh', async ({ 
     params: { projectId, objective: 'Isolated objective', idempotencyKey: 'isolated-thread' },
   });
   const threadId = thread.body.result.thread.id as string;
-  await page.goto(`${fixture.origin}/web/`);
+  await page.goto(fixture.origin);
   await page.goto(
-    `${fixture.origin}/web/?project=${encodeURIComponent(projectId)}&thread=${encodeURIComponent(threadId)}`
+    `${fixture.origin}/?project=${encodeURIComponent(projectId)}&thread=${encodeURIComponent(threadId)}`
   );
   await expect(
     page
@@ -109,8 +112,8 @@ test('keeps project selection isolated across deep links and refresh', async ({ 
   ).toBeVisible();
   await page.goBack();
   await expect(
-    page.getByRole('navigation', { name: 'Projects' }).getByText('Second project', { exact: true })
-  ).toBeVisible();
+    page.getByRole('combobox', { name: 'Select project' }).locator('option:checked')
+  ).toHaveText('Second project');
 });
 
 test('returns typed request errors without duplicate side effects', async () => {

@@ -4,7 +4,7 @@ import {
   DesktopLifecycle,
   installShutdownSignals,
   type DesktopStartup,
-} from '../desktop/lifecycle.js';
+} from '../apps/zenx/src/lifecycle.js';
 
 describe('DesktopLifecycle', () => {
   it('closes acquired resources after a partial startup failure', async () => {

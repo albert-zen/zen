@@ -12,7 +12,7 @@ import {
   serveAppServerHttpTransport,
   type ModelGateway,
 } from './test-exports.js';
-import { publishAppServerClientHandoff } from '../src/adapters/node/app-server-config.js';
+import { publishAppServerClientHandoff } from '../packages/framework/src/adapters/node/app-server-config.js';
 
 describe('Web development App Server proxy', () => {
   it('keeps the capability out of DEBUG=vite:config subprocess output', async () => {
@@ -226,7 +226,7 @@ describe('Web development App Server proxy', () => {
     try {
       await expect(
         createViteServer({
-          configFile: 'web/vite.config.ts',
+          configFile: 'apps/web/vite.config.ts',
           logLevel: 'silent',
         })
       ).rejects.toThrow(
@@ -265,7 +265,7 @@ async function startDebugProxySubprocess(appServer: AppServerClient): Promise<{
     [
       join(process.cwd(), 'node_modules', 'vite', 'bin', 'vite.js'),
       '--config',
-      'web/vite.config.ts',
+      'apps/web/vite.config.ts',
       '--host',
       '127.0.0.1',
       '--port',
@@ -407,7 +407,7 @@ async function startProxy(appServer: AppServerClient): Promise<{
     delete process.env.ZEN_APP_SERVER_CAPABILITY;
     process.env.ZEN_APP_SERVER_CAPABILITY_HANDOFF = published.path;
     vite = await createViteServer({
-      configFile: 'web/vite.config.ts',
+      configFile: 'apps/web/vite.config.ts',
       customLogger: logger,
       server: {
         host: '127.0.0.1',

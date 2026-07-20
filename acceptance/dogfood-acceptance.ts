@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createAgentAppProductionComposition } from '../src/adapters/node/index.js';
+import { createAgentAppProductionComposition } from '@zen/framework/node';
 
 export type AgentAppBootstrapAcceptance = {
   readonly status: 'passed';

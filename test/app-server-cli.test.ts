@@ -1,32 +1,17 @@
-import { execFile, fork, type ChildProcess } from 'node:child_process';
+import { fork, type ChildProcess } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { consumeAppServerClientHandoff } from '../src/adapters/node/app-server-config.js';
+import { consumeAppServerClientHandoff } from '../packages/framework/src/adapters/node/app-server-config.js';
 import { HttpAppServerClient } from './test-exports.js';
 
-const execFileAsync = promisify(execFile);
-
 describe('standalone App Server CLI', () => {
-  beforeAll(async () => {
-    await execFileAsync(
-      process.execPath,
-      [
-        join(process.cwd(), 'node_modules', 'typescript', 'bin', 'tsc'),
-        '-p',
-        'tsconfig.build.json',
-      ],
-      { cwd: process.cwd() }
-    );
-  }, 30_000);
-
   it('rejects conflicting credential modes without logging the capability', async () => {
     const root = await mkdtemp(join(tmpdir(), 'zen-app-server-cli-modes-'));
     const providedCapability = 'provided-capability-0123456789-abcdef-0123456789';
-    const child = fork(join(process.cwd(), 'dist', 'adapters', 'node', 'app-server-cli.js'), [], {
+    const child = fork(join(process.cwd(), 'apps', 'cli', 'dist', 'app-server-cli.js'), [], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -78,6 +63,23 @@ describe('standalone App Server CLI', () => {
     }
   });
 
+  it('uses the shutdown marker to follow the graceful shutdown path', async () => {
+    const cli = await startGeneratedCapabilityCli('shutdown-marker');
+
+    try {
+      await writeFile(cli.shutdownMarker, '', 'utf8');
+      await waitForExit(cli.child);
+
+      expect(cli.child.exitCode).toBe(0);
+      await expect(readFile(cli.handoffPath, 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      expect(cli.output()).not.toContain(cli.capability);
+    } finally {
+      await cli.close();
+    }
+  });
+
   it('does not delete a handoff atomically claimed as shutdown starts', async () => {
     const cli = await startGeneratedCapabilityCli('claim-shutdown-race');
     const claimedPath = `${cli.handoffPath}.test-claim`;
@@ -123,7 +125,7 @@ describe('standalone App Server CLI', () => {
     );
     await mkdir(handoffDirectory);
 
-    const child = fork(join(process.cwd(), 'dist', 'adapters', 'node', 'app-server-cli.js'), [], {
+    const child = fork(join(process.cwd(), 'apps', 'cli', 'dist', 'app-server-cli.js'), [], {
       cwd: process.cwd(),
       env,
       silent: true,
@@ -211,6 +213,7 @@ async function startGeneratedCapabilityCli(label: string): Promise<{
   readonly child: ChildProcess;
   readonly handoffDirectory: string;
   readonly handoffPath: string;
+  readonly shutdownMarker: string;
   readonly capability: string;
   readonly ownershipMarker: string;
   output(): string;
@@ -218,6 +221,7 @@ async function startGeneratedCapabilityCli(label: string): Promise<{
 }> {
   const root = await mkdtemp(join(tmpdir(), `zen-app-server-cli-${label}-`));
   const handoffDirectory = join(root, 'handoff');
+  const shutdownMarker = join(root, 'shutdown.marker');
   const configPath = join(root, 'model-provider.json');
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -225,6 +229,7 @@ async function startGeneratedCapabilityCli(label: string): Promise<{
     ZEN_APP_SERVER_PORT: '0',
     ZEN_APP_DATA_ROOT: join(root, 'app-data'),
     ZEN_MODEL_PROVIDER_CONFIG: configPath,
+    ZEN_APP_SERVER_SHUTDOWN_FILE: shutdownMarker,
   };
   delete env.ZEN_APP_SERVER_CAPABILITY;
   delete env.ZEN_APP_SERVER_CAPABILITY_HANDOFF;
@@ -239,7 +244,7 @@ async function startGeneratedCapabilityCli(label: string): Promise<{
     'utf8'
   );
   await mkdir(handoffDirectory);
-  const child = fork(join(process.cwd(), 'dist', 'adapters', 'node', 'app-server-cli.js'), [], {
+  const child = fork(join(process.cwd(), 'apps', 'cli', 'dist', 'app-server-cli.js'), [], {
     cwd: process.cwd(),
     env,
     silent: true,
@@ -271,6 +276,7 @@ async function startGeneratedCapabilityCli(label: string): Promise<{
       child,
       handoffDirectory,
       handoffPath,
+      shutdownMarker,
       capability: published.capability,
       ownershipMarker: published.ownershipMarker,
       output: () => `${stdout}\n${stderr}`,

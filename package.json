@@ -1,119 +1,60 @@
 {
-  "name": "zen-kernel",
+  "name": "zen",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "desktop-dist/main.js",
-  "exports": {
-    ".": {
-      "types": "./dist/kernel/index.d.ts",
-      "default": "./dist/kernel/index.js"
-    },
-    "./product": {
-      "types": "./dist/product/index.d.ts",
-      "default": "./dist/product/index.js"
-    },
-    "./node": {
-      "types": "./dist/adapters/node/index.d.ts",
-      "default": "./dist/adapters/node/index.js"
-    },
-    "./presentation": {
-      "types": "./dist/presentation/index.d.ts",
-      "default": "./dist/presentation/index.js"
-    }
-  },
-  "imports": {
-    "#zen/node": "./src/adapters/node/index.ts",
-    "#zen/product": "./src/product/index.ts",
-    "#zen/presentation": "./src/presentation/index.ts"
-  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "app-server": "npm run build && node dist/adapters/node/app-server-cli.js",
-    "build": "node scripts/clean-generated-outputs.mjs production && tsc -p tsconfig.build.json",
-    "build:acceptance": "node scripts/clean-generated-outputs.mjs acceptance && tsc -p tsconfig.acceptance.json",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run typecheck:web && tsc -p tsconfig.desktop.json --noEmit && npm test && npm run build && npm run build:acceptance && npm run web:build && tsc -p tsconfig.desktop.json && npm run coverage && npm run e2e",
+    "app-server": "npm run build:framework && npm run build:cli && npm run app-server -w @zen/cli",
+    "build": "npm run clean && npm run build:framework && npm run build:cli && npm run build:web && npm run build:zenx && npm run build:imzen",
+    "build:acceptance": "npm run build:framework && node scripts/clean-generated-outputs.mjs acceptance && tsc -p tsconfig.acceptance.json",
+    "build:cli": "npm run build -w @zen/cli",
+    "build:framework": "npm run build -w @zen/framework",
+    "build:imzen": "npm run build -w @zen/imzen",
+    "build:web": "npm run build -w @zen/web",
+    "build:zenx": "npm run build -w @zen/zenx",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run build:acceptance && npm run coverage && npm run e2e",
+    "clean": "node scripts/clean-generated-outputs.mjs production",
     "coverage": "npm run coverage:kernel && npm run coverage:product && npm run coverage:presentation",
     "coverage:kernel": "node scripts/run-coverage.mjs kernel",
     "coverage:presentation": "node scripts/run-coverage.mjs presentation",
     "coverage:product": "node scripts/run-coverage.mjs product",
-    "dogfood:alb-94": "npm run build && npm run build:acceptance && node docs/implementation/alb-94-dogfood-acceptance.mjs",
-    "e2e": "node scripts/run-e2e.mjs",
-    "desktop:build": "npm run build && npm run web:build && tsc -p tsconfig.desktop.json",
-    "desktop:dev": "npm run desktop:build && electron .",
-    "desktop:dist": "npm run desktop:build && electron-builder --publish never",
-    "desktop:inspect": "node scripts/inspect-desktop-package.mjs",
-    "desktop:pack": "npm run desktop:build && electron-builder --dir",
-    "desktop:verify-render": "node scripts/verify-desktop-render.mjs",
-    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"desktop/**/*.ts\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"desktop/**/*.ts\" \"test/**/*.{ts,tsx,mjs}\" \"web/**/*.{ts,tsx,css,html}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
+    "dogfood:alb-94": "npm run build:acceptance && node docs/implementation/alb-94-dogfood-acceptance.mjs",
+    "e2e": "npm run build:framework && npm run build:web && node scripts/run-e2e.mjs",
+    "format": "prettier --write \"packages/framework/src/**/*.ts\" \"apps/cli/src/**/*.ts\" \"apps/web/**/*.{ts,tsx,css,html,json}\" \"apps/zenx/**/*.{ts,mjs,json}\" \"apps/imzen/**/*.{ts,json}\" \"test/**/*.{ts,tsx,mjs}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
+    "format:check": "prettier --check \"packages/framework/src/**/*.ts\" \"apps/cli/src/**/*.ts\" \"apps/web/**/*.{ts,tsx,css,html,json}\" \"apps/zenx/**/*.{ts,mjs,json}\" \"apps/imzen/**/*.{ts,json}\" \"test/**/*.{ts,tsx,mjs}\" \"acceptance/**/*.ts\" \"e2e/**/*.{mjs,ts}\" \"*.{json,js,mjs,cjs,ts,md}\" \"docs/agents/quality-gates.md\"",
+    "imzen:build": "npm run build:framework && npm run build:imzen",
+    "imzen:live": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/imzen-live.ps1",
+    "imzen:start": "npm run imzen:build && npm run start -w @zen/imzen",
     "lint": "eslint .",
-    "test": "vitest run --pool=forks --fileParallelism=false --maxWorkers=1",
-    "typecheck": "tsc --noEmit",
-    "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
-    "web": "npm run build && node dist/adapters/node/web-dev-cli.js",
-    "web:build": "vite build --config web/vite.config.ts",
-    "web:dev": "vite --config web/vite.config.ts --host 127.0.0.1"
-  },
-  "bin": {
-    "zen-app-server": "dist/adapters/node/app-server-cli.js",
-    "zen-web": "dist/adapters/node/web-dev-cli.js"
+    "test": "npm run build:framework && npm run build:cli && vitest run --pool=forks --fileParallelism=false --maxWorkers=1 && npm run test -w @zen/imzen",
+    "typecheck": "npm run build:framework && tsc --noEmit && npm run typecheck -w @zen/framework && npm run typecheck -w @zen/cli && npm run typecheck -w @zen/web && npm run typecheck -w @zen/zenx && npm run typecheck -w @zen/imzen",
+    "web": "npm run build:framework && npm run build:cli && npm run web -w @zen/cli",
+    "web:build": "npm run build:framework && npm run build:web",
+    "web:dev": "npm run build:framework && npm run dev -w @zen/web",
+    "zenx:build": "npm run build:framework && npm run build:web && npm run build:zenx",
+    "zenx:dev": "npm run zenx:build && npm run dev -w @zen/zenx",
+    "zenx:dist": "npm run zenx:build && npm run dist -w @zen/zenx",
+    "zenx:inspect": "node scripts/inspect-desktop-package.mjs apps/zenx/release/win-unpacked/resources/app.asar",
+    "zenx:pack": "npm run zenx:build && npm run pack -w @zen/zenx",
+    "zenx:verify-render": "node scripts/verify-desktop-render.mjs apps/zenx/release/win-unpacked/ZenX.exe"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.61.1",
-    "@tailwindcss/vite": "^4.3.0",
     "@types/node": "^25.9.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
     "@vitest/coverage-v8": "^4.1.10",
-    "electron": "^43.1.1",
-    "electron-builder": "^26.15.3",
     "eslint": "^10.7.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
     "jsdom": "^26.1.0",
     "prettier": "^3.9.5",
-    "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.64.0",
-    "vite": "^8.0.16",
     "vitest": "^4.1.7"
-  },
-  "dependencies": {
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "lucide-react": "^1.17.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "tailwind-merge": "^3.6.0"
-  },
-  "build": {
-    "appId": "com.zen.agent",
-    "productName": "ZenX",
-    "publish": null,
-    "asar": true,
-    "artifactName": "ZenX-${version}-${arch}.${ext}",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**",
-      "web-dist/**",
-      "desktop-dist/**",
-      "package.json",
-      "!node_modules/**"
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    }
   }
 }

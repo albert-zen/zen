@@ -12,8 +12,8 @@ import type {
   ProjectSnapshot,
 } from './test-exports.js';
 import { AgentWorkspaceClient } from './test-exports.js';
-import { AgentWorkspace } from '../web/src/workspace.tsx';
-import { ThreadDialog } from '../web/src/workspace-dialogs.tsx';
+import { AgentWorkspace } from '../apps/web/src/workspace.tsx';
+import { ThreadDialog } from '../apps/web/src/workspace-dialogs.tsx';
 
 describe('AgentWorkspace', () => {
   let root: Root | undefined;

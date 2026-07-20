@@ -1,0 +1,28 @@
+{
+  "name": "@zen/framework",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/kernel/index.d.ts",
+      "default": "./dist/kernel/index.js"
+    },
+    "./product": {
+      "types": "./dist/product/index.d.ts",
+      "default": "./dist/product/index.js"
+    },
+    "./node": {
+      "types": "./dist/adapters/node/index.d.ts",
+      "default": "./dist/adapters/node/index.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation/index.d.ts",
+      "default": "./dist/presentation/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node ../../scripts/clean-generated-outputs.mjs package && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@zen/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "zen-app-server": "dist/app-server-cli.js",
+    "zen-web": "dist/web-dev-cli.js"
+  },
+  "scripts": {
+    "app-server": "node dist/app-server-cli.js",
+    "build": "node ../../scripts/clean-generated-outputs.mjs package && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "web": "node dist/web-dev-cli.js"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@vitejs/plugin-react": "^6.0.2",
+    "@zen/framework": "0.0.0",
+    "vite": "^8.0.16"
+  }
+}

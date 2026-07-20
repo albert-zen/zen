@@ -5,7 +5,7 @@ import {
   CodexProviderService,
   type CodexAccount,
   type CodexProviderClient,
-} from '../src/adapters/node/index.js';
+} from '../packages/framework/src/adapters/node/index.js';
 
 describe('CodexProviderService', () => {
   it('starts lazily, coalesces status work, and caches the account and catalog in memory', async () => {

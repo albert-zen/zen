@@ -6,7 +6,7 @@ import {
   type ThreadRuntime,
   type TurnExecutor,
   type TurnExecutorInput,
-} from '../src/product/index.js';
+} from '../packages/framework/src/product/index.js';
 
 describe('TurnExecutor thread runtime branch', () => {
   it('completes a turn through a TurnExecutor and passes the thread snapshot, records, input, and append callback', async () => {
