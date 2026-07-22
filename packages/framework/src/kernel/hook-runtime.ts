@@ -69,6 +69,7 @@ export type HookResult<TDecision extends HookDecision = HookDecision> =
 
 export type HookHandlers = {
   readonly onItemAppending?: (context: ItemAppendingHookContext) => HookResult<HookItemDecision>;
+  /** Post-commit observer. Failures are audited and never reject the committed append. */
   readonly onItemAppended?: (context: ItemAppendedHookContext) => HookResult<never>;
   readonly beforeToolCall?: (
     context: BeforeToolCallHookContext
@@ -134,8 +135,11 @@ export class HookRuntime {
         })
       );
     } catch (cause) {
-      await this.appendHookError('onItemAppended', appended, cause);
-      throw cause;
+      try {
+        await this.appendHookError('onItemAppended', appended, cause);
+      } catch {
+        // The candidate is already committed; audit persistence cannot change that contract.
+      }
     }
 
     return appended;
@@ -145,7 +149,8 @@ export class HookRuntime {
     readonly call: ToolCallHookPayload;
     readonly assistantItem: Item;
   }): Promise<
-    { readonly type: 'continue'; readonly call: ToolCallHookPayload } | { readonly type: 'block' }
+    | { readonly type: 'continue'; readonly call: ToolCallHookPayload }
+    | { readonly type: 'block'; readonly reason?: string }
   > {
     let result: Awaited<HookResult<HookToolCallDecision>>;
 
@@ -170,10 +175,16 @@ export class HookRuntime {
     await this.appendToolHookEffect(input.call, input.assistantItem, result.decision);
 
     if (result.decision.type === 'block') {
-      return { type: 'block' };
+      return {
+        type: 'block',
+        ...(result.decision.reason === undefined ? {} : { reason: result.decision.reason }),
+      };
     }
 
-    return { type: 'continue', call: result.decision.call };
+    return {
+      type: 'continue',
+      call: { ...result.decision.call, id: input.call.id },
+    };
   }
 
   private async appendHookItems(result: Awaited<HookResult>): Promise<void> {
@@ -227,8 +238,11 @@ export class HookRuntime {
     }
 
     if (decision.type === 'replace') {
-      payload.replacementToolCallId = decision.call.id;
+      payload.replacementToolCallId = call.id;
       payload.replacementToolName = decision.call.name;
+      if (decision.call.id !== call.id) {
+        payload.hookSuppliedToolCallId = decision.call.id;
+      }
     }
 
     return await this.appendItem({

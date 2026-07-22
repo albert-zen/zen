@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  closeWithBoundedRetry,
   DesktopLifecycle,
   installShutdownSignals,
   type DesktopStartup,
@@ -68,6 +69,98 @@ describe('DesktopLifecycle', () => {
     expect(calls).toContain('window:close');
   });
 
+  it('shares an in-flight close, re-arms after rejection, and stays closed after retry success', async () => {
+    const calls: string[] = [];
+    const firstClose = deferred<void>();
+    let compositionAttempts = 0;
+    const lifecycle = new DesktopLifecycle();
+    await lifecycle.start({
+      ...startup(calls),
+      createComposition: async () => ({
+        close: async () => {
+          compositionAttempts += 1;
+          calls.push(`composition:close:${compositionAttempts}`);
+          if (compositionAttempts === 1) {
+            await firstClose.promise;
+            throw new Error('transient credential persistence failure');
+          }
+        },
+      }),
+    });
+
+    const first = lifecycle.close();
+    const concurrent = lifecycle.close();
+    expect(concurrent).toBe(first);
+    firstClose.resolve(undefined);
+    await expect(first).rejects.toThrow('Production shutdown failed');
+    await expect(concurrent).rejects.toThrow('Production shutdown failed');
+
+    const retry = lifecycle.close();
+    await expect(retry).resolves.toBeUndefined();
+    expect(lifecycle.close()).toBe(retry);
+    expect(compositionAttempts).toBe(2);
+  });
+
+  it('performs a bounded retry and retains every terminal shutdown failure', async () => {
+    const observed: Array<{ readonly attempt: number; readonly message: string }> = [];
+    let attempts = 0;
+    await expect(
+      closeWithBoundedRetry(
+        async () => {
+          attempts += 1;
+          throw new Error(`failure-${attempts}`);
+        },
+        {
+          attempts: 2,
+          onFailure: (cause, attempt) =>
+            observed.push({ attempt, message: (cause as Error).message }),
+        }
+      )
+    ).rejects.toMatchObject({
+      name: 'AggregateError',
+      errors: [
+        expect.objectContaining({ message: 'failure-1' }),
+        expect.objectContaining({ message: 'failure-2' }),
+      ],
+    });
+    expect(attempts).toBe(2);
+    expect(observed).toEqual([
+      { attempt: 1, message: 'failure-1' },
+      { attempt: 2, message: 'failure-2' },
+    ]);
+  });
+
+  it('bounds each close attempt by a real deadline when a resource never settles', async () => {
+    const observed: Array<{ readonly attempt: number; readonly message: string }> = [];
+    let attempts = 0;
+
+    await expect(
+      closeWithBoundedRetry(
+        async () => {
+          attempts += 1;
+          await new Promise<void>(() => undefined);
+        },
+        {
+          attempts: 2,
+          attemptTimeoutMs: 10,
+          onFailure: (cause, attempt) =>
+            observed.push({ attempt, message: (cause as Error).message }),
+        }
+      )
+    ).rejects.toMatchObject({
+      name: 'AggregateError',
+      errors: [
+        expect.objectContaining({ message: 'Production shutdown attempt timed out after 10ms' }),
+        expect.objectContaining({ message: 'Production shutdown attempt timed out after 10ms' }),
+      ],
+    });
+    expect(attempts).toBe(2);
+    expect(observed).toEqual([
+      { attempt: 1, message: 'Production shutdown attempt timed out after 10ms' },
+      { attempt: 2, message: 'Production shutdown attempt timed out after 10ms' },
+    ]);
+  });
+
   it('collapses repeated SIGINT and SIGTERM requests to one shutdown', () => {
     const listeners = new Map<string, () => void>();
     let shutdowns = 0;
@@ -123,4 +216,12 @@ function startup(
       },
     }),
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }

@@ -136,7 +136,7 @@ describe('appendToolExecutionItems', () => {
       },
     };
 
-    await appendToolExecutionItems({
+    const result = await appendToolExecutionItems({
       itemList: items,
       toolRuntime: runtime,
       assistantItem: assistant,
@@ -147,7 +147,10 @@ describe('appendToolExecutionItems', () => {
       'tool.call.started',
       'tool.output.delta',
       'tool.error',
+      'tool.result.completed',
     ]);
+    expect(result.completed).toHaveLength(1);
+    expect(result.errors).toHaveLength(1);
     expect(items.getItems()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -168,6 +171,17 @@ describe('appendToolExecutionItems', () => {
             message: 'fake tool failed',
             cause: { name: 'Error', message: 'fake tool failed' },
           }),
+        }),
+        expect.objectContaining({
+          id: 'item-5',
+          type: 'tool.result.completed',
+          payload: {
+            toolCallId: 'call-weather-1',
+            toolName: 'weather',
+            input: { city: 'Shanghai' },
+            content: { error: 'fake tool failed' },
+            isError: true,
+          },
         }),
       ])
     );
@@ -259,7 +273,9 @@ describe('appendToolExecutionItems', () => {
     });
 
     expect(toolExecuted).toBe(false);
-    expect(result).toEqual({ started: [], completed: [], errors: [] });
+    expect(result.started).toHaveLength(1);
+    expect(result.completed).toHaveLength(1);
+    expect(result.errors).toHaveLength(1);
     expect(items.getItems()).toEqual([
       assistant,
       expect.objectContaining({
@@ -275,6 +291,17 @@ describe('appendToolExecutionItems', () => {
           toolCallId: 'call-weather-1',
           toolName: 'weather',
         },
+      }),
+      expect.objectContaining({ type: 'tool.call.started' }),
+      expect.objectContaining({ type: 'tool.error', visibility: 'trace' }),
+      expect.objectContaining({
+        type: 'tool.result.completed',
+        payload: expect.objectContaining({
+          toolCallId: 'call-weather-1',
+          toolName: 'weather',
+          content: { error: 'Tool call blocked by hook: blocked weather' },
+          isError: true,
+        }),
       }),
     ]);
   });
@@ -328,6 +355,100 @@ describe('appendToolExecutionItems', () => {
     expect(hookInvocations).toBe(1);
     expect(toolInvocations).toBe(0);
     expect(items.getItems().map((item) => item.type)).toContain('hook.effect');
+  });
+
+  it('keeps hook replacements linked to the original assistant tool-call id', async () => {
+    const items = createItems();
+    const assistant = appendAssistantToolCall(items);
+    const executedIds: string[] = [];
+    const hooks = new HookRuntime({
+      itemList: items,
+      hooks: {
+        beforeToolCall: () => ({
+          decision: {
+            type: 'replace',
+            call: { id: 'replacement-id', name: 'weather', input: { city: 'Beijing' } },
+          },
+        }),
+      },
+    });
+
+    await appendToolExecutionItems({
+      itemList: items,
+      assistantItem: assistant,
+      hookRuntime: hooks,
+      toolRuntime: {
+        async *execute(call) {
+          executedIds.push(call.id);
+          yield { type: 'result.completed', content: 'sunny' };
+        },
+      },
+    });
+
+    const results = items.getItems().filter((item) => item.type === 'tool.result.completed');
+    expect(executedIds).toEqual(['call-weather-1']);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.payload).toMatchObject({ toolCallId: 'call-weather-1' });
+    expect(JSON.stringify(results)).not.toContain('replacement-id');
+  });
+
+  it('pairs the active and unstarted calls when a multi-tool batch is interrupted', async () => {
+    const items = createItems();
+    const assistant = appendAssistantToolCalls(items);
+    const controller = new AbortController();
+    const started = deferred<void>();
+    const execution = appendToolExecutionItems({
+      itemList: items,
+      assistantItem: assistant,
+      signal: controller.signal,
+      toolRuntime: {
+        async *execute(_call, context) {
+          started.resolve(undefined);
+          await rejectOnAbort(context.signal ?? new AbortController().signal);
+          yield { type: 'result.completed', content: 'unreachable' };
+        },
+      },
+    });
+
+    await started.promise;
+    controller.abort();
+    await expect(execution).rejects.toThrow('Async iterator consumption aborted');
+
+    const results = items
+      .getItems()
+      .filter((item) => item.type === 'tool.result.completed')
+      .map((item) => item.payload);
+    expect(results).toEqual([
+      expect.objectContaining({ toolCallId: 'call-weather-1', isError: true }),
+      expect.objectContaining({ toolCallId: 'call-time-1', isError: true, canceled: true }),
+    ]);
+  });
+
+  it('pairs unstarted calls when the first call yields execution', async () => {
+    const items = createItems();
+    const assistant = appendAssistantToolCalls(items);
+    const executed: string[] = [];
+
+    const result = await appendToolExecutionItems({
+      itemList: items,
+      assistantItem: assistant,
+      toolRuntime: {
+        async *execute(call) {
+          executed.push(call.id);
+          yield { type: 'execution.yielded', content: 'waiting' };
+        },
+      },
+    });
+
+    expect(executed).toEqual(['call-weather-1']);
+    expect(result.yielded?.payload).toMatchObject({
+      toolCallId: 'call-weather-1',
+      executionYielded: true,
+    });
+    expect(result.completed.map((item) => item.payload)).toEqual([
+      expect.objectContaining({ toolCallId: 'call-weather-1' }),
+      expect.objectContaining({ toolCallId: 'call-time-1', isError: true, canceled: true }),
+    ]);
   });
 
   it('does not start malformed or already-aborted tool work', async () => {
@@ -386,5 +507,36 @@ function appendAssistantToolCall(items: InMemoryItemList) {
         },
       ],
     },
+  });
+}
+
+function appendAssistantToolCalls(items: InMemoryItemList) {
+  return items.append({
+    type: 'assistant.message.completed',
+    runId: 'run-1',
+    turnId: 'turn-1',
+    payload: {
+      content: 'Checking multiple tools.',
+      toolCalls: [
+        { id: 'call-weather-1', name: 'weather', input: { city: 'Shanghai' } },
+        { id: 'call-time-1', name: 'time', input: { zone: 'Asia/Shanghai' } },
+      ],
+    },
+  });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function rejectOnAbort(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new Error('aborted'));
+    if (signal.aborted) return abort();
+    signal.addEventListener('abort', abort, { once: true });
   });
 }

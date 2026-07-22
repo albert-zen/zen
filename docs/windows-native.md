@@ -7,7 +7,8 @@ This guide documents the Windows-native path for running Symphony against the Ze
 - Windows 10/11
 - PowerShell 5.1 or PowerShell 7
 - Git
-- Codex CLI logged in on the same Windows user account
+- Codex CLI logged in for Symphony worker automation only; Zen production uses
+  its Pi-backed ChatGPT subscription adapter and never launches Codex CLI
 - Node.js on `PATH`
 - `mise` for Erlang/Elixir in the Symphony runtime repo
 - Linear API key stored in `LINEAR_API_KEY`

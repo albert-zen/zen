@@ -24,16 +24,17 @@ import {
 import { FileProjectCoordinationJournal } from './file-project-coordination-journal.js';
 import { FileThreadJournal } from './file-thread-journal.js';
 import { LocalToolRuntime, localToolDefinitions } from './local-tool-runtime.js';
-import type { ModelProviderConfigOptions } from './model-provider-config.js';
-import { CodexProviderService } from './codex-provider-service.js';
-import { CodexTurnExecutor } from './codex-turn-executor.js';
+import {
+  DEFAULT_OPENAI_SUBSCRIPTION_MODEL_ID,
+  OpenAiSubscriptionModelGateway,
+  type OpenAiSubscriptionToolDefinition,
+} from './openai-subscription-model-gateway.js';
+import { OpenAISubscriptionProviderService } from './openai-subscription-provider-service.js';
 import { replayThreadJournal } from './provider-runtime.js';
 
 export type AgentAppProjectRuntimeFactoryOptions = {
   /** Explicit application-data root; project discovery is always registry-driven. */
   readonly appDataRoot: string;
-  /** Retained for explicit createModel extension hosts. */
-  readonly config?: ModelProviderConfigOptions;
   readonly createModel?: (
     project: ProjectSnapshot,
     toolDefinitions: readonly { readonly function: { readonly name: string } }[]
@@ -43,7 +44,7 @@ export type AgentAppProjectRuntimeFactoryOptions = {
     context: Extract<AgentAppRequestContext, { readonly actor: 'agent' }>
   ) => Promise<AgentAppResponse>;
   /** Production owns this once for every Agent App Server process. */
-  readonly codexProviderService?: CodexProviderService;
+  readonly openaiSubscriptionProviderService?: OpenAISubscriptionProviderService;
 };
 
 type ProjectRuntimeState = { current: ProjectSnapshot };
@@ -81,7 +82,8 @@ class NodeProjectRuntime implements ProjectRuntime {
     private readonly state: ProjectRuntimeState,
     private readonly appServer: AppServer,
     private readonly coordinator: ProjectCoordinator,
-    private readonly scheduler: AgentScheduler
+    private readonly scheduler: AgentScheduler,
+    private readonly closeSubscriptionModels: () => void
   ) {}
 
   static async open(
@@ -95,6 +97,12 @@ class NodeProjectRuntime implements ProjectRuntime {
     const coordinationJournal = new FileProjectCoordinationJournal({
       filePath: join(directory, 'coordination.jsonl'),
     });
+    const subscriptionModels = options.createModel
+      ? undefined
+      : new OpenAiSubscriptionThreadGatewayCache(
+          requiredOpenAISubscriptionProvider(options),
+          project.id
+        );
     let coordinator: ProjectCoordinator | undefined;
     const scheduler = new AgentScheduler({
       maxActiveExecutions: (projectId) => {
@@ -121,6 +129,7 @@ class NodeProjectRuntime implements ProjectRuntime {
         state,
         executionProjects,
         options,
+        subscriptionModels,
         (threadId) => coordinator?.threadSummary(project.id, threadId).modelProfile
       );
       const appServer = new AppServer({
@@ -194,9 +203,12 @@ class NodeProjectRuntime implements ProjectRuntime {
           });
         }
       }
-      return new NodeProjectRuntime(state, appServer, coordinator, scheduler);
+      return new NodeProjectRuntime(state, appServer, coordinator, scheduler, () =>
+        subscriptionModels?.close()
+      );
     } catch (cause) {
       const results = await Promise.allSettled([
+        Promise.resolve().then(() => subscriptionModels?.close()),
         scheduler.close(),
         coordinationJournal.close(),
         threadJournal.close(),
@@ -389,9 +401,14 @@ class NodeProjectRuntime implements ProjectRuntime {
     }
   }
 
-  async close(): Promise<void> {
-    this.closePromise ??= this.closeResources();
-    return await this.closePromise;
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    const attempt = this.closeResources();
+    this.closePromise = attempt;
+    void attempt.catch(() => {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+    });
+    return attempt;
   }
 
   private async closeResources(): Promise<void> {
@@ -400,6 +417,7 @@ class NodeProjectRuntime implements ProjectRuntime {
     for (const close of [
       () => this.scheduler.close(),
       () => this.appServer.close(),
+      () => this.closeSubscriptionModels(),
       () => this.coordinator.close(),
     ]) {
       const result = await Promise.allSettled([close()]);
@@ -415,6 +433,7 @@ function createProjectThreadRuntimeFactory(
   state: ProjectRuntimeState,
   executionProjects: ReadonlyMap<string, ProjectSnapshot>,
   options: AgentAppProjectRuntimeFactoryOptions,
+  subscriptionModels: OpenAiSubscriptionThreadGatewayCache | undefined,
   resolveThreadModelProfile: (threadId: string) => string | undefined
 ): ThreadRuntimeFactory {
   return ({ thread, turn, approvalBroker }) => {
@@ -436,21 +455,6 @@ function createProjectThreadRuntimeFactory(
         sourceThreadId: thread.id,
       }),
     });
-    if (!options.createModel) {
-      if (!options.codexProviderService) {
-        throw new Error('CodexProviderService is required when createModel is absent');
-      }
-      return {
-        executor: new CodexTurnExecutor({
-          provider: options.codexProviderService,
-          cwd: project.rootPath,
-          model: resolveThreadModelProfile(thread.id) ?? project.policy.defaultModelProfile,
-          threadTools,
-          threadToolDefinitions,
-          approvalBroker,
-        }),
-      };
-    }
     const local = new LocalToolRuntime({ cwd: project.rootPath, approvalBroker });
     const toolRuntime = new CompositeToolRuntime([
       {
@@ -464,12 +468,111 @@ function createProjectThreadRuntimeFactory(
         runtime: local,
       },
     ]);
+    const subscriptionProvider = options.createModel
+      ? undefined
+      : requiredOpenAISubscriptionProvider(options);
+    const modelId =
+      resolveThreadModelProfile(thread.id) ??
+      project.policy.defaultModelProfile ??
+      subscriptionProvider?.defaultModelId;
     return {
-      model: options.createModel(project, [...threadToolDefinitions, ...localToolDefinitions]),
+      model: options.createModel
+        ? options.createModel(project, [...threadToolDefinitions, ...localToolDefinitions])
+        : subscriptionModels!.get(thread.id, modelId, [
+            ...threadToolDefinitions,
+            ...localToolDefinitions,
+          ]),
       toolRuntime,
       systemPrompt: DEFAULT_ZEN_SYSTEM_PROMPT,
     };
   };
+}
+
+function requiredOpenAISubscriptionProvider(
+  options: AgentAppProjectRuntimeFactoryOptions
+): OpenAISubscriptionProviderService {
+  if (!options.openaiSubscriptionProviderService) {
+    throw new Error('OpenAISubscriptionProviderService is required when createModel is absent');
+  }
+  return options.openaiSubscriptionProviderService;
+}
+
+class OpenAiSubscriptionThreadGatewayCache {
+  private readonly entries = new Map<
+    string,
+    Readonly<{
+      readonly modelId: string;
+      readonly sessionGeneration: number;
+      readonly gateway: OpenAiSubscriptionModelGateway;
+    }>
+  >();
+
+  constructor(
+    private readonly provider: OpenAISubscriptionProviderService,
+    private readonly projectId: string
+  ) {}
+
+  get(
+    threadId: string,
+    modelId: string | undefined,
+    tools: readonly OpenAiSubscriptionToolDefinition[]
+  ): ModelGateway {
+    const effectiveModelId =
+      modelId ?? this.provider.defaultModelId ?? DEFAULT_OPENAI_SUBSCRIPTION_MODEL_ID;
+    const sessionId = providerSessionId(this.projectId, threadId);
+    const existing = this.entries.get(threadId);
+    if (
+      existing?.modelId === effectiveModelId &&
+      existing.sessionGeneration === this.provider.sessionGeneration
+    ) {
+      return existing.gateway;
+    }
+
+    if (existing) {
+      this.provider.releaseSession(sessionId);
+      this.entries.delete(threadId);
+    }
+
+    this.provider.registerSession(sessionId);
+    try {
+      const gateway = new OpenAiSubscriptionModelGateway({
+        sessionId,
+        modelId: effectiveModelId,
+        tools,
+        provider: this.provider.modelProvider,
+        acquireAccessLease: async (signal) => await this.provider.acquireAccessLease(signal),
+      });
+      this.entries.set(threadId, {
+        modelId: effectiveModelId,
+        sessionGeneration: this.provider.sessionGeneration,
+        gateway,
+      });
+      return gateway;
+    } catch (cause) {
+      this.provider.releaseSession(sessionId);
+      throw cause;
+    }
+  }
+
+  close(): void {
+    const failures: unknown[] = [];
+    for (const threadId of [...this.entries.keys()]) {
+      try {
+        this.provider.releaseSession(providerSessionId(this.projectId, threadId));
+        this.entries.delete(threadId);
+      } catch (cause) {
+        failures.push(cause);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'OpenAI subscription gateway cache shutdown failed');
+    }
+  }
+}
+
+function providerSessionId(projectId: string, threadId: string): string {
+  const encode = (value: string) => Buffer.from(value, 'utf8').toString('base64url');
+  return `zen:${encode(projectId)}:${encode(threadId)}`;
 }
 
 function success(

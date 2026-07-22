@@ -700,7 +700,12 @@ describe('ThreadManager', () => {
 
     expect(turn.status).toBe('canceled');
     expect(snapshot.status).toBe('idle');
-    expect(snapshot.items.map((item) => item.type)).not.toContain('tool.error');
+    expect(snapshot.items.map((item) => item.type)).toContain('tool.error');
+    expect(snapshot.items.filter((item) => item.type === 'tool.result.completed')).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ toolCallId: 'call-1', isError: true }),
+      }),
+    ]);
     expect(snapshot.items.map((item) => item.type)).toContain('turn.canceled');
     expect(snapshot.items.map((item) => item.type)).not.toContain('turn.completed');
     expect(turn.error).toEqual(

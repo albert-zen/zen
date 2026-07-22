@@ -4,6 +4,7 @@ import type {
   ToolRuntime,
   ToolRuntimeEvent,
 } from '../kernel/index.js';
+import { assertEffectPermitted } from '../kernel/effect-permission.js';
 
 export type PolicyDecision =
   | { readonly type: 'allow'; readonly reason?: string }
@@ -111,13 +112,22 @@ export class ApprovalBroker {
     };
   }
 
-  declineTurn(threadId: string, turnId: string, reason: string): readonly ApprovalRequest[] {
+  declineTurn(
+    threadId: string,
+    turnId: string,
+    reason: string,
+    options: { readonly resolutionRecorded?: boolean } = {}
+  ): readonly ApprovalRequest[] {
     const matches = [...this.pending.values()].filter(
       (pending) => pending.request.threadId === threadId && pending.request.turnId === turnId
     );
     for (const pending of matches) {
       this.pending.delete(pending.request.id);
-      pending.resolve({ type: 'decline', reason });
+      pending.resolve({
+        type: 'decline',
+        reason,
+        ...(options.resolutionRecorded ? { resolutionRecorded: true } : {}),
+      });
     }
     return matches.map((pending) => pending.request);
   }
@@ -149,6 +159,7 @@ export class PolicyToolRuntime implements ToolRuntime {
     context: ToolExecutionContext
   ): AsyncIterable<ToolRuntimeEvent> {
     const policyDecision = await this.options.policy.evaluate(call, context);
+    assertEffectPermitted(context.signal);
     if (policyDecision.type === 'allow') {
       yield* this.options.toolRuntime.execute(call, context);
       return;

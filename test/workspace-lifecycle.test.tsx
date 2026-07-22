@@ -251,20 +251,54 @@ describe('AgentWorkspace', () => {
     expect(container.querySelector('[role="dialog"]')?.textContent).toContain('Pro');
     expect(container.querySelector('[role="dialog"]')?.textContent).not.toContain('token');
   });
+
+  it('does not present an expired subscription credential as connected', async () => {
+    const transport = new WorkspaceTransport();
+    transport.authState = 'expired';
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(
+        <AgentWorkspace createClient={() => new AgentWorkspaceClient({ client: transport })} />
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.textContent).toContain('ChatGPT session expired');
+    await act(async () => {
+      (container.querySelector('[aria-label="Provider account"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('Session expired');
+    expect(container.querySelector('[role="dialog"]')?.textContent).not.toContain('Connected');
+  });
 });
 
 class WorkspaceTransport implements AgentAppClient {
   private listener?: AgentAppNotificationListener;
   private projects: ProjectSnapshot[] = [];
+  authState: 'authenticated' | 'expired' = 'authenticated';
   async request(request: AgentAppRequest): Promise<AgentAppResponse> {
     if (request.method === 'provider/read' || request.method === 'provider/refresh')
       return success(request.method, {
         status: {
           state: 'ready',
-          cli: { state: 'ready', command: 'codex' },
+          refreshing: false,
+          provider: { id: 'openai-codex', auth: 'oauth' },
+          transport: {
+            identity: 'openai-codex-responses',
+            preferred: 'websocket',
+            fallback: 'http',
+          },
           account: {
             state: 'authenticated',
-            account: { type: 'chatgpt', email: 'user@example.test', plan: 'Pro' },
+            type: 'chatgpt',
+            email: 'user@example.test',
+            plan: 'Pro',
+          },
+          auth: {
+            state: this.authState,
+            expiresAt: this.authState === 'expired' ? 1 : 2_000_000_000_000,
           },
           models: {
             state: 'ready',

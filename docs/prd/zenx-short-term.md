@@ -22,9 +22,11 @@ The direction is intentionally narrow:
   waiting logical Threads and App Server requests do not consume a lease.
 - Agent-created threads and messages use the exact same App Server protocol,
   persistence, idempotency, and permissions path as UI actions.
-- Provider adapters must use the official Codex app-server path for ChatGPT
-  subscription access and the stateful Responses/WebSocket upstream where
-  available.
+- Provider adapters use Pi-backed, inference-only ChatGPT subscription OAuth to
+  the Codex Responses transport, preferring provider WebSocket with HTTP
+  fallback. Zen remains the Turn harness.
+- Zen owns an independent OAuth credential lifecycle. It does not import or
+  compete to rotate another application's refresh token.
 - No client or adapter may bypass the provider stack directly.
 
 ## Problem Statement
@@ -44,8 +46,8 @@ The short-term gap is not model quality. The gap is product coherence:
 
 1. Ship a practical ZenX desktop/web experience that can carry a real user
    through project setup, thread creation, turn execution, and history review.
-2. Prove the subscription-backed provider path using the official Codex
-   app-server integration.
+2. Prove the subscription-backed provider path using Zen's Pi-backed
+   inference-only ChatGPT subscription adapter.
 3. Keep Project and Thread state durable and server-owned.
 4. Make Zen CLI/TUI thin clients over the same App Server contract instead of
    separate product silos.
@@ -148,10 +150,16 @@ The CLI/TUI must not become a second domain model.
 
 The first provider slice must do three things:
 
-1. Use the official Codex app-server route for ChatGPT subscription-backed
-   access.
-2. Use the stateful Responses/WebSocket upstream for execution and streaming.
+1. Use Pi-backed ChatGPT subscription OAuth for inference-only Codex Responses
+   access; never delegate a Zen Turn to a Codex process or app-server.
+2. Use the stateful provider Responses/WebSocket upstream with HTTP fallback
+   for execution and streaming.
 3. Prevent any direct provider bypass path from the client or adapter layer.
+4. Derive provider session identity from both Project and project-scoped Thread
+   identity, so same-named Threads in different Projects cannot share sockets
+   or continuation state.
+5. Keep login URLs and device codes transient and outside durable command
+   replay.
 
 This means the product can show a working end-to-end session without teaching
 clients how to talk to providers directly.
@@ -165,7 +173,8 @@ clients how to talk to providers directly.
 - ZenX desktop/web can create, open, and resume Threads.
 - A Turn can be submitted and streamed to completion.
 - The resulting history is durable and reload-safe.
-- The provider path uses the official Codex app-server integration.
+- The provider path uses Zen's Pi-backed inference-only subscription adapter;
+  Zen owns AgentLoop, Items, tools, approvals, scheduling, and persistence.
 - Project root identity is immutable after creation.
 - Model, permission, and execution policy updates are persisted as one atomic
   change and applied on the next Turn.
@@ -207,13 +216,15 @@ clients how to talk to providers directly.
 - `maxActiveExecutions` counts leases held by actively executing Turns for
   their Agent Executors, not waiting logical Threads or request throughput.
 - The same Thread history is visible after the client reconnects.
-- The provider slice works through the official Codex app-server path and does
-  not require direct provider SDK access in the client.
+- The provider slice works through Zen's Pi-backed inference-only subscription
+  adapter and does not require direct provider SDK access in the client.
 - Zen CLI/TUI can be added against the same server contract without introducing
   a separate Thread store.
 - The UI stays focused on Projects and Threads and does not drift into an IDE
   layout.
 - Provider/account/model selection is visible in the short-term UI.
+- Expired or failed authentication never renders as connected, including after
+  reconnect or restart.
 - The create/run flow does not require a manual Project name when the folder
   path already provides it.
 

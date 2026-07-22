@@ -24,5 +24,8 @@
   "scripts": {
     "build": "node ../../scripts/clean-generated-outputs.mjs package && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.80.10"
   }
 }

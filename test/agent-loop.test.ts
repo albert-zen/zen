@@ -1,8 +1,12 @@
+import type { AssistantMessage, Context as PiContext } from '@earendil-works/pi-ai';
+import { convertResponsesMessages } from '@earendil-works/pi-ai/api/openai-responses-shared';
+import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex';
 import { describe, expect, it } from 'vitest';
 
 import {
   AgentLoop,
   InMemoryItemList,
+  OpenAiSubscriptionModelGateway,
   type ModelContext,
   type ModelEvent,
   type ModelGateway,
@@ -522,6 +526,63 @@ describe('AgentLoop', () => {
     ]);
   });
 
+  it.each(['tool.call.started', 'tool.result.completed'] as const)(
+    'keeps one model-visible tool result when onItemAppended fails after %s',
+    async (failureType) => {
+      const itemList = createItems();
+      const observedContexts: ModelContext[] = [];
+      let modelCalls = 0;
+      const agent = new AgentLoop({
+        itemList,
+        model: {
+          async *generate(context) {
+            observedContexts.push(context);
+            modelCalls += 1;
+            yield modelCalls === 1
+              ? {
+                  type: 'message.completed' as const,
+                  content: 'Calling tool',
+                  toolCalls: [{ id: 'provider-call-1', name: 'fake-tool' }],
+                }
+              : { type: 'message.completed' as const, content: 'Tool complete' };
+          },
+        },
+        toolRuntime: {
+          async *execute() {
+            yield { type: 'result.completed', content: 'one result' };
+          },
+        },
+        hooks: {
+          onItemAppended({ item }) {
+            if (item.type === failureType) throw new Error(`observer failed after ${failureType}`);
+          },
+        },
+      });
+
+      const result = await agent.run({
+        input: 'run tool',
+        runId: `run-${failureType}`,
+        turnId: `turn-${failureType}`,
+      });
+      const itemResults = result.items.filter((item) => item.type === 'tool.result.completed');
+      const contextResults =
+        observedContexts[1]?.parts.filter((part) => part.type === 'toolResult') ?? [];
+
+      expect(itemResults).toHaveLength(1);
+      expect(contextResults).toEqual([
+        expect.objectContaining({ toolCallId: 'provider-call-1', content: 'one result' }),
+      ]);
+      await expect(countFunctionCallOutputs(observedContexts[1]!)).resolves.toBe(1);
+      expect(
+        result.items.filter(
+          (item) =>
+            item.type === 'hook.effect' &&
+            (item.payload as { readonly itemType?: unknown }).itemType === failureType
+        )
+      ).toHaveLength(1);
+    }
+  );
+
   it('keeps the injected appender authoritative when hooks are enabled', async () => {
     const itemList = createItems();
     let modelCalls = 0;
@@ -558,6 +619,129 @@ describe('AgentLoop', () => {
       'tool start is not durable'
     );
     expect(toolCalls).toBe(0);
+  });
+
+  it('pairs failed tool calls for the model and completes after model recovery', async () => {
+    const itemList = createItems();
+    const observedContexts: ModelContext[] = [];
+    let modelCalls = 0;
+    const agent = new AgentLoop({
+      itemList,
+      model: {
+        async *generate(context) {
+          observedContexts.push(context);
+          modelCalls += 1;
+          yield modelCalls === 1
+            ? {
+                type: 'message.completed' as const,
+                content: 'Run shell',
+                toolCalls: [{ id: 'call-failed', name: 'shell', input: { command: 'bad' } }],
+              }
+            : { type: 'message.completed' as const, content: 'Recovered from tool error' };
+        },
+      },
+      toolRuntime: {
+        async *execute() {
+          yield { type: 'error', error: new Error('approval declined') };
+        },
+      },
+    });
+
+    const result = await agent.run({
+      input: 'Try it',
+      runId: 'run-recover',
+      turnId: 'turn-recover',
+    });
+
+    expect(observedContexts[1]?.parts).toContainEqual({
+      type: 'toolResult',
+      toolCallId: 'call-failed',
+      toolName: 'shell',
+      content: { error: 'approval declined' },
+      isError: true,
+    });
+    expect(result.items.map((item) => item.type)).toEqual(
+      expect.arrayContaining(['tool.error', 'tool.result.completed', 'turn.completed'])
+    );
+  });
+
+  it('does not execute an old-auth response tool call after its lease is revoked', async () => {
+    const itemList = createItems();
+    const authentication = new AbortController();
+    let toolCalls = 0;
+    const agent = new AgentLoop({
+      itemList,
+      model: {
+        async *generate() {
+          yield {
+            type: 'message.completed' as const,
+            content: 'Use a tool',
+            toolCalls: [{ id: 'old-auth-call', name: 'shell', input: { command: 'secret' } }],
+            validitySignal: authentication.signal,
+          };
+          authentication.abort(new Error('account switched'));
+        },
+      },
+      toolRuntime: {
+        async *execute() {
+          toolCalls += 1;
+          yield { type: 'result.completed', content: 'must not execute' };
+        },
+      },
+    });
+
+    await expect(
+      agent.run({ input: 'run', runId: 'run-auth', turnId: 'turn-auth' })
+    ).rejects.toThrow('Async iterator consumption aborted');
+    expect(toolCalls).toBe(0);
+    expect(
+      itemList.getItems().find((item) => item.type === 'tool.result.completed')?.payload
+    ).toMatchObject({ toolCallId: 'old-auth-call', isError: true, canceled: true });
+  });
+
+  it('replays a fully paired batch after the first tool yields', async () => {
+    const itemList = createItems();
+    const contexts: ModelContext[] = [];
+    let modelCalls = 0;
+    const agent = new AgentLoop({
+      itemList,
+      model: {
+        async *generate(context) {
+          contexts.push(context);
+          modelCalls += 1;
+          yield modelCalls === 1
+            ? {
+                type: 'message.completed' as const,
+                content: 'Start two tasks',
+                toolCalls: [
+                  { id: 'yield-call', name: 'thread.wait' },
+                  { id: 'abandoned-call', name: 'thread.send' },
+                ],
+              }
+            : { type: 'message.completed' as const, content: 'Resumed safely' };
+        },
+      },
+      toolRuntime: {
+        async *execute() {
+          yield { type: 'execution.yielded', content: 'waiting' };
+        },
+      },
+    });
+
+    await expect(
+      agent.run({ input: 'wait', runId: 'run-yield-1', turnId: 'turn-yield-1' })
+    ).resolves.toMatchObject({ yielded: true });
+    await expect(
+      agent.run({ input: 'resume', runId: 'run-yield-2', turnId: 'turn-yield-2' })
+    ).resolves.toMatchObject({ yielded: false });
+
+    const toolResults = contexts[1]?.parts.filter((part) => part.type === 'toolResult') ?? [];
+    expect(toolResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ toolCallId: 'yield-call' }),
+        expect.objectContaining({ toolCallId: 'abandoned-call', isError: true }),
+      ])
+    );
   });
 
   it('notifies observers in the same appended item order as the item list', async () => {
@@ -603,5 +787,70 @@ function fakeModel(
       observedContexts.push(context);
       yield* events;
     },
+  };
+}
+
+async function countFunctionCallOutputs(context: ModelContext): Promise<number> {
+  const model = openaiCodexProvider()
+    .getModels()
+    .find((candidate) => candidate.id === 'gpt-5.6-terra');
+  if (!model) throw new Error('OpenAI subscription test model is unavailable');
+  let providerContext: PiContext | undefined;
+  const gateway = new OpenAiSubscriptionModelGateway({
+    sessionId: 'hook-output-count',
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'fake-tool',
+          parameters: { type: 'object', properties: {}, additionalProperties: false },
+        },
+      },
+    ],
+    acquireAccessLease: async () => ({
+      accessToken: 'test-token',
+      generation: 1,
+      signal: new AbortController().signal,
+    }),
+    provider: {
+      getModels: () => [model],
+      stream: async function* (_model, streamContext) {
+        providerContext = streamContext;
+        yield {
+          type: 'done',
+          reason: 'stop',
+          message: completedAssistant(model.id),
+        };
+      },
+    },
+  });
+
+  for await (const event of gateway.generate(context)) {
+    // Consume the request so the injected provider captures its protocol context.
+    void event;
+  }
+  if (!providerContext) throw new Error('Provider context was not captured');
+  return convertResponsesMessages(model, providerContext, new Set(['openai-codex']), {
+    includeSystemPrompt: false,
+  }).filter((item) => item.type === 'function_call_output').length;
+}
+
+function completedAssistant(model: string): AssistantMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'text', text: 'complete' }],
+    api: 'openai-codex-responses',
+    provider: 'openai-codex',
+    model,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'stop',
+    timestamp: 0,
   };
 }

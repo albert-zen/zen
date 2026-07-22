@@ -29,7 +29,26 @@
     },
     "files": [
       "dist/**",
-      "package.json"
+      "package.json",
+      "!node_modules/**/*.map",
+      "!node_modules/**/*.ts",
+      "!node_modules/**/*.md",
+      "!node_modules/**/{test,tests,__tests__,src,source,sources,docs,doc,examples}/**",
+      "!node_modules/@anthropic-ai/**",
+      "!node_modules/@aws-crypto/**",
+      "!node_modules/@aws-sdk/**",
+      "!node_modules/@google/**",
+      "!node_modules/@mistralai/**",
+      "!node_modules/@opentelemetry/**",
+      "!node_modules/@smithy/**",
+      "!node_modules/openai/**",
+      "!node_modules/gaxios/**",
+      "!node_modules/google-auth-library/**",
+      "!node_modules/google-logging-utils/**",
+      "!node_modules/zod/**",
+      "!node_modules/zod-to-json-schema/**",
+      "!node_modules/json-schema-to-ts/**",
+      "!node_modules/ts-algebra/**"
     ],
     "win": {
       "target": [

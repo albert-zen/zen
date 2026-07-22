@@ -412,7 +412,7 @@ export function ProviderDialog(props: {
   const [formError, setFormError] = React.useState('');
 
   if (!props.open) return null;
-  const authenticated = props.provider.account.state === 'authenticated';
+  const authenticated = providerAuthenticated(props.provider);
   const run = (name: string, operation: () => Promise<void>) => {
     setBusy(name);
     setFormError('');
@@ -426,20 +426,30 @@ export function ProviderDialog(props: {
       <div className="grid gap-4">
         <div className="grid gap-2 rounded-md border border-zinc-800 bg-zinc-900/50 p-3">
           <ProviderStatusRow
-            label="Codex CLI"
-            status={props.provider.cli.state}
-            value={
-              props.provider.cli.state === 'ready'
-                ? 'Connected'
-                : props.provider.cli.state === 'error'
-                  ? 'Connection error'
-                  : capitalize(props.provider.cli.state)
+            label="ChatGPT subscription OAuth"
+            status={
+              props.provider.auth.state === 'expired'
+                ? 'error'
+                : authenticated
+                  ? 'ready'
+                  : props.provider.state
             }
-            title={props.provider.cli.command}
+            value={
+              props.provider.auth.state === 'expired'
+                ? 'Session expired'
+                : authenticated
+                  ? 'Connected'
+                  : 'Sign in required'
+            }
+          />
+          <ProviderStatusRow
+            label="Codex Responses transport"
+            status={props.provider.state}
+            value={`${capitalize(props.provider.transport.preferred)} preferred, ${props.provider.transport.fallback.toUpperCase()} fallback`}
           />
           <ProviderStatusRow
             label="ChatGPT account"
-            status={props.provider.account.state === 'authenticated' ? 'ready' : 'idle'}
+            status={authenticated ? 'ready' : 'idle'}
             value={accountLabel(props.provider)}
           />
         </div>
@@ -915,6 +925,10 @@ function accountLabel(provider: ProviderStatus): string {
   }
   if (provider.account.state === 'unauthenticated') return 'Not signed in';
   return 'Unknown';
+}
+
+function providerAuthenticated(provider: ProviderStatus): boolean {
+  return provider.account.state === 'authenticated' && provider.auth.state === 'authenticated';
 }
 
 function capitalize(value: string): string {

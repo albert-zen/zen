@@ -8,7 +8,6 @@ import {
   ApprovalBroker,
   FileThreadJournal,
   PolicyToolRuntime,
-  createProviderBackedAppServer,
   replayThreadJournal,
   type AppServerNotification,
   type ThreadRecord,
@@ -56,7 +55,7 @@ describe('AppServer journal commits', () => {
             async run(input: TurnExecutorInput) {
               await appendExecutorStarted(input);
               await input.appendItem({
-                type: 'internal.codex.provider-thread',
+                type: 'internal.provider-session',
                 runId: input.turnSnapshot.runId,
                 turnId: input.turnSnapshot.id,
                 visibility: 'internal',
@@ -80,27 +79,25 @@ describe('AppServer journal commits', () => {
     await waitFor(() => journal.internalAppendStarted);
 
     expect(internalAppendReturned).toBe(false);
-    expect(notificationItemTypes(notifications)).not.toContain('internal.codex.provider-thread');
+    expect(notificationItemTypes(notifications)).not.toContain('internal.provider-session');
 
     internalCommit.resolve();
     await terminal;
     expect(internalAppendReturned).toBe(true);
-    expect(journal.items.map((item) => item.type)).toContain('internal.codex.provider-thread');
-    expect(notificationItemTypes(notifications)).not.toContain('internal.codex.provider-thread');
+    expect(journal.items.map((item) => item.type)).toContain('internal.provider-session');
+    expect(notificationItemTypes(notifications)).not.toContain('internal.provider-session');
 
     const read = await server.request({ method: 'thread/read', params: { threadId } });
     if (!read.ok || read.method !== 'thread/read') throw new Error('thread read failed');
     expect(read.result.thread.items.map((item) => item.type)).not.toContain(
-      'internal.codex.provider-thread'
+      'internal.provider-session'
     );
     await server.close();
 
     const replay = await replayThreadJournal(journal);
     const restoredRecord = replay.initialThreads[0];
     if (!restoredRecord) throw new Error('thread did not replay');
-    expect(restoredRecord.items.map((item) => item.type)).toContain(
-      'internal.codex.provider-thread'
-    );
+    expect(restoredRecord.items.map((item) => item.type)).toContain('internal.provider-session');
     let executionRecord: ThreadRecord | undefined;
     const reloadedNotifications: AppServerNotification[] = [];
     const reloaded = new AppServer({
@@ -132,18 +129,14 @@ describe('AppServer journal commits', () => {
       throw new Error('reloaded thread read failed');
     }
     expect(reloadedRead.result.thread.items.map((item) => item.type)).not.toContain(
-      'internal.codex.provider-thread'
+      'internal.provider-session'
     );
     const reloadedTerminal = waitForTerminal(reloaded, threadId);
     await reloaded.request({ method: 'turn/start', params: { threadId, input: 'second' } });
     await reloadedTerminal;
 
-    expect(executionRecord?.items.map((item) => item.type)).toContain(
-      'internal.codex.provider-thread'
-    );
-    expect(notificationItemTypes(reloadedNotifications)).not.toContain(
-      'internal.codex.provider-thread'
-    );
+    expect(executionRecord?.items.map((item) => item.type)).toContain('internal.provider-session');
+    expect(notificationItemTypes(reloadedNotifications)).not.toContain('internal.provider-session');
     await reloaded.close();
   });
 
@@ -517,8 +510,12 @@ describe('AppServer journal commits', () => {
       'utf8'
     );
     await writeFile(join(dir, 'legacy.json'), '{}', 'utf8');
-    const server = await createProviderBackedAppServer({
-      threadJournal: new FileThreadJournal({ dir }),
+    const replayJournal = new FileThreadJournal({ dir });
+    const replay = await replayThreadJournal(replayJournal);
+    const server = new AppServer({
+      threadJournal: replayJournal,
+      persistenceFailures: replay.persistenceFailures,
+      threadManagerOptions: { initialThreads: replay.initialThreads },
     });
     const listed = await server.request({ method: 'thread/list' });
     if (!listed.ok || listed.method !== 'thread/list') throw new Error('thread list failed');

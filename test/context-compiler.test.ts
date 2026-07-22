@@ -181,6 +181,32 @@ describe('ContextCompiler', () => {
     ]);
   });
 
+  it('preserves model-visible tool error semantics', () => {
+    const context = new ContextCompiler().compile([
+      item({
+        id: 'tool-error-result',
+        seq: 1,
+        type: 'tool.result.completed',
+        payload: {
+          toolCallId: 'call-failed-1',
+          toolName: 'shell',
+          content: { error: 'approval declined' },
+          isError: true,
+        },
+      }),
+    ]);
+
+    expect(context.parts).toEqual([
+      {
+        type: 'toolResult',
+        toolCallId: 'call-failed-1',
+        toolName: 'shell',
+        content: { error: 'approval declined' },
+        isError: true,
+      },
+    ]);
+  });
+
   it('does not mutate input item order or item payloads while compiling context', () => {
     const compiler = new ContextCompiler();
     const userPayload = { content: 'Second by seq' };

@@ -7,9 +7,9 @@ import { describe, expect, it } from 'vitest';
 import {
   AppServer,
   type AppServerNotification,
-  createProviderBackedAppServer,
   FileThreadJournal,
   type ModelGateway,
+  replayThreadJournal,
 } from './test-exports.js';
 
 describe('AppServer', () => {
@@ -301,13 +301,15 @@ describe('AppServer', () => {
     await journal.append('thread-1', item('turn.started', 'run-1', 'turn-1', 'item-1', {}));
     await journal.close();
 
-    const server = await createProviderBackedAppServer({
-      threadJournal: new FileThreadJournal({ dir }),
-      appServerOptions: {
-        threadManagerOptions: {
-          generateItemId: sequence('repair-item'),
-          clock: () => 2000,
-        },
+    const replayJournal = new FileThreadJournal({ dir });
+    const replay = await replayThreadJournal(replayJournal);
+    const server = new AppServer({
+      threadJournal: replayJournal,
+      persistenceFailures: replay.persistenceFailures,
+      threadManagerOptions: {
+        initialThreads: replay.initialThreads,
+        generateItemId: sequence('repair-item'),
+        clock: () => 2000,
       },
     });
 

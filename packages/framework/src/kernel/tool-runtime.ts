@@ -1,6 +1,7 @@
 import type { HookRuntime } from './hook-runtime.js';
 import type { Item, ItemAppendInput, ItemList } from './item-list.js';
 import {
+  AsyncIteratorAbortedError,
   consumeAbortableAsyncIterator,
   isAsyncIteratorAbortedError,
 } from './abortable-async-iterator.js';
@@ -103,31 +104,66 @@ export async function appendToolExecutionItems(
   const completed: Item[] = [];
   const errors: Item[] = [];
   let yielded: Item | undefined;
+  const requestedCalls = readToolCalls(input.assistantItem.payload);
 
-  for (const requestedCall of readToolCalls(input.assistantItem.payload)) {
+  for (const [callIndex, requestedCall] of requestedCalls.entries()) {
     if (input.signal?.aborted) {
-      break;
+      await appendAbandonedToolResults(
+        appendItem,
+        input.assistantItem,
+        requestedCalls.slice(callIndex),
+        completed,
+        'Tool call canceled before execution'
+      );
+      throw new AsyncIteratorAbortedError();
     }
 
-    const hookDecision = await input.hookRuntime?.beforeToolCall({
-      call: requestedCall,
-      assistantItem: input.assistantItem,
-    });
+    let hookDecision: Awaited<ReturnType<HookRuntime['beforeToolCall']>> | undefined;
+
+    try {
+      hookDecision = await input.hookRuntime?.beforeToolCall({
+        call: requestedCall,
+        assistantItem: input.assistantItem,
+      });
+    } catch (cause) {
+      const startedItem = await appendToolStarted(appendItem, input.assistantItem, requestedCall);
+      started.push(startedItem);
+      const failure = await appendToolFailure(appendItem, startedItem, requestedCall, cause);
+      errors.push(failure.error);
+      completed.push(failure.result);
+      continue;
+    }
+
+    if (input.signal?.aborted) {
+      await appendAbandonedToolResults(
+        appendItem,
+        input.assistantItem,
+        requestedCalls.slice(callIndex),
+        completed,
+        'Tool call canceled before execution'
+      );
+      throw new AsyncIteratorAbortedError();
+    }
 
     if (hookDecision?.type === 'block') {
+      const startedItem = await appendToolStarted(appendItem, input.assistantItem, requestedCall);
+      started.push(startedItem);
+      const reason = hookDecision.reason ? `: ${hookDecision.reason}` : '';
+      const failure = await appendToolFailure(
+        appendItem,
+        startedItem,
+        requestedCall,
+        new Error(`Tool call blocked by hook${reason}`)
+      );
+      errors.push(failure.error);
+      completed.push(failure.result);
       continue;
     }
 
     const call = hookDecision?.call ?? requestedCall;
-    const startedItem = await appendRequired(appendItem, {
-      type: 'tool.call.started',
-      runId: input.assistantItem.runId,
-      turnId: input.assistantItem.turnId,
-      causeId: input.assistantItem.id,
-      visibility: 'trace',
-      payload: createToolCallPayload(call),
-    });
+    const startedItem = await appendToolStarted(appendItem, input.assistantItem, call);
     let deltaIndex = 0;
+    let terminalSeen = false;
 
     started.push(startedItem);
 
@@ -187,6 +223,7 @@ export async function appendToolExecutionItems(
         }
 
         if (event.type === 'result.completed') {
+          terminalSeen = true;
           completed.push(
             await appendRequired(appendItem, {
               type: 'tool.result.completed',
@@ -200,9 +237,11 @@ export async function appendToolExecutionItems(
               },
             })
           );
+          return false;
         }
 
         if (event.type === 'execution.yielded') {
+          terminalSeen = true;
           yielded = await appendRequired(appendItem, {
             type: 'tool.result.completed',
             runId: input.assistantItem.runId,
@@ -220,22 +259,108 @@ export async function appendToolExecutionItems(
         }
 
         if (event.type === 'error') {
-          errors.push(await appendToolError(appendItem, startedItem, call, event.error));
+          terminalSeen = true;
+          const failure = await appendToolFailure(appendItem, startedItem, call, event.error);
+          errors.push(failure.error);
+          completed.push(failure.result);
           return false;
         }
       });
     } catch (caughtError) {
-      if (isAsyncIteratorAbortedError(caughtError)) throw caughtError;
-      errors.push(await appendToolError(appendItem, startedItem, call, caughtError));
+      if (isAsyncIteratorAbortedError(caughtError)) {
+        const failure = await appendToolFailure(
+          appendItem,
+          startedItem,
+          call,
+          new Error('Tool call canceled during execution')
+        );
+        errors.push(failure.error);
+        completed.push(failure.result);
+        await appendAbandonedToolResults(
+          appendItem,
+          input.assistantItem,
+          requestedCalls.slice(callIndex + 1),
+          completed,
+          'Tool call canceled before execution'
+        );
+        throw caughtError;
+      }
+      terminalSeen = true;
+      const failure = await appendToolFailure(appendItem, startedItem, call, caughtError);
+      errors.push(failure.error);
+      completed.push(failure.result);
+    }
+
+    if (!terminalSeen && !input.signal?.aborted) {
+      const failure = await appendToolFailure(
+        appendItem,
+        startedItem,
+        call,
+        new Error('Tool runtime ended without a terminal event')
+      );
+      errors.push(failure.error);
+      completed.push(failure.result);
     }
 
     if (input.signal?.aborted) {
+      if (!terminalSeen) {
+        const failure = await appendToolFailure(
+          appendItem,
+          startedItem,
+          call,
+          new Error('Tool call canceled during execution')
+        );
+        errors.push(failure.error);
+        completed.push(failure.result);
+      }
+      await appendAbandonedToolResults(
+        appendItem,
+        input.assistantItem,
+        requestedCalls.slice(callIndex + 1),
+        completed,
+        'Tool call canceled before execution'
+      );
+      throw new AsyncIteratorAbortedError();
+    }
+    if (yielded) {
+      await appendAbandonedToolResults(
+        appendItem,
+        input.assistantItem,
+        requestedCalls.slice(callIndex + 1),
+        completed,
+        'Tool call canceled after another call yielded execution'
+      );
       break;
     }
-    if (yielded) break;
   }
 
   return { started, completed, errors, ...(yielded ? { yielded } : {}) };
+}
+
+async function appendAbandonedToolResults(
+  appendItem: ItemAppender,
+  assistantItem: Item,
+  calls: readonly ToolCallPayload[],
+  completed: Item[],
+  message: string
+): Promise<void> {
+  for (const call of calls) {
+    completed.push(
+      await appendRequired(appendItem, {
+        type: 'tool.result.completed',
+        runId: assistantItem.runId,
+        turnId: assistantItem.turnId,
+        causeId: assistantItem.id,
+        targetId: assistantItem.id,
+        payload: {
+          ...createToolCallPayload(call),
+          content: { error: message },
+          isError: true,
+          canceled: true,
+        },
+      })
+    );
+  }
 }
 
 function approvalRequestPayload(
@@ -253,13 +378,29 @@ function approvalRequestPayload(
   };
 }
 
-function appendToolError(
+function appendToolStarted(
+  appendItem: ItemAppender,
+  assistantItem: Item,
+  call: ToolCallPayload
+): Promise<Item> {
+  return appendRequired(appendItem, {
+    type: 'tool.call.started',
+    runId: assistantItem.runId,
+    turnId: assistantItem.turnId,
+    causeId: assistantItem.id,
+    visibility: 'trace',
+    payload: createToolCallPayload(call),
+  });
+}
+
+async function appendToolFailure(
   appendItem: ItemAppender,
   startedItem: Item,
   call: ToolCallPayload,
   cause: unknown
-): Promise<Item> {
-  return appendRequired(appendItem, {
+): Promise<{ readonly error: Item; readonly result: Item }> {
+  const message = readErrorMessage(cause);
+  const error = await appendRequired(appendItem, {
     type: 'tool.error',
     runId: startedItem.runId,
     turnId: startedItem.turnId,
@@ -268,10 +409,24 @@ function appendToolError(
     visibility: 'trace',
     payload: {
       ...createToolCallPayload(call),
-      message: readErrorMessage(cause),
+      message,
       cause: serializeErrorCause(cause),
     },
   });
+  const result = await appendRequired(appendItem, {
+    type: 'tool.result.completed',
+    runId: startedItem.runId,
+    turnId: startedItem.turnId,
+    causeId: startedItem.id,
+    targetId: startedItem.id,
+    payload: {
+      ...createToolCallPayload(call),
+      content: { error: message },
+      isError: true,
+    },
+  });
+
+  return { error, result };
 }
 
 function createAppender(input: AppendToolExecutionItemsInput): ItemAppender {

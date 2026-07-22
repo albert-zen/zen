@@ -10,6 +10,61 @@ import {
 } from './test-exports.js';
 
 describe('approval resolution and interrupt ordering', () => {
+  it('does not create a late approval after a suspended policy outlives its canceled Turn', async () => {
+    const broker = new ApprovalBroker({ generateId: () => 'late-approval' });
+    const policyStarted = deferred<void>();
+    const policyDecision = deferred<{ readonly type: 'needsApproval'; readonly reason: string }>();
+    let delegated = false;
+    const server = new AppServer({
+      approvalBroker: broker,
+      threadManagerOptions: {
+        generateThreadId: sequence('thread'),
+        generateTurnId: sequence('turn'),
+        generateRunId: sequence('run'),
+        generateItemId: sequence('item'),
+        runtimeFactory: ({ approvalBroker }) => ({
+          model: raceModel(true),
+          toolRuntime: new PolicyToolRuntime({
+            approvalBroker: approvalBroker!,
+            policy: {
+              evaluate: async () => {
+                policyStarted.resolve();
+                return await policyDecision.promise;
+              },
+            },
+            toolRuntime: {
+              async *execute() {
+                delegated = true;
+                yield { type: 'result.completed', content: 'unexpected' };
+              },
+            },
+          }),
+        }),
+      },
+    });
+
+    try {
+      const thread = await startThread(server);
+      const turn = await startTurn(server, thread.id, 'suspend policy');
+      await policyStarted.promise;
+      const terminal = waitForTerminal(server, thread.id, turn.id);
+
+      await server.request({ method: 'turn/interrupt', params: { threadId: thread.id } });
+      await terminal;
+      policyDecision.resolve({ type: 'needsApproval', reason: 'arrived too late' });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const snapshot = await readThread(server, thread.id);
+      expect(snapshot.turns).toEqual([expect.objectContaining({ status: 'canceled' })]);
+      expect(broker.listPending()).toEqual([]);
+      expect(delegated).toBe(false);
+      expect(snapshot.items.filter((item) => item.type === 'approval.requested')).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('rejects a stale resolution when interrupt consumes the pending approval and continues FIFO', async () => {
     const broker = new ApprovalBroker({ generateId: () => 'approval-1' });
     let shellStarts = 0;
@@ -48,7 +103,15 @@ describe('approval resolution and interrupt ordering', () => {
     expect(shellStarts).toBe(0);
     expect(broker.listPending()).toEqual([]);
     expect(snapshot.turns.map((turn) => turn.status)).toEqual(['canceled', 'completed']);
-    expect(snapshot.items.some((item) => item.type === 'approval.resolved')).toBe(false);
+    expect(
+      snapshot.items.filter((item) => item.type === 'approval.resolved').map((item) => item.payload)
+    ).toEqual([
+      expect.objectContaining({
+        approvalId: requested.approvalId,
+        decision: 'decline',
+        decisionReason: 'Turn interrupted',
+      }),
+    ]);
   });
 
   it('allows an atomically consumed approval to start, then aborts it and continues FIFO', async () => {

@@ -107,7 +107,9 @@ export class AgentAppServer {
       }
       return await inflight.promise;
     }
-    const operation = this.executeMutationOnce(request, scope, key, digest, context);
+    const operation = request.method.startsWith('provider/')
+      ? this.executeTransientMutation(request, context)
+      : this.executeMutationOnce(request, scope, key, digest, context);
     this.inflightCommands.set(identity, { digest, promise: operation });
     try {
       return await operation;
@@ -115,6 +117,16 @@ export class AgentAppServer {
       if (this.inflightCommands.get(identity)?.promise === operation) {
         this.inflightCommands.delete(identity);
       }
+    }
+  }
+  private async executeTransientMutation(
+    request: AgentAppRequest,
+    context: AgentAppRequestContext
+  ): Promise<AgentAppResponse> {
+    try {
+      return await this.dispatch(request, context);
+    } catch (cause) {
+      return error(code(cause), cause instanceof Error ? cause.message : String(cause));
     }
   }
   private async executeMutationOnce(
@@ -307,10 +319,10 @@ export class AgentAppServer {
       if (this.projectTails.get(projectId) === tail) this.projectTails.delete(projectId);
     }
   }
-  async close(): Promise<void> {
-    if (this.closePromise) return await this.closePromise;
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.closing = true;
-    this.closePromise = (async () => {
+    const attempt = (async () => {
       const opened = await Promise.allSettled([...this.runtimes.values()]);
       const failures = opened.flatMap((result) =>
         result.status === 'rejected' ? [result.reason] : []
@@ -323,7 +335,11 @@ export class AgentAppServer {
       );
       if (failures.length > 0) throw new AggregateError(failures, 'Agent App Server close failed');
     })();
-    return await this.closePromise;
+    this.closePromise = attempt;
+    void attempt.catch(() => {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+    });
+    return attempt;
   }
 }
 function text(value: unknown): string {

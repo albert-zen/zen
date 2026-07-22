@@ -9,7 +9,6 @@ import {
 import {
   AppServer,
   ApprovalBroker,
-  createProviderBackedAppServer,
   type AppServerClient,
   type ModelGateway,
   type ThreadJournal,
@@ -360,15 +359,6 @@ describe('production composition shutdown', () => {
     expect(journal.closeCalls).toBe(1);
     expect(journal.cancellationAttempts).toBeGreaterThan(0);
   });
-
-  it('closes the journal when provider replay fails before AppServer ownership transfers', async () => {
-    const journal = new ReplayFaultJournal();
-
-    await expect(createProviderBackedAppServer({ threadJournal: journal })).rejects.toThrow(
-      'replay failed'
-    );
-    expect(journal.closeCalls).toBe(1);
-  });
 });
 
 class RecordingJournal implements ThreadJournal {
@@ -403,12 +393,6 @@ class CancellationFaultJournal extends RecordingJournal {
       throw new Error('cancellation append failed');
     }
     await super.append(threadId, item);
-  }
-}
-
-class ReplayFaultJournal extends RecordingJournal {
-  override async replay(): Promise<readonly ThreadJournalReplay[]> {
-    throw new Error('replay failed');
   }
 }
 

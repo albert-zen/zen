@@ -16,6 +16,8 @@ export type ModelTextDeltaEvent = {
 export type ModelMessageCompletedEvent = {
   readonly type: 'message.completed';
   readonly content: unknown;
+  /** Ephemeral authority for effects derived from this response; never persisted in Items. */
+  readonly validitySignal?: AbortSignal;
   readonly toolCalls?: readonly Readonly<{
     readonly id: string;
     readonly name: string;
@@ -57,6 +59,7 @@ export type ModelResponseItems = {
   readonly completed?: Item;
   readonly error?: Item;
   readonly requestCompleted: Item;
+  readonly executionSignal?: AbortSignal;
 };
 
 export async function appendModelResponseItems(
@@ -84,11 +87,17 @@ export async function appendModelResponseItems(
   let completed: Item | undefined;
   let error: Item | undefined;
   let deltaIndex = 0;
+  let terminalSeen = false;
+  let executionSignal: AbortSignal | undefined;
 
   try {
     assertEffectPermitted(input.signal);
     const events = input.model.generate(input.context, input.options, input.signal);
     await consumeAbortableAsyncIterator(events, input.signal, async (event) => {
+      if (terminalSeen) {
+        throw new Error('Model gateway emitted more than one terminal event');
+      }
+
       if (event.type === 'text.delta') {
         await appendItem({
           type: 'assistant.message.delta',
@@ -102,6 +111,8 @@ export async function appendModelResponseItems(
       }
 
       if (event.type === 'message.completed') {
+        terminalSeen = true;
+        executionSignal = event.validitySignal;
         const payload: Record<string, unknown> = { content: event.content };
 
         if (event.toolCalls) {
@@ -119,6 +130,7 @@ export async function appendModelResponseItems(
       }
 
       if (event.type === 'error') {
+        terminalSeen = true;
         error = await appendAssistantError(
           appendItem,
           input,
@@ -129,6 +141,16 @@ export async function appendModelResponseItems(
         return false;
       }
     });
+
+    if (!terminalSeen) {
+      error = await appendAssistantError(
+        appendItem,
+        input,
+        requestStarted,
+        assistantStarted,
+        new Error('Model gateway stream ended without a terminal event')
+      );
+    }
   } catch (caughtError) {
     if (isAsyncIteratorAbortedError(caughtError)) throw caughtError;
     error = await appendAssistantError(
@@ -156,6 +178,7 @@ export async function appendModelResponseItems(
     completed,
     error,
     requestCompleted,
+    ...(executionSignal ? { executionSignal } : {}),
   };
 }
 

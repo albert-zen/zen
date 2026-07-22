@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { cleanGeneratedOutputs } from '../scripts/clean-generated-outputs.mjs';
 import {
+  assertDesktopPackageBounds,
   findForbiddenAsarEntries,
   findMissingRequiredAsarEntries,
 } from '../scripts/inspect-desktop-package.mjs';
@@ -85,6 +86,16 @@ describe('production build and package hygiene', () => {
       'dist/web/index.html',
       'node_modules/@zen/framework/dist/adapters/node/index.js',
     ]);
+  });
+
+  it('enforces bounded ASAR size and entry count', () => {
+    expect(() => assertDesktopPackageBounds({ bytes: 12_000_000, entries: 3_000 })).not.toThrow();
+    expect(() => assertDesktopPackageBounds({ bytes: 12_000_001, entries: 1 })).toThrow(
+      'maximum is 12000000 bytes'
+    );
+    expect(() => assertDesktopPackageBounds({ bytes: 1, entries: 3_001 })).toThrow(
+      'maximum is 3000'
+    );
   });
 });
 

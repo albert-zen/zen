@@ -139,19 +139,41 @@ contract.
 
 Required rules:
 
-- use the official Codex app-server path for ChatGPT subscription-backed access
-- use stateful Responses/WebSocket upstream where available
+- use a Pi-backed, inference-only ChatGPT subscription OAuth adapter to the Codex Responses transport
+- use the adapter's stateful Responses/WebSocket upstream with HTTP fallback
+- let Zen own OAuth login, refresh rotation, persistence, and logout without importing another application's credential file
 - keep provider state and provider-specific recovery behind the adapter
 - never expose a direct provider bypass to a client
 
-Provider-specific thread identifiers are continuation handles, not canonical
-Zen identities. A Codex thread id may be bound to a Zen Thread as a replaceable
-resume handle for incremental continuation, but it is never surfaced as Zen
-identity and never treated as the source of truth.
+Pi `sessionId` is a stable, globally unique provider identity derived
+unambiguously from `projectId` plus the project-scoped Zen `threadId`. This
+allows provider WebSocket caching and delta continuation without changing Zen
+Thread identity or moving canonical context out of the Zen Item history. It is
+never a provider-owned Thread or Turn identity.
 
-If the provider handle is available, the adapter may resume it for the next
-incremental continuation. If it is unavailable, the adapter rehydrates from
-canonical Zen Items and continues from the Zen Thread state instead.
+Each project runtime may retain one lightweight subscription gateway per Zen
+Thread and effective model. The gateway keeps only the previous Pi request and
+raw AssistantMessage metadata in process memory so the next request can
+reconstruct Pi's exact continuation prefix. Provider signatures, encrypted
+reasoning, and response ids are never persisted to Items or exposed through
+public protocols.
+
+Changing the effective model releases the Thread's provider session and
+replaces the gateway before the next Turn. Restart, compaction, or any context
+prefix divergence discards the in-memory continuation and rehydrates a full
+request from canonical Zen Items.
+
+Every requested tool call has exactly one model-visible tool result before a
+later model request. Rejection, invalid input, timeout, and execution failure
+retain an auditable trace error and append a paired `isError` result. Provider
+streams that do not end in exactly one terminal completion or error fail the
+Turn instead of recording a false completion.
+
+OAuth login URLs and device codes are process-transient. Provider auth
+commands may be deduplicated while concurrently in flight, but they never enter
+the durable Project command ledger or replay after restart. Every credential
+change invalidates provider sessions authenticated with the previous access
+token before later inference can proceed.
 
 The adapter boundary is intentionally stricter than a generic SDK wrapper. The
 goal is to make the provider path replaceable without spreading provider
@@ -264,13 +286,12 @@ Project runtime directly.
 
 - Build the Zen App Server SSOT for Projects, Threads, and Turns.
 - Ship ZenX desktop/web on top of that server.
-- Integrate the official Codex app-server path for subscription-backed access.
+- Integrate a Pi-backed, inference-only ChatGPT subscription adapter to Codex Responses.
 - Stream execution through the stateful Responses/WebSocket upstream.
 - Keep all durable history server-owned.
-- Make the provider-specific Codex thread id a replaceable continuation handle
-  bound to the Zen Thread, not Zen identity.
-- Rehydrate from canonical Zen Items when the continuation handle cannot be
-  resumed.
+- Use a stable Project/Thread composite as Pi's session id for provider
+  WebSocket caching and delta continuation while rehydrating canonical context
+  from Zen Items.
 - Enforce `maxActiveExecutions` as the single active-execution limit: each
   actively executing Turn holds one lease for its Agent Executor, while waiting
   logical Threads hold none.
@@ -328,12 +349,12 @@ verified.
 - `maxActiveExecutions` is the only concurrency limit and counts execution
   leases held by actively executing Turns for their Agent Executors, not
   waiting logical Threads or App Server request volume.
-- Provider access goes through the official Codex app-server integration and the
-  stateful Responses/WebSocket upstream.
+- Provider access goes through Zen's Pi-backed inference-only ChatGPT
+  subscription adapter to Codex Responses, with a stateful provider WebSocket
+  and HTTP fallback. Zen client transport remains local HTTP/SSE.
 - No code path allows a direct provider bypass from client to provider.
-- Provider-specific Codex thread ids are never exposed as Zen identity.
-- A provider handle can be reused for incremental continuation when available,
-  and the adapter can rehydrate from canonical Zen Items when it is not.
+- The Pi session id is a stable composite of Project and project-scoped Thread
+  identity; canonical context is always recompiled from Zen Items.
 - Agent-created threads and messages use the same protocol, persistence,
   idempotency, and permission path as UI actions.
 - Item history is sufficient to explain what happened in a Thread.

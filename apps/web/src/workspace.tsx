@@ -154,7 +154,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElem
               thread={snapshot.selectedThread}
               summary={selectedSummary}
               state={snapshot.state}
-              providerAuthenticated={snapshot.provider.account.state === 'authenticated'}
+              providerAuthenticated={providerAuthenticated(snapshot)}
               onOpenProvider={() => setDialog('provider')}
               onResolveApproval={(approval, decision) => client.resolveApproval(approval, decision)}
               onSend={(input, operationKey) =>
@@ -180,7 +180,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps = {}): React.ReactElem
                 <Button variant="primary" onClick={() => setDialog('project')}>
                   Create project
                 </Button>
-                {snapshot.provider.account.state !== 'authenticated' ? (
+                {!providerAuthenticated(snapshot) ? (
                   <ProviderSetupCallout onOpen={() => setDialog('provider')} />
                 ) : null}
               </div>
@@ -335,7 +335,8 @@ function resourceSummary(snapshot: AgentWorkspaceSnapshot): string {
 function providerLabel(snapshot: AgentWorkspaceSnapshot): string {
   const provider = snapshot.provider;
   if (provider.error || provider.state === 'error') return 'Provider error';
-  if (provider.account.state === 'authenticated') {
+  if (provider.auth.state === 'expired') return 'ChatGPT session expired';
+  if (providerAuthenticated(snapshot)) {
     return provider.account.email ?? 'ChatGPT connected';
   }
   if (provider.refreshing) return 'Checking provider';
@@ -345,8 +346,15 @@ function providerLabel(snapshot: AgentWorkspaceSnapshot): string {
 function providerIndicator(snapshot: AgentWorkspaceSnapshot): string {
   const provider = snapshot.provider;
   if (provider.error || provider.state === 'error') return 'bg-rose-400';
-  if (provider.account.state === 'authenticated') return 'bg-emerald-400';
+  if (providerAuthenticated(snapshot)) return 'bg-emerald-400';
   return 'bg-amber-400';
+}
+
+function providerAuthenticated(snapshot: AgentWorkspaceSnapshot): boolean {
+  return (
+    snapshot.provider.account.state === 'authenticated' &&
+    snapshot.provider.auth.state === 'authenticated'
+  );
 }
 
 function updateUrl(snapshot: AgentWorkspaceSnapshot): void {

@@ -124,6 +124,7 @@ export class ThreadManager {
   private readonly runtimeFactory: ThreadRuntimeFactory;
   private readonly turnTails = new Map<string, Promise<void>>();
   private readonly activeTurns = new Map<string, ActiveTurn>();
+  private readonly approvalDrains = new Map<string, Promise<void>>();
   private readonly approvalBroker?: ApprovalBroker;
   private readonly persistenceObserver?: ThreadManagerOptions['persistenceObserver'];
   private readonly itemCommitBarrier?: ThreadManagerOptions['itemCommitBarrier'];
@@ -224,7 +225,10 @@ export class ThreadManager {
   async fenceThread(threadId: string): Promise<ThreadSnapshot> {
     const thread = this.getThread(threadId);
     const active = this.activeTurns.get(threadId);
-    if (active) active.controller.abort();
+    if (active) {
+      await this.drainTurnApprovals(thread, active.turnId, 'Thread fenced');
+      active.controller.abort();
+    }
     const cancellable = this.snapshotThread(thread).turns.filter(
       (turn) => turn.status === 'queued' || turn.id === active?.turnId
     );
@@ -266,26 +270,19 @@ export class ThreadManager {
     const failures: unknown[] = [];
     this.closing = true;
     this.abandonPendingTurns();
-    for (const pending of this.approvalBroker?.listPending() ?? []) {
-      this.approvalBroker?.declineTurn(
-        pending.request.threadId,
-        pending.request.turnId,
-        'Server closing'
-      );
-    }
+    const approvalDrains = this.drainAllApprovals('Server closing');
+    for (const active of this.activeTurns.values()) active.controller.abort();
+    collectRejected(await Promise.allSettled(approvalDrains), failures);
     if (this.fenced) {
-      for (const active of this.activeTurns.values()) active.controller.abort();
       collectRejected(await Promise.allSettled([...this.turnTails.values()]), failures);
       if (failures.length > 0) throw new AggregateError(failures, 'ThreadManager shutdown failed');
       return;
     }
     const cancellations: Promise<TurnSnapshot>[] = [];
     for (const thread of this.threads.values()) {
-      const active = this.activeTurns.get(thread.id);
       for (const turn of this.snapshotThread(thread).turns) {
         if (turn.status === 'queued') cancellations.push(this.cancelTurn(thread, turn));
       }
-      if (active) active.controller.abort();
     }
     collectRejected(await Promise.allSettled(cancellations), failures);
     collectRejected(await Promise.allSettled([...this.turnTails.values()]), failures);
@@ -339,11 +336,11 @@ export class ThreadManager {
       throw new Error(`No active turn for thread: ${threadId}`);
     }
 
-    // Resolve before aborting so the waiting tool emits its audit resolution and error.
-    this.approvalBroker?.declineTurn(threadId, active.turnId, 'Turn interrupted');
+    const thread = this.getThread(threadId);
+    void this.drainTurnApprovals(thread, active.turnId, 'Turn interrupted').catch(() => undefined);
     active.controller.abort();
 
-    return this.getTurnSnapshot(this.getThread(threadId), active.turnId);
+    return this.getTurnSnapshot(thread, active.turnId);
   }
 
   async recordApprovalResolution(
@@ -629,12 +626,14 @@ export class ThreadManager {
       }
 
       if (controller.signal.aborted) {
+        await this.drainTurnApprovals(thread, turn.id, 'Turn interrupted');
         return await this.cancelTurn(thread, turn);
       }
 
       const failureItem = readTurnFailureItem(thread.itemList.getItems(), turn.id);
 
       if (failureItem) {
+        await this.drainTurnApprovals(thread, turn.id, 'Turn failed');
         return await this.failTurn(thread, turn, {
           code: 'TURN_FAILED',
           message: readFailureMessage(failureItem.payload),
@@ -642,15 +641,30 @@ export class ThreadManager {
         });
       }
 
+      await this.drainTurnApprovals(thread, turn.id, 'Turn failed');
       return await this.failTurn(thread, turn, {
         code: 'TURN_FAILED',
         message: 'Turn ended without a terminal lifecycle item',
       });
-    } catch (cause) {
+    } catch (caughtCause) {
       const turn = this.getTurnSnapshot(thread, turnId);
+      let cause = caughtCause;
 
       if (this.fenced) {
         return turn;
+      }
+
+      try {
+        await this.drainTurnApprovals(
+          thread,
+          turnId,
+          controller.signal.aborted ? 'Turn interrupted' : 'Turn failed'
+        );
+      } catch (approvalCause) {
+        cause = new AggregateError(
+          [caughtCause, approvalCause],
+          'Turn execution and approval cleanup failed'
+        );
       }
 
       if (isTerminalTurnStatus(turn.status)) {
@@ -667,9 +681,13 @@ export class ThreadManager {
         details: serializeError(cause),
       });
     } finally {
-      if (lease) await lease.settle(this.getTurnSnapshot(thread, turnId));
-      if (this.activeTurns.get(thread.id)?.turnId === turnId) {
-        this.activeTurns.delete(thread.id);
+      try {
+        if (lease) await lease.settle(this.getTurnSnapshot(thread, turnId));
+      } finally {
+        this.approvalDrains.delete(approvalDrainKey(thread.id, turnId));
+        if (this.activeTurns.get(thread.id)?.turnId === turnId) {
+          this.activeTurns.delete(thread.id);
+        }
       }
     }
   }
@@ -705,6 +723,46 @@ export class ThreadManager {
       modelOptions: input.modelOptions,
       signal,
     });
+  }
+
+  private drainAllApprovals(reason: string): readonly Promise<void>[] {
+    const turns = new Map<string, { readonly thread: ThreadState; readonly turnId: string }>();
+    for (const pending of this.approvalBroker?.listPending() ?? []) {
+      const key = `${pending.request.threadId}\u0000${pending.request.turnId}`;
+      const thread = this.threads.get(pending.request.threadId);
+      if (thread) turns.set(key, { thread, turnId: pending.request.turnId });
+    }
+    return [...turns.values()].map(
+      async ({ thread, turnId }) => await this.drainTurnApprovals(thread, turnId, reason)
+    );
+  }
+
+  private async drainTurnApprovals(
+    thread: ThreadState,
+    turnId: string,
+    reason: string
+  ): Promise<void> {
+    const key = approvalDrainKey(thread.id, turnId);
+    const existing = this.approvalDrains.get(key);
+    if (existing) return await existing;
+    const drain = this.performApprovalDrain(thread, turnId, reason);
+    this.approvalDrains.set(key, drain);
+    void drain.catch(() => undefined);
+    return await drain;
+  }
+
+  private async performApprovalDrain(
+    thread: ThreadState,
+    turnId: string,
+    reason: string
+  ): Promise<void> {
+    const requests =
+      this.approvalBroker?.declineTurn(thread.id, turnId, reason, {
+        resolutionRecorded: true,
+      }) ?? [];
+    for (const request of requests) {
+      await this.recordApprovalResolution(request, { type: 'decline', reason });
+    }
   }
 
   private createThreadState(record: ThreadRecord): ThreadState {
@@ -918,6 +976,10 @@ function collectRejected(
   }
 }
 
+function approvalDrainKey(threadId: string, turnId: string): string {
+  return `${threadId}\u0000${turnId}`;
+}
+
 function flattenAggregateError(cause: unknown): readonly unknown[] {
   if (!(cause instanceof AggregateError)) return [cause];
   return cause.errors.flatMap((nested) => flattenAggregateError(nested));
@@ -988,11 +1050,7 @@ function readUserInputForTurn(thread: ThreadState, turn: TurnSnapshot): JsonValu
 }
 
 function readTurnFailureItem(items: readonly Item[], turnId: string): Item | undefined {
-  return items.find(
-    (item) =>
-      item.turnId === turnId &&
-      (item.type === 'assistant.message.error' || item.type === 'tool.error')
-  );
+  return items.find((item) => item.turnId === turnId && item.type === 'assistant.message.error');
 }
 
 function readObjectProperty(payload: unknown, key: string): unknown {

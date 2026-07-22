@@ -46,20 +46,30 @@ export type WorkspaceProviderLogin =
 export type WorkspaceProviderStatus = {
   readonly state: 'idle' | 'ready' | 'error' | 'closed';
   readonly refreshing: boolean;
-  readonly cli: {
-    readonly state: 'idle' | 'ready' | 'error' | 'closed';
-    readonly command?: string;
+  readonly provider: {
+    readonly id: 'openai-codex';
+    readonly auth: 'oauth';
+  };
+  readonly transport: {
+    readonly identity: 'openai-codex-responses';
+    readonly preferred: 'websocket';
+    readonly fallback: 'http';
   };
   readonly account: {
-    readonly state: 'unknown' | 'authenticated' | 'unauthenticated';
+    readonly state: 'authenticated' | 'unauthenticated';
     readonly type?: string;
     readonly email?: string;
     readonly plan?: string;
     readonly requiresOpenaiAuth?: boolean;
   };
+  readonly auth: {
+    readonly state: 'authenticated' | 'expired' | 'unauthenticated';
+    readonly expiresAt?: number;
+  };
   readonly models: {
-    readonly state: 'unknown' | 'ready';
+    readonly state: 'ready';
     readonly items: readonly WorkspaceProviderModel[];
+    readonly defaultModel?: string;
   };
   readonly login?: WorkspaceProviderLogin;
   readonly error?: string;
@@ -162,27 +172,35 @@ export class AgentWorkspaceClient {
   }
 
   async startProviderLogin(type: 'chatgpt' | 'chatgptDeviceCode'): Promise<WorkspaceProviderLogin> {
-    const response = await this.providerMutation('provider/login/start', { type });
-    const login = readProviderLogin(response);
-    this.provider = { ...this.provider, login, error: undefined };
-    this.publish();
+    const mutation = await this.providerMutation('provider/login/start', { type });
+    const login = readProviderLogin(mutation.response);
+    if (mutation.generation === this.providerGeneration) {
+      this.provider = { ...this.provider, login, error: undefined };
+      this.publish();
+    }
     return login;
   }
 
   async cancelProviderLogin(): Promise<void> {
     const login = this.provider.login;
     if (!login) return;
-    await this.providerMutation('provider/login/cancel', { loginId: login.loginId });
-    this.provider = { ...this.provider, login: undefined, error: undefined };
-    this.publish();
-    await this.loadProviderStatus('provider/refresh', false);
+    const mutation = await this.providerMutation('provider/login/cancel', {
+      loginId: login.loginId,
+    });
+    if (mutation.generation === this.providerGeneration) {
+      this.provider = { ...this.provider, login: undefined, error: undefined };
+      this.publish();
+      await this.loadProviderStatus('provider/refresh', false);
+    }
   }
 
   async logoutProvider(): Promise<void> {
-    await this.providerMutation('provider/logout', {});
-    this.provider = { ...this.provider, login: undefined, error: undefined };
-    this.publish();
-    await this.loadProviderStatus('provider/refresh', false);
+    const mutation = await this.providerMutation('provider/logout', {});
+    if (mutation.generation === this.providerGeneration) {
+      this.provider = { ...this.provider, login: undefined, error: undefined };
+      this.publish();
+      await this.loadProviderStatus('provider/refresh', false);
+    }
   }
 
   async selectProject(projectId: string, threadId?: string): Promise<void> {
@@ -471,7 +489,7 @@ export class AgentWorkspaceClient {
     propagateError: boolean
   ): Promise<void> {
     const generation = ++this.providerGeneration;
-    this.provider = { ...this.provider, refreshing: true, error: undefined };
+    this.provider = { ...emptyProviderStatus(), refreshing: true };
     this.publish();
     try {
       const response = await this.client.request({ method, params: {} });
@@ -480,21 +498,11 @@ export class AgentWorkspaceClient {
       }
       const next = readProviderStatus(response);
       if (generation !== this.providerGeneration) return;
-      this.provider = {
-        ...next,
-        refreshing: false,
-        ...(next.account.state === 'authenticated' ? {} : { login: this.provider.login }),
-      };
+      this.provider = { ...next, refreshing: false };
       this.publish();
     } catch (cause) {
       if (generation === this.providerGeneration) {
-        this.provider = {
-          ...this.provider,
-          state: 'error',
-          refreshing: false,
-          cli: { ...this.provider.cli, state: 'error' },
-          error: readError(cause),
-        };
+        this.provider = { ...emptyProviderStatus(), state: 'error', error: readError(cause) };
         this.publish();
       }
       if (propagateError) throw cause;
@@ -504,18 +512,21 @@ export class AgentWorkspaceClient {
   private async providerMutation(
     method: 'provider/login/start' | 'provider/login/cancel' | 'provider/logout',
     params: Record<string, unknown>
-  ): Promise<AgentAppResponse> {
+  ): Promise<{ readonly response: AgentAppResponse; readonly generation: number }> {
+    const generation = ++this.providerGeneration;
     const response = await this.client.request({
       method,
       params: { ...params, idempotencyKey: this.idempotencyKey() } as never,
     });
     if (!response.ok || response.method !== method) {
       const error = response.ok ? `Unexpected ${response.method}` : response.error.message;
-      this.provider = { ...this.provider, error };
-      this.publish();
+      if (generation === this.providerGeneration) {
+        this.provider = { ...emptyProviderStatus(), state: 'error', error };
+        this.publish();
+      }
       throw new Error(error);
     }
-    return response;
+    return { response, generation };
   }
 
   private async threadCommand(method: 'thread/cancel' | 'thread/archive'): Promise<void> {
@@ -592,9 +603,11 @@ function emptyProviderStatus(): WorkspaceProviderStatus {
   return {
     state: 'idle',
     refreshing: false,
-    cli: { state: 'idle' },
-    account: { state: 'unknown' },
-    models: { state: 'unknown', items: [] },
+    provider: { id: 'openai-codex', auth: 'oauth' },
+    transport: { identity: 'openai-codex-responses', preferred: 'websocket', fallback: 'http' },
+    account: { state: 'unauthenticated' },
+    auth: { state: 'unauthenticated' },
+    models: { state: 'ready', items: [] },
   };
 }
 
@@ -603,35 +616,54 @@ function readProviderStatus(response: AgentAppResponse): WorkspaceProviderStatus
     throw new Error(response.ok ? 'Invalid provider status' : response.error.message);
   }
   const status = response.result.status;
-  const cli = readRecord(status.cli, 'provider CLI status');
+  const provider = readRecord(status.provider, 'subscription provider');
+  const transport = readRecord(status.transport, 'subscription transport');
   const accountStatus = readRecord(status.account, 'provider account status');
+  const authStatus = readRecord(status.auth, 'provider auth status');
   const models = readRecord(status.models, 'provider model status');
-  const account = isRecord(accountStatus.account) ? accountStatus.account : undefined;
   if (!Array.isArray(models.items)) throw new Error('Invalid provider model list');
   return {
     state: readEnum(status.state, ['idle', 'ready', 'error', 'closed'], 'provider state'),
-    refreshing: false,
-    cli: {
-      state: readEnum(cli.state, ['idle', 'ready', 'error', 'closed'], 'provider CLI state'),
-      ...(typeof cli.command === 'string' ? { command: cli.command } : {}),
+    refreshing: status.refreshing === true,
+    provider: {
+      id: readEnum(provider.id, ['openai-codex'], 'subscription provider id'),
+      auth: readEnum(provider.auth, ['oauth'], 'subscription provider auth'),
+    },
+    transport: {
+      identity: readEnum(
+        transport.identity,
+        ['openai-codex-responses'],
+        'subscription transport identity'
+      ),
+      preferred: readEnum(transport.preferred, ['websocket'], 'subscription transport preference'),
+      fallback: readEnum(transport.fallback, ['http'], 'subscription transport fallback'),
     },
     account: {
       state: readEnum(
         accountStatus.state,
-        ['unknown', 'authenticated', 'unauthenticated'],
+        ['authenticated', 'unauthenticated'],
         'provider account state'
       ),
-      ...(account && typeof account.type === 'string' ? { type: account.type } : {}),
-      ...(account && typeof account.email === 'string' ? { email: account.email } : {}),
-      ...(account ? readAccountPlan(account) : {}),
-      ...(typeof accountStatus.requiresOpenaiAuth === 'boolean'
-        ? { requiresOpenaiAuth: accountStatus.requiresOpenaiAuth }
-        : {}),
+      ...(typeof accountStatus.type === 'string' ? { type: accountStatus.type } : {}),
+      ...(typeof accountStatus.email === 'string' ? { email: accountStatus.email } : {}),
+      ...readAccountPlan(accountStatus),
+    },
+    auth: {
+      state: readEnum(
+        authStatus.state,
+        ['authenticated', 'expired', 'unauthenticated'],
+        'provider auth state'
+      ),
+      ...(typeof authStatus.expiresAt === 'number' ? { expiresAt: authStatus.expiresAt } : {}),
     },
     models: {
-      state: readEnum(models.state, ['unknown', 'ready'], 'provider model state'),
+      state: readEnum(models.state, ['ready'], 'provider model state'),
       items: models.items.map(readProviderModel),
+      ...(typeof models.defaultModel === 'string' ? { defaultModel: models.defaultModel } : {}),
     },
+    ...(status.login === undefined
+      ? {}
+      : { login: readProviderLoginValue(status.login, 'provider login status') }),
     ...(typeof status.error === 'string' ? { error: status.error } : {}),
   };
 }
@@ -640,7 +672,11 @@ function readProviderLogin(response: AgentAppResponse): WorkspaceProviderLogin {
   if (!response.ok || !isRecord(response.result.result)) {
     throw new Error(response.ok ? 'Invalid provider login result' : response.error.message);
   }
-  const result = response.result.result;
+  return readProviderLoginValue(response.result.result, 'provider login result');
+}
+
+function readProviderLoginValue(value: unknown, label: string): WorkspaceProviderLogin {
+  const result = readRecord(value, label);
   if (
     result.type === 'chatgpt' &&
     typeof result.loginId === 'string' &&
@@ -661,7 +697,7 @@ function readProviderLogin(response: AgentAppResponse): WorkspaceProviderLogin {
       userCode: result.userCode,
     };
   }
-  throw new Error('Invalid provider login result');
+  throw new Error(`Invalid ${label}`);
 }
 
 function readProviderModel(value: unknown): WorkspaceProviderModel {

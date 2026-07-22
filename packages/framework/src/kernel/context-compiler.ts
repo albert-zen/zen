@@ -18,6 +18,7 @@ export type ModelToolResultPart = {
   readonly toolCallId: string;
   readonly toolName?: string;
   readonly content: unknown;
+  readonly isError?: boolean;
 };
 
 export type ModelContextPart = ModelMessagePart | ModelToolResultPart;
@@ -89,6 +90,7 @@ function toToolResultPart(item: Item): ModelToolResultPart[] {
     type: 'toolResult',
     toolCallId: linkedToolCallId,
     content: readContent(item.payload),
+    ...(payload.isError === true ? { isError: true } : {}),
   };
   const toolName = readString(payload.toolName);
 

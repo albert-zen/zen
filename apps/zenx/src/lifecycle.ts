@@ -18,6 +18,14 @@ export type ShutdownSignalSource = {
   off(event: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
 };
 
+export type BoundedCloseOptions = {
+  readonly attempts?: number;
+  readonly attemptTimeoutMs?: number;
+  readonly onFailure?: (cause: unknown, attempt: number) => void;
+};
+
+const defaultCloseAttemptTimeoutMs = 5_000;
+
 export function installShutdownSignals(
   source: ShutdownSignalSource,
   shutdown: () => void
@@ -56,7 +64,7 @@ export class DesktopLifecycle {
       this.window = await startup.createWindow(this.host);
     } catch (cause) {
       try {
-        await this.close();
+        await closeWithBoundedRetry(() => this.close(), { attempts: 2 });
       } catch (shutdownCause) {
         throw new AggregateError([cause, shutdownCause], 'Desktop startup and shutdown failed', {
           cause: shutdownCause,
@@ -67,8 +75,13 @@ export class DesktopLifecycle {
   }
 
   close(): Promise<void> {
-    this.closePromise ??= this.closeResources();
-    return this.closePromise;
+    if (this.closePromise) return this.closePromise;
+    const attempt = this.closeResources();
+    this.closePromise = attempt;
+    void attempt.catch(() => {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+    });
+    return attempt;
   }
 
   private async closeResources(): Promise<void> {
@@ -81,6 +94,50 @@ export class DesktopLifecycle {
       failures
     );
     if (failures.length > 0) throw new AggregateError(failures, 'Production shutdown failed');
+  }
+}
+
+export async function closeWithBoundedRetry(
+  close: () => Promise<void>,
+  options: BoundedCloseOptions = {}
+): Promise<void> {
+  const attempts = options.attempts ?? 2;
+  if (!Number.isSafeInteger(attempts) || attempts < 1) {
+    throw new Error('Bounded close attempts must be a positive integer');
+  }
+  const attemptTimeoutMs = options.attemptTimeoutMs ?? defaultCloseAttemptTimeoutMs;
+  if (!Number.isFinite(attemptTimeoutMs) || attemptTimeoutMs <= 0) {
+    throw new Error('Bounded close attempt timeout must be positive');
+  }
+
+  const failures: unknown[] = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await closeWithDeadline(close, attemptTimeoutMs);
+      return;
+    } catch (cause) {
+      failures.push(cause);
+      options.onFailure?.(cause, attempt);
+    }
+  }
+  throw new AggregateError(failures, `Production shutdown failed after ${attempts} attempts`);
+}
+
+async function closeWithDeadline(close: () => Promise<void>, timeoutMs: number): Promise<void> {
+  const operation = Promise.resolve().then(close);
+  void operation.catch(() => undefined);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(
+      () => reject(new Error(`Production shutdown attempt timed out after ${timeoutMs}ms`)),
+      timeoutMs
+    );
+    timeout.unref?.();
+  });
+  try {
+    await Promise.race([operation, deadline]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 

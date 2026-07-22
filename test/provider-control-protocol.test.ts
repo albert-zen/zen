@@ -1,7 +1,13 @@
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   AgentAppServer,
+  FileProjectCommandStore,
+  ProjectCommandLedger,
   type ProviderControl,
   type ProjectManager,
   type ProjectSnapshot,
@@ -53,7 +59,7 @@ describe('Provider control protocol', () => {
     expect(fixture.createRuntime).not.toHaveBeenCalled();
   });
 
-  it('deduplicates provider/login/cancel by idempotency key and conflicts on a different digest', async () => {
+  it('deduplicates concurrent provider/login/cancel but does not replay it after completion', async () => {
     const gate = deferred<void>();
     const control = providerControl({
       loginCancel: vi.fn(async (input) => {
@@ -113,12 +119,12 @@ describe('Provider control protocol', () => {
     });
 
     expect(replay).toEqual(firstResponse);
-    expect(control.loginCancel).toHaveBeenCalledTimes(1);
+    expect(control.loginCancel).toHaveBeenCalledTimes(2);
     expect(fixture.projectManagerRead).not.toHaveBeenCalled();
     expect(fixture.createRuntime).not.toHaveBeenCalled();
   });
 
-  it('deduplicates provider/login/start by idempotency key and conflicts on a different digest', async () => {
+  it('deduplicates concurrent provider/login/start but does not replay transient results', async () => {
     const gate = deferred<void>();
     const control = providerControl({
       loginStart: vi.fn(async (input) => {
@@ -181,9 +187,56 @@ describe('Provider control protocol', () => {
     });
 
     expect(replay).toEqual(firstResponse);
-    expect(control.loginStart).toHaveBeenCalledTimes(1);
+    expect(control.loginStart).toHaveBeenCalledTimes(2);
     expect(fixture.projectManagerRead).not.toHaveBeenCalled();
     expect(fixture.createRuntime).not.toHaveBeenCalled();
+  });
+
+  it('never persists transient login material and starts a new generation after restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zen-provider-ledger-'));
+    const commandPath = join(root, 'commands.json');
+    await writeFile(commandPath, JSON.stringify({ version: 1, commands: [] }));
+    const firstControl = providerControl({
+      loginStart: vi.fn(async () => ({
+        type: 'chatgptDeviceCode',
+        loginId: 'login-generation-1',
+        verificationUrl: 'https://auth.example/device',
+        userCode: 'SECRET-CODE-1',
+      })),
+    });
+    const firstLedger = await ProjectCommandLedger.open(new FileProjectCommandStore(commandPath));
+    const first = createServer(firstControl, firstLedger);
+    const request = {
+      method: 'provider/login/start' as const,
+      params: { type: 'chatgptDeviceCode', idempotencyKey: 'login-start' },
+    };
+
+    await expect(first.server.request(request)).resolves.toMatchObject({
+      ok: true,
+      result: { result: { loginId: 'login-generation-1', userCode: 'SECRET-CODE-1' } },
+    });
+    const commandContents = await readFile(commandPath, 'utf8');
+    expect(commandContents).not.toContain('SECRET-CODE-1');
+    expect(commandContents).not.toContain('auth.example');
+    expect(commandContents).not.toContain('provider/login/start');
+
+    const secondControl = providerControl({
+      loginStart: vi.fn(async () => ({
+        type: 'chatgptDeviceCode',
+        loginId: 'login-generation-2',
+        verificationUrl: 'https://auth.example/device-2',
+        userCode: 'SECRET-CODE-2',
+      })),
+    });
+    const restarted = createServer(
+      secondControl,
+      await ProjectCommandLedger.open(new FileProjectCommandStore(commandPath))
+    );
+    await expect(restarted.server.request(request)).resolves.toMatchObject({
+      ok: true,
+      result: { result: { loginId: 'login-generation-2', userCode: 'SECRET-CODE-2' } },
+    });
+    expect(secondControl.loginStart).toHaveBeenCalledTimes(1);
   });
 
   it('returns INVALID_REQUEST when provider control is unavailable', async () => {
@@ -241,7 +294,7 @@ describe('Provider control protocol', () => {
   });
 });
 
-function createServer(providerControl?: ProviderControl) {
+function createServer(providerControl?: ProviderControl, commandLedger?: ProjectCommandLedger) {
   const projectManagerRead = vi.fn(async () => {
     throw new Error('project lookup should not run for provider control requests');
   });
@@ -269,6 +322,7 @@ function createServer(providerControl?: ProviderControl) {
       projectManager,
       createRuntime,
       providerControl,
+      commandLedger,
     }),
     projectManagerRead,
     createRuntime,

@@ -73,12 +73,13 @@ describe('PolicyToolRuntime', () => {
     });
 
     expect(executed).toBe(false);
-    expect(result.completed).toEqual([]);
+    expect(result.completed).toHaveLength(1);
     expect(result.errors).toHaveLength(1);
     expect(items.getItems().map((item) => item.type)).toEqual([
       'assistant.message.completed',
       'tool.call.started',
       'tool.error',
+      'tool.result.completed',
     ]);
     expect(result.errors[0]).toEqual(
       expect.objectContaining({
@@ -224,7 +225,7 @@ describe('PolicyToolRuntime', () => {
     const result = await resultPromise;
 
     expect(executed).toBe(false);
-    expect(result.completed).toEqual([]);
+    expect(result.completed).toHaveLength(1);
     expect(result.errors).toHaveLength(1);
     expect(items.getItems().map((item) => item.type)).toEqual([
       'assistant.message.completed',
@@ -232,6 +233,7 @@ describe('PolicyToolRuntime', () => {
       'approval.requested',
       'approval.resolved',
       'tool.error',
+      'tool.result.completed',
     ]);
     expect(
       items

@@ -6,6 +6,19 @@ The core design keeps `ItemList` as the source of truth. The agent loop appends
 items, and product layers such as the Agent App Server, Web UI, durable store,
 model provider adapter, and shell runtime project from that item history.
 
+For ChatGPT/Codex subscription access, Zen uses a Pi-backed, inference-only
+OAuth adapter to the Codex Responses transport. Zen itself remains the harness:
+its AgentLoop, Item history, context compiler, tool runtimes, approvals,
+scheduler, and Project/Thread/Turn persistence execute every Turn. The provider
+prefers its own WebSocket transport with HTTP fallback; Zen clients continue to
+use the separate local HTTP/SSE App Server transport.
+
+Zen owns its ChatGPT OAuth credential independently and never imports or
+rotates another application's auth file. Provider WebSocket sessions use a
+stable, globally unique identity derived from the Zen Project and its
+project-scoped Thread id; canonical context and replay still come only from
+Zen Items.
+
 ## Status
 
 Zen currently includes:
@@ -166,23 +179,6 @@ Run the dogfood acceptance scenario:
 
 ```powershell
 npm run dogfood:alb-94
-```
-
-## Model Provider Configuration
-
-By default Zen reads provider config from:
-
-```text
-C:\Users\<user>\.zen\model-provider.json
-```
-
-The same values can be supplied by environment variables:
-
-```powershell
-$env:ZEN_MODEL_BASE_URL="https://provider.example/v1"
-$env:ZEN_MODEL_API_KEY="..."
-$env:ZEN_MODEL="model-id"
-$env:ZEN_MODEL_PARAMS='{"temperature":0}'
 ```
 
 ## Secure App Server Transport

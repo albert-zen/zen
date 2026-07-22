@@ -288,13 +288,12 @@ describe('AgentWorkspaceClient', () => {
     transport.providerStatus = providerStatus({
       account: {
         state: 'authenticated',
-        account: {
-          type: 'chatgpt',
-          email: 'user@example.test',
-          planType: 'pro',
-          accessToken: 'must-not-reach-presentation',
-        },
+        type: 'chatgpt',
+        email: 'user@example.test',
+        plan: 'pro',
+        accessToken: 'must-not-reach-presentation',
       },
+      auth: { state: 'authenticated', expiresAt: 1_800_000_000_000 },
     });
     const client = new AgentWorkspaceClient({ client: transport });
 
@@ -303,12 +302,14 @@ describe('AgentWorkspaceClient', () => {
     expect(client.getSnapshot().selectedProject?.id).toBe('p1');
     expect(client.getSnapshot().provider).toMatchObject({
       state: 'ready',
-      cli: { state: 'ready' },
+      provider: { id: 'openai-codex', auth: 'oauth' },
+      transport: { preferred: 'websocket', fallback: 'http' },
       account: {
         state: 'authenticated',
         email: 'user@example.test',
         plan: 'pro',
       },
+      auth: { state: 'authenticated', expiresAt: 1_800_000_000_000 },
       models: { items: [{ id: 'gpt-5.4', displayName: 'GPT-5.4' }] },
     });
     expect(JSON.stringify(client.getSnapshot().provider)).not.toContain('must-not-reach');
@@ -323,7 +324,7 @@ describe('AgentWorkspaceClient', () => {
     expect(client.getSnapshot()).toMatchObject({
       connection: { status: 'connected' },
       selectedProject: { id: 'p1' },
-      provider: { state: 'error', error: 'Codex CLI unavailable' },
+      provider: { state: 'error', error: 'Subscription unavailable' },
     });
 
     transport.failProviderRead = false;
@@ -344,6 +345,54 @@ describe('AgentWorkspaceClient', () => {
       expect(request.params).not.toHaveProperty('projectId');
     }
   });
+
+  it('replaces transient login and stale auth from each authoritative status response', async () => {
+    const transport = new WorkspaceTransport([project('p1', 'One')]);
+    transport.providerStatus = providerStatus({
+      account: { state: 'authenticated', email: 'old@example.test' },
+      auth: { state: 'authenticated', expiresAt: 1_800_000_000_000 },
+    });
+    const client = new AgentWorkspaceClient({ client: transport });
+    await client.connect({ projectId: 'p1' });
+    await client.startProviderLogin('chatgptDeviceCode');
+    expect(client.getSnapshot().provider.login?.loginId).toBe('login-device');
+
+    transport.providerStatus = providerStatus({
+      account: { state: 'authenticated', email: 'old@example.test' },
+      auth: { state: 'expired', expiresAt: 1 },
+    });
+    await client.refreshProvider();
+    expect(client.getSnapshot().provider).toMatchObject({
+      account: { state: 'authenticated' },
+      auth: { state: 'expired', expiresAt: 1 },
+    });
+    expect(client.getSnapshot().provider.login).toBeUndefined();
+
+    await client.startProviderLogin('chatgpt');
+    transport.failProviderRead = true;
+    await expect(client.refreshProvider()).rejects.toThrow('Subscription unavailable');
+    expect(client.getSnapshot().provider).toMatchObject({
+      state: 'error',
+      account: { state: 'unauthenticated' },
+      auth: { state: 'unauthenticated' },
+    });
+    expect(client.getSnapshot().provider.login).toBeUndefined();
+  });
+
+  it('does not let a deferred pre-login status erase the successful login generation', async () => {
+    const transport = new WorkspaceTransport([project('p1', 'One')]);
+    const client = new AgentWorkspaceClient({ client: transport });
+    transport.deferNextProviderStatus = true;
+
+    const staleRefresh = client.refreshProvider();
+    await transport.waitForDeferredProviderStatus();
+    await client.startProviderLogin('chatgpt');
+    expect(client.getSnapshot().provider.login).toMatchObject({ loginId: 'login-browser' });
+
+    transport.resolveDeferredProviderStatus();
+    await staleRefresh;
+    expect(client.getSnapshot().provider.login).toMatchObject({ loginId: 'login-browser' });
+  });
 });
 
 class WorkspaceTransport implements AgentAppClient {
@@ -355,6 +404,7 @@ class WorkspaceTransport implements AgentAppClient {
   threadStatus: ThreadSnapshot['status'] = 'idle';
   providerStatus: Record<string, unknown> = providerStatus();
   failProviderRead = false;
+  deferNextProviderStatus = false;
   loseCreateResponseOnce = false;
   loseTurnResponseOnce = false;
   threadCreateCommits = 0;
@@ -363,6 +413,8 @@ class WorkspaceTransport implements AgentAppClient {
   private readonly turnsByKey = new Map<string, NonNullable<ThreadSnapshot['turns'][number]>>();
   private readonly lostResponses = new Set<string>();
   private deferred?: () => void;
+  private providerStatusDeferred = deferred<void>();
+  private providerStatusWaiting = deferred<void>();
   constructor(private readonly projects: ProjectSnapshot[]) {}
 
   async request(request: AgentAppRequest): Promise<AgentAppResponse> {
@@ -370,8 +422,14 @@ class WorkspaceTransport implements AgentAppClient {
     if (request.method === this.invalidResponseFor) return response('wrong', {});
     const params = request.params as Record<string, unknown>;
     if (request.method === 'provider/read' || request.method === 'provider/refresh') {
-      if (this.failProviderRead) return failure(request.method, 'Codex CLI unavailable');
-      return response(request.method, { status: this.providerStatus });
+      if (this.failProviderRead) return failure(request.method, 'Subscription unavailable');
+      const status = this.providerStatus;
+      if (this.deferNextProviderStatus) {
+        this.deferNextProviderStatus = false;
+        this.providerStatusWaiting.resolve(undefined);
+        await this.providerStatusDeferred.promise;
+      }
+      return response(request.method, { status });
     }
     if (request.method === 'provider/login/start') {
       return response(request.method, {
@@ -483,6 +541,14 @@ class WorkspaceTransport implements AgentAppClient {
   resolveDeferred(): void {
     this.deferred?.();
   }
+  async waitForDeferredProviderStatus(): Promise<void> {
+    await this.providerStatusWaiting.promise;
+  }
+  resolveDeferredProviderStatus(): void {
+    this.providerStatusDeferred.resolve(undefined);
+    this.providerStatusDeferred = deferred<void>();
+    this.providerStatusWaiting = deferred<void>();
+  }
 }
 
 function project(id: string, name: string): ProjectSnapshot {
@@ -524,8 +590,15 @@ function failure(method: string, message: string): AgentAppResponse {
 function providerStatus(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     state: 'ready',
-    cli: { state: 'ready', command: 'codex' },
-    account: { state: 'unauthenticated', requiresOpenaiAuth: true },
+    refreshing: false,
+    provider: { id: 'openai-codex', auth: 'oauth' },
+    transport: {
+      identity: 'openai-codex-responses',
+      preferred: 'websocket',
+      fallback: 'http',
+    },
+    account: { state: 'unauthenticated' },
+    auth: { state: 'unauthenticated' },
     models: {
       state: 'ready',
       items: [
@@ -539,4 +612,12 @@ function providerStatus(overrides: Record<string, unknown> = {}): Record<string,
     },
     ...overrides,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }

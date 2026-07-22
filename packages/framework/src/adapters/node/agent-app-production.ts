@@ -17,8 +17,11 @@ import {
   createAgentAppProjectRuntimeFactory,
   type AgentAppProjectRuntimeFactoryOptions,
 } from './agent-app-runtime.js';
-import type { CodexAppServerLoginInput } from './codex-app-server-client.js';
-import { CodexProviderService, type CodexProviderStatus } from './codex-provider-service.js';
+import {
+  OpenAISubscriptionProviderService,
+  type OpenAISubscriptionLoginInput,
+  type OpenAISubscriptionProviderStatus,
+} from './openai-subscription-provider-service.js';
 
 export type AgentAppServerConfiguration = AgentAppProjectRuntimeFactoryOptions & {
   /** Registry location is explicit and always rooted under appDataRoot. */
@@ -28,15 +31,9 @@ export type AgentAppServerConfiguration = AgentAppProjectRuntimeFactoryOptions &
 export type AgentAppProductionComposition = {
   readonly agentAppServer: AgentAppServer;
   readonly projectManager: ProjectManager;
-  readonly codexProviderService: CodexProviderService;
+  readonly openaiSubscriptionProviderService: OpenAISubscriptionProviderService;
   close(): Promise<void>;
 };
-
-export async function createAgentAppServer(
-  options: AgentAppServerConfiguration
-): Promise<AgentAppServer> {
-  return (await createAgentAppProductionComposition(options)).agentAppServer;
-}
 
 /**
  * The default CLI deliberately does not consume this composition until APP-005C.
@@ -56,16 +53,17 @@ export async function createAgentAppProductionComposition(
   const commandLedger = await ProjectCommandLedger.open(
     new FileProjectCommandStore(join(appDataRoot, 'commands.json'))
   );
-  const codexProviderService = options.codexProviderService ?? new CodexProviderService();
+  const openaiSubscriptionProviderService =
+    options.openaiSubscriptionProviderService ??
+    new OpenAISubscriptionProviderService({ appDataRoot });
   const agentAppServer: AgentAppServer = new AgentAppServer({
     projectManager,
     commandLedger,
-    providerControl: createCodexProviderControl(codexProviderService),
+    providerControl: createOpenAISubscriptionProviderControl(openaiSubscriptionProviderService),
     createRuntime: createAgentAppProjectRuntimeFactory({
       appDataRoot,
-      config: options.config,
       createModel: options.createModel,
-      codexProviderService,
+      openaiSubscriptionProviderService,
       requestAgentApp: async (request, context): Promise<AgentAppResponse> =>
         await agentAppServer.requestFromAgent(request, context),
     }),
@@ -74,19 +72,27 @@ export async function createAgentAppProductionComposition(
   return {
     agentAppServer,
     projectManager,
-    codexProviderService,
+    openaiSubscriptionProviderService,
     close: () => {
-      closePromise ??= closeComposition(agentAppServer, codexProviderService);
-      return closePromise;
+      if (closePromise) return closePromise;
+      const attempt = closeComposition(agentAppServer, openaiSubscriptionProviderService);
+      closePromise = attempt;
+      void attempt.catch(() => {
+        if (closePromise === attempt) closePromise = undefined;
+      });
+      return attempt;
     },
   };
 }
 
-function createCodexProviderControl(provider: CodexProviderService): ProviderControl {
+function createOpenAISubscriptionProviderControl(
+  provider: OpenAISubscriptionProviderService
+): ProviderControl {
   return {
     read: async () => providerStatusJson(await provider.status()),
     refresh: async () => providerStatusJson(await provider.refresh()),
-    loginStart: async (input) => await provider.startLogin(parseCodexLoginInput(input)),
+    loginStart: async (input) =>
+      await provider.startLogin(parseOpenAISubscriptionLoginInput(input)),
     loginCancel: async (input) => await provider.cancelLogin(requiredLoginId(input)),
     logout: async (input) => {
       requireEmptyInput(input, 'provider/logout');
@@ -95,7 +101,7 @@ function createCodexProviderControl(provider: CodexProviderService): ProviderCon
   };
 }
 
-function providerStatusJson(status: CodexProviderStatus): JsonValue {
+function providerStatusJson(status: OpenAISubscriptionProviderStatus): JsonValue {
   return jsonValue(status);
 }
 
@@ -115,7 +121,7 @@ function jsonValue(value: unknown): JsonValue {
 
 const credentialKey = /(?:api)?key|token|secret|password/i;
 
-function parseCodexLoginInput(input: JsonObject): CodexAppServerLoginInput {
+function parseOpenAISubscriptionLoginInput(input: JsonObject): OpenAISubscriptionLoginInput {
   if (input.type === 'chatgptDeviceCode') {
     requireOnlyKeys(input, ['type'], 'provider/login/start');
     return { type: 'chatgptDeviceCode' };
@@ -123,26 +129,8 @@ function parseCodexLoginInput(input: JsonObject): CodexAppServerLoginInput {
   if (input.type !== 'chatgpt') {
     throw new Error('provider/login/start requires type chatgpt or chatgptDeviceCode');
   }
-  requireOnlyKeys(
-    input,
-    ['type', 'codexStreamlinedLogin', 'useHostedLoginSuccessPage', 'appBrand'],
-    'provider/login/start'
-  );
-  const codexStreamlinedLogin = optionalBoolean(
-    input.codexStreamlinedLogin,
-    'codexStreamlinedLogin'
-  );
-  const useHostedLoginSuccessPage = optionalBoolean(
-    input.useHostedLoginSuccessPage,
-    'useHostedLoginSuccessPage'
-  );
-  const appBrand = optionalAppBrand(input.appBrand);
-  return {
-    type: 'chatgpt',
-    ...(codexStreamlinedLogin === undefined ? {} : { codexStreamlinedLogin }),
-    ...(useHostedLoginSuccessPage === undefined ? {} : { useHostedLoginSuccessPage }),
-    ...(appBrand === undefined ? {} : { appBrand }),
-  };
+  requireOnlyKeys(input, ['type'], 'provider/login/start');
+  return { type: 'chatgpt' };
 }
 
 function requiredLoginId(input: JsonObject): string {
@@ -162,28 +150,16 @@ function requireOnlyKeys(input: JsonObject, allowed: readonly string[], method: 
   if (unexpected) throw new Error(`${method} does not accept ${unexpected}`);
 }
 
-function optionalBoolean(value: unknown, name: string): boolean | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'boolean') throw new Error(`${name} must be a boolean`);
-  return value;
-}
-
-function optionalAppBrand(value: unknown): 'codex' | 'chatgpt' | null | undefined {
-  if (value === undefined) return undefined;
-  if (value === null || value === 'codex' || value === 'chatgpt') return value;
-  throw new Error('appBrand must be codex, chatgpt, or null');
-}
-
 async function closeComposition(
   agentAppServer: AgentAppServer,
-  codexProviderService: CodexProviderService
+  openaiSubscriptionProviderService: OpenAISubscriptionProviderService
 ): Promise<void> {
   const failures: unknown[] = [];
   const server = await Promise.allSettled([agentAppServer.close()]);
   failures.push(
     ...server.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
   );
-  const provider = await Promise.allSettled([codexProviderService.close()]);
+  const provider = await Promise.allSettled([openaiSubscriptionProviderService.close()]);
   failures.push(
     ...provider.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
   );

@@ -98,11 +98,17 @@ export class AgentLoop {
         turnId: input.turnId,
       });
 
-      if (!modelItems.completed || !this.toolRuntime || !hasToolCalls(modelItems.completed)) {
+      if (
+        modelItems.error ||
+        !modelItems.completed ||
+        !this.toolRuntime ||
+        !hasToolCalls(modelItems.completed)
+      ) {
         shouldContinue = false;
         continue;
       }
 
+      const toolSignal = combineAbortSignals(input.signal, modelItems.executionSignal);
       const tools = await appendToolExecutionItems({
         itemList: this.itemList,
         threadId: input.threadId,
@@ -110,7 +116,7 @@ export class AgentLoop {
         toolRuntime: this.toolRuntime,
         assistantItem: modelItems.completed,
         hookRuntime: this.hookRuntime,
-        signal: input.signal,
+        signal: toolSignal,
       });
       if (tools.yielded) {
         yielded = true;
@@ -196,6 +202,15 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
+function combineAbortSignals(
+  turnSignal: AbortSignal | undefined,
+  responseSignal: AbortSignal | undefined
+): AbortSignal | undefined {
+  if (!turnSignal) return responseSignal;
+  if (!responseSignal) return turnSignal;
+  return AbortSignal.any([turnSignal, responseSignal]);
+}
+
 function hasToolCalls(item: Item): boolean {
   const payload = item.payload;
 
@@ -208,11 +223,7 @@ function hasToolCalls(item: Item): boolean {
 }
 
 function hasTurnFailure(items: readonly Item[], turnId: string): boolean {
-  return items.some(
-    (item) =>
-      item.turnId === turnId &&
-      (item.type === 'assistant.message.error' || item.type === 'tool.error')
-  );
+  return items.some((item) => item.turnId === turnId && item.type === 'assistant.message.error');
 }
 
 function latestSystemPromptContent(items: readonly Item[]): unknown {

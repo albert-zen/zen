@@ -11,7 +11,7 @@ import {
 } from '@zen/framework/node';
 import { acquireSingleInstance } from './instance-policy.js';
 import { registerDesktopIpc } from './ipc.js';
-import { DesktopLifecycle, installShutdownSignals } from './lifecycle.js';
+import { closeWithBoundedRetry, DesktopLifecycle, installShutdownSignals } from './lifecycle.js';
 import { serveDesktopStaticHost, type DesktopStaticHost } from './static-host.js';
 import { createWindowOptions, installWindowPolicy } from './window-policy.js';
 
@@ -40,9 +40,13 @@ async function runDesktop(): Promise<void> {
   const shutdown = (): void => {
     if (shutdownRequested) return;
     shutdownRequested = true;
-    void lifecycle
-      .close()
-      .catch((cause: unknown) => console.error('Zen desktop shutdown failed', cause))
+    void closeWithBoundedRetry(() => lifecycle.close(), {
+      attempts: 2,
+      attemptTimeoutMs: 2_000,
+      onFailure: (cause, attempt) =>
+        console.error(`Zen desktop shutdown attempt ${attempt} failed`, cause),
+    })
+      .catch((cause: unknown) => console.error('Zen desktop shutdown retries failed', cause))
       .finally(() => {
         nativeQuitAllowed = true;
         app.quit();

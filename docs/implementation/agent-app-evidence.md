@@ -173,7 +173,7 @@
   full check again passed formatting, lint, types, `49`/`401`, and all builds,
   then failed kernel coverage when
   `test/local-tool-runtime.test.ts > runs shell commands in the workspace and
-  returns command output` exceeded Vitest's existing `5000ms` timeout. The
+returns command output` exceeded Vitest's existing `5000ms` timeout. The
   timeout was not changed, skipped, or retried inside Vitest. An immediately
   following standalone serial kernel coverage run passed `49`/`401`; this
   indicated resource-sensitive cleanup work rather than a confirmed leak. The
@@ -462,6 +462,149 @@ Round: 2
 
 - Completion validation passed: serial focused Vitest, Prettier check, ESLint,
   core/Web TypeScript checks, core/Web/desktop builds, `npm audit
-  --audit-level=low`, and `git diff --check`.
+--audit-level=low`, and `git diff --check`.
 - No Linear mutation, external push, full check, coverage, E2E, or package
   command was run. This remains a local `codex/agent-app` implementation.
+
+## Codex Worker Note
+
+Round: 3
+
+- Replaced the production Codex app-server turn path with one process-owned
+  `OpenAISubscriptionProviderService` and a Pi-backed
+  `OpenAiSubscriptionModelGateway`. Zen's AgentLoop, Item history, context
+  compiler, composite Thread/local tool runtime, approvals, scheduler, and
+  persistence now execute every production Turn.
+- Stable Zen Thread ids are registered as Pi `sessionId` values. The service
+  owns those cached provider WebSocket resources and explicitly releases them
+  on composition shutdown. OAuth refresh is bounded by Zen because installed
+  Pi refresh ignores AbortSignal.
+- Removed the retired Codex app-server client/provider/executor modules and
+  their tests, plus the exported generic provider-backed AppServer harness.
+  Public Node exports now expose the subscription service and model gateway.
+- Validation passed: focused serial Vitest (10 files/69 tests), `npm run
+typecheck`, `npm run lint`, `npm run format:check`, framework/CLI/Web/ZenX
+  builds, and `git diff --check`. Browser E2E and coverage were intentionally
+  skipped per the task; no commit, push, PR, or Linear mutation was made.
+
+## Codex Worker Note
+
+Round: 4
+
+- Fixed the real subscription smoke failure by mapping every Zen tool name at
+  the Pi gateway boundary. Definitions, historical assistant tool calls, and
+  tool results use the same provider-safe name; returned tool calls are mapped
+  back before AgentLoop dispatch.
+- Valid short names remain unchanged. Invalid or overlong names receive a
+  readable sanitized prefix plus a stable digest, with deterministic collision
+  resolution and the provider's 64-character limit enforced.
+- Validation passed: focused serial Vitest (4 files/21 tests), `npm run
+typecheck`, `npm run build`, `npm run lint`, `npm run format:check`, and `git
+diff --check`. No long-lived service, browser E2E, coverage, commit, push, PR,
+  or Linear mutation was used.
+
+## Codex Worker Note
+
+Round: 5
+
+- Added real Pi incremental continuation support without changing Zen's Item
+  SSOT. A per-Thread/effective-model gateway keeps only the previous Pi request
+  and raw AssistantMessage metadata in process memory, then reconstructs the
+  exact prefix required by Pi's cached WebSocket delta path.
+- Opaque text/reasoning signatures, response ids, and full function-call ids
+  stay inside the adapter. Model changes release the old Pi session and replace
+  the gateway; restart, compaction, or context divergence falls back to a full
+  Item-derived request.
+- Validation passed: focused serial Vitest (6 files/44 tests), `npm run
+typecheck`, `npm run build`, `npm run lint`, `npm run format:check`, and `git
+diff --check`. No long-lived service, browser E2E, coverage, commit, push, PR,
+  or Linear mutation was used.
+
+## Codex Worker Note
+
+Round: 6
+
+- Corrected Pi session ownership for project-scoped Thread ids. Provider
+  sessions now use an unambiguous Project/Thread composite; model and project
+  lifecycle changes release only their owned session. Credential generation
+  changes close every owned Pi socket and discard in-memory opaque
+  continuation before a new-account request.
+- Tool rejection, invalid input, timeout, runtime failure, and silent tool EOF
+  now retain trace errors and append paired model-visible `isError` results.
+  Model/provider streams must emit exactly one terminal event or the Turn
+  fails.
+- Removed Codex auth import and Pi refresh ownership. Zen persists an
+  independent OAuth credential, refreshes through an abortable bounded token
+  transport, preserves late single-flight success, and retries dirty
+  persistence without exposing credentials. Provider auth mutations are
+  concurrent-idempotent only and never persist login URLs or device codes.
+- Provider presentation now parses authoritative `auth` and `login`, clears
+  stale state on reconnect/failure, and never renders expired auth as
+  connected.
+- The real ZenX ASAR was reduced from 72,094,727 bytes / 13,413 entries to
+  8,941,837 bytes / 2,329 entries without weakening denied segments. Inspection
+  now enforces 12 MB / 3,000-entry ceilings, and packaged rendering passed.
+- Validation passed: focused serial Vitest (12 files/102 tests), all workspace
+  TypeScript checks, ESLint, focused Prettier checks, framework/CLI/Web/ZenX
+  builds, real Electron pack/inspect/render, and `git diff --check`. No
+  long-lived service, browser E2E, coverage, commit, push, PR, or Linear
+  mutation was used.
+
+## Codex Worker Note
+
+Round: 7
+
+- Production and Desktop close ownership now retains one in-flight attempt,
+  remains idempotent after success, and re-arms after rejection. Electron main
+  performs exactly one bounded retry, logs each failed attempt, and retains all
+  terminal failures in an AggregateError before allowing quit.
+- `onItemAppended` is explicitly post-commit: observer failures append audit
+  evidence without rejecting the committed Item. Tool starts and results can no
+  longer be mistaken for uncommitted appends, so each provider tool call keeps
+  exactly one model-visible result.
+- Thread terminal handling now atomically consumes each Turn's pending approval
+  capability, persists one authoritative decline, and shares that drain across
+  auth-generation abort, interrupt, fence, and shutdown paths. The final UI
+  projection contains no actionable approval after a failed or cancelled Turn.
+- Validation passed: focused serial Vitest (14 files/131 tests), framework and
+  ZenX TypeScript checks, full ESLint, repository Prettier check, and `git diff
+--check`. No long-lived service, package operation, browser E2E, coverage,
+  commit, push, PR, or Linear mutation was used.
+
+## Codex Worker Note
+
+Round: 8
+
+- Login credential acceptance is now transactional with login ownership.
+  Cancellation aborts and joins any owned credential mutation, restores the
+  prior Zen credential on disk, and cannot return `canceled` before a blocked
+  candidate write has been rolled back.
+- Policy evaluation now has a synchronous effect-permission fence after its
+  await, preventing delayed policy decisions from creating approvals or
+  delegating tools after the Turn is terminal.
+- Desktop shutdown retains two attempts and now gives each attempt a finite
+  deadline before native Electron quit. Production composition, Agent App
+  Server, project runtime, and Desktop close operations retain concurrent
+  single-flight behavior while re-arming rejected attempts.
+- Removed the unused `createAgentAppServer` convenience export because it
+  discarded the production provider owner. The subscription approval test now
+  uses Pi's real event-stream adapter with no unsafe stream cast.
+- Validation: focused regression tests, full root TypeScript checks, ESLint,
+  repository Prettier check, and `git diff --check`. Packaging was not rerun
+  because no production dependency or package configuration changed.
+
+## Codex Worker Note
+
+Round: 9
+
+- Cancellation rollback now stages the prior credential, including an
+  unauthenticated `undefined` credential, as the durable dirty intent before
+  compensating persistence starts. A failed rollback rejects `cancelLogin`,
+  leaves the prior account authoritative in memory, and is retried by the next
+  explicit provider operation or shutdown.
+- Deterministic fault injection proves that a candidate credential can reach
+  disk, the first prior-credential rollback rename can fail with `EIO`, and a
+  later close restores the prior credential before a fresh service starts.
+- Validation: focused provider tests (22 tests), full root TypeScript checks, ESLint,
+  repository Prettier check, and `git diff --check`. No package operation,
+  long-lived service, commit, or push was used.

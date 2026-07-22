@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,6 +28,8 @@ const REQUIRED_ENTRIES = [
   'dist/web/index.html',
   'node_modules/@zen/framework/dist/adapters/node/index.js',
 ];
+export const MAX_DESKTOP_ASAR_BYTES = 12_000_000;
+export const MAX_DESKTOP_ASAR_ENTRIES = 3_000;
 
 export function findForbiddenAsarEntries(entries) {
   return entries.filter((entry) => {
@@ -49,7 +51,7 @@ export function findMissingRequiredAsarEntries(entries) {
 
 export async function inspectDesktopPackage(asarPath) {
   const resolved = resolve(asarPath);
-  await access(resolved);
+  const packageStat = await stat(resolved);
   const entries = listPackage(resolved);
   const forbidden = findForbiddenAsarEntries(entries);
   if (forbidden.length > 0) {
@@ -59,7 +61,17 @@ export async function inspectDesktopPackage(asarPath) {
   if (missing.length > 0) {
     throw new Error(`Missing desktop package entries:\n${missing.join('\n')}`);
   }
-  return { entries: entries.length, asarPath: resolved };
+  assertDesktopPackageBounds({ bytes: packageStat.size, entries: entries.length });
+  return { bytes: packageStat.size, entries: entries.length, asarPath: resolved };
+}
+
+export function assertDesktopPackageBounds({ bytes, entries }) {
+  if (bytes > MAX_DESKTOP_ASAR_BYTES) {
+    throw new Error(`Desktop ASAR is ${bytes} bytes; maximum is ${MAX_DESKTOP_ASAR_BYTES} bytes`);
+  }
+  if (entries > MAX_DESKTOP_ASAR_ENTRIES) {
+    throw new Error(`Desktop ASAR has ${entries} entries; maximum is ${MAX_DESKTOP_ASAR_ENTRIES}`);
+  }
 }
 
 function normalizeEntry(entry) {
@@ -70,5 +82,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const result = await inspectDesktopPackage(
     process.argv[2] ?? 'apps/zenx/release/win-unpacked/resources/app.asar'
   );
-  console.log(`Inspected ${result.entries} ASAR entries: ${result.asarPath}`);
+  console.log(
+    `Inspected ${result.entries} ASAR entries (${result.bytes} bytes): ${result.asarPath}`
+  );
 }

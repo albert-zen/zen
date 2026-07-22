@@ -78,6 +78,39 @@ describe('HookRuntime', () => {
     ]);
   });
 
+  it('audits post-commit observer failure without rejecting the committed append', async () => {
+    const itemList = createItems();
+    const hooks = new HookRuntime({
+      itemList,
+      hooks: {
+        onItemAppended() {
+          throw new Error('post-commit observer failed');
+        },
+      },
+    });
+
+    const appended = await hooks.append({
+      type: 'tool.call.started',
+      runId: 'run-1',
+      turnId: 'turn-1',
+      payload: { toolCallId: 'call-1', toolName: 'shell' },
+    });
+
+    expect(appended).toEqual(expect.objectContaining({ type: 'tool.call.started' }));
+    expect(itemList.getItems()).toEqual([
+      appended,
+      expect.objectContaining({
+        type: 'hook.effect',
+        payload: expect.objectContaining({
+          hook: 'onItemAppended',
+          effect: 'error',
+          message: 'post-commit observer failed',
+          itemType: 'tool.call.started',
+        }),
+      }),
+    ]);
+  });
+
   it('records a hook.effect item when a hook blocks an append', async () => {
     const itemList = createItems();
     const hooks = new HookRuntime({
@@ -220,7 +253,7 @@ describe('HookRuntime', () => {
       replace.beforeToolCall({ call: { id: 'tool-1', name: 'shell' }, assistantItem: assistant })
     ).resolves.toEqual({
       type: 'continue',
-      call: { id: 'tool-2', name: 'shell', input: { command: 'safe' } },
+      call: { id: 'tool-1', name: 'shell', input: { command: 'safe' } },
     });
 
     const block = new HookRuntime({
@@ -229,10 +262,14 @@ describe('HookRuntime', () => {
     });
     await expect(
       block.beforeToolCall({ call: { id: 'tool-3', name: 'shell' }, assistantItem: assistant })
-    ).resolves.toEqual({ type: 'block' });
+    ).resolves.toEqual({ type: 'block', reason: 'denied' });
     expect(itemList.getItems().map((entry) => entry.payload)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ effect: 'replace', replacementToolCallId: 'tool-2' }),
+        expect.objectContaining({
+          effect: 'replace',
+          replacementToolCallId: 'tool-1',
+          hookSuppliedToolCallId: 'tool-2',
+        }),
         expect.objectContaining({ effect: 'block', reason: 'denied' }),
       ])
     );
