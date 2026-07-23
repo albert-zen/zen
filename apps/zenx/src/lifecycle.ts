@@ -1,3 +1,6 @@
+import { statSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
+
 type Closable = {
   close(): void | Promise<void>;
 };
@@ -13,6 +16,11 @@ export type DesktopStartup = {
   createWindow(host: Quiesceable): Promise<Closable>;
 };
 
+export type ExternalDesktopStartup = {
+  createHost(): Promise<Quiesceable>;
+  createWindow(host: Quiesceable): Promise<Closable>;
+};
+
 export type ShutdownSignalSource = {
   on(event: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
   off(event: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
@@ -25,6 +33,30 @@ export type BoundedCloseOptions = {
 };
 
 const defaultCloseAttemptTimeoutMs = 5_000;
+
+export function installShutdownFile(
+  markerPath: string | undefined,
+  shutdown: () => void,
+  pollIntervalMs = 250
+): () => void {
+  if (markerPath === undefined) return () => undefined;
+  if (!markerPath.trim() || !isAbsolute(markerPath) || markerPath.includes('\0')) {
+    throw new Error('ZEN_DESKTOP_SHUTDOWN_FILE must be an absolute file path');
+  }
+  if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 25 || pollIntervalMs > 10_000) {
+    throw new Error('Desktop shutdown marker poll interval must be from 25 to 10000ms');
+  }
+  assertMarkerIsMissingOrFile(markerPath);
+  let requested = false;
+  const timer = setInterval(() => {
+    if (requested || !markerExists(markerPath)) return;
+    requested = true;
+    clearInterval(timer);
+    shutdown();
+  }, pollIntervalMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}
 
 export function installShutdownSignals(
   source: ShutdownSignalSource,
@@ -69,6 +101,24 @@ export class DesktopLifecycle {
         throw new AggregateError([cause, shutdownCause], 'Desktop startup and shutdown failed', {
           cause: shutdownCause,
         });
+      }
+      throw cause;
+    }
+  }
+
+  async startExternal(startup: ExternalDesktopStartup): Promise<void> {
+    try {
+      this.host = await startup.createHost();
+      this.window = await startup.createWindow(this.host);
+    } catch (cause) {
+      try {
+        await closeWithBoundedRetry(() => this.close(), { attempts: 2 });
+      } catch (shutdownCause) {
+        throw new AggregateError(
+          [cause, shutdownCause],
+          'External desktop startup and shutdown failed',
+          { cause: shutdownCause }
+        );
       }
       throw cause;
     }
@@ -152,5 +202,31 @@ async function settle<T>(
   );
   failures.push(
     ...results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
+  );
+}
+
+function assertMarkerIsMissingOrFile(path: string): void {
+  try {
+    if (!statSync(path).isFile()) throw new Error(`Shutdown marker path is not a file: ${path}`);
+  } catch (cause) {
+    if (!isMissingPathError(cause)) throw cause;
+  }
+}
+
+function markerExists(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch (cause) {
+    if (isMissingPathError(cause)) return false;
+    throw cause;
+  }
+}
+
+function isMissingPathError(cause: unknown): boolean {
+  return (
+    typeof cause === 'object' &&
+    cause !== null &&
+    'code' in cause &&
+    (cause.code === 'ENOENT' || cause.code === 'ENOTDIR')
   );
 }

@@ -81,6 +81,74 @@ describe('ImZenBridge', () => {
     await bridge.stop();
   });
 
+  it('lists Project Threads and binds the conversation only after App Server validation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'imzen-bridge-'));
+    roots.push(root);
+    const state = await ImZenStateStore.open(join(root, 'state.json'));
+    const fake = new FakeAgentAppClient(root, {
+      listedThreads: [
+        {
+          threadId: 'thread-from-zenx',
+          status: 'completed',
+          objective: 'Started in ZenX',
+        },
+      ],
+    });
+    const delivered: QQOutboundMessage[] = [];
+    const bridge = new ImZenBridge({
+      client: fake,
+      config: { ...config(root), allowedUserIds: new Set(['owner']) },
+      deliver: async (outbound) => {
+        delivered.push(outbound);
+      },
+      pollIntervalMs: 1,
+      sleep: async () => undefined,
+      state,
+    });
+    await bridge.start();
+
+    await expect(bridge.accept(message('owner', 'threads', '/threads'))).resolves.toBe('accepted');
+    await expect(bridge.accept(message('owner', 'bind', '/bind thread-from-zenx'))).resolves.toBe(
+      'accepted'
+    );
+    expect(state.binding('c2c:owner')).toEqual({
+      projectId: 'project-1',
+      threadId: 'thread-from-zenx',
+    });
+
+    await bridge.accept(message('owner', 'continued', 'continue from QQ'));
+    await waitUntil(() => state.pendingJobs().length === 0);
+
+    expect(delivered.map((entry) => entry.text)).toEqual([
+      'Zen threads:\nthread-from-zenx [completed] Started in ZenX',
+      'Bound this QQ conversation to Zen thread thread-from-zenx.',
+      'answer from Zen',
+    ]);
+    expect(fake.requests.find((request) => request.method === 'turn/start')?.params.threadId).toBe(
+      'thread-from-zenx'
+    );
+    await bridge.stop();
+  });
+
+  it('does not persist /bind when the selected Thread cannot be read', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'imzen-bridge-'));
+    roots.push(root);
+    const state = await ImZenStateStore.open(join(root, 'state.json'));
+    const bridge = new ImZenBridge({
+      client: new FakeAgentAppClient(root),
+      config: { ...config(root), allowedUserIds: new Set(['owner']) },
+      deliver: async () => undefined,
+      state,
+    });
+    await bridge.start();
+
+    await expect(
+      bridge.accept(message('owner', 'bind-missing', '/bind missing-thread'))
+    ).rejects.toThrow('missing');
+    expect(state.binding('c2c:owner')).toBeUndefined();
+    await bridge.stop();
+  });
+
   it('serializes /new behind an older auto-binding job', async () => {
     const root = await mkdtemp(join(tmpdir(), 'imzen-bridge-'));
     roots.push(root);
@@ -272,6 +340,7 @@ class FakeAgentAppClient implements AgentAppClient {
   private readonly projectReadError?: Error;
   private readonly projectReadErrorCode?: AgentAppErrorCode;
   private readonly threadReadError?: AgentAppErrorCode;
+  private readonly listedThreads: readonly Record<string, unknown>[];
 
   constructor(
     private readonly root: string,
@@ -281,6 +350,7 @@ class FakeAgentAppClient implements AgentAppClient {
       projectReadErrorCode?: AgentAppErrorCode;
       projectStatus?: 'active' | 'archived';
       threadReadError?: AgentAppErrorCode;
+      listedThreads?: readonly Record<string, unknown>[];
     } = {}
   ) {
     this.projectStatus = options.projectStatus ?? 'active';
@@ -288,6 +358,7 @@ class FakeAgentAppClient implements AgentAppClient {
     this.projectReadError = options.projectReadError;
     this.projectReadErrorCode = options.projectReadErrorCode;
     this.threadReadError = options.threadReadError;
+    this.listedThreads = options.listedThreads ?? [];
   }
 
   async request(request: AgentAppRequest): Promise<AgentAppResponse> {
@@ -327,6 +398,9 @@ class FakeAgentAppClient implements AgentAppClient {
         thread: threadSnapshot('idle', `thread-${this.threadCreateCount}`),
       });
     }
+    if (request.method === 'thread/list') {
+      return ok(request.method, { threads: this.listedThreads });
+    }
     if (request.method === 'thread/read') {
       if (this.threadReadError && !this.threadCreated) {
         return {
@@ -336,6 +410,14 @@ class FakeAgentAppClient implements AgentAppClient {
         };
       }
       if (!this.threadCreated) {
+        const listed = this.listedThreads.find(
+          (thread) => thread.threadId === request.params.threadId
+        );
+        if (listed) {
+          return ok(request.method, {
+            thread: threadSnapshot('completed', String(listed.threadId)),
+          });
+        }
         return {
           method: request.method,
           ok: false,

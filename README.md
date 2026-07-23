@@ -74,12 +74,15 @@ Run the built desktop application locally:
 npm run zenx:dev
 ```
 
-The desktop main process starts the project-scoped Agent App HTTP/SSE transport
-on loopback and serves the Web build assembled under `apps/zenx/dist/web` from
-a same-origin static host. The renderer
-only uses Agent App `/request` and `/events`; the transport capability remains
-in the main-process proxy. Electron exposes only directory selection and a
-bounded native-notification bridge to the Web UI.
+For an ordinary direct launch, the desktop main process starts a private
+project-scoped Agent App HTTP/SSE transport on loopback. When both
+`ZEN_APP_SERVER_URL` and `ZEN_APP_SERVER_CAPABILITY` select a trusted loopback
+server, ZenX instead runs in external mode: it creates no production
+composition or private Agent App transport and its same-origin static host
+proxies the supplied shared server. The renderer only uses Agent App
+`/request` and `/events`; the capability remains in the main-process proxy.
+Electron exposes only directory selection and a bounded native-notification
+bridge to the Web UI.
 
 Create an unsigned unpacked Windows artifact with:
 
@@ -120,12 +123,15 @@ Set `IMZEN_ALLOWED_USER_IDS` to a comma-separated QQ open-id allowlist. Without
 an allowlist, the first startup prints a one-time `/pair <code>` command;
 ordinary messages remain unauthorized until that exact command is received.
 QQ conversations bind to durable Zen Threads, and pending replies resume after
-an IMZen restart with stable App Server and QQ idempotency keys.
+an IMZen restart with stable App Server and QQ idempotency keys. `/threads`
+lists Threads in the configured Project, `/bind <threadId>` validates and binds
+an existing Thread, and `/new [objective]` creates and binds a new Thread.
 
-On Windows, the managed live command builds both packages, starts a dedicated
-loopback App Server, registers this repository as a Project through that App
-Server, connects QQ, and records only verified process identities (never the
-capability or QQ credential) under the application data directory:
+On Windows, the managed live command builds the server and clients, starts
+exactly one standalone loopback App Server, registers this repository as a
+Project through that App Server, and starts IMZen and ZenX with the same URL and
+capability. It records only verified process identities (never the capability
+or QQ credential) under the application data directory:
 
 ```powershell
 npm run imzen:live -- start -SecretFile "D:\private\qqbotSecret.json"
@@ -133,11 +139,11 @@ npm run imzen:live -- status
 npm run imzen:live -- stop
 ```
 
-Repeated `start` calls reuse the registered pair instead of accumulating Node
-processes. `stop` verifies PID, creation time, executable, and command line,
-then requests IMZen shutdown first and waits for it before requesting App Server
-shutdown. It force-stops only a still-running, verified owned tree after the
-bounded graceful wait expires. The v2 live descriptor records the two per-run
+Repeated `start` calls reuse the registered process set instead of accumulating
+Node or Electron processes. `stop` verifies PID, creation time, executable, and
+command line, then requests graceful shutdown for IMZen and ZenX before the App
+Server. It force-stops only a still-running, verified owned tree after the
+bounded graceful wait expires. The v3 live descriptor records three per-run
 shutdown marker paths and process identities, never the capability or QQ
 credential.
 

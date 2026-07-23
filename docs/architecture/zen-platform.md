@@ -230,6 +230,14 @@ integration practical.
 ZenX is the first user-facing proof that the App Server SSOT works. It should
 feel focused on durable work, not on file manipulation.
 
+ZenX has two explicit host modes. A direct standalone launch may own one private
+production composition and loopback transport. A managed shared launch supplies
+a validated loopback App Server URL and capability; in that mode ZenX owns only
+its static proxy and Electron window, creates no composition or private
+transport, and never closes the shared server. In both modes, the capability
+stays in the trusted main process and the renderer uses same-origin
+`/request`/`/events` only.
+
 Primary UI intent:
 
 - one Project switcher
@@ -263,6 +271,11 @@ IMZen selects an existing Project; it never creates one from QQ. Its only
 external-to-Zen association is a QQ-conversation-to-Thread binding. The binding
 records the Project id needed for Project-scoped Thread calls, but QQ channels
 and users are not Project identities.
+
+Authorized QQ users can list the configured Project's server-owned Threads and
+bind a conversation to one after `thread/read` validation. Subsequent input
+uses `turn/start` with that exact Project and Thread identity, allowing a Thread
+started in ZenX to continue in IMZen without synchronization or journal access.
 
 The gateway may durably retain pairing ownership, conversation bindings, and
 pending external delivery. Pending jobs remain until QQ accepts delivery and
@@ -331,8 +344,11 @@ feature completeness or production readiness.
 - Deny access by default through an explicit allowlist or one-time pairing.
 - Keep QQ-specific parsing, retry, and delivery behavior isolated in IMZen.
 - Keep provider and runtime creation exclusively in the App Server composition.
-- Keep IMZen startup/shutdown ownership limited to its QQ gateway, bridge, and
-  pending workers; it does not own the external App Server.
+- Keep the IMZen executable's startup/shutdown ownership limited to its QQ
+  gateway, bridge, pending workers, and App Server client.
+- Provide one Windows managed launcher that owns one standalone App Server,
+  ZenX, and IMZen as a verified process set and shuts the clients down before
+  the server.
 
 Live QQ verification, packaging, service supervision, monitoring, network-fault
 evidence, and broader IM-provider support remain follow-on work until separately
@@ -369,8 +385,9 @@ verified.
   state without becoming a second Zen SSOT.
 - Duplicate QQ messages retain stable App Server and QQ delivery idempotency.
 - QQ ingress is deny-by-default and restricted to official HTTPS/WSS endpoints.
-- IMZen has no direct provider or runtime bypass and does not own App Server
-  startup or shutdown.
+- IMZen has no direct provider or runtime bypass. The IMZen executable does not
+  own App Server startup or shutdown; the explicit managed launcher owns the
+  shared process set.
 
 ## Open Questions
 

@@ -67,7 +67,7 @@ export class ImZenBridge {
       return 'paired';
     }
     if (message.text === '/help') {
-      await this.reply(message, 'IMZen commands: /new, /status, /help');
+      await this.reply(message, 'IMZen commands: /threads, /bind <threadId>, /new, /status, /help');
       return 'accepted';
     }
     if (message.text === '/status') {
@@ -79,6 +79,23 @@ export class ImZenBridge {
         await this.createAndBindThread(message, message.text.slice('/new'.length).trim());
       });
       await this.reply(message, 'Created a new Zen thread for this conversation.');
+      return 'accepted';
+    }
+    if (message.text === '/threads') {
+      await this.enqueueConversationTask(message.conversationId, async () => {
+        await this.replyWithThreads(message);
+      });
+      return 'accepted';
+    }
+    if (message.text === '/bind' || message.text.startsWith('/bind ')) {
+      const threadId = message.text.slice('/bind'.length).trim();
+      if (!threadId || threadId.includes(' ')) {
+        await this.reply(message, 'Usage: /bind <threadId>');
+        return 'accepted';
+      }
+      await this.enqueueConversationTask(message.conversationId, async () => {
+        await this.bindExistingThread(message, threadId);
+      });
       return 'accepted';
     }
     if (!message.text.trim()) return 'ignored';
@@ -344,6 +361,59 @@ export class ImZenBridge {
       message,
       `Zen thread ${binding.threadId}: ${String(thread.status ?? 'unknown')}`
     );
+  }
+
+  private async replyWithThreads(message: QQInboundMessage): Promise<void> {
+    const projectId = await this.resolveProjectId();
+    const response = await this.request('thread/list', { projectId });
+    if (
+      !response.ok ||
+      response.method !== 'thread/list' ||
+      !Array.isArray(response.result.threads)
+    ) {
+      throw new Error(
+        response.ok ? 'thread/list returned an invalid result' : response.error.message
+      );
+    }
+    const lines = response.result.threads.map((entry) => {
+      if (!isRecord(entry)) throw new Error('thread/list returned an invalid Thread');
+      const threadId =
+        typeof entry.threadId === 'string'
+          ? entry.threadId
+          : typeof entry.id === 'string'
+            ? entry.id
+            : undefined;
+      if (!threadId) throw new Error('thread/list returned a Thread without an id');
+      const status = typeof entry.status === 'string' ? entry.status : 'unknown';
+      const objective =
+        typeof entry.objective === 'string' && entry.objective.trim()
+          ? ` ${entry.objective.trim()}`
+          : '';
+      return `${threadId} [${status}]${objective}`;
+    });
+    await this.reply(
+      message,
+      lines.length > 0
+        ? `Zen threads:\n${lines.join('\n')}`
+        : 'No Zen threads exist in this Project.'
+    );
+  }
+
+  private async bindExistingThread(message: QQInboundMessage, threadId: string): Promise<void> {
+    const projectId = await this.resolveProjectId();
+    const response = await this.request('thread/read', { projectId, threadId });
+    const thread = resultRecord(response, 'thread/read', 'thread');
+    const returnedThreadId =
+      typeof thread.id === 'string'
+        ? thread.id
+        : typeof thread.threadId === 'string'
+          ? thread.threadId
+          : undefined;
+    if (returnedThreadId !== threadId) {
+      throw new Error(`App Server returned Thread ${String(returnedThreadId)} for ${threadId}`);
+    }
+    await this.options.state.bind(message.conversationId, { projectId, threadId });
+    await this.reply(message, `Bound this QQ conversation to Zen thread ${threadId}.`);
   }
 
   private async reply(message: QQInboundMessage, text: string): Promise<void> {

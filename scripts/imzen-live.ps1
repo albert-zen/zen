@@ -75,7 +75,7 @@ function Test-SameProcessIdentity($Expected, $Actual) {
 function Read-Descriptor {
   if (-not (Test-Path -LiteralPath $descriptorPath)) { return $null }
   $descriptor = Get-Content -LiteralPath $descriptorPath -Raw | ConvertFrom-Json
-  if ($descriptor.version -notin @(1, 2)) {
+  if ($descriptor.version -notin @(1, 2, 3)) {
     throw "Unsupported IMZen live descriptor version: $($descriptor.version)."
   }
   return $descriptor
@@ -89,11 +89,21 @@ function Write-Descriptor($Value) {
 }
 
 function Get-DescriptorProcesses($Descriptor) {
-  @($Descriptor.imzen, $Descriptor.appServer) | Where-Object { $null -ne $_ }
+  @($Descriptor.imzen, $Descriptor.zenx, $Descriptor.appServer) | Where-Object { $null -ne $_ }
+}
+
+function Test-CompleteManagedDescriptor($Descriptor) {
+  return (
+    $null -ne $Descriptor -and
+    $Descriptor.version -eq 3 -and
+    $null -ne $Descriptor.imzen -and
+    $null -ne $Descriptor.zenx -and
+    $null -ne $Descriptor.appServer
+  )
 }
 
 function Get-DescriptorShutdownMarker($Descriptor, [string]$Role) {
-  if ($Descriptor.version -ne 2 -or $null -eq $Descriptor.shutdownMarkers) { return $null }
+  if ($Descriptor.version -notin @(2, 3) -or $null -eq $Descriptor.shutdownMarkers) { return $null }
   $marker = $Descriptor.shutdownMarkers.$Role
   if ($null -eq $marker -or -not ([string]$marker).Trim()) { return $null }
   $fullMarkerPath = [IO.Path]::GetFullPath([string]$marker)
@@ -107,6 +117,8 @@ function Get-DescriptorShutdownMarker($Descriptor, [string]$Role) {
 function Request-GracefulShutdown($Descriptor, $Expected) {
   $markerRole = if ($Expected.role -eq 'IMZen') {
     'imzen'
+  } elseif ($Expected.role -eq 'ZenX') {
+    'zenx'
   } elseif ($Expected.role -eq 'Zen App Server') {
     'appServer'
   } else {
@@ -327,7 +339,7 @@ function Stop-IdentityBoundProcess($Record) {
 }
 
 function Remove-ManagedControlFiles($Descriptor) {
-  foreach ($role in @('imzen', 'appServer')) {
+  foreach ($role in @('imzen', 'zenx', 'appServer')) {
     $marker = Get-DescriptorShutdownMarker $Descriptor $role
     if ($null -ne $marker) {
       Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
@@ -366,7 +378,7 @@ function Show-Status($Descriptor) {
     return $false
   }
   $running = @()
-  foreach ($expected in @(Get-DescriptorProcesses $Descriptor | Sort-Object { if ($_.role -eq 'Zen App Server') { 0 } else { 1 } })) {
+  foreach ($expected in @(Get-DescriptorProcesses $Descriptor)) {
     if (Test-VerifiedProcessStillRunning $expected) {
       $running += $expected
       Write-Host "$($expected.role) PID $($expected.pid) is running."
@@ -381,7 +393,8 @@ function Show-Status($Descriptor) {
       Select-Object -Last 1
     if ($null -ne $pairing) { Write-Host $pairing.Line }
   }
-  return $running.Count -eq 2
+  $expectedCount = @(Get-DescriptorProcesses $Descriptor).Count
+  return $expectedCount -gt 0 -and $running.Count -eq $expectedCount
 }
 
 function Invoke-AppServer([string]$Url, [string]$Capability, [string]$Method, $Params) {
@@ -422,8 +435,9 @@ $resolvedProjectRoot = if ($ProjectRoot) {
 
 $existing = Read-Descriptor
 if ($null -ne $existing) {
-  if (Show-Status $existing) {
-    Write-Output 'IMZen is already connected; no duplicate processes were started.'
+  $existingRunning = Show-Status $existing
+  if ((Test-CompleteManagedDescriptor $existing) -and $existingRunning) {
+    Write-Output 'Managed Zen clients are already connected; no duplicate processes were started.'
     exit 0
   }
   Stop-LiveProcesses $existing
@@ -433,26 +447,37 @@ $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Sil
 if ($null -ne $listener) { throw "Port $Port is already in use." }
 
 if (-not $SkipBuild) {
-  & npm.cmd run imzen:build
-  if ($LASTEXITCODE -ne 0) { throw "IMZen build failed with exit code $LASTEXITCODE." }
+  & npm.cmd run build
+  if ($LASTEXITCODE -ne 0) { throw "Managed client build failed with exit code $LASTEXITCODE." }
 }
 
 $nodeExecutable = [IO.Path]::GetFullPath((& node.exe -p 'process.execPath').Trim())
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $nodeExecutable)) {
   throw 'Unable to resolve the real Node.js executable.'
 }
+$electronExecutable = [IO.Path]::GetFullPath((& node.exe -e "process.stdout.write(require('electron'))").Trim())
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $electronExecutable)) {
+  throw 'Unable to resolve the real Electron executable.'
+}
 
 New-Item -ItemType Directory -Path $runDirectory, $logDirectory -Force | Out-Null
 $appServerShutdownMarker = Join-Path $runDirectory "app-server-$([guid]::NewGuid().ToString('N')).shutdown"
 $imzenShutdownMarker = Join-Path $runDirectory "imzen-$([guid]::NewGuid().ToString('N')).shutdown"
-if ((Test-Path -LiteralPath $appServerShutdownMarker) -or (Test-Path -LiteralPath $imzenShutdownMarker)) {
+$zenxShutdownMarker = Join-Path $runDirectory "zenx-$([guid]::NewGuid().ToString('N')).shutdown"
+if (
+  (Test-Path -LiteralPath $appServerShutdownMarker) -or
+  (Test-Path -LiteralPath $imzenShutdownMarker) -or
+  (Test-Path -LiteralPath $zenxShutdownMarker)
+) {
   throw 'Generated shutdown marker path already exists.'
 }
 $appServerLog = Join-Path $logDirectory 'imzen-app-server.out.log'
 $appServerErrorLog = Join-Path $logDirectory 'imzen-app-server.err.log'
 $imzenLog = Join-Path $logDirectory 'imzen.out.log'
 $imzenErrorLog = Join-Path $logDirectory 'imzen.err.log'
-Remove-Item -LiteralPath $appServerLog, $appServerErrorLog, $imzenLog, $imzenErrorLog -Force -ErrorAction SilentlyContinue
+$zenxLog = Join-Path $logDirectory 'zenx.out.log'
+$zenxErrorLog = Join-Path $logDirectory 'zenx.err.log'
+Remove-Item -LiteralPath $appServerLog, $appServerErrorLog, $imzenLog, $imzenErrorLog, $zenxLog, $zenxErrorLog -Force -ErrorAction SilentlyContinue
 
 $randomBytes = New-Object byte[] 32
 $random = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -469,6 +494,7 @@ $managedEnvironmentNames = @(
   'ZEN_APP_SERVER_CAPABILITY',
   'ZEN_APP_SERVER_URL',
   'ZEN_APP_SERVER_SHUTDOWN_FILE',
+  'ZEN_DESKTOP_SHUTDOWN_FILE',
   'IMZEN_PROJECT_ID',
   'IMZEN_PROJECT_ROOT',
   'IMZEN_QQ_SECRET_FILE',
@@ -486,6 +512,8 @@ $appServerProcess = $null
 $appServerIdentity = $null
 $imzenProcess = $null
 $imzenIdentity = $null
+$zenxProcess = $null
+$zenxIdentity = $null
 try {
   foreach ($name in @('IMZEN_QQ_SECRET_FILE', 'IMZEN_QQ_APP_ID', 'IMZEN_QQ_APP_SECRET', 'IMZEN_QQ_TOKEN', 'IMZEN_SHUTDOWN_FILE')) {
     [Environment]::SetEnvironmentVariable($name, $null, 'Process')
@@ -561,8 +589,29 @@ try {
   }
   if (-not $ready) { throw 'IMZen did not connect within 20 seconds.' }
 
+  $env:ZEN_DESKTOP_SHUTDOWN_FILE = $zenxShutdownMarker
+  $zenxProcess = Start-Process -FilePath $electronExecutable `
+    -ArgumentList (ConvertTo-QuotedProcessArgument (Join-Path $repoRoot 'apps\zenx')) `
+    -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput $zenxLog -RedirectStandardError $zenxErrorLog
+  $zenxIdentity = Get-ProcessIdentity $zenxProcess 'ZenX'
+
+  $zenxReady = $false
+  for ($attempt = 0; $attempt -lt 80; $attempt += 1) {
+    if ($zenxProcess.HasExited) { throw "ZenX exited during startup. See $zenxErrorLog." }
+    if (
+      (Test-Path -LiteralPath $zenxLog) -and
+      (Select-String -LiteralPath $zenxLog -Quiet -Pattern '^ZenX connected to the shared Zen App Server\.$')
+    ) {
+      $zenxReady = $true
+      break
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not $zenxReady) { throw 'ZenX did not connect within 20 seconds.' }
+
   $descriptor = [PSCustomObject]@{
-    version = 2
+    version = 3
     startedAt = [DateTimeOffset]::UtcNow.ToString('o')
     appServerUrl = $url
     projectId = [string]$project.id
@@ -570,25 +619,31 @@ try {
     shutdownMarkers = [PSCustomObject]@{
       appServer = $appServerShutdownMarker
       imzen = $imzenShutdownMarker
+      zenx = $zenxShutdownMarker
     }
     appServer = $appServerIdentity
     imzen = $imzenIdentity
+    zenx = $zenxIdentity
     appServerLog = $appServerLog
     appServerErrorLog = $appServerErrorLog
     imzenLog = $imzenLog
     imzenErrorLog = $imzenErrorLog
+    zenxLog = $zenxLog
+    zenxErrorLog = $zenxErrorLog
   }
   Write-Descriptor $descriptor
   [void](Show-Status $descriptor)
 } catch {
   $incompleteDescriptor = [PSCustomObject]@{
-    version = 2
+    version = 3
     shutdownMarkers = [PSCustomObject]@{
       appServer = $appServerShutdownMarker
       imzen = $imzenShutdownMarker
+      zenx = $zenxShutdownMarker
     }
     appServer = $appServerIdentity
     imzen = $imzenIdentity
+    zenx = $zenxIdentity
   }
   try {
     Stop-LiveProcesses $incompleteDescriptor
