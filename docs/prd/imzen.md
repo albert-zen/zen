@@ -115,6 +115,9 @@ Supported commands are:
 
 - `/help`: list the initial commands
 - `/status`: report the bound Zen Thread's current status
+- `/threads`: list existing Threads in the configured Project
+- `/bind <threadId>`: validate an existing Project Thread through the App Server
+  and replace the conversation binding
 - `/new [objective]`: create and bind a new Thread in the selected Project
 - `/pair <code>`: claim the bridge owner only while unconfigured pairing is
   available
@@ -229,10 +232,14 @@ SSE subscriptions, waits for owned tasks to settle, and reports failures without
 deleting pending state. It never shuts down the external App Server or its
 provider runtime.
 
-The Windows managed live command supplies separate per-run
-`IMZEN_SHUTDOWN_FILE` and `ZEN_APP_SERVER_SHUTDOWN_FILE` markers. It requests
-IMZen shutdown and waits before asking the App Server to stop, preserving App
-Server availability while the gateway drains.
+The Windows managed live command is an explicit process owner above the client
+executables. It starts one standalone App Server, then gives its URL and
+capability to IMZen and ZenX. Separate per-run `IMZEN_SHUTDOWN_FILE`,
+`ZEN_DESKTOP_SHUTDOWN_FILE`, and `ZEN_APP_SERVER_SHUTDOWN_FILE` markers allow it
+to request both clients' shutdown before asking the App Server to stop,
+preserving server availability while client work drains. Its descriptor keeps
+verified process identities and marker paths but never the capability or QQ
+credential.
 
 ## Current Slice Acceptance
 
@@ -241,6 +248,8 @@ Server availability while the gateway drains.
 - Explicit Project id selection and active canonical-root matching fail closed
   when the Project cannot be read or found.
 - Each QQ conversation binds only to a Zen Thread in the selected Project.
+- `/threads` reads server-owned Project Threads and `/bind` persists only after
+  the selected Thread is successfully read from the App Server.
 - Duplicate QQ inbound message ids reuse the same App Server Turn idempotency
   key.
 - The pending record survives restart and is retained through QQ delivery.

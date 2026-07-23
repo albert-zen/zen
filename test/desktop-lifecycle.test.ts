@@ -1,13 +1,41 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
   closeWithBoundedRetry,
   DesktopLifecycle,
+  installShutdownFile,
   installShutdownSignals,
   type DesktopStartup,
 } from '../apps/zenx/src/lifecycle.js';
 
 describe('DesktopLifecycle', () => {
+  it('starts external mode without acquiring or closing a composition or private transport', async () => {
+    const calls: string[] = [];
+    const lifecycle = new DesktopLifecycle();
+
+    await lifecycle.startExternal({
+      createHost: async () => ({
+        quiesce: async () => {
+          calls.push('host:quiesce');
+        },
+        close: async () => {
+          calls.push('host:close');
+        },
+      }),
+      createWindow: async () => ({
+        close: () => {
+          calls.push('window:close');
+        },
+      }),
+    });
+    await lifecycle.close();
+
+    expect(calls).toEqual(['host:quiesce', 'host:close', 'window:close']);
+  });
+
   it('closes acquired resources after a partial startup failure', async () => {
     const calls: string[] = [];
     const lifecycle = new DesktopLifecycle();
@@ -179,6 +207,35 @@ describe('DesktopLifecycle', () => {
     expect(shutdowns).toBe(1);
     dispose();
     expect(listeners.size).toBe(0);
+  });
+
+  it('requests shutdown once when the managed desktop marker appears', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zenx-shutdown-'));
+    const marker = join(root, 'desktop.shutdown');
+    let shutdowns = 0;
+    const dispose = installShutdownFile(
+      marker,
+      () => {
+        shutdowns += 1;
+      },
+      25
+    );
+    try {
+      await writeFile(marker, '');
+      await expect.poll(() => shutdowns).toBe(1);
+      await writeFile(marker, 'again');
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+      expect(shutdowns).toBe(1);
+    } finally {
+      dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an untrusted desktop shutdown marker path', () => {
+    expect(() => installShutdownFile('relative.shutdown', () => undefined)).toThrow(
+      'must be an absolute file path'
+    );
   });
 });
 

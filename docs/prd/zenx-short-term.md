@@ -171,6 +171,10 @@ clients how to talk to providers directly.
 - Single-account access path.
 - Zen App Server owns Projects, Threads, Turns, and history.
 - ZenX desktop/web can create, open, and resume Threads.
+- A managed ZenX launch can proxy one supplied loopback App Server without
+  creating or owning a private composition; a direct launch may retain the
+  standalone private fallback.
+- The renderer never receives the App Server capability in either host mode.
 - A Turn can be submitted and streamed to completion.
 - The resulting history is durable and reload-safe.
 - The provider path uses Zen's Pi-backed inference-only subscription adapter;

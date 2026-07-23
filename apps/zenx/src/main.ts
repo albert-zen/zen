@@ -2,16 +2,16 @@ import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electr
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  createAgentAppProductionComposition,
-  resolveAgentAppDataRoot,
-  serveAgentAppHttpTransport,
-  type AgentAppHttpTransport,
-  type AgentAppProductionComposition,
-} from '@zen/framework/node';
+import type { AgentAppHttpTransport, AgentAppProductionComposition } from '@zen/framework/node';
+import { resolveDesktopAppServerMode } from './app-server-mode.js';
 import { acquireSingleInstance } from './instance-policy.js';
 import { registerDesktopIpc } from './ipc.js';
-import { closeWithBoundedRetry, DesktopLifecycle, installShutdownSignals } from './lifecycle.js';
+import {
+  closeWithBoundedRetry,
+  DesktopLifecycle,
+  installShutdownFile,
+  installShutdownSignals,
+} from './lifecycle.js';
 import { serveDesktopStaticHost, type DesktopStaticHost } from './static-host.js';
 import { createWindowOptions, installWindowPolicy } from './window-policy.js';
 
@@ -24,6 +24,7 @@ void runDesktop().catch((cause: unknown) => {
 
 async function runDesktop(): Promise<void> {
   const lifecycle = new DesktopLifecycle();
+  const appServerMode = resolveDesktopAppServerMode(process.env);
   let mainWindow: BrowserWindow | undefined;
   if (
     !acquireSingleInstance(app, () => {
@@ -60,8 +61,10 @@ async function runDesktop(): Promise<void> {
   });
   app.on('window-all-closed', shutdown);
   const removeShutdownSignals = installShutdownSignals(process, shutdown);
+  const removeShutdownFile = installShutdownFile(process.env.ZEN_DESKTOP_SHUTDOWN_FILE, shutdown);
   app.once('will-quit', () => {
     removeShutdownSignals();
+    removeShutdownFile();
   });
 
   await app.whenReady();
@@ -75,6 +78,52 @@ async function runDesktop(): Promise<void> {
     showNotification: (notification) => new Notification(notification).show(),
   });
 
+  const createWindow = async (host: unknown) => {
+    const staticHost = host as DesktopStaticHost;
+    const window = new BrowserWindow(createWindowOptions(join(desktopDirectory, 'preload.js')));
+    mainWindow = window;
+    installWindowPolicy(window, shell);
+    window.on('close', (event) => {
+      if (nativeQuitAllowed) return;
+      event.preventDefault();
+      shutdown();
+    });
+    window.webContents.on('render-process-gone', (_event, details) =>
+      console.error('Zen renderer process exited', details.reason)
+    );
+    window.on('unresponsive', () => console.error('Zen renderer is unresponsive'));
+    window.once('ready-to-show', () => {
+      if (process.env.ZEN_DESKTOP_HIDE !== '1') window.show();
+    });
+    await window.loadURL(staticHost.url);
+    const autoQuitMs = Number(process.env.ZEN_DESKTOP_AUTO_QUIT_MS);
+    if (Number.isSafeInteger(autoQuitMs) && autoQuitMs > 0) setTimeout(shutdown, autoQuitMs);
+    return {
+      close: () => {
+        if (!window.isDestroyed()) window.destroy();
+      },
+    };
+  };
+
+  if (appServerMode.type === 'external') {
+    await lifecycle.startExternal({
+      createHost: async () =>
+        await serveDesktopStaticHost({
+          apiTarget: appServerMode.url,
+          capability: appServerMode.capability,
+          staticRoot: join(desktopDirectory, 'web'),
+        }),
+      createWindow,
+    });
+    console.log('ZenX connected to the shared Zen App Server.');
+    return;
+  }
+
+  const {
+    createAgentAppProductionComposition,
+    resolveAgentAppDataRoot,
+    serveAgentAppHttpTransport,
+  } = await import('@zen/framework/node');
   await lifecycle.start({
     createComposition: async () =>
       await createAgentAppProductionComposition({ appDataRoot: resolveAgentAppDataRoot() }),
@@ -92,31 +141,6 @@ async function runDesktop(): Promise<void> {
         staticRoot: join(desktopDirectory, 'web'),
       });
     },
-    createWindow: async (host) => {
-      const staticHost = host as DesktopStaticHost;
-      const window = new BrowserWindow(createWindowOptions(join(desktopDirectory, 'preload.js')));
-      mainWindow = window;
-      installWindowPolicy(window, shell);
-      window.on('close', (event) => {
-        if (nativeQuitAllowed) return;
-        event.preventDefault();
-        shutdown();
-      });
-      window.webContents.on('render-process-gone', (_event, details) =>
-        console.error('Zen renderer process exited', details.reason)
-      );
-      window.on('unresponsive', () => console.error('Zen renderer is unresponsive'));
-      window.once('ready-to-show', () => {
-        if (process.env.ZEN_DESKTOP_HIDE !== '1') window.show();
-      });
-      await window.loadURL(staticHost.url);
-      const autoQuitMs = Number(process.env.ZEN_DESKTOP_AUTO_QUIT_MS);
-      if (Number.isSafeInteger(autoQuitMs) && autoQuitMs > 0) setTimeout(shutdown, autoQuitMs);
-      return {
-        close: () => {
-          if (!window.isDestroyed()) window.destroy();
-        },
-      };
-    },
+    createWindow,
   });
 }
