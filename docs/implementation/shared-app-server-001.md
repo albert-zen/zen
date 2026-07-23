@@ -145,3 +145,57 @@ cleanup, and zero-residual census are covered by the PowerShell harness.
 - Base: `origin/main` at `27ea04e`
 - Implementation commit: `8038eab`
 - Pull request: <https://github.com/albert-zen/zen/pull/1>
+
+## Codex Worker Note Round 2
+
+Review `4767169703` was accepted and reworked regression-first without changing
+the ZenX external/private split or the direct OpenAI subscription runtime.
+
+### Reviewer Findings Disposition
+
+1. **Project-change binding reuse: fixed.** `ensureBinding` now resolves and
+   validates the current Project before considering persisted state. A readable
+   binding from another Project is never reused; ordinary input follows the
+   existing auto-bind semantics and creates a new Thread under the current
+   Project. A restart test persists `project-old/thread-old`, configures
+   `project-new`, keeps both readable, and asserts `thread/create`,
+   `turn/start`, and the replacement binding all use `project-new`.
+2. **Graceful-root descendant leak: fixed.** Managed stop captures an
+   identity-bound ownership ledger before requesting the marker, refreshes it
+   while waiting, and verifies/kills surviving descendants even after the root
+   exits. The marker fixture leaves a child alive after its ZenX-role root exits
+   and proves the child is removed while an unrelated process remains live.
+3. **Final startup race: fixed.** Final registration writes the descriptor,
+   requires all three verified identities, performs an authenticated
+   `project/read` health check, rechecks all identities, and cleans the complete
+   owned set on failure. The deterministic race fixture kills ZenX during that
+   final health window and asserts startup fails, the descriptor is removed,
+   all owned roles exit, and an unrelated process survives. Ambient
+   `ZEN_DESKTOP_AUTO_QUIT_MS` is cleared for managed ZenX.
+4. **Continuation SSE identity: fixed.** Cross-client acceptance now extracts
+   the second durable Turn id and Item ids, proves they differ from the ZenX
+   Turn, and requires the SSE `turn/completed` notification to match that exact
+   continuation snapshot.
+5. **Ambient credential conflict: fixed.** Managed launch saves, clears, and
+   restores `ZEN_APP_SERVER_CAPABILITY_DIR` and
+   `ZEN_APP_SERVER_CAPABILITY_HANDOFF` before installing the generated
+   capability. The PowerShell harness supplies both ambient modes and verifies
+   only the generated capability remains for child launch.
+
+### Round 2 Validation
+
+- Focused desktop/shared tests: 4 files, 16 tests passing.
+- Full IMZen workspace: 4 files, 28 tests passing.
+- Expanded PowerShell ownership harness: passing, including marker-aware
+  descendant cleanup, startup-race cleanup, ambient credential sanitization,
+  PID-reuse refusal, unrelated-process preservation, and three-role census.
+- `npm run format:check`: passing.
+- `npm run lint`: passing.
+- `npm run typecheck`: passing.
+- `npm run build && npm run build:acceptance`: passing.
+- `npm run e2e`: 3 tests passing.
+- Final worktree process census: zero residual managed, Node, Electron, ZenX,
+  fixture, or harness processes and zero harness temp directories.
+
+Residual risk remains limited to the unavailable real QQ credential/live QQ
+session and the previously recorded baseline `npm test`/coverage failures.

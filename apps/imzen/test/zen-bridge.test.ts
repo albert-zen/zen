@@ -81,6 +81,50 @@ describe('ImZenBridge', () => {
     await bridge.stop();
   });
 
+  it('rebinds under the currently configured Project after restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'imzen-bridge-'));
+    roots.push(root);
+    const statePath = join(root, 'state.json');
+    const previousState = await ImZenStateStore.open(statePath);
+    await previousState.bind('c2c:owner', {
+      projectId: 'project-old',
+      threadId: 'thread-old',
+    });
+    const restartedState = await ImZenStateStore.open(statePath);
+    const fake = new FakeAgentAppClient(root, {
+      projectIds: ['project-old', 'project-new'],
+      listedThreads: [{ threadId: 'thread-old', status: 'completed' }],
+    });
+    const bridge = new ImZenBridge({
+      client: fake,
+      config: {
+        ...config(root),
+        allowedUserIds: new Set(['owner']),
+        projectId: 'project-new',
+      },
+      deliver: async () => undefined,
+      pollIntervalMs: 1,
+      sleep: async () => undefined,
+      state: restartedState,
+    });
+    await bridge.start();
+    await bridge.accept(message('owner', 'project-change', 'continue in the new Project'));
+    await waitUntil(() => restartedState.pendingJobs().length === 0);
+
+    expect(
+      fake.requests.find((request) => request.method === 'thread/create')?.params.projectId
+    ).toBe('project-new');
+    expect(fake.requests.find((request) => request.method === 'turn/start')?.params).toMatchObject({
+      projectId: 'project-new',
+      threadId: 'thread-1',
+    });
+    expect(restartedState.binding('c2c:owner')).toEqual({
+      projectId: 'project-new',
+      threadId: 'thread-1',
+    });
+    await bridge.stop();
+  });
+
   it('lists Project Threads and binds the conversation only after App Server validation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'imzen-bridge-'));
     roots.push(root);
@@ -341,6 +385,7 @@ class FakeAgentAppClient implements AgentAppClient {
   private readonly projectReadErrorCode?: AgentAppErrorCode;
   private readonly threadReadError?: AgentAppErrorCode;
   private readonly listedThreads: readonly Record<string, unknown>[];
+  private readonly projectIds: readonly string[];
 
   constructor(
     private readonly root: string,
@@ -351,6 +396,7 @@ class FakeAgentAppClient implements AgentAppClient {
       projectStatus?: 'active' | 'archived';
       threadReadError?: AgentAppErrorCode;
       listedThreads?: readonly Record<string, unknown>[];
+      projectIds?: readonly string[];
     } = {}
   ) {
     this.projectStatus = options.projectStatus ?? 'active';
@@ -359,6 +405,7 @@ class FakeAgentAppClient implements AgentAppClient {
     this.projectReadErrorCode = options.projectReadErrorCode;
     this.threadReadError = options.threadReadError;
     this.listedThreads = options.listedThreads ?? [];
+    this.projectIds = options.projectIds ?? ['project-1'];
   }
 
   async request(request: AgentAppRequest): Promise<AgentAppResponse> {
@@ -376,8 +423,16 @@ class FakeAgentAppClient implements AgentAppClient {
           },
         };
       }
+      const projectId = String(request.params.projectId);
+      if (!this.projectIds.includes(projectId)) {
+        return {
+          method: request.method,
+          ok: false,
+          error: { code: 'PROJECT_NOT_FOUND', message: `missing: ${projectId}` },
+        };
+      }
       return ok(request.method, {
-        project: { id: 'project-1', rootPath: this.root, status: this.projectStatus },
+        project: { id: projectId, rootPath: this.root, status: this.projectStatus },
       });
     }
     if (request.method === 'project/list') {
@@ -388,7 +443,11 @@ class FakeAgentAppClient implements AgentAppClient {
         await this.projectListGate;
       }
       return ok(request.method, {
-        projects: [{ id: 'project-1', rootPath: this.root, status: this.projectStatus }],
+        projects: this.projectIds.map((id) => ({
+          id,
+          rootPath: this.root,
+          status: this.projectStatus,
+        })),
       });
     }
     if (request.method === 'thread/create') {

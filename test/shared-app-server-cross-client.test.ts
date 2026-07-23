@@ -137,7 +137,14 @@ describe('shared ZenX and IMZen App Server', () => {
         }),
         'thread'
       );
-      expect(completedTurns(durableThread)).toHaveLength(2);
+      const durableTurns = completedTurns(durableThread);
+      expect(durableTurns).toHaveLength(2);
+      const firstTurnId = stringField(durableTurns[0]!, 'id');
+      const continuationTurn = durableTurns[1]!;
+      const continuationTurnId = stringField(continuationTurn, 'id');
+      const continuationItemIds = stringArrayField(continuationTurn, 'itemIds');
+      expect(continuationTurnId).not.toBe(firstTurnId);
+      expect(continuationItemIds.length).toBeGreaterThan(0);
       expect(itemContents(durableThread)).toEqual(
         expect.arrayContaining([
           'first from zenx',
@@ -147,18 +154,31 @@ describe('shared ZenX and IMZen App Server', () => {
         ])
       );
 
-      let observedContinuation = false;
+      let observedContinuation: Record<string, unknown> | undefined;
       for (let index = 0; index < 30 && !observedContinuation; index += 1) {
         const event = await events.next();
         if (event.event !== 'notification') continue;
         const envelope = JSON.parse(event.data) as Record<string, unknown>;
         const notification = isRecord(envelope.notification) ? envelope.notification : {};
-        observedContinuation =
+        const turn = isRecord(notification.turn) ? notification.turn : undefined;
+        if (
           envelope.projectId === projectId &&
           notification.type === 'turn/completed' &&
-          notification.threadId === threadId;
+          notification.threadId === threadId &&
+          turn?.id === continuationTurnId
+        ) {
+          observedContinuation = notification;
+        }
       }
-      expect(observedContinuation).toBe(true);
+      expect(observedContinuation).toMatchObject({
+        threadId,
+        turn: {
+          id: continuationTurnId,
+          itemIds: continuationItemIds,
+          status: 'completed',
+        },
+        type: 'turn/completed',
+      });
     } finally {
       streamAbort.abort();
       await bridge?.stop();
@@ -253,6 +273,20 @@ function itemContents(thread: Record<string, unknown>): readonly string[] {
     if (!isRecord(item) || !isRecord(item.payload)) return [];
     return typeof item.payload.content === 'string' ? [item.payload.content] : [];
   });
+}
+
+function stringField(value: Record<string, unknown>, field: string): string {
+  const result = value[field];
+  if (typeof result !== 'string') throw new Error(`Missing ${field}`);
+  return result;
+}
+
+function stringArrayField(value: Record<string, unknown>, field: string): readonly string[] {
+  const result = value[field];
+  if (!Array.isArray(result) || result.some((entry) => typeof entry !== 'string')) {
+    throw new Error(`Missing ${field}`);
+  }
+  return result;
 }
 
 function latestUserContent(context: ModelContext): string {

@@ -144,9 +144,12 @@ function Request-GracefulShutdown($Descriptor, $Expected) {
   return $true
 }
 
-function Wait-ForVerifiedProcessExit($Expected, [int]$TimeoutSeconds) {
+function Wait-ForVerifiedProcessExit($Expected, [int]$TimeoutSeconds, $Ownership = $null) {
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
   do {
+    if ($null -ne $Ownership) {
+      [void](Add-OwnedDescendantsToLedger $Ownership.ledger @(Get-ProcessSnapshot))
+    }
     if (-not (Test-VerifiedProcessStillRunning $Expected)) { return $true }
     Start-Sleep -Milliseconds 200
   } while ([DateTime]::UtcNow -lt $deadline)
@@ -165,7 +168,7 @@ function Test-VerifiedProcessStillRunning($Expected) {
   }
 }
 
-function Stop-VerifiedOwnedTree($Expected) {
+function New-OwnedProcessLedger($Expected) {
   $rootIdentity = [PSCustomObject]@{
     role = $Expected.role
     pid = [int]$Expected.pid
@@ -185,10 +188,20 @@ function Stop-VerifiedOwnedTree($Expected) {
       identity = $rootIdentity
     }
   }
-  $terminated = @()
-
   $initialSnapshot = @(Get-ProcessSnapshot)
   [void](Add-OwnedDescendantsToLedger $ledger $initialSnapshot)
+  return [PSCustomObject]@{
+    ledger = $ledger
+    rootKey = $rootKey
+  }
+}
+
+function Stop-VerifiedOwnedTree($Expected, $Ownership = $null) {
+  if ($null -eq $Ownership) { $Ownership = New-OwnedProcessLedger $Expected }
+  $ledger = $Ownership.ledger
+  $rootKey = $Ownership.rootKey
+  $terminated = @()
+
   $rootResult = Stop-IdentityBoundProcess $ledger[$rootKey]
   if ($rootResult -eq 'terminated') { $terminated += [int]$Expected.pid }
 
@@ -286,6 +299,15 @@ function Get-LiveOwnedRecords([hashtable]$Ledger, [object[]]$Processes) {
   }
 }
 
+function Get-LiveOwnedDescendants($Ownership) {
+  $snapshot = @(Get-ProcessSnapshot)
+  [void](Add-OwnedDescendantsToLedger $Ownership.ledger $snapshot)
+  @(
+    Get-LiveOwnedRecords $Ownership.ledger $snapshot |
+      Where-Object { $_.depth -gt 0 }
+  )
+}
+
 function Stop-IdentityBoundProcess($Record) {
   $expected = $Record.identity
   $actualCim = Get-CimInstance Win32_Process -Filter "ProcessId=$($expected.pid)" -ErrorAction SilentlyContinue
@@ -348,13 +370,31 @@ function Remove-ManagedControlFiles($Descriptor) {
   Remove-Item -LiteralPath $descriptorPath -Force -ErrorAction SilentlyContinue
 }
 
-function Stop-LiveProcesses($Descriptor) {
+function Stop-LiveProcesses($Descriptor, $OwnershipByIdentity = $null) {
   $failures = @()
   foreach ($expected in @(Get-DescriptorProcesses $Descriptor)) {
     try {
-      if (-not (Test-VerifiedProcessStillRunning $expected)) { continue }
+      $identityKey = Get-ProcessIdentityKey $expected
+      $ownership = if (
+        $null -ne $OwnershipByIdentity -and
+        $OwnershipByIdentity.ContainsKey($identityKey)
+      ) {
+        $OwnershipByIdentity[$identityKey]
+      } else {
+        $null
+      }
+      if (-not (Test-VerifiedProcessStillRunning $expected)) {
+        if ($null -ne $ownership -and @(Get-LiveOwnedDescendants $ownership).Count -gt 0) {
+          Stop-VerifiedOwnedTree $expected $ownership
+        }
+        continue
+      }
+      if ($null -eq $ownership) { $ownership = New-OwnedProcessLedger $expected }
       $requested = Request-GracefulShutdown $Descriptor $expected
-      if ($requested -and (Wait-ForVerifiedProcessExit $expected $gracefulShutdownTimeoutSeconds)) {
+      if ($requested -and (Wait-ForVerifiedProcessExit $expected $gracefulShutdownTimeoutSeconds $ownership)) {
+        if (@(Get-LiveOwnedDescendants $ownership).Count -gt 0) {
+          Stop-VerifiedOwnedTree $expected $ownership
+        }
         Write-Output "$($expected.role) PID $($expected.pid) exited gracefully."
         continue
       }
@@ -363,7 +403,7 @@ function Stop-LiveProcesses($Descriptor) {
       } else {
         Write-Warning "No graceful shutdown control is available for legacy $($expected.role) PID $($expected.pid)."
       }
-      Stop-VerifiedOwnedTree $expected
+      Stop-VerifiedOwnedTree $expected $ownership
     } catch {
       $failures += $_.Exception.Message
     }
@@ -404,6 +444,66 @@ function Invoke-AppServer([string]$Url, [string]$Capability, [string]$Method, $P
   } -ContentType 'application/json' -Body $body
   if (-not $response.ok) { throw "App Server $Method failed: $($response.error.message)" }
   return $response
+}
+
+function Set-GeneratedAppServerCredentialEnvironment([string]$Capability) {
+  $env:ZEN_APP_SERVER_CAPABILITY = $Capability
+  [Environment]::SetEnvironmentVariable('ZEN_APP_SERVER_CAPABILITY_DIR', $null, 'Process')
+  [Environment]::SetEnvironmentVariable('ZEN_APP_SERVER_CAPABILITY_HANDOFF', $null, 'Process')
+}
+
+function New-DescriptorOwnershipLedgers($Descriptor) {
+  $ownershipByIdentity = @{}
+  foreach ($expected in @(Get-DescriptorProcesses $Descriptor)) {
+    $ownershipByIdentity[(Get-ProcessIdentityKey $expected)] = New-OwnedProcessLedger $expected
+  }
+  return $ownershipByIdentity
+}
+
+function Register-ManagedStartup($Descriptor, [scriptblock]$HealthCheck) {
+  $ownershipByIdentity = New-DescriptorOwnershipLedgers $Descriptor
+  Write-Descriptor $Descriptor
+  try {
+    if (-not (Test-CompleteManagedDescriptor $Descriptor) -or -not (Show-Status $Descriptor)) {
+      throw 'Managed startup did not retain all three verified process identities.'
+    }
+    [void](& $HealthCheck)
+    if (-not (Show-Status $Descriptor)) {
+      throw 'A managed process exited during final startup registration.'
+    }
+  } catch {
+    $startupFailure = $_.Exception
+    try {
+      Stop-LiveProcesses $Descriptor $ownershipByIdentity
+    } catch {
+      throw [AggregateException]::new(
+        'Managed startup validation and cleanup failed.',
+        [Exception[]]@($startupFailure, $_.Exception)
+      )
+    }
+    throw $startupFailure
+  }
+}
+
+function Get-ManagedEnvironmentNames {
+  @(
+    'ZEN_APP_SERVER_HOST',
+    'ZEN_APP_SERVER_PORT',
+    'ZEN_APP_SERVER_CAPABILITY',
+    'ZEN_APP_SERVER_CAPABILITY_DIR',
+    'ZEN_APP_SERVER_CAPABILITY_HANDOFF',
+    'ZEN_APP_SERVER_URL',
+    'ZEN_APP_SERVER_SHUTDOWN_FILE',
+    'ZEN_DESKTOP_AUTO_QUIT_MS',
+    'ZEN_DESKTOP_SHUTDOWN_FILE',
+    'IMZEN_PROJECT_ID',
+    'IMZEN_PROJECT_ROOT',
+    'IMZEN_QQ_SECRET_FILE',
+    'IMZEN_SHUTDOWN_FILE',
+    'IMZEN_QQ_APP_ID',
+    'IMZEN_QQ_APP_SECRET',
+    'IMZEN_QQ_TOKEN'
+  )
 }
 
 function ConvertTo-QuotedProcessArgument([string]$Value) {
@@ -488,21 +588,7 @@ try {
 }
 $capability = [Convert]::ToBase64String($randomBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $url = "http://127.0.0.1:$Port"
-$managedEnvironmentNames = @(
-  'ZEN_APP_SERVER_HOST',
-  'ZEN_APP_SERVER_PORT',
-  'ZEN_APP_SERVER_CAPABILITY',
-  'ZEN_APP_SERVER_URL',
-  'ZEN_APP_SERVER_SHUTDOWN_FILE',
-  'ZEN_DESKTOP_SHUTDOWN_FILE',
-  'IMZEN_PROJECT_ID',
-  'IMZEN_PROJECT_ROOT',
-  'IMZEN_QQ_SECRET_FILE',
-  'IMZEN_SHUTDOWN_FILE',
-  'IMZEN_QQ_APP_ID',
-  'IMZEN_QQ_APP_SECRET',
-  'IMZEN_QQ_TOKEN'
-)
+$managedEnvironmentNames = @(Get-ManagedEnvironmentNames)
 $savedEnvironment = @{}
 foreach ($name in $managedEnvironmentNames) {
   $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -520,7 +606,7 @@ try {
   }
   $env:ZEN_APP_SERVER_HOST = '127.0.0.1'
   $env:ZEN_APP_SERVER_PORT = [string]$Port
-  $env:ZEN_APP_SERVER_CAPABILITY = $capability
+  Set-GeneratedAppServerCredentialEnvironment $capability
   $env:ZEN_APP_SERVER_SHUTDOWN_FILE = $appServerShutdownMarker
   $appServerProcess = Start-Process -FilePath $nodeExecutable `
     -ArgumentList (ConvertTo-QuotedProcessArgument (Join-Path $repoRoot 'apps\cli\dist\app-server-cli.js')) `
@@ -590,6 +676,7 @@ try {
   if (-not $ready) { throw 'IMZen did not connect within 20 seconds.' }
 
   $env:ZEN_DESKTOP_SHUTDOWN_FILE = $zenxShutdownMarker
+  [Environment]::SetEnvironmentVariable('ZEN_DESKTOP_AUTO_QUIT_MS', $null, 'Process')
   $zenxProcess = Start-Process -FilePath $electronExecutable `
     -ArgumentList (ConvertTo-QuotedProcessArgument (Join-Path $repoRoot 'apps\zenx')) `
     -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru `
@@ -631,8 +718,11 @@ try {
     zenxLog = $zenxLog
     zenxErrorLog = $zenxErrorLog
   }
-  Write-Descriptor $descriptor
-  [void](Show-Status $descriptor)
+  Register-ManagedStartup $descriptor {
+    [void](Invoke-AppServer $url $capability 'project/read' @{
+      projectId = [string]$project.id
+    })
+  }
 } catch {
   $incompleteDescriptor = [PSCustomObject]@{
     version = 3

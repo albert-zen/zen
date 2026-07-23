@@ -223,8 +223,12 @@ export class ImZenBridge {
   }
 
   private async ensureBinding(message: QQInboundMessage): Promise<ConversationBinding> {
+    const projectId = await this.resolveProjectId();
     const existing = this.options.state.binding(message.conversationId);
     if (existing) {
+      if (existing.projectId !== projectId) {
+        return await this.createAndBindThread(message, '', projectId);
+      }
       const response = await this.request('thread/read', {
         projectId: existing.projectId,
         threadId: existing.threadId,
@@ -236,15 +240,9 @@ export class ImZenBridge {
       if (response.error.code !== 'THREAD_NOT_FOUND') {
         throw new Error(response.error.message);
       }
-      const projectId = await this.resolveProjectId();
-      if (projectId !== existing.projectId) {
-        throw new Error(
-          `Stored conversation binding points to Project ${existing.projectId}, but the configured Project is ${projectId}`
-        );
-      }
       return await this.createAndBindThread(message, '', projectId);
     }
-    return await this.createAndBindThread(message, '');
+    return await this.createAndBindThread(message, '', projectId);
   }
 
   private async createAndBindThread(
