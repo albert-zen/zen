@@ -64,6 +64,17 @@ The canonical handoff is the GitHub branch and pull request.
 - Added cross-client evidence proving two completed Turns on one durable Thread
   and ZenX SSE observation of the IMZen continuation.
 
+### Round 2
+
+- Completed focused tests, all IMZen tests, formatting, lint, typechecks,
+  production/acceptance builds, Playwright E2E, ZenX pack/inspect/render, an
+  external-mode packaged render, and Windows process ownership/census checks.
+- Recorded the unchanged module-boundary and canceled-Turn interrupt failures
+  that block the full test/coverage chains without changing unrelated runtime
+  architecture or weakening a gate.
+- Verified final process cleanup, committed and pushed the implementation, and
+  opened the GitHub pull request against `main`.
+
 ## Validation
 
 Completed validation:
@@ -132,5 +143,5 @@ cleanup, and zero-residual census are covered by the PowerShell harness.
 
 - Branch: `codex/shared-app-server-001-shared-instance`
 - Base: `origin/main` at `27ea04e`
-- Commit: pending
-- Pull request: pending
+- Implementation commit: `8038eab`
+- Pull request: <https://github.com/albert-zen/zen/pull/1>
