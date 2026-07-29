@@ -44,7 +44,7 @@ IM Channel ↔ Zen App Server 的 gateway。策略已从"fork imcodex"更新为
 
 | 阶段 | 交付 | 验收 |
 |---|---|---|
-| 1 | 宪法文档校准 | 用户逐份签字 |
+| 1 | 宪法文档校准 | 文档定稿 |
 | 2 | 协议侦察：stub server 记录 `codex --remote` / T3 Code 实际调用 | 确定协议子集与第一客户端，钉住 Codex 版本 |
 | 3 | 纯内存最小链路（initialize → thread/start → turn/start → FakeModel → item 事件） | 上下文只从 ItemList 得到；单条代码路径可读懂完整生命周期 |
 | 4 | append-only journal（每 Thread 一个 JSONL） | 重启恢复；未完成 Turn 呈现为明确中断 |

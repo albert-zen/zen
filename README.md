@@ -4,9 +4,10 @@
 
 ## 文档
 
-- [VISION.md](VISION.md) — 北极星、不变量、Non-goals
-- [ARCHITECTURE.md](ARCHITECTURE.md) — 核心概念、协议、adapter 边界
-- [PRODUCTS.md](PRODUCTS.md) — 各接入端的定位与路线
+- [VISION.md](VISION.md) — 北极星与目标
+- [ARCHITECTURE.md](ARCHITECTURE.md) — 不变量、核心概念、协议、adapter 边界
+- [LESSONS.md](LESSONS.md) — 非目标与 zen-legacy 的教训
+- [PRODUCTS.md](PRODUCTS.md) — 各接入端的定位与里程碑
 - [SALVAGE.md](SALVAGE.md) — 从 zen-legacy 移植的清单
 
 前身仓库见 [zen-legacy](https://github.com/albert-zen/zen-legacy)（tag `legacy-2026-07`）。

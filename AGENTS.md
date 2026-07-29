@@ -1,7 +1,8 @@
 # AGENTS.md
 
 Zen：本地个人 agent 框架。核心 = Agent Runtime（append-only ItemList）+ App Server。
-权威文档：VISION.md（不变量与 non-goals）、ARCHITECTURE.md（概念与边界）、PRODUCTS.md（接入端）。
+权威文档：VISION.md（目标）、ARCHITECTURE.md（不变量、概念与边界）、
+LESSONS.md（非目标与教训）、PRODUCTS.md（接入端与里程碑）。
 
 ## 不变量
 
@@ -14,7 +15,7 @@ Zen：本地个人 agent 框架。核心 = Agent Runtime（append-only ItemList�
 4. Project 不是运行时对象；接入端（CLI/桌面/Web/IM）不得拥有自己的
    Agent/Thread/Turn/调度语义。
 5. 流式 delta 不写 journal；journal 每行一个完整的 canonical Item。
-6. VISION.md 的 Non-goals 清单在 review 时对照执行；需要其中某项时先改 VISION.md。
+6. LESSONS.md 的非目标清单在 review 时对照执行；需要其中某项时先改 LESSONS.md。
 7. 失败明确告知用户，不建自我修复的 durable 状态机。
 
 ## 验证
@@ -23,8 +24,3 @@ Zen：本地个人 agent 框架。核心 = Agent Runtime（append-only ItemList�
 npm test        # 单测（占位：Phase 3 落地后生效）
 npm run check   # format + lint + typecheck + unit
 ```
-
-## 工作方式
-
-人在环：不使用自主 issue 流水线，不写过程档案（DAG/evidence/transcript）。
-每个阶段一次整体 review，验收标准见 PRODUCTS.md 里程碑表。

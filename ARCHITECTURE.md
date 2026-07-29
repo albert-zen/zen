@@ -15,6 +15,18 @@
 接收并转交。Thread 记录创建时实际使用的 cwd；"项目列表"是客户端按
 workspace 派生的分组视图，不是运行时容器。
 
+## 不变量
+
+违反这些规则的代码不合入，无论多有用。
+
+1. **会话状态可推导。** Thread 的所有会话语义与执行结果必须由 append-only
+   ItemList 推导。引入不可推导的会话状态前，先修改本文件并说明理由。
+2. **配置在外侧。** 凭证、Provider 账户、workspace 配置在 Zen Core 外部，
+   可独立持久化，但不得保存或覆盖 Thread、Turn、Item 的运行状态。
+3. **一切抽象可解释。** 每个模块、每个概念必须在本文件有一句话解释；
+   解释不清，说明它不该存在。
+4. **失败明确告知。** 出错时明确告诉用户，不建自我修复的 durable 状态机。
+
 ## 状态边界
 
 | 状态类别 | 例子 | 归属 |
@@ -23,7 +35,8 @@ workspace 派生的分组视图，不是运行时容器。
 | 外部运行配置 | API Key、Provider 账户、默认模型、workspace 配置 | Zen Core 外部的配置层 |
 | 观测与展示状态 | 流式 delta、延迟指标、debug log、UI 状态 | 临时事件 / telemetry，不持久化 |
 
-判据见 VISION.md：删除该记录会改变 agent 的上下文或用户理解的历史，才是 Item。
+一条记录该不该进 ItemList，判据是：**删除它之后，Agent 下一轮得到的上下文、
+或用户理解的执行历史会不会改变？** 会，就是 Item；不会，就放外侧。
 Thread 内保留一份不含秘密的生效配置描述（`provider / model / credential_ref /
 cwd / tool_policy`），记录"当时用了什么"，不记录秘密本身。
 
