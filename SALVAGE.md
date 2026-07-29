@@ -1,0 +1,39 @@
+# SALVAGE
+
+从 [zen-legacy](https://github.com/albert-zen/zen-legacy)（tag `legacy-2026-07`，
+本地 `~/Code/zen-legacy`）有目的地移植，而不是怀旧式翻仓库。
+原则：等新骨架跑通后作为 adapter 一块块搬，不一开始就 copy。
+
+## 值得移植的代码
+
+| 来源（zen-legacy） | 内容 | 去处 |
+|---|---|---|
+| `packages/framework/src/adapters/node/openai-subscription-*.ts` | 订阅认证 / OAuth 流程，编码了真实协议的坑 | `adapters/`，收在 ModelGateway 接口后 |
+| `packages/framework/src/adapters/node/openai-compatible-model-gateway.ts` | OpenAI 兼容网关 | 同上 |
+| `apps/imzen/src/zen-bridge.ts` 中的 IM 通道传输部分 | QQ 消息进出（**不含** durable 路由状态机） | 参考；imzen 主体 fork 自 imcodex |
+
+## 值得移植的概念（代码重审后再搬）
+
+- kernel：`Item`、`InMemoryItemList`、`AgentLoop`、`ContextCompiler` ——
+  概念照搬，实现趁机精简（legacy kernel 已膨胀至 ~1900 行，hook/observer 需重审）。
+- `docs/design-intent.md` 中仍准确的段落（item-first 论述），已吸收进 VISION.md，
+  移植代码时可回查原文。
+
+## 值得回查的资料
+
+- legacy 的 ~26k 行测试：不移植，但其中记录的真实边界情况在移植 gateway
+  和 IM 传输层时值得检索。
+
+## 外部参考（借实现，不 fork 项目）
+
+- **pi**（badlogic，TypeScript，极简）— agent loop 与 provider 处理的结构参考
+- **OpenClaw** — 多 IM 通道接入与订阅认证的实现参考
+- **Codex CLI**（Apache-2.0）— 订阅认证的官方实现；app-server 协议的权威来源
+- **T3 Code** `apps/server/src/provider/Layers/CodexSessionRuntime.ts` —
+  codex-compat 需要支持的方法/事件子集的事实定义
+
+## 明确不移植
+
+两层 AppServer、ProjectCoordinator、AgentScheduler、coordination journal、
+command ledger、durable lease/wait/handoff、`docs/implementation` 过程档案、
+Linear/Symphony 工作流文档。理由见 VISION.md Non-goals。
