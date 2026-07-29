@@ -3,15 +3,14 @@
 所有接入端平级，都只通过 App Server 协议工作。任何接入端都不得拥有
 自己的 Agent、Thread、Turn 或调度语义。
 
-## 第一客户端（候选优先级）
+## 第一客户端
 
-1. **原版 `codex --remote`** — Codex CLI 支持连接远程 App Server；若 Zen 的
-   协议子集能承载它，第一客户端零开发。
-2. **固定版本 T3 Code** — MIT 开源桌面编排器，用同一协议驱动 agent。
-3. **自建薄 Zen CLI** — 仅当上面两者要求的子集过大时才做。
+**自建薄 Zen CLI** 是首个稳定接入端，只覆盖启动 / 恢复 Thread、发送消息、
+流式显示与审批，不拥有 Agent 或调度语义。
 
-选择由 Phase 2 协议侦察决定：起一个最小 stub App Server，记录真实客户端
-的实际调用，据此定子集。
+原版 `codex --remote` 与固定版本 T3 Code 是机会型兼容目标：Phase 2 用最小
+stub App Server 记录真实调用，在不污染 Zen Core 的前提下扩展协议子集。能接入
+是生态收益，不能接入也不阻塞 Zen 自身产品。
 
 ## 桌面
 
@@ -21,14 +20,14 @@ T3 Code / Traycer 这类通用编排工具表达不了的 Zen 特有需求。
 
 ## IMZen
 
-IM Channel ↔ Zen App Server 的 gateway。策略已从"fork imcodex"更新为
-**复用 + 指向**：
+IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它不是单独的
+架构层。实现策略是**复用通道，不复用 agent backend**：
 
 - imcodex 的 `channels` 层（QQ 等 IM 接入、鉴权、收发）依赖方向干净、
-  可作为库直接复用——imt3 项目已验证这条边界。
-- imcodex 的 backend 本来就说 Codex app-server 协议（`thread/start` /
-  `thread/resume`）；Zen 兼容同一协议后，**imzen 的最小形态可能只是
-  imcodex 指向 `zen app-server` 的一个 backend 配置**，待 Phase 2 后确认。
+  作为固定 commit 的库直接复用。
+- IMZen 自己只保留薄 middleware、IM conversation 到 Zen thread 的内存绑定，
+  并通过 imcodex 的 `AppServerClient` 调 Zen。它不导入 imcodex 的 agent、
+  backend、store 或持久化路由语义。
 - 可靠性策略刻意从简：投递失败直接告知用户，不建 durable 路由/恢复状态机
   ——zen-legacy 结尾连续十个 `fix(imzen)` 加固提交是那条路的墓志铭。
 
@@ -42,13 +41,17 @@ IM Channel ↔ Zen App Server 的 gateway。策略已从"fork imcodex"更新为
 
 ## 里程碑
 
-| 阶段 | 交付 | 验收 |
-|---|---|---|
-| 1 | 宪法文档校准 | 文档定稿 |
-| 2 | 协议侦察：stub server 记录 `codex --remote` / T3 Code 实际调用 | 确定协议子集与第一客户端，钉住 Codex 版本 |
-| 3 | 纯内存最小链路（initialize → thread/start → turn/start → FakeModel → item 事件） | 上下文只从 ItemList 得到；单条代码路径可读懂完整生命周期 |
-| 4 | append-only journal（每 Thread 一个 JSONL） | 重启恢复；未完成 Turn 呈现为明确中断 |
-| 5 | 第一个 shell tool + item 级审批 | accept / decline / cancel 全链路 |
-| 6 | 真实客户端兼容 | 所选客户端完成一轮会话 + 一次工具审批 |
-| 7 | 真实模型（API-key provider 先行） | 真模型走通同一链路 |
-| 8 | imzen（复用 imcodex 通道层） | IM 消息 → thread → 回复闭环 |
+| 阶段 | 当前结果                                                                  | 状态                                   |
+| ---- | ------------------------------------------------------------------------- | -------------------------------------- |
+| 1    | VISION / ARCHITECTURE / LESSONS / PRODUCTS 定义当前产品边界               | 完成                                   |
+| 2    | 协议钉在 codex-cli 0.146.0；精确子集记录在 `src/protocol/codex/README.md` | 完成                                   |
+| 3    | 内存 ItemList → Runtime → App Server → FakeModel 事件链                   | 完成                                   |
+| 4    | 每 Thread 一个 append-only JSONL；stale open Turn 派生为 interrupted      | 完成                                   |
+| 5    | shell + command item 瞬态审批；accept / decline / cancel / interrupt      | 完成                                   |
+| 6    | 薄 Zen CLI；stdio 与 loopback WebSocket                                   | 完成                                   |
+| 7    | 严格 OpenAI-compatible streaming adapter；两轮 tool-call 集成测试         | 实现完成；真实网络验收需要外部 API Key |
+| 8    | 独立 IMZen；复用固定版 imcodex channels 与 AppServerClient                | 本地完整闭环通过；真实频道需频道凭证   |
+
+原版 `codex --remote` 0.146.0 还会调用账户、模型、配置、hooks 等 bootstrap
+方法，Zen 当前明确返回 unsupported，因此不宣称兼容原版 TUI。这不阻塞 Zen CLI，
+也不会反向扩大 Core。

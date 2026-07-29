@@ -1,0 +1,11 @@
+dist/
+node_modules/
+.zen/
+.env
+.env.*
+*.log
+**/.pytest_cache/
+**/.ruff_cache/
+**/.venv/
+**/__pycache__/
+*.py[cod]

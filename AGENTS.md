@@ -21,6 +21,6 @@ LESSONS.md（非目标与教训）、PRODUCTS.md（接入端与里程碑）。
 ## 验证
 
 ```sh
-npm test        # 单测（占位：Phase 3 落地后生效）
+npm test        # Node Core / protocol / CLI + IMZen 单测
 npm run check   # format + lint + typecheck + unit
 ```

@@ -6,16 +6,17 @@
 
 ## 值得移植的代码
 
-| 来源（zen-legacy） | 内容 | 去处 |
-|---|---|---|
-| `packages/framework/src/adapters/node/openai-subscription-*.ts` | 订阅认证 / OAuth 流程，编码了真实协议的坑 | `adapters/`，收在 ModelGateway 接口后 |
-| `packages/framework/src/adapters/node/openai-compatible-model-gateway.ts` | OpenAI 兼容网关 | 同上 |
-| `apps/imzen/src/zen-bridge.ts` 中的 IM 通道传输部分 | QQ 消息进出（**不含** durable 路由状态机） | 仅作边界情况参考；imzen 已改为复用 imcodex 的 channels 层（见 PRODUCTS.md） |
+| 来源（zen-legacy）                                                        | 内容                                       | 去处                                                                        |
+| ------------------------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------- |
+| `packages/framework/src/adapters/node/openai-subscription-*.ts`           | 订阅认证 / OAuth 流程，编码了真实协议的坑  | 候选 adapter，实现真实需要出现后再决定目录                                  |
+| `packages/framework/src/adapters/node/openai-compatible-model-gateway.ts` | OpenAI 兼容网关                            | 同上                                                                        |
+| `apps/imzen/src/zen-bridge.ts` 中的 IM 通道传输部分                       | QQ 消息进出（**不含** durable 路由状态机） | 仅作边界情况参考；imzen 已改为复用 imcodex 的 channels 层（见 PRODUCTS.md） |
 
 ## 值得移植的概念（代码重审后再搬）
 
-- kernel：`Item`、`InMemoryItemList`、`AgentLoop`、`ContextCompiler` ——
-  概念照搬，实现趁机精简（legacy kernel 已膨胀至 ~1900 行，hook/observer 需重审）。
+- kernel：`Item`、`InMemoryItemList`、`AgentLoop`、`ContextCompiler` 仅作为候选
+  实现参考；不是预先批准的独立抽象。需要时先在 ARCHITECTURE.md 解释，再用
+  更小的实现落地（legacy kernel 已膨胀至 ~1900 行，hook/observer 需重审）。
 - `docs/design-intent.md` 中仍准确的段落（item-first 论述），已吸收进 VISION.md，
   移植代码时可回查原文。
 

@@ -1,0 +1,33 @@
+{
+  "name": "@zen/agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "zen": "./dist/apps/cli/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
+    "format": "prettier --write . && uv run --project apps/imzen --extra dev ruff format apps/imzen",
+    "format:check": "prettier --check . && uv run --project apps/imzen --extra dev ruff format --check apps/imzen",
+    "lint": "uv run --project apps/imzen --extra dev ruff check apps/imzen",
+    "start": "node dist/apps/cli/src/cli.js",
+    "test": "npm run test:node && npm run test:imzen",
+    "test:imzen": "uv run --project apps/imzen --extra dev pytest -q apps/imzen/tests",
+    "test:node": "npm run build && node --test dist/test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2"
+  }
+}
