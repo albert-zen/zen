@@ -282,6 +282,7 @@ export class AgentRuntime {
       messages: compileModelMessages(options.thread.items),
       tools: this.#tools.definitions,
       signal: options.signal,
+      sessionId: options.thread.id,
     })) {
       if (event.type === "text_delta") {
         if (!started) {

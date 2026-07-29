@@ -8,8 +8,8 @@
 
 | 来源（zen-legacy）                                                        | 内容                                       | 去处                                                                        |
 | ------------------------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------- |
-| `packages/framework/src/adapters/node/openai-subscription-*.ts`           | 订阅认证 / OAuth 流程，编码了真实协议的坑  | 候选 adapter，实现真实需要出现后再决定目录                                  |
-| `packages/framework/src/adapters/node/openai-compatible-model-gateway.ts` | OpenAI 兼容网关                            | 同上                                                                        |
+| `packages/framework/src/adapters/node/openai-subscription-*.ts`           | 订阅认证 / OAuth 流程，编码了真实协议的坑  | 只作事实参考；Zen 已按自身边界原生实现 adapter/profile，不依赖 PI 或 legacy |
+| `packages/framework/src/adapters/node/openai-compatible-model-gateway.ts` | OpenAI 兼容网关                            | 只作事实参考；Zen 使用自己的最小 ModelAdapter                               |
 | `apps/imzen/src/zen-bridge.ts` 中的 IM 通道传输部分                       | QQ 消息进出（**不含** durable 路由状态机） | 仅作边界情况参考；imzen 已改为复用 imcodex 的 channels 层（见 PRODUCTS.md） |
 
 ## 值得移植的概念（代码重审后再搬）

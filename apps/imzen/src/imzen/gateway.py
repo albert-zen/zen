@@ -16,6 +16,8 @@ class AppServerClient(Protocol):
 
     def add_server_request_handler(self, handler: Callable[[dict], Awaitable[None]]) -> None: ...
 
+    def add_connection_reset_handler(self, handler: Callable[[int], Awaitable[None]]) -> None: ...
+
     async def initialize(self) -> dict: ...
 
     async def start_thread(self, **params: Any) -> dict: ...
@@ -62,6 +64,7 @@ class ImZenGateway:
             return
         self.client.add_notification_handler(self.handle_notification)
         self.client.add_server_request_handler(self.handle_server_request)
+        self.client.add_connection_reset_handler(self.handle_connection_reset)
         await self.client.initialize()
         self._started = True
 
@@ -78,6 +81,25 @@ class ImZenGateway:
         self._terminal_items.clear()
         self._started = False
         await self.client.close()
+
+    async def handle_connection_reset(self, connection_epoch: int) -> None:
+        """Discard transport-local state and make lost output explicit."""
+
+        self._pending_approvals.clear()
+        self._terminal_items.clear()
+        conversations = sorted(set(self._thread_by_conversation))
+        for conversation in conversations:
+            await self._send_to_conversation(
+                conversation,
+                message_type="error",
+                text=(
+                    "The Zen App Server connection was reset. Any pending approval "
+                    "was cancelled; resend your last message if no reply arrived."
+                ),
+                delivery_id=(
+                    f"imzen:connection-reset:{connection_epoch}:{conversation[0]}:{conversation[1]}"
+                ),
+            )
 
     def thread_for(self, channel_id: str, conversation_id: str) -> str | None:
         return self._thread_by_conversation.get((channel_id, conversation_id))

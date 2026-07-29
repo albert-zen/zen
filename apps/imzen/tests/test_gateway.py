@@ -12,6 +12,7 @@ class FakeAppServer:
     def __init__(self) -> None:
         self.notification_handlers = []
         self.server_request_handlers = []
+        self.connection_reset_handlers = []
         self.started_threads: list[dict[str, Any]] = []
         self.started_turns: list[tuple[str, dict[str, Any]]] = []
         self.replies: list[tuple[str | int, dict]] = []
@@ -25,6 +26,9 @@ class FakeAppServer:
 
     def add_server_request_handler(self, handler) -> None:
         self.server_request_handlers.append(handler)
+
+    def add_connection_reset_handler(self, handler) -> None:
+        self.connection_reset_handlers.append(handler)
 
     async def initialize(self) -> dict:
         self.initialized = True
@@ -68,6 +72,10 @@ class FakeAppServer:
     async def request(self, payload: dict) -> None:
         for handler in self.server_request_handlers:
             await handler(payload)
+
+    async def reset(self, epoch: int) -> None:
+        for handler in self.connection_reset_handlers:
+            await handler(epoch)
 
 
 class FakeAdapter:
@@ -257,6 +265,39 @@ async def test_resolved_approval_is_removed_without_recovery_state(tmp_path):
     assert client.replies == []
     assert adapter.sent[-1].message_type == "error"
     assert adapter.sent[-1].text == "No matching approval request is pending."
+
+
+@pytest.mark.asyncio
+async def test_connection_reset_clears_transport_state_and_warns_bound_conversation(
+    tmp_path,
+):
+    client = FakeAppServer()
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+    await middleware.start()
+    await middleware.handle_inbound(adapter, inbound("m1", "run it"))
+    await client.request(
+        {
+            "id": "approval-1",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "command": "printf hello",
+            },
+        }
+    )
+
+    await client.reset(7)
+    await middleware.handle_inbound(adapter, inbound("m2", "/approve approval-1"))
+
+    assert client.replies == []
+    assert adapter.sent[-2].message_type == "error"
+    assert "connection was reset" in adapter.sent[-2].text
+    assert adapter.sent[-2].metadata["delivery_id"] == "imzen:connection-reset:7:test:chat-1"
+    assert adapter.sent[-1].text == "No matching approval request is pending."
+    assert middleware.gateway.thread_for("test", "chat-1") == "thread-1"
 
 
 @pytest.mark.asyncio

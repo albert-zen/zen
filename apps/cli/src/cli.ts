@@ -1,14 +1,21 @@
 #!/usr/bin/env node
 
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { createHostedAppServer, type HostProvider } from "./host.js";
+import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
+import { DEFAULT_OPENAI_SUBSCRIPTION_MODEL } from "../../../src/model/openai-subscription.js";
 import {
   CodexClient,
   responseResult,
 } from "../../../src/protocol/codex/client.js";
+import {
+  bridgeCodexStdioToWebSocket,
+  readBearerTokenFile,
+} from "../../../src/protocol/codex/bridge.js";
 import { serveCodexStdio } from "../../../src/protocol/codex/stdio.js";
 import {
   serveCodexWebSocket,
@@ -36,6 +43,8 @@ async function main(): Promise<void> {
     await chatCommand(parseArguments(args));
   } else if (command === "threads") {
     await threadsCommand(parseArguments(args));
+  } else if (command === "auth") {
+    await authCommand(parseArguments(args));
   } else if (command === "help" || command === "--help" || command === "-h") {
     printHelp();
   } else {
@@ -45,11 +54,34 @@ async function main(): Promise<void> {
 
 async function appServerCommand(args: ParsedArguments): Promise<void> {
   assertNoPositionals(args);
-  const host = createHostedAppServer(hostOptions(args));
+  const remote = option(args, "remote");
+  if (remote !== undefined && args.options.has("listen")) {
+    throw new Error("--remote and --listen cannot be used together");
+  }
+  const bearerToken = await loadBearerToken(args);
+  if (remote !== undefined) {
+    await bridgeCodexStdioToWebSocket({
+      url: remote,
+      ...(bearerToken === undefined ? {} : { bearerToken }),
+    });
+    return;
+  }
+
   const listen = option(args, "listen") ?? "ws://127.0.0.1:4500";
   const zenHome = dataDirectory(args);
+  const hostConfig = hostOptions(args);
+  const host = createHostedAppServer(hostConfig);
   if (listen === "stdio://" || listen === "stdio") {
-    serveCodexStdio({ appServer: host, zenHome });
+    if (bearerToken !== undefined) {
+      throw new Error(
+        "--auth-token-file only applies to WebSocket listeners or --remote",
+      );
+    }
+    serveCodexStdio({
+      appServer: host,
+      zenHome,
+      configuredModel: hostConfig.model,
+    });
     return;
   }
 
@@ -57,6 +89,8 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
     appServer: host,
     zenHome,
     listen,
+    configuredModel: hostConfig.model,
+    ...(bearerToken === undefined ? {} : { bearerToken }),
   });
   process.stderr.write(`Zen App Server listening on ${server.url}\n`);
   await waitForShutdown(server);
@@ -168,22 +202,87 @@ async function threadsCommand(args: ParsedArguments): Promise<void> {
   }
 }
 
+async function authCommand(args: ParsedArguments): Promise<void> {
+  const [action, ...extra] = args.positionals;
+  if (action === undefined || extra.length > 0) {
+    throw new Error("Usage: zen auth login|status|logout");
+  }
+  const profile = new OpenAiSubscriptionAuthProfile(
+    subscriptionProfilePath(args),
+  );
+
+  if (action === "status") {
+    const status = await profile.status();
+    if (!status.authenticated) {
+      process.stdout.write("OpenAI subscription: not authenticated\n");
+      return;
+    }
+    const expiration =
+      status.expiresAt === undefined
+        ? ""
+        : `, expires ${new Date(status.expiresAt).toISOString()}`;
+    const account =
+      status.accountId === undefined ? "" : ` (${status.accountId})`;
+    process.stdout.write(
+      `OpenAI subscription: ${status.expired ? "expired" : "authenticated"}${account}${expiration}\n`,
+    );
+    return;
+  }
+
+  if (action === "logout") {
+    await profile.logout();
+    process.stdout.write("OpenAI subscription: logged out\n");
+    return;
+  }
+
+  if (action !== "login") {
+    throw new Error(`Unknown auth action: ${action}`);
+  }
+
+  const terminal = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  try {
+    await profile.login({
+      notifyAuthUrl: (url) => {
+        process.stdout.write(`Open this URL to sign in:\n${url}\n`);
+        openBrowser(url);
+      },
+      readManualCode: async ({ message, signal }) =>
+        await terminal.question(`${message} `, { signal }),
+    });
+    process.stdout.write("OpenAI subscription: authenticated\n");
+  } finally {
+    terminal.close();
+  }
+}
+
 async function connectClient(args: ParsedArguments): Promise<ClientSession> {
   let localServer: CodexWebSocketServer | undefined;
   const remote = option(args, "remote");
+  if (remote !== undefined && args.options.has("listen")) {
+    throw new Error("--remote and --listen cannot be used together");
+  }
+  const bearerToken = await loadBearerToken(args);
   let url = remote;
   if (remote === undefined) {
+    const hostConfig = hostOptions(args);
     localServer = await serveCodexWebSocket({
-      appServer: createHostedAppServer(hostOptions(args)),
+      appServer: createHostedAppServer(hostConfig),
       zenHome: dataDirectory(args),
       listen: "ws://127.0.0.1:0",
+      configuredModel: hostConfig.model,
+      ...(bearerToken === undefined ? {} : { bearerToken }),
     });
     url = localServer.url;
   }
   if (url === undefined) {
     throw new Error("Failed to create an App Server endpoint");
   }
-  const client = await CodexClient.connect(url);
+  const client = await CodexClient.connect(url, {
+    ...(bearerToken === undefined ? {} : { bearerToken }),
+  });
   await client.initialize({
     name: "zen-cli",
     title: "Zen CLI",
@@ -205,7 +304,11 @@ async function openThread(
       ? await client.request("thread/start", {
           cwd: workingDirectory(args),
           ...(local || requestedModel !== undefined
-            ? { model: requestedModel ?? modelName(args) }
+            ? {
+                model:
+                  requestedModel ??
+                  modelName(args, option(args, "provider") ?? "fake"),
+              }
             : {}),
           ...(local || requestedApproval !== undefined
             ? {
@@ -325,6 +428,11 @@ function hostOptions(args: ParsedArguments) {
   let secretEnvironmentVariables: readonly string[] = [];
   if (providerName === "fake") {
     provider = { type: "fake" };
+  } else if (providerName === "openai-subscription") {
+    provider = {
+      type: "openai-subscription",
+      profilePath: subscriptionProfilePath(args),
+    };
   } else if (providerName === "openai-compatible") {
     const environmentVariable = option(args, "api-key-env") ?? "OPENAI_API_KEY";
     if (option(args, "model") === undefined) {
@@ -354,7 +462,7 @@ function hostOptions(args: ParsedArguments) {
   return {
     cwd: workingDirectory(args),
     dataDirectory: dataDirectory(args),
-    model: modelName(args),
+    model: modelName(args, providerName),
     approvalPolicy: approval,
     provider,
     secretEnvironmentVariables,
@@ -369,6 +477,7 @@ function parseArguments(args: string[]): ParsedArguments {
     "api-key-env",
     "approval",
     "approve",
+    "auth-token-file",
     "base-url",
     "cwd",
     "data-dir",
@@ -431,8 +540,26 @@ function dataDirectory(args: ParsedArguments): string {
   );
 }
 
-function modelName(args: ParsedArguments): string {
-  return option(args, "model") ?? "fake";
+function modelName(args: ParsedArguments, providerName: string): string {
+  return (
+    option(args, "model") ??
+    (providerName === "openai-subscription"
+      ? DEFAULT_OPENAI_SUBSCRIPTION_MODEL
+      : "fake")
+  );
+}
+
+function subscriptionProfilePath(args: ParsedArguments): string {
+  return path.join(dataDirectory(args), "openai-subscription-auth.json");
+}
+
+async function loadBearerToken(
+  args: ParsedArguments,
+): Promise<string | undefined> {
+  const filePath = option(args, "auth-token-file");
+  return filePath === undefined
+    ? undefined
+    : await readBearerTokenFile(path.resolve(filePath));
 }
 
 function assertNoPositionals(args: ParsedArguments): void {
@@ -458,22 +585,39 @@ function printHelp(): void {
   process.stdout.write(`Zen — local personal agent runtime
 
 Usage:
-  zen app-server [--listen ws://127.0.0.1:4500]
+  zen app-server [--listen ws://127.0.0.1:4500] [--auth-token-file <path>]
+  zen app-server --remote ws://127.0.0.1:4500 [--auth-token-file <path>]
   zen run [options] <prompt>
   zen chat [options]
   zen threads [options]
+  zen auth login
+  zen auth status
+  zen auth logout
 
 Core options:
   --cwd <path>                 Thread working directory
   --data-dir <path>            Host-owned Zen data directory
-  --model <name>               Model name (default: fake)
+  --model <name>               Model name (defaults to fake, or gpt-5.6-terra for subscription)
   --approval always|never      Tool approval policy
   --remote <ws://...>          Connect to an existing Zen App Server
+  --auth-token-file <path>     Bearer token file for WebSocket transport
   --thread <id>                Resume an existing Thread
-  --provider fake|openai-compatible
+  --provider fake|openai-subscription|openai-compatible
   --base-url <url>             OpenAI-compatible API base URL
   --api-key-env <name>         Name of the host environment variable containing the key
 `);
+}
+
+function openBrowser(url: string): void {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  const child = spawn("open", [url], {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.on("error", () => undefined);
+  child.unref();
 }
 
 void main().catch((error: unknown) => {

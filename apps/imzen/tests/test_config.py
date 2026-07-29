@@ -8,12 +8,12 @@ from imzen.config import ConfigurationError, Settings
 def test_settings_accept_loopback_websocket(tmp_path):
     settings = Settings.from_env(
         {
-            "IMZEN_APP_SERVER_URL": "ws://127.0.0.1:8765",
+            "IMZEN_APP_SERVER_URL": "ws://127.0.0.1:4500",
             "IMZEN_CWD": str(tmp_path),
         }
     )
 
-    assert settings.app_server_url == "ws://127.0.0.1:8765"
+    assert settings.app_server_url == "ws://127.0.0.1:4500"
     assert settings.cwd == tmp_path.resolve()
 
 

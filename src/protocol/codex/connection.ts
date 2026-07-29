@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 
 import {
   AppServerError,
@@ -36,12 +37,14 @@ export interface CodexConnectionOptions {
   appServer: ZenAppServer;
   send: SendJson;
   zenHome: string;
+  configuredModel?: string;
 }
 
 export class CodexConnection {
   readonly #appServer: ZenAppServer;
   readonly #send: SendJson;
   readonly #zenHome: string;
+  readonly #configuredModel: string;
   readonly #pending = new Map<
     RequestId,
     {
@@ -56,13 +59,14 @@ export class CodexConnection {
   #initializedNotification = false;
   #closed = false;
   #nextServerRequest = 1;
-  #acceptCommandsForSession = false;
+  readonly #acceptedCommandThreads = new Set<string>();
   #eventChain: Promise<void> = Promise.resolve();
 
   constructor(options: CodexConnectionOptions) {
     this.#appServer = options.appServer;
     this.#send = options.send;
     this.#zenHome = options.zenHome;
+    this.#configuredModel = options.configuredModel ?? "fake";
     this.#unsubscribe = this.#appServer.subscribe((event) => {
       this.#eventChain = this.#eventChain
         .then(async () => {
@@ -146,11 +150,72 @@ export class CodexConnection {
   async #dispatch(request: JsonRpcRequest): Promise<void> {
     const params = recordParams(request);
     switch (request.method) {
+      case "account/read": {
+        rejectUnsupportedValues(params, []);
+        this.#send({
+          id: request.id,
+          result: { account: null, requiresOpenaiAuth: false },
+        });
+        return;
+      }
+      case "skills/list": {
+        const cwds = requiredStringArray(params, "cwds");
+        rejectUnsupportedValues(params, ["cwds"]);
+        this.#send({
+          id: request.id,
+          result: {
+            data: cwds.map((cwd) => ({ cwd, skills: [], errors: [] })),
+          },
+        });
+        return;
+      }
+      case "model/list": {
+        rejectUnsupportedValues(params, ["cursor"]);
+        if (params.cursor !== undefined && params.cursor !== null) {
+          throw new InvalidParamsError("model/list cursor is not supported");
+        }
+        const model = this.#configuredModel;
+        this.#send({
+          id: request.id,
+          result: {
+            data: [
+              {
+                id: model,
+                model,
+                upgrade: null,
+                upgradeInfo: null,
+                availabilityNux: null,
+                displayName: model,
+                description: "Model configured by the Zen host",
+                hidden: false,
+                supportedReasoningEfforts: [],
+                defaultReasoningEffort: "medium",
+                inputModalities: ["text"],
+                supportsPersonality: false,
+                additionalSpeedTiers: [],
+                serviceTiers: [],
+                defaultServiceTier: null,
+                isDefault: true,
+              },
+            ],
+            nextCursor: null,
+          },
+        });
+        return;
+      }
       case "thread/start": {
+        rejectUnsupportedValues(params, [
+          "cwd",
+          "model",
+          "approvalPolicy",
+          "sandbox",
+          "approvalsReviewer",
+        ]);
         const sandbox = optionalString(params.sandbox);
         const cwd = optionalString(params.cwd);
         const model = optionalString(params.model);
         const approvalPolicy = readApprovalPolicy(params.approvalPolicy);
+        readApprovalsReviewer(params.approvalsReviewer);
         if (sandbox !== undefined && sandbox !== "danger-full-access") {
           throw new InvalidParamsError(`Unsupported sandbox mode: ${sandbox}`);
         }
@@ -173,8 +238,16 @@ export class CodexConnection {
       }
       case "thread/resume": {
         const threadId = requiredString(params, "threadId");
-        rejectOverrides(params, ["model", "cwd", "approvalPolicy", "sandbox"]);
         const snapshot = await this.#appServer.readThread(threadId);
+        validateMatchingThreadConfiguration(params, snapshot, [
+          "threadId",
+          "cwd",
+          "model",
+          "approvalPolicy",
+          "sandbox",
+          "sandboxPolicy",
+          "approvalsReviewer",
+        ]);
         this.#subscribedThreads.add(threadId);
         this.#send({
           id: request.id,
@@ -229,18 +302,19 @@ export class CodexConnection {
         return;
       }
       case "turn/start": {
-        rejectOverrides(params, [
-          "cwd",
-          "approvalPolicy",
-          "sandboxPolicy",
-          "model",
-          "serviceTier",
-          "effort",
-          "summary",
-          "personality",
-          "outputSchema",
-        ]);
         const threadId = requiredString(params, "threadId");
+        const snapshot = await this.#appServer.readThread(threadId);
+        validateMatchingThreadConfiguration(params, snapshot, [
+          "threadId",
+          "input",
+          "cwd",
+          "model",
+          "approvalPolicy",
+          "sandbox",
+          "sandboxPolicy",
+          "approvalsReviewer",
+          "collaborationMode",
+        ]);
         const text = readTextInput(params.input);
         this.#subscribedThreads.add(threadId);
         const handle = await this.#appServer.startTurn(threadId, text, {
@@ -474,7 +548,7 @@ export class CodexConnection {
     // The command item must be visible before its approval request, matching Codex.
     await this.#eventChain;
     request.signal.throwIfAborted();
-    if (this.#acceptCommandsForSession) {
+    if (this.#acceptedCommandThreads.has(request.threadId)) {
       return "accept";
     }
     const requestId = `approval_${String(this.#nextServerRequest++)}`;
@@ -511,7 +585,7 @@ export class CodexConnection {
       throw new Error("Client returned an invalid approval decision");
     }
     if (response.decision === "acceptForSession") {
-      this.#acceptCommandsForSession = true;
+      this.#acceptedCommandThreads.add(request.threadId);
     }
     return response.decision;
   }
@@ -679,6 +753,22 @@ function optionalString(value: unknown): string | undefined {
   return value;
 }
 
+function requiredStringArray(
+  params: Record<string, unknown>,
+  key: string,
+): string[] {
+  const value = params[key];
+  if (
+    !Array.isArray(value) ||
+    value.some((entry) => typeof entry !== "string" || entry.length === 0)
+  ) {
+    throw new InvalidParamsError(
+      `${key} must be an array of non-empty strings`,
+    );
+  }
+  return value;
+}
+
 function readApprovalPolicy(value: unknown): "always" | "never" | undefined {
   if (value === undefined || value === null) {
     return undefined;
@@ -690,6 +780,34 @@ function readApprovalPolicy(value: unknown): "always" | "never" | undefined {
     return "always";
   }
   throw new InvalidParamsError(`Unsupported approval policy: ${String(value)}`);
+}
+
+function readApprovalsReviewer(value: unknown): "user" | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === "user") {
+    return "user";
+  }
+  throw new InvalidParamsError(
+    `Unsupported approvals reviewer: ${String(value)}`,
+  );
+}
+
+function readSandboxPolicy(value: unknown): "danger-full-access" | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    value.type !== "dangerFullAccess" ||
+    Object.keys(value).some((key) => key !== "type")
+  ) {
+    throw new InvalidParamsError(
+      "Unsupported sandbox policy; Zen currently supports dangerFullAccess only",
+    );
+  }
+  return "danger-full-access";
 }
 
 function readTextInput(value: unknown): string {
@@ -710,13 +828,92 @@ function readTextInput(value: unknown): string {
   return text.join("\n");
 }
 
-function rejectOverrides(
+function validateMatchingThreadConfiguration(
   params: Record<string, unknown>,
-  keys: string[],
+  snapshot: ThreadSnapshot,
+  supportedKeys: string[],
 ): void {
-  for (const key of keys) {
-    if (params[key] !== undefined && params[key] !== null) {
-      throw new InvalidParamsError(`${key} overrides are not supported`);
+  rejectUnsupportedValues(params, supportedKeys);
+
+  const cwd = optionalString(params.cwd);
+  if (cwd !== undefined && path.resolve(cwd) !== snapshot.cwd) {
+    throw new InvalidParamsError(
+      `cwd does not match thread metadata: ${snapshot.cwd}`,
+    );
+  }
+
+  const model = optionalString(params.model);
+  if (model !== undefined && model !== snapshot.model) {
+    throw new InvalidParamsError(
+      `model does not match thread metadata: ${snapshot.model}`,
+    );
+  }
+
+  const approvalPolicy = readApprovalPolicy(params.approvalPolicy);
+  if (
+    approvalPolicy !== undefined &&
+    approvalPolicy !== snapshot.approvalPolicy
+  ) {
+    throw new InvalidParamsError(
+      "approvalPolicy does not match thread metadata",
+    );
+  }
+
+  const sandbox = optionalString(params.sandbox);
+  if (sandbox !== undefined && sandbox !== "danger-full-access") {
+    throw new InvalidParamsError(`Unsupported sandbox mode: ${sandbox}`);
+  }
+  if (sandbox !== undefined && sandbox !== snapshot.sandbox) {
+    throw new InvalidParamsError("sandbox does not match thread metadata");
+  }
+
+  const sandboxPolicy = readSandboxPolicy(params.sandboxPolicy);
+  if (sandboxPolicy !== undefined && sandboxPolicy !== snapshot.sandbox) {
+    throw new InvalidParamsError(
+      "sandboxPolicy does not match thread metadata",
+    );
+  }
+
+  readApprovalsReviewer(params.approvalsReviewer);
+  readDefaultCollaborationMode(params.collaborationMode, snapshot);
+}
+
+function readDefaultCollaborationMode(
+  value: unknown,
+  snapshot: ThreadSnapshot,
+): void {
+  if (value === undefined || value === null) {
+    return;
+  }
+  if (
+    !isRecord(value) ||
+    value.mode !== "default" ||
+    !isRecord(value.settings) ||
+    Object.keys(value).some((key) => key !== "mode" && key !== "settings") ||
+    Object.keys(value.settings).some(
+      (key) =>
+        key !== "model" &&
+        key !== "reasoning_effort" &&
+        key !== "developer_instructions",
+    ) ||
+    value.settings.model !== snapshot.model ||
+    value.settings.reasoning_effort !== "medium" ||
+    typeof value.settings.developer_instructions !== "string"
+  ) {
+    throw new InvalidParamsError(
+      "Unsupported collaborationMode; Zen accepts only T3's default envelope for the configured model",
+    );
+  }
+}
+
+function rejectUnsupportedValues(
+  params: Record<string, unknown>,
+  supportedKeys: string[],
+): void {
+  const supported = new Set(supportedKeys);
+  for (const [key, value] of Object.entries(params)) {
+    if (!supported.has(key) && value !== undefined && value !== null) {
+      throw new InvalidParamsError(`${key} is not supported`);
     }
   }
 }

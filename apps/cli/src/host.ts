@@ -7,11 +7,17 @@ import {
 } from "../../../src/journal.js";
 import { FakeModel, type ModelAdapter } from "../../../src/model.js";
 import { OpenAiCompatibleModel } from "../../../src/model/openai-compatible.js";
+import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
 import { AgentRuntime } from "../../../src/runtime.js";
 import { ShellToolExecutor } from "../../../src/tool.js";
+import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
 
 export type HostProvider =
   | { type: "fake" }
+  | {
+      type: "openai-subscription";
+      profilePath: string;
+    }
   | {
       type: "openai-compatible";
       baseUrl: string;
@@ -58,6 +64,13 @@ export function createHostedAppServer(options: ZenHostOptions): ZenAppServer {
 function createModel(provider: HostProvider): ModelAdapter {
   if (provider.type === "fake") {
     return new FakeModel();
+  }
+  if (provider.type === "openai-subscription") {
+    const profile = new OpenAiSubscriptionAuthProfile(provider.profilePath);
+    return new OpenAiSubscriptionModel({
+      acquireAccessLease: async (signal) =>
+        await profile.acquireAccessLease(signal),
+    });
   }
   return new OpenAiCompatibleModel({
     baseUrl: provider.baseUrl,

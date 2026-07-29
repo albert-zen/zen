@@ -41,16 +41,16 @@ IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它
 
 ## 里程碑
 
-| 阶段 | 当前结果                                                                  | 状态                                   |
-| ---- | ------------------------------------------------------------------------- | -------------------------------------- |
-| 1    | VISION / ARCHITECTURE / LESSONS / PRODUCTS 定义当前产品边界               | 完成                                   |
-| 2    | 协议钉在 codex-cli 0.146.0；精确子集记录在 `src/protocol/codex/README.md` | 完成                                   |
-| 3    | 内存 ItemList → Runtime → App Server → FakeModel 事件链                   | 完成                                   |
-| 4    | 每 Thread 一个 append-only JSONL；stale open Turn 派生为 interrupted      | 完成                                   |
-| 5    | shell + command item 瞬态审批；accept / decline / cancel / interrupt      | 完成                                   |
-| 6    | 薄 Zen CLI；stdio 与 loopback WebSocket                                   | 完成                                   |
-| 7    | 严格 OpenAI-compatible streaming adapter；两轮 tool-call 集成测试         | 实现完成；真实网络验收需要外部 API Key |
-| 8    | 独立 IMZen；复用固定版 imcodex channels 与 AppServerClient                | 本地完整闭环通过；真实频道需频道凭证   |
+| 阶段 | 当前结果                                                                  | 状态                                 |
+| ---- | ------------------------------------------------------------------------- | ------------------------------------ |
+| 1    | VISION / ARCHITECTURE / LESSONS / PRODUCTS 定义当前产品边界               | 完成                                 |
+| 2    | 协议钉在 codex-cli 0.146.0；精确子集记录在 `src/protocol/codex/README.md` | 完成                                 |
+| 3    | 内存 ItemList → Runtime → App Server → FakeModel 事件链                   | 完成                                 |
+| 4    | 每 Thread 一个 append-only JSONL；stale open Turn 派生为 interrupted      | 完成                                 |
+| 5    | shell + command item 瞬态审批；accept / decline / cancel / interrupt      | 完成                                 |
+| 6    | 薄 Zen CLI；stdio 与 loopback WebSocket                                   | 完成                                 |
+| 7    | OpenAI-compatible 与 ChatGPT subscription adapters；两轮 tool-call        | 实现完成；订阅真实网络闭环已通过     |
+| 8    | 独立 IMZen；复用固定版 imcodex channels 与 AppServerClient                | 本地完整闭环通过；真实频道需频道凭证 |
 
 原版 `codex --remote` 0.146.0 还会调用账户、模型、配置、hooks 等 bootstrap
 方法，Zen 当前明确返回 unsupported，因此不宣称兼容原版 TUI。这不阻塞 Zen CLI，

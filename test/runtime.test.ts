@@ -231,6 +231,39 @@ test("journal stores only complete canonical items, never deltas", async () => {
   }
 });
 
+test("partial model deltas are not canonicalized when the model ends incomplete", async () => {
+  const incompleteModel: ModelAdapter = {
+    provider: "incomplete-test",
+    async *stream(): AsyncIterable<ModelEvent> {
+      yield { type: "text_delta", delta: "transient partial answer" };
+      throw new Error(
+        "OpenAI subscription response was incomplete: max_output_tokens",
+      );
+    },
+  };
+  const server = createServer({ model: incompleteModel });
+  const events: RuntimeEvent[] = [];
+  server.subscribe((event) => {
+    events.push(event);
+  });
+
+  const thread = await server.startThread();
+  const turn = await server.startTurn(thread.id, "answer fully");
+  await turn.done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert(events.some((event) => event.type === "item_delta"));
+  assert.equal(
+    snapshot.items.some((item) => item.type === "agent_message"),
+    false,
+  );
+  assert.equal(
+    snapshot.items.find((item) => item.type === "failure")?.message,
+    "OpenAI subscription response was incomplete: max_output_tokens",
+  );
+  assert.equal(snapshot.turns[0]?.status, "failed");
+});
+
 test("canonical items and exposed snapshots are immutable at runtime", async () => {
   const server = createServer();
   const thread = await server.startThread();

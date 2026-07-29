@@ -72,6 +72,70 @@ test("enforces the Codex initialize handshake and method boundary", async () => 
   connection.close();
 });
 
+test("projects the exact T3 Code provider bootstrap from host configuration", async () => {
+  const messages: JsonRpcMessage[] = [];
+  const connection = new CodexConnection({
+    appServer: testHost(),
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    configuredModel: "gpt-5.6-terra",
+    send: (message) => {
+      messages.push(message);
+    },
+  });
+
+  await connection.receive({ id: 1, method: "initialize", params: {} });
+  messages.pop();
+  await connection.receive({ method: "initialized" });
+
+  await connection.receive({ id: 2, method: "account/read", params: {} });
+  assert.deepEqual(messages.pop(), {
+    id: 2,
+    result: { account: null, requiresOpenaiAuth: false },
+  });
+
+  const cwds = [process.cwd(), path.join(os.tmpdir(), "second-workspace")];
+  await connection.receive({
+    id: 3,
+    method: "skills/list",
+    params: { cwds },
+  });
+  assert.deepEqual(messages.pop(), {
+    id: 3,
+    result: {
+      data: cwds.map((cwd) => ({ cwd, skills: [], errors: [] })),
+    },
+  });
+
+  await connection.receive({ id: 4, method: "model/list", params: {} });
+  assert.deepEqual(messages.pop(), {
+    id: 4,
+    result: {
+      data: [
+        {
+          id: "gpt-5.6-terra",
+          model: "gpt-5.6-terra",
+          upgrade: null,
+          upgradeInfo: null,
+          availabilityNux: null,
+          displayName: "gpt-5.6-terra",
+          description: "Model configured by the Zen host",
+          hidden: false,
+          supportedReasoningEfforts: [],
+          defaultReasoningEffort: "medium",
+          inputModalities: ["text"],
+          supportsPersonality: false,
+          additionalSpeedTiers: [],
+          serviceTiers: [],
+          defaultServiceTier: null,
+          isDefault: true,
+        },
+      ],
+      nextCursor: null,
+    },
+  });
+  connection.close();
+});
+
 test("streams the minimal Codex Thread/Turn/Item lifecycle over WebSocket", async () => {
   const server = await serveCodexWebSocket({
     appServer: testHost(),
@@ -137,6 +201,147 @@ test("streams the minimal Codex Thread/Turn/Item lifecycle over WebSocket", asyn
       (readThread.turns[0] as { status: string }).status,
       "completed",
     );
+  } finally {
+    client.close();
+    await server.close();
+  }
+});
+
+test("accepts matching T3 full-access resume and turn configuration", async () => {
+  const server = await serveCodexWebSocket({
+    appServer: testHost(),
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const client = await CodexClient.connect(server.url);
+  try {
+    await client.initialize({
+      name: "t3code_desktop",
+      title: "T3 Code Desktop",
+      version: "0.0.30",
+    });
+    const start = await client.request("thread/start", {
+      cwd: process.cwd(),
+      model: "fake",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+    });
+    const thread = responseResult<Record<string, unknown>>(start, "thread");
+
+    const resumed = await client.request("thread/resume", {
+      threadId: thread.id,
+      cwd: process.cwd(),
+      model: "fake",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+      serviceTier: null,
+    });
+    assert.equal(
+      responseResult<Record<string, unknown>>(resumed, "thread").id,
+      thread.id,
+    );
+
+    const completed = deferred<void>();
+    client.onNotification("turn/completed", () => {
+      completed.resolve();
+    });
+    const turn = await client.request("turn/start", {
+      threadId: thread.id,
+      input: [{ type: "text", text: "hello from T3" }],
+      model: "fake",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandboxPolicy: { type: "dangerFullAccess" },
+      serviceTier: null,
+      effort: null,
+      collaborationMode: {
+        mode: "default",
+        settings: {
+          model: "fake",
+          reasoning_effort: "medium",
+          developer_instructions: "T3 default-mode compatibility envelope",
+        },
+      },
+    });
+    assert.equal(
+      responseResult<Record<string, unknown>>(turn, "turn").status,
+      "inProgress",
+    );
+    await completed.promise;
+  } finally {
+    client.close();
+    await server.close();
+  }
+});
+
+test("rejects mismatched or unsupported T3 thread configuration", async () => {
+  const server = await serveCodexWebSocket({
+    appServer: testHost(),
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const client = await CodexClient.connect(server.url);
+  try {
+    await client.initialize({
+      name: "t3code_desktop",
+      title: "T3 Code Desktop",
+      version: "0.0.30",
+    });
+    const start = await client.request("thread/start", {
+      cwd: process.cwd(),
+      model: "fake",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+    });
+    const thread = responseResult<Record<string, unknown>>(start, "thread");
+
+    for (const params of [
+      { threadId: thread.id, model: "a-different-model" },
+      { threadId: thread.id, approvalPolicy: "on-request" },
+      { threadId: thread.id, sandbox: "workspace-write" },
+      { threadId: thread.id, approvalsReviewer: "auto_review" },
+      { threadId: thread.id, serviceTier: "fast" },
+    ]) {
+      await assert.rejects(
+        client.request("thread/resume", params),
+        (error: unknown) =>
+          error instanceof CodexClientError && error.code === -32602,
+      );
+    }
+
+    const input = [{ type: "text", text: "must not run" }];
+    for (const overrides of [
+      { model: "a-different-model" },
+      { approvalPolicy: "on-request" },
+      { sandboxPolicy: { type: "workspaceWrite" } },
+      { approvalsReviewer: "auto_review" },
+      { serviceTier: "fast" },
+      { effort: "high" },
+      { collaborationMode: { mode: "plan", settings: {} } },
+      {
+        collaborationMode: {
+          mode: "default",
+          settings: {
+            model: "a-different-model",
+            reasoning_effort: "medium",
+            developer_instructions: "ignored",
+          },
+        },
+      },
+    ]) {
+      await assert.rejects(
+        client.request("turn/start", {
+          threadId: thread.id,
+          input,
+          ...overrides,
+        }),
+        (error: unknown) =>
+          error instanceof CodexClientError && error.code === -32602,
+      );
+    }
   } finally {
     client.close();
     await server.close();
@@ -250,6 +455,87 @@ test("acceptForSession remains connection-local and suppresses later approval pr
       dispose();
     }
     assert.equal(approvalRequests, 1);
+  } finally {
+    client.close();
+    await server.close();
+  }
+});
+
+test("acceptForSession applies only to the approved thread on one connection", async () => {
+  const server = await serveCodexWebSocket({
+    appServer: testHost("always"),
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const client = await CodexClient.connect(server.url);
+  try {
+    const approvalThreadIds: string[] = [];
+    client.onServerRequest(
+      "item/commandExecution/requestApproval",
+      (params) => {
+        assert(isRecord(params));
+        const threadId = params.threadId;
+        assert(typeof threadId === "string");
+        approvalThreadIds.push(threadId);
+        return {
+          decision:
+            approvalThreadIds.length === 1 ? "acceptForSession" : "accept",
+        };
+      },
+    );
+    await client.initialize({
+      name: "test",
+      title: "Test",
+      version: "0.1.0",
+    });
+    const firstStart = await client.request("thread/start", {
+      approvalPolicy: "on-request",
+      sandbox: "danger-full-access",
+    });
+    const firstThread = responseResult<Record<string, unknown>>(
+      firstStart,
+      "thread",
+    );
+    const secondStart = await client.request("thread/start", {
+      approvalPolicy: "on-request",
+      sandbox: "danger-full-access",
+    });
+    const secondThread = responseResult<Record<string, unknown>>(
+      secondStart,
+      "thread",
+    );
+
+    const runCommand = async (
+      threadId: string,
+      command: string,
+    ): Promise<void> => {
+      const completed = deferred<void>();
+      const dispose = client.onNotification("turn/completed", (params) => {
+        if (isRecord(params) && params.threadId === threadId) {
+          completed.resolve();
+        }
+      });
+      try {
+        await client.request("turn/start", {
+          threadId,
+          input: [
+            { type: "text", text: `!shell ${command}`, text_elements: [] },
+          ],
+        });
+        await completed.promise;
+      } finally {
+        dispose();
+      }
+    };
+
+    await runCommand(String(firstThread.id), "printf first");
+    await runCommand(String(firstThread.id), "printf second");
+    await runCommand(String(secondThread.id), "printf third");
+
+    assert.deepEqual(approvalThreadIds, [
+      String(firstThread.id),
+      String(secondThread.id),
+    ]);
   } finally {
     client.close();
     await server.close();

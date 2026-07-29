@@ -11,7 +11,7 @@ durable command queue, outbox, scheduler, or recovery state machine.
 ## Configuration
 
 ```sh
-export IMZEN_APP_SERVER_URL=ws://127.0.0.1:8765
+export IMZEN_APP_SERVER_URL=ws://127.0.0.1:4500
 export IMZEN_CWD=/absolute/workspace
 export IMZEN_CHANNELS_CONFIG_FILE=/absolute/private/channels.json
 python -m imzen
@@ -35,6 +35,13 @@ IMCodex adapter:
 
 Supported keys at the top level are `qq`, `telegram`, `feishu`, and `weixin`.
 Feishu additionally requires installing the `feishu` extra.
+
+An existing channel config created for another client of the same pinned
+IMCodex channel version can be reused by pointing
+`IMZEN_CHANNELS_CONFIG_FILE` at that private file. Do not run two clients with
+the same bot credentials at the same time: stop the previous channel owner
+before starting IMZen. Reusing the file does not import that client's
+bindings, queues, agent state, or backend.
 
 Zen's current 0.146.0 protocol subset accepts text input only. IMZen includes
 downloaded file paths in a text manifest; image-only model input is not yet

@@ -55,8 +55,15 @@ export class CodexClient {
     });
   }
 
-  static async connect(url: string): Promise<CodexClient> {
-    const socket = new WebSocket(url);
+  static async connect(
+    url: string,
+    options: { bearerToken?: string } = {},
+  ): Promise<CodexClient> {
+    const socket = new WebSocket(url, {
+      ...(options.bearerToken === undefined
+        ? {}
+        : { headers: { Authorization: `Bearer ${options.bearerToken}` } }),
+    });
     await new Promise<void>((resolve, reject) => {
       socket.once("open", resolve);
       socket.once("error", reject);

@@ -30,6 +30,11 @@ export interface ModelRequest {
   messages: ModelMessage[];
   tools: ModelTool[];
   signal: AbortSignal;
+  /**
+   * Optional provider cache hint. It identifies the authoritative Zen Thread,
+   * but providers must not treat it as a second persisted conversation.
+   */
+  sessionId?: string;
 }
 
 export interface ModelTool {

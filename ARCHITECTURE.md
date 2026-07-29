@@ -78,12 +78,18 @@ Codex CLI、T3 Code 是收益，不是核心设计前提。
 - **固定版本**：协议 schema 以 codex-cli 0.146.0 的生成结果为准，不承诺
   "兼容最新"。升级版本是一次显式决策。
 - **强制握手**：每个连接先 `initialize` → `initialized`，之后才接受其他方法。
+- **WebSocket 访问控制在宿主侧**：loopback listener 拒绝浏览器 `Origin`，可选
+  bearer credential 仅用于 transport 握手，不进入 Zen Core、Thread 或 journal。
+- **stdio ↔ WebSocket bridge 只是 transport adapter**：它原样转发固定协议消息，
+  不创建 runtime、Thread 或任何可持久化状态。
 - **子集先由 Zen 生命周期定义**：实现 Zen 自建 CLI 所需的最小生命周期，再用
   stub 记录原版 `codex --remote` 与固定版本 T3 Code 的实际调用，机会性扩展
-  兼容面。当前请求子集是 `thread/start`、`thread/resume`、`thread/read`、
-  `thread/list`、`thread/unsubscribe`、`turn/start`、`turn/interrupt`，以及
-  Thread / Turn / Item 事件流和 command item 审批请求。精确清单见
+  兼容面。当前请求子集包括 `account/read`、`skills/list`、`model/list`、
+  `thread/start`、`thread/resume`、`thread/read`、`thread/list`、
+  `thread/unsubscribe`、`turn/start`、`turn/interrupt`，以及 Thread / Turn /
+  Item 事件流和 command item 审批请求。精确清单见
   `src/protocol/codex/README.md`。
+- `account/read`、`skills/list` 与 `model/list` 只投影宿主公开能力，不向 Zen Core 或 Thread 写入账户、skill、provider 状态。
 - 未实现的方法一律返回 JSON-RPC `-32601`；不返回伪造的成功结果。
 - **sandbox 与 approval 分离**：sandbox 限制工具实际上能做什么，approval
   决定何时询问用户。首版只接受明确支持的 sandbox mode，其他 mode 返回
@@ -102,8 +108,13 @@ Codex CLI、T3 Code 是收益，不是核心设计前提。
 
 - **持久化** — Thread journal：每个 Thread 一个 JSONL，每行一个 canonical Item；
   启动时扫描 journal 得到 thread 列表，不建数据库索引。
-- **ModelAdapter** — 模型调用；API-key provider 先行，订阅认证后补
-  （参考实现见 SALVAGE.md）。模型响应只能通过追加 Item 改变 Thread。
+- **ModelAdapter** — 模型调用；当前有 OpenAI-compatible API-key 与
+  ChatGPT subscription / Codex Responses 两个 adapter，模型响应只能通过追加
+  Item 改变 Thread。
+- **SubscriptionAuthProfile** — 宿主持有的 OAuth credential store 与
+  request-time token resolver；它位于 Core 外，不进入 ItemList，ModelAdapter
+  只拿一次请求所需的 access lease。provider 的 sessionId 只允许作为可丢弃的
+  transport cache / affinity hint，不得映射或持久化第二套 Thread。
 - **工具** — shell 等工具的实际执行。
 - **审批** — 审批请求的呈现与应答（各接入端自行实现 UI）。
 
@@ -129,11 +140,12 @@ src/
   model.ts
   model/
     openai-compatible.ts
+    openai-subscription.ts
   tool.ts
   protocol/
     codex/         # 0.146.0 wire types + 映射（唯一允许协议 churn 的地方）
 apps/
-  cli/             # 薄协议客户端；host 在这里组合外部配置与 adapters
+  cli/             # 薄协议客户端；host 在这里组合外部配置、OAuth profile 与 adapters
   imzen/           # 与 CLI/Web/桌面平级的独立接入端
 ```
 

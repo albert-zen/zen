@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import { WebSocket, WebSocketServer } from "ws";
 
 import type { ZenAppServer } from "../../app-server.js";
@@ -13,15 +15,18 @@ export async function serveCodexWebSocket(options: {
   appServer: ZenAppServer;
   zenHome: string;
   listen: string;
+  bearerToken?: string;
+  configuredModel?: string;
 }): Promise<CodexWebSocketServer> {
   const endpoint = new URL(options.listen);
   if (endpoint.protocol !== "ws:") {
     throw new Error("Zen currently supports ws:// App Server listeners only");
   }
   if (!isLoopback(endpoint.hostname)) {
-    throw new Error(
-      `Refusing unauthenticated non-loopback listener: ${endpoint.hostname}`,
-    );
+    throw new Error(`Refusing non-loopback listener: ${endpoint.hostname}`);
+  }
+  if (options.bearerToken !== undefined && options.bearerToken.length === 0) {
+    throw new Error("WebSocket bearer token must not be empty");
   }
   const requestedPort =
     endpoint.port.length === 0 ? 0 : Number.parseInt(endpoint.port, 10);
@@ -29,6 +34,25 @@ export async function serveCodexWebSocket(options: {
     host: endpoint.hostname,
     port: requestedPort,
     path: endpoint.pathname === "/" ? undefined : endpoint.pathname,
+    verifyClient: (info, accept) => {
+      if (info.req.headers.origin !== undefined) {
+        accept(false, 403, "Forbidden");
+        return;
+      }
+      if (
+        options.bearerToken !== undefined &&
+        !hasExpectedBearerToken(
+          info.req.headers.authorization,
+          options.bearerToken,
+        )
+      ) {
+        accept(false, 401, "Unauthorized", {
+          "WWW-Authenticate": "Bearer",
+        });
+        return;
+      }
+      accept(true);
+    },
   });
   const connections = new Set<CodexConnection>();
 
@@ -36,6 +60,9 @@ export async function serveCodexWebSocket(options: {
     const connection = new CodexConnection({
       appServer: options.appServer,
       zenHome: options.zenHome,
+      ...(options.configuredModel === undefined
+        ? {}
+        : { configuredModel: options.configuredModel }),
       send: (message) => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify(message));
@@ -107,4 +134,17 @@ function isLoopback(hostname: string): boolean {
     hostname === "::1" ||
     hostname === "[::1]"
   );
+}
+
+function hasExpectedBearerToken(
+  authorization: string | undefined,
+  bearerToken: string,
+): boolean {
+  const actual = createHash("sha256")
+    .update(authorization ?? "")
+    .digest();
+  const expected = createHash("sha256")
+    .update(`Bearer ${bearerToken}`)
+    .digest();
+  return timingSafeEqual(actual, expected);
 }

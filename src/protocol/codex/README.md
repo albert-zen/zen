@@ -9,6 +9,9 @@ protocol 的固定子集。升级 Codex 版本必须重新生成 schema、审查
 Client requests：
 
 - `initialize`
+- `account/read`
+- `skills/list`
+- `model/list`
 - `thread/start`
 - `thread/resume`
 - `thread/read`
@@ -34,21 +37,31 @@ Server notifications：
 Server request：`item/commandExecution/requestApproval`。
 
 其他方法返回 JSON-RPC `-32601`。当前只接受 `danger-full-access` sandbox；
-approval 只接受 `on-request` 与 `never`，二者是不同维度。实时 token usage 暂不
-投影，避免发送不完整的 0.146.0 类型。
+approval 只接受 `on-request` 与 `never`，二者是不同维度。resume 与 turn
+携带配置时，只有和 Thread metadata 等价的值会被接受；service tier、effort、
+plan collaboration mode 等未实现配置返回 `-32602`。T3 总会发送的
+`default` collaboration envelope 只作为接入端 UI 元数据接受：其中 model
+必须匹配宿主，reasoning effort 必须为默认值；developer instructions 不进入
+Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，避免发送
+不完整的 0.146.0 类型。
 
 ## Transport
 
 `stdio.ts` 实现每行一个 JSON-RPC message 的 stdio transport；
-`websocket.ts` 实现无鉴权的 loopback-only `ws://` transport。二者承载完全相同
-的消息协议。Unix socket 与非本机监听尚未实现。
+`websocket.ts` 实现 loopback-only `ws://` transport，拒绝带 `Origin` 的浏览器
+连接，并可由宿主注入 bearer token 保护握手。二者承载完全相同的消息协议；
+`bridge.ts` 为 T3 这类只会启动 stdio 子进程的接入端原样桥接中央 WebSocket，
+不解析消息或创建本地 runtime。transport credential 不进入 Thread 或 journal；
+token 文件在 POSIX 上不得允许 group/world 读取。Unix socket 与非本机监听尚未实现。
 
 ## 兼容范围
 
 仓库测试覆盖 Zen CLI 的一轮会话、streaming、command approval、interrupt、
-resume 与双连接事件投影。原版 `codex --remote` TUI 0.146.0 还要求
-`account/read`、`model/list`、`config/*`、`hooks/list` 等 bootstrap 方法；
-Zen 没有伪造这些响应，因此当前不宣称兼容原版 TUI。
+resume、双连接事件投影，以及 T3 Code 0.0.30 使用的 `account/read`、
+`skills/list`、`model/list` bootstrap 和 full-access 配置投影。其他 sandbox
+模式未实现；在真实 T3 Code 完成一轮会话与一次工具执行前，不宣称完整兼容。
+原版 `codex --remote` TUI 0.146.0 还要求 `config/*`、`hooks/list` 等方法，
+当前仍不兼容。
 
 本机 schema oracle：
 
