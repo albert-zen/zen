@@ -10,7 +10,7 @@
 |---|---|---|
 | `packages/framework/src/adapters/node/openai-subscription-*.ts` | 订阅认证 / OAuth 流程，编码了真实协议的坑 | `adapters/`，收在 ModelGateway 接口后 |
 | `packages/framework/src/adapters/node/openai-compatible-model-gateway.ts` | OpenAI 兼容网关 | 同上 |
-| `apps/imzen/src/zen-bridge.ts` 中的 IM 通道传输部分 | QQ 消息进出（**不含** durable 路由状态机） | 参考；imzen 主体 fork 自 imcodex |
+| `apps/imzen/src/zen-bridge.ts` 中的 IM 通道传输部分 | QQ 消息进出（**不含** durable 路由状态机） | 仅作边界情况参考；imzen 已改为复用 imcodex 的 channels 层（见 PRODUCTS.md） |
 
 ## 值得移植的概念（代码重审后再搬）
 
