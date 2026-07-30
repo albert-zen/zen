@@ -79,6 +79,70 @@ def test_unknown_channel_fails_explicitly(tmp_path):
         )
 
 
+def test_qq_credentials_are_loaded_from_an_imzen_owned_private_file(tmp_path):
+    credentials = tmp_path / "qq.json"
+    credentials.write_text(
+        json.dumps({"appid": 123456789, "appsecret": "private-value"}),
+        encoding="utf-8",
+    )
+    credentials.chmod(0o600)
+    config = tmp_path / "channels.json"
+    config.write_text(
+        json.dumps(
+            {
+                "qq": {
+                    "enabled": True,
+                    "credentials_file": str(credentials),
+                    "allowed_user_ids": ["none"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    middleware = FakeMiddleware()
+
+    runtime = build_channel_runtime(
+        config,
+        middleware,
+        registry={"qq": FakeChannel},
+    )
+
+    assert len(runtime.adapters) == 1
+    resolved = runtime.adapters[0].config
+    assert resolved["app_id"] == "123456789"
+    assert resolved["client_secret"] == "private-value"
+    assert resolved["allowed_user_ids"] == ["none"]
+    assert "credentials_file" not in resolved
+
+
+def test_qq_credentials_file_must_be_private(tmp_path):
+    credentials = tmp_path / "qq.json"
+    credentials.write_text(
+        json.dumps({"appid": 123456789, "appsecret": "private-value"}),
+        encoding="utf-8",
+    )
+    credentials.chmod(0o644)
+    config = tmp_path / "channels.json"
+    config.write_text(
+        json.dumps(
+            {
+                "qq": {
+                    "enabled": True,
+                    "credentials_file": str(credentials),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError, match="must not be readable"):
+        build_channel_runtime(
+            config,
+            FakeMiddleware(),
+            registry={"qq": FakeChannel},
+        )
+
+
 def test_no_config_creates_empty_runtime():
     middleware = FakeMiddleware()
 

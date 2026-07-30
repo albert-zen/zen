@@ -21,27 +21,28 @@ python -m imzen
 App Server bearer token.
 
 The channel config is a JSON object. Enabled values are passed to the pinned
-IMCodex adapter:
+IMCodex adapter. IMZen can keep QQ credentials in its own private credential
+file instead of copying another product's channel configuration:
 
 ```json
 {
-  "telegram": {
+  "qq": {
     "enabled": true,
-    "bot_token_file": "/absolute/private/telegram-token",
-    "allowed_user_ids": ["123456"]
+    "credentials_file": "/absolute/private/imzen/qq.json",
+    "allowed_user_ids": ["none"]
   }
 }
 ```
 
-Supported keys at the top level are `qq`, `telegram`, `feishu`, and `weixin`.
-Feishu additionally requires installing the `feishu` extra.
+The QQ credential file contains only `appid` and `appsecret`, is owned by the
+current user, and must be mode `600` on POSIX. `allowed_user_ids: ["none"]`
+connects the bot while rejecting all inbound work; replace it with the owner's
+QQ openid after observing the first denied message in the private log.
 
-An existing channel config created for another client of the same pinned
-IMCodex channel version can be reused by pointing
-`IMZEN_CHANNELS_CONFIG_FILE` at that private file. Do not run two clients with
-the same bot credentials at the same time: stop the previous channel owner
-before starting IMZen. Reusing the file does not import that client's
-bindings, queues, agent state, or backend.
+Supported keys at the top level are `qq`, `telegram`, `feishu`, and `weixin`.
+Feishu additionally requires installing the `feishu` extra. Each IMZen
+deployment owns its channel config and credentials; do not point it at
+imcodex's live config or run two clients with the same bot credentials.
 
 Zen's current 0.146.0 protocol subset accepts text input only. IMZen includes
 downloaded file paths in a text manifest; image-only model input is not yet

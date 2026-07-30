@@ -25,6 +25,9 @@ IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它
 
 - imcodex 的 `channels` 层（QQ 等 IM 接入、鉴权、收发）依赖方向干净、
   作为固定 commit 的库直接复用。
+- 这种复用只是固定版本的 package 依赖：IMZen 拥有自己的进程、channel
+  配置与 credential，不读取运行中 imcodex 的配置或状态，也不要求二者使用
+  同一个机器人账号。
 - IMZen 自己只保留薄 middleware、IM conversation 到 Zen thread 的内存绑定，
   并通过 imcodex 的 `AppServerClient` 调 Zen。它不导入 imcodex 的 agent、
   backend、store 或持久化路由语义。
