@@ -48,6 +48,7 @@ export interface UserMessageItem extends ItemBase {
   type: "user_message";
   turnId: string;
   text: string;
+  clientId?: string;
 }
 
 export interface AgentMessageItem extends ItemBase {

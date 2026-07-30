@@ -61,6 +61,7 @@ export interface RunTurnOptions {
   thread: Thread;
   turnId?: string;
   text: string;
+  clientId?: string;
   configuration: RuntimeConfiguration;
   signal: AbortSignal;
   commit: (item: CanonicalItem) => Promise<void>;
@@ -114,6 +115,9 @@ export class AgentRuntime {
         createdAt: this.#now(),
         type: "user_message",
         text: options.text,
+        ...(options.clientId === undefined
+          ? {}
+          : { clientId: options.clientId }),
       };
       await this.#completeItem(userItem, options);
 

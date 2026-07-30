@@ -120,7 +120,7 @@ export class ZenAppServer {
   async startTurn(
     threadId: string,
     text: string,
-    options: { requestApproval?: ApprovalHandler } = {},
+    options: { clientId?: string; requestApproval?: ApprovalHandler } = {},
   ): Promise<TurnHandle> {
     if (text.length === 0) {
       throw new AppServerError("invalid_request", "Turn input cannot be empty");
@@ -157,6 +157,9 @@ export class ZenAppServer {
               thread,
               turnId,
               text,
+              ...(options.clientId === undefined
+                ? {}
+                : { clientId: options.clientId }),
               configuration: {
                 cwd: metadata.cwd,
                 model: metadata.model,

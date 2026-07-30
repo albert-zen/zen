@@ -51,7 +51,7 @@ export type CodexThreadItem =
   | {
       type: "userMessage";
       id: string;
-      clientId: null;
+      clientId: string | null;
       content: Array<{ type: "text"; text: string; text_elements: [] }>;
     }
   | {
@@ -171,7 +171,7 @@ export function projectCompletedItem(
       return {
         type: "userMessage",
         id: item.id,
-        clientId: null,
+        clientId: item.clientId ?? null,
         content: [{ type: "text", text: item.text, text_elements: [] }],
       };
     case "agent_message":

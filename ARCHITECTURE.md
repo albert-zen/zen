@@ -58,6 +58,8 @@ canonical Item 追加，已有 Item 不改写、不删除。
 
 Turn 边界对齐 Codex rollout 语义：canonical `turn_started` 开始 Turn，
 `turn_completed` / `turn_aborted` 结束 Turn；完成的语义 Item 在二者之间追加。
+canonical `user_message` 可携带接入端提供的可选 `clientId`，仅用于跨接入端关联
+同一条用户消息，并投影为 wire `userMessage.clientId`。
 崩溃重放时，尾部只有 `turn_started` 而没有终止 Item 的 Turn 派生为
 interrupted，不追加 synthetic recovery record，也不恢复半截 stream。wire
 `turn/started` / `turn/completed` 是这些 canonical lifecycle Item 的协议投影。

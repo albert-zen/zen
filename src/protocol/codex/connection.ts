@@ -314,10 +314,16 @@ export class CodexConnection {
           "sandboxPolicy",
           "approvalsReviewer",
           "collaborationMode",
+          "clientUserMessageId",
         ]);
         const text = readTextInput(params.input);
+        const clientId = optionalNonEmptyString(
+          params.clientUserMessageId,
+          "clientUserMessageId",
+        );
         this.#subscribedThreads.add(threadId);
         const handle = await this.#appServer.startTurn(threadId, text, {
+          ...(clientId === undefined ? {} : { clientId }),
           requestApproval: async (approval) =>
             await this.#requestApproval(approval),
         });
@@ -749,6 +755,19 @@ function optionalString(value: unknown): string | undefined {
   }
   if (typeof value !== "string") {
     throw new InvalidParamsError("Expected a string");
+  }
+  return value;
+}
+
+function optionalNonEmptyString(
+  value: unknown,
+  key: string,
+): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "string" || value.length === 0) {
+    throw new InvalidParamsError(`${key} must be a non-empty string`);
   }
   return value;
 }

@@ -197,12 +197,118 @@ test("streams the minimal Codex Thread/Turn/Item lifecycle over WebSocket", asyn
     });
     const readThread = responseResult<Record<string, unknown>>(read, "thread");
     assert(Array.isArray(readThread.turns));
-    assert.equal(
-      (readThread.turns[0] as { status: string }).status,
-      "completed",
+    const firstTurn = readThread.turns[0];
+    assert(isRecord(firstTurn));
+    assert.equal(firstTurn.status, "completed");
+    assert(Array.isArray(firstTurn.items));
+    const projectedUser = firstTurn.items.find(
+      (item) => isRecord(item) && item.type === "userMessage",
     );
+    assert(isRecord(projectedUser));
+    assert.equal(projectedUser.clientId, null);
   } finally {
     client.close();
+    await server.close();
+  }
+});
+
+test("preserves client user message IDs across subscribed connections", async () => {
+  const appServer = testHost();
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const initiating = await CodexClient.connect(server.url);
+  const observing = await CodexClient.connect(server.url);
+  try {
+    const userStarted = deferred<Record<string, unknown>>();
+    const userCompleted = deferred<Record<string, unknown>>();
+    const turnCompleted = deferred<void>();
+
+    observing.onNotification("item/started", (params) => {
+      if (
+        isRecord(params) &&
+        isRecord(params.item) &&
+        params.item.type === "userMessage"
+      ) {
+        userStarted.resolve(params.item);
+      }
+    });
+    observing.onNotification("item/completed", (params) => {
+      if (
+        isRecord(params) &&
+        isRecord(params.item) &&
+        params.item.type === "userMessage"
+      ) {
+        userCompleted.resolve(params.item);
+      }
+    });
+    observing.onNotification("turn/completed", () => {
+      turnCompleted.resolve();
+    });
+
+    await initiating.initialize({
+      name: "initiating",
+      title: "Initiating Client",
+      version: "0.1.0",
+    });
+    await observing.initialize({
+      name: "observing",
+      title: "Observing Client",
+      version: "0.1.0",
+    });
+    const start = await initiating.request("thread/start", {
+      cwd: process.cwd(),
+      model: "fake",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    const thread = responseResult<Record<string, unknown>>(start, "thread");
+    if (typeof thread.id !== "string") {
+      throw new Error("thread/start returned no thread id");
+    }
+    const threadId = thread.id;
+    await observing.request("thread/resume", { threadId });
+
+    const clientUserMessageId = "t3-user-message-123";
+    await initiating.request("turn/start", {
+      threadId,
+      input: [{ type: "text", text: "cross-client hello" }],
+      clientUserMessageId,
+    });
+
+    const [startedItem, completedItem] = await within(
+      Promise.all([userStarted.promise, userCompleted.promise]),
+    );
+    await within(turnCompleted.promise);
+    assert.equal(startedItem.clientId, clientUserMessageId);
+    assert.equal(completedItem.clientId, clientUserMessageId);
+    assert.equal(startedItem.id, completedItem.id);
+
+    const snapshot = await appServer.readThread(threadId);
+    const canonicalUser = snapshot.items.find(
+      (item) => item.type === "user_message",
+    );
+    assert.equal(canonicalUser?.clientId, clientUserMessageId);
+
+    const read = await observing.request("thread/read", {
+      threadId,
+      includeTurns: true,
+    });
+    const readThread = responseResult<Record<string, unknown>>(read, "thread");
+    assert(Array.isArray(readThread.turns));
+    const projectedTurn = readThread.turns[0];
+    assert(isRecord(projectedTurn));
+    assert(Array.isArray(projectedTurn.items));
+    const projectedUser = projectedTurn.items.find(
+      (item) => isRecord(item) && item.type === "userMessage",
+    );
+    assert(isRecord(projectedUser));
+    assert.equal(projectedUser.clientId, clientUserMessageId);
+  } finally {
+    initiating.close();
+    observing.close();
     await server.close();
   }
 });
