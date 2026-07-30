@@ -6,7 +6,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigurationError
+from .config import ConfigurationError, PermissionMode
 
 
 class ChannelRuntime:
@@ -47,6 +47,8 @@ def build_channel_runtime(
     middleware: Any,
     *,
     registry: dict[str, type] | None = None,
+    permission_mode: PermissionMode = "full-access",
+    allow_unrestricted_full_access: bool = False,
 ) -> ChannelRuntime:
     if config_file is None:
         return ChannelRuntime([], middleware)
@@ -61,6 +63,15 @@ def build_channel_runtime(
         channel_config = config.get(channel_id)
         if not isinstance(channel_config, dict) or channel_config.get("enabled") is not True:
             continue
+        if (
+            permission_mode == "full-access"
+            and not allow_unrestricted_full_access
+            and not _has_access_restriction(channel_config)
+        ):
+            raise ConfigurationError(
+                "IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS=true is required when "
+                f"IMZEN_PERMISSION_MODE=full-access enables unrestricted channel: {channel_id}"
+            )
         resolved_config = _resolve_channel_config(
             channel_id,
             channel_config,
@@ -68,6 +79,22 @@ def build_channel_runtime(
         )
         adapters.append(adapter_type.from_config(config=resolved_config, middleware=middleware))
     return ChannelRuntime(adapters, middleware)
+
+
+def _has_access_restriction(config: dict[str, Any]) -> bool:
+    for key in ("allowed_user_ids", "allowed_conversation_ids"):
+        value = config.get(key)
+        if isinstance(value, str):
+            candidates = value.replace("\n", ",").split(",")
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            candidates = value
+        elif value is None:
+            candidates = ()
+        else:
+            candidates = (value,)
+        if any(str(candidate).strip() not in {"", "*"} for candidate in candidates):
+            return True
+    return False
 
 
 def _default_registry() -> dict[str, type]:

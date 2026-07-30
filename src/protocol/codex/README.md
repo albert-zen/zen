@@ -53,8 +53,11 @@ Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，�
 `bridge.ts` 为 T3 这类只会启动 stdio 子进程的接入端原样桥接中央 WebSocket，
 不解析消息或创建本地 runtime。transport credential 不进入 Thread 或 journal；
 token 文件在 POSIX 上不得允许 group/world 读取。T3 0.0.31 自动追加的两项
-loopback MCP `-c` 配置由 CLI remote bridge 启动边界验证后忽略，不进入 wire
-protocol 或 Core；T3 MCP tools 尚未实现。Unix socket 与非本机监听尚未实现。
+MCP `-c` 配置由 CLI remote bridge 启动边界验证后忽略，不进入 wire protocol
+或 Core；其中 URL 必须是无凭证的 `http` `/mcp` endpoint。remote bridge 除
+`--remote`、可选的 `--auth-token-file` 和这两项配置外，不接受宿主或 runtime
+选项；这些配置属于中央 App Server。T3 MCP tools 尚未实现。Unix socket 与
+非本机监听尚未实现。
 
 ## 兼容范围
 

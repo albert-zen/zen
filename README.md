@@ -25,7 +25,8 @@ npm install
 npm run check
 npm run build
 node dist/apps/cli/src/cli.js run "hello"
-node dist/apps/cli/src/cli.js run --approve "!shell printf tool-ok"
+node dist/apps/cli/src/cli.js run "!shell printf full-access-ok"
+node dist/apps/cli/src/cli.js run --approve "!shell printf approved-ok"
 ```
 
 启动一个可被其他接入端连接的 App Server：
@@ -47,8 +48,10 @@ T3 Code 固定以 stdio 启动 `${binary} app-server`。把 binary 指向 `zen`�
 launch args 设为 `--remote ws://127.0.0.1:4500 --auth-token-file <path>`，
 Zen CLI 就只做 JSONL stdio ↔ WebSocket 薄桥；Thread 与模型执行仍全部属于上面的
 中央 Zen App Server，不会为每个 T3 session 创建本地 runtime。T3 0.0.31
-自动追加的 loopback `mcp_servers.t3-code` 两项 `-c` 配置只在这个 remote
-bridge 模式下被精确识别并忽略；Zen 当前不宣称提供 T3 MCP tools。
+自动追加的 `mcp_servers.t3-code` 两项 `-c` 配置只在这个 remote bridge 模式下
+被精确识别并忽略；除此之外，bridge 只接受 `--remote` 与可选的
+`--auth-token-file`。模型、审批、workspace 等宿主配置应在中央 App Server
+启动时传入。Zen 当前不宣称提供 T3 MCP tools。
 
 真实模型使用 `--provider openai-compatible`、`--model`、`--base-url` 与
 `--api-key-env`。指定的 key 只由宿主读取，不进入协议、Thread 或 shell tool
@@ -56,7 +59,8 @@ bridge 模式下被精确识别并忽略；Zen 当前不宣称提供 T3 MCP tool
 `node dist/apps/cli/src/cli.js help`。
 
 CLI 与 App Server 默认使用 Full Access：`sandbox=danger-full-access` 且
-`approvalPolicy=never`。需要逐项确认命令时显式传
+`approvalPolicy=never`。一次性 `run` 的 `--approve` / `--deny` 会自动启用
+`--approval always`；`chat` 或 App Server 需要逐项确认命令时则显式传
 `--approval always`。Full Access 没有安全隔离，只应在受信任的本机和接入端使用。
 
 ChatGPT Plus / Pro subscription 使用 Zen 自己的宿主 profile，不读取或覆盖

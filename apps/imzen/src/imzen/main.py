@@ -16,7 +16,12 @@ async def run(settings: Settings | None = None) -> None:
         default_cwd=str(resolved.cwd),
         default_permission_mode=resolved.permission_mode,
     )
-    channels = build_channel_runtime(resolved.channels_config_file, middleware)
+    channels = build_channel_runtime(
+        resolved.channels_config_file,
+        middleware,
+        permission_mode=resolved.permission_mode,
+        allow_unrestricted_full_access=resolved.allow_unrestricted_full_access,
+    )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     registered_signals: list[signal.Signals] = []

@@ -11,6 +11,7 @@ from .config import PermissionMode
 
 Deliver = Callable[[OutboundMessage], Awaitable[None]]
 ConversationKey = tuple[str, str]
+THREAD_LIST_LIMIT = 20
 
 
 class AppServerClient(Protocol):
@@ -46,6 +47,7 @@ class AppServerClient(Protocol):
 class _PendingApproval:
     transport_request_id: str | int
     conversation: ConversationKey
+    thread_id: str
 
 
 class ImZenGateway:
@@ -172,7 +174,13 @@ class ImZenGateway:
                 approval_policy=("never" if permission_mode == "full-access" else "on-request"),
             )
             thread_id = _thread_id(result)
-            self._bind(key, thread_id)
+            if not await self._bind(key, thread_id):
+                await self._send_thread_already_bound(
+                    key,
+                    thread_id,
+                    delivery_id=self._inbound_delivery_id(inbound, "thread-bound"),
+                )
+                return
         await self.client.start_turn(thread_id, input_items=input_items)
 
     async def handle_notification(self, notification: dict) -> None:
@@ -215,6 +223,7 @@ class ImZenGateway:
         self._pending_approvals[handle] = _PendingApproval(
             transport_request_id=transport_request_id,
             conversation=conversation,
+            thread_id=thread_id,
         )
         await self._send_to_conversation(
             conversation,
@@ -251,6 +260,8 @@ class ImZenGateway:
                     )
                 ).casefold()
             ]
+        matching_count = len(threads)
+        threads = threads[:THREAD_LIST_LIMIT]
         self._listed_threads_by_conversation[key] = threads
         if not threads:
             text = "No matching Zen threads."
@@ -259,6 +270,11 @@ class ImZenGateway:
             for index, thread in enumerate(threads, start=1):
                 lines.append(f"{index}. **[{_thread_status(thread)}]** {_thread_preview(thread)}")
                 lines.append(f"   `{str(thread.get('id') or '')}`")
+            if matching_count > len(threads):
+                lines.append(
+                    f"Showing {len(threads)} of {matching_count} matching threads. "
+                    "Narrow the list with `/threads <query>`."
+                )
             lines.append("Use `/pick <number|id|query>`.")
             text = "\n".join(lines)
         await self._send_to_conversation(
@@ -278,10 +294,14 @@ class ImZenGateway:
                 delivery_id=self._inbound_delivery_id(inbound, "pick-missing"),
             )
             return
-        threads = self._listed_threads_by_conversation.get(key)
-        if threads is None:
+        normalized_selector = selector.strip()
+        if normalized_selector.isdecimal():
+            threads = self._listed_threads_by_conversation.get(key)
+            if threads is None:
+                threads = (await self._read_thread_list())[:THREAD_LIST_LIMIT]
+                self._listed_threads_by_conversation[key] = threads
+        else:
             threads = await self._read_thread_list()
-            self._listed_threads_by_conversation[key] = threads
         matches = _select_threads(threads, selector)
         if len(matches) != 1:
             await self._send_to_conversation(
@@ -296,9 +316,22 @@ class ImZenGateway:
             )
             return
         thread_id = str(matches[0].get("id") or "")
+        if self._thread_is_bound_elsewhere(key, thread_id):
+            await self._send_thread_already_bound(
+                key,
+                thread_id,
+                delivery_id=self._inbound_delivery_id(inbound, "pick-bound"),
+            )
+            return
         result = await self.client.resume_thread(thread_id=thread_id)
         thread = _result_thread(result)
-        self._bind(key, thread_id)
+        if not await self._bind(key, thread_id):
+            await self._send_thread_already_bound(
+                key,
+                thread_id,
+                delivery_id=self._inbound_delivery_id(inbound, "pick-bound"),
+            )
+            return
         approval_policy = str(result.get("approvalPolicy") or "")
         if approval_policy in {"never", "on-request"}:
             self._permission_by_conversation[key] = (
@@ -395,21 +428,32 @@ class ImZenGateway:
         )
 
     async def _clear_binding(self, key: ConversationKey) -> None:
-        pending_handles = [
+        old_thread_id = self._thread_by_conversation.get(key)
+        if old_thread_id is not None:
+            await self._cancel_pending_approvals(old_thread_id)
+            self._thread_by_conversation.pop(key, None)
+            if self._conversation_by_thread.get(old_thread_id) == key:
+                self._conversation_by_thread.pop(old_thread_id, None)
+
+    async def _cancel_pending_approvals(self, thread_id: str) -> None:
+        pending_approvals = [
             (handle, pending)
             for handle, pending in self._pending_approvals.items()
-            if pending.conversation == key
+            if pending.thread_id == thread_id
         ]
-        for _handle, pending in pending_handles:
-            await self.client.reply_to_transport_request(
-                pending.transport_request_id,
-                {"decision": "cancel"},
-            )
-        old_thread_id = self._thread_by_conversation.pop(key, None)
-        if old_thread_id is not None:
-            self._conversation_by_thread.pop(old_thread_id, None)
-        for handle, _pending in pending_handles:
+        first_error: Exception | None = None
+        for handle, pending in pending_approvals:
             self._pending_approvals.pop(handle, None)
+            try:
+                await self.client.reply_to_transport_request(
+                    pending.transport_request_id,
+                    {"decision": "cancel"},
+                )
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     async def _answer_approval(
         self,
@@ -419,16 +463,17 @@ class ImZenGateway:
         handle: str,
     ) -> None:
         key = self._key(inbound)
+        current_thread_id = self._thread_by_conversation.get(key)
         if not handle:
             candidates = [
                 candidate
                 for candidate, pending in self._pending_approvals.items()
-                if pending.conversation == key
+                if pending.conversation == key and pending.thread_id == current_thread_id
             ]
             if len(candidates) == 1:
                 handle = candidates[0]
         pending = self._pending_approvals.get(handle)
-        if pending is None or pending.conversation != key:
+        if pending is None or pending.conversation != key or pending.thread_id != current_thread_id:
             await self._send_to_conversation(
                 key,
                 message_type="error",
@@ -566,15 +611,42 @@ class ImZenGateway:
             )
         )
 
-    def _bind(self, conversation: ConversationKey, thread_id: str) -> None:
+    async def _bind(self, conversation: ConversationKey, thread_id: str) -> bool:
+        if self._thread_is_bound_elsewhere(conversation, thread_id):
+            return False
         previous = self._thread_by_conversation.get(conversation)
         if previous is not None and previous != thread_id:
-            self._conversation_by_thread.pop(previous, None)
-        previous_conversation = self._conversation_by_thread.get(thread_id)
-        if previous_conversation is not None and previous_conversation != conversation:
-            self._thread_by_conversation.pop(previous_conversation, None)
+            await self._cancel_pending_approvals(previous)
+            if self._conversation_by_thread.get(previous) == conversation:
+                self._conversation_by_thread.pop(previous, None)
         self._thread_by_conversation[conversation] = thread_id
         self._conversation_by_thread[thread_id] = conversation
+        return True
+
+    def _thread_is_bound_elsewhere(
+        self,
+        conversation: ConversationKey,
+        thread_id: str,
+    ) -> bool:
+        current = self._conversation_by_thread.get(thread_id)
+        return current is not None and current != conversation
+
+    async def _send_thread_already_bound(
+        self,
+        conversation: ConversationKey,
+        thread_id: str,
+        *,
+        delivery_id: str,
+    ) -> None:
+        await self._send_to_conversation(
+            conversation,
+            message_type="error",
+            text=(
+                f"Zen thread `{thread_id}` is already selected by another IM conversation. "
+                "This conversation was not rebound."
+            ),
+            delivery_id=delivery_id,
+        )
 
     def _permission_mode(self, conversation: ConversationKey) -> PermissionMode:
         return self._permission_by_conversation.get(

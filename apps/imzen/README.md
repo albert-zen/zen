@@ -14,6 +14,7 @@ durable command queue, outbox, scheduler, or recovery state machine.
 export IMZEN_APP_SERVER_URL=ws://127.0.0.1:4500
 export IMZEN_CWD=/absolute/workspace
 export IMZEN_PERMISSION_MODE=full-access
+export IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS=true
 export IMZEN_CHANNELS_CONFIG_FILE=/absolute/private/channels.json
 python -m imzen
 ```
@@ -23,7 +24,11 @@ App Server bearer token. `IMZEN_PERMISSION_MODE` accepts `full-access`
 (the default) or `approval-required`. Full Access requests the only currently
 supported sandbox (`danger-full-access`) with approval policy `never`; commands
 can therefore access everything available to the IMZen host process without an
-approval prompt. Use a bot and channel access policy that you trust.
+approval prompt. If an enabled channel has neither `allowed_user_ids` nor
+`allowed_conversation_ids`, Full Access requires the explicit deployment opt-in
+`IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS=true`; alternatively, configure an
+allowlist. This opt-in is host configuration and never enters Zen Core or a
+Thread.
 
 The channel config is a JSON object. Enabled values are passed to the pinned
 IMCodex adapter. IMZen can keep QQ credentials in its own private credential
@@ -54,7 +59,8 @@ Use `/threads [query]` to list the central App Server's Threads, `/pick
 <number|id|query>` to bind this IM conversation to one, and `/status` to inspect
 the current binding. This is how an IM conversation can continue a Thread first
 created through T3 Code or another App Server client. The binding and the most
-recent list are display state held only in IMZen memory.
+recent list are display state held only in IMZen memory. `/threads` shows at
+most 20 matches; use a query to narrow larger histories.
 
 Supported keys at the top level are `qq`, `telegram`, `feishu`, and `weixin`.
 Feishu additionally requires installing the `feishu` extra. Each IMZen

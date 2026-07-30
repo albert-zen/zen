@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -764,6 +764,47 @@ test("CLI executes one full local protocol turn", async () => {
     ]);
     assert.equal(echo.stderr, "");
     assert.match(echo.stdout, /Echo: hello CLI/);
+    const [persistedThreadFile] = await readdir(
+      path.join(temporaryDirectory, "threads"),
+    );
+    if (
+      persistedThreadFile === undefined ||
+      !persistedThreadFile.endsWith(".jsonl")
+    ) {
+      throw new Error("CLI did not persist the expected Thread journal");
+    }
+    const persistedThreadId = persistedThreadFile.slice(0, -".jsonl".length);
+
+    for (const [options, expected] of [
+      [["--approval", "always", "--approve"], /approvalPolicy does not match/u],
+      [["--model", "different-model"], /model does not match/u],
+      [["--cwd", os.tmpdir()], /cwd does not match/u],
+    ] as const) {
+      await assert.rejects(
+        executeCli([
+          "run",
+          "--data-dir",
+          temporaryDirectory,
+          "--thread",
+          persistedThreadId,
+          ...options,
+          "resume must reject a mismatched explicit setting",
+        ]),
+        expected,
+      );
+    }
+
+    const matchingResume = await executeCli([
+      "run",
+      "--data-dir",
+      temporaryDirectory,
+      "--thread",
+      persistedThreadId,
+      "--approval",
+      "never",
+      "resume with matching settings",
+    ]);
+    assert.match(matchingResume.stdout, /Echo: resume with matching settings/u);
 
     const fullAccessTool = await executeCli([
       "run",
@@ -778,13 +819,46 @@ test("CLI executes one full local protocol turn", async () => {
       "run",
       "--data-dir",
       temporaryDirectory,
-      "--approval",
-      "always",
       "--approve",
       "!shell printf cli-approved",
     ]);
     assert.equal(approvedTool.stderr, "");
     assert.match(approvedTool.stdout, /Command result:\s+cli-approved/u);
+
+    const deniedTool = await executeCli([
+      "run",
+      "--data-dir",
+      temporaryDirectory,
+      "--deny",
+      "!shell printf command-must-not-run",
+    ]);
+    assert.equal(deniedTool.stderr, "");
+    assert.match(deniedTool.stdout, /User declined this tool call/u);
+    assert.doesNotMatch(deniedTool.stdout, /command-must-not-run/u);
+
+    await assert.rejects(
+      executeCli([
+        "run",
+        "--data-dir",
+        temporaryDirectory,
+        "--approve",
+        "--deny",
+        "conflicting decisions",
+      ]),
+      /--approve and --deny cannot be used together/u,
+    );
+    await assert.rejects(
+      executeCli([
+        "run",
+        "--data-dir",
+        temporaryDirectory,
+        "--approval",
+        "never",
+        "--approve",
+        "contradictory approval mode",
+      ]),
+      /--approve\/--deny require approval mode/u,
+    );
   } finally {
     await rm(temporaryDirectory, { recursive: true });
   }

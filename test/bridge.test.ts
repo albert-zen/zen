@@ -99,7 +99,16 @@ test("rejects binary frames from the central App Server", async () => {
   }
 });
 
-test("T3 remote bridge accepts only its injected loopback MCP options", async () => {
+test("T3 remote bridge accepts the injected MCP endpoint shapes it ignores", async () => {
+  for (const endpoint of [
+    "http://[::1]:3773/mcp",
+    "http://100.64.0.40:3773/mcp",
+  ]) {
+    await assertCliBridgeStarts(endpoint);
+  }
+});
+
+async function assertCliBridgeStarts(mcpEndpoint: string): Promise<void> {
   const server = await listeningServer();
   const child = spawn(
     process.execPath,
@@ -109,7 +118,7 @@ test("T3 remote bridge accepts only its injected loopback MCP options", async ()
       "--remote",
       serverUrl(server),
       "-c",
-      "mcp_servers.t3-code.url=http://127.0.0.1:3773/mcp",
+      `mcp_servers.t3-code.url=${mcpEndpoint}`,
       "-c",
       'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
     ],
@@ -144,7 +153,7 @@ test("T3 remote bridge accepts only its injected loopback MCP options", async ()
     child.kill();
     await closeServer(server);
   }
-});
+}
 
 test("T3 MCP options fail closed outside the exact remote bridge shape", async () => {
   const missingValue = await failedCli(["app-server", "-c"]);
@@ -173,6 +182,47 @@ test("T3 MCP options fail closed outside the exact remote bridge shape", async (
     unrelatedConfiguration,
     /Unsupported -c configuration for the Zen T3 bridge/u,
   );
+
+  const duplicateConfiguration = await failedCli([
+    "app-server",
+    "--remote",
+    "ws://127.0.0.1:1",
+    "-c",
+    "mcp_servers.t3-code.url=http://127.0.0.1:3773/mcp",
+    "-c",
+    "mcp_servers.t3-code.url=http://localhost:3774/mcp",
+  ]);
+  assert.match(duplicateConfiguration, /Duplicate T3 MCP url/u);
+
+  const credentialedConfiguration = await failedCli([
+    "app-server",
+    "--remote",
+    "ws://127.0.0.1:1",
+    "-c",
+    "mcp_servers.t3-code.url=http://user:secret@example.test/mcp",
+  ]);
+  assert.match(credentialedConfiguration, /credential-free http \/mcp URL/u);
+});
+
+test("remote bridge rejects host and runtime options that it cannot apply", async () => {
+  for (const option of [
+    ["--approval", "always"],
+    ["--provider", "fake"],
+    ["--model", "fake"],
+    ["--cwd", process.cwd()],
+    ["--data-dir", os.tmpdir()],
+    ["--approve"],
+    ["--deny"],
+    ["--thread", "thread-id"],
+  ]) {
+    const failure = await failedCli([
+      "app-server",
+      "--remote",
+      "ws://127.0.0.1:1",
+      ...option,
+    ]);
+    assert.match(failure, /Options not supported by app-server --remote/u);
+  }
 });
 
 async function listeningServer(): Promise<WebSocketServer> {

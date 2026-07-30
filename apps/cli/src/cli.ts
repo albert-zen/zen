@@ -60,6 +60,9 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
   if (remote !== undefined && args.options.has("listen")) {
     throw new Error("--remote and --listen cannot be used together");
   }
+  if (remote !== undefined) {
+    assertRemoteBridgeOptions(args);
+  }
   const bearerToken = await loadBearerToken(args);
   if (remote !== undefined) {
     await bridgeCodexStdioToWebSocket({
@@ -102,6 +105,7 @@ async function runCommand(args: ParsedArguments): Promise<void> {
   if (args.positionals.length === 0) {
     throw new Error("zen run requires a prompt");
   }
+  applyRunApprovalDecision(args);
   const session = await connectClient(args);
   try {
     const decision = flag(args, "approve") ? "accept" : "decline";
@@ -301,6 +305,7 @@ async function openThread(
   const existing = option(args, "thread");
   const requestedModel = option(args, "model");
   const requestedApproval = option(args, "approval");
+  const requestedCwd = option(args, "cwd");
   const response =
     existing === undefined
       ? await client.request("thread/start", {
@@ -322,7 +327,19 @@ async function openThread(
             : {}),
           ...(local ? { sandbox: "danger-full-access" } : {}),
         })
-      : await client.request("thread/resume", { threadId: existing });
+      : await client.request("thread/resume", {
+          threadId: existing,
+          ...(requestedCwd === undefined
+            ? {}
+            : { cwd: path.resolve(requestedCwd) }),
+          ...(requestedModel === undefined ? {} : { model: requestedModel }),
+          ...(requestedApproval === undefined
+            ? {}
+            : {
+                approvalPolicy:
+                  requestedApproval === "never" ? "never" : "on-request",
+              }),
+        });
   const thread = responseResult<Record<string, unknown>>(response, "thread");
   if (typeof thread.id !== "string") {
     throw new Error("App Server response omitted thread.id");
@@ -525,7 +542,7 @@ function parseArguments(args: string[]): ParsedArguments {
 
 function parseAppServerArguments(args: string[]): ParsedArguments {
   const filtered: string[] = [];
-  let ignoredT3McpConfiguration = false;
+  const ignoredT3McpConfigurations = new Set<"url" | "bearer-token-env-var">();
   for (let index = 0; index < args.length; index += 1) {
     const value = args[index];
     if (value !== "-c") {
@@ -538,12 +555,18 @@ function parseAppServerArguments(args: string[]): ParsedArguments {
     if (configuration === undefined) {
       throw new Error("Option -c requires a value");
     }
-    assertIgnorableT3McpConfiguration(configuration);
-    ignoredT3McpConfiguration = true;
+    const kind = readIgnorableT3McpConfiguration(configuration);
+    if (ignoredT3McpConfigurations.has(kind)) {
+      throw new Error(`Duplicate T3 MCP ${kind} -c configuration`);
+    }
+    ignoredT3McpConfigurations.add(kind);
     index += 1;
   }
   const parsed = parseArguments(filtered);
-  if (ignoredT3McpConfiguration && option(parsed, "remote") === undefined) {
+  if (
+    ignoredT3McpConfigurations.size > 0 &&
+    option(parsed, "remote") === undefined
+  ) {
     throw new Error(
       "T3 MCP -c options are accepted only with app-server --remote",
     );
@@ -551,7 +574,9 @@ function parseAppServerArguments(args: string[]): ParsedArguments {
   return parsed;
 }
 
-function assertIgnorableT3McpConfiguration(value: string): void {
+function readIgnorableT3McpConfiguration(
+  value: string,
+): "url" | "bearer-token-env-var" {
   const urlPrefix = "mcp_servers.t3-code.url=";
   if (value.startsWith(urlPrefix)) {
     const endpoint = unquote(value.slice(urlPrefix.length));
@@ -563,23 +588,22 @@ function assertIgnorableT3McpConfiguration(value: string): void {
     }
     if (
       parsed.protocol !== "http:" ||
-      !["127.0.0.1", "::1", "localhost"].includes(parsed.hostname) ||
       parsed.pathname !== "/mcp" ||
       parsed.username ||
       parsed.password ||
       parsed.search ||
       parsed.hash
     ) {
-      throw new Error("T3 MCP URL must be a credential-free loopback /mcp URL");
+      throw new Error("T3 MCP URL must be a credential-free http /mcp URL");
     }
-    return;
+    return "url";
   }
   const bearerPrefix = "mcp_servers.t3-code.bearer_token_env_var=";
   if (
     value.startsWith(bearerPrefix) &&
     unquote(value.slice(bearerPrefix.length)) === "T3_MCP_BEARER_TOKEN"
   ) {
-    return;
+    return "bearer-token-env-var";
   }
   throw new Error("Unsupported -c configuration for the Zen T3 bridge");
 }
@@ -588,6 +612,40 @@ function unquote(value: string): string {
   return value.startsWith('"') && value.endsWith('"')
     ? value.slice(1, -1)
     : value;
+}
+
+function assertRemoteBridgeOptions(args: ParsedArguments): void {
+  const allowed = new Set(["remote", "auth-token-file"]);
+  const unsupported = [...args.options.keys()].filter(
+    (name) => !allowed.has(name),
+  );
+  if (unsupported.length > 0) {
+    throw new Error(
+      `Options not supported by app-server --remote: ${unsupported
+        .map((name) => `--${name}`)
+        .join(", ")}`,
+    );
+  }
+}
+
+function applyRunApprovalDecision(args: ParsedArguments): void {
+  const approve = flag(args, "approve");
+  const deny = flag(args, "deny");
+  if (approve && deny) {
+    throw new Error("--approve and --deny cannot be used together");
+  }
+  if (!approve && !deny) {
+    return;
+  }
+  const approval = option(args, "approval");
+  if (approval === "never") {
+    throw new Error(
+      "--approve/--deny require approval mode; remove --approval never",
+    );
+  }
+  if (approval === undefined) {
+    args.options.set("approval", "always");
+  }
 }
 
 function option(args: ParsedArguments, name: string): string | undefined {
@@ -668,6 +726,8 @@ Core options:
   --data-dir <path>            Host-owned Zen data directory
   --model <name>               Model name (defaults to fake, or gpt-5.6-terra for subscription)
   --approval always|never      Tool approval policy (default: never / Full Access)
+  --approve                    Accept one-shot run approvals (implies --approval always)
+  --deny                       Decline one-shot run approvals (implies --approval always)
   --remote <ws://...>          Connect to an existing Zen App Server
   --auth-token-file <path>     Bearer token file for WebSocket transport
   --thread <id>                Resume an existing Thread

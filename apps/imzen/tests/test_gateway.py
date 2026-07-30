@@ -16,6 +16,7 @@ class FakeAppServer:
         self.started_threads: list[dict[str, Any]] = []
         self.started_turns: list[tuple[str, dict[str, Any]]] = []
         self.listed_threads: list[dict[str, Any]] = []
+        self.list_threads_calls = 0
         self.resumed_threads: list[str] = []
         self.read_threads: list[str] = []
         self.replies: list[tuple[str | int, dict]] = []
@@ -43,6 +44,7 @@ class FakeAppServer:
         return {"thread": {"id": f"thread-{self._thread_sequence}"}}
 
     async def list_threads(self, **_params: Any) -> dict:
+        self.list_threads_calls += 1
         return {"data": self.listed_threads}
 
     async def resume_thread(self, **params: Any) -> dict:
@@ -314,6 +316,135 @@ async def test_list_pick_and_status_continue_an_existing_app_server_thread(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_pick_number_uses_the_current_threads_cache(tmp_path):
+    client = FakeAppServer()
+    client.listed_threads = [
+        {
+            "id": "thread-cached",
+            "preview": "cached result",
+            "updatedAt": 10,
+            "status": {"type": "idle"},
+        }
+    ]
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+
+    await middleware.handle_inbound(adapter, inbound("m1", "/threads"))
+    client.listed_threads = [
+        {
+            "id": "thread-newer",
+            "preview": "new server result",
+            "updatedAt": 20,
+            "status": {"type": "idle"},
+        },
+        *client.listed_threads,
+    ]
+    await middleware.handle_inbound(adapter, inbound("m2", "/pick 1"))
+
+    assert client.list_threads_calls == 1
+    assert client.resumed_threads == ["thread-cached"]
+    assert middleware.gateway.thread_for("test", "chat-1") == "thread-cached"
+
+
+@pytest.mark.parametrize("selector", ["thread-new", "fresh handoff"])
+@pytest.mark.asyncio
+async def test_pick_id_or_query_refreshes_the_full_thread_list(tmp_path, selector):
+    client = FakeAppServer()
+    client.listed_threads = [
+        {
+            "id": "thread-cached",
+            "preview": "cached result",
+            "updatedAt": 10,
+            "status": {"type": "idle"},
+        }
+    ]
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+
+    await middleware.handle_inbound(adapter, inbound("m1", "/threads"))
+    client.listed_threads = [
+        {
+            "id": "thread-new",
+            "preview": "fresh handoff",
+            "updatedAt": 20,
+            "status": {"type": "idle"},
+        },
+        *client.listed_threads,
+    ]
+    await middleware.handle_inbound(adapter, inbound("m2", f"/pick {selector}"))
+
+    assert client.list_threads_calls == 2
+    assert client.resumed_threads == ["thread-new"]
+    assert middleware.gateway.thread_for("test", "chat-1") == "thread-new"
+
+
+@pytest.mark.asyncio
+async def test_threads_limits_the_displayed_and_numbered_results(tmp_path):
+    client = FakeAppServer()
+    client.listed_threads = [
+        {
+            "id": f"thread-{index:02}",
+            "preview": f"work-{index:02}",
+            "updatedAt": 100 - index,
+            "status": {"type": "idle"},
+        }
+        for index in range(25)
+    ]
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+
+    await middleware.handle_inbound(adapter, inbound("m1", "/threads"))
+
+    text = adapter.sent[-1].text
+    assert "`thread-19`" in text
+    assert "`thread-20`" not in text
+    assert "Showing 20 of 25 matching threads." in text
+    assert "Narrow the list with `/threads <query>`." in text
+
+    await middleware.handle_inbound(adapter, inbound("m2", "/pick 21"))
+
+    assert client.list_threads_calls == 1
+    assert client.resumed_threads == []
+    assert adapter.sent[-1].message_type == "error"
+    assert adapter.sent[-1].text == "No matching Zen thread."
+
+
+@pytest.mark.asyncio
+async def test_pick_rejects_a_thread_selected_by_another_conversation(tmp_path):
+    client = FakeAppServer()
+    client.listed_threads = [
+        {
+            "id": "thread-shared",
+            "preview": "shared work",
+            "updatedAt": 10,
+            "status": {"type": "idle"},
+        }
+    ]
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+
+    await middleware.handle_inbound(
+        adapter,
+        inbound("m1", "/pick thread-shared", conversation_id="chat-1"),
+    )
+    await middleware.handle_inbound(
+        adapter,
+        inbound("m2", "/pick thread-shared", conversation_id="chat-2"),
+    )
+
+    assert client.resumed_threads == ["thread-shared"]
+    assert middleware.gateway.thread_for("test", "chat-1") == "thread-shared"
+    assert middleware.gateway.thread_for("test", "chat-2") is None
+    assert adapter.sent[-1].message_type == "error"
+    assert "already selected by another IM conversation" in adapter.sent[-1].text
+    assert "was not rebound" in adapter.sent[-1].text
+
+
+@pytest.mark.asyncio
 async def test_app_server_failure_is_reported_without_a_client_queue(tmp_path):
     class FailingAppServer(FakeAppServer):
         async def start_turn(self, thread_id: str, **params: Any) -> dict:
@@ -453,9 +584,50 @@ async def test_new_explicitly_cancels_pending_approval(tmp_path):
     )
 
     await middleware.handle_inbound(adapter, inbound("m2", "/new"))
+    await middleware.handle_inbound(adapter, inbound("m3", "/approve 7"))
 
     assert client.replies == [(7, {"decision": "cancel"})]
     assert middleware.gateway.thread_for("test", "chat-1") is None
+    assert adapter.sent[-1].message_type == "error"
+    assert adapter.sent[-1].text == "No matching approval request is pending."
+
+
+@pytest.mark.asyncio
+async def test_pick_cancels_old_thread_approval_before_rebinding(tmp_path):
+    client = FakeAppServer()
+    client.listed_threads = [
+        {
+            "id": "thread-handoff",
+            "preview": "handoff target",
+            "updatedAt": 20,
+            "status": {"type": "idle"},
+        }
+    ]
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+    await middleware.start()
+    await middleware.handle_inbound(adapter, inbound("m1", "run it"))
+    await client.request(
+        {
+            "id": "approval-old",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "command": "printf old",
+            },
+        }
+    )
+
+    await middleware.handle_inbound(adapter, inbound("m2", "/pick thread-handoff"))
+    await middleware.handle_inbound(adapter, inbound("m3", "/approve approval-old"))
+
+    assert client.replies == [("approval-old", {"decision": "cancel"})]
+    assert client.resumed_threads == ["thread-handoff"]
+    assert middleware.gateway.thread_for("test", "chat-1") == "thread-handoff"
+    assert adapter.sent[-1].message_type == "error"
+    assert adapter.sent[-1].text == "No matching approval request is pending."
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,7 @@ class Settings:
     permission_mode: PermissionMode = "full-access"
     channels_config_file: Path | None = None
     app_server_auth_token_file: Path | None = None
+    allow_unrestricted_full_access: bool = False
 
     @classmethod
     def from_env(
@@ -45,10 +46,14 @@ class Settings:
         channels_file = _optional_path(values.get("IMZEN_CHANNELS_CONFIG_FILE"))
         token_file = _optional_path(values.get("IMZEN_APP_SERVER_AUTH_TOKEN_FILE"))
         permission_mode = _permission_mode(values.get("IMZEN_PERMISSION_MODE"))
+        allow_unrestricted_full_access = _unrestricted_full_access_opt_in(
+            values.get("IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS")
+        )
         return cls(
             app_server_url=app_server_url,
             cwd=cwd,
             permission_mode=permission_mode,
+            allow_unrestricted_full_access=allow_unrestricted_full_access,
             channels_config_file=channels_file,
             app_server_auth_token_file=token_file,
         )
@@ -71,6 +76,15 @@ def _permission_mode(value: str | None) -> PermissionMode:
     if normalized not in {"full-access", "approval-required"}:
         raise ConfigurationError("IMZEN_PERMISSION_MODE must be full-access or approval-required")
     return normalized  # type: ignore[return-value]
+
+
+def _unrestricted_full_access_opt_in(value: str | None) -> bool:
+    normalized = str(value or "").strip().casefold()
+    if not normalized:
+        return False
+    if normalized not in {"true", "false"}:
+        raise ConfigurationError("IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS must be true or false")
+    return normalized == "true"
 
 
 def _validate_app_server_url(value: str) -> str:
