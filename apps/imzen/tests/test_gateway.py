@@ -15,6 +15,9 @@ class FakeAppServer:
         self.connection_reset_handlers = []
         self.started_threads: list[dict[str, Any]] = []
         self.started_turns: list[tuple[str, dict[str, Any]]] = []
+        self.listed_threads: list[dict[str, Any]] = []
+        self.resumed_threads: list[str] = []
+        self.read_threads: list[str] = []
         self.replies: list[tuple[str | int, dict]] = []
         self.error_replies: list[tuple[str | int, int, str]] = []
         self.initialized = False
@@ -38,6 +41,31 @@ class FakeAppServer:
         self.started_threads.append(params)
         self._thread_sequence += 1
         return {"thread": {"id": f"thread-{self._thread_sequence}"}}
+
+    async def list_threads(self, **_params: Any) -> dict:
+        return {"data": self.listed_threads}
+
+    async def resume_thread(self, **params: Any) -> dict:
+        thread_id = str(params["thread_id"])
+        self.resumed_threads.append(thread_id)
+        thread = next(thread for thread in self.listed_threads if thread["id"] == thread_id)
+        return {
+            "thread": thread,
+            "approvalPolicy": thread.get("approvalPolicy", "never"),
+        }
+
+    async def read_thread(self, thread_id: str, **_params: Any) -> dict:
+        self.read_threads.append(thread_id)
+        thread = next(
+            (thread for thread in self.listed_threads if thread["id"] == thread_id),
+            {
+                "id": thread_id,
+                "preview": "",
+                "cwd": "",
+                "status": {"type": "idle"},
+            },
+        )
+        return {"thread": thread}
 
     async def start_turn(self, thread_id: str, **params: Any) -> dict:
         self.started_turns.append((thread_id, params))
@@ -110,7 +138,13 @@ async def test_conversation_reuses_one_thread_and_projects_completed_item(tmp_pa
     await middleware.handle_inbound(adapter, inbound("m2", "second"))
 
     assert client.initialized is True
-    assert client.started_threads == [{"cwd": str(tmp_path)}]
+    assert client.started_threads == [
+        {
+            "cwd": str(tmp_path),
+            "sandbox": "danger-full-access",
+            "approval_policy": "never",
+        }
+    ]
     assert [thread_id for thread_id, _ in client.started_turns] == [
         "thread-1",
         "thread-1",
@@ -175,6 +209,108 @@ async def test_new_clears_only_the_client_binding(tmp_path):
         "thread-2",
     ]
     assert adapter.sent[0].text == "The next message will start a new Zen thread."
+
+
+@pytest.mark.asyncio
+async def test_permission_mode_is_selectable_and_applies_to_the_next_thread(tmp_path):
+    client = FakeAppServer()
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+
+    await middleware.handle_inbound(adapter, inbound("m1", "first"))
+    await middleware.handle_inbound(
+        adapter,
+        inbound("m2", "/permission approval-required"),
+    )
+    await middleware.handle_inbound(adapter, inbound("m3", "second"))
+    await middleware.handle_inbound(adapter, inbound("m4", "/permission"))
+
+    assert client.started_threads == [
+        {
+            "cwd": str(tmp_path),
+            "sandbox": "danger-full-access",
+            "approval_policy": "never",
+        },
+        {
+            "cwd": str(tmp_path),
+            "sandbox": "danger-full-access",
+            "approval_policy": "on-request",
+        },
+    ]
+    assert "Commands require approval" in adapter.sent[-2].text
+    assert adapter.sent[-1].text.startswith("Permission mode: approval-required.")
+
+
+@pytest.mark.asyncio
+async def test_agent_markdown_is_delivered_unchanged(tmp_path):
+    client = FakeAppServer()
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+    await middleware.start()
+    await middleware.handle_inbound(adapter, inbound("m1", "format it"))
+
+    markdown = "**bold**\n\n- one\n- two\n\n```sh\nprintf hello\n```"
+    await client.notify(
+        {
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "agent-markdown",
+                    "type": "agentMessage",
+                    "text": markdown,
+                },
+            },
+        }
+    )
+
+    assert adapter.sent[-1].text == markdown
+
+
+@pytest.mark.asyncio
+async def test_list_pick_and_status_continue_an_existing_app_server_thread(tmp_path):
+    client = FakeAppServer()
+    client.listed_threads = [
+        {
+            "id": "thread-older",
+            "preview": "older work",
+            "cwd": str(tmp_path),
+            "updatedAt": 10,
+            "status": {"type": "idle"},
+            "approvalPolicy": "never",
+        },
+        {
+            "id": "thread-t3",
+            "preview": "T3 desktop handoff",
+            "cwd": str(tmp_path),
+            "updatedAt": 20,
+            "status": {"type": "idle"},
+            "approvalPolicy": "never",
+        },
+    ]
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+
+    await middleware.handle_inbound(adapter, inbound("m1", "/threads"))
+    await middleware.handle_inbound(adapter, inbound("m2", "/pick 1"))
+    await middleware.handle_inbound(adapter, inbound("m3", "/status"))
+    await middleware.handle_inbound(adapter, inbound("m4", "continue from IM"))
+
+    assert "T3 desktop handoff" in adapter.sent[0].text
+    assert adapter.sent[0].text.index("T3 desktop handoff") < adapter.sent[0].text.index(
+        "older work"
+    )
+    assert client.resumed_threads == ["thread-t3"]
+    assert client.read_threads == ["thread-t3"]
+    assert middleware.gateway.thread_for("test", "chat-1") == "thread-t3"
+    assert client.started_turns[-1] == (
+        "thread-t3",
+        {"input_items": [{"type": "text", "text": "continue from IM"}]},
+    )
 
 
 @pytest.mark.asyncio

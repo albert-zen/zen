@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -98,10 +99,102 @@ test("rejects binary frames from the central App Server", async () => {
   }
 });
 
+test("T3 remote bridge accepts only its injected loopback MCP options", async () => {
+  const server = await listeningServer();
+  const child = spawn(
+    process.execPath,
+    [
+      path.resolve("dist/apps/cli/src/cli.js"),
+      "app-server",
+      "--remote",
+      serverUrl(server),
+      "-c",
+      "mcp_servers.t3-code.url=http://127.0.0.1:3773/mcp",
+      "-c",
+      'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+    ],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  try {
+    const [socketValue] = await once(server, "connection");
+    const socket = socketValue as WebSocket;
+    const received = once(socket, "message");
+    child.stdin.write('{"id":1,"method":"initialize"}\n');
+    const [data] = await received;
+    assert.equal(data.toString(), '{"id":1,"method":"initialize"}');
+    const forwarded = once(child.stdout, "data");
+    socket.send('{"id":1,"result":{"ok":true}}');
+    await forwarded;
+    child.stdin.end();
+    const [exitCode] = await once(child, "close");
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.equal(stdout, '{"id":1,"result":{"ok":true}}\n');
+  } finally {
+    child.kill();
+    await closeServer(server);
+  }
+});
+
+test("T3 MCP options fail closed outside the exact remote bridge shape", async () => {
+  const missingValue = await failedCli(["app-server", "-c"]);
+  assert.match(missingValue, /Option -c requires a value/u);
+
+  const localListener = await failedCli([
+    "app-server",
+    "--listen",
+    "stdio",
+    "-c",
+    "mcp_servers.t3-code.url=http://127.0.0.1:3773/mcp",
+  ]);
+  assert.match(
+    localListener,
+    /T3 MCP -c options are accepted only with app-server --remote/u,
+  );
+
+  const unrelatedConfiguration = await failedCli([
+    "app-server",
+    "--remote",
+    "ws://127.0.0.1:1",
+    "-c",
+    "model=gpt-5.6-terra",
+  ]);
+  assert.match(
+    unrelatedConfiguration,
+    /Unsupported -c configuration for the Zen T3 bridge/u,
+  );
+});
+
 async function listeningServer(): Promise<WebSocketServer> {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(server, "listening");
   return server;
+}
+
+async function failedCli(args: string[]): Promise<string> {
+  const child = spawn(
+    process.execPath,
+    [path.resolve("dist/apps/cli/src/cli.js"), ...args],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const [exitCode] = await once(child, "close");
+  assert.equal(exitCode, 1);
+  return stderr;
 }
 
 function serverUrl(server: WebSocketServer): string {

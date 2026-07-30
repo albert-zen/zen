@@ -33,10 +33,12 @@ interface ClientSession {
   localServer?: CodexWebSocketServer;
 }
 
+const DEFAULT_APPROVAL_POLICY = "never" as const;
+
 async function main(): Promise<void> {
   const [command = "help", ...args] = process.argv.slice(2);
   if (command === "app-server") {
-    await appServerCommand(parseArguments(args));
+    await appServerCommand(parseAppServerArguments(args));
   } else if (command === "run") {
     await runCommand(parseArguments(args));
   } else if (command === "chat") {
@@ -313,7 +315,7 @@ async function openThread(
           ...(local || requestedApproval !== undefined
             ? {
                 approvalPolicy:
-                  (requestedApproval ?? "always") === "never"
+                  (requestedApproval ?? DEFAULT_APPROVAL_POLICY) === "never"
                     ? "never"
                     : "on-request",
               }
@@ -455,7 +457,7 @@ function hostOptions(args: ParsedArguments) {
   } else {
     throw new Error(`Unsupported provider: ${providerName}`);
   }
-  const approval = option(args, "approval") ?? "always";
+  const approval = option(args, "approval") ?? DEFAULT_APPROVAL_POLICY;
   if (approval !== "always" && approval !== "never") {
     throw new Error("--approval must be always or never");
   }
@@ -519,6 +521,73 @@ function parseArguments(args: string[]): ParsedArguments {
     index += 1;
   }
   return { options, positionals };
+}
+
+function parseAppServerArguments(args: string[]): ParsedArguments {
+  const filtered: string[] = [];
+  let ignoredT3McpConfiguration = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+    if (value !== "-c") {
+      if (value !== undefined) {
+        filtered.push(value);
+      }
+      continue;
+    }
+    const configuration = args[index + 1];
+    if (configuration === undefined) {
+      throw new Error("Option -c requires a value");
+    }
+    assertIgnorableT3McpConfiguration(configuration);
+    ignoredT3McpConfiguration = true;
+    index += 1;
+  }
+  const parsed = parseArguments(filtered);
+  if (ignoredT3McpConfiguration && option(parsed, "remote") === undefined) {
+    throw new Error(
+      "T3 MCP -c options are accepted only with app-server --remote",
+    );
+  }
+  return parsed;
+}
+
+function assertIgnorableT3McpConfiguration(value: string): void {
+  const urlPrefix = "mcp_servers.t3-code.url=";
+  if (value.startsWith(urlPrefix)) {
+    const endpoint = unquote(value.slice(urlPrefix.length));
+    let parsed: URL;
+    try {
+      parsed = new URL(endpoint);
+    } catch {
+      throw new Error("T3 MCP URL configuration is invalid");
+    }
+    if (
+      parsed.protocol !== "http:" ||
+      !["127.0.0.1", "::1", "localhost"].includes(parsed.hostname) ||
+      parsed.pathname !== "/mcp" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      throw new Error("T3 MCP URL must be a credential-free loopback /mcp URL");
+    }
+    return;
+  }
+  const bearerPrefix = "mcp_servers.t3-code.bearer_token_env_var=";
+  if (
+    value.startsWith(bearerPrefix) &&
+    unquote(value.slice(bearerPrefix.length)) === "T3_MCP_BEARER_TOKEN"
+  ) {
+    return;
+  }
+  throw new Error("Unsupported -c configuration for the Zen T3 bridge");
+}
+
+function unquote(value: string): string {
+  return value.startsWith('"') && value.endsWith('"')
+    ? value.slice(1, -1)
+    : value;
 }
 
 function option(args: ParsedArguments, name: string): string | undefined {
@@ -598,7 +667,7 @@ Core options:
   --cwd <path>                 Thread working directory
   --data-dir <path>            Host-owned Zen data directory
   --model <name>               Model name (defaults to fake, or gpt-5.6-terra for subscription)
-  --approval always|never      Tool approval policy
+  --approval always|never      Tool approval policy (default: never / Full Access)
   --remote <ws://...>          Connect to an existing Zen App Server
   --auth-token-file <path>     Bearer token file for WebSocket transport
   --thread <id>                Resume an existing Thread

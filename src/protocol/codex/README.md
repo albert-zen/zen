@@ -52,12 +52,14 @@ Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，�
 连接，并可由宿主注入 bearer token 保护握手。二者承载完全相同的消息协议；
 `bridge.ts` 为 T3 这类只会启动 stdio 子进程的接入端原样桥接中央 WebSocket，
 不解析消息或创建本地 runtime。transport credential 不进入 Thread 或 journal；
-token 文件在 POSIX 上不得允许 group/world 读取。Unix socket 与非本机监听尚未实现。
+token 文件在 POSIX 上不得允许 group/world 读取。T3 0.0.31 自动追加的两项
+loopback MCP `-c` 配置由 CLI remote bridge 启动边界验证后忽略，不进入 wire
+protocol 或 Core；T3 MCP tools 尚未实现。Unix socket 与非本机监听尚未实现。
 
 ## 兼容范围
 
 仓库测试覆盖 Zen CLI 的一轮会话、streaming、command approval、interrupt、
-resume、双连接事件投影，以及 T3 Code 0.0.30 使用的 `account/read`、
+resume、双连接事件投影，以及 T3 Code 0.0.31 使用的 `account/read`、
 `skills/list`、`model/list` bootstrap 和 full-access 配置投影。其他 sandbox
 模式未实现；在真实 T3 Code 完成一轮会话与一次工具执行前，不宣称完整兼容。
 原版 `codex --remote` TUI 0.146.0 还要求 `config/*`、`hooks/list` 等方法，

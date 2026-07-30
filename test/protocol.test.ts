@@ -765,10 +765,21 @@ test("CLI executes one full local protocol turn", async () => {
     assert.equal(echo.stderr, "");
     assert.match(echo.stdout, /Echo: hello CLI/);
 
+    const fullAccessTool = await executeCli([
+      "run",
+      "--data-dir",
+      temporaryDirectory,
+      "!shell printf cli-full-access",
+    ]);
+    assert.equal(fullAccessTool.stderr, "");
+    assert.match(fullAccessTool.stdout, /Command result:\s+cli-full-access/u);
+
     const approvedTool = await executeCli([
       "run",
       "--data-dir",
       temporaryDirectory,
+      "--approval",
+      "always",
       "--approve",
       "!shell printf cli-approved",
     ]);

@@ -13,12 +13,17 @@ durable command queue, outbox, scheduler, or recovery state machine.
 ```sh
 export IMZEN_APP_SERVER_URL=ws://127.0.0.1:4500
 export IMZEN_CWD=/absolute/workspace
+export IMZEN_PERMISSION_MODE=full-access
 export IMZEN_CHANNELS_CONFIG_FILE=/absolute/private/channels.json
 python -m imzen
 ```
 
 `IMZEN_APP_SERVER_AUTH_TOKEN_FILE` may name a private file containing the
-App Server bearer token.
+App Server bearer token. `IMZEN_PERMISSION_MODE` accepts `full-access`
+(the default) or `approval-required`. Full Access requests the only currently
+supported sandbox (`danger-full-access`) with approval policy `never`; commands
+can therefore access everything available to the IMZen host process without an
+approval prompt. Use a bot and channel access policy that you trust.
 
 The channel config is a JSON object. Enabled values are passed to the pinned
 IMCodex adapter. IMZen can keep QQ credentials in its own private credential
@@ -28,7 +33,8 @@ file instead of copying another product's channel configuration:
 {
   "qq": {
     "enabled": true,
-    "credentials_file": "/absolute/private/imzen/qq.json"
+    "credentials_file": "/absolute/private/imzen/qq.json",
+    "markdown_enabled": true
   }
 }
 ```
@@ -38,6 +44,17 @@ current user, and must be mode `600` on POSIX. With no access restriction,
 the pinned channel adapter accepts messages that the QQ platform delivers to
 this bot. `allowed_user_ids` and `allowed_conversation_ids` remain optional
 restrictions for deployments that need a narrower scope.
+
+Use `/permission` to inspect the current conversation preset and
+`/permission full-access` or `/permission approval-required` to change it.
+Changing the preset starts a new Zen Thread on the next message because a
+Thread's effective sandbox and approval policy are immutable history.
+
+Use `/threads [query]` to list the central App Server's Threads, `/pick
+<number|id|query>` to bind this IM conversation to one, and `/status` to inspect
+the current binding. This is how an IM conversation can continue a Thread first
+created through T3 Code or another App Server client. The binding and the most
+recent list are display state held only in IMZen memory.
 
 Supported keys at the top level are `qq`, `telegram`, `feishu`, and `weixin`.
 Feishu additionally requires installing the `feishu` extra. Each IMZen

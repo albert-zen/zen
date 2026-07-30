@@ -28,14 +28,31 @@ IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它
 - 这种复用只是固定版本的 package 依赖：IMZen 拥有自己的进程、channel
   配置与 credential，不读取运行中 imcodex 的配置或状态，也不要求二者使用
   同一个机器人账号。
-- IMZen 自己只保留薄 middleware、IM conversation 到 Zen thread 的内存绑定，
-  并通过 imcodex 的 `AppServerClient` 调 Zen。它不导入 imcodex 的 agent、
-  backend、store 或持久化路由语义。
+- IMZen 自己只保留薄 middleware、IM conversation 到 Zen thread 的内存绑定。
+  它仅复用 imcodex package 中通用的 `AppServerClient` 类，由 IMZen 进程直接
+  连接 Zen App Server；请求不经过正在运行的 imcodex 服务。它不导入 imcodex
+  的 agent、backend、store 或持久化路由语义。
 - 可靠性策略刻意从简：投递失败直接告知用户，不建 durable 路由/恢复状态机
   ——zen-legacy 结尾连续十个 `fix(imzen)` 加固提交是那条路的墓志铭。
 
 相关项目：**imt3**（IM ↔ T3 编排层，`~/Code/imt3`）与 imzen 平行，
 共享 imcodex 通道层，不属于 Zen 仓库。
+
+### IMAgent SDK 候选边界
+
+IM channel 与后端 agent service 之间确实存在可复用端口，但暂不为了一个实现
+立即拆 package。先让 IMZen 内的最小接口被真实使用；出现第二个独立后端后再抽
+`IMAgent SDK`：
+
+- channel 侧只产生统一 inbound message、接收 outbound message；
+- service 侧提供 create/list/read/resume thread、start/interrupt turn、回应审批
+  与事件订阅；
+- “切换 Thread”是 gateway 的 conversation → thread 临时绑定，不是后端新增
+  一份会话状态；
+- status 从 service 的 Thread/Turn 投影读取，不另建状态表。
+
+这样抽取发生在接入端边界，不会把通道、Project 或第二套 Agent 语义带进 Zen
+Core。
 
 ## Web UI
 

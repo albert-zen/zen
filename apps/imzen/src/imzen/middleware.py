@@ -7,19 +7,27 @@ from typing import Any
 from imcodex.channels.base import ChannelRouteContext
 from imcodex.models import InboundMessage, OutboundMessage
 
+from .config import PermissionMode
 from .gateway import AppServerClient, ImZenGateway
 
 
 class ImZenMiddleware:
     """The small adapter-facing surface that IMCodex channels require."""
 
-    def __init__(self, *, client: AppServerClient, default_cwd: str) -> None:
+    def __init__(
+        self,
+        *,
+        client: AppServerClient,
+        default_cwd: str,
+        default_permission_mode: PermissionMode = "full-access",
+    ) -> None:
         self._adapters: dict[str, Any] = {}
         self._route_contexts: dict[tuple[str, str], ChannelRouteContext] = {}
         self._conversation_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self.gateway = ImZenGateway(
             client=client,
             default_cwd=default_cwd,
+            default_permission_mode=default_permission_mode,
             deliver=self._deliver,
         )
 

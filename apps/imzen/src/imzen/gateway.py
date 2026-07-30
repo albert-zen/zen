@@ -7,6 +7,8 @@ from typing import Any, Protocol
 
 from imcodex.models import InboundMessage, OutboundMessage
 
+from .config import PermissionMode
+
 Deliver = Callable[[OutboundMessage], Awaitable[None]]
 ConversationKey = tuple[str, str]
 
@@ -21,6 +23,12 @@ class AppServerClient(Protocol):
     async def initialize(self) -> dict: ...
 
     async def start_thread(self, **params: Any) -> dict: ...
+
+    async def list_threads(self, **params: Any) -> dict: ...
+
+    async def resume_thread(self, **params: Any) -> dict: ...
+
+    async def read_thread(self, thread_id: str, **params: Any) -> dict: ...
 
     async def start_turn(self, thread_id: str, **params: Any) -> dict: ...
 
@@ -48,13 +56,17 @@ class ImZenGateway:
         *,
         client: AppServerClient,
         default_cwd: str | Path,
+        default_permission_mode: PermissionMode = "full-access",
         deliver: Deliver,
     ) -> None:
         self.client = client
         self.default_cwd = str(Path(default_cwd).resolve())
+        self.default_permission_mode = default_permission_mode
         self.deliver = deliver
         self._thread_by_conversation: dict[ConversationKey, str] = {}
         self._conversation_by_thread: dict[str, ConversationKey] = {}
+        self._permission_by_conversation: dict[ConversationKey, PermissionMode] = {}
+        self._listed_threads_by_conversation: dict[ConversationKey, list[dict]] = {}
         self._pending_approvals: dict[str, _PendingApproval] = {}
         self._terminal_items: set[tuple[str, str]] = set()
         self._started = False
@@ -87,6 +99,7 @@ class ImZenGateway:
 
         self._pending_approvals.clear()
         self._terminal_items.clear()
+        self._listed_threads_by_conversation.clear()
         conversations = sorted(set(self._thread_by_conversation))
         for conversation in conversations:
             await self._send_to_conversation(
@@ -122,11 +135,28 @@ class ImZenGateway:
         if command == "/new":
             await self._new_thread(inbound)
             return
+        if command == "/threads":
+            await self._list_threads(inbound, argument.strip())
+            return
+        if command == "/pick":
+            await self._pick_thread(inbound, argument.strip())
+            return
+        if command == "/status":
+            await self._show_status(inbound)
+            return
+        if command == "/permission":
+            await self._set_permission(inbound, argument.strip())
+            return
         if command == "/help":
             await self._send_to_conversation(
                 self._key(inbound),
                 message_type="status",
-                text="IMZen commands: /new, /approve [id], /deny [id], /cancel [id], /help",
+                text=(
+                    "IMZen commands: /new, /threads [query], /pick <number|id|query>, "
+                    "/status, "
+                    "/permission [full-access|approval-required], "
+                    "/approve [id], /deny [id], /cancel [id], /help"
+                ),
                 delivery_id=self._inbound_delivery_id(inbound, "help"),
             )
             return
@@ -135,7 +165,12 @@ class ImZenGateway:
         key = self._key(inbound)
         thread_id = self._thread_by_conversation.get(key)
         if thread_id is None:
-            result = await self.client.start_thread(cwd=self.default_cwd)
+            permission_mode = self._permission_mode(key)
+            result = await self.client.start_thread(
+                cwd=self.default_cwd,
+                sandbox="danger-full-access",
+                approval_policy=("never" if permission_mode == "full-access" else "on-request"),
+            )
             thread_id = _thread_id(result)
             self._bind(key, thread_id)
         await self.client.start_turn(thread_id, input_items=input_items)
@@ -191,6 +226,175 @@ class ImZenGateway:
 
     async def _new_thread(self, inbound: InboundMessage) -> None:
         key = self._key(inbound)
+        await self._clear_binding(key)
+        await self._send_to_conversation(
+            key,
+            message_type="status",
+            text="The next message will start a new Zen thread.",
+            delivery_id=self._inbound_delivery_id(inbound, "new"),
+        )
+
+    async def _list_threads(self, inbound: InboundMessage, query: str) -> None:
+        key = self._key(inbound)
+        threads = await self._read_thread_list()
+        if query:
+            normalized = query.casefold()
+            threads = [
+                thread
+                for thread in threads
+                if normalized
+                in " ".join(
+                    (
+                        str(thread.get("id") or ""),
+                        str(thread.get("preview") or ""),
+                        str(thread.get("cwd") or ""),
+                    )
+                ).casefold()
+            ]
+        self._listed_threads_by_conversation[key] = threads
+        if not threads:
+            text = "No matching Zen threads."
+        else:
+            lines = ["## Zen threads"]
+            for index, thread in enumerate(threads, start=1):
+                lines.append(f"{index}. **[{_thread_status(thread)}]** {_thread_preview(thread)}")
+                lines.append(f"   `{str(thread.get('id') or '')}`")
+            lines.append("Use `/pick <number|id|query>`.")
+            text = "\n".join(lines)
+        await self._send_to_conversation(
+            key,
+            message_type="status",
+            text=text,
+            delivery_id=self._inbound_delivery_id(inbound, "threads"),
+        )
+
+    async def _pick_thread(self, inbound: InboundMessage, selector: str) -> None:
+        key = self._key(inbound)
+        if not selector:
+            await self._send_to_conversation(
+                key,
+                message_type="error",
+                text="Use /pick <number|id|query>.",
+                delivery_id=self._inbound_delivery_id(inbound, "pick-missing"),
+            )
+            return
+        threads = self._listed_threads_by_conversation.get(key)
+        if threads is None:
+            threads = await self._read_thread_list()
+            self._listed_threads_by_conversation[key] = threads
+        matches = _select_threads(threads, selector)
+        if len(matches) != 1:
+            await self._send_to_conversation(
+                key,
+                message_type="error",
+                text=(
+                    "No matching Zen thread."
+                    if not matches
+                    else "More than one Zen thread matched; use its number or id."
+                ),
+                delivery_id=self._inbound_delivery_id(inbound, "pick-unresolved"),
+            )
+            return
+        thread_id = str(matches[0].get("id") or "")
+        result = await self.client.resume_thread(thread_id=thread_id)
+        thread = _result_thread(result)
+        self._bind(key, thread_id)
+        approval_policy = str(result.get("approvalPolicy") or "")
+        if approval_policy in {"never", "on-request"}:
+            self._permission_by_conversation[key] = (
+                "full-access" if approval_policy == "never" else "approval-required"
+            )
+        await self._send_to_conversation(
+            key,
+            message_type="status",
+            text=(
+                f"Switched to **{_thread_preview(thread)}**.\n"
+                f"`{thread_id}`\n"
+                f"Status: {_thread_status(thread)}."
+            ),
+            delivery_id=self._inbound_delivery_id(inbound, "pick"),
+        )
+
+    async def _show_status(self, inbound: InboundMessage) -> None:
+        key = self._key(inbound)
+        thread_id = self._thread_by_conversation.get(key)
+        if thread_id is None:
+            text = "No Zen thread is selected. Send a message or use `/threads` and `/pick`."
+        else:
+            result = await self.client.read_thread(thread_id)
+            thread = _result_thread(result)
+            text = (
+                f"## Zen thread\n"
+                f"- Status: **{_thread_status(thread)}**\n"
+                f"- Preview: {_thread_preview(thread)}\n"
+                f"- ID: `{thread_id}`\n"
+                f"- Workspace: `{str(thread.get('cwd') or self.default_cwd)}`"
+            )
+        await self._send_to_conversation(
+            key,
+            message_type="status",
+            text=text,
+            delivery_id=self._inbound_delivery_id(inbound, "status"),
+        )
+
+    async def _read_thread_list(self) -> list[dict]:
+        result = await self.client.list_threads()
+        data = result.get("data")
+        if not isinstance(data, list):
+            raise RuntimeError("thread/list did not return a thread list")
+        threads = [thread for thread in data if isinstance(thread, dict)]
+        return sorted(
+            threads,
+            key=lambda thread: float(thread.get("updatedAt") or 0),
+            reverse=True,
+        )
+
+    async def _set_permission(self, inbound: InboundMessage, argument: str) -> None:
+        key = self._key(inbound)
+        current = self._permission_mode(key)
+        normalized = argument.casefold()
+        if not normalized:
+            await self._send_to_conversation(
+                key,
+                message_type="status",
+                text=(
+                    f"Permission mode: {current}. "
+                    "Use /permission full-access or /permission approval-required."
+                ),
+                delivery_id=self._inbound_delivery_id(inbound, "permission-status"),
+            )
+            return
+        if normalized not in {"full-access", "approval-required"}:
+            await self._send_to_conversation(
+                key,
+                message_type="error",
+                text="Permission mode must be full-access or approval-required.",
+                delivery_id=self._inbound_delivery_id(inbound, "permission-invalid"),
+            )
+            return
+        permission_mode: PermissionMode = normalized  # type: ignore[assignment]
+        if permission_mode != current:
+            await self._clear_binding(key)
+            self._permission_by_conversation[key] = permission_mode
+        await self._send_to_conversation(
+            key,
+            message_type="status",
+            text=(
+                f"Permission mode: {permission_mode}. "
+                + (
+                    "Commands run without approval prompts."
+                    if permission_mode == "full-access"
+                    else "Commands require approval."
+                )
+                + " The next message will start a new Zen thread."
+            ),
+            delivery_id=self._inbound_delivery_id(
+                inbound,
+                f"permission-{permission_mode}",
+            ),
+        )
+
+    async def _clear_binding(self, key: ConversationKey) -> None:
         pending_handles = [
             (handle, pending)
             for handle, pending in self._pending_approvals.items()
@@ -206,12 +410,6 @@ class ImZenGateway:
             self._conversation_by_thread.pop(old_thread_id, None)
         for handle, _pending in pending_handles:
             self._pending_approvals.pop(handle, None)
-        await self._send_to_conversation(
-            key,
-            message_type="status",
-            text="The next message will start a new Zen thread.",
-            delivery_id=self._inbound_delivery_id(inbound, "new"),
-        )
 
     async def _answer_approval(
         self,
@@ -378,6 +576,12 @@ class ImZenGateway:
         self._thread_by_conversation[conversation] = thread_id
         self._conversation_by_thread[thread_id] = conversation
 
+    def _permission_mode(self, conversation: ConversationKey) -> PermissionMode:
+        return self._permission_by_conversation.get(
+            conversation,
+            self.default_permission_mode,
+        )
+
     @staticmethod
     def _key(inbound: InboundMessage) -> ConversationKey:
         return inbound.channel_id, inbound.conversation_id
@@ -423,6 +627,50 @@ def _thread_id(result: dict) -> str:
     if value:
         return str(value)
     raise RuntimeError("thread/start did not return a thread id")
+
+
+def _result_thread(result: dict) -> dict:
+    thread = result.get("thread")
+    if isinstance(thread, dict) and thread.get("id"):
+        return thread
+    raise RuntimeError("App Server response did not include a thread")
+
+
+def _select_threads(threads: list[dict], selector: str) -> list[dict]:
+    normalized = selector.strip().casefold()
+    if normalized.isdecimal():
+        index = int(normalized) - 1
+        return [threads[index]] if 0 <= index < len(threads) else []
+    exact = [thread for thread in threads if str(thread.get("id") or "").casefold() == normalized]
+    if exact:
+        return exact
+    prefixed = [
+        thread
+        for thread in threads
+        if str(thread.get("id") or "").casefold().startswith(normalized)
+    ]
+    if prefixed:
+        return prefixed
+    return [
+        thread for thread in threads if normalized in str(thread.get("preview") or "").casefold()
+    ]
+
+
+def _thread_preview(thread: dict) -> str:
+    preview = " ".join(str(thread.get("preview") or "").split())
+    if not preview:
+        return "(empty thread)"
+    return preview if len(preview) <= 120 else f"{preview[:117]}..."
+
+
+def _thread_status(thread: dict) -> str:
+    status = thread.get("status")
+    if isinstance(status, dict):
+        value = str(status.get("type") or "").strip()
+        if value:
+            return value
+    value = str(status or "").strip()
+    return value or "unknown"
 
 
 def _item_text(item: dict) -> str:

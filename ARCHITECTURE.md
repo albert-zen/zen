@@ -117,6 +117,9 @@ Codex CLI、T3 Code 是收益，不是核心设计前提。
   transport cache / affinity hint，不得映射或持久化第二套 Thread。
 - **工具** — shell 等工具的实际执行。
 - **审批** — 审批请求的呈现与应答（各接入端自行实现 UI）。
+- **接入端权限预设** — `Full Access` / `Approval Required` 只是接入端对新
+  Thread 的显示与配置预设，分别投影为独立的 sandbox 与 approval policy
+  协议字段；它不修改已有 Thread，也不进入 Zen Core。
 
 ## 并发
 

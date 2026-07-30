@@ -94,6 +94,7 @@ def test_qq_credentials_are_loaded_from_an_imzen_owned_private_file(tmp_path):
                     "enabled": True,
                     "credentials_file": str(credentials),
                     "allowed_user_ids": ["none"],
+                    "markdown_enabled": True,
                 }
             }
         ),
@@ -112,6 +113,7 @@ def test_qq_credentials_are_loaded_from_an_imzen_owned_private_file(tmp_path):
     assert resolved["app_id"] == "123456789"
     assert resolved["client_secret"] == "private-value"
     assert resolved["allowed_user_ids"] == ["none"]
+    assert resolved["markdown_enabled"] is True
     assert "credentials_file" not in resolved
 
 

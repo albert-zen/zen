@@ -11,7 +11,11 @@ from .middleware import ImZenMiddleware
 async def run(settings: Settings | None = None) -> None:
     resolved = settings or Settings.from_env()
     client = _build_app_server_client(resolved)
-    middleware = ImZenMiddleware(client=client, default_cwd=str(resolved.cwd))
+    middleware = ImZenMiddleware(
+        client=client,
+        default_cwd=str(resolved.cwd),
+        default_permission_mode=resolved.permission_mode,
+    )
     channels = build_channel_runtime(resolved.channels_config_file, middleware)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
