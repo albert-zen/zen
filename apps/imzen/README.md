@@ -28,16 +28,16 @@ file instead of copying another product's channel configuration:
 {
   "qq": {
     "enabled": true,
-    "credentials_file": "/absolute/private/imzen/qq.json",
-    "allowed_user_ids": ["none"]
+    "credentials_file": "/absolute/private/imzen/qq.json"
   }
 }
 ```
 
 The QQ credential file contains only `appid` and `appsecret`, is owned by the
-current user, and must be mode `600` on POSIX. `allowed_user_ids: ["none"]`
-connects the bot while rejecting all inbound work; replace it with the owner's
-QQ openid after observing the first denied message in the private log.
+current user, and must be mode `600` on POSIX. With no access restriction,
+the pinned channel adapter accepts messages that the QQ platform delivers to
+this bot. `allowed_user_ids` and `allowed_conversation_ids` remain optional
+restrictions for deployments that need a narrower scope.
 
 Supported keys at the top level are `qq`, `telegram`, `feishu`, and `weixin`.
 Feishu additionally requires installing the `feishu` extra. Each IMZen
