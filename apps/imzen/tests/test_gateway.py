@@ -15,6 +15,15 @@ class FakeAppServer:
         self.connection_reset_handlers = []
         self.started_threads: list[dict[str, Any]] = []
         self.started_turns: list[tuple[str, dict[str, Any]]] = []
+        self.calls: list[tuple[str, dict]] = []
+        self.models: list[dict[str, Any]] = [
+            {
+                "id": "model-one",
+                "displayName": "Model One",
+                "isDefault": True,
+            },
+            {"id": "model-two", "displayName": "Model Two"},
+        ]
         self.listed_threads: list[dict[str, Any]] = []
         self.list_threads_calls = 0
         self.resumed_threads: list[str] = []
@@ -37,6 +46,13 @@ class FakeAppServer:
     async def initialize(self) -> dict:
         self.initialized = True
         return {}
+
+    async def call(self, method: str, params: dict | None = None) -> dict:
+        self.calls.append((method, dict(params or {})))
+        return {}
+
+    async def list_models(self, **_params: Any) -> dict:
+        return {"data": self.models}
 
     async def start_thread(self, **params: Any) -> dict:
         self.started_threads.append(params)
@@ -175,6 +191,48 @@ async def test_conversation_reuses_one_thread_and_projects_completed_item(tmp_pa
 
     await middleware.stop()
     assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_model_lists_host_catalog_and_switches_the_bound_thread(tmp_path):
+    client = FakeAppServer()
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+
+    await middleware.handle_inbound(adapter, inbound("m1", "/model"))
+    assert adapter.sent[-1].message_type == "status"
+    assert "**Model One** (`model-one`) — default" in adapter.sent[-1].text
+    assert "**Model Two** (`model-two`)" in adapter.sent[-1].text
+
+    await middleware.handle_inbound(adapter, inbound("m2", "start work"))
+    await middleware.handle_inbound(adapter, inbound("m3", "/model model-two"))
+
+    assert client.calls == [
+        (
+            "thread/settings/update",
+            {"threadId": "thread-1", "model": "model-two"},
+        )
+    ]
+    assert adapter.sent[-1].text == "Model switched to **model-two** for subsequent turns."
+
+
+@pytest.mark.asyncio
+async def test_model_rejects_unavailable_model_and_requires_a_bound_thread(tmp_path):
+    client = FakeAppServer()
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+
+    await middleware.handle_inbound(adapter, inbound("m1", "/model model-two"))
+    assert adapter.sent[-1].message_type == "error"
+    assert "No Zen thread is selected" in adapter.sent[-1].text
+
+    await middleware.handle_inbound(adapter, inbound("m2", "start work"))
+    await middleware.handle_inbound(adapter, inbound("m3", "/model missing"))
+    assert adapter.sent[-1].message_type == "error"
+    assert adapter.sent[-1].text == "Model is not available from this Zen host: missing"
+    assert client.calls == []
 
 
 @pytest.mark.asyncio

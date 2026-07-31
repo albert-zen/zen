@@ -23,6 +23,10 @@ class AppServerClient(Protocol):
 
     async def initialize(self) -> dict: ...
 
+    async def call(self, method: str, params: dict | None = None) -> dict: ...
+
+    async def list_models(self, **params: Any) -> dict: ...
+
     async def start_thread(self, **params: Any) -> dict: ...
 
     async def list_threads(self, **params: Any) -> dict: ...
@@ -149,13 +153,16 @@ class ImZenGateway:
         if command == "/permission":
             await self._set_permission(inbound, argument.strip())
             return
+        if command == "/model":
+            await self._set_model(inbound, argument.strip())
+            return
         if command == "/help":
             await self._send_to_conversation(
                 self._key(inbound),
                 message_type="status",
                 text=(
                     "IMZen commands: /new, /threads [query], /pick <number|id|query>, "
-                    "/status, "
+                    "/status, /model [name], "
                     "/permission [full-access|approval-required], "
                     "/approve [id], /deny [id], /cancel [id], /help"
                 ),
@@ -425,6 +432,65 @@ class ImZenGateway:
                 inbound,
                 f"permission-{permission_mode}",
             ),
+        )
+
+    async def _set_model(self, inbound: InboundMessage, argument: str) -> None:
+        key = self._key(inbound)
+        result = await self.client.list_models()
+        data = result.get("data")
+        if not isinstance(data, list):
+            raise RuntimeError("model/list did not return a model list")
+        models = [
+            model
+            for model in data
+            if isinstance(model, dict)
+            and isinstance(model.get("id"), str)
+            and model["id"]
+            and model.get("hidden") is not True
+        ]
+        if not argument:
+            lines = ["## Zen models"]
+            for model in models:
+                model_id = str(model["id"])
+                display_name = str(model.get("displayName") or model_id)
+                default = " — default" if model.get("isDefault") is True else ""
+                lines.append(f"- **{display_name}** (`{model_id}`){default}")
+            lines.append("Use `/model <name>` to switch the selected thread.")
+            await self._send_to_conversation(
+                key,
+                message_type="status",
+                text="\n".join(lines),
+                delivery_id=self._inbound_delivery_id(inbound, "models"),
+            )
+            return
+
+        thread_id = self._thread_by_conversation.get(key)
+        if thread_id is None:
+            await self._send_to_conversation(
+                key,
+                message_type="error",
+                text="No Zen thread is selected. Send a message or use `/threads` and `/pick`.",
+                delivery_id=self._inbound_delivery_id(inbound, "model-no-thread"),
+            )
+            return
+        matching = next((model for model in models if model["id"] == argument), None)
+        if matching is None:
+            await self._send_to_conversation(
+                key,
+                message_type="error",
+                text=f"Model is not available from this Zen host: {argument}",
+                delivery_id=self._inbound_delivery_id(inbound, "model-unavailable"),
+            )
+            return
+        await self.client.call(
+            "thread/settings/update",
+            {"threadId": thread_id, "model": argument},
+        )
+        await self._send_to_conversation(
+            key,
+            message_type="status",
+            text=f"Model switched to **{argument}** for subsequent turns.",
+            delivery_id=self._inbound_delivery_id(inbound, "model-switched"),
         )
 
     async def _clear_binding(self, key: ConversationKey) -> None:

@@ -28,7 +28,7 @@ export interface CodexThread {
   agentNickname: null;
   agentRole: null;
   gitInfo: null;
-  name: null;
+  name: string | null;
   turns: CodexTurn[];
 }
 
@@ -117,7 +117,7 @@ export function projectThread(
     agentNickname: null,
     agentRole: null,
     gitInfo: null,
-    name: null,
+    name: snapshot.name ?? null,
     turns: options.includeTurns
       ? snapshot.turns.map((turn) => projectTurn(turn, true, snapshot.cwd))
       : [],
@@ -192,6 +192,7 @@ export function projectCompletedItem(
     case "tool_call":
       return projectCommandStarted(item, "");
     case "failure":
+    case "thread_configuration_changed":
     case "thread_metadata":
     case "tool_result":
     case "turn_aborted":

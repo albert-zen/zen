@@ -16,7 +16,6 @@ export async function serveCodexWebSocket(options: {
   zenHome: string;
   listen: string;
   bearerToken?: string;
-  configuredModel?: string;
 }): Promise<CodexWebSocketServer> {
   const endpoint = new URL(options.listen);
   if (endpoint.protocol !== "ws:") {
@@ -60,9 +59,6 @@ export async function serveCodexWebSocket(options: {
     const connection = new CodexConnection({
       appServer: options.appServer,
       zenHome: options.zenHome,
-      ...(options.configuredModel === undefined
-        ? {}
-        : { configuredModel: options.configuredModel }),
       send: (message) => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify(message));

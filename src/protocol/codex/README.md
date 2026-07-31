@@ -16,6 +16,8 @@ Client requests：
 - `thread/resume`
 - `thread/read`
 - `thread/list`
+- `thread/name/set`
+- `thread/settings/update`
 - `thread/unsubscribe`
 - `turn/start`
 - `turn/interrupt`
@@ -25,6 +27,8 @@ Client notification：`initialized`。
 Server notifications：
 
 - `thread/started`
+- `thread/name/updated`
+- `thread/settings/updated`
 - `turn/started`
 - `item/started`
 - `item/agentMessage/delta`

@@ -7,7 +7,6 @@ import type { ZenAppServer } from "../../app-server.js";
 export function serveCodexStdio(options: {
   appServer: ZenAppServer;
   zenHome: string;
-  configuredModel?: string;
 }): () => void {
   const connection = new CodexConnection({
     ...options,

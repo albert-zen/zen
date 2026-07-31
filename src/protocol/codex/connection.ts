@@ -3,6 +3,7 @@ import path from "node:path";
 
 import {
   AppServerError,
+  type AppServerEvent,
   type ThreadSnapshot,
   ZenAppServer,
 } from "../../app-server.js";
@@ -11,7 +12,6 @@ import type {
   CanonicalItem,
   ToolCallItem,
 } from "../../item.js";
-import type { RuntimeEvent } from "../../runtime.js";
 import type { ApprovalRequest } from "../../tool.js";
 import {
   projectCommandCompleted,
@@ -37,14 +37,12 @@ export interface CodexConnectionOptions {
   appServer: ZenAppServer;
   send: SendJson;
   zenHome: string;
-  configuredModel?: string;
 }
 
 export class CodexConnection {
   readonly #appServer: ZenAppServer;
   readonly #send: SendJson;
   readonly #zenHome: string;
-  readonly #configuredModel: string;
   readonly #pending = new Map<
     RequestId,
     {
@@ -66,7 +64,6 @@ export class CodexConnection {
     this.#appServer = options.appServer;
     this.#send = options.send;
     this.#zenHome = options.zenHome;
-    this.#configuredModel = options.configuredModel ?? "fake";
     this.#unsubscribe = this.#appServer.subscribe((event) => {
       this.#eventChain = this.#eventChain
         .then(async () => {
@@ -174,30 +171,28 @@ export class CodexConnection {
         if (params.cursor !== undefined && params.cursor !== null) {
           throw new InvalidParamsError("model/list cursor is not supported");
         }
-        const model = this.#configuredModel;
         this.#send({
           id: request.id,
           result: {
-            data: [
-              {
-                id: model,
-                model,
-                upgrade: null,
-                upgradeInfo: null,
-                availabilityNux: null,
-                displayName: model,
-                description: "Model configured by the Zen host",
-                hidden: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
-                inputModalities: ["text"],
-                supportsPersonality: false,
-                additionalSpeedTiers: [],
-                serviceTiers: [],
-                defaultServiceTier: null,
-                isDefault: true,
-              },
-            ],
+            data: this.#appServer.listModels().map((entry) => ({
+              id: entry.id,
+              model: entry.id,
+              upgrade: null,
+              upgradeInfo: null,
+              availabilityNux: null,
+              displayName: entry.displayName ?? entry.id,
+              description:
+                entry.description ?? "Model configured by the Zen host",
+              hidden: entry.hidden ?? false,
+              supportedReasoningEfforts: [],
+              defaultReasoningEffort: "medium",
+              inputModalities: ["text"],
+              supportsPersonality: false,
+              additionalSpeedTiers: [],
+              serviceTiers: [],
+              defaultServiceTier: null,
+              isDefault: entry.isDefault ?? false,
+            })),
             nextCursor: null,
           },
         });
@@ -238,8 +233,13 @@ export class CodexConnection {
       }
       case "thread/resume": {
         const threadId = requiredString(params, "threadId");
-        const snapshot = await this.#appServer.readThread(threadId);
-        validateMatchingThreadConfiguration(params, snapshot, [
+        let snapshot = await this.#appServer.readThread(threadId);
+        const requestedModel = optionalString(params.model);
+        const validationSnapshot =
+          requestedModel === undefined
+            ? snapshot
+            : { ...snapshot, model: requestedModel };
+        validateMatchingThreadConfiguration(params, validationSnapshot, [
           "threadId",
           "cwd",
           "model",
@@ -248,6 +248,11 @@ export class CodexConnection {
           "sandboxPolicy",
           "approvalsReviewer",
         ]);
+        if (requestedModel !== undefined) {
+          snapshot = await this.#appServer.updateThreadSettings(threadId, {
+            model: requestedModel,
+          });
+        }
         this.#subscribedThreads.add(threadId);
         this.#send({
           id: request.id,
@@ -256,6 +261,25 @@ export class CodexConnection {
             ...threadSettings(snapshot),
           },
         });
+        return;
+      }
+      case "thread/name/set": {
+        rejectUnsupportedValues(params, ["threadId", "name"]);
+        const threadId = requiredString(params, "threadId");
+        await this.#appServer.setThreadName(
+          threadId,
+          requiredString(params, "name"),
+        );
+        this.#send({ id: request.id, result: {} });
+        return;
+      }
+      case "thread/settings/update": {
+        rejectUnsupportedValues(params, ["threadId", "model"]);
+        const threadId = requiredString(params, "threadId");
+        await this.#appServer.updateThreadSettings(threadId, {
+          model: requiredString(params, "model"),
+        });
+        this.#send({ id: request.id, result: {} });
         return;
       }
       case "thread/read": {
@@ -304,18 +328,25 @@ export class CodexConnection {
       case "turn/start": {
         const threadId = requiredString(params, "threadId");
         const snapshot = await this.#appServer.readThread(threadId);
-        validateMatchingThreadConfiguration(params, snapshot, [
-          "threadId",
-          "input",
-          "cwd",
-          "model",
-          "approvalPolicy",
-          "sandbox",
-          "sandboxPolicy",
-          "approvalsReviewer",
-          "collaborationMode",
-          "clientUserMessageId",
-        ]);
+        const requestedModel = optionalString(params.model);
+        validateMatchingThreadConfiguration(
+          params,
+          requestedModel === undefined
+            ? snapshot
+            : { ...snapshot, model: requestedModel },
+          [
+            "threadId",
+            "input",
+            "cwd",
+            "model",
+            "approvalPolicy",
+            "sandbox",
+            "sandboxPolicy",
+            "approvalsReviewer",
+            "collaborationMode",
+            "clientUserMessageId",
+          ],
+        );
         const text = readTextInput(params.input);
         const clientId = optionalNonEmptyString(
           params.clientUserMessageId,
@@ -324,6 +355,7 @@ export class CodexConnection {
         this.#subscribedThreads.add(threadId);
         const handle = await this.#appServer.startTurn(threadId, text, {
           ...(clientId === undefined ? {} : { clientId }),
+          ...(requestedModel === undefined ? {} : { model: requestedModel }),
           requestApproval: async (approval) =>
             await this.#requestApproval(approval),
         });
@@ -367,7 +399,32 @@ export class CodexConnection {
     }
   }
 
-  async #projectEvent(event: RuntimeEvent): Promise<void> {
+  async #projectEvent(event: AppServerEvent): Promise<void> {
+    if (event.type === "thread_name_updated") {
+      if (this.#subscribedThreads.has(event.threadId)) {
+        this.#send({
+          method: "thread/name/updated",
+          params: {
+            threadId: event.threadId,
+            threadName: event.name,
+          },
+        });
+      }
+      return;
+    }
+    if (event.type === "thread_settings_updated") {
+      if (this.#subscribedThreads.has(event.threadId)) {
+        const snapshot = await this.#appServer.readThread(event.threadId);
+        this.#send({
+          method: "thread/settings/updated",
+          params: {
+            threadId: event.threadId,
+            threadSettings: threadSettings(snapshot),
+          },
+        });
+      }
+      return;
+    }
     const eventThreadId =
       event.type === "item_completed" ? event.item.threadId : event.threadId;
     if (!this.#subscribedThreads.has(eventThreadId)) {
@@ -658,7 +715,13 @@ export class CodexConnection {
     this.#send({ id, error });
   }
 
-  #sendErrorNotification(error: unknown, event: RuntimeEvent): void {
+  #sendErrorNotification(error: unknown, event: AppServerEvent): void {
+    if (
+      event.type === "thread_name_updated" ||
+      event.type === "thread_settings_updated"
+    ) {
+      return;
+    }
     const threadId =
       event.type === "item_completed" ? event.item.threadId : event.threadId;
     const turnId =

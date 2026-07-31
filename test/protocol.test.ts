@@ -13,16 +13,22 @@ import {
 } from "../src/protocol/codex/client.js";
 import { CodexConnection } from "../src/protocol/codex/connection.js";
 import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
+import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { isRecord, type JsonRpcMessage } from "../src/protocol/codex/wire.js";
 
-function testHost(approvalPolicy: "always" | "never" = "never") {
+function testHost(
+  approvalPolicy: "always" | "never" = "never",
+  models: readonly string[] = ["fake"],
+) {
   return createHostedAppServer({
     cwd: process.cwd(),
     dataDirectory: path.join(os.tmpdir(), "unused-zen-test-data"),
-    model: "fake",
+    model: models[0] ?? "fake",
+    models,
     approvalPolicy,
     provider: { type: "fake" },
     journal: new InMemoryThreadJournal(),
+    threadMetadata: new InMemoryThreadMetadataStore(),
   });
 }
 
@@ -75,9 +81,8 @@ test("enforces the Codex initialize handshake and method boundary", async () => 
 test("projects the exact T3 Code provider bootstrap from host configuration", async () => {
   const messages: JsonRpcMessage[] = [];
   const connection = new CodexConnection({
-    appServer: testHost(),
+    appServer: testHost("never", ["gpt-5.6-terra", "gpt-5.6-sol"]),
     zenHome: path.join(os.tmpdir(), "zen-home"),
-    configuredModel: "gpt-5.6-terra",
     send: (message) => {
       messages.push(message);
     },
@@ -129,11 +134,186 @@ test("projects the exact T3 Code provider bootstrap from host configuration", as
           defaultServiceTier: null,
           isDefault: true,
         },
+        {
+          id: "gpt-5.6-sol",
+          model: "gpt-5.6-sol",
+          upgrade: null,
+          upgradeInfo: null,
+          availabilityNux: null,
+          displayName: "gpt-5.6-sol",
+          description: "Model configured by the Zen host",
+          hidden: false,
+          supportedReasoningEfforts: [],
+          defaultReasoningEffort: "medium",
+          inputModalities: ["text"],
+          supportsPersonality: false,
+          additionalSpeedTiers: [],
+          serviceTiers: [],
+          defaultServiceTier: null,
+          isDefault: false,
+        },
       ],
       nextCursor: null,
     },
   });
   connection.close();
+});
+
+test("switches models canonically and synchronizes thread settings", async () => {
+  const appServer = testHost("never", ["fake", "other"]);
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const initiating = await CodexClient.connect(server.url);
+  const observing = await CodexClient.connect(server.url);
+  try {
+    await initiating.initialize({
+      name: "initiating",
+      title: "Initiating",
+      version: "1",
+    });
+    await observing.initialize({
+      name: "observing",
+      title: "Observing",
+      version: "1",
+    });
+    const started = await initiating.request("thread/start", {
+      model: "fake",
+      cwd: process.cwd(),
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    });
+    const thread = responseResult<Record<string, unknown>>(started, "thread");
+    if (typeof thread.id !== "string") {
+      throw new Error("thread/start omitted id");
+    }
+    await observing.request("thread/resume", { threadId: thread.id });
+
+    const updated = deferred<Record<string, unknown>>();
+    observing.onNotification("thread/settings/updated", (params) => {
+      if (isRecord(params)) {
+        updated.resolve(params);
+      }
+    });
+    const response = await initiating.request("thread/settings/update", {
+      threadId: thread.id,
+      model: "other",
+    });
+    assert.deepEqual(response, {});
+    const notification = await within(updated.promise);
+    assert.equal(notification.threadId, thread.id);
+    assert(
+      isRecord(notification.threadSettings) &&
+        notification.threadSettings.model === "other",
+    );
+
+    const snapshot = await appServer.readThread(thread.id);
+    assert.equal(snapshot.model, "other");
+    assert.equal(
+      snapshot.items.filter(
+        (item) => item.type === "thread_configuration_changed",
+      ).length,
+      1,
+    );
+
+    const completed = deferred<void>();
+    initiating.onNotification("turn/completed", () => {
+      completed.resolve();
+    });
+    await initiating.request("turn/start", {
+      threadId: thread.id,
+      input: [{ type: "text", text: "switch back" }],
+      model: "fake",
+    });
+    await within(completed.promise);
+    const afterTurn = await appServer.readThread(thread.id);
+    assert.equal(afterTurn.model, "fake");
+    assert.equal(
+      afterTurn.items.filter(
+        (item) => item.type === "thread_configuration_changed",
+      ).length,
+      2,
+    );
+  } finally {
+    initiating.close();
+    observing.close();
+    await server.close();
+  }
+});
+
+test("synchronizes ZAS-owned thread names without adding Agent items", async () => {
+  const appServer = testHost();
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const initiating = await CodexClient.connect(server.url);
+  const observing = await CodexClient.connect(server.url);
+  try {
+    await initiating.initialize({
+      name: "initiating",
+      title: "Initiating",
+      version: "1",
+    });
+    await observing.initialize({
+      name: "observing",
+      title: "Observing",
+      version: "1",
+    });
+    const started = await initiating.request("thread/start", {});
+    const thread = responseResult<Record<string, unknown>>(started, "thread");
+    if (typeof thread.id !== "string") {
+      throw new Error("thread/start omitted id");
+    }
+    await observing.request("thread/resume", { threadId: thread.id });
+
+    const renamed = deferred<Record<string, unknown>>();
+    observing.onNotification("thread/name/updated", (params) => {
+      if (isRecord(params)) {
+        renamed.resolve(params);
+      }
+    });
+    await initiating.request("thread/name/set", {
+      threadId: thread.id,
+      name: "Shared title",
+    });
+    assert.deepEqual(await within(renamed.promise), {
+      threadId: thread.id,
+      threadName: "Shared title",
+    });
+
+    for (const [method, params] of [
+      ["thread/read", { threadId: thread.id }],
+      ["thread/resume", { threadId: thread.id }],
+      ["thread/list", {}],
+    ] as const) {
+      const result = await observing.request(method, params);
+      if (method === "thread/list") {
+        assert(isRecord(result) && Array.isArray(result.data));
+        const first = result.data[0];
+        assert(isRecord(first));
+        assert.equal(first.name, "Shared title");
+      } else {
+        assert.equal(
+          responseResult<Record<string, unknown>>(result, "thread").name,
+          "Shared title",
+        );
+      }
+    }
+    assert.equal(
+      (await appServer.readThread(thread.id)).items.some(
+        (item) => "name" in item,
+      ),
+      false,
+    );
+  } finally {
+    initiating.close();
+    observing.close();
+    await server.close();
+  }
 });
 
 test("streams the minimal Codex Thread/Turn/Item lifecycle over WebSocket", async () => {
@@ -404,8 +584,16 @@ test("rejects mismatched or unsupported T3 thread configuration", async () => {
     });
     const thread = responseResult<Record<string, unknown>>(start, "thread");
 
+    await assert.rejects(
+      client.request("thread/resume", {
+        threadId: thread.id,
+        model: "a-different-model",
+      }),
+      (error: unknown) =>
+        error instanceof CodexClientError && error.code === -32000,
+    );
+
     for (const params of [
-      { threadId: thread.id, model: "a-different-model" },
       { threadId: thread.id, approvalPolicy: "on-request" },
       { threadId: thread.id, sandbox: "workspace-write" },
       { threadId: thread.id, approvalsReviewer: "auto_review" },
@@ -419,8 +607,16 @@ test("rejects mismatched or unsupported T3 thread configuration", async () => {
     }
 
     const input = [{ type: "text", text: "must not run" }];
+    await assert.rejects(
+      client.request("turn/start", {
+        threadId: thread.id,
+        input,
+        model: "a-different-model",
+      }),
+      (error: unknown) =>
+        error instanceof CodexClientError && error.code === -32000,
+    );
     for (const overrides of [
-      { model: "a-different-model" },
       { approvalPolicy: "on-request" },
       { sandboxPolicy: { type: "workspaceWrite" } },
       { approvalsReviewer: "auto_review" },
@@ -883,7 +1079,6 @@ test("CLI executes one full local protocol turn", async () => {
 
     for (const [options, expected] of [
       [["--approval", "always", "--approve"], /approvalPolicy does not match/u],
-      [["--model", "different-model"], /model does not match/u],
       [["--cwd", os.tmpdir()], /cwd does not match/u],
     ] as const) {
       await assert.rejects(
@@ -899,6 +1094,35 @@ test("CLI executes one full local protocol turn", async () => {
         expected,
       );
     }
+
+    const switchedModel = await executeCli([
+      "run",
+      "--data-dir",
+      temporaryDirectory,
+      "--thread",
+      persistedThreadId,
+      "--model",
+      "different-model",
+      "resume with a different model",
+    ]);
+    assert.match(switchedModel.stdout, /Echo: resume with a different model/u);
+
+    const switchedFromCatalog = await executeCli([
+      "run",
+      "--data-dir",
+      temporaryDirectory,
+      "--thread",
+      persistedThreadId,
+      "--model",
+      "fake",
+      "--models",
+      "fake,different-model",
+      "resume with a host model catalog",
+    ]);
+    assert.match(
+      switchedFromCatalog.stdout,
+      /Echo: resume with a host model catalog/u,
+    );
 
     const matchingResume = await executeCli([
       "run",

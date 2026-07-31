@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { ZenAppServer } from "../src/app-server.js";
+import { type AppServerEvent, ZenAppServer } from "../src/app-server.js";
 import type {
   CanonicalItem,
   ThreadMetadataItem,
@@ -15,6 +15,7 @@ import {
   JsonlThreadJournal,
   type ThreadJournal,
 } from "../src/journal.js";
+import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
 import {
   FakeModel,
   type ModelAdapter,
@@ -23,7 +24,12 @@ import {
   type ModelRequest,
 } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
-import { AgentRuntime, type RuntimeEvent } from "../src/runtime.js";
+import { AgentRuntime } from "../src/runtime.js";
+import {
+  InMemoryThreadMetadataStore,
+  JsonlThreadMetadataStore,
+  type ThreadMetadataStore,
+} from "../src/thread-metadata.js";
 import { ShellToolExecutor, type ToolExecutor } from "../src/tool.js";
 
 function createServer(
@@ -31,6 +37,8 @@ function createServer(
     journal?: ThreadJournal;
     approvalPolicy?: "always" | "never";
     model?: ModelAdapter;
+    modelCatalog?: ModelCatalog;
+    threadMetadata?: ThreadMetadataStore;
     tools?: ToolExecutor;
   } = {},
 ): ZenAppServer {
@@ -40,14 +48,165 @@ function createServer(
       model: options.model ?? new FakeModel(),
       tools: options.tools ?? new ShellToolExecutor(),
     }),
+    modelCatalog:
+      options.modelCatalog ??
+      new StaticModelCatalog([{ id: "fake", isDefault: true }]),
+    threadMetadata: options.threadMetadata ?? new InMemoryThreadMetadataStore(),
     defaults: {
       cwd: process.cwd(),
-      model: "fake",
+      model: options.modelCatalog?.defaultModel().id ?? "fake",
       sandbox: "danger-full-access",
       approvalPolicy: options.approvalPolicy ?? "never",
     },
   });
 }
+
+test("derives each turn model from append-only configuration changes", async () => {
+  const journal = new InMemoryThreadJournal();
+  const requestedModels: string[] = [];
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requestedModels.push(request.model);
+      yield { type: "text_delta", delta: request.model };
+    },
+  };
+  const catalog = new StaticModelCatalog([
+    { id: "model-one", isDefault: true },
+    { id: "model-two" },
+  ]);
+  const server = createServer({ journal, model, modelCatalog: catalog });
+  const thread = await server.startThread({ model: "model-one" });
+  await (
+    await server.startTurn(thread.id, "first")
+  ).done;
+
+  const changed = await server.updateThreadSettings(thread.id, {
+    model: "model-two",
+    expectedModel: "model-one",
+  });
+  assert.equal(changed.model, "model-two");
+  await (
+    await server.startTurn(thread.id, "second")
+  ).done;
+
+  assert.deepEqual(requestedModels, ["model-one", "model-two"]);
+  assert.deepEqual(
+    changed.items
+      .filter((item) => item.type === "thread_configuration_changed")
+      .map((item) => item.model),
+    [{ from: "model-one", to: "model-two" }],
+  );
+
+  const replayed = createServer({ journal, model, modelCatalog: catalog });
+  const replayedSnapshot = await replayed.readThread(thread.id);
+  assert.equal(replayedSnapshot.model, "model-two");
+  assert.deepEqual(
+    replayedSnapshot.turns.map((turn) => turn.model),
+    ["model-one", "model-two"],
+  );
+});
+
+test("rejects unavailable, stale, and active-turn model changes", async () => {
+  let releaseModel: (() => void) | undefined;
+  const waiting = new Promise<void>((resolve) => {
+    releaseModel = resolve;
+  });
+  const slowModel: ModelAdapter = {
+    provider: "slow",
+    async *stream(): AsyncIterable<ModelEvent> {
+      await waiting;
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    model: slowModel,
+    modelCatalog: new StaticModelCatalog([
+      { id: "fake", isDefault: true },
+      { id: "other" },
+    ]),
+  });
+  const thread = await server.startThread();
+
+  await assert.rejects(
+    server.updateThreadSettings(thread.id, { model: "missing" }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "model_unavailable",
+  );
+  await assert.rejects(
+    server.updateThreadSettings(thread.id, {
+      model: "other",
+      expectedModel: "stale",
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "stale_thread_configuration",
+  );
+
+  const active = await server.startTurn(thread.id, "wait");
+  await assert.rejects(
+    server.updateThreadSettings(thread.id, { model: "other" }),
+    (error: unknown) =>
+      error instanceof Error && "code" in error && error.code === "thread_busy",
+  );
+  releaseModel?.();
+  await active.done;
+  assert.equal((await server.readThread(thread.id)).model, "fake");
+});
+
+test("persists user-facing names outside the canonical ItemList", async () => {
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-thread-metadata-test-"),
+  );
+  try {
+    const journal = new InMemoryThreadJournal();
+    const filename = path.join(temporaryDirectory, "thread-metadata.jsonl");
+    const server = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    const thread = await server.startThread();
+
+    const named = await server.setThreadName(thread.id, "  Model routing  ");
+    assert.equal(named.name, "Model routing");
+    assert.equal(
+      named.items.some((item) => "name" in item),
+      false,
+    );
+
+    const replayed = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    assert.equal((await replayed.readThread(thread.id)).name, "Model routing");
+    assert.equal((await replayed.listThreads())[0]?.name, "Model routing");
+    const events = (await readFile(filename, "utf8"))
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type: string;
+            threadId: string;
+            name: string;
+            updatedAt: string;
+          },
+      );
+    assert.deepEqual(events, [
+      {
+        type: "thread_name_set",
+        threadId: thread.id,
+        name: "Model routing",
+        updatedAt: events[0]?.updatedAt,
+      },
+    ]);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
 
 function createTwoCallModel(): ModelAdapter {
   return {
@@ -165,7 +324,7 @@ async function waitForProcessExit(
 
 test("runs a deterministic in-memory turn from append-only items", async () => {
   const server = createServer();
-  const events: RuntimeEvent[] = [];
+  const events: AppServerEvent[] = [];
   server.subscribe((event) => {
     events.push(event);
   });
@@ -242,7 +401,7 @@ test("partial model deltas are not canonicalized when the model ends incomplete"
     },
   };
   const server = createServer({ model: incompleteModel });
-  const events: RuntimeEvent[] = [];
+  const events: AppServerEvent[] = [];
   server.subscribe((event) => {
     events.push(event);
   });
@@ -751,10 +910,6 @@ test("deduplicates concurrent cold thread loads before starting a turn", async (
   });
 
   let readCount = 0;
-  let releaseReads!: () => void;
-  const bothReadsStarted = new Promise<void>((resolve) => {
-    releaseReads = resolve;
-  });
   const journal: ThreadJournal = {
     append: async (item) => {
       await backing.append(item);
@@ -762,10 +917,9 @@ test("deduplicates concurrent cold thread loads before starting a turn", async (
     listThreadIds: async () => await backing.listThreadIds(),
     read: async (requestedThreadId) => {
       readCount += 1;
-      if (readCount === 2) {
-        releaseReads();
-      }
-      await bothReadsStarted;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       return await backing.read(requestedThreadId);
     },
   };
@@ -795,6 +949,7 @@ test("deduplicates concurrent cold thread loads before starting a turn", async (
   const snapshot = await server.readThread(threadId);
   assert.equal(snapshot.turns.length, 1);
   assert.equal(snapshot.turns[0]?.status, "completed");
+  assert.equal(readCount, 1);
   assert(snapshot.items.some((item) => item.type === "agent_message"));
 });
 
@@ -898,7 +1053,13 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
       );
     },
   });
-  const server = createServer({ model });
+  const server = createServer({
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "fake", isDefault: true },
+      { id: "provider-model" },
+    ]),
+  });
   const thread = await server.startThread({ model: "provider-model" });
   const turn = await server.startTurn(thread.id, "use the tool");
   await turn.done;

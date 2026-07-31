@@ -5,10 +5,15 @@ import {
   JsonlThreadJournal,
   type ThreadJournal,
 } from "../../../src/journal.js";
+import { StaticModelCatalog } from "../../../src/model-catalog.js";
 import { FakeModel, type ModelAdapter } from "../../../src/model.js";
 import { OpenAiCompatibleModel } from "../../../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
 import { AgentRuntime } from "../../../src/runtime.js";
+import {
+  JsonlThreadMetadataStore,
+  type ThreadMetadataStore,
+} from "../../../src/thread-metadata.js";
 import { ShellToolExecutor } from "../../../src/tool.js";
 import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
 
@@ -30,14 +35,22 @@ export interface ZenHostOptions {
   cwd: string;
   dataDirectory: string;
   model: string;
+  models?: readonly string[];
   approvalPolicy: "always" | "never";
   provider: HostProvider;
   secretEnvironmentVariables?: readonly string[];
   journal?: ThreadJournal;
+  threadMetadata?: ThreadMetadataStore;
 }
 
 export function createHostedAppServer(options: ZenHostOptions): ZenAppServer {
   const model = createModel(options.provider);
+  const modelIds = uniqueModels(options.models ?? [options.model]);
+  if (!modelIds.includes(options.model)) {
+    throw new Error(
+      `Default model ${options.model} is absent from the configured model list`,
+    );
+  }
   return new ZenAppServer({
     journal:
       options.journal ??
@@ -52,6 +65,14 @@ export function createHostedAppServer(options: ZenHostOptions): ZenAppServer {
             : [],
       }),
     }),
+    modelCatalog: new StaticModelCatalog(
+      modelIds.map((id) => ({ id, isDefault: id === options.model })),
+    ),
+    threadMetadata:
+      options.threadMetadata ??
+      new JsonlThreadMetadataStore(
+        path.join(options.dataDirectory, "thread-metadata.jsonl"),
+      ),
     defaults: {
       cwd: path.resolve(options.cwd),
       model: options.model,
@@ -59,6 +80,23 @@ export function createHostedAppServer(options: ZenHostOptions): ZenAppServer {
       approvalPolicy: options.approvalPolicy,
     },
   });
+}
+
+function uniqueModels(models: readonly string[]): string[] {
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const rawModel of models) {
+    const model = rawModel.trim();
+    if (model.length === 0 || seen.has(model)) {
+      continue;
+    }
+    seen.add(model);
+    output.push(model);
+  }
+  if (output.length === 0) {
+    throw new Error("At least one configured model is required");
+  }
+  return output;
 }
 
 function createModel(provider: HostProvider): ModelAdapter {

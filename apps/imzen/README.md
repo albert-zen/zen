@@ -62,6 +62,11 @@ created through T3 Code or another App Server client. The binding and the most
 recent list are display state held only in IMZen memory. `/threads` shows at
 most 20 matches; use a query to narrow larger histories.
 
+Use `/model` to list the central Zen host's ModelCatalog and `/model <name>` to
+change the selected Thread for subsequent Turns. IMZen does not keep a separate
+model setting: it calls the same App Server operation used by Zen CLI and T3
+Code, and ZAS rejects changes while a Turn is active.
+
 Supported keys at the top level are `qq`, `telegram`, `feishu`, and `weixin`.
 Feishu additionally requires installing the `feishu` extra. Each IMZen
 deployment owns its channel config and credentials; do not point it at
