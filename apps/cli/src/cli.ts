@@ -183,11 +183,17 @@ async function chatCommand(args: ParsedArguments): Promise<void> {
           await printModels(session.client);
           continue;
         }
-        await session.client.request("thread/settings/update", {
-          threadId,
-          model,
-        });
-        process.stdout.write(`Model switched to ${model}.\n`);
+        try {
+          await session.client.request("thread/settings/update", {
+            threadId,
+            model,
+          });
+          process.stdout.write(`Model switched to ${model}.\n`);
+        } catch (error) {
+          process.stderr.write(
+            `Could not switch model: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
+        }
         continue;
       }
       await runOneTurn(session.client, threadId, prompt);

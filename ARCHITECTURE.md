@@ -14,7 +14,9 @@
   append-only 外部索引；它由 App Server 投影，但不进入 Agent 上下文或
   canonical ItemList。
 - **ModelCatalog** — 宿主公开的可选模型与默认模型目录；App Server 只投影和
-  校验它，credential 与 Provider 连接仍由宿主外部配置持有。
+  校验它，credential 与 Provider 连接仍由宿主外部配置持有。目录必须有且仅有
+  一个可见默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由
+  既有 Thread 或显式请求使用。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并
@@ -109,6 +111,10 @@ Codex CLI、T3 Code 是收益，不是核心设计前提。
 - `thread/settings/update` 修改后续 Turn 使用的配置；`turn/start` 携带的模型
   override 复用同一内部更新路径。成功变更必须先追加
   `thread_configuration_changed`，再广播 `thread/settings/updated`。
+- ZAS 是 Thread 生效配置的唯一权威。所有接入端通过
+  `thread/settings/updated` 与 `thread/resume` 返回值镜像同一份配置；恢复
+  Thread 时不得用客户端缓存覆盖 ZAS，只有用户明确选择新模型时才提交配置
+  变更。同值更新是空操作，即使 Turn 正在运行也不得阻断跨端恢复。
 - `thread/name/set` 修改 ZAS 的 ThreadMetadataStore 并广播
   `thread/name/updated`；名称不是 Agent Item。`thread/list`、`thread/read` 与
   `thread/resume` 返回当前名称。

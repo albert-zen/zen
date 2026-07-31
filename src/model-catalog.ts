@@ -30,27 +30,25 @@ export class StaticModelCatalog implements ModelCatalog {
       byId.set(entry.id, entry);
     }
     const defaults = normalized.filter((entry) => entry.isDefault === true);
-    if (defaults.length > 1) {
-      throw new Error("Model catalog can contain only one default model");
+    if (defaults.length !== 1) {
+      throw new Error("Model catalog must contain exactly one default model");
     }
-    const defaultEntry = defaults[0] ?? normalized[0];
+    const defaultEntry = defaults[0];
     if (defaultEntry === undefined) {
       throw new Error("Model catalog has no default model");
     }
-    this.#entries = Object.freeze(
-      normalized.map((entry) =>
-        Object.freeze({
-          ...entry,
-          isDefault: entry.id === defaultEntry.id,
-        }),
-      ),
-    );
-    this.#byId = new Map(this.#entries.map((entry) => [entry.id, entry]));
-    const resolvedDefault = this.#byId.get(defaultEntry.id);
-    if (resolvedDefault === undefined) {
-      throw new Error("Model catalog default disappeared");
+    if (defaultEntry.hidden === true) {
+      throw new Error("Model catalog default must be visible");
     }
-    this.#default = resolvedDefault;
+    const frozenEntries = normalized.map((entry) =>
+      Object.freeze({
+        ...entry,
+        isDefault: entry.id === defaultEntry.id,
+      }),
+    );
+    this.#entries = Object.freeze(frozenEntries);
+    this.#byId = new Map(this.#entries.map((entry) => [entry.id, entry]));
+    this.#default = frozenEntries[normalized.indexOf(defaultEntry)]!;
   }
 
   list(): readonly ModelCatalogEntry[] {

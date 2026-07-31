@@ -40,6 +40,8 @@ function createServer(
     modelCatalog?: ModelCatalog;
     threadMetadata?: ThreadMetadataStore;
     tools?: ToolExecutor;
+    idFactory?: () => string;
+    runtimeIdFactory?: () => string;
   } = {},
 ): ZenAppServer {
   return new ZenAppServer({
@@ -47,6 +49,9 @@ function createServer(
     runtime: new AgentRuntime({
       model: options.model ?? new FakeModel(),
       tools: options.tools ?? new ShellToolExecutor(),
+      ...(options.runtimeIdFactory === undefined
+        ? {}
+        : { idFactory: options.runtimeIdFactory }),
     }),
     modelCatalog:
       options.modelCatalog ??
@@ -58,8 +63,31 @@ function createServer(
       sandbox: "danger-full-access",
       approvalPolicy: options.approvalPolicy ?? "never",
     },
+    ...(options.idFactory === undefined
+      ? {}
+      : { idFactory: options.idFactory }),
   });
 }
+
+test("requires one visible default while hidden models remain addressable", () => {
+  assert.throws(
+    () => new StaticModelCatalog([{ id: "model-one" }]),
+    /exactly one default model/u,
+  );
+  assert.throws(
+    () =>
+      new StaticModelCatalog([
+        { id: "model-one", isDefault: true, hidden: true },
+      ]),
+    /default must be visible/u,
+  );
+  const catalog = new StaticModelCatalog([
+    { id: "model-one", isDefault: true },
+    { id: "model-hidden", hidden: true },
+  ]);
+  assert.equal(catalog.defaultModel().id, "model-one");
+  assert.equal(catalog.get("model-hidden")?.hidden, true);
+});
 
 test("derives each turn model from append-only configuration changes", async () => {
   const journal = new InMemoryThreadJournal();
@@ -83,7 +111,6 @@ test("derives each turn model from append-only configuration changes", async () 
 
   const changed = await server.updateThreadSettings(thread.id, {
     model: "model-two",
-    expectedModel: "model-one",
   });
   assert.equal(changed.model, "model-two");
   await (
@@ -107,7 +134,7 @@ test("derives each turn model from append-only configuration changes", async () 
   );
 });
 
-test("rejects unavailable, stale, and active-turn model changes", async () => {
+test("allows active-turn model no-ops but rejects real changes", async () => {
   let releaseModel: (() => void) | undefined;
   const waiting = new Promise<void>((resolve) => {
     releaseModel = resolve;
@@ -135,18 +162,11 @@ test("rejects unavailable, stale, and active-turn model changes", async () => {
       "code" in error &&
       error.code === "model_unavailable",
   );
-  await assert.rejects(
-    server.updateThreadSettings(thread.id, {
-      model: "other",
-      expectedModel: "stale",
-    }),
-    (error: unknown) =>
-      error instanceof Error &&
-      "code" in error &&
-      error.code === "stale_thread_configuration",
-  );
-
   const active = await server.startTurn(thread.id, "wait");
+  const resumed = await server.updateThreadSettings(thread.id, {
+    model: "fake",
+  });
+  assert.equal(resumed.model, "fake");
   await assert.rejects(
     server.updateThreadSettings(thread.id, { model: "other" }),
     (error: unknown) =>
@@ -206,6 +226,23 @@ test("persists user-facing names outside the canonical ItemList", async () => {
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
+});
+
+test("validates canonical items before appending them to the journal", async () => {
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    idFactory: () => "duplicate-id",
+    runtimeIdFactory: () => "duplicate-id",
+  });
+  const thread = await server.startThread();
+  const turn = await server.startTurn(thread.id, "must not persist");
+
+  await assert.rejects(turn.done, /Duplicate item id duplicate-id/u);
+  assert.deepEqual(
+    (await journal.read(thread.id)).map((item) => item.type),
+    ["thread_metadata"],
+  );
 });
 
 function createTwoCallModel(): ModelAdapter {
@@ -967,10 +1004,18 @@ test("refuses to run a persisted thread through a different provider", async () 
     sandbox: "danger-full-access",
     approvalPolicy: "never",
   });
-  const server = createServer({ journal });
+  const server = createServer({
+    journal,
+    modelCatalog: new StaticModelCatalog([
+      { id: "original-model", isDefault: true },
+      { id: "other-model" },
+    ]),
+  });
 
   await assert.rejects(
-    server.startTurn(threadId, "must not silently switch providers"),
+    server.startTurn(threadId, "must not silently switch providers", {
+      model: "other-model",
+    }),
     /requires provider original-provider, but this host provides fake/u,
   );
   const snapshot = await server.readThread(threadId);

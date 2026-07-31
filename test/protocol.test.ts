@@ -192,7 +192,7 @@ test("switches models canonically and synchronizes thread settings", async () =>
     await observing.request("thread/resume", { threadId: thread.id });
 
     const updated = deferred<Record<string, unknown>>();
-    observing.onNotification("thread/settings/updated", (params) => {
+    initiating.onNotification("thread/settings/updated", (params) => {
       if (isRecord(params)) {
         updated.resolve(params);
       }
@@ -236,9 +236,114 @@ test("switches models canonically and synchronizes thread settings", async () =>
       ).length,
       2,
     );
+
+    const rapidModels: string[] = [];
+    const rapidUpdates = deferred<void>();
+    initiating.onNotification("thread/settings/updated", (params) => {
+      if (
+        isRecord(params) &&
+        isRecord(params.threadSettings) &&
+        typeof params.threadSettings.model === "string"
+      ) {
+        rapidModels.push(params.threadSettings.model);
+        if (rapidModels.length === 2) {
+          rapidUpdates.resolve();
+        }
+      }
+    });
+    await Promise.all([
+      appServer.updateThreadSettings(String(thread.id), { model: "other" }),
+      appServer.updateThreadSettings(String(thread.id), { model: "fake" }),
+    ]);
+    await within(rapidUpdates.promise);
+    assert.deepEqual(rapidModels, ["other", "fake"]);
   } finally {
     initiating.close();
     observing.close();
+    await server.close();
+  }
+});
+
+test("resumes an active thread when T3 repeats its effective model", async () => {
+  const appServer = testHost("always", ["fake", "other"]);
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const running = await CodexClient.connect(server.url);
+  const resuming = await CodexClient.connect(server.url);
+  const approvalSeen = deferred<void>();
+  const releaseApproval = deferred<{ decision: "decline" }>();
+  try {
+    await running.initialize({
+      name: "imzen",
+      title: "IMZen",
+      version: "1",
+    });
+    await resuming.initialize({
+      name: "t3code_desktop",
+      title: "T3 Code Desktop",
+      version: "0.0.31",
+    });
+    running.onServerRequest(
+      "item/commandExecution/requestApproval",
+      async () => {
+        approvalSeen.resolve();
+        return await releaseApproval.promise;
+      },
+    );
+    const started = await running.request("thread/start", {
+      cwd: process.cwd(),
+      model: "fake",
+      approvalPolicy: "on-request",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+    });
+    const thread = responseResult<Record<string, unknown>>(started, "thread");
+    const turn = await running.request("turn/start", {
+      threadId: thread.id,
+      input: [{ type: "text", text: "!shell printf active" }],
+      model: "fake",
+      approvalPolicy: "on-request",
+      sandboxPolicy: { type: "dangerFullAccess" },
+      approvalsReviewer: "user",
+    });
+    await within(approvalSeen.promise);
+
+    const resumed = await resuming.request("thread/resume", {
+      threadId: thread.id,
+      cwd: process.cwd(),
+      model: "fake",
+      approvalPolicy: "on-request",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+    });
+    assert.equal(
+      responseResult<Record<string, unknown>>(resumed, "thread").id,
+      thread.id,
+    );
+    assert.equal((await appServer.readThread(String(thread.id))).model, "fake");
+
+    await assert.rejects(
+      resuming.request("thread/resume", {
+        threadId: thread.id,
+        model: "other",
+      }),
+      (error: unknown) =>
+        error instanceof CodexClientError && error.code === -32000,
+    );
+
+    const completed = deferred<void>();
+    running.onNotification("turn/completed", () => {
+      completed.resolve();
+    });
+    releaseApproval.resolve({ decision: "decline" });
+    await within(completed.promise);
+    assert(isRecord(turn) && isRecord(turn.turn));
+  } finally {
+    running.close();
+    resuming.close();
     await server.close();
   }
 });
@@ -515,6 +620,23 @@ test("accepts matching T3 full-access resume and turn configuration", async () =
     });
     const thread = responseResult<Record<string, unknown>>(start, "thread");
 
+    await assert.rejects(
+      client.request("thread/resume", {
+        threadId: thread.id,
+        model: "",
+      }),
+      (error: unknown) =>
+        error instanceof CodexClientError && error.code === -32602,
+    );
+    await assert.rejects(
+      client.request("thread/settings/update", {
+        threadId: thread.id,
+        model: "",
+      }),
+      (error: unknown) =>
+        error instanceof CodexClientError && error.code === -32602,
+    );
+
     const resumed = await client.request("thread/resume", {
       threadId: thread.id,
       cwd: process.cwd(),
@@ -607,6 +729,15 @@ test("rejects mismatched or unsupported T3 thread configuration", async () => {
     }
 
     const input = [{ type: "text", text: "must not run" }];
+    await assert.rejects(
+      client.request("turn/start", {
+        threadId: thread.id,
+        input,
+        model: "",
+      }),
+      (error: unknown) =>
+        error instanceof CodexClientError && error.code === -32602,
+    );
     await assert.rejects(
       client.request("turn/start", {
         threadId: thread.id,

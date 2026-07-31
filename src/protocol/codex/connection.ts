@@ -20,6 +20,7 @@ import {
   projectThread,
   projectTurn,
   threadSettings,
+  threadSettingsUpdated,
 } from "./mapper.js";
 import {
   isNotification,
@@ -208,7 +209,7 @@ export class CodexConnection {
         ]);
         const sandbox = optionalString(params.sandbox);
         const cwd = optionalString(params.cwd);
-        const model = optionalString(params.model);
+        const model = optionalNonEmptyString(params.model, "model");
         const approvalPolicy = readApprovalPolicy(params.approvalPolicy);
         readApprovalsReviewer(params.approvalsReviewer);
         if (sandbox !== undefined && sandbox !== "danger-full-access") {
@@ -234,12 +235,8 @@ export class CodexConnection {
       case "thread/resume": {
         const threadId = requiredString(params, "threadId");
         let snapshot = await this.#appServer.readThread(threadId);
-        const requestedModel = optionalString(params.model);
-        const validationSnapshot =
-          requestedModel === undefined
-            ? snapshot
-            : { ...snapshot, model: requestedModel };
-        validateMatchingThreadConfiguration(params, validationSnapshot, [
+        const requestedModel = optionalNonEmptyString(params.model, "model");
+        validateMatchingThreadConfiguration(params, snapshot, requestedModel, [
           "threadId",
           "cwd",
           "model",
@@ -328,25 +325,19 @@ export class CodexConnection {
       case "turn/start": {
         const threadId = requiredString(params, "threadId");
         const snapshot = await this.#appServer.readThread(threadId);
-        const requestedModel = optionalString(params.model);
-        validateMatchingThreadConfiguration(
-          params,
-          requestedModel === undefined
-            ? snapshot
-            : { ...snapshot, model: requestedModel },
-          [
-            "threadId",
-            "input",
-            "cwd",
-            "model",
-            "approvalPolicy",
-            "sandbox",
-            "sandboxPolicy",
-            "approvalsReviewer",
-            "collaborationMode",
-            "clientUserMessageId",
-          ],
-        );
+        const requestedModel = optionalNonEmptyString(params.model, "model");
+        validateMatchingThreadConfiguration(params, snapshot, requestedModel, [
+          "threadId",
+          "input",
+          "cwd",
+          "model",
+          "approvalPolicy",
+          "sandbox",
+          "sandboxPolicy",
+          "approvalsReviewer",
+          "collaborationMode",
+          "clientUserMessageId",
+        ]);
         const text = readTextInput(params.input);
         const clientId = optionalNonEmptyString(
           params.clientUserMessageId,
@@ -414,12 +405,11 @@ export class CodexConnection {
     }
     if (event.type === "thread_settings_updated") {
       if (this.#subscribedThreads.has(event.threadId)) {
-        const snapshot = await this.#appServer.readThread(event.threadId);
         this.#send({
           method: "thread/settings/updated",
           params: {
             threadId: event.threadId,
-            threadSettings: threadSettings(snapshot),
+            threadSettings: threadSettingsUpdated(event.settings),
           },
         });
       }
@@ -913,6 +903,7 @@ function readTextInput(value: unknown): string {
 function validateMatchingThreadConfiguration(
   params: Record<string, unknown>,
   snapshot: ThreadSnapshot,
+  requestedModel: string | undefined,
   supportedKeys: string[],
 ): void {
   rejectUnsupportedValues(params, supportedKeys);
@@ -921,13 +912,6 @@ function validateMatchingThreadConfiguration(
   if (cwd !== undefined && path.resolve(cwd) !== snapshot.cwd) {
     throw new InvalidParamsError(
       `cwd does not match thread metadata: ${snapshot.cwd}`,
-    );
-  }
-
-  const model = optionalString(params.model);
-  if (model !== undefined && model !== snapshot.model) {
-    throw new InvalidParamsError(
-      `model does not match thread metadata: ${snapshot.model}`,
     );
   }
 
@@ -957,12 +941,17 @@ function validateMatchingThreadConfiguration(
   }
 
   readApprovalsReviewer(params.approvalsReviewer);
-  readDefaultCollaborationMode(params.collaborationMode, snapshot);
+  readDefaultCollaborationMode(
+    params.collaborationMode,
+    snapshot,
+    requestedModel ?? snapshot.model,
+  );
 }
 
 function readDefaultCollaborationMode(
   value: unknown,
   snapshot: ThreadSnapshot,
+  model: string,
 ): void {
   if (value === undefined || value === null) {
     return;
@@ -978,7 +967,7 @@ function readDefaultCollaborationMode(
         key !== "reasoning_effort" &&
         key !== "developer_instructions",
     ) ||
-    value.settings.model !== snapshot.model ||
+    value.settings.model !== model ||
     value.settings.reasoning_effort !== "medium" ||
     typeof value.settings.developer_instructions !== "string"
   ) {

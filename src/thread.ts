@@ -39,7 +39,7 @@ export class Thread {
     return Object.freeze([...this.#items]);
   }
 
-  append(item: CanonicalItem): void {
+  validateAppend(item: CanonicalItem): void {
     if (item.threadId !== this.id) {
       throw new Error(
         `Item ${item.id} belongs to ${item.threadId}, not ${this.id}`,
@@ -59,6 +59,10 @@ export class Thread {
         throw new Error("Model change must change the effective model");
       }
     }
+  }
+
+  append(item: CanonicalItem): void {
+    this.validateAppend(item);
     this.#items.push(deepFreeze(structuredClone(item)));
   }
 

@@ -246,7 +246,10 @@ export function projectCommandCompleted(
 }
 
 export function threadSettings(
-  snapshot: ThreadSnapshot,
+  snapshot: Pick<
+    ThreadSnapshot,
+    "model" | "provider" | "cwd" | "approvalPolicy" | "sandbox"
+  >,
 ): Record<string, unknown> {
   return {
     model: snapshot.model,
@@ -259,6 +262,34 @@ export function threadSettings(
     approvalsReviewer: "user",
     sandbox: { type: "dangerFullAccess" },
     reasoningEffort: null,
+  };
+}
+
+export function threadSettingsUpdated(
+  snapshot: Pick<
+    ThreadSnapshot,
+    "model" | "provider" | "cwd" | "approvalPolicy" | "sandbox"
+  >,
+): Record<string, unknown> {
+  return {
+    approvalPolicy:
+      snapshot.approvalPolicy === "never" ? "never" : "on-request",
+    approvalsReviewer: "user",
+    collaborationMode: {
+      mode: "default",
+      settings: {
+        model: snapshot.model,
+        reasoning_effort: "medium",
+      },
+    },
+    cwd: snapshot.cwd,
+    effort: null,
+    model: snapshot.model,
+    modelProvider: snapshot.provider,
+    personality: null,
+    sandboxPolicy: { type: "dangerFullAccess" },
+    serviceTier: null,
+    summary: null,
   };
 }
 

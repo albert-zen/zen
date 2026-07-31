@@ -436,19 +436,19 @@ class ImZenGateway:
 
     async def _set_model(self, inbound: InboundMessage, argument: str) -> None:
         key = self._key(inbound)
-        result = await self.client.list_models()
-        data = result.get("data")
-        if not isinstance(data, list):
-            raise RuntimeError("model/list did not return a model list")
-        models = [
-            model
-            for model in data
-            if isinstance(model, dict)
-            and isinstance(model.get("id"), str)
-            and model["id"]
-            and model.get("hidden") is not True
-        ]
         if not argument:
+            result = await self.client.list_models()
+            data = result.get("data")
+            if not isinstance(data, list):
+                raise RuntimeError("model/list did not return a model list")
+            models = [
+                model
+                for model in data
+                if isinstance(model, dict)
+                and isinstance(model.get("id"), str)
+                and model["id"]
+                and model.get("hidden") is not True
+            ]
             lines = ["## Zen models"]
             for model in models:
                 model_id = str(model["id"])
@@ -471,15 +471,6 @@ class ImZenGateway:
                 message_type="error",
                 text="No Zen thread is selected. Send a message or use `/threads` and `/pick`.",
                 delivery_id=self._inbound_delivery_id(inbound, "model-no-thread"),
-            )
-            return
-        matching = next((model for model in models if model["id"] == argument), None)
-        if matching is None:
-            await self._send_to_conversation(
-                key,
-                message_type="error",
-                text=f"Model is not available from this Zen host: {argument}",
-                delivery_id=self._inbound_delivery_id(inbound, "model-unavailable"),
             )
             return
         await self.client.call(

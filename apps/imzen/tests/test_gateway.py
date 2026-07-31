@@ -48,7 +48,10 @@ class FakeAppServer:
         return {}
 
     async def call(self, method: str, params: dict | None = None) -> dict:
-        self.calls.append((method, dict(params or {})))
+        payload = dict(params or {})
+        self.calls.append((method, payload))
+        if method == "thread/settings/update" and payload.get("model") == "missing":
+            raise RuntimeError("Model is not available from this Zen host: missing")
         return {}
 
     async def list_models(self, **_params: Any) -> dict:
@@ -231,8 +234,16 @@ async def test_model_rejects_unavailable_model_and_requires_a_bound_thread(tmp_p
     await middleware.handle_inbound(adapter, inbound("m2", "start work"))
     await middleware.handle_inbound(adapter, inbound("m3", "/model missing"))
     assert adapter.sent[-1].message_type == "error"
-    assert adapter.sent[-1].text == "Model is not available from this Zen host: missing"
-    assert client.calls == []
+    assert (
+        adapter.sent[-1].text == "Zen could not process this message: "
+        "Model is not available from this Zen host: missing"
+    )
+    assert client.calls == [
+        (
+            "thread/settings/update",
+            {"threadId": "thread-1", "model": "missing"},
+        )
+    ]
 
 
 @pytest.mark.asyncio

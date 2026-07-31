@@ -70,7 +70,6 @@ export type AppServerEvent =
 
 export interface UpdateThreadSettingsInput {
   model: string;
-  expectedModel?: string;
 }
 
 export class ZenAppServer {
@@ -174,13 +173,20 @@ export class ZenAppServer {
     input: UpdateThreadSettingsInput,
   ): Promise<ThreadSnapshot> {
     return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      if (input.model === thread.effectiveConfiguration().model) {
+        return await this.#snapshot(
+          thread,
+          this.#activeTurns.get(threadId)?.turnId,
+        );
+      }
+      this.#requireAvailableModel(input.model);
       if (this.#activeTurns.has(threadId)) {
         throw new AppServerError(
           "thread_busy",
           `Thread ${threadId} already has a running turn`,
         );
       }
-      const thread = await this.#requireThread(threadId);
       return await this.#updateThreadSettingsUnlocked(thread, input);
     });
   }
@@ -228,6 +234,13 @@ export class ZenAppServer {
       }
 
       const thread = await this.#requireThread(threadId);
+      const initialConfiguration = thread.effectiveConfiguration();
+      if (initialConfiguration.provider !== this.#runtime.provider) {
+        throw new AppServerError(
+          "provider_unavailable",
+          `Thread ${threadId} requires provider ${initialConfiguration.provider}, but this host provides ${this.#runtime.provider}`,
+        );
+      }
       if (options.model !== undefined) {
         await this.#updateThreadSettingsUnlocked(thread, {
           model: options.model,
@@ -333,6 +346,7 @@ export class ZenAppServer {
   }
 
   async #commit(thread: Thread, item: CanonicalItem): Promise<void> {
+    thread.validateAppend(item);
     await this.#journal.append(item);
     thread.append(item);
   }
@@ -366,15 +380,6 @@ export class ZenAppServer {
   ): Promise<ThreadSnapshot> {
     this.#requireAvailableModel(input.model);
     const current = thread.effectiveConfiguration();
-    if (
-      input.expectedModel !== undefined &&
-      input.expectedModel !== current.model
-    ) {
-      throw new AppServerError(
-        "stale_thread_configuration",
-        `Expected model ${input.expectedModel}, but current model is ${current.model}`,
-      );
-    }
     if (input.model === current.model) {
       return await this.#snapshot(thread);
     }
