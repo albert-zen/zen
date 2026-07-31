@@ -33,10 +33,7 @@ export class StaticModelCatalog implements ModelCatalog {
     if (defaults.length !== 1) {
       throw new Error("Model catalog must contain exactly one default model");
     }
-    const defaultEntry = defaults[0];
-    if (defaultEntry === undefined) {
-      throw new Error("Model catalog has no default model");
-    }
+    const defaultEntry = defaults[0]!;
     if (defaultEntry.hidden === true) {
       throw new Error("Model catalog default must be visible");
     }
@@ -48,7 +45,7 @@ export class StaticModelCatalog implements ModelCatalog {
     );
     this.#entries = Object.freeze(frozenEntries);
     this.#byId = new Map(this.#entries.map((entry) => [entry.id, entry]));
-    this.#default = frozenEntries[normalized.indexOf(defaultEntry)]!;
+    this.#default = this.#byId.get(defaultEntry.id)!;
   }
 
   list(): readonly ModelCatalogEntry[] {

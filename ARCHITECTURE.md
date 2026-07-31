@@ -12,7 +12,9 @@
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
 - **ThreadMetadataStore** — ZAS 按 threadId 持久化名称等产品元数据的
   append-only 外部索引；它由 App Server 投影，但不进入 Agent 上下文或
-  canonical ItemList。
+  canonical ItemList。损坏或暂时不可读的产品元数据不得阻断 Thread 的创建、
+  读取或列表；ZAS 降级为无展示名称并明确记录 warning，而 metadata 写入失败
+  仍须返回错误。
 - **ModelCatalog** — 宿主公开的可选模型与默认模型目录；App Server 只投影和
   校验它，credential 与 Provider 连接仍由宿主外部配置持有。目录必须有且仅有
   一个可见默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由
@@ -115,6 +117,10 @@ Codex CLI、T3 Code 是收益，不是核心设计前提。
   `thread/settings/updated` 与 `thread/resume` 返回值镜像同一份配置；恢复
   Thread 时不得用客户端缓存覆盖 ZAS，只有用户明确选择新模型时才提交配置
   变更。同值更新是空操作，即使 Turn 正在运行也不得阻断跨端恢复。
+- Codex 协议投影不把 `thread_configuration_changed` 伪装成 Codex Thread Item；
+  它只通过当前 `threadSettings` 与 settings 通知暴露结果，不承诺展示历史切换点。
+  canonical ItemList 仍保留完整切换点和各 Turn 的生效模型，供 Zen 原生客户端
+  重放。
 - `thread/name/set` 修改 ZAS 的 ThreadMetadataStore 并广播
   `thread/name/updated`；名称不是 Agent Item。`thread/list`、`thread/read` 与
   `thread/resume` 返回当前名称。

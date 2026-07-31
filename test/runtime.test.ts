@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -92,10 +92,12 @@ test("requires one visible default while hidden models remain addressable", () =
 test("derives each turn model from append-only configuration changes", async () => {
   const journal = new InMemoryThreadJournal();
   const requestedModels: string[] = [];
+  const requestedMessages: ModelMessage[][] = [];
   const model: ModelAdapter = {
     provider: "recording",
     async *stream(request): AsyncIterable<ModelEvent> {
       requestedModels.push(request.model);
+      requestedMessages.push(structuredClone(request.messages));
       yield { type: "text_delta", delta: request.model };
     },
   };
@@ -118,6 +120,11 @@ test("derives each turn model from append-only configuration changes", async () 
   ).done;
 
   assert.deepEqual(requestedModels, ["model-one", "model-two"]);
+  assert.deepEqual(requestedMessages[1], [
+    { role: "user", text: "first" },
+    { role: "assistant", text: "model-one" },
+    { role: "user", text: "second" },
+  ]);
   assert.deepEqual(
     changed.items
       .filter((item) => item.type === "thread_configuration_changed")
@@ -215,14 +222,79 @@ test("persists user-facing names outside the canonical ItemList", async () => {
             updatedAt: string;
           },
       );
-    assert.deepEqual(events, [
+    assert.equal(events.length, 1);
+    assert.deepEqual(
+      { ...events[0], updatedAt: undefined },
       {
         type: "thread_name_set",
         threadId: thread.id,
         name: "Model routing",
-        updatedAt: events[0]?.updatedAt,
+        updatedAt: undefined,
       },
-    ]);
+    );
+    assert.equal(Number.isNaN(Date.parse(events[0]!.updatedAt)), false);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("product metadata corruption never blocks canonical threads", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-thread-metadata-corrupt-"),
+  );
+  const filename = path.join(temporaryDirectory, "thread-metadata.jsonl");
+  const journal = new InMemoryThreadJournal();
+  try {
+    await writeFile(filename, "not-json\n", "utf8");
+    const server = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    const thread = await server.startThread();
+    assert.equal((await server.listThreads()).length, 1);
+    assert.deepEqual(await journal.listThreadIds(), [thread.id]);
+
+    const named = await server.setThreadName(thread.id, "Recovered name");
+    assert.equal(named.name, "Recovered name");
+    const replayed = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    assert.equal((await replayed.readThread(thread.id)).name, "Recovered name");
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("product metadata load failures degrade and retry", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-thread-metadata-retry-"),
+  );
+  const filename = path.join(temporaryDirectory, "thread-metadata.jsonl");
+  const journal = new InMemoryThreadJournal();
+  try {
+    await mkdir(filename);
+    const server = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    const thread = await server.startThread();
+    assert.equal(thread.name, undefined);
+
+    await rm(filename, { recursive: true });
+    await writeFile(
+      filename,
+      `${JSON.stringify({
+        type: "thread_name_set",
+        threadId: thread.id,
+        name: "Retried name",
+        updatedAt: new Date().toISOString(),
+      })}\n`,
+      "utf8",
+    );
+    assert.equal((await server.readThread(thread.id)).name, "Retried name");
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }

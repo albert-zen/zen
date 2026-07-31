@@ -52,6 +52,8 @@ class FakeAppServer:
         self.calls.append((method, payload))
         if method == "thread/settings/update" and payload.get("model") == "missing":
             raise RuntimeError("Model is not available from this Zen host: missing")
+        if method == "thread/settings/update" and payload.get("model") == "busy":
+            raise RuntimeError("Thread thread-1 already has a running turn")
         return {}
 
     async def list_models(self, **_params: Any) -> dict:
@@ -234,16 +236,32 @@ async def test_model_rejects_unavailable_model_and_requires_a_bound_thread(tmp_p
     await middleware.handle_inbound(adapter, inbound("m2", "start work"))
     await middleware.handle_inbound(adapter, inbound("m3", "/model missing"))
     assert adapter.sent[-1].message_type == "error"
-    assert (
-        adapter.sent[-1].text == "Zen could not process this message: "
-        "Model is not available from this Zen host: missing"
-    )
+    assert "Could not switch model to **missing**" in adapter.sent[-1].text
+    assert "Model is not available from this Zen host: missing" in adapter.sent[-1].text
+    assert "**Model One** (`model-one`) — default" in adapter.sent[-1].text
+    assert "**Model Two** (`model-two`)" in adapter.sent[-1].text
     assert client.calls == [
         (
             "thread/settings/update",
             {"threadId": "thread-1", "model": "missing"},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_model_busy_error_is_reported_as_a_model_command_failure(tmp_path):
+    client = FakeAppServer()
+    adapter = FakeAdapter()
+    middleware = ImZenMiddleware(client=client, default_cwd=str(tmp_path))
+    middleware.register_adapter(adapter)
+
+    await middleware.handle_inbound(adapter, inbound("m1", "start work"))
+    await middleware.handle_inbound(adapter, inbound("m2", "/model busy"))
+
+    assert adapter.sent[-1].message_type == "error"
+    assert adapter.sent[-1].text == (
+        "Could not switch model to **busy**: Thread thread-1 already has a running turn"
+    )
 
 
 @pytest.mark.asyncio

@@ -710,6 +710,7 @@ export class CodexConnection {
       event.type === "thread_name_updated" ||
       event.type === "thread_settings_updated"
     ) {
+      console.warn(`Could not project ${event.type} notification`, error);
       return;
     }
     const threadId =

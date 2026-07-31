@@ -18,6 +18,7 @@ import {
 } from "./thread.js";
 import {
   normalizeThreadName,
+  type ThreadProductMetadata,
   type ThreadMetadataStore,
 } from "./thread-metadata.js";
 import type { ApprovalHandler } from "./tool.js";
@@ -247,12 +248,6 @@ export class ZenAppServer {
         });
       }
       const configuration = thread.effectiveConfiguration();
-      if (configuration.provider !== this.#runtime.provider) {
-        throw new AppServerError(
-          "provider_unavailable",
-          `Thread ${threadId} requires provider ${configuration.provider}, but this host provides ${this.#runtime.provider}`,
-        );
-      }
       const turnId = this.#id();
       const controller = new AbortController();
 
@@ -356,7 +351,15 @@ export class ZenAppServer {
     activeTurnId?: string,
   ): Promise<ThreadSnapshot> {
     const configuration = thread.effectiveConfiguration();
-    const productMetadata = await this.#threadMetadata.read(thread.id);
+    let productMetadata: ThreadProductMetadata = {};
+    try {
+      productMetadata = await this.#threadMetadata.read(thread.id);
+    } catch (error) {
+      console.warn(
+        `Could not read product metadata for Thread ${thread.id}`,
+        error,
+      );
+    }
     return {
       id: thread.id,
       items: thread.items,

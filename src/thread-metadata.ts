@@ -77,8 +77,16 @@ export class JsonlThreadMetadataStore implements ThreadMetadataStore {
   }
 
   async #load(): Promise<void> {
-    this.#loadPromise ??= this.#loadFile();
-    await this.#loadPromise;
+    const load = this.#loadPromise ?? this.#loadFile();
+    this.#loadPromise = load;
+    try {
+      await load;
+    } catch (error) {
+      if (this.#loadPromise === load) {
+        this.#loadPromise = undefined;
+      }
+      throw error;
+    }
   }
 
   async #loadFile(): Promise<void> {
@@ -99,14 +107,16 @@ export class JsonlThreadMetadataStore implements ThreadMetadataStore {
       try {
         event = JSON.parse(line);
       } catch {
-        throw new Error(
-          `Invalid JSON in ${this.#filename} at line ${String(index + 1)}`,
+        console.warn(
+          `Ignoring invalid JSON in ${this.#filename} at line ${String(index + 1)}`,
         );
+        continue;
       }
       if (!isThreadNameSetEvent(event)) {
-        throw new Error(
-          `Invalid thread metadata in ${this.#filename} at line ${String(index + 1)}`,
+        console.warn(
+          `Ignoring invalid thread metadata in ${this.#filename} at line ${String(index + 1)}`,
         );
+        continue;
       }
       this.#metadata.set(event.threadId, { name: event.name });
     }

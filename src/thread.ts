@@ -72,17 +72,8 @@ export class Thread {
     let configuration: EffectiveThreadConfiguration | undefined;
 
     for (const item of this.#items) {
-      if (item.type === "thread_metadata") {
-        configuration = configurationFromMetadata(item);
-        continue;
-      }
-      if (item.type === "thread_configuration_changed") {
-        if (configuration === undefined) {
-          throw new Error(
-            `Thread ${this.id} changed configuration before metadata`,
-          );
-        }
-        configuration = { ...configuration, model: item.model.to };
+      if (isConfigurationItem(item)) {
+        configuration = applyConfigurationItem(this.id, configuration, item);
         continue;
       }
       if (item.turnId === undefined) {
@@ -118,29 +109,11 @@ export class Thread {
     return turns;
   }
 
-  latestMetadata(): CanonicalItem | undefined {
-    return [...this.#items]
-      .reverse()
-      .find((item) => item.type === "thread_metadata");
-  }
-
   effectiveConfiguration(): EffectiveThreadConfiguration {
     let configuration: EffectiveThreadConfiguration | undefined;
     for (const item of this.#items) {
-      if (item.type === "thread_metadata") {
-        configuration = configurationFromMetadata(item);
-      } else if (item.type === "thread_configuration_changed") {
-        if (configuration === undefined) {
-          throw new Error(
-            `Thread ${this.id} changed configuration before metadata`,
-          );
-        }
-        if (configuration.model !== item.model.from) {
-          throw new Error(
-            `Thread ${this.id} has a stale model change from ${item.model.from}`,
-          );
-        }
-        configuration = { ...configuration, model: item.model.to };
+      if (isConfigurationItem(item)) {
+        configuration = applyConfigurationItem(this.id, configuration, item);
       }
     }
     if (configuration === undefined) {
@@ -148,6 +121,37 @@ export class Thread {
     }
     return configuration;
   }
+}
+
+type ConfigurationItem = Extract<
+  CanonicalItem,
+  { type: "thread_metadata" | "thread_configuration_changed" }
+>;
+
+function isConfigurationItem(item: CanonicalItem): item is ConfigurationItem {
+  return (
+    item.type === "thread_metadata" ||
+    item.type === "thread_configuration_changed"
+  );
+}
+
+function applyConfigurationItem(
+  threadId: string,
+  configuration: EffectiveThreadConfiguration | undefined,
+  item: ConfigurationItem,
+): EffectiveThreadConfiguration {
+  if (item.type === "thread_metadata") {
+    return configurationFromMetadata(item);
+  }
+  if (configuration === undefined) {
+    throw new Error(`Thread ${threadId} changed configuration before metadata`);
+  }
+  if (configuration.model !== item.model.from) {
+    throw new Error(
+      `Thread ${threadId} has a stale model change from ${item.model.from}`,
+    );
+  }
+  return { ...configuration, model: item.model.to };
 }
 
 function configurationFromMetadata(
