@@ -1,4 +1,9 @@
-import type { CanonicalItem } from "./item.js";
+import type {
+  ApprovalPolicy,
+  CanonicalItem,
+  SandboxMode,
+  ThreadMetadataItem,
+} from "./item.js";
 
 export type DerivedTurnStatus =
   "inProgress" | "completed" | "failed" | "interrupted";
@@ -7,6 +12,15 @@ export interface DerivedTurn {
   id: string;
   items: CanonicalItem[];
   status: DerivedTurnStatus;
+  model: string;
+}
+
+export interface EffectiveThreadConfiguration {
+  cwd: string;
+  model: string;
+  provider: string;
+  sandbox: SandboxMode;
+  approvalPolicy: ApprovalPolicy;
 }
 
 export class Thread {
@@ -25,7 +39,7 @@ export class Thread {
     return Object.freeze([...this.#items]);
   }
 
-  append(item: CanonicalItem): void {
+  validateAppend(item: CanonicalItem): void {
     if (item.threadId !== this.id) {
       throw new Error(
         `Item ${item.id} belongs to ${item.threadId}, not ${this.id}`,
@@ -34,20 +48,48 @@ export class Thread {
     if (this.#items.some((existing) => existing.id === item.id)) {
       throw new Error(`Duplicate item id ${item.id}`);
     }
+    if (item.type === "thread_configuration_changed") {
+      const current = this.effectiveConfiguration();
+      if (current.model !== item.model.from) {
+        throw new Error(
+          `Stale model change from ${item.model.from}; current model is ${current.model}`,
+        );
+      }
+      if (item.model.from === item.model.to) {
+        throw new Error("Model change must change the effective model");
+      }
+    }
+  }
+
+  append(item: CanonicalItem): void {
+    this.validateAppend(item);
     this.#items.push(deepFreeze(structuredClone(item)));
   }
 
   deriveTurns(options: { activeTurnId?: string } = {}): DerivedTurn[] {
     const turns: DerivedTurn[] = [];
     const byId = new Map<string, DerivedTurn>();
+    let configuration: EffectiveThreadConfiguration | undefined;
 
     for (const item of this.#items) {
+      if (isConfigurationItem(item)) {
+        configuration = applyConfigurationItem(this.id, configuration, item);
+        continue;
+      }
       if (item.turnId === undefined) {
         continue;
       }
       let turn = byId.get(item.turnId);
       if (turn === undefined) {
-        turn = { id: item.turnId, items: [], status: "inProgress" };
+        if (configuration === undefined) {
+          throw new Error(`Thread ${this.id} has a Turn before metadata`);
+        }
+        turn = {
+          id: item.turnId,
+          items: [],
+          status: "inProgress",
+          model: configuration.model,
+        };
         byId.set(item.turnId, turn);
         turns.push(turn);
       }
@@ -67,11 +109,61 @@ export class Thread {
     return turns;
   }
 
-  latestMetadata(): CanonicalItem | undefined {
-    return [...this.#items]
-      .reverse()
-      .find((item) => item.type === "thread_metadata");
+  effectiveConfiguration(): EffectiveThreadConfiguration {
+    let configuration: EffectiveThreadConfiguration | undefined;
+    for (const item of this.#items) {
+      if (isConfigurationItem(item)) {
+        configuration = applyConfigurationItem(this.id, configuration, item);
+      }
+    }
+    if (configuration === undefined) {
+      throw new Error(`Thread ${this.id} has no metadata item`);
+    }
+    return configuration;
   }
+}
+
+type ConfigurationItem = Extract<
+  CanonicalItem,
+  { type: "thread_metadata" | "thread_configuration_changed" }
+>;
+
+function isConfigurationItem(item: CanonicalItem): item is ConfigurationItem {
+  return (
+    item.type === "thread_metadata" ||
+    item.type === "thread_configuration_changed"
+  );
+}
+
+function applyConfigurationItem(
+  threadId: string,
+  configuration: EffectiveThreadConfiguration | undefined,
+  item: ConfigurationItem,
+): EffectiveThreadConfiguration {
+  if (item.type === "thread_metadata") {
+    return configurationFromMetadata(item);
+  }
+  if (configuration === undefined) {
+    throw new Error(`Thread ${threadId} changed configuration before metadata`);
+  }
+  if (configuration.model !== item.model.from) {
+    throw new Error(
+      `Thread ${threadId} has a stale model change from ${item.model.from}`,
+    );
+  }
+  return { ...configuration, model: item.model.to };
+}
+
+function configurationFromMetadata(
+  item: ThreadMetadataItem,
+): EffectiveThreadConfiguration {
+  return {
+    cwd: item.cwd,
+    model: item.model,
+    provider: item.provider,
+    sandbox: item.sandbox,
+    approvalPolicy: item.approvalPolicy,
+  };
 }
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {

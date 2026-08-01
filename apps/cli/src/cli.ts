@@ -85,7 +85,6 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
     serveCodexStdio({
       appServer: host,
       zenHome,
-      configuredModel: hostConfig.model,
     });
     return;
   }
@@ -94,7 +93,6 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
     appServer: host,
     zenHome,
     listen,
-    configuredModel: hostConfig.model,
     ...(bearerToken === undefined ? {} : { bearerToken }),
   });
   process.stderr.write(`Zen App Server listening on ${server.url}\n`);
@@ -164,7 +162,9 @@ async function chatCommand(args: ParsedArguments): Promise<void> {
       args,
       session.localServer !== undefined,
     );
-    process.stdout.write(`Zen thread ${threadId}. Type /exit to stop.\n`);
+    process.stdout.write(
+      `Zen thread ${threadId}. Type /model to list models, /model <name> to switch, or /exit to stop.\n`,
+    );
     while (true) {
       const prompt = (await terminal.question("> ")).trim();
       if (prompt === "/exit" || prompt === "/quit") {
@@ -173,12 +173,48 @@ async function chatCommand(args: ParsedArguments): Promise<void> {
       if (prompt.length === 0) {
         continue;
       }
+      if (prompt === "/model") {
+        await printModels(session.client);
+        continue;
+      }
+      if (prompt.startsWith("/model ")) {
+        const model = prompt.slice("/model ".length).trim();
+        if (model.length === 0) {
+          await printModels(session.client);
+          continue;
+        }
+        try {
+          await session.client.request("thread/settings/update", {
+            threadId,
+            model,
+          });
+          process.stdout.write(`Model switched to ${model}.\n`);
+        } catch (error) {
+          process.stderr.write(
+            `Could not switch model: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
+        }
+        continue;
+      }
       await runOneTurn(session.client, threadId, prompt);
     }
   } finally {
     terminal.close();
     session.client.close();
     await session.localServer?.close();
+  }
+}
+
+async function printModels(client: CodexClient): Promise<void> {
+  const response = await client.request("model/list", {});
+  if (!isRecord(response) || !Array.isArray(response.data)) {
+    throw new Error("App Server returned an invalid model list");
+  }
+  process.stdout.write("Available models:\n");
+  for (const value of response.data) {
+    if (isRecord(value) && typeof value.id === "string") {
+      process.stdout.write(`  ${value.id}\n`);
+    }
   }
 }
 
@@ -278,7 +314,6 @@ async function connectClient(args: ParsedArguments): Promise<ClientSession> {
       appServer: createHostedAppServer(hostConfig),
       zenHome: dataDirectory(args),
       listen: "ws://127.0.0.1:0",
-      configuredModel: hostConfig.model,
       ...(bearerToken === undefined ? {} : { bearerToken }),
     });
     url = localServer.url;
@@ -482,6 +517,7 @@ function hostOptions(args: ParsedArguments) {
     cwd: workingDirectory(args),
     dataDirectory: dataDirectory(args),
     model: modelName(args, providerName),
+    models: modelNames(args, providerName),
     approvalPolicy: approval,
     provider,
     secretEnvironmentVariables,
@@ -503,6 +539,7 @@ function parseArguments(args: string[]): ParsedArguments {
     "deny",
     "listen",
     "model",
+    "models",
     "provider",
     "provider-name",
     "remote",
@@ -676,6 +713,21 @@ function modelName(args: ParsedArguments, providerName: string): string {
   );
 }
 
+function modelNames(args: ParsedArguments, providerName: string): string[] {
+  const configured = option(args, "models");
+  if (configured === undefined) {
+    return [modelName(args, providerName)];
+  }
+  const models = configured
+    .split(",")
+    .map((model) => model.trim())
+    .filter((model) => model.length > 0);
+  if (models.length === 0) {
+    throw new Error("--models must contain at least one model name");
+  }
+  return models;
+}
+
 function subscriptionProfilePath(args: ParsedArguments): string {
   return path.join(dataDirectory(args), "openai-subscription-auth.json");
 }
@@ -725,6 +777,7 @@ Core options:
   --cwd <path>                 Thread working directory
   --data-dir <path>            Host-owned Zen data directory
   --model <name>               Model name (defaults to fake, or gpt-5.6-terra for subscription)
+  --models <a,b,...>           Complete model catalog exposed by this Zen host
   --approval always|never      Tool approval policy (default: never / Full Access)
   --approve                    Accept one-shot run approvals (implies --approval always)
   --deny                       Decline one-shot run approvals (implies --approval always)

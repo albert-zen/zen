@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { ZenAppServer } from "../src/app-server.js";
+import { type AppServerEvent, ZenAppServer } from "../src/app-server.js";
 import type {
   CanonicalItem,
   ThreadMetadataItem,
@@ -15,6 +15,7 @@ import {
   JsonlThreadJournal,
   type ThreadJournal,
 } from "../src/journal.js";
+import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
 import {
   FakeModel,
   type ModelAdapter,
@@ -23,7 +24,13 @@ import {
   type ModelRequest,
 } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
-import { AgentRuntime, type RuntimeEvent } from "../src/runtime.js";
+import { projectThread } from "../src/protocol/codex/mapper.js";
+import { AgentRuntime } from "../src/runtime.js";
+import {
+  InMemoryThreadMetadataStore,
+  JsonlThreadMetadataStore,
+  type ThreadMetadataStore,
+} from "../src/thread-metadata.js";
 import { ShellToolExecutor, type ToolExecutor } from "../src/tool.js";
 
 function createServer(
@@ -31,7 +38,11 @@ function createServer(
     journal?: ThreadJournal;
     approvalPolicy?: "always" | "never";
     model?: ModelAdapter;
+    modelCatalog?: ModelCatalog;
+    threadMetadata?: ThreadMetadataStore;
     tools?: ToolExecutor;
+    idFactory?: () => string;
+    runtimeIdFactory?: () => string;
   } = {},
 ): ZenAppServer {
   return new ZenAppServer({
@@ -39,15 +50,309 @@ function createServer(
     runtime: new AgentRuntime({
       model: options.model ?? new FakeModel(),
       tools: options.tools ?? new ShellToolExecutor(),
+      ...(options.runtimeIdFactory === undefined
+        ? {}
+        : { idFactory: options.runtimeIdFactory }),
     }),
+    modelCatalog:
+      options.modelCatalog ??
+      new StaticModelCatalog([{ id: "fake", isDefault: true }]),
+    threadMetadata: options.threadMetadata ?? new InMemoryThreadMetadataStore(),
     defaults: {
       cwd: process.cwd(),
-      model: "fake",
+      model: options.modelCatalog?.defaultModel().id ?? "fake",
       sandbox: "danger-full-access",
       approvalPolicy: options.approvalPolicy ?? "never",
     },
+    ...(options.idFactory === undefined
+      ? {}
+      : { idFactory: options.idFactory }),
   });
 }
+
+test("requires one visible default while hidden models remain addressable", () => {
+  assert.throws(
+    () => new StaticModelCatalog([{ id: "model-one" }]),
+    /exactly one default model/u,
+  );
+  assert.throws(
+    () =>
+      new StaticModelCatalog([
+        { id: "model-one", isDefault: true, hidden: true },
+      ]),
+    /default must be visible/u,
+  );
+  const catalog = new StaticModelCatalog([
+    { id: "model-one", isDefault: true },
+    { id: "model-hidden", hidden: true },
+  ]);
+  assert.equal(catalog.defaultModel().id, "model-one");
+  assert.equal(catalog.get("model-hidden")?.hidden, true);
+});
+
+test("derives each turn model from append-only configuration changes", async () => {
+  const journal = new InMemoryThreadJournal();
+  const requestedModels: string[] = [];
+  const requestedMessages: ModelMessage[][] = [];
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requestedModels.push(request.model);
+      requestedMessages.push(structuredClone(request.messages));
+      yield { type: "text_delta", delta: request.model };
+    },
+  };
+  const catalog = new StaticModelCatalog([
+    { id: "model-one", isDefault: true },
+    { id: "model-two" },
+  ]);
+  const server = createServer({ journal, model, modelCatalog: catalog });
+  const thread = await server.startThread({ model: "model-one" });
+  await (
+    await server.startTurn(thread.id, "first")
+  ).done;
+
+  const changed = await server.updateThreadSettings(thread.id, {
+    model: "model-two",
+  });
+  assert.equal(changed.model, "model-two");
+  await (
+    await server.startTurn(thread.id, "second")
+  ).done;
+
+  assert.deepEqual(requestedModels, ["model-one", "model-two"]);
+  assert.deepEqual(requestedMessages[1], [
+    { role: "user", text: "first" },
+    { role: "assistant", text: "model-one" },
+    { role: "user", text: "second" },
+  ]);
+  assert.deepEqual(
+    changed.items
+      .filter((item) => item.type === "thread_configuration_changed")
+      .map((item) => item.model),
+    [{ from: "model-one", to: "model-two" }],
+  );
+
+  const replayed = createServer({ journal, model, modelCatalog: catalog });
+  const replayedSnapshot = await replayed.readThread(thread.id);
+  assert.equal(replayedSnapshot.model, "model-two");
+  assert.deepEqual(
+    replayedSnapshot.turns.map((turn) => turn.model),
+    ["model-one", "model-two"],
+  );
+});
+
+test("allows active-turn model no-ops but rejects real changes", async () => {
+  let releaseModel: (() => void) | undefined;
+  const waiting = new Promise<void>((resolve) => {
+    releaseModel = resolve;
+  });
+  const slowModel: ModelAdapter = {
+    provider: "slow",
+    async *stream(): AsyncIterable<ModelEvent> {
+      await waiting;
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    model: slowModel,
+    modelCatalog: new StaticModelCatalog([
+      { id: "fake", isDefault: true },
+      { id: "other" },
+    ]),
+  });
+  const thread = await server.startThread();
+
+  await assert.rejects(
+    server.updateThreadSettings(thread.id, { model: "missing" }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "model_unavailable",
+  );
+  const active = await server.startTurn(thread.id, "wait");
+  const resumed = await server.updateThreadSettings(thread.id, {
+    model: "fake",
+  });
+  assert.equal(resumed.model, "fake");
+  await assert.rejects(
+    server.updateThreadSettings(thread.id, { model: "other" }),
+    (error: unknown) =>
+      error instanceof Error && "code" in error && error.code === "thread_busy",
+  );
+  releaseModel?.();
+  await active.done;
+  assert.equal((await server.readThread(thread.id)).model, "fake");
+});
+
+test("persists user-facing names outside the canonical ItemList", async () => {
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-thread-metadata-test-"),
+  );
+  try {
+    const journal = new InMemoryThreadJournal();
+    const filename = path.join(temporaryDirectory, "thread-metadata.jsonl");
+    const server = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    const thread = await server.startThread();
+
+    const named = await server.setThreadName(thread.id, "  Model routing  ");
+    assert.equal(named.name, "Model routing");
+    assert.equal(
+      named.items.some((item) => "name" in item),
+      false,
+    );
+
+    const replayed = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    assert.equal((await replayed.readThread(thread.id)).name, "Model routing");
+    assert.equal((await replayed.listThreads())[0]?.name, "Model routing");
+    const events = (await readFile(filename, "utf8"))
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type: string;
+            threadId: string;
+            name: string;
+            updatedAt: string;
+          },
+      );
+    assert.equal(events.length, 1);
+    assert.deepEqual(
+      { ...events[0], updatedAt: undefined },
+      {
+        type: "thread_name_set",
+        threadId: thread.id,
+        name: "Model routing",
+        updatedAt: undefined,
+      },
+    );
+    assert.equal(Number.isNaN(Date.parse(events[0]!.updatedAt)), false);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("product metadata corruption never blocks canonical threads", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-thread-metadata-corrupt-"),
+  );
+  const filename = path.join(temporaryDirectory, "thread-metadata.jsonl");
+  const journal = new InMemoryThreadJournal();
+  try {
+    await writeFile(filename, "not-json\n", "utf8");
+    const server = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    const thread = await server.startThread();
+    assert.equal((await server.listThreads()).length, 1);
+    assert.deepEqual(await journal.listThreadIds(), [thread.id]);
+
+    const named = await server.setThreadName(thread.id, "Recovered name");
+    assert.equal(named.name, "Recovered name");
+    const replayed = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    assert.equal((await replayed.readThread(thread.id)).name, "Recovered name");
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("product metadata load failures degrade and retry", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-thread-metadata-retry-"),
+  );
+  const filename = path.join(temporaryDirectory, "thread-metadata.jsonl");
+  const journal = new InMemoryThreadJournal();
+  try {
+    await mkdir(filename);
+    const server = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    const thread = await server.startThread();
+    assert.equal(thread.name, undefined);
+
+    await rm(filename, { recursive: true });
+    await writeFile(
+      filename,
+      `${JSON.stringify({
+        type: "thread_name_set",
+        threadId: thread.id,
+        name: "Retried name",
+        updatedAt: new Date().toISOString(),
+      })}\n`,
+      "utf8",
+    );
+    assert.equal((await server.readThread(thread.id)).name, "Retried name");
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("isolates a corrupt journal and lists it as a system error", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-corrupt-journal-"),
+  );
+  const journalDirectory = path.join(temporaryDirectory, "threads");
+  const metadata = new InMemoryThreadMetadataStore();
+  const journal = new JsonlThreadJournal(journalDirectory);
+  try {
+    const server = createServer({ journal, threadMetadata: metadata });
+    const healthy = await server.startThread();
+    await writeFile(
+      path.join(journalDirectory, "corrupt-thread.jsonl"),
+      "not-json\n",
+      "utf8",
+    );
+    await metadata.setName("corrupt-thread", "Damaged work");
+
+    const listed = await server.listThreads();
+    assert.equal(listed.length, 2);
+    assert(listed.some((entry) => entry.id === healthy.id));
+    const unavailable = listed.find((entry) => entry.id === "corrupt-thread");
+    assert(unavailable !== undefined && "status" in unavailable);
+    assert.equal(unavailable.status, "systemError");
+    assert.equal(unavailable.name, "Damaged work");
+    assert.match(unavailable.error, /Invalid JSON/u);
+    assert.deepEqual(
+      projectThread(unavailable, { includeTurns: false }).status,
+      { type: "systemError" },
+    );
+    await assert.rejects(server.readThread("corrupt-thread"), /Invalid JSON/u);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("validates canonical items before appending them to the journal", async () => {
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    idFactory: () => "duplicate-id",
+    runtimeIdFactory: () => "duplicate-id",
+  });
+  const thread = await server.startThread();
+  const turn = await server.startTurn(thread.id, "must not persist");
+
+  await assert.rejects(turn.done, /Duplicate item id duplicate-id/u);
+  assert.deepEqual(
+    (await journal.read(thread.id)).map((item) => item.type),
+    ["thread_metadata"],
+  );
+});
 
 function createTwoCallModel(): ModelAdapter {
   return {
@@ -165,7 +470,7 @@ async function waitForProcessExit(
 
 test("runs a deterministic in-memory turn from append-only items", async () => {
   const server = createServer();
-  const events: RuntimeEvent[] = [];
+  const events: AppServerEvent[] = [];
   server.subscribe((event) => {
     events.push(event);
   });
@@ -242,7 +547,7 @@ test("partial model deltas are not canonicalized when the model ends incomplete"
     },
   };
   const server = createServer({ model: incompleteModel });
-  const events: RuntimeEvent[] = [];
+  const events: AppServerEvent[] = [];
   server.subscribe((event) => {
     events.push(event);
   });
@@ -404,6 +709,7 @@ test("keeps stale open turns interrupted while only the current turn is active",
     await server.readThread(threadId),
     ...(await server.listThreads()),
   ]) {
+    assert(!("status" in snapshot));
     assert.deepEqual(
       snapshot.turns.map((turn) => [turn.id, turn.status]),
       [
@@ -751,10 +1057,6 @@ test("deduplicates concurrent cold thread loads before starting a turn", async (
   });
 
   let readCount = 0;
-  let releaseReads!: () => void;
-  const bothReadsStarted = new Promise<void>((resolve) => {
-    releaseReads = resolve;
-  });
   const journal: ThreadJournal = {
     append: async (item) => {
       await backing.append(item);
@@ -762,10 +1064,9 @@ test("deduplicates concurrent cold thread loads before starting a turn", async (
     listThreadIds: async () => await backing.listThreadIds(),
     read: async (requestedThreadId) => {
       readCount += 1;
-      if (readCount === 2) {
-        releaseReads();
-      }
-      await bothReadsStarted;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       return await backing.read(requestedThreadId);
     },
   };
@@ -795,6 +1096,7 @@ test("deduplicates concurrent cold thread loads before starting a turn", async (
   const snapshot = await server.readThread(threadId);
   assert.equal(snapshot.turns.length, 1);
   assert.equal(snapshot.turns[0]?.status, "completed");
+  assert.equal(readCount, 1);
   assert(snapshot.items.some((item) => item.type === "agent_message"));
 });
 
@@ -812,10 +1114,18 @@ test("refuses to run a persisted thread through a different provider", async () 
     sandbox: "danger-full-access",
     approvalPolicy: "never",
   });
-  const server = createServer({ journal });
+  const server = createServer({
+    journal,
+    modelCatalog: new StaticModelCatalog([
+      { id: "original-model", isDefault: true },
+      { id: "other-model" },
+    ]),
+  });
 
   await assert.rejects(
-    server.startTurn(threadId, "must not silently switch providers"),
+    server.startTurn(threadId, "must not silently switch providers", {
+      model: "other-model",
+    }),
     /requires provider original-provider, but this host provides fake/u,
   );
   const snapshot = await server.readThread(threadId);
@@ -898,7 +1208,13 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
       );
     },
   });
-  const server = createServer({ model });
+  const server = createServer({
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "fake", isDefault: true },
+      { id: "provider-model" },
+    ]),
+  });
   const thread = await server.startThread({ model: "provider-model" });
   const turn = await server.startTurn(thread.id, "use the tool");
   await turn.done;

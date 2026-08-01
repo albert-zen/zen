@@ -10,6 +10,18 @@
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — 驱动一个 Thread 的循环：从 ItemList 编译上下文 → 调用模型 → 执行工具，把发生的一切追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
+- **ThreadMetadataStore** — ZAS 按 threadId 持久化名称等产品元数据的
+  append-only 外部索引；它由 App Server 投影，但不进入 Agent 上下文或
+  canonical ItemList。损坏或暂时不可读的产品元数据不得阻断 Thread 的创建、
+  读取或列表；ZAS 降级为无展示名称并明确记录 warning，而 metadata 写入失败
+  仍须返回错误。
+- **UnavailableThreadSnapshot** — ZAS 在列举 Thread 时对无法重放的 canonical
+  journal 生成的只读故障投影；它只暴露 threadId、可用的产品名称和
+  `systemError`，不伪造或跳过权威会话历史。
+- **ModelCatalog** — 宿主公开的可选模型与默认模型目录；App Server 只投影和
+  校验它，credential 与 Provider 连接仍由宿主外部配置持有。目录必须有且仅有
+  一个可见默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由
+  既有 Thread 或显式请求使用。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并
@@ -41,8 +53,17 @@ Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派�
 或用户理解的执行历史会不会改变？** 会，就是 Item；不会，就放外侧。
 Thread 内可以保留一份不含秘密的生效配置描述（`provider / model / cwd /
 tool_policy`），记录"当时用了什么"；credential 及其引用都不进入 Thread。
+初始配置由 `thread_metadata` 记录；Turn 之间的配置变化由
+`thread_configuration_changed` canonical Item 追加记录。当前生效配置由初始
+metadata 与后续配置 Item 依次归约；每个 Turn 使用其 `turn_started` 之前最后
+一份生效配置。活跃 Turn 期间不得修改配置。
 宿主也不会把完整进程环境交给 shell tool：工具只继承运行命令所需的最小环境，
 Provider credential 即使来自环境变量也会被显式排除。
+
+Thread 的用户展示名称、置顶与归档等产品状态不改变 Agent 下一轮上下文，因此
+不进入 canonical ItemList。ZAS 可以知道、持久化并通过 App Server 同步这些
+状态；客户端当前选中的 Thread 仍是每个客户端或 conversation binding 的状态，
+ZAS 不保存全局 `currentThreadId`。
 
 首版不实现 context compaction。未来若引入，compaction 结果必须作为新的
 canonical Item 追加，已有 Item 不改写、不删除。
@@ -92,6 +113,23 @@ Codex CLI、T3 Code 是收益，不是核心设计前提。
   Item 事件流和 command item 审批请求。精确清单见
   `src/protocol/codex/README.md`。
 - `account/read`、`skills/list` 与 `model/list` 只投影宿主公开能力，不向 Zen Core 或 Thread 写入账户、skill、provider 状态。
+- `thread/settings/update` 修改后续 Turn 使用的配置；`turn/start` 携带的模型
+  override 复用同一内部更新路径。成功变更必须先追加
+  `thread_configuration_changed`，再广播 `thread/settings/updated`。
+- ZAS 是 Thread 生效配置的唯一权威。所有接入端通过
+  `thread/settings/updated` 与 `thread/resume` 返回值镜像同一份配置；恢复
+  Thread 时不得用客户端缓存覆盖 ZAS，只有用户明确选择新模型时才提交配置
+  变更。同值更新是空操作，即使 Turn 正在运行也不得阻断跨端恢复。
+- Codex 协议投影不把 `thread_configuration_changed` 伪装成 Codex Thread Item；
+  它只通过当前 `threadSettings` 与 settings 通知暴露结果，不承诺展示历史切换点。
+  canonical ItemList 仍保留完整切换点和各 Turn 的生效模型，供 Zen 原生客户端
+  重放。
+- `thread/name/set` 修改 ZAS 的 ThreadMetadataStore 并广播
+  `thread/name/updated`；名称不是 Agent Item。`thread/list`、`thread/read` 与
+  `thread/resume` 返回当前名称。
+- `thread/list` 必须隔离单个损坏 journal，并使用 Codex 标准
+  `status: systemError` 显式返回该 threadId；`thread/read` / `thread/resume`
+  仍明确失败，且不得用默认配置伪造可恢复的 Thread snapshot。
 - 未实现的方法一律返回 JSON-RPC `-32601`；不返回伪造的成功结果。
 - **sandbox 与 approval 分离**：sandbox 限制工具实际上能做什么，approval
   决定何时询问用户。首版只接受明确支持的 sandbox mode，其他 mode 返回

@@ -137,6 +137,7 @@ export function compileModelMessages(
         });
         break;
       case "reasoning":
+      case "thread_configuration_changed":
       case "thread_metadata":
       case "turn_aborted":
       case "turn_completed":

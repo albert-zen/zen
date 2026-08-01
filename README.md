@@ -51,7 +51,10 @@ Zen CLI 就只做 JSONL stdio ↔ WebSocket 薄桥；Thread 与模型执行仍�
 自动追加的 `mcp_servers.t3-code` 两项 `-c` 配置只在这个 remote bridge 模式下
 被精确识别并忽略；除此之外，bridge 只接受 `--remote` 与可选的
 `--auth-token-file`。模型、审批、workspace 等宿主配置应在中央 App Server
-启动时传入。Zen 当前不宣称提供 T3 MCP tools。
+启动时传入。用 `--models <model-a,model-b>` 声明完整 ModelCatalog，并用
+`--model <name>` 选择初始模型；T3、Zen CLI 与其他客户端都从同一个 App
+Server 读取目录，并在 Turn 之间切换同一 Thread 的模型。Zen 当前不宣称提供
+T3 MCP tools。
 
 真实模型使用 `--provider openai-compatible`、`--model`、`--base-url` 与
 `--api-key-env`。指定的 key 只由宿主读取，不进入协议、Thread 或 shell tool
@@ -71,6 +74,10 @@ node dist/apps/cli/src/cli.js auth login
 node dist/apps/cli/src/cli.js run --provider openai-subscription "hello"
 node dist/apps/cli/src/cli.js app-server --provider openai-subscription
 ```
+
+交互式 `zen chat` 中，`/model` 列出宿主公开的模型，`/model <name>` 修改当前
+Thread 后续 Turn 使用的模型。活跃 Turn 期间的修改会被 ZAS 拒绝；成功修改会
+进入 append-only Thread journal，而 credential 仍留在宿主外部。
 
 IMZen 的配置与运行方法见 [apps/imzen/README.md](apps/imzen/README.md)。
 

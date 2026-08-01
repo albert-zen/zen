@@ -1,5 +1,6 @@
 export type ItemType =
   | "thread_metadata"
+  | "thread_configuration_changed"
   | "turn_started"
   | "turn_completed"
   | "turn_aborted"
@@ -25,6 +26,14 @@ export interface ThreadMetadataItem extends ItemBase {
   provider: string;
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
+}
+
+export interface ThreadConfigurationChangedItem extends ItemBase {
+  type: "thread_configuration_changed";
+  model: {
+    from: string;
+    to: string;
+  };
 }
 
 export interface TurnStartedItem extends ItemBase {
@@ -88,6 +97,7 @@ export interface FailureItem extends ItemBase {
 
 export type CanonicalItem =
   | ThreadMetadataItem
+  | ThreadConfigurationChangedItem
   | TurnStartedItem
   | TurnCompletedItem
   | TurnAbortedItem

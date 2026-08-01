@@ -1,4 +1,8 @@
-import type { ThreadSnapshot } from "../../app-server.js";
+import type {
+  ThreadListEntry,
+  ThreadSnapshot,
+  UnavailableThreadSnapshot,
+} from "../../app-server.js";
 import type {
   CanonicalItem,
   ThreadMetadataItem,
@@ -19,7 +23,10 @@ export interface CodexThread {
   createdAt: number;
   updatedAt: number;
   recencyAt: null;
-  status: { type: "idle" } | { type: "active"; activeFlags: [] };
+  status:
+    | { type: "idle" }
+    | { type: "systemError" }
+    | { type: "active"; activeFlags: [] };
   path: null;
   cwd: string;
   cliVersion: string;
@@ -28,7 +35,7 @@ export interface CodexThread {
   agentNickname: null;
   agentRole: null;
   gitInfo: null;
-  name: null;
+  name: string | null;
   turns: CodexTurn[];
 }
 
@@ -86,9 +93,12 @@ export interface CodexCommandItem {
 }
 
 export function projectThread(
-  snapshot: ThreadSnapshot,
+  snapshot: ThreadListEntry,
   options: { includeTurns: boolean },
 ): CodexThread {
+  if (isUnavailableThread(snapshot)) {
+    return projectUnavailableThread(snapshot);
+  }
   const metadata = metadataFor(snapshot.items);
   const createdAt = seconds(metadata.createdAt);
   const updatedAt = seconds(
@@ -117,10 +127,45 @@ export function projectThread(
     agentNickname: null,
     agentRole: null,
     gitInfo: null,
-    name: null,
+    name: snapshot.name ?? null,
     turns: options.includeTurns
       ? snapshot.turns.map((turn) => projectTurn(turn, true, snapshot.cwd))
       : [],
+  };
+}
+
+function isUnavailableThread(
+  snapshot: ThreadListEntry,
+): snapshot is UnavailableThreadSnapshot {
+  return "status" in snapshot && snapshot.status === "systemError";
+}
+
+function projectUnavailableThread(
+  snapshot: UnavailableThreadSnapshot,
+): CodexThread {
+  return {
+    id: snapshot.id,
+    sessionId: snapshot.id,
+    forkedFromId: null,
+    parentThreadId: null,
+    preview: "Thread journal could not be loaded.",
+    ephemeral: false,
+    isPinned: false,
+    modelProvider: "",
+    createdAt: 0,
+    updatedAt: 0,
+    recencyAt: null,
+    status: { type: "systemError" },
+    path: null,
+    cwd: "",
+    cliVersion: "zen/0.1.0",
+    source: "appServer",
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: snapshot.name ?? null,
+    turns: [],
   };
 }
 
@@ -192,6 +237,7 @@ export function projectCompletedItem(
     case "tool_call":
       return projectCommandStarted(item, "");
     case "failure":
+    case "thread_configuration_changed":
     case "thread_metadata":
     case "tool_result":
     case "turn_aborted":
@@ -245,7 +291,10 @@ export function projectCommandCompleted(
 }
 
 export function threadSettings(
-  snapshot: ThreadSnapshot,
+  snapshot: Pick<
+    ThreadSnapshot,
+    "model" | "provider" | "cwd" | "approvalPolicy" | "sandbox"
+  >,
 ): Record<string, unknown> {
   return {
     model: snapshot.model,
@@ -258,6 +307,34 @@ export function threadSettings(
     approvalsReviewer: "user",
     sandbox: { type: "dangerFullAccess" },
     reasoningEffort: null,
+  };
+}
+
+export function threadSettingsUpdated(
+  snapshot: Pick<
+    ThreadSnapshot,
+    "model" | "provider" | "cwd" | "approvalPolicy" | "sandbox"
+  >,
+): Record<string, unknown> {
+  return {
+    approvalPolicy:
+      snapshot.approvalPolicy === "never" ? "never" : "on-request",
+    approvalsReviewer: "user",
+    collaborationMode: {
+      mode: "default",
+      settings: {
+        model: snapshot.model,
+        reasoning_effort: "medium",
+      },
+    },
+    cwd: snapshot.cwd,
+    effort: null,
+    model: snapshot.model,
+    modelProvider: snapshot.provider,
+    personality: null,
+    sandboxPolicy: { type: "dangerFullAccess" },
+    serviceTier: null,
+    summary: null,
   };
 }
 

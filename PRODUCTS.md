@@ -6,7 +6,8 @@
 ## 第一客户端
 
 **自建薄 Zen CLI** 是首个稳定接入端，只覆盖启动 / 恢复 Thread、发送消息、
-流式显示与审批，不拥有 Agent 或调度语义。
+流式显示、审批与模型选择，不拥有 Agent 或调度语义。交互式 `/model` 只调用
+App Server 的 Thread 设置操作；可用模型来自 ZAS 投影的宿主 ModelCatalog。
 
 原版 `codex --remote` 与固定版本 T3 Code 是机会型兼容目标：Phase 2 用最小
 stub App Server 记录真实调用，在不污染 Zen Core 的前提下扩展协议子集。能接入
