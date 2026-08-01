@@ -1,6 +1,5 @@
 {
   "compilerOptions": {
-    "composite": true,
     "forceConsistentCasingInFileNames": true,
     "jsx": "react-jsx",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

@@ -1,6 +1,5 @@
 {
   "compilerOptions": {
-    "composite": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "module": "NodeNext",
@@ -15,6 +14,8 @@
   "include": [
     "electron.vite.config.ts",
     "src/main/**/*.ts",
-    "src/preload/**/*.ts"
+    "src/preload/**/*.ts",
+    "src/protocol-client/**/*.ts",
+    "test/**/*.ts"
   ]
 }
