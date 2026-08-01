@@ -395,6 +395,40 @@ export class CodexConnection {
         this.#send({ id: request.id, result: { turnId: handle.id } });
         return;
       }
+      case "turn/replace": {
+        rejectUnsupportedValues(params, [
+          "threadId",
+          "expectedTurnId",
+          "input",
+          "clientUserMessageId",
+        ]);
+        const threadId = requiredString(params, "threadId");
+        const expectedTurnId = requiredString(params, "expectedTurnId");
+        const text = readTextInput(params.input);
+        const clientId = requiredString(params, "clientUserMessageId");
+        this.#subscribedThreads.add(threadId);
+        const replacement = await this.#appServer.replaceTurn(
+          threadId,
+          expectedTurnId,
+          text,
+          {
+            clientId,
+            requestApproval: async (approval) =>
+              await this.#requestApproval(approval),
+          },
+        );
+        this.#send({
+          id: request.id,
+          result: {
+            interruptedTurnId: replacement.interruptedTurnId,
+            turnId: replacement.turn.id,
+          },
+        });
+        void replacement.turn.done.catch((error: unknown) => {
+          this.#sendTurnExecutionFailure(threadId, replacement.turn.id, error);
+        });
+        return;
+      }
       case "turn/interrupt": {
         await this.#appServer.interruptTurn(
           requiredString(params, "threadId"),

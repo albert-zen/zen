@@ -142,6 +142,7 @@ export function compileModelMessages(
       case "thread_metadata":
       case "turn_aborted":
       case "turn_completed":
+      case "turn_replacement_requested":
       case "turn_started":
         break;
     }

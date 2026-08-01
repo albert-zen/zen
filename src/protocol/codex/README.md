@@ -23,6 +23,10 @@ Client requests：
 - `turn/steer`
 - `turn/interrupt`
 
+Zen extension：
+
+- `turn/replace`
+
 Client notification：`initialized`。
 
 Server notifications：
@@ -78,6 +82,26 @@ MCP `-c` 配置由 CLI remote bridge 启动边界验证后忽略，不进入 wir
 steer 不取消当前 model stream、tool 或 approval，也不处理 approval。若它在
 一次模型响应期间到达，Runtime 会完成该响应及其工具结果，然后在下一次 sampling
 前按 journal 中的 steer FIFO 顺序注入；因此原本可能结束的响应也会继续下一轮。
+
+## Hard steer：Zen `turn/replace` extension
+
+Codex 0.146.0 没有原子的 Interrupt & send 方法。Zen 因此增加明确的
+`turn/replace` 扩展；它不是标准 `turn/steer` mode，也不扩大 Codex 兼容声明。
+请求必须包含 `threadId`、`expectedTurnId`、text-only `input` 与非空
+`clientUserMessageId`。成功返回 `{ interruptedTurnId, turnId }`。
+
+App Server 在同一 Thread mutation boundary 内验证 active-Turn fence，先写入
+canonical `turn_replacement_requested` intent，再中断并等待旧 Turn 的
+`turn_aborted` durable，最后用 intent 中保留的 successor id 写入新的
+`turn_started` 与 `user_message`。响应只在这些事实全部 durable 后发送；任何
+时刻都不会有两个 active Turn。tool 与 pending approval 使用既有 AbortController
+路径取消并以既有 canonical 结果收口。
+
+相同 id、旧 Turn 与 input 的重试返回同一个 successor，不重复 abort/start/message；
+冲突复用失败。若进程停在旧 Turn 已 abort、successor 尚未 start 的间隙，Zen
+不会自动恢复；显式同 key 重试可以从 intent 继续。若 successor 的
+`turn_started` 已 durable 而初始 `user_message` 未 durable，则返回
+`replacement_incomplete`，不恢复半截执行或发明新 Turn。
 
 ## 兼容范围
 
