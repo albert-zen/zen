@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZenX — 交互原型 v2</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #101318;
+    --panel-2: #151920;
+    --panel-3: #1b2029;
+    --border: #262d38;
+    --border-soft: #1d232d;
+    --text: #e8ebf0;
+    --text-2: #a8b1bf;
+    --text-3: #78828f;
+    --text-4: #59626e;
+    --accent: #8b7cf6;
+    --accent-hi: #a89bff;
+    --accent-dim: rgba(139,124,246,.13);
+    --accent-line: rgba(139,124,246,.35);
+    --green: #46d17e;
+    --green-dim: rgba(70,209,126,.12);
+    --amber: #f5b83d;
+    --amber-dim: rgba(245,184,61,.11);
+    --blue: #62a8fa;
+    --blue-dim: rgba(98,168,250,.12);
+    --red: #f0716f;
+    --r-lg: 12px; --r-md: 9px; --r-sm: 6px;
+    --dur: 180ms;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; overflow: hidden; font-size: 13.5px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #29303c; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  button { font-family: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+  .ic { display: inline-flex; flex: none; vertical-align: -3px; }
+  .ic svg { display: block; }
+
+  /* ================= Sidebar ================= */
+  #sidebar {
+    width: 304px; min-width: 304px; height: 100%;
+    background: var(--panel); border-right: 1px solid var(--border-soft);
+    display: flex; flex-direction: column;
+  }
+  .sb-head { padding: 14px 14px 8px; display: flex; align-items: center; gap: 9px; }
+  .sb-logo {
+    width: 26px; height: 26px; border-radius: 8px; flex: none;
+    background: linear-gradient(140deg, #8b7cf6, #5b8cf6);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 13px; color: #fff;
+  }
+  .sb-title { font-weight: 650; font-size: 14.5px; letter-spacing: .1px; display: flex; align-items: center; gap: 4px; }
+  .sb-title .ic { color: var(--text-4); }
+  .sb-head .grow { flex: 1; }
+  .hbtn {
+    width: 30px; height: 30px; border-radius: 8px; border: none; background: transparent;
+    color: var(--text-3); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    transition: background var(--dur), color var(--dur); position: relative;
+  }
+  .hbtn:hover { background: var(--panel-3); color: var(--text); }
+  .hbtn.active { background: var(--accent-dim); color: var(--accent-hi); box-shadow: inset 0 0 0 1px var(--accent-line); }
+  .hbtn .tip {
+    position: absolute; top: calc(100% + 6px); right: 0; background: var(--panel-3);
+    border: 1px solid var(--border); color: var(--text-2); font-size: 11px; white-space: nowrap;
+    padding: 4px 9px; border-radius: 6px; opacity: 0; pointer-events: none; transition: opacity var(--dur); z-index: 20;
+  }
+  .hbtn:hover .tip { opacity: 1; }
+
+  .sb-nav { padding: 2px 8px 4px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 6.5px 10px; border-radius: var(--r-md);
+    color: var(--text-2); font-size: 13px; cursor: pointer; border: none; background: none; width: 100%;
+    text-align: left; transition: background var(--dur), color var(--dur);
+  }
+  .nav-item:hover { background: var(--panel-2); color: var(--text); }
+  .nav-item.sel { background: var(--panel-3); color: var(--text); }
+  .nav-item .ic { color: var(--text-3); }
+  .nav-item .n-badge { margin-left: auto; }
+
+  .sb-filters { display: flex; gap: 5px; padding: 8px 14px 6px; }
+  .sb-filter {
+    font-size: 11.5px; padding: 3px 10px; border-radius: 999px; cursor: pointer; border: 1px solid var(--border-soft);
+    color: var(--text-3); background: transparent; transition: all var(--dur); user-select: none;
+  }
+  .sb-filter:hover { color: var(--text-2); border-color: var(--border); }
+  .sb-filter.on { background: var(--accent-dim); color: var(--accent-hi); border-color: var(--accent-line); }
+
+  .sb-list { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
+  .sb-section {
+    font-size: 10.5px; font-weight: 650; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--text-4); padding: 14px 10px 5px; display: flex; align-items: center; gap: 6px;
+  }
+  .sb-section .cnt { font-weight: 500; }
+
+  /* inbox 卡片 */
+  .card {
+    border-radius: var(--r-md); padding: 9px 11px; margin-bottom: 3px; cursor: pointer;
+    border: 1px solid transparent; transition: background var(--dur), border-color var(--dur), opacity .25s;
+    position: relative;
+  }
+  .card:hover { background: var(--panel-2); }
+  .card.sel { background: var(--panel-3); border-color: var(--border-soft); }
+  .card.needs::before {
+    content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2.5px;
+    border-radius: 2px; background: var(--amber);
+  }
+  .card .row1 { display: flex; align-items: center; gap: 7px; }
+  .card .t-title { font-weight: 560; font-size: 13.5px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .ts { font-size: 11px; color: var(--text-4); font-variant-numeric: tabular-nums; flex: none; }
+  .card .row2 { display: flex; align-items: center; gap: 6px; margin-top: 4.5px; flex-wrap: wrap; }
+  .card .preview {
+    font-size: 12px; color: var(--text-3); margin-top: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card.settled { opacity: .62; padding: 6.5px 11px; }
+  .card.settled:hover { opacity: 1; }
+  .card.settled .preview, .card.settled .row2 { display: none; }
+  .card.unsettling { animation: unsettle .45s ease; }
+  @keyframes unsettle { from { transform: translateY(8px); background: var(--accent-dim); } to { transform: none; } }
+
+  /* 项目视图行 */
+  .proj-head {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-md);
+    cursor: pointer; color: var(--text-2); font-size: 13px; font-weight: 560;
+    transition: background var(--dur);
+  }
+  .proj-head:hover { background: var(--panel-2); color: var(--text); }
+  .proj-head .ic.chev { transition: transform var(--dur); color: var(--text-4); }
+  .proj-head.open .ic.chev { transform: rotate(90deg); }
+  .proj-head .p-cnt { margin-left: auto; font-size: 11px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+  .trow {
+    display: flex; align-items: center; gap: 8px; padding: 5.5px 10px 5.5px 32px; border-radius: var(--r-md);
+    cursor: pointer; font-size: 13px; color: var(--text-2); transition: background var(--dur), color var(--dur);
+  }
+  .trow:hover { background: var(--panel-2); color: var(--text); }
+  .trow.sel { background: var(--panel-3); color: var(--text); }
+  .trow .t-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .trow .st { flex: none; display: inline-flex; align-items: center; }
+
+  .chip {
+    font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+    background: var(--panel-3); color: var(--text-3); border: 1px solid var(--border-soft); white-space: nowrap;
+  }
+  .pill { font-size: 10.5px; font-weight: 620; padding: 1.5px 8px; border-radius: 999px; white-space: nowrap; }
+  .pill.working  { background: var(--green-dim); color: var(--green); }
+  .pill.approval { background: var(--amber-dim); color: var(--amber); }
+  .pill.watching { background: var(--accent-dim); color: var(--accent-hi); }
+  .pill.settled  { background: var(--panel-3); color: var(--text-3); }
+  .pill.room     { background: var(--blue-dim); color: var(--blue); }
+
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .dot.working { background: var(--green); animation: pulse 1.6s infinite; }
+  .dot.approval { background: var(--amber); }
+  .dot.watching { background: var(--accent); }
+  .dot.settled { background: #39414d; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(70,209,126,.4);} 60% { box-shadow: 0 0 0 5px rgba(70,209,126,0);} }
+
+  .badge-unread {
+    background: var(--blue); color: #081221; font-size: 10.5px; font-weight: 700;
+    min-width: 17px; height: 17px; border-radius: 999px;
+    display: inline-flex; align-items: center; justify-content: center; padding: 0 5px;
+  }
+  .trig-badge {
+    font-size: 10.5px; padding: 1.5px 6px; border-radius: 5px; display: inline-flex; align-items: center; gap: 4px;
+    background: var(--accent-dim); color: var(--accent-hi);
+  }
+  .spinner {
+    width: 12px; height: 12px; border: 1.8px solid var(--border); border-top-color: var(--green);
+    border-radius: 50%; animation: spin .8s linear infinite; flex: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ================= 主区域 ================= */
+  #main { flex: 1; display: flex; min-width: 0; }
+  #content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .m-head {
+    height: 54px; border-bottom: 1px solid var(--border-soft);
+    display: flex; align-items: center; gap: 10px; padding: 0 20px; flex: none; background: var(--panel);
+  }
+  .m-title { font-weight: 650; font-size: 15px; letter-spacing: .1px; }
+  .m-sub { font-size: 11.5px; color: var(--text-3); margin-top: 1px; }
+  .m-head .spacer { flex: 1; }
+  .icon-btn {
+    background: transparent; border: 1px solid var(--border-soft); color: var(--text-2);
+    border-radius: 8px; padding: 5px 11px; font-size: 12px; cursor: pointer;
+    transition: all var(--dur); display: inline-flex; align-items: center; gap: 6px;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--border); background: var(--panel-2); }
+  .icon-btn.on { background: var(--accent-dim); color: var(--accent-hi); border-color: var(--accent-line); }
+
+  #msgs { flex: 1; overflow-y: auto; padding: 22px 0 12px; }
+  .msgs-inner { max-width: 780px; margin: 0 auto; padding: 0 28px; }
+
+  .item { margin-bottom: 18px; }
+  .item .who { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .avatar {
+    width: 24px; height: 24px; border-radius: 50%; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #fff; letter-spacing: 0;
+  }
+  .who .name { font-weight: 620; font-size: 12.5px; }
+  .who .wts { font-size: 11px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+  .bubble-user {
+    background: var(--panel-3); border: 1px solid var(--border-soft);
+    border-radius: var(--r-lg); padding: 9px 14px; margin-left: 32px; max-width: 92%;
+  }
+  .bubble-ai { margin-left: 32px; max-width: 95%; white-space: pre-wrap; }
+  .bubble-ai .cursor { display: inline-block; width: 7px; height: 15px; background: var(--text-2); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .tool-card {
+    margin-left: 32px; background: var(--panel-2); border: 1px solid var(--border-soft);
+    border-radius: var(--r-md); padding: 7px 12px; font-size: 12.5px; max-width: 92%;
+    display: flex; align-items: center; gap: 9px;
+  }
+  .tool-card .ic { color: var(--text-4); }
+  .tool-card .tname { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--text-2); flex: none; }
+  .tool-card .tdetail { color: var(--text-3); font-size: 12px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tool-status { font-size: 11px; flex: none; }
+  .tool-status.run { color: var(--green); }
+  .tool-status.done { color: var(--text-4); }
+
+  .wakeup {
+    border: 1px solid var(--accent-line); background: var(--accent-dim);
+    border-radius: var(--r-lg); padding: 11px 15px; margin: 24px 0 18px;
+  }
+  .wakeup .w1 { display: flex; align-items: center; gap: 8px; font-weight: 620; color: var(--accent-hi); font-size: 12.5px; }
+  .wakeup .w1 .wts { margin-left: auto; font-weight: 400; color: var(--text-3); font-size: 11px; }
+  .wakeup .w2 { color: var(--text-2); font-size: 12.5px; margin-top: 4px; }
+  .wakeup .w3 { margin-top: 8px; font-size: 12.5px; background: rgba(0,0,0,.28); border-radius: 7px; padding: 7px 11px; }
+  .wakeup .w3 .lbl { color: var(--text-4); font-size: 10.5px; letter-spacing: .5px; display: block; margin-bottom: 2px; }
+
+  .approval-card {
+    margin-left: 32px; border: 1px solid rgba(245,184,61,.35); background: var(--amber-dim);
+    border-radius: var(--r-lg); padding: 12px 15px; max-width: 92%;
+  }
+  .approval-card .a1 { font-weight: 620; color: var(--amber); font-size: 12.5px; display: flex; gap: 8px; align-items: center; }
+  .approval-card .a1 small { font-weight: 400; color: var(--text-3); font-size: 11px; }
+  .approval-card pre {
+    margin: 9px 0; background: rgba(0,0,0,.35); border-radius: 7px; padding: 8px 12px;
+    font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px; overflow-x: auto;
+  }
+  .a-btns { display: flex; gap: 8px; }
+  .btn {
+    border: none; border-radius: 7px; padding: 6px 15px; font-size: 12.5px; font-weight: 620;
+    cursor: pointer; transition: filter var(--dur); min-height: 30px;
+  }
+  .btn:hover { filter: brightness(1.12); }
+  .btn.ok { background: var(--green); color: #06170c; }
+  .btn.no { background: var(--panel-3); color: var(--text-2); border: 1px solid var(--border); }
+  .a-done { font-size: 12px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
+
+  .turn-divider { display: flex; align-items: center; gap: 10px; margin: 22px 0; color: var(--text-4); font-size: 11px; }
+  .turn-divider::before, .turn-divider::after { content: ""; flex: 1; height: 1px; background: var(--border-soft); }
+
+  .composer-wrap { padding: 10px 28px 18px; flex: none; }
+  .composer {
+    max-width: 780px; margin: 0 auto; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 13px; padding: 10px 13px;
+    display: flex; flex-direction: column; gap: 8px; position: relative;
+    transition: border-color var(--dur);
+  }
+  .composer:focus-within { border-color: #3a4356; }
+  .composer textarea {
+    background: transparent; border: none; outline: none; resize: none;
+    color: var(--text); font: inherit; font-size: 13.5px; min-height: 22px; max-height: 120px;
+  }
+  .composer .c-row { display: flex; align-items: center; gap: 8px; }
+  .composer .c-hint { font-size: 11.5px; color: var(--text-4); flex: 1; }
+  .send-btn {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    padding: 5.5px 15px; font-size: 12.5px; font-weight: 620; cursor: pointer; min-height: 29px;
+    transition: filter var(--dur);
+  }
+  .send-btn:hover { filter: brightness(1.12); }
+  .mention-pop {
+    position: absolute; bottom: calc(100% + 6px); left: 12px;
+    background: var(--panel-3); border: 1px solid var(--border); border-radius: var(--r-md);
+    padding: 4px; box-shadow: 0 10px 30px rgba(0,0,0,.5); z-index: 5; min-width: 240px;
+  }
+  .mention-pop .mi { padding: 6px 11px; border-radius: 6px; cursor: pointer; display: flex; gap: 8px; align-items: center; font-size: 12.5px; }
+  .mention-pop .mi:hover { background: var(--panel-2); }
+  .mention-pop .mi small { color: var(--text-4); font-size: 11px; margin-left: auto; }
+
+  /* ================= 触发器面板 ================= */
+  #trig-rail {
+    width: 296px; min-width: 296px; border-left: 1px solid var(--border-soft);
+    background: var(--panel); overflow-y: auto; padding: 16px 14px;
+  }
+  .rail-head { display: flex; align-items: center; gap: 7px; font-weight: 650; font-size: 13px; margin-bottom: 3px; color: var(--text); }
+  .rail-head .ic { color: var(--accent-hi); }
+  .rail-sub { font-size: 11.5px; color: var(--text-3); margin-bottom: 12px; line-height: 1.5; }
+  .trig-card {
+    background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: var(--r-md);
+    padding: 10px 12px; margin-bottom: 8px; transition: border-color var(--dur);
+  }
+  .trig-card:hover { border-color: var(--border); }
+  .trig-card .tc1 { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 12.5px; }
+  .trig-card .x {
+    margin-left: auto; color: var(--text-4); cursor: pointer; border: none; background: none;
+    padding: 3px; border-radius: 5px; display: inline-flex; transition: all var(--dur);
+  }
+  .trig-card .x:hover { color: var(--red); background: rgba(240,113,111,.1); }
+  .trig-card .tc2 { font-size: 12px; color: var(--text-2); margin-top: 4px; }
+  .trig-card .tc2.prompt { color: var(--text-3); font-size: 11.5px; }
+  .trig-card .tc3 { font-size: 11px; color: var(--text-4); margin-top: 6px; }
+  .trig-icon {
+    width: 22px; height: 22px; border-radius: 6px; background: var(--accent-dim); color: var(--accent-hi);
+    display: inline-flex; align-items: center; justify-content: center; flex: none;
+  }
+  .add-trig {
+    width: 100%; border: 1px dashed var(--border); background: transparent; color: var(--text-3);
+    border-radius: var(--r-md); padding: 8px; font-size: 12.5px; cursor: pointer; margin-top: 2px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; transition: all var(--dur);
+  }
+  .add-trig:hover { color: var(--accent-hi); border-color: var(--accent-line); }
+  .trig-form { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px; margin-top: 8px; }
+  .trig-form label { font-size: 11px; color: var(--text-3); display: block; margin: 9px 0 3px; }
+  .trig-form label:first-child { margin-top: 0; }
+  .trig-form select, .trig-form input {
+    width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 7px;
+    color: var(--text); padding: 6.5px 9px; font-size: 12.5px; outline: none; font-family: inherit;
+  }
+  .trig-form select:focus, .trig-form input:focus { border-color: var(--accent-line); }
+  .tf-btns { display: flex; gap: 7px; margin-top: 13px; }
+  .hist-item { font-size: 11.5px; color: var(--text-2); padding: 7px 2px; border-bottom: 1px solid var(--border-soft); display: flex; gap: 8px; }
+  .hist-item .hts { color: var(--text-4); font-variant-numeric: tabular-nums; flex: none; }
+  .hist-item .ic { color: var(--accent-hi); margin-top: 1px; }
+  .empty-hint { font-size: 12px; color: var(--text-4); padding: 6px 2px; }
+
+  /* ================= 已安排(全局触发器) ================= */
+  .sched-wrap { max-width: 780px; margin: 0 auto; padding: 24px 28px; }
+  .sched-row {
+    display: flex; gap: 12px; align-items: flex-start; background: var(--panel-2);
+    border: 1px solid var(--border-soft); border-radius: var(--r-md); padding: 12px 14px; margin-bottom: 8px;
+  }
+  .sched-row .s-main { flex: 1; min-width: 0; }
+  .sched-row .s-cond { font-weight: 600; font-size: 13px; }
+  .sched-row .s-prompt { font-size: 12px; color: var(--text-3); margin-top: 3px; }
+  .sched-row .s-owner {
+    font-size: 11.5px; color: var(--text-3); margin-top: 7px; display: inline-flex; gap: 6px; align-items: center;
+    cursor: pointer; border: none; background: none; padding: 0; font-family: inherit;
+  }
+  .sched-row .s-owner:hover { color: var(--accent-hi); }
+  .sched-row .s-next { font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; flex: none; text-align: right; }
+
+  /* ================= Room ================= */
+  .room-parts { display: flex; gap: 6px; align-items: center; }
+  .part {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-2);
+    background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 999px; padding: 3px 10px 3px 4px;
+  }
+  .part .avatar { width: 17px; height: 17px; font-size: 9px; }
+  .part .st-ic { display: inline-flex; }
+  .room-msg { margin-bottom: 15px; }
+  .room-sysline { text-align: center; font-size: 11.5px; color: var(--accent-hi); margin: 15px 0; display: flex; align-items: center; gap: 10px; }
+  .room-sysline::before, .room-sysline::after { content: ""; flex: 1; height: 1px; background: rgba(139,124,246,.18); }
+  .mention { color: var(--blue); background: var(--blue-dim); border-radius: 4px; padding: 0 3px; font-weight: 570; }
+  .origin-card {
+    margin: 8px 0 0 32px; border: 1px solid var(--border-soft); background: var(--panel-2);
+    border-radius: var(--r-md); padding: 7px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+    cursor: pointer; max-width: 440px; transition: border-color var(--dur); border-left: 2px solid var(--accent-line);
+  }
+  .origin-card:hover { border-color: var(--accent-line); }
+  .origin-card .oc-t { color: var(--text-2); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .origin-card .oc-link { color: var(--accent-hi); font-size: 11.5px; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; }
+  .typing { display: inline-flex; gap: 3px; padding: 4px 0; }
+  .typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); animation: tybl 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay: .18s; } .typing i:nth-child(3) { animation-delay: .36s; }
+  @keyframes tybl { 0%,60%,100% { opacity: .3; } 30% { opacity: 1; } }
+
+  /* ================= 演示台 & Toast ================= */
+  #demo {
+    position: fixed; right: 16px; bottom: 16px; z-index: 50;
+    background: var(--panel-3); border: 1px solid var(--border); border-radius: 14px;
+    padding: 12px 13px; width: 240px; box-shadow: 0 14px 44px rgba(0,0,0,.55);
+  }
+  #demo .d-head { font-size: 10.5px; font-weight: 700; letter-spacing: 1px; color: var(--text-4); text-transform: uppercase; margin-bottom: 9px; display: flex; align-items: center; }
+  #demo .d-head .min { margin-left: auto; cursor: pointer; color: var(--text-4); padding: 0 4px; background: none; border: none; font-size: 13px; }
+  #demo .d-btn {
+    width: 100%; text-align: left; background: var(--panel-2); border: 1px solid var(--border-soft);
+    color: var(--text); border-radius: 8px; padding: 7px 11px; font-size: 12.5px; cursor: pointer;
+    margin-bottom: 6px; transition: border-color var(--dur); display: flex; align-items: center; gap: 8px;
+  }
+  #demo .d-btn .ic { color: var(--text-3); }
+  #demo .d-btn:hover:not(:disabled) { border-color: var(--accent-line); }
+  #demo .d-btn:disabled { opacity: .35; cursor: default; }
+  #demo .d-note { font-size: 11px; color: var(--text-4); margin-top: 2px; line-height: 1.5; }
+  #demo.min .d-body { display: none; }
+  #toasts { position: fixed; top: 16px; right: 16px; z-index: 60; display: flex; flex-direction: column; gap: 8px; }
+  .toast {
+    background: var(--panel-3); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 10px; padding: 10px 14px; font-size: 12.5px; max-width: 360px;
+    box-shadow: 0 10px 34px rgba(0,0,0,.5); animation: toastin .28s cubic-bezier(.2,.9,.3,1.2);
+    display: flex; gap: 9px; align-items: flex-start;
+  }
+  .toast .ic { color: var(--accent-hi); margin-top: 2px; }
+  .toast b { color: var(--accent-hi); font-weight: 620; }
+  @keyframes toastin { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  .note {
+    display: none; font-size: 11.5px; color: #cbc5f5; background: rgba(139,124,246,.08);
+    border: 1px dashed var(--accent-line); border-radius: 8px; padding: 7px 11px; margin: 8px 0; line-height: 1.55;
+  }
+  body.notes .note { display: block; }
+  .note b { color: var(--accent-hi); }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div class="sb-head">
+    <div class="sb-logo">Z</div>
+    <div class="sb-title">ZenX <span class="ic" id="i-chevdown"></span></div>
+    <div class="grow"></div>
+    <button class="hbtn" aria-label="搜索" id="btn-search"></button>
+    <button class="hbtn" aria-label="切换侧栏视图" id="btn-mode" onclick="toggleMode()"></button>
+  </div>
+  <div class="sb-nav" id="sb-nav"></div>
+  <div id="sb-filters-slot"></div>
+  <div class="sb-list" id="sb-list"></div>
+</div>
+
+<div id="main">
+  <div id="content"></div>
+  <div id="trig-rail" style="display:none"></div>
+</div>
+
+<div id="demo">
+  <div class="d-head">原型演示 <button class="min" onclick="document.getElementById('demo').classList.toggle('min')" aria-label="收起">—</button></div>
+  <div class="d-body" id="demo-body"></div>
+</div>
+<div id="toasts"></div>
+
+<script>
+/* ================= SVG 图标 ================= */
+function svg(paths, opt) {
+  const o = Object.assign({ size: 15, sw: 1.6, fill: 'none' }, opt);
+  return `<span class="ic"><svg width="${o.size}" height="${o.size}" viewBox="0 0 16 16" fill="${o.fill}" stroke="currentColor" stroke-width="${o.sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg></span>`;
+}
+const P = {
+  clock:   '<circle cx="8" cy="8" r="6.2"/><path d="M8 4.8V8l2.3 1.5"/>',
+  eye:     '<path d="M1.6 8s2.3-4.2 6.4-4.2S14.4 8 14.4 8s-2.3 4.2-6.4 4.2S1.6 8 1.6 8Z"/><circle cx="8" cy="8" r="1.9"/>',
+  chat:    '<path d="M13.8 7.6c0 2.9-2.6 5.2-5.8 5.2-.7 0-1.4-.1-2-.3L2.5 13.4l.9-2.6C2.6 9.9 2.2 8.8 2.2 7.6c0-2.9 2.6-5.2 5.8-5.2s5.8 2.3 5.8 5.2Z"/>',
+  bolt:    '<path d="M8.8 1.6 3.4 9h3.4l-.9 5.4L11.3 7H7.9l.9-5.4Z"/>',
+  signal:  '<circle cx="8" cy="8" r="1.6"/><path d="M4.9 11.1a4.4 4.4 0 0 1 0-6.2M11.1 4.9a4.4 4.4 0 0 1 0 6.2M3 13a7 7 0 0 1 0-10M13 3a7 7 0 0 1 0 10"/>',
+  folder:  '<path d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3l1.4 1.6h5.6c.7 0 1.2.5 1.2 1.2v6c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2v-7.6Z"/>',
+  chevR:   '<path d="m6 3.6 4.4 4.4L6 12.4"/>',
+  chevD:   '<path d="m3.6 6 4.4 4.4L12.4 6"/>',
+  search:  '<circle cx="7.2" cy="7.2" r="4.6"/><path d="m10.8 10.8 3.4 3.4"/>',
+  inbox:   '<path d="M2 9.5h3.4l1.2 1.8h2.8l1.2-1.8H14"/><path d="M3.4 3.4h9.2L14 9.5v3.1c0 .6-.5 1-1 1H3c-.5 0-1-.4-1-1V9.5l1.4-6.1Z"/>',
+  tree:    '<path d="M2.5 3.5h11M5.5 8h8M5.5 12.5h8"/><circle cx="3" cy="8" r=".2"/><circle cx="3" cy="12.5" r=".2"/>',
+  compose: '<path d="M7.3 3H3.4c-.8 0-1.4.6-1.4 1.4v8.2c0 .8.6 1.4 1.4 1.4h8.2c.8 0 1.4-.6 1.4-1.4V8.7"/><path d="M12.6 1.9a1.6 1.6 0 0 1 2.3 2.3L9 10.1l-3 .7.7-3 5.9-5.9Z"/>',
+  hash:    '<path d="M6.4 2.5 4.8 13.5M11.2 2.5 9.6 13.5M2.8 5.8h10.9M2.3 10.2h10.9"/>',
+  check:   '<path d="m2.8 8.6 3.4 3.4 7-7.4"/>',
+  x:       '<path d="m4 4 8 8M12 4l-8 8"/>',
+  dots:    '<circle cx="3.4" cy="8" r=".4"/><circle cx="8" cy="8" r=".4"/><circle cx="12.6" cy="8" r=".4"/>',
+  moon:    '<path d="M13.4 9.4A5.8 5.8 0 0 1 6.6 2.6a5.8 5.8 0 1 0 6.8 6.8Z"/>',
+  pin:     '<path d="M9.5 2 14 6.5l-3.4 1.1-2.2 4.5-1.4-1.4L2.5 15M7 10.6 5.4 9l-4.5 2.2L2 6.8 9.5 2"/>',
+  arrow:   '<path d="M4.5 11.5 11.5 4.5M6 4.5h5.5V10"/>',
+  warn:    '<path d="M8 2 1.8 13h12.4L8 2Z"/><path d="M8 6.5v3M8 11.6v.1"/>',
+  plus:    '<path d="M8 3v10M3 8h10"/>',
+  play:    '<path d="M4.5 2.8v10.4L13 8 4.5 2.8Z"/>',
+  ff:      '<path d="M1.8 3.4V12.6L8 8 1.8 3.4ZM8.2 3.4V12.6L14.4 8 8.2 3.4Z"/>',
+  at:      '<circle cx="8" cy="8" r="2.4"/><path d="M10.4 8v1c0 1.1.7 1.7 1.6 1.7 1.2 0 2-1.3 2-2.7A6 6 0 1 0 11 13.2"/>',
+  reset:   '<path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.8L2.4 6"/><path d="M2.3 2.5V6h3.5"/>',
+  info:    '<circle cx="8" cy="8" r="6.2"/><path d="M8 7.4v3.4M8 5v.1"/>',
+  bell:    '<path d="M12.6 6.4a4.6 4.6 0 0 0-9.2 0c0 3.4-1.6 4.6-1.6 4.6h12.4s-1.6-1.2-1.6-4.6Z"/><path d="M9.3 13.4a1.5 1.5 0 0 1-2.6 0"/>',
+};
+const ic = (n, o) => svg(P[n], o);
+const TRIG_ICON = { timer: 'clock', watch: 'eye', mention: 'chat', signal: 'signal' };
+
+/* ================= 数据 ================= */
+const AGENTS = {
+  you:      { name: '你',       color: '#5b8cf6', ini: '你', kind: 'human' },
+  executor: { name: 'Executor', color: '#2f9d68', ini: 'E',  kind: 'agent' },
+  monitor:  { name: 'Monitor',  color: '#8b7cf6', ini: 'M',  kind: 'agent' },
+  zen:      { name: 'Zen',      color: '#6b7cd6', ini: 'Z',  kind: 'agent' },
+};
+
+let CLOCK = 14 * 60 + 12;
+const fmt = m => `${String(Math.floor(m/60)%24).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+const ago = m => { const d = CLOCK - m; if (d <= 0) return '刚刚'; if (d < 60) return `${d} 分钟前`; return `${Math.floor(d/60)} 小时前`; };
+
+let SB_MODE = 'inbox';
+try { SB_MODE = localStorage.getItem('zenx-sb-mode') || 'inbox'; } catch (e) {}
+
+const state = {
+  view: { type: 'thread', id: 't-mon' },
+  filter: 'all',
+  railOpen: true,
+  projOpen: { zen: true, imzen: false },
+  threads: {}, rooms: {},
+};
+
+function T(id, o) { state.threads[id] = Object.assign({ id, items: [], triggers: [], history: [], unread: 0 }, o); }
+
+T('t-exec', {
+  title: '实现 thread 归档', project: 'zen', model: 'sonnet-5', agent: 'executor',
+  status: 'working', ts: CLOCK - 1, lastActivity: '正在运行 pnpm test…',
+  items: [
+    { kind: 'user', from: 'you', ts: CLOCK - 42, text: '实现 thread 归档:归档的线程不出现在 thread/list 默认结果里,但可以恢复。注意归档状态属于产品元数据,别写进 canonical ItemList。' },
+    { kind: 'assistant', from: 'executor', ts: CLOCK - 41, text: '明白。归档是产品状态,走 ThreadMetadataStore 一侧,和置顶/名称同一层。我先看现有 metadata 的读写路径,然后加 archived 字段、改 thread/list 投影、补测试。' },
+    { kind: 'tool', ts: CLOCK - 40, name: 'shell', detail: 'grep -n "metadata" src/app-server.ts', status: 'done' },
+    { kind: 'tool', ts: CLOCK - 33, name: 'edit', detail: 'src/thread-metadata.ts (+48 −6)', status: 'done' },
+    { kind: 'tool', ts: CLOCK - 20, name: 'edit', detail: 'src/app-server.ts (+31 −4)', status: 'done' },
+    { kind: 'assistant', from: 'executor', ts: CLOCK - 3, text: '归档字段与 thread/list 过滤已经完成,thread/archive 与 thread/unarchive 两个方法接上了 metadata store。现在跑一遍测试确认没有破坏现有行为。' },
+    { kind: 'tool', ts: CLOCK - 1, name: 'shell', detail: 'pnpm test', status: 'run' },
+  ],
+});
+
+T('t-mon', {
+  title: '值守 release-42', project: 'zen', model: 'fable-5', agent: 'monitor',
+  status: 'watching', ts: CLOCK - 32, lastActivity: '值守中 · 2 个观察 · 下次心跳 ' + fmt(CLOCK + 20),
+  items: [
+    { kind: 'user', from: 'you', ts: CLOCK - 34, text: '这个 release 周期你负责值守:盯着 Executor 的归档任务,它每完成一个 Turn 你就检查一次 diff 的风险;另外每 20 分钟做一次例行巡视。结论发到 #release-42,别刷屏,没事就保持安静。' },
+    { kind: 'assistant', from: 'monitor', ts: CLOCK - 33, text: '收到。我不会驻留轮询,改为登记三个触发器,平时休眠、命中才上线:\n\n1. 观察 Executor 线程的 turn_completed —— 它每完成一轮我就审一次 diff;\n2. 20 分钟定时心跳 —— 例行巡视,无事不打扰;\n3. #release-42 提及 @Monitor —— 随叫随到。\n\n登记完成后我先休眠。' },
+    { kind: 'tool', ts: CLOCK - 33, name: 'trigger.create', detail: 'watch thread:t-exec on:turn_completed', status: 'done' },
+    { kind: 'tool', ts: CLOCK - 33, name: 'trigger.create', detail: 'timer every:20m', status: 'done' },
+    { kind: 'tool', ts: CLOCK - 32, name: 'trigger.create', detail: 'watch room:#release-42 on:mention', status: 'done' },
+  ],
+  triggers: [
+    { id: 'g1', type: 'watch',   title: '观察 Thread', cond: 'Executor「实现 thread 归档」 turn_completed', prompt: '检查该 Turn 的 diff,评估风险,把结论发到 #release-42', by: 'Monitor', ts: CLOCK - 33 },
+    { id: 'g2', type: 'timer',   title: '定时心跳',    cond: '每 20 分钟', next: CLOCK + 20, prompt: '例行巡视 release-42 相关线程,有异常才发声', by: 'Monitor', ts: CLOCK - 33 },
+    { id: 'g3', type: 'mention', title: '观察 Room',   cond: '#release-42 提及 @Monitor', prompt: '阅读上下文并回应提问', by: 'Monitor', ts: CLOCK - 32 },
+  ],
+});
+
+T('t-ref', {
+  title: '重构 journal 索引', project: 'zen', model: 'sonnet-5', agent: 'zen',
+  status: 'approval', ts: CLOCK - 6, lastActivity: '等待批准:运行迁移脚本',
+  items: [
+    { kind: 'user', from: 'you', ts: CLOCK - 26, text: '启动时扫描 journal 太慢了,给 thread 列表做一个可重建的索引缓存。' },
+    { kind: 'assistant', from: 'zen', ts: CLOCK - 25, text: '方案:在 journal 目录旁维护 index.json,内容完全可由 journal 重放推导(符合"会话状态可推导"),损坏就重建。我已写好实现和迁移脚本,需要先对现有 journal 目录跑一次索引构建。' },
+    { kind: 'tool', ts: CLOCK - 18, name: 'edit', detail: 'src/journal-index.ts (+142)', status: 'done' },
+    { kind: 'approval', ts: CLOCK - 6, cmd: 'pnpm exec tsx scripts/build-journal-index.ts ~/.zen/threads', status: 'pending' },
+  ],
+});
+
+T('t-a', { title: '修复 turn_aborted 重放边界', project: 'zen', model: 'sonnet-5', agent: 'zen', status: 'settled', ts: CLOCK - 95, lastActivity: 'Turn 完成 · 已合入', items: [
+  { kind: 'user', from: 'you', ts: CLOCK - 130, text: '修复 turn_aborted 的重放边界问题。' },
+  { kind: 'assistant', from: 'zen', ts: CLOCK - 96, text: '已修复并补齐测试,尾部只有 turn_started 的 Turn 正确派生为 interrupted。' },
+]});
+T('t-b', { title: 'IMZen gateway 心跳日志降噪', project: 'imzen', model: 'haiku-4.5', agent: 'zen', status: 'settled', ts: CLOCK - 210, lastActivity: 'Turn 完成', items: [
+  { kind: 'user', from: 'you', ts: CLOCK - 220, text: '把 gateway 的心跳日志降到 debug 级。' },
+  { kind: 'assistant', from: 'zen', ts: CLOCK - 210, text: '已调整,同时保留了断连告警在 info 级。' },
+]});
+
+state.rooms['r-42'] = {
+  id: 'r-42', name: 'release-42', unread: 0, pinned: true,
+  parts: ['you', 'executor', 'monitor'],
+  msgs: [
+    { from: 'you', ts: CLOCK - 35, text: '这个作战室跟进 v0.4 发布:归档功能 + journal 索引。Executor 负责实现,@Monitor 负责风险值守,结论都发在这里。' },
+    { from: 'monitor', ts: CLOCK - 32, text: '值守就位。我登记了三个触发器(Executor 每轮完成、20 分钟心跳、这里 @我),平时不占用任何算力,命中才上线。', origin: { thread: 't-mon', label: 'Turn #1 · 触发器登记' } },
+    { from: 'executor', ts: CLOCK - 20, text: '归档字段与 thread/list 过滤已完成,正在补测试。metadata store 一侧没有动 canonical journal。', origin: { thread: 't-exec', label: 'Turn #1 · 进行中' } },
+  ],
+};
+
+/* ================= 基础 ================= */
+const $ = s => document.querySelector(s);
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const rich = s => esc(s).replace(/@(Monitor|Executor|Zen|你)/g, '<span class="mention">@$1</span>').replace(/\n/g, '<br>');
+const av = (a, sz) => `<span class="avatar" style="background:${AGENTS[a].color}${sz ? `;width:${sz}px;height:${sz}px;font-size:${sz*0.46}px` : ''}">${AGENTS[a].ini}</span>`;
+const PILL = { working: ['working','运行中'], approval: ['approval','待批准'], watching: ['watching','值守中'], settled: ['settled','已沉降'] };
+
+function toast(html, iconName) {
+  const d = document.createElement('div');
+  d.className = 'toast';
+  d.innerHTML = ic(iconName || 'bolt') + `<div>${html}</div>`;
+  $('#toasts').appendChild(d);
+  setTimeout(() => { d.style.transition = 'opacity .35s'; d.style.opacity = '0'; setTimeout(() => d.remove(), 350); }, 4200);
+}
+
+/* ================= Sidebar ================= */
+function toggleMode() {
+  SB_MODE = SB_MODE === 'inbox' ? 'projects' : 'inbox';
+  try { localStorage.setItem('zenx-sb-mode', SB_MODE); } catch (e) {}
+  render();
+  toast(SB_MODE === 'inbox'
+    ? '已切换到<b>收件箱视图</b>:按需要你处理的程度与最近活动排序'
+    : '已切换到<b>项目视图</b>:按项目分组的经典结构', SB_MODE === 'inbox' ? 'inbox' : 'tree');
+}
+
+function statusGlyph(t) {
+  if (t.status === 'working') return '<span class="spinner" title="运行中"></span>';
+  if (t.status === 'approval') return `<span style="color:var(--amber)" title="待批准">${ic('warn',{size:13})}</span>`;
+  if (t.status === 'watching') return `<span style="color:var(--accent-hi)" title="值守中">${ic('moon',{size:13})}</span>`;
+  return '';
+}
+
+function trigBadges(t) {
+  if (!t.triggers.length) return '';
+  const timer = t.triggers.find(g => g.type === 'timer');
+  const watches = t.triggers.filter(g => g.type !== 'timer').length;
+  return `${timer ? `<span class="trig-badge">${ic('clock',{size:11})}${fmt(timer.next)}</span>` : ''}${watches ? `<span class="trig-badge">${ic('eye',{size:11})}${watches}</span>` : ''}`;
+}
+
+function threadCard(t) {
+  const [pc, pl] = PILL[t.status];
+  const sel = state.view.type === 'thread' && state.view.id === t.id ? 'sel' : '';
+  return `<div class="card ${sel} ${t.status==='approval'?'needs':''} ${t.status==='settled'?'settled':''}" onclick="openThread('${t.id}')" tabindex="0" onkeydown="if(event.key==='Enter')openThread('${t.id}')">
+    <div class="row1"><span class="dot ${t.status}"></span><span class="t-title">${esc(t.title)}</span><span class="ts">${ago(t.ts)}</span></div>
+    <div class="row2"><span class="pill ${pc}">${pl}</span><span class="chip">${t.project}</span><span class="chip">${t.model}</span>${trigBadges(t)}</div>
+    <div class="preview">${esc(t.lastActivity)}</div>
+  </div>`;
+}
+
+function roomCard(r) {
+  const sel = state.view.type === 'room' && state.view.id === r.id ? 'sel' : '';
+  const last = r.msgs[r.msgs.length - 1];
+  return `<div class="card ${sel}" onclick="openRoom('${r.id}')" tabindex="0" onkeydown="if(event.key==='Enter')openRoom('${r.id}')">
+    <div class="row1"><span style="color:var(--blue)">${ic('hash',{size:13})}</span><span class="t-title">${esc(r.name)}</span>
+      ${r.unread ? `<span class="badge-unread">${r.unread}</span>` : ''}<span class="ts">${ago(last.ts)}</span></div>
+    <div class="row2"><span class="pill room">作战室</span><span class="chip">${r.parts.length} 位成员</span></div>
+    <div class="preview">${AGENTS[last.from].name}: ${esc(last.text)}</div>
+  </div>`;
+}
+
+function renderNav() {
+  const totalTrig = Object.values(state.threads).reduce((n, t) => n + t.triggers.length, 0);
+  $('#sb-nav').innerHTML = `
+    <button class="nav-item" onclick="toast('原型未包含新建对话流程','info')">${ic('compose')} 新对话</button>
+    <button class="nav-item ${state.view.type==='sched'?'sel':''}" onclick="openSched()">${ic('clock')} 已安排
+      ${totalTrig ? `<span class="n-badge trig-badge">${totalTrig}</span>` : ''}</button>`;
+  $('#btn-search').innerHTML = ic('search') + '<span class="tip">搜索(原型未实现)</span>';
+  $('#btn-mode').innerHTML = (SB_MODE === 'inbox' ? ic('tree') : ic('inbox')) +
+    `<span class="tip">${SB_MODE === 'inbox' ? '切换到项目视图' : '切换到收件箱视图'}</span>`;
+  $('#btn-mode').classList.toggle('active', SB_MODE === 'inbox');
+  $('#i-chevdown').innerHTML = svg(P.chevD, { size: 11 });
+}
+
+function renderSidebarInbox() {
+  $('#sb-filters-slot').innerHTML = `<div class="sb-filters">${
+    [['all','全部'],['needs','需要你'],['watching','值守中']].map(([k,l]) =>
+      `<button class="sb-filter ${state.filter===k?'on':''}" onclick="state.filter='${k}';render()">${l}</button>`).join('')}</div>`;
+  const ts = Object.values(state.threads).sort((a,b) => b.ts - a.ts);
+  const needs = ts.filter(t => t.status === 'approval');
+  const active = ts.filter(t => t.status === 'working');
+  const watching = ts.filter(t => t.status === 'watching');
+  const settled = ts.filter(t => t.status === 'settled');
+  let h = `<div class="sb-section">作战室</div>` + Object.values(state.rooms).map(roomCard).join('');
+  h += `<div class="note"><b>注记 · 双视图</b>:右上角按钮在收件箱视图(Sidebar V2 式)与项目视图(经典分组)之间切换,选择会被记住。两个心智模型都保留,不逼用户迁移。</div>`;
+  if (state.filter !== 'watching' && needs.length) h += `<div class="sb-section">需要你 <span class="cnt">${needs.length}</span></div>` + needs.map(threadCard).join('');
+  if (state.filter === 'all' && active.length) h += `<div class="sb-section">进行中 <span class="cnt">${active.length}</span></div>` + active.map(threadCard).join('');
+  if (state.filter !== 'needs' && watching.length) {
+    h += `<div class="sb-section">值守中 <span class="cnt">${watching.length}</span></div>`;
+    h += `<div class="note"><b>注记</b>:"值守中" = 带唤醒条件的 snooze。agent 零 token 休眠,卡片直接显示下次心跳时间与观察数,触发即回到顶部。</div>`;
+    h += watching.map(threadCard).join('');
+  }
+  if (state.filter === 'all' && settled.length) h += `<div class="sb-section">今天 · 已完成 <span class="cnt">${settled.length}</span></div>` + settled.map(threadCard).join('');
+  $('#sb-list').innerHTML = h;
+}
+
+function renderSidebarProjects() {
+  $('#sb-filters-slot').innerHTML = '';
+  let h = '';
+  // 置顶
+  const pinned = Object.values(state.rooms).filter(r => r.pinned);
+  if (pinned.length) {
+    h += `<div class="sb-section">${ic('pin',{size:11})} 置顶</div>`;
+    h += pinned.map(r => {
+      const sel = state.view.type === 'room' && state.view.id === r.id ? 'sel' : '';
+      return `<div class="trow ${sel}" style="padding-left:10px" onclick="openRoom('${r.id}')" tabindex="0" onkeydown="if(event.key==='Enter')openRoom('${r.id}')">
+        <span style="color:var(--blue)">${ic('hash',{size:13})}</span><span class="t-title">${esc(r.name)}</span>
+        ${r.unread ? `<span class="badge-unread">${r.unread}</span>` : ''}</div>`;
+    }).join('');
+  }
+  h += `<div class="sb-section">项目</div>`;
+  h += `<div class="note"><b>注记 · 项目视图</b>:经典的项目 → 线程两级结构,行内只保留一个状态记号(转圈 = 运行中,月亮 = 值守,三角 = 待批准),细节留给收件箱视图与线程页。</div>`;
+  const projects = [...new Set(Object.values(state.threads).map(t => t.project))];
+  for (const p of projects) {
+    const list = Object.values(state.threads).filter(t => t.project === p).sort((a,b) => b.ts - a.ts);
+    const open = state.projOpen[p];
+    const activeCnt = list.filter(t => t.status !== 'settled').length;
+    h += `<div class="proj-head ${open?'open':''}" onclick="state.projOpen['${p}']=!state.projOpen['${p}'];render()" tabindex="0"
+      onkeydown="if(event.key==='Enter'){state.projOpen['${p}']=!state.projOpen['${p}'];render()}">
+      <span class="ic chev">${svg(P.chevR,{size:11})}</span>${ic('folder',{size:14})}<span>${p}</span>
+      <span class="p-cnt">${activeCnt ? activeCnt + ' 活跃' : list.length}</span></div>`;
+    if (open) h += list.map(t => {
+      const sel = state.view.type === 'thread' && state.view.id === t.id ? 'sel' : '';
+      return `<div class="trow ${sel}" onclick="openThread('${t.id}')" tabindex="0" onkeydown="if(event.key==='Enter')openThread('${t.id}')">
+        <span class="t-title">${esc(t.title)}</span><span class="st">${statusGlyph(t)}</span></div>`;
+    }).join('');
+  }
+  $('#sb-list').innerHTML = h;
+}
+
+function renderSidebar() {
+  renderNav();
+  if (SB_MODE === 'inbox') renderSidebarInbox(); else renderSidebarProjects();
+}
+
+/* ================= Thread 视图 ================= */
+function itemHTML(t, it) {
+  if (it.kind === 'user') return `<div class="item">
+    <div class="who">${av(it.from)}<span class="name">${AGENTS[it.from].name}</span><span class="wts">${fmt(it.ts)}</span></div>
+    <div class="bubble-user">${rich(it.text)}</div></div>`;
+  if (it.kind === 'assistant') return `<div class="item">
+    <div class="who">${av(it.from)}<span class="name">${AGENTS[it.from].name}</span><span class="wts">${fmt(it.ts)}</span></div>
+    <div class="bubble-ai">${rich(it.text)}${it.streaming ? '<span class="cursor"></span>' : ''}</div></div>`;
+  if (it.kind === 'tool') return `<div class="item"><div class="tool-card">
+    ${it.status === 'run' ? '<span class="spinner"></span>' : ic('check',{size:12})}
+    <span class="tname">${it.name}</span><span class="tdetail">${esc(it.detail)}</span>
+    <span class="tool-status ${it.status}">${it.status === 'run' ? '运行中' : '完成'}</span></div></div>`;
+  if (it.kind === 'approval') return `<div class="item"><div class="approval-card">
+    <div class="a1">${ic('warn',{size:14})} 命令待批准 <small>超出当前审批策略</small></div>
+    <pre>${esc(it.cmd)}</pre>
+    ${it.status === 'pending'
+      ? `<div class="a-btns"><button class="btn ok" onclick="approve('${t.id}')">批准并运行</button><button class="btn no" onclick="deny('${t.id}')">拒绝</button></div>`
+      : `<div class="a-done">${it.status === 'approved' ? ic('check',{size:13}) + ' 已批准并执行' : ic('x',{size:13}) + ' 已拒绝'}</div>`}</div></div>`;
+  if (it.kind === 'wakeup') return `<div class="wakeup">
+    <div class="w1">${ic(TRIG_ICON[it.type] || 'bolt')} 触发器唤醒 · ${esc(it.title)}<span class="wts">${fmt(it.ts)}</span></div>
+    <div class="w2">${rich(it.cond)} <span style="color:var(--text-4)">· 由 ${esc(it.by)} 于 ${ago(it.armedTs)}登记</span></div>
+    <div class="w3"><span class="lbl">注入提示词</span>${esc(it.prompt)}</div>
+  </div>
+  <div class="note"><b>注记 · 唤醒的呈现</b>:触发注入渲染为系统级横幅而非伪装的用户消息 —— 模型与人都能一眼区分"谁叫醒了我、为什么、带着什么指令"。备选是渲染成特殊来源的用户气泡,更轻但来源感更弱。</div>`;
+  if (it.kind === 'divider') return `<div class="turn-divider">${esc(it.text)}</div>`;
+  return '';
+}
+
+function renderThread(t) {
+  const [pc, pl] = PILL[t.status];
+  $('#content').innerHTML = `
+    <div class="m-head">
+      <div><div class="m-title">${esc(t.title)}</div>
+      <div class="m-sub">${t.project} · ${t.model} · ${AGENTS[t.agent].name}</div></div>
+      <span class="pill ${pc}" style="margin-left:4px">${pl}</span>
+      <div class="spacer"></div>
+      <button class="icon-btn ${state.railOpen ? 'on' : ''}" onclick="state.railOpen=!state.railOpen;render()">
+        ${ic('bolt',{size:13})} 触发器${t.triggers.length ? ` · ${t.triggers.length}` : ''}</button>
+      <button class="icon-btn" onclick="toast('原型未包含线程菜单','info')" aria-label="更多">${ic('dots',{size:13})}</button>
+    </div>
+    <div id="msgs"><div class="msgs-inner">${t.items.map(it => itemHTML(t, it)).join('')}</div></div>
+    <div class="composer-wrap"><div class="composer">
+      <textarea id="cmp" rows="1" placeholder="${t.status === 'watching' ? `给 ${AGENTS[t.agent].name} 发消息会立即唤醒它,触发器保持登记…` : '发送消息…'}"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendThreadMsg('${t.id}')}"></textarea>
+      <div class="c-row"><span class="c-hint">${t.status === 'working' ? `${AGENTS[t.agent].name} 正在运行 Turn,消息将排队` : 'Enter 发送 · Shift+Enter 换行'}</span>
+      <button class="send-btn" onclick="sendThreadMsg('${t.id}')">发送</button></div>
+    </div></div>`;
+  renderRail(t);
+  $('#msgs').scrollTop = $('#msgs').scrollHeight;
+}
+
+function renderRail(t) {
+  const rail = $('#trig-rail');
+  if (!state.railOpen || state.view.type !== 'thread') { rail.style.display = 'none'; return; }
+  rail.style.display = 'block';
+  const cards = t.triggers.map(g => `<div class="trig-card">
+    <div class="tc1"><span class="trig-icon">${ic(TRIG_ICON[g.type],{size:12})}</span>${esc(g.title)}
+      <button class="x" title="取消这个触发器" onclick="cancelTrig('${t.id}','${g.id}')">${ic('x',{size:12})}</button></div>
+    <div class="tc2">${esc(g.cond)}${g.next ? ` · 下次 ${fmt(g.next)}` : ''}</div>
+    <div class="tc2 prompt">↳ ${esc(g.prompt)}</div>
+    <div class="tc3">由 ${esc(g.by)} 登记 · ${ago(g.ts)}</div>
+  </div>`).join('');
+  const hist = t.history.length
+    ? t.history.map(h => `<div class="hist-item"><span class="hts">${fmt(h.ts)}</span>${ic(TRIG_ICON[h.type] || 'bolt',{size:12})}<span>${esc(h.text)}</span></div>`).join('')
+    : `<div class="empty-hint">还没有触发记录 —— 命中一次后会在这里留下审计轨迹。</div>`;
+  rail.innerHTML = `
+    <div class="rail-head">${ic('bolt',{size:14})} 触发器</div>
+    <div class="rail-sub">这个 agent 休眠时的唤醒条件,任何一条命中都会在本线程注入一个新 Turn。</div>
+    <div class="note"><b>注记 · 权威接口</b>:触发器是产品内建工具 + 权威 API,不是黑盒脚本 —— 所以才能列出、取消、审计。登记/取消动作以 tool call 形式留在线程历史里。</div>
+    ${cards || '<div class="empty-hint">没有登记中的触发器。休眠的 agent 只能被用户消息唤醒。</div>'}
+    <div id="trig-form-slot"><button class="add-trig" onclick="showTrigForm('${t.id}')">${ic('plus',{size:12})} 新建触发器</button></div>
+    <div class="rail-head" style="margin-top:20px">触发历史</div>
+    ${hist}`;
+}
+
+function showTrigForm(tid) {
+  $('#trig-form-slot').innerHTML = `<div class="trig-form">
+    <label for="tf-type">类型</label>
+    <select id="tf-type">
+      <option value="timer">定时(一次或周期)</option>
+      <option value="watch">观察某个 Thread 的事件</option>
+      <option value="mention">观察作战室提及/关键词</option>
+      <option value="signal">等待其他 Agent 的 signal</option>
+    </select>
+    <label for="tf-cond">条件</label><input id="tf-cond" placeholder="例:每 30 分钟 / thread X turn_completed">
+    <label for="tf-prompt">唤醒时注入的提示词</label><input id="tf-prompt" placeholder="醒来后做什么">
+    <div class="tf-btns"><button class="btn ok" onclick="createTrig('${tid}')">登记触发器</button>
+    <button class="btn no" onclick="render()">取消</button></div></div>`;
+  $('#tf-cond').focus();
+}
+
+function createTrig(tid) {
+  const t = state.threads[tid];
+  const type = $('#tf-type').value;
+  const titles = { timer: '定时', watch: '观察 Thread', mention: '观察 Room', signal: '等待 signal' };
+  const cond = $('#tf-cond').value || '(未填写条件)';
+  t.triggers.push({ id: 'g' + Math.floor(performance.now()), type, title: titles[type],
+    cond, prompt: $('#tf-prompt').value || '(未填写提示词)', by: '你', ts: CLOCK,
+    next: type === 'timer' ? CLOCK + 30 : undefined });
+  t.items.push({ kind: 'tool', ts: CLOCK, name: 'trigger.create', detail: `${type} ${cond} (由用户从面板登记)`, status: 'done' });
+  toast(`已为 <b>${AGENTS[t.agent].name}</b> 登记触发器:${esc(cond)}`, TRIG_ICON[type]);
+  render();
+}
+
+function cancelTrig(tid, gid) {
+  const t = state.threads[tid];
+  const g = t.triggers.find(x => x.id === gid);
+  t.triggers = t.triggers.filter(x => x.id !== gid);
+  t.items.push({ kind: 'tool', ts: CLOCK, name: 'trigger.cancel', detail: `${g.type} ${g.cond}`, status: 'done' });
+  if (!t.triggers.length && t.status === 'watching') t.lastActivity = '空闲(无触发器)';
+  toast(`已取消触发器:${esc(g.cond)}`, 'x');
+  render();
+}
+
+/* ================= 已安排(全局触发器总览) ================= */
+function openSched() { state.view = { type: 'sched' }; render(); }
+
+function renderSched() {
+  const rows = [];
+  for (const t of Object.values(state.threads))
+    for (const g of t.triggers) rows.push({ t, g });
+  rows.sort((a, b) => (a.g.next ?? 1e9) - (b.g.next ?? 1e9));
+  const hist = Object.values(state.threads)
+    .flatMap(t => t.history.map(h => ({ t, h })))
+    .sort((a, b) => b.h.ts - a.h.ts);
+  $('#content').innerHTML = `
+    <div class="m-head">
+      <div><div class="m-title">已安排</div>
+      <div class="m-sub">全部 agent 的触发器总览 · ${rows.length} 个登记中</div></div>
+    </div>
+    <div style="flex:1;overflow-y:auto"><div class="sched-wrap">
+      <div class="note"><b>注记 · 为什么能有这一页</b>:因为触发器走产品的权威接口而不是各自为政的黑盒脚本,系统才能回答"现在全局挂着哪些定时器和观察"。这是把机制收进产品的最大红利。</div>
+      ${rows.length ? rows.map(({ t, g }) => `<div class="sched-row">
+        <span class="trig-icon">${ic(TRIG_ICON[g.type],{size:13})}</span>
+        <div class="s-main">
+          <div class="s-cond">${esc(g.cond)}</div>
+          <div class="s-prompt">↳ ${esc(g.prompt)}</div>
+          <button class="s-owner" onclick="openThread('${t.id}')">${av(t.agent, 15)} ${AGENTS[t.agent].name} · ${esc(t.title)} ${ic('arrow',{size:11})}</button>
+        </div>
+        <div class="s-next">${g.next ? `下次<br><b style="color:var(--text-2)">${fmt(g.next)}</b>` : '事件驱动'}</div>
+      </div>`).join('') : '<div class="empty-hint">没有任何登记中的触发器。</div>'}
+      <div class="sb-section" style="padding-left:2px;margin-top:18px">最近触发</div>
+      ${hist.length ? hist.map(({ t, h }) => `<div class="hist-item"><span class="hts">${fmt(h.ts)}</span>${ic(TRIG_ICON[h.type] || 'bolt',{size:12})}
+        <span>${esc(h.text)} <span style="color:var(--text-4)">· ${AGENTS[t.agent].name}</span></span></div>`).join('')
+        : '<div class="empty-hint">还没有触发记录,用右下角的演示按钮制造一次。</div>'}
+    </div></div>`;
+  renderRail({});
+}
+
+/* ================= Room ================= */
+function renderRoom(r) {
+  r.unread = 0;
+  const parts = r.parts.map(p => {
+    const a = AGENTS[p];
+    let st = '';
+    if (p !== 'you') {
+      const t = Object.values(state.threads).find(x => x.agent === p);
+      if (t?.status === 'working') st = '<span class="st-ic"><span class="spinner" style="width:10px;height:10px"></span></span>';
+      else if (t?.status === 'watching') st = `<span class="st-ic" style="color:var(--accent-hi)" title="休眠值守中,@提及可唤醒">${ic('moon',{size:11})}</span>`;
+    }
+    return `<span class="part">${av(p, 17)}${a.name}${st}</span>`;
+  }).join('');
+  const msgs = r.msgs.map(m => {
+    if (m.sys) return `<div class="room-sysline">${ic('bolt',{size:12})} ${rich(m.text)}</div>`;
+    return `<div class="room-msg item">
+      <div class="who">${av(m.from)}<span class="name">${AGENTS[m.from].name}</span>
+      ${AGENTS[m.from].kind === 'agent' ? '<span class="chip" style="font-size:10px">agent</span>' : ''}
+      <span class="wts">${fmt(m.ts)}</span></div>
+      <div class="bubble-ai">${rich(m.text)}</div>
+      ${m.origin ? `<div class="origin-card" onclick="openThread('${m.origin.thread}')" tabindex="0" onkeydown="if(event.key==='Enter')openThread('${m.origin.thread}')">
+        <span class="oc-t">推理过程在线程「${esc(state.threads[m.origin.thread].title)}」· ${esc(m.origin.label)}</span>
+        <span class="oc-link">打开线程 ${ic('arrow',{size:11})}</span></div>` : ''}
+    </div>`;
+  }).join('');
+  $('#content').innerHTML = `
+    <div class="m-head">
+      <div><div class="m-title" style="display:flex;align-items:center;gap:6px"><span style="color:var(--blue)">${ic('hash',{size:15})}</span>${esc(r.name)}</div>
+      <div class="m-sub">人和 agent 的共享讨论区 · 结论在这里,推理在各自线程</div></div>
+      <div class="spacer"></div><div class="room-parts">${parts}</div>
+    </div>
+    <div id="msgs"><div class="msgs-inner">
+      <div class="note"><b>注记 · Room ≠ Thread</b>:作战室是共享转录,不是 agent 上下文。每个 agent 保持自己的线程;room 消息在它被唤醒时才拷入其上下文。agent 发言附带"来源线程"卡片 —— 结论进 Room,推理留在 Thread。</div>
+      ${msgs}${r.typing ? `<div class="room-msg item"><div class="who">${av(r.typing)}<span class="name">${AGENTS[r.typing].name}</span><span class="wts" style="color:var(--green)">正在输入…</span></div><div class="typing" style="margin-left:32px"><i></i><i></i><i></i></div></div>` : ''}
+    </div></div>
+    <div class="composer-wrap"><div class="composer">
+      <div class="mention-pop" id="mpop" style="display:none">
+        <div class="mi" onclick="pickMention('Executor')">${av('executor', 17)} Executor <small>运行中</small></div>
+        <div class="mi" onclick="pickMention('Monitor')">${av('monitor', 17)} Monitor <small>休眠 · @提及会唤醒</small></div>
+      </div>
+      <textarea id="cmp" rows="1" placeholder="发消息… 输入 @ 可以点名唤醒某个 agent"
+        oninput="onRoomInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendRoomMsg('${r.id}')}"></textarea>
+      <div class="c-row"><span class="c-hint">@提及休眠中的 agent 会命中它的观察触发器并唤醒它</span>
+      <button class="send-btn" onclick="sendRoomMsg('${r.id}')">发送</button></div>
+    </div></div>`;
+  $('#msgs').scrollTop = $('#msgs').scrollHeight;
+  renderRail({});
+}
+
+function onRoomInput(el) { $('#mpop').style.display = /@$/.test(el.value) ? 'block' : 'none'; }
+function pickMention(n) {
+  const el = $('#cmp'); el.value = el.value.replace(/@$/, '@' + n + ' '); el.focus();
+  $('#mpop').style.display = 'none';
+}
+
+/* ================= 导航 ================= */
+function openThread(id) { state.view = { type: 'thread', id }; render(); }
+function openRoom(id) { state.view = { type: 'room', id }; render(); }
+function render() {
+  renderSidebar();
+  if (state.view.type === 'thread') renderThread(state.threads[state.view.id]);
+  else if (state.view.type === 'room') renderRoom(state.rooms[state.view.id]);
+  else renderSched();
+}
+
+/* ================= 动作 ================= */
+function stream(tid, from, text, done) {
+  const t = state.threads[tid];
+  const it = { kind: 'assistant', from, ts: CLOCK, text: '', streaming: true };
+  t.items.push(it);
+  let i = 0;
+  const timer = setInterval(() => {
+    i += 2 + Math.floor(Math.random() * 3);
+    it.text = text.slice(0, i);
+    if (i >= text.length) { it.text = text; it.streaming = false; clearInterval(timer); render(); done && done(); }
+    else render();
+  }, 28);
+}
+
+function approve(tid) {
+  const t = state.threads[tid];
+  t.items.find(i => i.kind === 'approval' && i.status === 'pending').status = 'approved';
+  t.status = 'working'; t.ts = CLOCK; t.lastActivity = '正在运行迁移脚本…';
+  const tool = { kind: 'tool', ts: CLOCK, name: 'shell', detail: 'pnpm exec tsx scripts/build-journal-index.ts', status: 'run' };
+  t.items.push(tool); render();
+  setTimeout(() => {
+    tool.status = 'done';
+    stream(tid, t.agent, '索引构建完成:37 个 thread,journal 完整可重放,index.json 与重放结果一致。删除 index.json 再启动会自动重建 —— 缓存是纯投影,没有引入第二份权威状态。', () => {
+      t.status = 'settled'; t.lastActivity = 'Turn 完成 · 索引已上线'; render();
+      toast('<b>重构 journal 索引</b> 已完成并沉降', 'check');
+    });
+  }, 1600);
+}
+function deny(tid) {
+  const t = state.threads[tid];
+  t.items.find(i => i.kind === 'approval' && i.status === 'pending').status = 'denied';
+  stream(tid, t.agent, '好的,不执行迁移。索引代码保留在分支上,你想先审实现的话我可以把 diff 摘要发出来。', () => {
+    t.status = 'settled'; t.lastActivity = '已拒绝迁移 · 等待后续指示'; render();
+  });
+}
+
+function sendThreadMsg(tid) {
+  const el = $('#cmp'); const text = el.value.trim(); if (!text) return;
+  const t = state.threads[tid];
+  t.items.push({ kind: 'user', from: 'you', ts: CLOCK, text });
+  el.value = '';
+  const wasWatching = t.status === 'watching';
+  t.status = 'working'; t.ts = CLOCK; t.lastActivity = '正在响应你的消息…'; render();
+  setTimeout(() => {
+    stream(tid, t.agent, wasWatching
+      ? '收到(用户消息直接唤醒,无需触发器)。我处理完这条就继续回到值守,三个触发器保持登记不变。'
+      : '收到,我按这个调整。', () => {
+      if (wasWatching) { t.status = 'watching'; t.lastActivity = `值守中 · ${t.triggers.length} 个触发器`; }
+      else if (tid !== 't-exec') { t.status = 'settled'; t.lastActivity = 'Turn 完成'; }
+      render();
+    });
+  }, 700);
+}
+
+function sendRoomMsg(rid) {
+  const el = $('#cmp'); const text = el.value.trim(); if (!text) return;
+  state.rooms[rid].msgs.push({ from: 'you', ts: CLOCK, text });
+  el.value = ''; render();
+  if (/@Monitor/.test(text)) wakeMonitorByMention(text);
+}
+
+/* ================= 演示剧本 ================= */
+function monitorWake(wakeup, work) {
+  const t = state.threads['t-mon'];
+  t.status = 'working'; t.ts = CLOCK; t.lastActivity = '被触发器唤醒,正在检查…';
+  t.items.push({ kind: 'divider', text: `休眠 ${Math.max(1, CLOCK - (t._sleepFrom || CLOCK - 12))} 分钟 · 0 token` });
+  t.items.push(Object.assign({ kind: 'wakeup', ts: CLOCK }, wakeup));
+  render();
+  work(t);
+}
+function monitorSleep(t, note) {
+  t.status = 'watching'; t._sleepFrom = CLOCK;
+  t.lastActivity = note || `值守中 · ${t.triggers.length} 个触发器`;
+  render();
+}
+
+let execDone = false;
+function simExecutorFinish() {
+  if (execDone) { toast('Executor 已经完成过这个 Turn 了,先重置原型', 'info'); return; }
+  execDone = true; const b = $('#d-exec'); if (b) b.disabled = true;
+  CLOCK += 1;
+  const te = state.threads['t-exec'];
+  te.items.find(i => i.status === 'run').status = 'done';
+  stream('t-exec', 'executor', '测试全部通过(41 passed)。归档功能完成:thread/archive、thread/unarchive 走 metadata store,thread/list 默认过滤已归档线程,canonical journal 未受影响。', () => {
+    te.status = 'settled'; te.ts = CLOCK; te.lastActivity = 'Turn 完成 · 归档实现完毕';
+    render();
+    toast('<b>Executor</b> 完成了 Turn — turn_completed 事件广播', 'check');
+    setTimeout(() => {
+      toast('触发器命中 → <b>Monitor</b> 被唤醒(观察:Executor turn_completed)', 'eye');
+      monitorWake({
+        type: 'watch', title: '观察 Thread 命中', armedTs: CLOCK - 34, by: 'Monitor',
+        cond: 'Executor「实现 thread 归档」 完成了 Turn #1',
+        prompt: '检查该 Turn 的 diff,评估风险,把结论发到 #release-42',
+      }, (t) => {
+        const tool1 = { kind: 'tool', ts: CLOCK, name: 'thread.read', detail: 't-exec · Turn #1 · diff 摘要 (+221 −10, 4 files)', status: 'run' };
+        t.items.push(tool1); render();
+        setTimeout(() => {
+          tool1.status = 'done'; render();
+          stream('t-mon', 'monitor',
+            '审查完毕。整体风险低:归档状态确实只落在 metadata store,canonical ItemList 干净。一个中等关注点 —— thread/list 的过滤发生在投影层,如果 metadata 暂时不可读,按现有降级规则这些线程会带着"无归档状态"回到列表,行为正确但值得在测试里钉住。结论发到作战室。', () => {
+            t.items.push({ kind: 'tool', ts: CLOCK, name: 'room.post', detail: '#release-42 · 风险结论 + 来源线程链接', status: 'done' });
+            t.history.push({ ts: CLOCK, type: 'watch', text: '观察命中:Executor turn_completed → Turn #2' });
+            monitorSleep(t);
+            const r = state.rooms['r-42'];
+            r.msgs.push({ from: 'monitor', ts: CLOCK,
+              text: '归档 Turn 审查完毕,风险低。metadata 与 canonical journal 边界干净。一个建议:metadata 不可读时的 thread/list 降级行为,建议补一条测试钉住。',
+              origin: { thread: 't-mon', label: 'Turn #2 · 触发器唤醒的审查' } });
+            if (!(state.view.type === 'room' && state.view.id === 'r-42')) r.unread++;
+            render();
+            toast('<b>Monitor</b> 已把结论发到 <b>#release-42</b>,回到值守(休眠)', 'chat');
+          });
+        }, 1300);
+      });
+    }, 1400);
+  });
+}
+
+function simFastForward() {
+  CLOCK += 20;
+  const t = state.threads['t-mon'];
+  const timer = t.triggers.find(g => g.type === 'timer');
+  if (!timer) { toast('Monitor 没有登记定时器(可能被你取消了)', 'info'); render(); return; }
+  timer.next = CLOCK + 20;
+  toast('定时心跳命中 → <b>Monitor</b> 被唤醒(每 20 分钟)', 'clock');
+  monitorWake({
+    type: 'timer', title: '定时心跳', armedTs: t.triggers[0]?.ts ?? CLOCK - 53, by: 'Monitor',
+    cond: '每 20 分钟例行巡视', prompt: '巡视 release-42 相关线程,有异常才发声',
+  }, (tt) => {
+    const tool = { kind: 'tool', ts: CLOCK, name: 'thread.events', detail: '扫描 t-exec / #release-42 自上次以来的新事件', status: 'run' };
+    tt.items.push(tool); render();
+    setTimeout(() => {
+      tool.status = 'done'; render();
+      stream('t-mon', 'monitor', '巡视完成:过去 20 分钟没有需要人注意的变化。不向作战室发声,继续休眠。', () => {
+        tt.history.push({ ts: CLOCK, type: 'timer', text: '心跳巡视:无异常,未发声' });
+        monitorSleep(tt);
+        toast('<b>Monitor</b> 巡视无异常,静默回到值守 — 廉价心跳的体感', 'moon');
+      });
+    }, 1200);
+  });
+}
+
+function simMention() {
+  const r = state.rooms['r-42'];
+  const q = '@Monitor 现在整体风险怎么样?journal 索引那边需要人工介入吗?';
+  r.msgs.push({ from: 'you', ts: CLOCK, text: q });
+  if (!(state.view.type === 'room' && state.view.id === 'r-42')) r.unread++;
+  render();
+  wakeMonitorByMention(q);
+}
+
+function wakeMonitorByMention(q) {
+  const r = state.rooms['r-42'];
+  const t = state.threads['t-mon'];
+  const g = t.triggers.find(x => x.type === 'mention');
+  if (!g) { toast('Monitor 没有登记 @提及触发器(可能被你取消了)', 'info'); return; }
+  setTimeout(() => {
+    toast('提及触发器命中 → <b>Monitor</b> 被唤醒', 'chat');
+    r.msgs.push({ sys: true, ts: CLOCK, text: '@Monitor 被提及唤醒(触发器:观察 #release-42 提及)' });
+    r.typing = 'monitor'; render();
+    monitorWake({
+      type: 'mention', title: '作战室提及', armedTs: g.ts, by: 'Monitor',
+      cond: `#release-42 · 你: "${q.slice(0, 40)}…"`, prompt: '阅读上下文并回应提问',
+    }, (tt) => {
+      setTimeout(() => {
+        stream('t-mon', 'monitor', '回顾两个线程的最新状态,整理回答发回作战室。', () => {
+          tt.items.push({ kind: 'tool', ts: CLOCK, name: 'room.post', detail: '#release-42 · 回应提问', status: 'done' });
+          tt.history.push({ ts: CLOCK, type: 'mention', text: '提及唤醒:回应了作战室提问' });
+          monitorSleep(tt);
+          r.typing = null;
+          r.msgs.push({ from: 'monitor', ts: CLOCK,
+            text: '当前整体风险低。归档功能边界干净;journal 索引是纯投影、可随时重建,迁移脚本批准后跑一次即可,不需要额外人工介入。我建议的唯一动作:给 metadata 降级路径补一条回归测试。',
+            origin: { thread: 't-mon', label: 'Turn · 提及唤醒' } });
+          if (!(state.view.type === 'room' && state.view.id === 'r-42')) r.unread++;
+          render();
+          toast('<b>Monitor</b> 已回应,回到值守', 'chat');
+        });
+      }, 1100);
+    });
+  }, 900);
+}
+
+/* ================= 演示台 ================= */
+$('#demo-body').innerHTML = `
+  <button class="d-btn" id="d-exec" onclick="simExecutorFinish()">${ic('play',{size:12})} Executor 完成当前 Turn</button>
+  <button class="d-btn" onclick="simFastForward()">${ic('ff',{size:12})} 快进 20 分钟(命中定时器)</button>
+  <button class="d-btn" onclick="simMention()">${ic('at',{size:12})} 有人在作战室 @Monitor</button>
+  <button class="d-btn" onclick="location.reload()">${ic('reset',{size:12})} 重置原型</button>
+  <button class="d-btn" style="border-style:dashed" onclick="document.body.classList.toggle('notes')">${ic('info',{size:12})} 显示/隐藏设计注记</button>
+  <div class="d-note">这些按钮模拟外部事件,用来体验触发器与唤醒的动态流程。侧栏右上角可切换收件箱/项目视图。</div>`;
+
+state.threads['t-mon']._sleepFrom = CLOCK - 32;
+render();
+</script>
+</body>
+</html>
