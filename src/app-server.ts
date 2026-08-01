@@ -49,6 +49,15 @@ export interface ThreadSnapshot {
   name?: string;
 }
 
+export interface UnavailableThreadSnapshot {
+  id: string;
+  status: "systemError";
+  error: string;
+  name?: string;
+}
+
+export type ThreadListEntry = ThreadSnapshot | UnavailableThreadSnapshot;
+
 export interface TurnHandle {
   id: string;
   done: Promise<void>;
@@ -147,15 +156,23 @@ export class ZenAppServer {
     return await this.#snapshot(thread);
   }
 
-  async listThreads(): Promise<ThreadSnapshot[]> {
+  async listThreads(): Promise<ThreadListEntry[]> {
     const threadIds = await this.#journal.listThreadIds();
-    const snapshots: ThreadSnapshot[] = [];
+    const snapshots: ThreadListEntry[] = [];
     for (const threadId of threadIds) {
-      const thread = await this.#loadThread(threadId);
-      if (thread !== undefined) {
-        snapshots.push(
-          await this.#snapshot(thread, this.#activeTurns.get(threadId)?.turnId),
-        );
+      try {
+        const thread = await this.#loadThread(threadId);
+        if (thread !== undefined) {
+          snapshots.push(
+            await this.#snapshot(
+              thread,
+              this.#activeTurns.get(threadId)?.turnId,
+            ),
+          );
+        }
+      } catch (error) {
+        console.warn(`Could not load Thread ${threadId}`, error);
+        snapshots.push(await this.#unavailableSnapshot(threadId, error));
       }
     }
     return snapshots;
@@ -371,6 +388,29 @@ export class ZenAppServer {
       provider: configuration.provider,
       sandbox: configuration.sandbox,
       approvalPolicy: configuration.approvalPolicy,
+      ...(productMetadata.name === undefined
+        ? {}
+        : { name: productMetadata.name }),
+    };
+  }
+
+  async #unavailableSnapshot(
+    threadId: string,
+    error: unknown,
+  ): Promise<UnavailableThreadSnapshot> {
+    let productMetadata: ThreadProductMetadata = {};
+    try {
+      productMetadata = await this.#threadMetadata.read(threadId);
+    } catch (metadataError) {
+      console.warn(
+        `Could not read product metadata for unavailable Thread ${threadId}`,
+        metadataError,
+      );
+    }
+    return {
+      id: threadId,
+      status: "systemError",
+      error: error instanceof Error ? error.message : String(error),
       ...(productMetadata.name === undefined
         ? {}
         : { name: productMetadata.name }),

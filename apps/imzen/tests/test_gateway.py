@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from imcodex.appserver import AppServerError
 from imcodex.models import InboundMessage
 
 from imzen.middleware import ImZenMiddleware
@@ -51,7 +52,11 @@ class FakeAppServer:
         payload = dict(params or {})
         self.calls.append((method, payload))
         if method == "thread/settings/update" and payload.get("model") == "missing":
-            raise RuntimeError("Model is not available from this Zen host: missing")
+            raise AppServerError(
+                "Model is not available from this Zen host: missing",
+                code=-32000,
+                data={"zenCode": "model_unavailable"},
+            )
         if method == "thread/settings/update" and payload.get("model") == "busy":
             raise RuntimeError("Thread thread-1 already has a running turn")
         return {}

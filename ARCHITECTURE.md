@@ -15,6 +15,9 @@
   canonical ItemList。损坏或暂时不可读的产品元数据不得阻断 Thread 的创建、
   读取或列表；ZAS 降级为无展示名称并明确记录 warning，而 metadata 写入失败
   仍须返回错误。
+- **UnavailableThreadSnapshot** — ZAS 在列举 Thread 时对无法重放的 canonical
+  journal 生成的只读故障投影；它只暴露 threadId、可用的产品名称和
+  `systemError`，不伪造或跳过权威会话历史。
 - **ModelCatalog** — 宿主公开的可选模型与默认模型目录；App Server 只投影和
   校验它，credential 与 Provider 连接仍由宿主外部配置持有。目录必须有且仅有
   一个可见默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由
@@ -124,6 +127,9 @@ Codex CLI、T3 Code 是收益，不是核心设计前提。
 - `thread/name/set` 修改 ZAS 的 ThreadMetadataStore 并广播
   `thread/name/updated`；名称不是 Agent Item。`thread/list`、`thread/read` 与
   `thread/resume` 返回当前名称。
+- `thread/list` 必须隔离单个损坏 journal，并使用 Codex 标准
+  `status: systemError` 显式返回该 threadId；`thread/read` / `thread/resume`
+  仍明确失败，且不得用默认配置伪造可恢复的 Thread snapshot。
 - 未实现的方法一律返回 JSON-RPC `-32601`；不返回伪造的成功结果。
 - **sandbox 与 approval 分离**：sandbox 限制工具实际上能做什么，approval
   决定何时询问用户。首版只接受明确支持的 sandbox mode，其他 mode 返回

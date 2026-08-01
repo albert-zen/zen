@@ -24,6 +24,7 @@ import {
   type ModelRequest,
 } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
+import { projectThread } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime } from "../src/runtime.js";
 import {
   InMemoryThreadMetadataStore,
@@ -295,6 +296,42 @@ test("product metadata load failures degrade and retry", async (t) => {
       "utf8",
     );
     assert.equal((await server.readThread(thread.id)).name, "Retried name");
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("isolates a corrupt journal and lists it as a system error", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-corrupt-journal-"),
+  );
+  const journalDirectory = path.join(temporaryDirectory, "threads");
+  const metadata = new InMemoryThreadMetadataStore();
+  const journal = new JsonlThreadJournal(journalDirectory);
+  try {
+    const server = createServer({ journal, threadMetadata: metadata });
+    const healthy = await server.startThread();
+    await writeFile(
+      path.join(journalDirectory, "corrupt-thread.jsonl"),
+      "not-json\n",
+      "utf8",
+    );
+    await metadata.setName("corrupt-thread", "Damaged work");
+
+    const listed = await server.listThreads();
+    assert.equal(listed.length, 2);
+    assert(listed.some((entry) => entry.id === healthy.id));
+    const unavailable = listed.find((entry) => entry.id === "corrupt-thread");
+    assert(unavailable !== undefined && "status" in unavailable);
+    assert.equal(unavailable.status, "systemError");
+    assert.equal(unavailable.name, "Damaged work");
+    assert.match(unavailable.error, /Invalid JSON/u);
+    assert.deepEqual(
+      projectThread(unavailable, { includeTurns: false }).status,
+      { type: "systemError" },
+    );
+    await assert.rejects(server.readThread("corrupt-thread"), /Invalid JSON/u);
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
@@ -672,6 +709,7 @@ test("keeps stale open turns interrupted while only the current turn is active",
     await server.readThread(threadId),
     ...(await server.listThreads()),
   ]) {
+    assert(!("status" in snapshot));
     assert.deepEqual(
       snapshot.turns.map((turn) => [turn.id, turn.status]),
       [

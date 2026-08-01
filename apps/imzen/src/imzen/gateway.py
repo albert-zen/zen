@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from imcodex.appserver import AppServerError
 from imcodex.models import InboundMessage, OutboundMessage
 
 from .config import PermissionMode
@@ -461,7 +462,7 @@ class ImZenGateway:
             )
         except Exception as exc:
             text = f"Could not switch model to **{argument}**: {exc}"
-            if "not available" in str(exc).casefold():
+            if _zen_error_code(exc) == "model_unavailable":
                 try:
                     text = f"{text}\n\n{await self._model_catalog_markdown()}"
                 except Exception:
@@ -762,6 +763,13 @@ class ImZenGateway:
         if not items:
             raise ValueError("message text and attachments are empty")
         return items
+
+
+def _zen_error_code(error: Exception) -> str | None:
+    if not isinstance(error, AppServerError) or not isinstance(error.data, dict):
+        return None
+    code = error.data.get("zenCode")
+    return code if isinstance(code, str) else None
 
 
 def _thread_id(result: dict) -> str:
