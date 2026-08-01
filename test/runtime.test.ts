@@ -345,9 +345,10 @@ test("validates canonical items before appending them to the journal", async () 
     runtimeIdFactory: () => "duplicate-id",
   });
   const thread = await server.startThread();
-  const turn = await server.startTurn(thread.id, "must not persist");
-
-  await assert.rejects(turn.done, /Duplicate item id duplicate-id/u);
+  await assert.rejects(
+    server.startTurn(thread.id, "must not persist"),
+    /Duplicate item id duplicate-id/u,
+  );
   assert.deepEqual(
     (await journal.read(thread.id)).map((item) => item.type),
     ["thread_metadata"],
@@ -1246,3 +1247,300 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
     "provider complete",
   );
 });
+
+test("soft steer stays in one Turn and forces a new sample after streamed output", async () => {
+  const firstSampleEntered = testDeferred<void>();
+  const releaseFirstSample = testDeferred<void>();
+  const requests: ModelMessage[][] = [];
+  let sample = 0;
+  const model: ModelAdapter = {
+    provider: "steer-test",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request.messages));
+      sample += 1;
+      if (sample === 1) {
+        firstSampleEntered.resolve();
+        await releaseFirstSample.promise;
+        yield { type: "text_delta", delta: "first answer" };
+        return;
+      }
+      yield { type: "text_delta", delta: "steered answer" };
+    },
+  };
+  const server = createServer({ model });
+  const events: AppServerEvent[] = [];
+  server.subscribe((event) => events.push(event));
+  const thread = await server.startThread();
+  const active = await server.startTurn(thread.id, "initial request", {
+    clientId: "initial-client-id",
+  });
+  await firstSampleEntered.promise;
+
+  const steered = await server.steerTurn(
+    thread.id,
+    active.id,
+    "follow this correction",
+    { clientId: "steer-client-id" },
+  );
+  assert.equal(steered.id, active.id);
+  assert.equal(
+    (
+      await server.steerTurn(thread.id, active.id, "follow this correction", {
+        clientId: "steer-client-id",
+      })
+    ).id,
+    active.id,
+  );
+  await server.steerTurn(thread.id, active.id, "then preserve the tests", {
+    clientId: "steer-client-id-2",
+  });
+  await assert.rejects(
+    server.steerTurn(thread.id, active.id, "conflicting correction", {
+      clientId: "steer-client-id",
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "idempotency_conflict",
+  );
+
+  releaseFirstSample.resolve();
+  await active.done;
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1], [
+    { role: "user", text: "initial request" },
+    { role: "assistant", text: "first answer" },
+    { role: "user", text: "follow this correction" },
+    { role: "user", text: "then preserve the tests" },
+  ]);
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns.length, 1);
+  assert.equal(snapshot.turns[0]?.id, active.id);
+  assert.equal(snapshot.turns[0]?.status, "completed");
+  assert.deepEqual(
+    snapshot.items
+      .filter((item) => item.type === "user_message")
+      .map((item) => item.text),
+    ["initial request", "follow this correction", "then preserve the tests"],
+  );
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "turn_started").length,
+    1,
+  );
+  assert.equal(
+    events.filter(
+      (event) =>
+        event.type === "item_completed" &&
+        event.item.type === "user_message" &&
+        event.item.clientId === "steer-client-id",
+    ).length,
+    1,
+  );
+});
+
+test("soft steer waits behind a tool result and does not cancel approval", async () => {
+  const approvalRequested = testDeferred<void>();
+  const releaseApproval = testDeferred<"accept">();
+  const requests: ModelMessage[][] = [];
+  let sample = 0;
+  const model: ModelAdapter = {
+    provider: "steer-tool-test",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request.messages));
+      sample += 1;
+      if (sample === 1) {
+        yield {
+          type: "tool_call",
+          callId: "steer-call",
+          name: "shell",
+          arguments: { command: "printf tool" },
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "done after correction" };
+    },
+  };
+  const tools: ToolExecutor = {
+    definitions: [
+      {
+        name: "shell",
+        description: "shell",
+        inputSchema: { type: "object" },
+      },
+    ],
+    async execute() {
+      return { output: "tool complete", exitCode: 0 };
+    },
+  };
+  const server = createServer({
+    model,
+    tools,
+    approvalPolicy: "always",
+  });
+  const thread = await server.startThread();
+  const active = await server.startTurn(thread.id, "use a tool", {
+    requestApproval: async () => {
+      approvalRequested.resolve();
+      return await releaseApproval.promise;
+    },
+  });
+  await testWithin(
+    Promise.race([
+      approvalRequested.promise,
+      active.done.then(() => {
+        throw new Error("Turn finished before requesting approval");
+      }),
+    ]),
+    "approval request",
+  );
+
+  await server.steerTurn(thread.id, active.id, "change the final response", {
+    clientId: "approval-steer",
+  });
+  assert.equal(requests.length, 1);
+  releaseApproval.resolve("accept");
+  await testWithin(active.done, "steered approval turn");
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1], [
+    { role: "user", text: "use a tool" },
+    {
+      role: "assistant",
+      toolCalls: [
+        {
+          callId: "steer-call",
+          name: "shell",
+          arguments: { command: "printf tool" },
+        },
+      ],
+    },
+    { role: "tool", callId: "steer-call", text: "tool complete", exitCode: 0 },
+    { role: "user", text: "change the final response" },
+  ]);
+});
+
+test("soft steer never acknowledges a failed journal append or crosses a terminal fence", async () => {
+  const backing = new InMemoryThreadJournal();
+  const journal: ThreadJournal = {
+    append: async (item) => {
+      if (item.type === "user_message" && item.text === "must not persist") {
+        throw new Error("steer journal unavailable");
+      }
+      await backing.append(item);
+    },
+    listThreadIds: async () => await backing.listThreadIds(),
+    read: async (threadId) => await backing.read(threadId),
+  };
+  const modelEntered = testDeferred<void>();
+  const releaseModel = testDeferred<void>();
+  const model: ModelAdapter = {
+    provider: "steer-failure-test",
+    async *stream(): AsyncIterable<ModelEvent> {
+      modelEntered.resolve();
+      await releaseModel.promise;
+      yield { type: "text_delta", delta: "finished" };
+    },
+  };
+  const server = createServer({ journal, model });
+  const thread = await server.startThread();
+  const active = await server.startTurn(thread.id, "initial");
+  await modelEntered.promise;
+
+  await assert.rejects(
+    server.steerTurn(thread.id, active.id, "must not persist", {
+      clientId: "failed-steer-id",
+    }),
+    /steer journal unavailable/u,
+  );
+  assert.equal(
+    (await server.readThread(thread.id)).items.some(
+      (item) =>
+        item.type === "user_message" && item.clientId === "failed-steer-id",
+    ),
+    false,
+  );
+
+  releaseModel.resolve();
+  await active.done;
+  await assert.rejects(
+    server.steerTurn(thread.id, active.id, "too late"),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "turn_not_running",
+  );
+  assert.equal(
+    (await server.readThread(thread.id)).items.at(-1)?.type,
+    "turn_completed",
+  );
+});
+
+test("an interrupt that wins the mutation fence rejects a racing soft steer", async () => {
+  const modelEntered = testDeferred<void>();
+  const releaseModel = testDeferred<void>();
+  const model: ModelAdapter = {
+    provider: "steer-interrupt-test",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      modelEntered.resolve();
+      await releaseModel.promise;
+      request.signal.throwIfAborted();
+      yield { type: "text_delta", delta: "too late" };
+    },
+  };
+  const server = createServer({ model });
+  const thread = await server.startThread();
+  const active = await server.startTurn(thread.id, "wait");
+  await modelEntered.promise;
+
+  const interrupted = server.interruptTurn(thread.id, active.id);
+  await assert.rejects(
+    server.steerTurn(thread.id, active.id, "must lose the fence"),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "turn_not_running",
+  );
+  releaseModel.resolve();
+  await interrupted;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns[0]?.status, "interrupted");
+  assert.equal(
+    snapshot.items.some(
+      (item) =>
+        item.type === "user_message" && item.text === "must lose the fence",
+    ),
+    false,
+  );
+});
+
+function testDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T extends void ? void : T) => void;
+} {
+  let resolve!: (value: T extends void ? void : T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise as (value: T extends void ? void : T) => void;
+  });
+  return { promise, resolve };
+}
+
+async function testWithin<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out waiting for ${label}`)),
+          1_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}

@@ -20,6 +20,7 @@ Client requests：
 - `thread/settings/update`
 - `thread/unsubscribe`
 - `turn/start`
+- `turn/steer`
 - `turn/interrupt`
 
 Client notification：`initialized`。
@@ -62,6 +63,21 @@ MCP `-c` 配置由 CLI remote bridge 启动边界验证后忽略，不进入 wir
 `--remote`、可选的 `--auth-token-file` 和这两项配置外，不接受宿主或 runtime
 选项；这些配置属于中央 App Server。T3 MCP tools 尚未实现。Unix socket 与
 非本机监听尚未实现。
+
+## Soft steer
+
+`turn/steer` 对齐 Codex 0.146.0 的 same-Turn 行为。请求必须包含
+`threadId`、作为 fencing token 的 `expectedTurnId`，以及非空 `input`；Zen
+当前只接受 `[{ type: "text", text: string }]`，可选
+`clientUserMessageId` 用于可靠重试。成功返回 `{ turnId }`，其中 id 必须仍是
+同一个 active Turn，不产生新的 `turn/started`。无 active Turn、fence 过期、
+目标已经终态或不可表示的 input 都明确失败。
+
+接受成功前，输入已经作为 canonical `user_message` 写入 journal。相同
+`clientUserMessageId`、Turn 与内容的重试返回原成功且不重复追加；冲突复用失败。
+steer 不取消当前 model stream、tool 或 approval，也不处理 approval。若它在
+一次模型响应期间到达，Runtime 会完成该响应及其工具结果，然后在下一次 sampling
+前按 journal 中的 steer FIFO 顺序注入；因此原本可能结束的响应也会继续下一轮。
 
 ## 兼容范围
 

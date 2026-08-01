@@ -58,6 +58,11 @@ export interface UserMessageItem extends ItemBase {
   turnId: string;
   text: string;
   clientId?: string;
+  /**
+   * Model-response item whose tool/result step must finish before this
+   * same-Turn steer is presented to the next model sample.
+   */
+  deliveryAfter?: string;
 }
 
 export interface AgentMessageItem extends ItemBase {
@@ -76,6 +81,8 @@ export interface ToolCallItem extends ItemBase {
   type: "tool_call";
   turnId: string;
   callId: string;
+  /** Stable id of the model response that produced this call. */
+  modelResponseId?: string;
   name: string;
   arguments: Record<string, unknown>;
 }

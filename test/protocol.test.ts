@@ -348,6 +348,107 @@ test("resumes an active thread when T3 repeats its effective model", async () =>
   }
 });
 
+test("dispatches Codex turn/steer to the same active Turn for every subscriber", async () => {
+  const appServer = testHost("always");
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const initiating = await CodexClient.connect(server.url);
+  const steering = await CodexClient.connect(server.url);
+  const approvalSeen = deferred<void>();
+  const releaseApproval = deferred<{ decision: "decline" }>();
+  const turnCompleted = deferred<void>();
+  try {
+    await initiating.initialize({
+      name: "initiating",
+      title: "Initiating",
+      version: "1",
+    });
+    await steering.initialize({
+      name: "steering",
+      title: "Steering",
+      version: "1",
+    });
+    initiating.onServerRequest(
+      "item/commandExecution/requestApproval",
+      async () => {
+        approvalSeen.resolve();
+        return await releaseApproval.promise;
+      },
+    );
+    initiating.onNotification("turn/completed", () => {
+      turnCompleted.resolve();
+    });
+    const started = await initiating.request("thread/start", {
+      approvalPolicy: "on-request",
+      sandbox: "danger-full-access",
+    });
+    const thread = responseResult<Record<string, unknown>>(started, "thread");
+    await steering.request("thread/resume", { threadId: thread.id });
+    const turnStart = await initiating.request("turn/start", {
+      threadId: thread.id,
+      input: [{ type: "text", text: "!shell printf active" }],
+    });
+    const turn = responseResult<Record<string, unknown>>(turnStart, "turn");
+    await within(approvalSeen.promise);
+
+    const observedByInitiator = deferred<Record<string, unknown>>();
+    const observedBySteerer = deferred<Record<string, unknown>>();
+    const observeSteer =
+      (target: ReturnType<typeof deferred<Record<string, unknown>>>) =>
+      (params: unknown): void => {
+        if (
+          isRecord(params) &&
+          isRecord(params.item) &&
+          params.item.type === "userMessage" &&
+          params.item.clientId === "steer-protocol-id"
+        ) {
+          target.resolve(params);
+        }
+      };
+    initiating.onNotification(
+      "item/completed",
+      observeSteer(observedByInitiator),
+    );
+    steering.onNotification("item/completed", observeSteer(observedBySteerer));
+
+    assert.deepEqual(
+      await steering.request("turn/steer", {
+        threadId: thread.id,
+        expectedTurnId: turn.id,
+        input: [{ type: "text", text: "change direction" }],
+        clientUserMessageId: "steer-protocol-id",
+      }),
+      { turnId: turn.id },
+    );
+    const observations = await within(
+      Promise.all([observedByInitiator.promise, observedBySteerer.promise]),
+    );
+    for (const observation of observations) {
+      assert.equal(observation.threadId, thread.id);
+      assert.equal(observation.turnId, turn.id);
+    }
+
+    await assert.rejects(
+      steering.request("turn/steer", {
+        threadId: thread.id,
+        expectedTurnId: "stale-turn",
+        input: [{ type: "text", text: "must fail" }],
+      }),
+      (error: unknown) =>
+        error instanceof CodexClientError && error.code === -32000,
+    );
+    releaseApproval.resolve({ decision: "decline" });
+    await within(turnCompleted.promise);
+  } finally {
+    initiating.close();
+    steering.close();
+    await server.close();
+  }
+});
+
 test("synchronizes ZAS-owned thread names without adding Agent items", async () => {
   const appServer = testHost();
   const server = await serveCodexWebSocket({
