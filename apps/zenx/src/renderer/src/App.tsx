@@ -1,13 +1,30 @@
 import { useEffect, useState } from "react";
-import type { AppServerHostStatus } from "../../main/app-server-manager";
+import type { AppServerHostStatus } from "../../main/app-server-manager.js";
+import type { Thread } from "../../protocol-client/index.js";
 import { Icon } from "./icons";
+import { Sidebar } from "./Sidebar";
+import {
+  applyThreadNotification,
+  readSidebarMode,
+  threadTitle,
+  writeSidebarMode,
+  type SidebarMode,
+} from "./thread-list";
 
 export function App() {
   const [railOpen, setRailOpen] = useState(true);
   const [serverStatus, setServerStatus] = useState<AppServerHostStatus>({
     type: "starting",
   });
-  const [threadCount, setThreadCount] = useState<number | null>(null);
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
+    try {
+      return readSidebarMode(window.localStorage);
+    } catch {
+      return "inbox";
+    }
+  });
   const [requestError, setRequestError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -16,7 +33,7 @@ export function App() {
       try {
         const result = await window.zenx.protocol.request("thread/list", {});
         if (active) {
-          setThreadCount(result.data.length);
+          setThreads(result.data);
           setRequestError(null);
         }
       } catch (error) {
@@ -32,6 +49,15 @@ export function App() {
       setServerStatus(status);
       if (status.type === "ready") void loadThreads();
     });
+    const disposeNotifications = window.zenx.protocol.onNotification(
+      (method, params) => {
+        if (active) {
+          setThreads((current) =>
+            applyThreadNotification(current, method, params),
+          );
+        }
+      },
+    );
     void window.zenx.protocol
       .getStatus()
       .then((status) => {
@@ -49,60 +75,45 @@ export function App() {
     return () => {
       active = false;
       dispose();
+      disposeNotifications();
     };
   }, []);
 
+  const selectedThread =
+    threads.find((thread) => thread.id === selectedThreadId) ?? null;
+  const changeSidebarMode = (mode: SidebarMode) => {
+    setSidebarMode(mode);
+    try {
+      writeSidebarMode(window.localStorage, mode);
+    } catch {
+      // A disabled localStorage keeps the in-memory preference for this window.
+    }
+  };
+
   return (
     <div className="app-shell">
-      <aside className="sidebar" aria-label="Thread navigation">
-        <header className="sidebar-header">
-          <div className="brand-mark" aria-hidden="true">
-            Z
-          </div>
-          <div className="brand-name">
-            ZenX <Icon name="chevron-down" size={11} />
-          </div>
-          <button
-            className="icon-button"
-            type="button"
-            aria-label="Search threads"
-          >
-            <Icon name="search" />
-          </button>
-        </header>
-
-        <nav className="sidebar-nav" aria-label="Primary">
-          <button className="nav-item" type="button">
-            <Icon name="compose" />
-            New conversation
-          </button>
-          <button
-            className="nav-item selected"
-            type="button"
-            aria-current="page"
-          >
-            <Icon name="inbox" />
-            Inbox
-          </button>
-        </nav>
-
-        <section className="thread-list" aria-labelledby="threads-heading">
-          <h2 id="threads-heading">
-            Threads{threadCount === null ? "" : ` · ${String(threadCount)}`}
-          </h2>
-          <div className="sidebar-empty">
-            {serverStatus.type === "ready"
-              ? "Your conversations will appear here."
-              : "Waiting for the local App Server."}
-          </div>
-        </section>
-      </aside>
+      <Sidebar
+        mode={sidebarMode}
+        onModeChange={changeSidebarMode}
+        onSelectThread={setSelectedThreadId}
+        selectedThreadId={selectedThreadId}
+        serverReady={serverStatus.type === "ready"}
+        threads={threads}
+      />
 
       <main className="workspace">
         <header className="workspace-header">
           <div>
-            <h1>Start a conversation</h1>
-            <p>Select a thread or create a new one.</p>
+            <h1>
+              {selectedThread === null
+                ? "Start a conversation"
+                : threadTitle(selectedThread)}
+            </h1>
+            <p>
+              {selectedThread === null
+                ? "Select a thread or create a new one."
+                : `${selectedThread.cwd} · ${selectedThread.modelProvider}`}
+            </p>
           </div>
           <button
             className={`toolbar-button${railOpen ? " active" : ""}`}
@@ -135,7 +146,7 @@ export function App() {
             <h2>Starting Zen App Server</h2>
             <p>Connecting to the local agent runtime…</p>
           </section>
-        ) : (
+        ) : selectedThread === null ? (
           <section className="empty-canvas" aria-label="Empty conversation">
             <div className="empty-glyph" aria-hidden="true">
               <Icon name="thread" size={22} />
@@ -146,6 +157,14 @@ export function App() {
               <Icon name="compose" size={15} />
               New conversation
             </button>
+          </section>
+        ) : (
+          <section className="empty-canvas" aria-label="Selected thread">
+            <div className="empty-glyph" aria-hidden="true">
+              <Icon name="thread" size={22} />
+            </div>
+            <h2>Thread selected</h2>
+            <p>Conversation history will appear here in the thread view.</p>
           </section>
         )}
       </main>
