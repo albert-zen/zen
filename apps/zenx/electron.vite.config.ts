@@ -13,7 +13,16 @@ export default defineConfig({
       },
     },
   },
-  preload: {},
+  preload: {
+    build: {
+      rollupOptions: {
+        output: {
+          format: "cjs",
+          entryFileNames: "[name].cjs",
+        },
+      },
+    },
+  },
   renderer: {
     plugins: [react()],
   },

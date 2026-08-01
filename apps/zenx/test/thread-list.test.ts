@@ -47,6 +47,25 @@ test("derives recency-first inbox groups and preserves system errors", () => {
   assert.match(threadTitle(unavailable), /Unavailable thread/u);
 });
 
+test("moves active approval threads to Needs you without duplicating them", () => {
+  const pending = makeThread("pending", 40, {
+    type: "active",
+    activeFlags: [],
+  });
+  const active = makeThread("active", 30, {
+    type: "active",
+    activeFlags: [],
+  });
+  const sections = deriveInboxSections(
+    [active, pending],
+    new Set([pending.id]),
+  );
+  assert.deepEqual(
+    sections.map((section) => section.threads.map((thread) => thread.id)),
+    [["pending"], ["active"], []],
+  );
+});
+
 test("derives project groups only from cwd and isolates unavailable journals", () => {
   const zen = makeThread("zen", 20, { type: "idle" }, "/work/zen");
   const nested = makeThread("nested", 10, { type: "idle" }, "/tmp/zen");
@@ -84,8 +103,25 @@ test("applies name and turn lifecycle notifications without altering errors", ()
     30,
   );
   assert.equal(active[0]?.status.type, "active");
-  const settled = applyThreadNotification(
+  const previewed = applyThreadNotification(
     active,
+    "item/completed",
+    {
+      threadId: idle.id,
+      turnId: "turn",
+      item: {
+        type: "userMessage",
+        id: "message",
+        clientId: null,
+        content: [{ type: "text", text: "Newest prompt", text_elements: [] }],
+      },
+      completedAtMs: 35_000,
+    },
+    35,
+  );
+  assert.equal(previewed[0]?.preview, "Newest prompt");
+  const settled = applyThreadNotification(
+    previewed,
     "turn/completed",
     { threadId: idle.id, turn: makeTurn("turn", "completed") },
     40,

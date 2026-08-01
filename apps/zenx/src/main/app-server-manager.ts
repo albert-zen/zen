@@ -10,6 +10,8 @@ import {
   type ClientRequestResults,
   type ServerNotificationMethod,
   type ServerNotificationParams,
+  type ServerRequestParams,
+  type ServerRequestResults,
 } from "../protocol-client/index.js";
 import {
   isHostEvent,
@@ -38,10 +40,37 @@ type NotificationListener = (
   params: ServerNotificationParams[ServerNotificationMethod],
 ) => void;
 
+export type ApprovalDecision =
+  ServerRequestResults["item/commandExecution/requestApproval"]["decision"];
+
+export interface ApprovalRequestEvent {
+  requestId: string;
+  params: ServerRequestParams["item/commandExecution/requestApproval"];
+}
+
+export interface ApprovalResolvedEvent {
+  requestId: string;
+  threadId: string;
+  decision: ApprovalDecision | null;
+}
+
+interface PendingApproval {
+  event: ApprovalRequestEvent;
+  decision: ApprovalDecision | null;
+  resolve(result: { decision: ApprovalDecision }): void;
+}
+
 export class AppServerManager {
   readonly #options: AppServerManagerOptions;
   readonly #statusListeners = new Set<(status: AppServerHostStatus) => void>();
   readonly #notificationListeners = new Set<NotificationListener>();
+  readonly #approvalListeners = new Set<
+    (event: ApprovalRequestEvent) => void
+  >();
+  readonly #approvalResolvedListeners = new Set<
+    (event: ApprovalResolvedEvent) => void
+  >();
+  readonly #pendingApprovals = new Map<string, PendingApproval>();
   #status: AppServerHostStatus = { type: "stopped" };
   #child: ChildProcess | undefined;
   #client: ZenXProtocolClient | undefined;
@@ -133,9 +162,40 @@ export class AppServerManager {
     return () => this.#notificationListeners.delete(listener);
   }
 
+  onApprovalRequest(
+    listener: (event: ApprovalRequestEvent) => void,
+  ): () => void {
+    this.#approvalListeners.add(listener);
+    return () => this.#approvalListeners.delete(listener);
+  }
+
+  get pendingApprovalRequests(): readonly ApprovalRequestEvent[] {
+    return [...this.#pendingApprovals.values()].map((pending) => pending.event);
+  }
+
+  onApprovalResolved(
+    listener: (event: ApprovalResolvedEvent) => void,
+  ): () => void {
+    this.#approvalResolvedListeners.add(listener);
+    return () => this.#approvalResolvedListeners.delete(listener);
+  }
+
+  respondToApproval(requestId: string, decision: ApprovalDecision): void {
+    const pending = this.#pendingApprovals.get(requestId);
+    if (pending === undefined) {
+      throw new Error(`Approval request ${requestId} is no longer pending`);
+    }
+    if (pending.decision !== null) {
+      throw new Error(`Approval request ${requestId} already has a response`);
+    }
+    pending.decision = decision;
+    pending.resolve({ decision });
+  }
+
   async stop(): Promise<void> {
     if (this.#stopping) return;
     this.#stopping = true;
+    this.#cancelPendingApprovals();
     this.#client?.close();
     this.#client = undefined;
     const child = this.#child;
@@ -150,6 +210,24 @@ export class AppServerManager {
   }
 
   #forwardNotifications(client: ZenXProtocolClient): void {
+    client.onServerRequest(
+      "item/commandExecution/requestApproval",
+      async (params, context) => {
+        const requestId = String(context.requestId);
+        if (this.#pendingApprovals.has(requestId)) {
+          throw new Error(`Duplicate approval request ${requestId}`);
+        }
+        return await new Promise<{ decision: ApprovalDecision }>((resolve) => {
+          const event = { requestId, params };
+          this.#pendingApprovals.set(requestId, {
+            event,
+            decision: null,
+            resolve,
+          });
+          for (const listener of this.#approvalListeners) listener(event);
+        });
+      },
+    );
     for (const method of [
       "thread/started",
       "thread/name/updated",
@@ -164,11 +242,34 @@ export class AppServerManager {
       "error",
     ] as const) {
       client.onNotification(method, (params) => {
+        if (method === "serverRequest/resolved") {
+          this.#resolveApproval(
+            params as ServerNotificationParams["serverRequest/resolved"],
+          );
+        }
         for (const listener of this.#notificationListeners) {
           listener(method, params);
         }
       });
     }
+  }
+
+  #resolveApproval(
+    params: ServerNotificationParams["serverRequest/resolved"],
+  ): void {
+    const pending = this.#pendingApprovals.get(params.requestId);
+    if (pending === undefined) return;
+    if (pending.decision === null) {
+      pending.decision = "cancel";
+      pending.resolve({ decision: "cancel" });
+    }
+    const event = {
+      requestId: params.requestId,
+      threadId: params.threadId,
+      decision: pending.decision,
+    } satisfies ApprovalResolvedEvent;
+    this.#pendingApprovals.delete(params.requestId);
+    for (const listener of this.#approvalResolvedListeners) listener(event);
   }
 
   #handleChildExit(
@@ -178,6 +279,7 @@ export class AppServerManager {
   ): void {
     if (this.#child !== child) return;
     this.#child = undefined;
+    this.#cancelPendingApprovals();
     this.#client?.close();
     this.#client = undefined;
     if (!this.#stopping) {
@@ -193,6 +295,13 @@ export class AppServerManager {
   #setStatus(status: AppServerHostStatus): void {
     this.#status = status;
     for (const listener of this.#statusListeners) listener(status);
+  }
+
+  #cancelPendingApprovals(): void {
+    for (const pending of this.#pendingApprovals.values()) {
+      pending.resolve({ decision: "cancel" });
+    }
+    this.#pendingApprovals.clear();
   }
 }
 
