@@ -1,9 +1,11 @@
 dist/
+apps/zenx/out/
 node_modules/
 .zen/
 .env
 .env.*
 *.log
+*.tsbuildinfo
 **/.pytest_cache/
 **/.ruff_cache/
 **/.venv/
