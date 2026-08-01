@@ -449,6 +449,118 @@ test("dispatches Codex turn/steer to the same active Turn for every subscriber",
   }
 });
 
+test("turn/replace atomically interrupts the fenced Turn before starting its successor", async () => {
+  const appServer = testHost("always");
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const initiating = await CodexClient.connect(server.url);
+  const replacing = await CodexClient.connect(server.url);
+  const approvalSeen = deferred<void>();
+  const releaseOldApproval = deferred<{ decision: "decline" }>();
+  const approvalResolved = deferred<void>();
+  const replacementCompleted = deferred<void>();
+  const observed: Array<{ method: string; params: unknown }> = [];
+  try {
+    await initiating.initialize({
+      name: "initiating",
+      title: "Initiating",
+      version: "1",
+    });
+    await replacing.initialize({
+      name: "replacing",
+      title: "Replacing",
+      version: "1",
+    });
+    initiating.onServerRequest(
+      "item/commandExecution/requestApproval",
+      async () => {
+        approvalSeen.resolve();
+        return await releaseOldApproval.promise;
+      },
+    );
+    initiating.onNotification("serverRequest/resolved", () => {
+      approvalResolved.resolve();
+    });
+    for (const method of ["turn/completed", "turn/started", "item/completed"]) {
+      replacing.onNotification(method, (params) => {
+        observed.push({ method, params });
+        if (
+          method === "turn/completed" &&
+          isRecord(params) &&
+          isRecord(params.turn) &&
+          params.turn.status === "completed"
+        ) {
+          replacementCompleted.resolve();
+        }
+      });
+    }
+
+    const started = await initiating.request("thread/start", {
+      approvalPolicy: "on-request",
+      sandbox: "danger-full-access",
+    });
+    const thread = responseResult<Record<string, unknown>>(started, "thread");
+    await replacing.request("thread/resume", { threadId: thread.id });
+    const turnStart = await initiating.request("turn/start", {
+      threadId: thread.id,
+      input: [{ type: "text", text: "!shell printf old" }],
+    });
+    const oldTurn = responseResult<Record<string, unknown>>(turnStart, "turn");
+    await within(approvalSeen.promise);
+
+    const response = await replacing.request("turn/replace", {
+      threadId: thread.id,
+      expectedTurnId: oldTurn.id,
+      input: [{ type: "text", text: "replacement request" }],
+      clientUserMessageId: "replace-protocol-id",
+    });
+    assert(isRecord(response));
+    assert.equal(response.interruptedTurnId, oldTurn.id);
+    assert.equal(typeof response.turnId, "string");
+    assert.notEqual(response.turnId, oldTurn.id);
+    await within(approvalResolved.promise);
+    await within(replacementCompleted.promise);
+    releaseOldApproval.resolve({ decision: "decline" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const oldCompletedIndex = observed.findIndex(
+      ({ method, params }) =>
+        method === "turn/completed" &&
+        isRecord(params) &&
+        isRecord(params.turn) &&
+        params.turn.id === oldTurn.id &&
+        params.turn.status === "interrupted",
+    );
+    const newStartedIndex = observed.findIndex(
+      ({ method, params }) =>
+        method === "turn/started" &&
+        isRecord(params) &&
+        isRecord(params.turn) &&
+        params.turn.id === response.turnId,
+    );
+    const replacementInputIndex = observed.findIndex(
+      ({ method, params }) =>
+        method === "item/completed" &&
+        isRecord(params) &&
+        isRecord(params.item) &&
+        params.item.type === "userMessage" &&
+        params.item.clientId === "replace-protocol-id",
+    );
+    assert(oldCompletedIndex >= 0);
+    assert(newStartedIndex > oldCompletedIndex);
+    assert(replacementInputIndex > newStartedIndex);
+  } finally {
+    releaseOldApproval.resolve({ decision: "decline" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    initiating.close();
+    replacing.close();
+    await server.close();
+  }
+});
+
 test("synchronizes ZAS-owned thread names without adding Agent items", async () => {
   const appServer = testHost();
   const server = await serveCodexWebSocket({

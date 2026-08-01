@@ -242,6 +242,7 @@ export function projectCompletedItem(
     case "tool_result":
     case "turn_aborted":
     case "turn_completed":
+    case "turn_replacement_requested":
     case "turn_started":
       return null;
   }

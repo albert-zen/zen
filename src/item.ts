@@ -4,6 +4,7 @@ export type ItemType =
   | "turn_started"
   | "turn_completed"
   | "turn_aborted"
+  | "turn_replacement_requested"
   | "user_message"
   | "agent_message"
   | "reasoning"
@@ -51,6 +52,14 @@ export interface TurnAbortedItem extends ItemBase {
   type: "turn_aborted";
   turnId: string;
   reason: string;
+}
+
+export interface TurnReplacementRequestedItem extends ItemBase {
+  type: "turn_replacement_requested";
+  turnId: string;
+  successorTurnId: string;
+  text: string;
+  clientId: string;
 }
 
 export interface UserMessageItem extends ItemBase {
@@ -108,6 +117,7 @@ export type CanonicalItem =
   | TurnStartedItem
   | TurnCompletedItem
   | TurnAbortedItem
+  | TurnReplacementRequestedItem
   | UserMessageItem
   | AgentMessageItem
   | ReasoningItem

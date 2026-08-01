@@ -8,7 +8,9 @@ import type {
   SandboxMode,
   ThreadConfigurationChangedItem,
   ThreadMetadataItem,
+  TurnAbortedItem,
   TurnCompletedItem,
+  TurnReplacementRequestedItem,
   UserMessageItem,
 } from "./item.js";
 import type { ThreadJournal } from "./journal.js";
@@ -71,6 +73,16 @@ export interface SteerTurnOptions {
   clientId?: string;
 }
 
+export interface ReplaceTurnOptions {
+  clientId: string;
+  requestApproval?: ApprovalHandler;
+}
+
+export interface ReplaceTurnResult {
+  interruptedTurnId: string;
+  turn: TurnHandle;
+}
+
 export interface ThreadSettingsUpdatedEvent {
   type: "thread_settings_updated";
   threadId: string;
@@ -110,6 +122,10 @@ export class ZenAppServer {
   >();
   readonly #subscribers = new Set<(event: AppServerEvent) => void>();
   readonly #mutationChains = new Map<string, Promise<void>>();
+  readonly #replacementOperations = new Map<
+    string,
+    { clientId: string; result: Promise<ReplaceTurnResult> }
+  >();
 
   constructor(options: {
     journal: ThreadJournal;
@@ -212,7 +228,10 @@ export class ZenAppServer {
         );
       }
       this.#requireAvailableModel(input.model);
-      if (this.#activeTurns.has(threadId)) {
+      if (
+        this.#activeTurns.has(threadId) ||
+        this.#pendingReplacement(thread) !== undefined
+      ) {
         throw new AppServerError(
           "thread_busy",
           `Thread ${threadId} already has a running turn`,
@@ -253,6 +272,22 @@ export class ZenAppServer {
       requestApproval?: ApprovalHandler;
     } = {},
   ): Promise<TurnHandle> {
+    return await this.#launchTurn(threadId, text, options);
+  }
+
+  async #launchTurn(
+    threadId: string,
+    text: string,
+    options: {
+      clientId?: string;
+      model?: string;
+      requestApproval?: ApprovalHandler;
+    },
+    internal: {
+      turnId?: string;
+      replacementClientId?: string;
+    } = {},
+  ): Promise<TurnHandle> {
     if (text.length === 0) {
       throw new AppServerError("invalid_request", "Turn input cannot be empty");
     }
@@ -265,6 +300,17 @@ export class ZenAppServer {
       }
 
       const thread = await this.#requireThread(threadId);
+      const pendingReplacement = this.#pendingReplacement(thread);
+      if (
+        pendingReplacement !== undefined &&
+        (internal.replacementClientId !== pendingReplacement.clientId ||
+          internal.turnId !== pendingReplacement.successorTurnId)
+      ) {
+        throw new AppServerError(
+          "replacement_pending",
+          `Thread ${threadId} has an unfinished replacement operation`,
+        );
+      }
       const initialConfiguration = thread.effectiveConfiguration();
       if (initialConfiguration.provider !== this.#runtime.provider) {
         throw new AppServerError(
@@ -278,7 +324,7 @@ export class ZenAppServer {
         });
       }
       const configuration = thread.effectiveConfiguration();
-      const turnId = this.#id();
+      const turnId = internal.turnId ?? this.#id();
       const controller = new AbortController();
       const ready = deferred<void>();
 
@@ -360,6 +406,202 @@ export class ZenAppServer {
       throw error;
     }
     return launch.handle;
+  }
+
+  async replaceTurn(
+    threadId: string,
+    expectedTurnId: string,
+    text: string,
+    options: ReplaceTurnOptions,
+  ): Promise<ReplaceTurnResult> {
+    if (text.length === 0) {
+      throw new AppServerError(
+        "invalid_request",
+        "Replacement input cannot be empty",
+      );
+    }
+    if (options.clientId.length === 0) {
+      throw new AppServerError(
+        "invalid_request",
+        "Replacement client id cannot be empty",
+      );
+    }
+
+    const planned = await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const existing = thread.items.find(
+        (item): item is TurnReplacementRequestedItem =>
+          item.type === "turn_replacement_requested" &&
+          item.clientId === options.clientId,
+      );
+      const existingUserMessage = thread.items.find(
+        (item): item is UserMessageItem =>
+          item.type === "user_message" && item.clientId === options.clientId,
+      );
+      if (existing === undefined && existingUserMessage !== undefined) {
+        throw new AppServerError(
+          "idempotency_conflict",
+          `clientUserMessageId ${options.clientId} was already used for a user message`,
+        );
+      }
+      if (existing !== undefined) {
+        if (existing.turnId !== expectedTurnId || existing.text !== text) {
+          throw new AppServerError(
+            "idempotency_conflict",
+            `clientUserMessageId ${options.clientId} was already used for a different replacement`,
+          );
+        }
+        const runningDuplicate = this.#replacementOperations.get(threadId);
+        if (runningDuplicate !== undefined) {
+          if (runningDuplicate.clientId !== options.clientId) {
+            throw new AppServerError(
+              "replacement_pending",
+              `Thread ${threadId} already has a replacement in progress`,
+            );
+          }
+          return { pending: runningDuplicate.result };
+        }
+        const successorInput = thread.items.find(
+          (item): item is UserMessageItem =>
+            item.type === "user_message" &&
+            item.turnId === existing.successorTurnId &&
+            item.clientId === options.clientId,
+        );
+        if (successorInput !== undefined) {
+          const successor = this.#activeTurns.get(threadId);
+          return {
+            complete: {
+              interruptedTurnId: expectedTurnId,
+              turn: {
+                id: existing.successorTurnId,
+                done:
+                  successor?.turnId === existing.successorTurnId
+                    ? successor.done
+                    : Promise.resolve(),
+              },
+            },
+          };
+        }
+        if (
+          thread.items.some(
+            (item) =>
+              item.type === "turn_started" &&
+              item.turnId === existing.successorTurnId,
+          )
+        ) {
+          throw new AppServerError(
+            "replacement_incomplete",
+            `Replacement successor ${existing.successorTurnId} started without a durable user message`,
+          );
+        }
+      }
+
+      const inFlight = this.#replacementOperations.get(threadId);
+      if (inFlight !== undefined) {
+        if (inFlight.clientId !== options.clientId) {
+          throw new AppServerError(
+            "replacement_pending",
+            `Thread ${threadId} already has a replacement in progress`,
+          );
+        }
+        return { pending: inFlight.result };
+      }
+
+      let intent = existing;
+      let oldDone: Promise<void> = Promise.resolve();
+      if (intent === undefined) {
+        const active = this.#activeTurns.get(threadId);
+        if (
+          active === undefined ||
+          active.turnId !== expectedTurnId ||
+          active.controller.signal.aborted ||
+          this.#isTerminal(thread, expectedTurnId)
+        ) {
+          throw new AppServerError(
+            "turn_not_running",
+            `Turn ${expectedTurnId} is not running on thread ${threadId}`,
+          );
+        }
+        intent = {
+          id: this.#id(),
+          threadId,
+          turnId: expectedTurnId,
+          successorTurnId: this.#id(),
+          createdAt: this.#now(),
+          type: "turn_replacement_requested",
+          text,
+          clientId: options.clientId,
+        };
+        await this.#commit(thread, intent);
+        this.#emit({ type: "item_completed", item: intent });
+        active.controller.abort(
+          new DOMException("Replaced by user", "AbortError"),
+        );
+        oldDone = active.done;
+      } else {
+        const active = this.#activeTurns.get(threadId);
+        if (active?.turnId === expectedTurnId) {
+          active.controller.abort(
+            new DOMException("Replaced by user", "AbortError"),
+          );
+          oldDone = active.done;
+        } else if (active !== undefined) {
+          throw new AppServerError(
+            "replacement_pending",
+            `Thread ${threadId} is running a different Turn`,
+          );
+        } else if (!this.#isTerminal(thread, expectedTurnId)) {
+          const aborted: TurnAbortedItem = {
+            id: this.#id(),
+            threadId,
+            turnId: expectedTurnId,
+            createdAt: this.#now(),
+            type: "turn_aborted",
+            reason: "Replacement continued by explicit client retry",
+          };
+          await this.#commit(thread, aborted);
+          this.#emit({
+            type: "turn_completed",
+            threadId,
+            turnId: expectedTurnId,
+            status: "interrupted",
+          });
+        }
+      }
+
+      const replacementIntent = intent;
+      const result = Promise.resolve().then(async () => {
+        await oldDone;
+        const turn = await this.#launchTurn(
+          threadId,
+          replacementIntent.text,
+          {
+            clientId: replacementIntent.clientId,
+            ...(options.requestApproval === undefined
+              ? {}
+              : { requestApproval: options.requestApproval }),
+          },
+          {
+            turnId: replacementIntent.successorTurnId,
+            replacementClientId: replacementIntent.clientId,
+          },
+        );
+        return { interruptedTurnId: expectedTurnId, turn };
+      });
+      this.#replacementOperations.set(threadId, {
+        clientId: options.clientId,
+        result,
+      });
+      void result.then(
+        () => this.#clearReplacementOperation(threadId, result),
+        () => this.#clearReplacementOperation(threadId, result),
+      );
+      return { pending: result };
+    });
+    if ("complete" in planned) {
+      return planned.complete;
+    }
+    return await planned.pending;
   }
 
   async steerTurn(
@@ -474,6 +716,9 @@ export class ZenAppServer {
           `Turn ${turnId} is not running on thread ${thread.id}`,
         );
       }
+      if (active.controller.signal.aborted) {
+        throw active.controller.signal.reason;
+      }
       await this.#commit(thread, message);
       const pendingSteer = thread.items.some(
         (item) =>
@@ -495,6 +740,44 @@ export class ZenAppServer {
       await this.#commit(thread, completed);
       return true;
     });
+  }
+
+  #pendingReplacement(
+    thread: Thread,
+  ): TurnReplacementRequestedItem | undefined {
+    const intents = thread.items.filter(
+      (item): item is TurnReplacementRequestedItem =>
+        item.type === "turn_replacement_requested",
+    );
+    for (const intent of intents.reverse()) {
+      const successorInput = thread.items.some(
+        (item) =>
+          item.type === "user_message" &&
+          item.turnId === intent.successorTurnId &&
+          item.clientId === intent.clientId,
+      );
+      if (!successorInput) {
+        return intent;
+      }
+    }
+    return undefined;
+  }
+
+  #isTerminal(thread: Thread, turnId: string): boolean {
+    return thread.items.some(
+      (item) =>
+        item.turnId === turnId &&
+        (item.type === "turn_completed" || item.type === "turn_aborted"),
+    );
+  }
+
+  #clearReplacementOperation(
+    threadId: string,
+    result: Promise<ReplaceTurnResult>,
+  ): void {
+    if (this.#replacementOperations.get(threadId)?.result === result) {
+      this.#replacementOperations.delete(threadId);
+    }
   }
 
   async #loadThread(threadId: string): Promise<Thread | undefined> {

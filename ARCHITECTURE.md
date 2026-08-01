@@ -13,6 +13,9 @@
 - **SoftSteerDeliveryAnchor** — 当前执行在每次模型采样前设置的临时 response id；
   steer 的 canonical `user_message.deliveryAfter` 持久化这个排序锚点，使下一次
   采样能从 ItemList 重建正确上下文，而不形成第二份 mailbox 或会话状态。
+- **TurnReplacementIntent** — canonical `turn_replacement_requested` Item 记录一次
+  fenced Interrupt & send 的旧/新 Turn id、输入与幂等 key，使显式客户端重试能
+  从 abort/start 崩溃间隙继续，而不依赖隐藏 command queue 或恢复表。
 - **ThreadMetadataStore** — ZAS 按 threadId 持久化名称等产品元数据的
   append-only 外部索引；它由 App Server 投影，但不进入 Agent 上下文或
   canonical ItemList。损坏或暂时不可读的产品元数据不得阻断 Thread 的创建、
@@ -91,6 +94,13 @@ anchor 仅是可丢弃 checkpoint；会改变重放或上下文的排序事实�
 崩溃重放时，尾部只有 `turn_started` 而没有终止 Item 的 Turn 派生为
 interrupted，不追加 synthetic recovery record，也不恢复半截 stream。wire
 `turn/started` / `turn/completed` 是这些 canonical lifecycle Item 的协议投影。
+Hard steer 在任何副作用前先追加 `turn_replacement_requested`，再以普通
+`turn_aborted` 结束旧 Turn，并以普通 `turn_started` + `user_message` 开始保留 id
+的后继 Turn。replacement intent 不进入模型上下文；后继用户消息落盘后它即由
+ItemList 推导为 resolved。进程不会自动继续未完成 intent，只有携带同一
+`clientUserMessageId` 的显式 `turn/replace` 重试可以继续 abort/start 间隙；若
+后继 `turn_started` 已落盘而初始用户消息未落盘，则明确报告 incomplete，不恢复
+半截执行。
 
 审批请求与应答是正在运行的 Turn 和接入端之间的瞬态交互，不写 journal。
 最终执行或拒绝的结果由完整的 tool-result Item 表达。
@@ -102,6 +112,10 @@ protocol 兼容子集**（Thread / Turn / Item 三原语）。transport 只是�
 承载方式，不是第二套协议。当前兼容基线钉在 **codex-cli 0.146.0**，实现
 JSONL stdio 与 loopback WebSocket 两种承载；Unix socket 尚未实现。兼容原版
 Codex CLI、T3 Code 是收益，不是核心设计前提。
+
+Zen 只在 Codex 0.146.0 没有等价原子语义时增加一项明确命名的协议扩展：
+`turn/replace`。它不是 Codex compatibility claim，也不得复用或改变标准
+`turn/steer`；客户端必须显式调用并处理 unsupported。
 
 规则：
 
@@ -123,6 +137,9 @@ Codex CLI、T3 Code 是收益，不是核心设计前提。
 - `thread/settings/update` 修改后续 Turn 使用的配置；`turn/start` 携带的模型
   override 复用同一内部更新路径。成功变更必须先追加
   `thread_configuration_changed`，再广播 `thread/settings/updated`。
+- `turn/replace` 是 fenced Hard steer：成功响应前，旧 Turn 的 `turn_aborted`、
+  新 Turn 的 `turn_started` 与初始 `user_message` 均已 durable；普通客户端不得
+  用两个独立请求模拟其原子用户意图。
 - ZAS 是 Thread 生效配置的唯一权威。所有接入端通过
   `thread/settings/updated` 与 `thread/resume` 返回值镜像同一份配置；恢复
   Thread 时不得用客户端缓存覆盖 ZAS，只有用户明确选择新模型时才提交配置

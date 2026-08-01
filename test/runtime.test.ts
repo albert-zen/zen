@@ -1515,6 +1515,205 @@ test("an interrupt that wins the mutation fence rejects a racing soft steer", as
   );
 });
 
+test("hard steer aborts the fenced Turn and starts one idempotent successor", async () => {
+  const firstSampleEntered = testDeferred<void>();
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "replace-test",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      samples += 1;
+      if (samples === 1) {
+        firstSampleEntered.resolve();
+        await new Promise<void>((_resolve, reject) => {
+          request.signal.addEventListener(
+            "abort",
+            () => reject(request.signal.reason),
+            { once: true },
+          );
+        });
+        return;
+      }
+      yield { type: "text_delta", delta: "replacement complete" };
+    },
+  };
+  const server = createServer({ model });
+  const thread = await server.startThread();
+  const active = await server.startTurn(thread.id, "old work");
+  await firstSampleEntered.promise;
+
+  const replacementRequest = server.replaceTurn(
+    thread.id,
+    active.id,
+    "new direction",
+    { clientId: "replace-client-id" },
+  );
+  const concurrentRetry = server.replaceTurn(
+    thread.id,
+    active.id,
+    "new direction",
+    { clientId: "replace-client-id" },
+  );
+  const [replacement, concurrentDuplicate] = await Promise.all([
+    replacementRequest,
+    concurrentRetry,
+  ]);
+  assert.equal(replacement.interruptedTurnId, active.id);
+  assert.notEqual(replacement.turn.id, active.id);
+  assert.equal(concurrentDuplicate.turn.id, replacement.turn.id);
+  await replacement.turn.done;
+
+  const duplicate = await server.replaceTurn(
+    thread.id,
+    active.id,
+    "new direction",
+    { clientId: "replace-client-id" },
+  );
+  assert.equal(duplicate.turn.id, replacement.turn.id);
+  await assert.rejects(
+    server.replaceTurn(thread.id, active.id, "conflicting direction", {
+      clientId: "replace-client-id",
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "idempotency_conflict",
+  );
+  await assert.rejects(
+    server.replaceTurn(thread.id, active.id, "late replacement", {
+      clientId: "late-replacement-id",
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "turn_not_running",
+  );
+
+  const snapshot = await server.readThread(thread.id);
+  assert.deepEqual(
+    snapshot.turns.map((turn) => [turn.id, turn.status]),
+    [
+      [active.id, "interrupted"],
+      [replacement.turn.id, "completed"],
+    ],
+  );
+  const relevant = snapshot.items.filter(
+    (item) =>
+      item.type === "turn_replacement_requested" ||
+      item.type === "turn_aborted" ||
+      item.type === "turn_started" ||
+      item.type === "user_message",
+  );
+  assert.deepEqual(
+    relevant.map((item) => item.type),
+    [
+      "turn_started",
+      "user_message",
+      "turn_replacement_requested",
+      "turn_aborted",
+      "turn_started",
+      "user_message",
+    ],
+  );
+  const successorInput = relevant.at(-1);
+  assert.equal(
+    successorInput?.type === "user_message"
+      ? successorInput.clientId
+      : undefined,
+    "replace-client-id",
+  );
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "turn_replacement_requested")
+      .length,
+    1,
+  );
+});
+
+test("hard steer resumes only by explicit retry after the abort/start durable gap", async () => {
+  const backing = new InMemoryThreadJournal();
+  let startedItems = 0;
+  let failSuccessorStart = true;
+  const journal: ThreadJournal = {
+    append: async (item) => {
+      if (item.type === "turn_started") {
+        startedItems += 1;
+        if (startedItems === 2 && failSuccessorStart) {
+          failSuccessorStart = false;
+          throw new Error("successor start journal failure");
+        }
+      }
+      await backing.append(item);
+    },
+    listThreadIds: async () => await backing.listThreadIds(),
+    read: async (threadId) => await backing.read(threadId),
+  };
+  const oldSampleEntered = testDeferred<void>();
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "replace-retry-test",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      samples += 1;
+      if (samples === 1) {
+        oldSampleEntered.resolve();
+        await new Promise<void>((_resolve, reject) => {
+          request.signal.addEventListener(
+            "abort",
+            () => reject(request.signal.reason),
+            { once: true },
+          );
+        });
+        return;
+      }
+      yield { type: "text_delta", delta: "retried successor" };
+    },
+  };
+  const firstHost = createServer({ journal, model });
+  const thread = await firstHost.startThread();
+  const active = await firstHost.startTurn(thread.id, "old work");
+  await oldSampleEntered.promise;
+
+  await assert.rejects(
+    firstHost.replaceTurn(thread.id, active.id, "retry this replacement", {
+      clientId: "replace-retry-id",
+    }),
+    /successor start journal failure/u,
+  );
+  const interrupted = await firstHost.readThread(thread.id);
+  const intent = interrupted.items.find(
+    (item) => item.type === "turn_replacement_requested",
+  );
+  assert(intent !== undefined);
+  assert.equal(interrupted.turns[0]?.status, "interrupted");
+  assert.equal(
+    interrupted.items.some(
+      (item) =>
+        item.type === "turn_started" && item.turnId === intent.successorTurnId,
+    ),
+    false,
+  );
+
+  const restarted = createServer({ journal, model });
+  const recovered = await restarted.replaceTurn(
+    thread.id,
+    active.id,
+    "retry this replacement",
+    { clientId: "replace-retry-id" },
+  );
+  assert.equal(recovered.turn.id, intent.successorTurnId);
+  await recovered.turn.done;
+  const snapshot = await restarted.readThread(thread.id);
+  assert.deepEqual(
+    snapshot.turns.map((turn) => turn.status),
+    ["interrupted", "completed"],
+  );
+  assert.equal(
+    snapshot.items.filter(
+      (item) =>
+        item.type === "user_message" && item.clientId === "replace-retry-id",
+    ).length,
+    1,
+  );
+});
+
 function testDeferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T extends void ? void : T) => void;
