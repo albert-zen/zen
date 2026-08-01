@@ -10,6 +10,9 @@
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — 驱动一个 Thread 的循环：从 ItemList 编译上下文 → 调用模型 → 执行工具，把发生的一切追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
+- **SoftSteerDeliveryAnchor** — 当前执行在每次模型采样前设置的临时 response id；
+  steer 的 canonical `user_message.deliveryAfter` 持久化这个排序锚点，使下一次
+  采样能从 ItemList 重建正确上下文，而不形成第二份 mailbox 或会话状态。
 - **ThreadMetadataStore** — ZAS 按 threadId 持久化名称等产品元数据的
   append-only 外部索引；它由 App Server 投影，但不进入 Agent 上下文或
   canonical ItemList。损坏或暂时不可读的产品元数据不得阻断 Thread 的创建、
@@ -80,7 +83,11 @@ canonical Item 追加，已有 Item 不改写、不删除。
 Turn 边界对齐 Codex rollout 语义：canonical `turn_started` 开始 Turn，
 `turn_completed` / `turn_aborted` 结束 Turn；完成的语义 Item 在二者之间追加。
 canonical `user_message` 可携带接入端提供的可选 `clientId`，仅用于跨接入端关联
-同一条用户消息，并投影为 wire `userMessage.clientId`。
+同一条用户消息，并投影为 wire `userMessage.clientId`。active Turn 接受的 soft
+steer 仍是普通 canonical `user_message`；若它在一次模型响应或其工具执行期间
+到达，`deliveryAfter` 记录该模型响应的稳定 id。journal 顺序继续表达事实发生
+顺序，模型采样投影则把 steer 放在该响应及其 tool results 之后。执行中的当前
+anchor 仅是可丢弃 checkpoint；会改变重放或上下文的排序事实已经进入 Item。
 崩溃重放时，尾部只有 `turn_started` 而没有终止 Item 的 Turn 派生为
 interrupted，不追加 synthetic recovery record，也不恢复半截 stream。wire
 `turn/started` / `turn/completed` 是这些 canonical lifecycle Item 的协议投影。
@@ -109,7 +116,7 @@ Codex CLI、T3 Code 是收益，不是核心设计前提。
   stub 记录原版 `codex --remote` 与固定版本 T3 Code 的实际调用，机会性扩展
   兼容面。当前请求子集包括 `account/read`、`skills/list`、`model/list`、
   `thread/start`、`thread/resume`、`thread/read`、`thread/list`、
-  `thread/unsubscribe`、`turn/start`、`turn/interrupt`，以及 Thread / Turn /
+  `thread/unsubscribe`、`turn/start`、`turn/steer`、`turn/interrupt`，以及 Thread / Turn /
   Item 事件流和 command item 审批请求。精确清单见
   `src/protocol/codex/README.md`。
 - `account/read`、`skills/list` 与 `model/list` 只投影宿主公开能力，不向 Zen Core 或 Thread 写入账户、skill、provider 状态。
@@ -164,7 +171,10 @@ Codex CLI、T3 Code 是收益，不是核心设计前提。
 ## 并发
 
 一个 Thread 内最多运行一个 Turn；App Server 只保留当前进程内的执行句柄和
-AbortController，不把它们当成会话事实。跨 Thread 直接并发运行，没有
+AbortController，以及可从 active Turn Item 重建的 SoftSteerDeliveryAnchor，
+不把它们当成会话事实。Thread 的 runtime append、steer、interrupt 与终态提交
+经过同一个 mutation boundary 线性化，禁止 canonical 用户消息落到 terminal
+Item 之后。跨 Thread 直接并发运行，没有
 ProjectCoordinator、调度队列或可持久化的 scheduler。进程崩了就崩了：重启后
 从 journal 恢复 Thread 内容，未完成的 Turn 派生为中断，由用户重发。
 

@@ -15,7 +15,7 @@ import type {
   TurnStartedItem,
   UserMessageItem,
 } from "./item.js";
-import { compileModelMessages, type ModelAdapter } from "./model.js";
+import type { ModelAdapter, ModelMessage } from "./model.js";
 import type { Thread } from "./thread.js";
 import type { ApprovalHandler, ToolExecutor } from "./tool.js";
 
@@ -65,7 +65,13 @@ export interface RunTurnOptions {
   configuration: RuntimeConfiguration;
   signal: AbortSignal;
   commit: (item: CanonicalItem) => Promise<void>;
+  prepareModelSample: (modelResponseId: string) => Promise<ModelMessage[]>;
+  commitFinal: (
+    message: AgentMessageItem,
+    modelResponseId: string,
+  ) => Promise<boolean>;
   emit: (event: RuntimeEvent) => void;
+  initialInputCommitted?: () => void;
   requestApproval?: ApprovalHandler;
 }
 
@@ -120,6 +126,7 @@ export class AgentRuntime {
           : { clientId: options.clientId }),
       };
       await this.#completeItem(userItem, options);
+      options.initialInputCommitted?.();
 
       for (let round = 0; ; round += 1) {
         options.signal.throwIfAborted();
@@ -133,17 +140,11 @@ export class AgentRuntime {
             type: "agent_message",
             text: result.text,
           };
-          await options.commit(agentItem);
+          const terminal = await options.commitFinal(agentItem, result.itemId);
           options.emit({ type: "item_completed", item: agentItem });
-          const completed: TurnCompletedItem = {
-            id: this.#id(),
-            threadId: options.thread.id,
-            turnId,
-            createdAt: this.#now(),
-            type: "turn_completed",
-            status: "completed",
-          };
-          await options.commit(completed);
+          if (!terminal) {
+            continue;
+          }
           options.emit({
             type: "turn_completed",
             threadId: options.thread.id,
@@ -180,6 +181,7 @@ export class AgentRuntime {
             createdAt: this.#now(),
             type: "tool_call",
             callId: toolCall.callId,
+            modelResponseId: result.itemId,
             name: toolCall.name,
             arguments: toolCall.arguments,
           };
@@ -281,9 +283,11 @@ export class AgentRuntime {
       arguments: Record<string, unknown>;
     }> = [];
 
+    const messages = await options.prepareModelSample(itemId);
+
     for await (const event of this.#model.stream({
       model: options.configuration.model,
-      messages: compileModelMessages(options.thread.items),
+      messages,
       tools: this.#tools.definitions,
       signal: options.signal,
       sessionId: options.thread.id,

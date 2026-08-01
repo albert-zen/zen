@@ -371,6 +371,30 @@ export class CodexConnection {
         });
         return;
       }
+      case "turn/steer": {
+        rejectUnsupportedValues(params, [
+          "threadId",
+          "expectedTurnId",
+          "input",
+          "clientUserMessageId",
+        ]);
+        const threadId = requiredString(params, "threadId");
+        const expectedTurnId = requiredString(params, "expectedTurnId");
+        const text = readTextInput(params.input);
+        const clientId = optionalNonEmptyString(
+          params.clientUserMessageId,
+          "clientUserMessageId",
+        );
+        this.#subscribedThreads.add(threadId);
+        const handle = await this.#appServer.steerTurn(
+          threadId,
+          expectedTurnId,
+          text,
+          clientId === undefined ? {} : { clientId },
+        );
+        this.#send({ id: request.id, result: { turnId: handle.id } });
+        return;
+      }
       case "turn/interrupt": {
         await this.#appServer.interruptTurn(
           requiredString(params, "threadId"),

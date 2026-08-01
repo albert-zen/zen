@@ -66,6 +66,7 @@ export interface ModelAdapter {
 export function compileModelMessages(
   items: readonly CanonicalItem[],
 ): ModelMessage[] {
+  items = orderSteeredMessagesForSampling(items);
   const messages: ModelMessage[] = [];
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
@@ -146,6 +147,119 @@ export function compileModelMessages(
     }
   }
   return messages;
+}
+
+/**
+ * Canonical order records when facts happened. A steer accepted while a model
+ * response or its tools are in flight therefore appears before that response
+ * in the journal. `deliveryAfter` is the durable ordering anchor that lets the
+ * sampling projection place the message after the completed assistant step.
+ */
+function orderSteeredMessagesForSampling(
+  items: readonly CanonicalItem[],
+): readonly CanonicalItem[] {
+  const anchored = new Map<
+    string,
+    Array<{
+      item: Extract<CanonicalItem, { type: "user_message" }>;
+      index: number;
+    }>
+  >();
+  const unanchored: Array<{ item: CanonicalItem; originalIndex: number }> = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item === undefined) {
+      continue;
+    }
+    if (item.type === "user_message" && item.deliveryAfter !== undefined) {
+      const pending = anchored.get(item.deliveryAfter) ?? [];
+      pending.push({ item, index });
+      anchored.set(item.deliveryAfter, pending);
+    } else {
+      unanchored.push({ item, originalIndex: index });
+    }
+  }
+  if (anchored.size === 0) {
+    return items;
+  }
+
+  const insertion = new Map<number, CanonicalItem[]>();
+  const fallback = new Map<number, CanonicalItem[]>();
+  for (const [anchorId, pending] of anchored) {
+    const anchorIndex = unanchored.findIndex(
+      ({ item }) =>
+        item.id === anchorId ||
+        (item.type === "tool_call" && item.modelResponseId === anchorId),
+    );
+    if (anchorIndex < 0) {
+      for (const { item, index } of pending) {
+        const target = fallback.get(index) ?? [];
+        target.push(item);
+        fallback.set(index, target);
+      }
+      continue;
+    }
+
+    let insertionIndex = anchorIndex;
+    const anchor = unanchored[anchorIndex]?.item;
+    if (anchor?.type === "agent_message" || anchor?.type === "tool_call") {
+      const callIds = new Set<string>();
+      const firstCallIndex =
+        anchor.type === "tool_call" ? anchorIndex : anchorIndex + 1;
+      for (
+        let cursor = firstCallIndex;
+        cursor < unanchored.length;
+        cursor += 1
+      ) {
+        const candidate = unanchored[cursor]?.item;
+        if (
+          candidate?.type !== "tool_call" ||
+          candidate.modelResponseId !== anchorId
+        ) {
+          break;
+        }
+        callIds.add(candidate.callId);
+      }
+      if (callIds.size > 0) {
+        for (
+          let cursor = anchorIndex + 1;
+          cursor < unanchored.length;
+          cursor += 1
+        ) {
+          const candidate = unanchored[cursor]?.item;
+          if (
+            candidate?.type === "tool_result" &&
+            callIds.has(candidate.callId)
+          ) {
+            insertionIndex = cursor;
+          }
+        }
+      }
+    }
+    const target = insertion.get(insertionIndex) ?? [];
+    target.push(...pending.map(({ item }) => item));
+    insertion.set(insertionIndex, target);
+  }
+
+  const ordered: CanonicalItem[] = [];
+  for (let index = 0; index < unanchored.length; index += 1) {
+    const entry = unanchored[index];
+    if (entry === undefined) {
+      continue;
+    }
+    for (const [originalIndex, values] of [...fallback]) {
+      if (originalIndex <= entry.originalIndex) {
+        ordered.push(...values);
+        fallback.delete(originalIndex);
+      }
+    }
+    ordered.push(entry.item);
+    ordered.push(...(insertion.get(index) ?? []));
+  }
+  for (const values of fallback.values()) {
+    ordered.push(...values);
+  }
+  return ordered;
 }
 
 export class FakeModel implements ModelAdapter {

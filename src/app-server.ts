@@ -2,14 +2,18 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import type {
+  AgentMessageItem,
   ApprovalPolicy,
   CanonicalItem,
   SandboxMode,
   ThreadConfigurationChangedItem,
   ThreadMetadataItem,
+  TurnCompletedItem,
+  UserMessageItem,
 } from "./item.js";
 import type { ThreadJournal } from "./journal.js";
 import type { ModelCatalog, ModelCatalogEntry } from "./model-catalog.js";
+import { compileModelMessages } from "./model.js";
 import { AgentRuntime, type RuntimeEvent } from "./runtime.js";
 import {
   Thread,
@@ -63,6 +67,10 @@ export interface TurnHandle {
   done: Promise<void>;
 }
 
+export interface SteerTurnOptions {
+  clientId?: string;
+}
+
 export interface ThreadSettingsUpdatedEvent {
   type: "thread_settings_updated";
   threadId: string;
@@ -93,7 +101,12 @@ export class ZenAppServer {
   readonly #threads = new Map<string, Thread>();
   readonly #activeTurns = new Map<
     string,
-    { turnId: string; controller: AbortController; done: Promise<void> }
+    {
+      turnId: string;
+      controller: AbortController;
+      done: Promise<void>;
+      deliveryAnchorId?: string;
+    }
   >();
   readonly #subscribers = new Set<(event: AppServerEvent) => void>();
   readonly #mutationChains = new Map<string, Promise<void>>();
@@ -243,7 +256,7 @@ export class ZenAppServer {
     if (text.length === 0) {
       throw new AppServerError("invalid_request", "Turn input cannot be empty");
     }
-    return await this.#withThreadMutation(threadId, async () => {
+    const launch = await this.#withThreadMutation(threadId, async () => {
       if (this.#activeTurns.has(threadId)) {
         throw new AppServerError(
           "thread_busy",
@@ -267,6 +280,7 @@ export class ZenAppServer {
       const configuration = thread.effectiveConfiguration();
       const turnId = this.#id();
       const controller = new AbortController();
+      const ready = deferred<void>();
 
       const done = new Promise<void>((resolve, reject) => {
         setImmediate(() => {
@@ -287,7 +301,31 @@ export class ZenAppServer {
                 },
                 signal: controller.signal,
                 commit: async (item) => {
-                  await this.#commit(thread, item);
+                  await this.#withThreadMutation(threadId, async () => {
+                    await this.#commit(thread, item);
+                  });
+                },
+                prepareModelSample: async (modelResponseId) =>
+                  await this.#withThreadMutation(threadId, async () => {
+                    const active = this.#activeTurns.get(threadId);
+                    if (active?.turnId !== turnId) {
+                      throw new AppServerError(
+                        "turn_not_running",
+                        `Turn ${turnId} is not running on thread ${threadId}`,
+                      );
+                    }
+                    active.deliveryAnchorId = modelResponseId;
+                    return compileModelMessages(thread.items);
+                  }),
+                commitFinal: async (message, modelResponseId) =>
+                  await this.#commitFinalResponse(
+                    thread,
+                    turnId,
+                    message,
+                    modelResponseId,
+                  ),
+                initialInputCommitted: () => {
+                  ready.resolve();
                 },
                 emit: (event) => {
                   this.#emit(event);
@@ -298,7 +336,10 @@ export class ZenAppServer {
               });
               resolve();
             } catch (error) {
-              reject(error instanceof Error ? error : new Error(String(error)));
+              const normalized =
+                error instanceof Error ? error : new Error(String(error));
+              ready.reject(normalized);
+              reject(normalized);
             } finally {
               const active = this.#activeTurns.get(threadId);
               if (active?.turnId === turnId) {
@@ -310,22 +351,150 @@ export class ZenAppServer {
       });
 
       this.#activeTurns.set(threadId, { turnId, controller, done });
-      return { id: turnId, done };
+      return { handle: { id: turnId, done }, ready: ready.promise };
+    });
+    try {
+      await launch.ready;
+    } catch (error) {
+      await launch.handle.done.catch(() => undefined);
+      throw error;
+    }
+    return launch.handle;
+  }
+
+  async steerTurn(
+    threadId: string,
+    expectedTurnId: string,
+    text: string,
+    options: SteerTurnOptions = {},
+  ): Promise<TurnHandle> {
+    if (text.length === 0) {
+      throw new AppServerError(
+        "invalid_request",
+        "Steer input cannot be empty",
+      );
+    }
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      if (options.clientId !== undefined) {
+        const duplicate = thread.items.find(
+          (item): item is UserMessageItem =>
+            item.type === "user_message" && item.clientId === options.clientId,
+        );
+        if (duplicate !== undefined) {
+          if (duplicate.turnId === expectedTurnId && duplicate.text === text) {
+            const duplicateActive = this.#activeTurns.get(threadId);
+            return {
+              id: expectedTurnId,
+              done:
+                duplicateActive?.turnId === expectedTurnId
+                  ? duplicateActive.done
+                  : Promise.resolve(),
+            };
+          }
+          throw new AppServerError(
+            "idempotency_conflict",
+            `clientUserMessageId ${options.clientId} was already used for different input`,
+          );
+        }
+      }
+
+      const active = this.#activeTurns.get(threadId);
+      if (
+        active === undefined ||
+        active.turnId !== expectedTurnId ||
+        active.controller.signal.aborted
+      ) {
+        throw new AppServerError(
+          "turn_not_running",
+          `Turn ${expectedTurnId} is not running on thread ${threadId}`,
+        );
+      }
+      if (
+        thread.items.some(
+          (item) =>
+            item.turnId === expectedTurnId &&
+            (item.type === "turn_completed" || item.type === "turn_aborted"),
+        )
+      ) {
+        throw new AppServerError(
+          "turn_not_running",
+          `Turn ${expectedTurnId} is already terminal on thread ${threadId}`,
+        );
+      }
+
+      const message: UserMessageItem = {
+        id: this.#id(),
+        threadId,
+        turnId: expectedTurnId,
+        createdAt: this.#now(),
+        type: "user_message",
+        text,
+        ...(options.clientId === undefined
+          ? {}
+          : { clientId: options.clientId }),
+        ...(active.deliveryAnchorId === undefined
+          ? {}
+          : { deliveryAfter: active.deliveryAnchorId }),
+      };
+      await this.#commit(thread, message);
+      this.#emit({ type: "item_completed", item: message });
+      return { id: expectedTurnId, done: active.done };
     });
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
-    const active = this.#activeTurns.get(threadId);
-    if (active === undefined || active.turnId !== turnId) {
-      throw new AppServerError(
-        "turn_not_running",
-        `Turn ${turnId} is not running on thread ${threadId}`,
+    const activeHandle = await this.#withThreadMutation(threadId, async () => {
+      const active = this.#activeTurns.get(threadId);
+      if (active === undefined || active.turnId !== turnId) {
+        throw new AppServerError(
+          "turn_not_running",
+          `Turn ${turnId} is not running on thread ${threadId}`,
+        );
+      }
+      active.controller.abort(
+        new DOMException("Interrupted by user", "AbortError"),
       );
-    }
-    active.controller.abort(
-      new DOMException("Interrupted by user", "AbortError"),
-    );
-    await active.done;
+      return { done: active.done };
+    });
+    await activeHandle.done;
+  }
+
+  async #commitFinalResponse(
+    thread: Thread,
+    turnId: string,
+    message: AgentMessageItem,
+    modelResponseId: string,
+  ): Promise<boolean> {
+    return await this.#withThreadMutation(thread.id, async () => {
+      const active = this.#activeTurns.get(thread.id);
+      if (active?.turnId !== turnId) {
+        throw new AppServerError(
+          "turn_not_running",
+          `Turn ${turnId} is not running on thread ${thread.id}`,
+        );
+      }
+      await this.#commit(thread, message);
+      const pendingSteer = thread.items.some(
+        (item) =>
+          item.type === "user_message" &&
+          item.turnId === turnId &&
+          item.deliveryAfter === modelResponseId,
+      );
+      if (pendingSteer) {
+        return false;
+      }
+      const completed: TurnCompletedItem = {
+        id: this.#id(),
+        threadId: thread.id,
+        turnId,
+        createdAt: this.#now(),
+        type: "turn_completed",
+        status: "completed",
+      };
+      await this.#commit(thread, completed);
+      return true;
+    });
   }
 
   async #loadThread(threadId: string): Promise<Thread | undefined> {
@@ -491,4 +660,18 @@ export class AppServerError extends Error {
     this.name = "AppServerError";
     this.code = code;
   }
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: Error): void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
