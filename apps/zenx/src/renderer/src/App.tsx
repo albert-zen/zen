@@ -1,8 +1,56 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { AppServerHostStatus } from "../../main/app-server-manager";
 import { Icon } from "./icons";
 
 export function App() {
   const [railOpen, setRailOpen] = useState(true);
+  const [serverStatus, setServerStatus] = useState<AppServerHostStatus>({
+    type: "starting",
+  });
+  const [threadCount, setThreadCount] = useState<number | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const loadThreads = async () => {
+      try {
+        const result = await window.zenx.protocol.request("thread/list", {});
+        if (active) {
+          setThreadCount(result.data.length);
+          setRequestError(null);
+        }
+      } catch (error) {
+        if (active) {
+          setRequestError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
+    };
+    const dispose = window.zenx.protocol.onStatus((status) => {
+      if (!active) return;
+      setServerStatus(status);
+      if (status.type === "ready") void loadThreads();
+    });
+    void window.zenx.protocol
+      .getStatus()
+      .then((status) => {
+        if (!active) return;
+        setServerStatus(status);
+        if (status.type === "ready") void loadThreads();
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setRequestError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      });
+    return () => {
+      active = false;
+      dispose();
+    };
+  }, []);
 
   return (
     <div className="app-shell">
@@ -39,9 +87,13 @@ export function App() {
         </nav>
 
         <section className="thread-list" aria-labelledby="threads-heading">
-          <h2 id="threads-heading">Threads</h2>
+          <h2 id="threads-heading">
+            Threads{threadCount === null ? "" : ` · ${String(threadCount)}`}
+          </h2>
           <div className="sidebar-empty">
-            Your conversations will appear here.
+            {serverStatus.type === "ready"
+              ? "Your conversations will appear here."
+              : "Waiting for the local App Server."}
           </div>
         </section>
       </aside>
@@ -64,17 +116,38 @@ export function App() {
           </button>
         </header>
 
-        <section className="empty-canvas" aria-label="Empty conversation">
-          <div className="empty-glyph" aria-hidden="true">
-            <Icon name="thread" size={22} />
-          </div>
-          <h2>No thread selected</h2>
-          <p>Create a conversation to start working with Zen.</p>
-          <button className="primary-button" type="button">
-            <Icon name="compose" size={15} />
-            New conversation
-          </button>
-        </section>
+        {serverStatus.type === "error" || requestError !== null ? (
+          <section className="empty-canvas server-error" role="alert">
+            <div className="empty-glyph" aria-hidden="true">
+              <Icon name="thread" size={22} />
+            </div>
+            <h2>Zen App Server stopped</h2>
+            <p>
+              {serverStatus.type === "error"
+                ? serverStatus.message
+                : requestError}
+            </p>
+            <span>Restart ZenX after checking the host configuration.</span>
+          </section>
+        ) : serverStatus.type !== "ready" ? (
+          <section className="empty-canvas" aria-live="polite">
+            <div className="loading-ring" aria-hidden="true" />
+            <h2>Starting Zen App Server</h2>
+            <p>Connecting to the local agent runtime…</p>
+          </section>
+        ) : (
+          <section className="empty-canvas" aria-label="Empty conversation">
+            <div className="empty-glyph" aria-hidden="true">
+              <Icon name="thread" size={22} />
+            </div>
+            <h2>No thread selected</h2>
+            <p>Create a conversation to start working with Zen.</p>
+            <button className="primary-button" type="button">
+              <Icon name="compose" size={15} />
+              New conversation
+            </button>
+          </section>
+        )}
       </main>
 
       <aside
