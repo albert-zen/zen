@@ -1,18 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 
+import type { ApprovalDecision } from "../../main/app-server-manager.js";
 import type { Thread, ThreadItem, Turn } from "../../protocol-client/index.js";
+import type { ApprovalCardState } from "./approval-state";
 import { Icon } from "./icons";
 import { activeTurn } from "./thread-view-state";
 
 interface ThreadViewProps {
+  approvals: readonly ApprovalCardState[];
   thread: Thread;
   onInterrupt(turnId: string): Promise<void>;
+  onRespondToApproval(
+    requestId: string,
+    decision: ApprovalDecision,
+  ): Promise<void>;
   onStartTurn(text: string): Promise<void>;
 }
 
 export function ThreadView({
+  approvals,
   thread,
   onInterrupt,
+  onRespondToApproval,
   onStartTurn,
 }: ThreadViewProps) {
   const [draft, setDraft] = useState("");
@@ -69,7 +78,15 @@ export function ThreadView({
             </div>
           ) : (
             thread.turns.map((turn, index) => (
-              <TurnBlock index={index} key={turn.id} turn={turn} />
+              <TurnBlock
+                approvals={approvals.filter(
+                  (approval) => approval.params.turnId === turn.id,
+                )}
+                index={index}
+                key={turn.id}
+                onRespondToApproval={onRespondToApproval}
+                turn={turn}
+              />
             ))
           )}
         </div>
@@ -129,7 +146,20 @@ export function ThreadView({
   );
 }
 
-function TurnBlock({ turn, index }: { turn: Turn; index: number }) {
+function TurnBlock({
+  turn,
+  index,
+  approvals,
+  onRespondToApproval,
+}: {
+  turn: Turn;
+  index: number;
+  approvals: readonly ApprovalCardState[];
+  onRespondToApproval(
+    requestId: string,
+    decision: ApprovalDecision,
+  ): Promise<void>;
+}) {
   return (
     <section
       className={`turn-block ${turn.status}`}
@@ -140,7 +170,18 @@ function TurnBlock({ turn, index }: { turn: Turn; index: number }) {
         <span>{turnLabel(turn)}</span>
       </div>
       {turn.items.map((item) => (
-        <ItemView item={item} key={item.id} />
+        <div key={item.id}>
+          <ItemView item={item} />
+          {approvals
+            .filter((approval) => approval.params.itemId === item.id)
+            .map((approval) => (
+              <ApprovalCard
+                approval={approval}
+                key={approval.requestId}
+                onRespond={onRespondToApproval}
+              />
+            ))}
+        </div>
       ))}
       {turn.error === null ? null : (
         <div className="turn-error" role="alert">
@@ -149,6 +190,105 @@ function TurnBlock({ turn, index }: { turn: Turn; index: number }) {
       )}
     </section>
   );
+}
+
+function ApprovalCard({
+  approval,
+  onRespond,
+}: {
+  approval: ApprovalCardState;
+  onRespond(requestId: string, decision: ApprovalDecision): Promise<void>;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const respond = async (decision: "accept" | "decline") => {
+    setError(null);
+    try {
+      await onRespond(approval.requestId, decision);
+    } catch (requestError) {
+      setError(describeError(requestError));
+    }
+  };
+  return (
+    <article className={`approval-card ${approval.status}`}>
+      <header>
+        <span className="approval-icon" aria-hidden="true">
+          <Icon name="warning" size={14} />
+        </span>
+        <div>
+          <strong>Command needs approval</strong>
+          <span>Review what Zen is asking to run.</span>
+        </div>
+      </header>
+      <dl>
+        <div>
+          <dt>Command</dt>
+          <dd>
+            <code>{approval.params.command}</code>
+          </dd>
+        </div>
+        <div>
+          <dt>Working directory</dt>
+          <dd>{approval.params.cwd}</dd>
+        </div>
+      </dl>
+      {error === null ? null : (
+        <p className="approval-error" role="alert">
+          {error}
+        </p>
+      )}
+      {approval.status === "pending" ? (
+        <div className="approval-actions">
+          <button
+            className="approval-decline"
+            type="button"
+            onClick={() => void respond("decline")}
+          >
+            Do not run it
+          </button>
+          <button
+            className="approval-accept"
+            type="button"
+            onClick={() => void respond("accept")}
+          >
+            Run this command
+          </button>
+        </div>
+      ) : approval.status === "responding" ? (
+        <p className="approval-result" aria-live="polite">
+          Sending {approval.decision === "accept" ? "approval" : "refusal"}…
+        </p>
+      ) : (
+        <p className={`approval-result ${approvalResultClass(approval)}`}>
+          <Icon
+            name={approval.decision === "accept" ? "check" : "warning"}
+            size={13}
+          />
+          {approvalResultLabel(approval)}
+        </p>
+      )}
+    </article>
+  );
+}
+
+function approvalResultClass(approval: ApprovalCardState): string {
+  return approval.decision === "accept" ||
+    approval.decision === "acceptForSession"
+    ? "accepted"
+    : "not-run";
+}
+
+function approvalResultLabel(approval: ApprovalCardState): string {
+  switch (approval.decision) {
+    case "accept":
+      return "Approved — the command may run.";
+    case "acceptForSession":
+      return "Approved for this session.";
+    case "decline":
+      return "Declined — the command was not run.";
+    case "cancel":
+    case null:
+      return "Resolved without running the command.";
+  }
 }
 
 function ItemView({ item }: { item: ThreadItem }) {

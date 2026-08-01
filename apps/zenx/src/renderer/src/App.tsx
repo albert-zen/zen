@@ -1,9 +1,20 @@
 import { useEffect, useState } from "react";
-import type { AppServerHostStatus } from "../../main/app-server-manager.js";
+import type {
+  AppServerHostStatus,
+  ApprovalDecision,
+} from "../../main/app-server-manager.js";
 import type { Thread } from "../../protocol-client/index.js";
 import { Icon } from "./icons";
 import { Sidebar } from "./Sidebar";
 import { ThreadView } from "./ThreadView";
+import {
+  addApprovalRequest,
+  markApprovalResponding,
+  pendingApprovalThreadIds,
+  resolveApproval,
+  restoreApprovalPending,
+  type ApprovalCardState,
+} from "./approval-state";
 import {
   applyThreadNotification,
   readSidebarMode,
@@ -23,6 +34,7 @@ export function App() {
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
+  const [approvals, setApprovals] = useState<ApprovalCardState[]>([]);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
     try {
       return readSidebarMode(window.localStorage);
@@ -68,6 +80,23 @@ export function App() {
         }
       },
     );
+    const disposeApprovals = window.zenx.protocol.onApprovalRequest((event) => {
+      if (active) {
+        setApprovals((current) => addApprovalRequest(current, event));
+      }
+    });
+    const disposeResolved = window.zenx.protocol.onApprovalResolved((event) => {
+      if (active) {
+        setApprovals((current) => resolveApproval(current, event));
+      }
+    });
+    void window.zenx.protocol
+      .getPendingApprovals()
+      .then((pending) => {
+        if (!active) return;
+        setApprovals((current) => pending.reduce(addApprovalRequest, current));
+      })
+      .catch(() => undefined);
     void window.zenx.protocol
       .getStatus()
       .then((status) => {
@@ -86,6 +115,8 @@ export function App() {
       active = false;
       dispose();
       disposeNotifications();
+      disposeApprovals();
+      disposeResolved();
     };
   }, []);
 
@@ -93,6 +124,7 @@ export function App() {
     threadDetail ??
     threads.find((thread) => thread.id === selectedThreadId) ??
     null;
+  const pendingThreadIds = pendingApprovalThreadIds(approvals);
 
   const selectThread = async (threadId: string) => {
     setSelectedThreadId(threadId);
@@ -145,6 +177,21 @@ export function App() {
       turnId,
     });
   };
+
+  const respondToApproval = async (
+    requestId: string,
+    decision: ApprovalDecision,
+  ) => {
+    setApprovals((current) =>
+      markApprovalResponding(current, requestId, decision),
+    );
+    try {
+      await window.zenx.protocol.respondToApproval(requestId, decision);
+    } catch (error) {
+      setApprovals((current) => restoreApprovalPending(current, requestId));
+      throw error;
+    }
+  };
   const changeSidebarMode = (mode: SidebarMode) => {
     setSidebarMode(mode);
     try {
@@ -161,6 +208,7 @@ export function App() {
         onModeChange={changeSidebarMode}
         onNewThread={() => void newThread()}
         onSelectThread={(threadId) => void selectThread(threadId)}
+        pendingApprovalThreadIds={pendingThreadIds}
         selectedThreadId={selectedThreadId}
         serverReady={serverStatus.type === "ready"}
         threads={threads}
@@ -243,7 +291,11 @@ export function App() {
           </section>
         ) : threadDetail !== null ? (
           <ThreadView
+            approvals={approvals.filter(
+              (approval) => approval.params.threadId === threadDetail.id,
+            )}
             onInterrupt={interruptTurn}
+            onRespondToApproval={respondToApproval}
             onStartTurn={startTurn}
             thread={threadDetail}
           />

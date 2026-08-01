@@ -212,6 +212,10 @@ export interface ServerRequestResults {
 
 export type ServerRequestMethod = keyof ServerRequestParams;
 
+export interface ServerRequestContext {
+  requestId: string | number;
+}
+
 export type ConnectionStatus =
   | { type: "connecting" }
   | { type: "ready"; reconnected: boolean }

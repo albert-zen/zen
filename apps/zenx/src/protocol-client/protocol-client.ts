@@ -17,6 +17,7 @@ import type {
   ServerNotificationMethod,
   ServerNotificationParams,
   ServerRequestMethod,
+  ServerRequestContext,
   ServerRequestParams,
   ServerRequestResults,
 } from "./types.js";
@@ -24,6 +25,7 @@ import type {
 type UnknownNotificationHandler = (params: unknown) => void | Promise<void>;
 type UnknownServerRequestHandler = (
   params: unknown,
+  context: ServerRequestContext,
 ) => unknown | Promise<unknown>;
 
 export interface ZenXProtocolClientOptions {
@@ -156,10 +158,11 @@ export class ZenXProtocolClient {
     method: M,
     handler: (
       params: ServerRequestParams[M],
+      context: ServerRequestContext,
     ) => ServerRequestResults[M] | Promise<ServerRequestResults[M]>,
   ): () => void {
-    const wrapped: UnknownServerRequestHandler = async (params) =>
-      await handler(params as ServerRequestParams[M]);
+    const wrapped: UnknownServerRequestHandler = async (params, context) =>
+      await handler(params as ServerRequestParams[M], context);
     this.#serverRequestHandlers.set(method, wrapped);
     return () => {
       if (this.#serverRequestHandlers.get(method) === wrapped) {
@@ -302,7 +305,9 @@ export class ZenXProtocolClient {
         return;
       }
       try {
-        const result = await handler(message.params);
+        const result = await handler(message.params, {
+          requestId: message.id,
+        });
         this.#send({ id: message.id, result });
       } catch (error) {
         this.#send({

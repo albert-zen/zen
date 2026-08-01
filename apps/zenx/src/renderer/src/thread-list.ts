@@ -40,23 +40,36 @@ export function writeSidebarMode(
 
 export function deriveInboxSections(
   threads: readonly Thread[],
+  pendingApprovalThreadIds: ReadonlySet<string> = new Set(),
 ): InboxSection[] {
   const sorted = sortByRecency(threads);
   return [
     {
       key: "needs",
       label: "Needs you",
-      threads: sorted.filter((thread) => thread.status.type === "systemError"),
+      threads: sorted.filter(
+        (thread) =>
+          thread.status.type === "systemError" ||
+          pendingApprovalThreadIds.has(thread.id),
+      ),
     },
     {
       key: "active",
       label: "In progress",
-      threads: sorted.filter((thread) => thread.status.type === "active"),
+      threads: sorted.filter(
+        (thread) =>
+          thread.status.type === "active" &&
+          !pendingApprovalThreadIds.has(thread.id),
+      ),
     },
     {
       key: "settled",
       label: "Completed",
-      threads: sorted.filter((thread) => thread.status.type === "idle"),
+      threads: sorted.filter(
+        (thread) =>
+          thread.status.type === "idle" &&
+          !pendingApprovalThreadIds.has(thread.id),
+      ),
     },
   ];
 }
@@ -116,6 +129,18 @@ export function applyThreadNotification(
             status: { type: "active" as const, activeFlags: [] },
             updatedAt: nowSeconds,
           }
+        : thread,
+    );
+  }
+  if (method === "item/completed") {
+    const event = params as ServerNotificationParams["item/completed"];
+    if (event.item.type !== "userMessage") return [...threads];
+    const preview = event.item.content
+      .map((content) => content.text)
+      .join("\n");
+    return threads.map((thread) =>
+      thread.id === event.threadId && thread.status.type !== "systemError"
+        ? { ...thread, preview, updatedAt: nowSeconds }
         : thread,
     );
   }

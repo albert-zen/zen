@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { isClientRequestMethod } from "../protocol-client/index.js";
 import { ipcChannels } from "../preload/ipc.js";
 import { AppServerManager } from "./app-server-manager.js";
+import type { ApprovalDecision } from "./app-server-manager.js";
 import { resolveZenXHostConfig } from "./host-config.js";
 
 let appServerManager: AppServerManager | undefined;
@@ -18,7 +19,7 @@ function createWindow(): BrowserWindow {
     show: false,
     backgroundColor: "#0b0d10",
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -79,12 +80,25 @@ app.on("window-all-closed", () => {
 function installProtocolIpc(manager: AppServerManager): void {
   ipcMain.handle(ipcChannels.getStatus, () => manager.status);
   ipcMain.handle(
+    ipcChannels.getPendingApprovals,
+    () => manager.pendingApprovalRequests,
+  );
+  ipcMain.handle(
     ipcChannels.request,
     async (_event, method: unknown, params: unknown) => {
       if (!isClientRequestMethod(method)) {
         throw new Error(`Unsupported ZenX protocol method: ${String(method)}`);
       }
       return await manager.request(method, params as never);
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.respondApproval,
+    (_event, requestId: unknown, decision: unknown) => {
+      if (typeof requestId !== "string" || !isApprovalDecision(decision)) {
+        throw new Error("Invalid ZenX approval response");
+      }
+      manager.respondToApproval(requestId, decision);
     },
   );
   manager.onStatus((status) => {
@@ -97,11 +111,34 @@ function installProtocolIpc(manager: AppServerManager): void {
       window.webContents.send(ipcChannels.notification, method, params);
     }
   });
+  manager.onApprovalRequest((approval) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(ipcChannels.approvalRequest, approval);
+    }
+  });
+  manager.onApprovalResolved((approval) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(ipcChannels.approvalResolved, approval);
+    }
+  });
 }
 
 function installFailedProtocolIpc(message: string): void {
   ipcMain.handle(ipcChannels.getStatus, () => ({ type: "error", message }));
+  ipcMain.handle(ipcChannels.getPendingApprovals, () => []);
   ipcMain.handle(ipcChannels.request, () => {
     throw new Error(`Zen App Server is not ready: ${message}`);
   });
+  ipcMain.handle(ipcChannels.respondApproval, () => {
+    throw new Error(`Zen App Server is not ready: ${message}`);
+  });
+}
+
+function isApprovalDecision(value: unknown): value is ApprovalDecision {
+  return (
+    value === "accept" ||
+    value === "acceptForSession" ||
+    value === "decline" ||
+    value === "cancel"
+  );
 }
