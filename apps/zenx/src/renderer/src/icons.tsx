@@ -1,15 +1,18 @@
 import type { ReactNode, SVGProps } from "react";
 
 type IconName =
+  | "check"
   | "chevron-down"
   | "chevron-right"
   | "compose"
   | "folder"
   | "inbox"
   | "panel-right"
+  | "reasoning"
   | "search"
   | "thread"
   | "tree"
+  | "stop"
   | "warning";
 
 type IconProps = SVGProps<SVGSVGElement> & {
@@ -18,6 +21,7 @@ type IconProps = SVGProps<SVGSVGElement> & {
 };
 
 const paths: Record<IconName, ReactNode> = {
+  check: <path d="m2.4 8.4 3.4 3.4 7.8-7.8" />,
   "chevron-down": <path d="m3.6 6 4.4 4.4L12.4 6" />,
   "chevron-right": <path d="m6 3.6 4.4 4.4L6 12.4" />,
   compose: (
@@ -41,6 +45,12 @@ const paths: Record<IconName, ReactNode> = {
       <path d="M10.2 2.2v11.6" />
     </>
   ),
+  reasoning: (
+    <>
+      <path d="M8 2.1a4.4 4.4 0 0 0-2.7 7.9c.5.4.8.9.8 1.5h3.8c0-.6.3-1.1.8-1.5A4.4 4.4 0 0 0 8 2.1Z" />
+      <path d="M6.5 13.8h3M6.2 11.5h3.6" />
+    </>
+  ),
   search: (
     <>
       <circle cx="7.2" cy="7.2" r="4.6" />
@@ -54,6 +64,7 @@ const paths: Record<IconName, ReactNode> = {
       <circle cx="3" cy="12.5" r=".2" />
     </>
   ),
+  stop: <rect x="3.2" y="3.2" width="9.6" height="9.6" rx="1.5" />,
   tree: (
     <>
       <path d="M2.5 3.5h11M5.5 8h8M5.5 12.5h8" />

@@ -12,6 +12,7 @@ import {
 interface SidebarProps {
   mode: SidebarMode;
   onModeChange(mode: SidebarMode): void;
+  onNewThread(): void;
   onSelectThread(threadId: string): void;
   selectedThreadId: string | null;
   serverReady: boolean;
@@ -21,6 +22,7 @@ interface SidebarProps {
 export function Sidebar({
   mode,
   onModeChange,
+  onNewThread,
   onSelectThread,
   selectedThreadId,
   serverReady,
@@ -56,7 +58,7 @@ export function Sidebar({
       </header>
 
       <nav className="sidebar-nav" aria-label="Primary">
-        <button className="nav-item" type="button">
+        <button className="nav-item" type="button" onClick={onNewThread}>
           <Icon name="compose" />
           New conversation
         </button>
