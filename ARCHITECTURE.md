@@ -16,6 +16,9 @@
 - **TurnReplacementIntent** — canonical `turn_replacement_requested` Item 记录一次
   fenced Interrupt & send 的旧/新 Turn id、输入与幂等 key，使显式客户端重试能
   从 abort/start 崩溃间隙继续，而不依赖隐藏 command queue 或恢复表。
+- **ComposerSubmission** — 接入端一次待确认的用户提交；只在 UI 内保留草稿、
+  发送意图和稳定 `clientUserMessageId`，是否已进入会话仍完全由 App Server 的
+  canonical Item 投影决定。
 - **ThreadMetadataStore** — ZAS 按 threadId 持久化名称等产品元数据的
   append-only 外部索引；它由 App Server 投影，但不进入 Agent 上下文或
   canonical ItemList。损坏或暂时不可读的产品元数据不得阻断 Thread 的创建、

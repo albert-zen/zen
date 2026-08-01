@@ -598,10 +598,13 @@ export class ZenAppServer {
       );
       return { pending: result };
     });
-    if ("complete" in planned) {
+    if ("complete" in planned && planned.complete !== undefined) {
       return planned.complete;
     }
-    return await planned.pending;
+    if ("pending" in planned && planned.pending !== undefined) {
+      return await planned.pending;
+    }
+    throw new Error("Turn replacement did not produce a result");
   }
 
   async steerTurn(

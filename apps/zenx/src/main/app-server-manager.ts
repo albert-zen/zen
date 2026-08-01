@@ -21,7 +21,8 @@ import {
 
 export type AppServerHostStatus =
   | { type: "starting" }
-  | { type: "ready" }
+  | { type: "ready"; reconnected: boolean }
+  | { type: "reconnecting"; attempt: number; delayMs: number }
   | { type: "error"; message: string }
   | { type: "stopped" };
 
@@ -131,7 +132,7 @@ export class AppServerManager {
         bearerTokenFile: this.#options.tokenFile,
       });
       this.#forwardNotifications(this.#client);
-      this.#setStatus({ type: "ready" });
+      this.#setStatus({ type: "ready", reconnected: false });
     } catch (error) {
       const message = asError(error).message;
       this.#setStatus({ type: "error", message });
@@ -210,6 +211,20 @@ export class AppServerManager {
   }
 
   #forwardNotifications(client: ZenXProtocolClient): void {
+    client.onStatus((status) => {
+      if (client !== this.#client || this.#stopping) return;
+      if (status.type === "reconnecting") {
+        this.#setStatus({
+          type: "reconnecting",
+          attempt: status.attempt,
+          delayMs: status.delayMs,
+        });
+      } else if (status.type === "ready" && status.reconnected) {
+        this.#setStatus({ type: "ready", reconnected: true });
+      } else if (status.type === "protocolError") {
+        this.#setStatus({ type: "error", message: status.error.message });
+      }
+    });
     client.onServerRequest(
       "item/commandExecution/requestApproval",
       async (params, context) => {

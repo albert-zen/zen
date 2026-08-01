@@ -91,6 +91,30 @@ test("streams command output and replaces it with the completed projection", () 
   assert.equal(commandOutput(current), "final output");
 });
 
+test("projects hard steer as an interrupted turn followed by one successor", () => {
+  const old = turn("turn-old", "inProgress", [
+    userItem("user-old", "old work"),
+  ]);
+  let current = thread([old]);
+  current = applyThreadViewNotification(current, "turn/completed", {
+    threadId: current.id,
+    turn: turn(old.id, "interrupted", old.items),
+  });
+  current = applyThreadViewNotification(current, "turn/started", {
+    threadId: current.id,
+    turn: turn("turn-new", "inProgress", [userItem("user-new", "replacement")]),
+  });
+
+  assert.deepEqual(
+    current.turns.map(({ id, status }) => ({ id, status })),
+    [
+      { id: "turn-old", status: "interrupted" },
+      { id: "turn-new", status: "inProgress" },
+    ],
+  );
+  assert.equal(activeTurn(current)?.id, "turn-new");
+});
+
 function thread(turns: Turn[] = []): Thread {
   return {
     id: "thread-1",

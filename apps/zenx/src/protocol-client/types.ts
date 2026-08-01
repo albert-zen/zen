@@ -110,6 +110,18 @@ export interface ClientRequestParams {
     input: Array<{ type: "text"; text: string }>;
     clientUserMessageId?: string;
   } & ThreadConfigurationParams;
+  "turn/steer": {
+    threadId: string;
+    expectedTurnId: string;
+    input: Array<{ type: "text"; text: string }>;
+    clientUserMessageId?: string;
+  };
+  "turn/replace": {
+    threadId: string;
+    expectedTurnId: string;
+    input: Array<{ type: "text"; text: string }>;
+    clientUserMessageId: string;
+  };
   "turn/interrupt": { threadId: string; turnId: string };
 }
 
@@ -134,6 +146,8 @@ export interface ClientRequestResults {
     status: "unsubscribed" | "notSubscribed";
   };
   "turn/start": { turn: Turn };
+  "turn/steer": { turnId: string };
+  "turn/replace": { interruptedTurnId: string; turnId: string };
   "turn/interrupt": Record<string, never>;
 }
 
