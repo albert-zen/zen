@@ -1,12 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AppServerHostStatus,
   ApprovalDecision,
 } from "../../main/app-server-manager.js";
-import type { Thread } from "../../protocol-client/index.js";
+import type {
+  ModelSummary,
+  ServerNotificationParams,
+  Thread,
+} from "../../protocol-client/index.js";
 import { Icon } from "./icons";
 import { Sidebar } from "./Sidebar";
 import { ThreadView } from "./ThreadView";
+import { ModelSelector } from "./ModelSelector";
 import {
   addApprovalRequest,
   markApprovalResponding,
@@ -15,6 +20,13 @@ import {
   restoreApprovalPending,
   type ApprovalCardState,
 } from "./approval-state";
+import {
+  applySettingsMirror,
+  canChangeThreadModel,
+  settingsFromSnapshot,
+  validateModelCatalog,
+  type SelectedThreadSettings,
+} from "./model-settings";
 import {
   applyThreadNotification,
   readSidebarMode,
@@ -25,6 +37,7 @@ import {
 import { applyThreadViewNotification } from "./thread-view-state";
 
 export function App() {
+  const selectionEpoch = useRef(0);
   const [railOpen, setRailOpen] = useState(true);
   const [serverStatus, setServerStatus] = useState<AppServerHostStatus>({
     type: "starting",
@@ -35,6 +48,14 @@ export function App() {
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<ApprovalCardState[]>([]);
+  const [models, setModels] = useState<ModelSummary[]>([]);
+  const [modelCatalogError, setModelCatalogError] = useState<string | null>(
+    null,
+  );
+  const [selectedSettings, setSelectedSettings] =
+    useState<SelectedThreadSettings | null>(null);
+  const [switchingModel, setSwitchingModel] = useState(false);
+  const [modelUpdateError, setModelUpdateError] = useState<string | null>(null);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
     try {
       return readSidebarMode(window.localStorage);
@@ -61,10 +82,25 @@ export function App() {
         }
       }
     };
+    const loadModels = async () => {
+      try {
+        const result = await window.zenx.protocol.request("model/list", {});
+        validateModelCatalog(result.data);
+        if (active) {
+          setModels(result.data);
+          setModelCatalogError(null);
+        }
+      } catch (error) {
+        if (active) setModelCatalogError(describeError(error));
+      }
+    };
     const dispose = window.zenx.protocol.onStatus((status) => {
       if (!active) return;
       setServerStatus(status);
-      if (status.type === "ready") void loadThreads();
+      if (status.type === "ready") {
+        void loadThreads();
+        void loadModels();
+      }
     });
     const disposeNotifications = window.zenx.protocol.onNotification(
       (method, params) => {
@@ -77,6 +113,18 @@ export function App() {
               ? null
               : applyThreadViewNotification(current, method, params),
           );
+          if (method === "thread/settings/updated") {
+            const event =
+              params as ServerNotificationParams["thread/settings/updated"];
+            setSelectedSettings((current) =>
+              applySettingsMirror(
+                current,
+                event.threadId,
+                event.threadSettings,
+              ),
+            );
+            setModelUpdateError(null);
+          }
         }
       },
     );
@@ -102,7 +150,10 @@ export function App() {
       .then((status) => {
         if (!active) return;
         setServerStatus(status);
-        if (status.type === "ready") void loadThreads();
+        if (status.type === "ready") {
+          void loadThreads();
+          void loadModels();
+        }
       })
       .catch((error: unknown) => {
         if (active) {
@@ -127,38 +178,51 @@ export function App() {
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
 
   const selectThread = async (threadId: string) => {
+    const epoch = ++selectionEpoch.current;
     setSelectedThreadId(threadId);
     setThreadDetail(null);
+    setSelectedSettings(null);
+    setModelUpdateError(null);
     setThreadLoading(true);
     setThreadError(null);
     try {
       const result = await window.zenx.protocol.request("thread/resume", {
         threadId,
       });
+      if (selectionEpoch.current !== epoch) return;
       setThreadDetail(result.thread);
+      setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
     } catch (error) {
-      setThreadError(describeError(error));
+      if (selectionEpoch.current === epoch) {
+        setThreadError(describeError(error));
+      }
     } finally {
-      setThreadLoading(false);
+      if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
   };
 
   const newThread = async () => {
+    const epoch = ++selectionEpoch.current;
     setThreadLoading(true);
     setThreadError(null);
+    setModelUpdateError(null);
     try {
       const result = await window.zenx.protocol.request("thread/start", {});
+      if (selectionEpoch.current !== epoch) return;
       setSelectedThreadId(result.thread.id);
       setThreadDetail(result.thread);
+      setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
       setThreads((current) =>
         applyThreadNotification(current, "thread/started", {
           thread: result.thread,
         }),
       );
     } catch (error) {
-      setThreadError(describeError(error));
+      if (selectionEpoch.current === epoch) {
+        setThreadError(describeError(error));
+      }
     } finally {
-      setThreadLoading(false);
+      if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
   };
 
@@ -190,6 +254,31 @@ export function App() {
     } catch (error) {
       setApprovals((current) => restoreApprovalPending(current, requestId));
       throw error;
+    }
+  };
+  const changeModel = async (model: string) => {
+    if (
+      threadDetail === null ||
+      selectedSettings === null ||
+      model === selectedSettings.model
+    ) {
+      return;
+    }
+    if (!canChangeThreadModel(threadDetail)) {
+      setModelUpdateError("Wait for the current turn to finish.");
+      return;
+    }
+    setSwitchingModel(true);
+    setModelUpdateError(null);
+    try {
+      await window.zenx.protocol.request("thread/settings/update", {
+        threadId: threadDetail.id,
+        model,
+      });
+    } catch (error) {
+      setModelUpdateError(describeError(error));
+    } finally {
+      setSwitchingModel(false);
     }
   };
   const changeSidebarMode = (mode: SidebarMode) => {
@@ -225,9 +314,21 @@ export function App() {
             <p>
               {selectedThread === null
                 ? "Select a thread or create a new one."
-                : `${selectedThread.cwd} · ${selectedThread.modelProvider}`}
+                : `${selectedThread.cwd} · ${selectedSettings?.model ?? selectedThread.modelProvider}`}
             </p>
           </div>
+          {selectedSettings === null ? null : (
+            <ModelSelector
+              disabled={
+                threadDetail === null || !canChangeThreadModel(threadDetail)
+              }
+              error={modelUpdateError ?? modelCatalogError}
+              models={models}
+              onChange={(model) => void changeModel(model)}
+              selectedModel={selectedSettings.model}
+              switching={switchingModel}
+            />
+          )}
           <button
             className={`toolbar-button${railOpen ? " active" : ""}`}
             type="button"

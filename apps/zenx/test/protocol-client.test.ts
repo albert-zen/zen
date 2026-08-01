@@ -14,11 +14,12 @@ import {
   type ServerNotificationMethod,
 } from "../src/protocol-client/index.js";
 
-function testHost() {
+function testHost(models: readonly string[] = ["fake"]) {
   return createHostedAppServer({
     cwd: process.cwd(),
     dataDirectory: path.join(os.tmpdir(), "unused-zenx-test-data"),
     model: "fake",
+    models,
     approvalPolicy: "never",
     provider: { type: "fake" },
     journal: new InMemoryThreadJournal(),
@@ -203,6 +204,62 @@ test("projects the same turn events to two subscribed ZenX clients", async () =>
       Promise.all([firstCompleted.promise, secondCompleted.promise]),
     );
     assert.deepEqual(secondEvents, firstEvents);
+  } finally {
+    initiating.close();
+    observing.close();
+    await server.close();
+  }
+});
+
+test("mirrors model updates to two clients and resumes ZAS authority", async () => {
+  const appServer = testHost(["fake", "other"]);
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zenx-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const initiating = await ZenXProtocolClient.connect(
+    clientOptions(server.url, "zenx-model-initiating"),
+  );
+  const observing = await ZenXProtocolClient.connect(
+    clientOptions(server.url, "zenx-model-observing"),
+  );
+  try {
+    const models = await initiating.request("model/list", {});
+    assert.deepEqual(
+      models.data.map((model) => [model.id, model.isDefault]),
+      [
+        ["fake", true],
+        ["other", false],
+      ],
+    );
+    const started = await initiating.request("thread/start", {});
+    await observing.request("thread/resume", {
+      threadId: started.thread.id,
+    });
+    const firstUpdated = deferred<string>();
+    const secondUpdated = deferred<string>();
+    initiating.onNotification("thread/settings/updated", (params) => {
+      firstUpdated.resolve(params.threadSettings.model);
+    });
+    observing.onNotification("thread/settings/updated", (params) => {
+      secondUpdated.resolve(params.threadSettings.model);
+    });
+
+    await initiating.request("thread/settings/update", {
+      threadId: started.thread.id,
+      model: "other",
+    });
+    assert.deepEqual(
+      await within(Promise.all([firstUpdated.promise, secondUpdated.promise])),
+      ["other", "other"],
+    );
+
+    const resumed = await observing.request("thread/resume", {
+      threadId: started.thread.id,
+    });
+    assert.equal(resumed.model, "other");
+    assert.equal(resumed.thread.modelProvider, "fake");
   } finally {
     initiating.close();
     observing.close();
