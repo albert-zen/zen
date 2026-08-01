@@ -18,6 +18,16 @@ export function applyThreadViewNotification(
       ? { ...thread, name: event.threadName, updatedAt: nowSeconds }
       : thread;
   }
+  if (method === "thread/settings/updated") {
+    const event = params as ServerNotificationParams["thread/settings/updated"];
+    return event.threadId === thread.id
+      ? {
+          ...thread,
+          modelProvider: event.threadSettings.modelProvider,
+          updatedAt: nowSeconds,
+        }
+      : thread;
+  }
   if (method === "turn/started") {
     const event = params as ServerNotificationParams["turn/started"];
     return event.threadId === thread.id

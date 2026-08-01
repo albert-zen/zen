@@ -120,6 +120,19 @@ export function applyThreadNotification(
         : thread,
     );
   }
+  if (method === "thread/settings/updated") {
+    const update =
+      params as ServerNotificationParams["thread/settings/updated"];
+    return threads.map((thread) =>
+      thread.id === update.threadId && thread.status.type !== "systemError"
+        ? {
+            ...thread,
+            modelProvider: update.threadSettings.modelProvider,
+            updatedAt: nowSeconds,
+          }
+        : thread,
+    );
+  }
   if (method === "turn/started") {
     const event = params as ServerNotificationParams["turn/started"];
     return threads.map((thread) =>
