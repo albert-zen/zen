@@ -59,6 +59,79 @@ test("projects a streamed tool turn from the hosted App Server", async () => {
   }
 });
 
+test("drives soft steer and atomic Interrupt & send through the hosted App Server", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-steer-"));
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "always",
+      provider: { type: "fake" },
+    },
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    const started = await manager.request("thread/start", {});
+    const approval = deferred<void>();
+    const approvalCancelled = deferred<void>();
+    const disposeApproval = manager.onApprovalRequest(() => approval.resolve());
+    const disposeResolved = manager.onApprovalResolved((event) => {
+      if (event.decision === "cancel") approvalCancelled.resolve();
+    });
+    const old = await manager.request("turn/start", {
+      threadId: started.thread.id,
+      input: [{ type: "text", text: "!shell printf old" }],
+      clientUserMessageId: "start-old",
+    });
+    await within(approval.promise);
+
+    const steered = await manager.request("turn/steer", {
+      threadId: started.thread.id,
+      expectedTurnId: old.turn.id,
+      input: [{ type: "text", text: "use this guidance" }],
+      clientUserMessageId: "steer-one",
+    });
+    assert.equal(steered.turnId, old.turn.id);
+
+    const replaced = await manager.request("turn/replace", {
+      threadId: started.thread.id,
+      expectedTurnId: old.turn.id,
+      input: [{ type: "text", text: "replacement work" }],
+      clientUserMessageId: "replace-one",
+    });
+    assert.equal(replaced.interruptedTurnId, old.turn.id);
+    assert.notEqual(replaced.turnId, old.turn.id);
+    await within(approvalCancelled.promise);
+    assert.equal(manager.pendingApprovalRequests.length, 0);
+
+    const read = await manager.request("thread/read", {
+      threadId: started.thread.id,
+      includeTurns: true,
+    });
+    assert.equal(read.thread.turns[0]?.status, "interrupted");
+    assert.equal(read.thread.turns[1]?.id, replaced.turnId);
+    assert(
+      read.thread.turns[1]?.items.some(
+        (item) =>
+          item.type === "userMessage" &&
+          item.clientId === "replace-one" &&
+          item.content[0]?.text === "replacement work",
+      ),
+    );
+    disposeApproval();
+    disposeResolved();
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((resolvePromise) => {

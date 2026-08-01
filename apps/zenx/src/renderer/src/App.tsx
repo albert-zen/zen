@@ -35,9 +35,20 @@ import {
   type SidebarMode,
 } from "./thread-list";
 import { applyThreadViewNotification } from "./thread-view-state";
+import {
+  acceptComposerSubmission,
+  beginComposerSubmission,
+  editComposer,
+  emptyComposerState,
+  failComposerSubmission,
+  type ComposerIntent,
+  type ComposerState,
+} from "./composer-state";
 
 export function App() {
   const selectionEpoch = useRef(0);
+  const selectedThreadIdRef = useRef<string | null>(null);
+  const composerStatesRef = useRef<Record<string, ComposerState>>({});
   const [railOpen, setRailOpen] = useState(true);
   const [serverStatus, setServerStatus] = useState<AppServerHostStatus>({
     type: "starting",
@@ -64,6 +75,34 @@ export function App() {
     }
   });
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [composerStates, setComposerStates] = useState<
+    Record<string, ComposerState>
+  >({});
+
+  const resumeThread = async (threadId: string) => {
+    const epoch = ++selectionEpoch.current;
+    selectedThreadIdRef.current = threadId;
+    setSelectedThreadId(threadId);
+    setThreadDetail(null);
+    setSelectedSettings(null);
+    setModelUpdateError(null);
+    setThreadLoading(true);
+    setThreadError(null);
+    try {
+      const result = await window.zenx.protocol.request("thread/resume", {
+        threadId,
+      });
+      if (selectionEpoch.current !== epoch) return;
+      setThreadDetail(result.thread);
+      setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
+    } catch (error) {
+      if (selectionEpoch.current === epoch) {
+        setThreadError(describeError(error));
+      }
+    } finally {
+      if (selectionEpoch.current === epoch) setThreadLoading(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -100,6 +139,9 @@ export function App() {
       if (status.type === "ready") {
         void loadThreads();
         void loadModels();
+        if (status.reconnected && selectedThreadIdRef.current !== null) {
+          void resumeThread(selectedThreadIdRef.current);
+        }
       }
     });
     const disposeNotifications = window.zenx.protocol.onNotification(
@@ -177,29 +219,7 @@ export function App() {
     null;
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
 
-  const selectThread = async (threadId: string) => {
-    const epoch = ++selectionEpoch.current;
-    setSelectedThreadId(threadId);
-    setThreadDetail(null);
-    setSelectedSettings(null);
-    setModelUpdateError(null);
-    setThreadLoading(true);
-    setThreadError(null);
-    try {
-      const result = await window.zenx.protocol.request("thread/resume", {
-        threadId,
-      });
-      if (selectionEpoch.current !== epoch) return;
-      setThreadDetail(result.thread);
-      setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
-    } catch (error) {
-      if (selectionEpoch.current === epoch) {
-        setThreadError(describeError(error));
-      }
-    } finally {
-      if (selectionEpoch.current === epoch) setThreadLoading(false);
-    }
-  };
+  const selectThread = resumeThread;
 
   const newThread = async () => {
     const epoch = ++selectionEpoch.current;
@@ -209,6 +229,7 @@ export function App() {
     try {
       const result = await window.zenx.protocol.request("thread/start", {});
       if (selectionEpoch.current !== epoch) return;
+      selectedThreadIdRef.current = result.thread.id;
       setSelectedThreadId(result.thread.id);
       setThreadDetail(result.thread);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
@@ -226,12 +247,83 @@ export function App() {
     }
   };
 
-  const startTurn = async (text: string) => {
-    if (threadDetail === null) throw new Error("No thread is selected");
-    await window.zenx.protocol.request("turn/start", {
-      threadId: threadDetail.id,
-      input: [{ type: "text", text }],
-    });
+  const updateComposer = (
+    threadId: string,
+    update: (state: ComposerState) => ComposerState,
+  ): ComposerState => {
+    const current = composerStatesRef.current[threadId] ?? emptyComposerState();
+    const next = update(current);
+    if (next !== current) {
+      composerStatesRef.current = {
+        ...composerStatesRef.current,
+        [threadId]: next,
+      };
+      setComposerStates(composerStatesRef.current);
+    }
+    return next;
+  };
+
+  const changeDraft = (threadId: string, draft: string) => {
+    updateComposer(threadId, (state) => editComposer(state, draft));
+  };
+
+  const submitComposer = async (
+    intent: ComposerIntent,
+    expectedTurnId: string | null,
+  ) => {
+    if (threadDetail === null) return;
+    const threadId = threadDetail.id;
+    if (composerStatesRef.current[threadId]?.submission?.status === "pending") {
+      return;
+    }
+    const started = updateComposer(threadId, (state) =>
+      beginComposerSubmission(state, intent, expectedTurnId, () =>
+        crypto.randomUUID(),
+      ),
+    );
+    const submission = started.submission;
+    if (submission === null || submission.status !== "pending") return;
+    try {
+      const input = [{ type: "text" as const, text: submission.text }];
+      if (submission.intent === "start") {
+        await window.zenx.protocol.request("turn/start", {
+          threadId,
+          input,
+          clientUserMessageId: submission.clientUserMessageId,
+        });
+      } else if (submission.intent === "steer") {
+        if (submission.expectedTurnId === null) {
+          throw new Error("The active turn changed before steering");
+        }
+        await window.zenx.protocol.request("turn/steer", {
+          threadId,
+          expectedTurnId: submission.expectedTurnId,
+          input,
+          clientUserMessageId: submission.clientUserMessageId,
+        });
+      } else {
+        if (submission.expectedTurnId === null) {
+          throw new Error("The active turn changed before replacement");
+        }
+        await window.zenx.protocol.request("turn/replace", {
+          threadId,
+          expectedTurnId: submission.expectedTurnId,
+          input,
+          clientUserMessageId: submission.clientUserMessageId,
+        });
+      }
+      updateComposer(threadId, (state) =>
+        acceptComposerSubmission(state, submission.clientUserMessageId),
+      );
+    } catch (error) {
+      updateComposer(threadId, (state) =>
+        failComposerSubmission(
+          state,
+          submission.clientUserMessageId,
+          describeError(error),
+        ),
+      );
+    }
   };
 
   const interruptTurn = async (turnId: string) => {
@@ -355,10 +447,32 @@ export function App() {
             <span>Restart ZenX after checking the host configuration.</span>
           </section>
         ) : serverStatus.type !== "ready" ? (
-          <section className="empty-canvas" aria-live="polite">
-            <div className="loading-ring" aria-hidden="true" />
-            <h2>Starting Zen App Server</h2>
-            <p>Connecting to the local agent runtime…</p>
+          <section
+            className="empty-canvas"
+            aria-live="polite"
+            role={serverStatus.type === "stopped" ? "alert" : undefined}
+          >
+            {serverStatus.type === "starting" ? (
+              <div className="loading-ring" aria-hidden="true" />
+            ) : (
+              <div className="empty-glyph" aria-hidden="true">
+                <Icon name="warning" size={22} />
+              </div>
+            )}
+            <h2>
+              {serverStatus.type === "starting"
+                ? "Starting Zen App Server"
+                : serverStatus.type === "reconnecting"
+                  ? "Reconnecting to Zen App Server"
+                  : "Zen App Server disconnected"}
+            </h2>
+            <p>
+              {serverStatus.type === "starting"
+                ? "Connecting to the local agent runtime…"
+                : serverStatus.type === "reconnecting"
+                  ? `Attempt ${serverStatus.attempt}. Your draft is preserved; the current thread will be rebuilt from App Server history after reconnecting.`
+                  : "Your draft is preserved. Restart ZenX to reconnect and rebuild the thread from App Server history."}
+            </p>
           </section>
         ) : threadLoading ? (
           <section className="empty-canvas" aria-live="polite">
@@ -395,9 +509,11 @@ export function App() {
             approvals={approvals.filter(
               (approval) => approval.params.threadId === threadDetail.id,
             )}
+            composer={composerStates[threadDetail.id] ?? emptyComposerState()}
+            onDraftChange={(draft) => changeDraft(threadDetail.id, draft)}
             onInterrupt={interruptTurn}
             onRespondToApproval={respondToApproval}
-            onStartTurn={startTurn}
+            onSubmit={submitComposer}
             thread={threadDetail}
           />
         ) : (

@@ -32,6 +32,7 @@ test("hosts a real App Server and removes its private token on shutdown", async 
   const tokenFile = path.join(directory, "runtime", "app-server.token");
   try {
     await manager.start();
+    assert.deepEqual(manager.status, { type: "ready", reconnected: false });
     assert.deepEqual(await manager.request("thread/list", {}), {
       data: [],
       nextCursor: null,

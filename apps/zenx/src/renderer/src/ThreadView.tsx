@@ -2,32 +2,42 @@ import { useEffect, useRef, useState } from "react";
 
 import type { ApprovalDecision } from "../../main/app-server-manager.js";
 import type { Thread, ThreadItem, Turn } from "../../protocol-client/index.js";
-import type { ApprovalCardState } from "./approval-state";
-import { Icon } from "./icons";
-import { activeTurn } from "./thread-view-state";
+import type { ApprovalCardState } from "./approval-state.js";
+import {
+  defaultComposerIntent,
+  type ComposerIntent,
+  type ComposerState,
+} from "./composer-state.js";
+import { Icon } from "./icons.js";
+import { activeTurn } from "./thread-view-state.js";
 
 interface ThreadViewProps {
   approvals: readonly ApprovalCardState[];
+  composer: ComposerState;
   thread: Thread;
+  onDraftChange(draft: string): void;
   onInterrupt(turnId: string): Promise<void>;
   onRespondToApproval(
     requestId: string,
     decision: ApprovalDecision,
   ): Promise<void>;
-  onStartTurn(text: string): Promise<void>;
+  onSubmit(
+    intent: ComposerIntent,
+    expectedTurnId: string | null,
+  ): Promise<void>;
 }
 
 export function ThreadView({
   approvals,
+  composer,
   thread,
+  onDraftChange,
   onInterrupt,
   onRespondToApproval,
-  onStartTurn,
+  onSubmit,
 }: ThreadViewProps) {
-  const [draft, setDraft] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [interruptError, setInterruptError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const runningTurn = activeTurn(thread);
 
@@ -36,33 +46,33 @@ export function ThreadView({
     if (scroll !== null) scroll.scrollTop = scroll.scrollHeight;
   }, [thread.turns]);
 
-  const submit = async () => {
-    const text = draft.trim();
-    if (text.length === 0 || runningTurn !== null || submitting) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await onStartTurn(text);
-      setDraft("");
-    } catch (requestError) {
-      setError(describeError(requestError));
-    } finally {
-      setSubmitting(false);
-    }
+  const submit = (intent: ComposerIntent) => {
+    if (composer.draft.trim().length === 0 || isSubmitting(composer)) return;
+    if (intent === "start" && runningTurn !== null) return;
+    if (intent !== "start" && runningTurn === null) return;
+    void onSubmit(intent, runningTurn?.id ?? null);
   };
 
   const interrupt = async () => {
     if (runningTurn === null || interrupting) return;
     setInterrupting(true);
-    setError(null);
+    setInterruptError(null);
     try {
       await onInterrupt(runningTurn.id);
     } catch (requestError) {
-      setError(describeError(requestError));
+      setInterruptError(describeError(requestError));
     } finally {
       setInterrupting(false);
     }
   };
+  const pendingApproval =
+    runningTurn !== null &&
+    approvals.some(
+      (approval) =>
+        approval.params.turnId === runningTurn.id &&
+        approval.status === "pending",
+    );
+  const submitting = isSubmitting(composer);
 
   return (
     <>
@@ -96,54 +106,121 @@ export function ThreadView({
         <div className="composer">
           <textarea
             aria-label="Message"
-            disabled={runningTurn !== null || submitting}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => onDraftChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                void submit();
+                submit(defaultComposerIntent(runningTurn !== null));
               }
             }}
             placeholder={
               runningTurn === null
                 ? "Send a message…"
-                : "Wait for the current turn to finish or interrupt it."
+                : "Steer the active turn…"
             }
             rows={1}
-            value={draft}
+            value={composer.draft}
           />
           <div className="composer-row">
-            <span className={error === null ? undefined : "composer-error"}>
-              {error ??
-                (runningTurn === null
-                  ? "Enter to send · Shift+Enter for a new line"
-                  : "A thread can run only one turn at a time.")}
+            <span
+              className={
+                composer.submission?.status === "failed" ||
+                interruptError !== null
+                  ? "composer-error"
+                  : undefined
+              }
+              role={
+                composer.submission?.status === "failed" ||
+                interruptError !== null
+                  ? "alert"
+                  : undefined
+              }
+            >
+              {composerStatus(
+                composer,
+                runningTurn !== null,
+                pendingApproval,
+                interruptError,
+              )}
             </span>
             {runningTurn === null ? (
               <button
                 className="send-button"
                 type="button"
-                disabled={draft.trim().length === 0 || submitting}
-                onClick={() => void submit()}
+                disabled={composer.draft.trim().length === 0 || submitting}
+                onClick={() => submit("start")}
               >
                 {submitting ? "Starting…" : "Send"}
               </button>
             ) : (
-              <button
-                className="interrupt-button"
-                type="button"
-                disabled={interrupting}
-                onClick={() => void interrupt()}
-              >
-                <Icon name="stop" size={12} />
-                {interrupting ? "Stopping…" : "Interrupt"}
-              </button>
+              <div className="active-turn-actions">
+                <button
+                  className="stop-button"
+                  type="button"
+                  aria-label="Interrupt without sending the draft"
+                  disabled={interrupting || submitting}
+                  onClick={() => void interrupt()}
+                >
+                  <Icon name="stop" size={12} />
+                  {interrupting ? "Stopping…" : "Interrupt"}
+                </button>
+                <button
+                  className="replace-button"
+                  type="button"
+                  aria-label="Interrupt the active turn and send this draft as a new turn"
+                  disabled={composer.draft.trim().length === 0 || submitting}
+                  onClick={() => submit("replace")}
+                >
+                  {submitting && composer.submission?.intent === "replace"
+                    ? "Replacing…"
+                    : "Interrupt & send"}
+                </button>
+                <button
+                  className="send-button"
+                  type="button"
+                  aria-label="Steer the active turn with this message"
+                  disabled={composer.draft.trim().length === 0 || submitting}
+                  onClick={() => submit("steer")}
+                >
+                  {submitting && composer.submission?.intent === "steer"
+                    ? "Steering…"
+                    : "Steer now"}
+                </button>
+              </div>
             )}
           </div>
         </div>
       </div>
     </>
   );
+}
+
+function isSubmitting(composer: ComposerState): boolean {
+  return composer.submission?.status === "pending";
+}
+
+function composerStatus(
+  composer: ComposerState,
+  active: boolean,
+  pendingApproval: boolean,
+  interruptError: string | null,
+): string {
+  if (interruptError !== null) return interruptError;
+  if (composer.submission?.status === "failed") {
+    return `${composer.submission.error ?? "Send failed"} Draft kept; retry uses the same message ID.`;
+  }
+  if (composer.submission?.status === "pending") {
+    return composer.submission.intent === "replace"
+      ? "Interrupting the current turn, then starting the replacement…"
+      : composer.submission.intent === "steer"
+        ? "Adding guidance to the current turn…"
+        : "Starting a new turn…";
+  }
+  if (!active) return "Enter to send · Shift+Enter for a new line";
+  if (pendingApproval) {
+    return "Steering adds guidance but does not approve the pending command. Interrupt & send cancels it.";
+  }
+  return "Enter steers this turn · Interrupt stops only · Interrupt & send starts a replacement turn";
 }
 
 function TurnBlock({

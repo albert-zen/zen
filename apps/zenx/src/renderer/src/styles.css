@@ -1100,6 +1100,7 @@ summary:focus-visible {
 .composer-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -1114,7 +1115,8 @@ summary:focus-visible {
 }
 
 .send-button,
-.interrupt-button {
+.stop-button,
+.replace-button {
   display: inline-flex;
   min-height: 28px;
   align-items: center;
@@ -1136,18 +1138,34 @@ summary:focus-visible {
   background: var(--color-blue);
 }
 
-.interrupt-button {
+.stop-button {
   color: #f7b3b1;
   background: rgba(240, 113, 111, 0.16);
 }
 
+.replace-button {
+  border: 1px solid rgba(240, 113, 111, 0.42);
+  color: #f7b3b1;
+  background: transparent;
+}
+
+.active-turn-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
 .send-button:hover:not(:disabled),
-.interrupt-button:hover:not(:disabled) {
+.stop-button:hover:not(:disabled),
+.replace-button:hover:not(:disabled) {
   filter: brightness(1.1);
 }
 
 .send-button:disabled,
-.interrupt-button:disabled {
+.stop-button:disabled,
+.replace-button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
