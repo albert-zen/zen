@@ -13,6 +13,7 @@
   --color-blue: #62a8fa;
   --color-blue-strong: #7bb5f8;
   --color-blue-dim: rgba(98, 168, 250, 0.12);
+  --color-red: #f0716f;
   --color-focus: #7bb5f8;
   --space-1: 4px;
   --space-2: 8px;
@@ -284,6 +285,33 @@ button:focus-visible {
   margin: var(--space-1) 0 var(--space-5);
   color: var(--color-text-subtle);
   font-size: var(--font-size-body);
+}
+
+.server-error .empty-glyph {
+  color: var(--color-red);
+  border-color: rgba(240, 113, 111, 0.35);
+  background: rgba(240, 113, 111, 0.1);
+}
+
+.server-error span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.loading-ring {
+  width: 22px;
+  height: 22px;
+  margin-bottom: var(--space-4);
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-blue);
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .primary-button {
