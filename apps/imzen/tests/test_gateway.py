@@ -502,6 +502,67 @@ async def test_generic_files_become_manifest_while_images_stay_native(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_attachment_only_file_becomes_one_manifest_turn(tmp_path: Path) -> None:
+    document = tmp_path / "notes.txt"
+    document.write_text("notes", encoding="utf-8")
+    gateway, channel, client = compose(tmp_path)
+    message = inbound(
+        "file-only",
+        content=(
+            AttachmentContent(
+                attachment_id="file-1",
+                media_type="text/plain",
+                source=LocalPath(str(document)),
+                filename="notes.txt",
+                size_bytes=document.stat().st_size,
+            ),
+        ),
+    )
+    await gateway.start()
+    try:
+        await channel.emit_message(message)
+    finally:
+        await gateway.stop()
+
+    assert client.started_turns == [("thread-1", f"[Attachments]\n- notes.txt: {document}", {})]
+
+
+@pytest.mark.asyncio
+async def test_attachment_only_image_stays_native_without_synthetic_text(tmp_path: Path) -> None:
+    image = tmp_path / "photo.png"
+    image.write_bytes(b"png")
+    gateway, channel, client = compose(tmp_path)
+    message = inbound(
+        "image-only",
+        content=(
+            AttachmentContent(
+                attachment_id="image-1",
+                media_type="image/png",
+                source=LocalPath(str(image)),
+                filename="photo.png",
+                size_bytes=image.stat().st_size,
+            ),
+        ),
+    )
+    await gateway.start()
+    try:
+        await channel.emit_message(message)
+    finally:
+        await gateway.stop()
+
+    assert client.started_turns == [
+        (
+            "thread-1",
+            None,
+            {
+                "input_items": [{"type": "localImage", "path": str(image)}],
+                "expected_local_image_epoch": 1,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_application_failure_is_reported_to_the_originating_message(tmp_path: Path) -> None:
     client = FakeAppServer()
     client.fail_turn = RuntimeError("thread is busy")

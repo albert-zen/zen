@@ -89,7 +89,10 @@ the same bot credentials.
 
 Downloaded generic files are represented in the Zen input as an explicit
 `[Attachments]` text manifest with staged local paths. Images remain typed
-local-image input. Markdown Agent output is delivered unchanged.
+local-image input. QQ exposes text, file, and image as separate inbound message
+shapes; IMZen accepts attachment-only file and image messages directly and
+does not synthesize or join a caption from adjacent text messages. Markdown
+Agent output is delivered unchanged.
 
 ## Migration behavior matrix
 
@@ -136,9 +139,11 @@ uv sync --all-extras
    `/permission approval-required`.
 5. Trigger a command approval and exercise `/approve`, `/deny`, or `/cancel`
    with the shown stable request reference.
-6. Send one generic file and one image; verify the file manifest and native
-   image input.
-7. Stop the App Server or force a Turn failure; verify an explicit IM error and
+6. Send one small generic file as a file-only QQ message; verify exactly one
+   Turn receives its `[Attachments]` manifest.
+7. Send one image as an image-only QQ message; verify exactly one Turn receives
+   native local-image input without synthetic text.
+8. Stop the App Server or force a Turn failure; verify an explicit IM error and
    no self-repair queue.
 
 This smoke test requires real QQ credentials and is intentionally not automated

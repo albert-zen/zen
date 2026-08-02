@@ -67,8 +67,6 @@ def adapt_inbound_content(message: InboundMessage):
     if file_lines:
         manifest = "[Attachments]\n" + "\n".join(file_lines)
         text = f"{text}\n\n{manifest}".strip()
-    if not text and images:
-        text = "[Image]"
     content = ((TextContent(text),) if text else ()) + tuple(images)
     if not content:
         raise ValueError("message text and attachments are empty")
