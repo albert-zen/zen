@@ -36,6 +36,9 @@
   binding 或调度语义。
 - **ImZenFailurePresenter** — 把 SDK 已分类并固定路由的终态入站失败渲染成
   IM 用户可见消息；它不决定重试，也不保存恢复状态。
+- **IMZen App Server shared filesystem root** — 部署者对本地 App Server 可读目录的
+  显式证明；SDK 仍负责把每个 local-image 路径限制在该目录内，未配置时 TCP
+  App Server 不接收本地图片路径。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并

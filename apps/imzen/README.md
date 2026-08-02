@@ -22,6 +22,7 @@ selects an existing Thread again.
 ```sh
 export IMZEN_APP_SERVER_URL=ws://127.0.0.1:4500
 export IMZEN_CWD=/absolute/workspace
+export IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT=/absolute/imzen/inbound-media
 export IMZEN_PERMISSION_MODE=full-access
 export IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS=true
 export IMZEN_CHANNELS_CONFIG_FILE=/absolute/private/channels.json
@@ -33,6 +34,13 @@ Server bearer token. `IMZEN_PERMISSION_MODE` accepts `full-access` (the
 default) or `approval-required`. Both use Zen's supported
 `danger-full-access` sandbox; they differ only in approval policy (`never` or
 `on-request`). This sandbox is not isolation.
+
+`IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT` is an explicit deployment
+attestation that the external App Server can read that local directory. IMZen
+passes local-image paths only when this setting is present, and the SDK rejects
+every image outside the configured root. Leave it unset for remote or
+unshared-filesystem App Servers. Channel `media_dir` values used for images
+must be inside this root.
 
 If an enabled channel has neither `allowed_user_ids` nor
 `allowed_conversation_ids`, Full Access requires the explicit deployment

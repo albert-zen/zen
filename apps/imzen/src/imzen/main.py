@@ -27,7 +27,7 @@ async def run(settings: Settings | None = None) -> None:
         application_instance_id="zen-main",
         client=client,
         cwd=str(resolved.cwd),
-        shared_filesystem_root=resolved.cwd,
+        shared_filesystem_root=(resolved.app_server_shared_filesystem_root or resolved.cwd),
         thread_start_options=thread_start_options(resolved.permission_mode),
     )
     controller = ImZenController(
@@ -86,4 +86,9 @@ def _build_app_server_client(settings: Settings) -> AppServerClient:
             "title": "IMZen",
             "version": "0.1.0",
         },
+        shared_filesystem_verifier=(
+            None
+            if settings.app_server_shared_filesystem_root is None
+            else settings.app_server_shared_filesystem_root.is_dir
+        ),
     )

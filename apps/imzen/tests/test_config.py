@@ -15,8 +15,38 @@ def test_settings_accept_loopback_websocket(tmp_path):
 
     assert settings.app_server_url == "ws://127.0.0.1:4500"
     assert settings.cwd == tmp_path.resolve()
+    assert settings.app_server_shared_filesystem_root is None
     assert settings.permission_mode == "full-access"
     assert settings.allow_unrestricted_full_access is False
+
+
+def test_settings_accept_explicit_app_server_shared_filesystem_root(tmp_path):
+    shared_root = tmp_path / "inbound-media"
+    shared_root.mkdir()
+
+    settings = Settings.from_env(
+        {
+            "IMZEN_APP_SERVER_URL": "ws://127.0.0.1:4500",
+            "IMZEN_CWD": str(tmp_path),
+            "IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT": str(shared_root),
+        }
+    )
+
+    assert settings.app_server_shared_filesystem_root == shared_root.resolve()
+
+
+def test_settings_reject_missing_app_server_shared_filesystem_root(tmp_path):
+    with pytest.raises(
+        ConfigurationError,
+        match="IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT does not exist",
+    ):
+        Settings.from_env(
+            {
+                "IMZEN_APP_SERVER_URL": "ws://127.0.0.1:4500",
+                "IMZEN_CWD": str(tmp_path),
+                "IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT": str(tmp_path / "missing"),
+            }
+        )
 
 
 def test_settings_accept_approval_required_permission_mode(tmp_path):
