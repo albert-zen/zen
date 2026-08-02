@@ -31,6 +31,11 @@
   校验它，credential 与 Provider 连接仍由宿主外部配置持有。目录必须有且仅有
   一个可见默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由
   既有 Thread 或显式请求使用。
+- **IMZenController** — IMZen 在 IM Agent SDK typed operations 之上组合
+  `/model`、`/permission` 与审批快捷命令的产品 UX；它不拥有 Thread、Turn、
+  binding 或调度语义。
+- **ImZenFailurePresenter** — 把 SDK 已分类并固定路由的终态入站失败渲染成
+  IM 用户可见消息；它不决定重试，也不保存恢复状态。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并
@@ -201,7 +206,7 @@ ProjectCoordinator、调度队列或可持久化的 scheduler。进程崩了就�
 ## 目标结构
 
 概念边界先用目录表达，不为了架构图拆 package。Core 与 CLI 暂时共用一个
-Node package；IMZen 只因为复用 Python channel 生态而独立。
+Node package；IMZen 只因为复用 Python IM Agent SDK 生态而独立。
 
 ```text
 src/
@@ -224,8 +229,9 @@ apps/
 
 这里的 package 只是安装与依赖边界，不是 Zen 领域模型。Core 与 CLI 当前共用
 一个 Node package，但代码边界分别是 `src/` 与 `apps/cli/`；IMZen 因复用
-Python 的 imcodex channel adapters 而作为独立 Python 应用存在。它们不会由
-package 关系长出 Project、Agent 或调度语义。
+Python IM Agent SDK 的 Channel、Gateway、Application adapter 与 bridge state
+ports 而作为独立 Python 应用存在。IMZen 只保留产品配置、命令/呈现与 composition
+root；这些 package 关系不会长出 Project、第二套 Agent 或调度语义。
 
 自建薄 CLI 是首个稳定接入端；原版 `codex --remote` / T3 Code 作为机会型兼容
 验收，不反向塑造 Zen Core。

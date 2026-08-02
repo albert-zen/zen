@@ -1,6 +1,5 @@
-"""Thin IM client for Zen."""
+"""Thin QQ/IM channel and Zen App Server composition."""
 
-from .gateway import ImZenGateway
-from .middleware import ImZenMiddleware
+from .controller import ImZenController, ImZenFailurePresenter, ImZenRequestPresenter
 
-__all__ = ["ImZenGateway", "ImZenMiddleware"]
+__all__ = ["ImZenController", "ImZenFailurePresenter", "ImZenRequestPresenter"]

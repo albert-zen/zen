@@ -3,24 +3,51 @@ from __future__ import annotations
 import asyncio
 import signal
 
-from .channels import build_channel_runtime
+from imagent.applications import ZenApplicationAdapter
+from imagent.applications.appserver_client import AppServerClient, AppServerSupervisor
+from imagent.bindings import InMemoryBindingRepository
+from imagent.contracts import ProjectionPolicy
+from imagent.gateway import ImAgentGateway
+
+from .channels import build_channels
 from .config import Settings
-from .middleware import ImZenMiddleware
+from .controller import (
+    ImZenController,
+    ImZenFailurePresenter,
+    ImZenRequestPresenter,
+    adapt_inbound_content,
+    thread_start_options,
+)
 
 
 async def run(settings: Settings | None = None) -> None:
     resolved = settings or Settings.from_env()
     client = _build_app_server_client(resolved)
-    middleware = ImZenMiddleware(
+    application = ZenApplicationAdapter(
+        application_instance_id="zen-main",
         client=client,
-        default_cwd=str(resolved.cwd),
+        cwd=str(resolved.cwd),
+        shared_filesystem_root=resolved.cwd,
+        thread_start_options=thread_start_options(resolved.permission_mode),
+    )
+    controller = ImZenController(
+        application=application,
+        client=client,
         default_permission_mode=resolved.permission_mode,
     )
-    channels = build_channel_runtime(
-        resolved.channels_config_file,
-        middleware,
-        permission_mode=resolved.permission_mode,
-        allow_unrestricted_full_access=resolved.allow_unrestricted_full_access,
+    gateway = ImAgentGateway(
+        channels=build_channels(
+            resolved.channels_config_file,
+            permission_mode=resolved.permission_mode,
+            allow_unrestricted_full_access=resolved.allow_unrestricted_full_access,
+        ),
+        applications=[application],
+        bindings=InMemoryBindingRepository(),
+        projection_policy=ProjectionPolicy.FOREGROUND_ONLY,
+        controller=controller,
+        content_adapter=adapt_inbound_content,
+        inbound_failure_presenter=ImZenFailurePresenter(),
+        request_presenter=ImZenRequestPresenter(),
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -35,37 +62,19 @@ async def run(settings: Settings | None = None) -> None:
             continue
         registered_signals.append(candidate)
 
-    middleware_started = False
-    channels_started = False
+    gateway_started = False
     try:
-        middleware_started = True
-        await middleware.start()
-        await channels.start()
-        channels_started = True
+        await gateway.start()
+        gateway_started = True
         await stop.wait()
     finally:
         for registered in registered_signals:
             loop.remove_signal_handler(registered)
-        errors: list[BaseException] = []
-        if channels_started:
-            try:
-                await channels.stop()
-            except BaseException as exc:
-                errors.append(exc)
-        if middleware_started:
-            try:
-                await middleware.stop()
-            except BaseException as exc:
-                errors.append(exc)
-        if errors:
-            raise BaseExceptionGroup("IMZen shutdown failed", errors)
+        if gateway_started:
+            await gateway.stop()
 
 
-def _build_app_server_client(settings: Settings):
-    try:
-        from imcodex.appserver import AppServerClient, AppServerSupervisor
-    except ImportError as exc:
-        raise RuntimeError("the pinned imcodex dependency is not installed") from exc
+def _build_app_server_client(settings: Settings) -> AppServerClient:
     supervisor = AppServerSupervisor(
         app_server_url=settings.app_server_url,
         app_server_auth_token_file=settings.app_server_auth_token_file,
