@@ -32,16 +32,18 @@ IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它
 - IMZen 代码只保留环境配置、SDK channel factory 调用、产品命令/权限预设、
   通用文件到文字 manifest 的映射、错误/审批呈现和 composition root。
 - Conversation → Thread binding 使用 SDK 的内存 repository；重启后从下一条消息
-  新建 Thread，或由用户 `/threads` + `/pick` 重新选择。它不是 Zen 会话权威，
-  也不进入 ItemList。
+  新建 Thread，或由用户 `/threads` + `/pick` 重新选择。SDK SQLite repository
+  只持久化 inbound/outbound 幂等等 bridge state，防止重启重新授权已有或结果未知
+  的 native message；两者都不是 Zen 会话权威，也不进入 ItemList。
 - 切换 Thread 只改变 Gateway binding，不隐式改变任何原生 UI 的 active Thread；
   status/history/catch-up 均从 Zen App Server 的权威投影读取。
 - 投递或处理失败通过 SDK 的终态 failure presenter 明确告知用户；不在 IMZen
   新建 durable queue、outbox 或自我修复状态机。
 
-SDK 依赖固定在组合分支提交
-`c6bd9a45a333354d907968dd68c8b817deafaf26`；它由四个独立 SDK Draft PR 的
-提交组成，便于分别 review 后再决定 SDK 上游合入顺序。
+SDK 依赖固定在已合入 `im-agent-sdk` `main` 的完整 ADR 0015 rollout 提交
+`57f255fb1f40a095aeabb5a6967380ba057494a3`。IMZen 只配置它实际使用的强类型
+I1 inbound content transformer、I2 classified failure presenter 与 request
+presenter；其他扩展位置缺席，因此保持 SDK 默认行为。
 
 ## Web UI
 

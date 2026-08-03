@@ -13,6 +13,7 @@ from imagent.contracts import (
     AttachmentContent,
     BindConversationToThread,
     ClearConversationThread,
+    Content,
     ConversationBinding,
     ConversationBound,
     ConversationRef,
@@ -31,13 +32,13 @@ from imagent.contracts import (
 )
 from imagent.controllers import (
     ControllerActions,
-    InboundFailurePhase,
     MarkdownRequestPresenter,
     RequestPresentation,
     SlashController,
 )
 from imagent.controllers.markdown import MarkdownSlashPresenter
 from imagent.controllers.slash import SlashCommand, parse_slash_command
+from imagent.gateway import InboundFailurePhase
 
 from .config import PermissionMode
 
@@ -49,7 +50,7 @@ def thread_start_options(mode: PermissionMode) -> dict[str, object]:
     }
 
 
-def adapt_inbound_content(message: InboundMessage):
+def adapt_inbound_content(message: InboundMessage) -> tuple[Content, ...]:
     """Preserve images and encode generic staged files as Zen-readable text."""
     text = "\n".join(part.text for part in message.content if isinstance(part, TextContent)).strip()
     images: list[AttachmentContent] = []
@@ -71,6 +72,13 @@ def adapt_inbound_content(message: InboundMessage):
     if not content:
         raise ValueError("message text and attachments are empty")
     return content
+
+
+class ImZenContentTransformer:
+    """Replay-safe typed projection from staged IM content to Zen input."""
+
+    async def transform_content(self, message: InboundMessage) -> tuple[Content, ...]:
+        return adapt_inbound_content(message)
 
 
 class ImZenController:
@@ -229,13 +237,17 @@ class ImZenController:
                 {"threadId": binding.thread_ref.native_thread_id, "model": model},
             )
         except Exception as error:
-            text = f"Could not switch model to **{model}**: {error}"
             if _zen_error_code(error) == "model_unavailable":
+                text = f"Could not switch model to **{model}**: {error}"
                 try:
                     text = f"{text}\n\n{await self._model_catalog_markdown()}"
                 except Exception:
                     text = f"{text}\n\nUse `/model` to list available models."
-            raise RuntimeError(text) from error
+                raise RuntimeError(text) from error
+            raise RuntimeError(
+                f"Model update to **{model}** did not complete cleanly; "
+                "Zen may already have applied it. Retrying the same model is safe."
+            ) from error
         return f"Model switched to **{model}** for subsequent turns."
 
     async def _model_catalog_markdown(self) -> str:
@@ -385,11 +397,10 @@ class ImZenRequestPresenter(MarkdownRequestPresenter):
 class ImZenFailurePresenter:
     """Render terminal SDK inbound failures as explicit IMZen messages."""
 
-    def present_failure(
+    async def present_failure(
         self,
-        error: BaseException,
-        *,
         phase: InboundFailurePhase,
+        *,
         conversation_ref: ConversationRef,
         delivery_id: str,
         reply_to_message_id: str,
@@ -403,7 +414,7 @@ class ImZenFailurePresenter:
         return OutboundMessage(
             delivery_id=delivery_id,
             conversation_ref=conversation_ref,
-            content=(TextContent(f"**Error:** {prefix}: {error}", TextFormat.MARKDOWN),),
+            content=(TextContent(f"**Error:** {prefix}.", TextFormat.MARKDOWN),),
             created_at=datetime.now(UTC),
             reply_to=reply_to_message_id,
         )

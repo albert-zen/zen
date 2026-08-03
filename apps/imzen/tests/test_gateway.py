@@ -18,14 +18,20 @@ from imagent.contracts import (
     ProjectionPolicy,
     TextContent,
 )
-from imagent.gateway import ImAgentGateway
+from imagent.gateway import (
+    GatewayExtensions,
+    GatewayRepositories,
+    ImAgentGateway,
+    InboundFailurePhase,
+)
+from imagent.storage import SQLiteGatewayState
 from imagent.testing import FakeChannelAdapter
 
 from imzen.controller import (
+    ImZenContentTransformer,
     ImZenController,
     ImZenFailurePresenter,
     ImZenRequestPresenter,
-    adapt_inbound_content,
     thread_start_options,
 )
 
@@ -51,6 +57,7 @@ class FakeAppServer:
         self.connected = False
         self.closed = False
         self.fail_turn: Exception | None = None
+        self.fail_model_update: Exception | None = None
 
     def add_notification_handler(self, handler) -> None:
         self.notification_handlers.append(handler)
@@ -134,6 +141,8 @@ class FakeAppServer:
     ) -> dict[str, object]:
         payload = dict(params or {})
         self.calls.append((method, payload))
+        if method == "thread/settings/update" and self.fail_model_update is not None:
+            raise self.fail_model_update
         if method == "thread/settings/update" and payload.get("model") == "missing":
             raise AppServerError(
                 "Model is not available from this Zen host: missing",
@@ -233,7 +242,12 @@ def inbound(
     )
 
 
-def compose(tmp_path: Path, client: FakeAppServer | None = None):
+def compose(
+    tmp_path: Path,
+    client: FakeAppServer | None = None,
+    *,
+    idempotency=None,
+):
     resolved_client = client or FakeAppServer()
     channel = FakeChannelAdapter("test")
     application = ZenApplicationAdapter(
@@ -247,12 +261,17 @@ def compose(tmp_path: Path, client: FakeAppServer | None = None):
     gateway = ImAgentGateway(
         channels=[channel],
         applications=[application],
-        bindings=InMemoryBindingRepository(),
+        repositories=GatewayRepositories(
+            bindings=InMemoryBindingRepository(),
+            idempotency=idempotency,
+        ),
         projection_policy=ProjectionPolicy.FOREGROUND_ONLY,
-        controller=controller,
-        content_adapter=adapt_inbound_content,
-        inbound_failure_presenter=ImZenFailurePresenter(),
-        request_presenter=ImZenRequestPresenter(),
+        extensions=GatewayExtensions(
+            controller=controller,
+            inbound_content_transformer=ImZenContentTransformer(),
+            inbound_failure_presenter=ImZenFailurePresenter(),
+            request_presenter=ImZenRequestPresenter(),
+        ),
     )
     return gateway, channel, resolved_client
 
@@ -418,6 +437,22 @@ async def test_model_catalog_switch_and_unavailable_error(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_model_transport_failure_reports_ambiguous_native_outcome(tmp_path: Path) -> None:
+    gateway, channel, client = compose(tmp_path)
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("m1", "start"))
+        client.fail_model_update = RuntimeError("connection lost")
+        await channel.emit_message(inbound("m2", "/model model-two"))
+    finally:
+        await gateway.stop()
+
+    rendered = "\n".join(sent_texts(channel))
+    assert "Zen may already have applied it" in rendered
+    assert "Retrying the same model is safe" in rendered
+
+
+@pytest.mark.asyncio
 async def test_command_approval_round_trips_with_stable_sdk_request_ref(tmp_path: Path) -> None:
     gateway, channel, client = compose(tmp_path)
     stable_refs: list[str] = []
@@ -575,11 +610,74 @@ async def test_application_failure_is_reported_to_the_originating_message(tmp_pa
     finally:
         await gateway.stop()
 
-    errors = [message for message in channel.sent if "thread is busy" in sent_texts_for(message)]
+    errors = [
+        message for message in channel.sent if "outcome is unknown" in sent_texts_for(message)
+    ]
     assert len(errors) == 1
-    assert "Zen could not process this message" in sent_texts_for(errors[0])
+    assert "Zen may have accepted this message" in sent_texts_for(errors[0])
     assert errors[0].reply_to == "m1"
     assert len(client.started_turns) == 1
+
+
+@pytest.mark.asyncio
+async def test_outcome_unknown_is_not_reauthorized_after_restart(tmp_path: Path) -> None:
+    state_path = tmp_path / "gateway.sqlite3"
+    message = inbound("m1", "hello")
+    first_state = SQLiteGatewayState(state_path)
+    first_client = FakeAppServer()
+    first_client.fail_turn = RuntimeError("connection lost")
+    first_gateway, first_channel, _ = compose(
+        tmp_path,
+        first_client,
+        idempotency=first_state,
+    )
+    await first_gateway.start()
+    try:
+        await first_channel.emit_message(message)
+    finally:
+        await first_gateway.stop()
+        await first_state.close()
+
+    reopened_state = SQLiteGatewayState(state_path, stale_claim_after_seconds=0)
+    second_client = FakeAppServer()
+    second_gateway, second_channel, _ = compose(
+        tmp_path,
+        second_client,
+        idempotency=reopened_state,
+    )
+    await second_gateway.start()
+    try:
+        await second_channel.emit_message(message)
+    finally:
+        await second_gateway.stop()
+        await reopened_state.close()
+
+    assert len(first_client.started_turns) == 1
+    assert second_client.started_threads == []
+    assert second_client.started_turns == []
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected"),
+    (
+        (InboundFailurePhase.PRE_ACCEPTANCE, "could not process"),
+        (InboundFailurePhase.OUTCOME_UNKNOWN, "outcome is unknown"),
+        (InboundFailurePhase.POST_ACCEPTANCE, "projection failed"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_failure_presenter_preserves_sdk_classification(phase, expected) -> None:
+    presented = await ImZenFailurePresenter().present_failure(
+        phase,
+        conversation_ref=ConversationRef("test", "chat-1"),
+        delivery_id="failure-1",
+        reply_to_message_id="native-1",
+    )
+
+    assert presented.delivery_id == "failure-1"
+    assert presented.conversation_ref == ConversationRef("test", "chat-1")
+    assert presented.reply_to == "native-1"
+    assert expected in sent_texts_for(presented)
 
 
 def sent_texts_for(message) -> str:

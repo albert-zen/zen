@@ -1,8 +1,8 @@
 # IMZen
 
 IMZen is a thin Python client of the Zen App Server. It composes the IM Agent
-SDK at pinned integration commit
-`c6bd9a45a333354d907968dd68c8b817deafaf26`; it does not implement a second
+SDK at the complete ADR 0015 rollout commit merged to SDK `main`,
+`57f255fb1f40a095aeabb5a6967380ba057494a3`; it does not implement a second
 Gateway, Channel runtime, Agent backend, transcript, scheduler, or recovery
 state machine.
 
@@ -22,6 +22,7 @@ selects an existing Thread again.
 ```sh
 export IMZEN_APP_SERVER_URL=ws://127.0.0.1:4500
 export IMZEN_CWD=/absolute/workspace
+export IMZEN_GATEWAY_STATE_FILE=/absolute/private/imzen/gateway.sqlite3
 export IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT=/absolute/imzen/inbound-media
 export IMZEN_PERMISSION_MODE=full-access
 export IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS=true
@@ -34,6 +35,12 @@ Server bearer token. `IMZEN_PERMISSION_MODE` accepts `full-access` (the
 default) or `approval-required`. Both use Zen's supported
 `danger-full-access` sandbox; they differ only in approval policy (`never` or
 `on-request`). This sandbox is not isolation.
+
+`IMZEN_GATEWAY_STATE_FILE` is required. It holds SDK-owned bridge state such as
+durable idempotency claims, including `side_effect_started`; this prevents a
+native redelivery after process restart from reauthorizing an input whose App
+Server outcome is unknown. Conversation bindings deliberately remain in memory,
+so this database is not a second Thread, transcript, queue, or Agent runtime.
 
 `IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT` is an explicit deployment
 attestation that the external App Server can read that local directory. IMZen
@@ -96,28 +103,40 @@ Agent output is delivered unchanged.
 
 ## Migration behavior matrix
 
-| Behavior                                          | Before                                  | After SDK migration                                             |
-| ------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
-| QQ/Telegram/Feishu/Weixin lifecycle               | IMZen middleware over borrowed adapters | SDK-native Channel adapters and Gateway lifecycle               |
-| Conversation binding                              | IMZen dictionaries                      | SDK `InMemoryBindingRepository`                                 |
-| Thread/Turn calls                                 | IMZen App Server wrapper                | SDK `ZenApplicationAdapter`                                     |
-| Output projection and duplicate fencing           | IMZen local Gateway                     | SDK projection/idempotency pipeline                             |
-| `/new`, `/permission`, `/model`, approval aliases | IMZen product behavior                  | Thin `ImZenController` over SDK typed actions                   |
-| `/threads`, `/pick`, `/catchup`, `/history`       | IMZen-specific parsing/list cache       | SDK Slash Controller and authoritative reads                    |
-| Native Thread activation on `/pick`               | Resume side effect                      | Deliberately absent; binding and native activation are separate |
-| Generic files and images                          | Text manifest + local image input       | Same behavior through SDK content-adapter seam                  |
-| Processing failures                               | Middleware error message                | SDK terminal failure phase + IMZen presenter                    |
-| Durable queue/recovery state                      | None                                    | None                                                            |
+| Behavior                                    | Before                                  | After SDK migration                                             |
+| ------------------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
+| QQ/Telegram/Feishu/Weixin lifecycle         | IMZen middleware over borrowed adapters | SDK-native Channel adapters and Gateway lifecycle               |
+| Conversation binding                        | IMZen dictionaries                      | SDK `InMemoryBindingRepository`                                 |
+| Thread/Turn calls                           | IMZen App Server wrapper                | SDK `ZenApplicationAdapter`                                     |
+| Output projection and duplicate fencing     | IMZen local Gateway                     | SDK projection/idempotency pipeline                             |
+| `/new`, `/permission`, approval aliases     | IMZen product behavior                  | Thin `ImZenController` over SDK actions/native profile seam     |
+| `/model`                                    | IMZen product behavior                  | Explicit Zen native operation outside current typed contracts   |
+| `/threads`, `/pick`, `/catchup`, `/history` | IMZen-specific parsing/list cache       | SDK Slash Controller and authoritative reads                    |
+| Native Thread activation on `/pick`         | Resume side effect                      | Deliberately absent; binding and native activation are separate |
+| Generic files and images                    | Text manifest + local image input       | Same behavior through SDK content-adapter seam                  |
+| Processing failures                         | Middleware error message                | SDK classified failure phase + bounded IMZen presenter          |
+| Durable queue/recovery state                | None                                    | None                                                            |
 
-## SDK migration dependencies
+## SDK migration dependency
 
-The integration commit contains four focused, independently reviewable SDK
-changes:
+The pin is the complete SDK `main` commit after the focused rollout tracked by
+[SDK issue #49](https://github.com/albert-zen/im-agent-sdk/issues/49). IMZen
+composes immutable repository and extension groups. It configures only I1
+inbound content transformation, I2 classified failure presentation, and request
+presentation; A1/O1/O2 remain absent because this consumer has no product-owned
+artifact materializer, destination presentation policy, or logical delivery
+observer.
 
-- [#35](https://github.com/albert-zen/im-agent-sdk/issues/35) / [Draft PR #37](https://github.com/albert-zen/im-agent-sdk/pull/37): evidenced Zen command-approval mapping.
-- [#36](https://github.com/albert-zen/im-agent-sdk/issues/36) / [Draft PR #38](https://github.com/albert-zen/im-agent-sdk/pull/38): default and per-call native Thread creation profiles.
-- [#39](https://github.com/albert-zen/im-agent-sdk/issues/39) / [Draft PR #41](https://github.com/albert-zen/im-agent-sdk/pull/41): consumer-owned inbound content adaptation.
-- [#42](https://github.com/albert-zen/im-agent-sdk/issues/42) / [Draft PR #44](https://github.com/albert-zen/im-agent-sdk/pull/44): terminal inbound failure presentation.
+One upstream limitation remains explicit: the accepted App Server adapter API
+keeps per-call native Thread profiles on the concrete
+`create_thread_with_options` seam. A crash after native Thread creation but
+before Conversation binding can therefore leave an unbound Zen Thread and a
+redelivery can create another. Moving this product-specific profile through an
+SDK pre-dispatch fence requires a future typed SDK operation; IMZen does not add
+a local outbox or second creation authority to mask that gap. Likewise `/model`
+is a Zen-specific native operation outside current SDK contracts, so ambiguous
+transport failures are reported as “may already have applied” and same-value
+retry is safe.
 
 ## Verification
 
@@ -143,8 +162,8 @@ uv sync --all-extras
    Turn receives its `[Attachments]` manifest.
 7. Send one image as an image-only QQ message; verify exactly one Turn receives
    native local-image input without synthetic text.
-8. Stop the App Server or force a Turn failure; verify an explicit IM error and
-   no self-repair queue.
+8. Stop the App Server or force a Turn failure; verify an explicit classified
+   IM error and no self-repair queue.
 
 This smoke test requires real QQ credentials and is intentionally not automated
 or claimed as completed by the repository test suite.
