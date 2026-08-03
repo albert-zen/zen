@@ -6,60 +6,28 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from imagent.channels import NativeTransportChannelAdapter, channel_from_config
+
 from .config import ConfigurationError, PermissionMode
 
 
-class ChannelRuntime:
-    def __init__(self, adapters: list[Any], middleware: Any) -> None:
-        self.adapters = adapters
-        self.middleware = middleware
-        for adapter in adapters:
-            middleware.register_adapter(adapter)
-
-    async def start(self) -> None:
-        started: list[Any] = []
-        try:
-            for adapter in self.adapters:
-                adapter.validate_startup_configuration()
-                await adapter.start()
-                started.append(adapter)
-        except BaseException:
-            for adapter in reversed(started):
-                try:
-                    await adapter.stop()
-                except BaseException:
-                    pass
-            raise
-
-    async def stop(self) -> None:
-        errors: list[BaseException] = []
-        for adapter in reversed(self.adapters):
-            try:
-                await adapter.stop()
-            except BaseException as exc:
-                errors.append(exc)
-        if errors:
-            raise BaseExceptionGroup("one or more IM channels failed to stop", errors)
-
-
-def build_channel_runtime(
+def build_channels(
     config_file: Path | None,
-    middleware: Any,
     *,
-    registry: dict[str, type] | None = None,
+    factory: Any = channel_from_config,
     permission_mode: PermissionMode = "full-access",
     allow_unrestricted_full_access: bool = False,
-) -> ChannelRuntime:
+) -> list[NativeTransportChannelAdapter]:
     if config_file is None:
-        return ChannelRuntime([], middleware)
-    adapters_by_id = registry or _default_registry()
+        return []
     config = _load_config(config_file)
-    unknown = sorted(set(config) - set(adapters_by_id))
+    supported = {"qq", "telegram", "feishu", "weixin"}
+    unknown = sorted(set(config) - supported)
     if unknown:
         raise ConfigurationError(f"unknown IM channel: {', '.join(unknown)}")
 
-    adapters: list[Any] = []
-    for channel_id, adapter_type in adapters_by_id.items():
+    adapters: list[NativeTransportChannelAdapter] = []
+    for channel_id in ("qq", "telegram", "feishu", "weixin"):
         channel_config = config.get(channel_id)
         if not isinstance(channel_config, dict) or channel_config.get("enabled") is not True:
             continue
@@ -77,8 +45,14 @@ def build_channel_runtime(
             channel_config,
             config_directory=config_file.parent,
         )
-        adapters.append(adapter_type.from_config(config=resolved_config, middleware=middleware))
-    return ChannelRuntime(adapters, middleware)
+        adapters.append(
+            factory(
+                channel_id,
+                config=resolved_config,
+                channel_instance_id=channel_id,
+            )
+        )
+    return adapters
 
 
 def _has_access_restriction(config: dict[str, Any]) -> bool:
@@ -95,26 +69,6 @@ def _has_access_restriction(config: dict[str, Any]) -> bool:
         if any(str(candidate).strip() not in {"", "*"} for candidate in candidates):
             return True
     return False
-
-
-def _default_registry() -> dict[str, type]:
-    try:
-        from imcodex.channels import (
-            FeishuChannelAdapter,
-            QQChannelAdapter,
-            TelegramChannelAdapter,
-            WeixinChannelAdapter,
-        )
-    except ImportError as exc:
-        raise ConfigurationError(
-            "the pinned imcodex dependency is required to enable real IM channels"
-        ) from exc
-    return {
-        "qq": QQChannelAdapter,
-        "telegram": TelegramChannelAdapter,
-        "feishu": FeishuChannelAdapter,
-        "weixin": WeixinChannelAdapter,
-    }
 
 
 def _load_config(path: Path) -> dict[str, Any]:

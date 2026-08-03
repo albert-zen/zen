@@ -19,6 +19,8 @@ PermissionMode = Literal["full-access", "approval-required"]
 class Settings:
     app_server_url: str
     cwd: Path
+    gateway_state_file: Path
+    app_server_shared_filesystem_root: Path | None = None
     permission_mode: PermissionMode = "full-access"
     channels_config_file: Path | None = None
     app_server_auth_token_file: Path | None = None
@@ -43,8 +45,15 @@ class Settings:
         if not cwd.is_dir():
             raise ConfigurationError(f"IMZEN_CWD is not a directory: {cwd}")
 
+        gateway_state_file = _state_file(
+            _required(values.get("IMZEN_GATEWAY_STATE_FILE"), "IMZEN_GATEWAY_STATE_FILE")
+        )
         channels_file = _optional_path(values.get("IMZEN_CHANNELS_CONFIG_FILE"))
         token_file = _optional_path(values.get("IMZEN_APP_SERVER_AUTH_TOKEN_FILE"))
+        shared_filesystem_root = _optional_existing_directory(
+            values.get("IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT"),
+            "IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT",
+        )
         permission_mode = _permission_mode(values.get("IMZEN_PERMISSION_MODE"))
         allow_unrestricted_full_access = _unrestricted_full_access_opt_in(
             values.get("IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS")
@@ -52,6 +61,8 @@ class Settings:
         return cls(
             app_server_url=app_server_url,
             cwd=cwd,
+            gateway_state_file=gateway_state_file,
+            app_server_shared_filesystem_root=shared_filesystem_root,
             permission_mode=permission_mode,
             allow_unrestricted_full_access=allow_unrestricted_full_access,
             channels_config_file=channels_file,
@@ -69,6 +80,27 @@ def _required(value: str | None, name: str) -> str:
 def _optional_path(value: str | None) -> Path | None:
     normalized = str(value or "").strip()
     return Path(normalized).expanduser().resolve() if normalized else None
+
+
+def _state_file(value: str) -> Path:
+    candidate = Path(value).expanduser().resolve()
+    if candidate.exists() and not candidate.is_file():
+        raise ConfigurationError(f"IMZEN_GATEWAY_STATE_FILE must be a file: {candidate}")
+    return candidate
+
+
+def _optional_existing_directory(value: str | None, name: str) -> Path | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    candidate = Path(normalized).expanduser()
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ConfigurationError(f"{name} does not exist: {candidate}") from exc
+    if not resolved.is_dir():
+        raise ConfigurationError(f"{name} must be a directory: {resolved}")
+    return resolved
 
 
 def _permission_mode(value: str | None) -> PermissionMode:

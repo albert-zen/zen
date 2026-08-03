@@ -22,38 +22,28 @@ T3 Code / Traycer 这类通用编排工具表达不了的 Zen 特有需求。
 ## IMZen
 
 IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它不是单独的
-架构层。实现策略是**复用通道，不复用 agent backend**：
+架构层。实现策略是**组合 IM Agent SDK，不在产品内复制 bridge runtime**：
 
-- imcodex 的 `channels` 层（QQ 等 IM 接入、鉴权、收发）依赖方向干净、
-  作为固定 commit 的库直接复用。
-- 这种复用只是固定版本的 package 依赖：IMZen 拥有自己的进程、channel
-  配置与 credential，不读取运行中 imcodex 的配置或状态，也不要求二者使用
-  同一个机器人账号。
-- IMZen 自己只保留薄 middleware、IM conversation 到 Zen thread 的内存绑定。
-  它仅复用 imcodex package 中通用的 `AppServerClient` 类，由 IMZen 进程直接
-  连接 Zen App Server；请求不经过正在运行的 imcodex 服务。它不导入 imcodex
-  的 agent、backend、store 或持久化路由语义。
-- 可靠性策略刻意从简：投递失败直接告知用户，不建 durable 路由/恢复状态机
-  ——zen-legacy 结尾连续十个 `fix(imzen)` 加固提交是那条路的墓志铭。
+- 固定 commit 的 `im-agent-sdk` 提供 QQ/Telegram/飞书/微信 Channel adapters、
+  `ImAgentGateway`、`ZenApplicationAdapter`、App Server client、typed contracts、
+  projection/request routing 与 in-memory binding repository。
+- IMZen 拥有自己的进程、channel 配置与 credential；不读取其他产品的配置或
+  状态，也不要求共用机器人账号。
+- IMZen 代码只保留环境配置、SDK channel factory 调用、产品命令/权限预设、
+  通用文件到文字 manifest 的映射、错误/审批呈现和 composition root。
+- Conversation → Thread binding 使用 SDK 的内存 repository；重启后从下一条消息
+  新建 Thread，或由用户 `/threads` + `/pick` 重新选择。SDK SQLite repository
+  只持久化 inbound/outbound 幂等等 bridge state，防止重启重新授权已有或结果未知
+  的 native message；两者都不是 Zen 会话权威，也不进入 ItemList。
+- 切换 Thread 只改变 Gateway binding，不隐式改变任何原生 UI 的 active Thread；
+  status/history/catch-up 均从 Zen App Server 的权威投影读取。
+- 投递或处理失败通过 SDK 的终态 failure presenter 明确告知用户；不在 IMZen
+  新建 durable queue、outbox 或自我修复状态机。
 
-相关项目：**imt3**（IM ↔ T3 编排层，`~/Code/imt3`）与 imzen 平行，
-共享 imcodex 通道层，不属于 Zen 仓库。
-
-### IMAgent SDK 候选边界
-
-IM channel 与后端 agent service 之间确实存在可复用端口，但暂不为了一个实现
-立即拆 package。先让 IMZen 内的最小接口被真实使用；出现第二个独立后端后再抽
-`IMAgent SDK`：
-
-- channel 侧只产生统一 inbound message、接收 outbound message；
-- service 侧提供 create/list/read/resume thread、start/interrupt turn、回应审批
-  与事件订阅；
-- “切换 Thread”是 gateway 的 conversation → thread 临时绑定，不是后端新增
-  一份会话状态；
-- status 从 service 的 Thread/Turn 投影读取，不另建状态表。
-
-这样抽取发生在接入端边界，不会把通道、Project 或第二套 Agent 语义带进 Zen
-Core。
+SDK 依赖固定在已合入 `im-agent-sdk` `main` 的完整 ADR 0015 rollout 提交
+`57f255fb1f40a095aeabb5a6967380ba057494a3`。IMZen 只配置它实际使用的强类型
+I1 inbound content transformer、I2 classified failure presenter 与 request
+presenter；其他扩展位置缺席，因此保持 SDK 默认行为。
 
 ## Web UI
 
@@ -71,7 +61,7 @@ Core。
 | 5    | shell + command item 瞬态审批；accept / decline / cancel / interrupt      | 完成                                 |
 | 6    | 薄 Zen CLI；stdio 与 loopback WebSocket                                   | 完成                                 |
 | 7    | OpenAI-compatible 与 ChatGPT subscription adapters；两轮 tool-call        | 实现完成；订阅真实网络闭环已通过     |
-| 8    | 独立 IMZen；复用固定版 imcodex channels 与 AppServerClient                | 本地完整闭环通过；真实频道需频道凭证 |
+| 8    | 独立 IMZen；组合固定提交的 IM Agent SDK                                   | SDK/本地闭环通过；真实 QQ 需频道凭证 |
 
 原版 `codex --remote` 0.146.0 还会调用账户、模型、配置、hooks 等 bootstrap
 方法，Zen 当前明确返回 unsupported，因此不宣称兼容原版 TUI。这不阻塞 Zen CLI，

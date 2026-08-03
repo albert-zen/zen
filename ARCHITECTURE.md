@@ -31,6 +31,21 @@
   校验它，credential 与 Provider 连接仍由宿主外部配置持有。目录必须有且仅有
   一个可见默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由
   既有 Thread 或显式请求使用。
+- **IMZenController** — IMZen 通过 IM Agent SDK typed actions，以及 SDK 明确保留
+  的 App Server native Thread profile seam，组合 `/model`、`/permission` 与审批
+  快捷命令的产品 UX；`/model` 是当前 typed contracts 外的 Zen native operation，
+  Controller 仍不拥有 Thread、Turn、binding 或调度语义。
+- **ImZenContentTransformer** — 在 SDK I1 强类型位置把已暂存的通用文件投影为
+  Zen 可读 manifest，并保留图片的 typed content；它不改变消息身份、binding、
+  continuation 或 correlation。
+- **ImZenFailurePresenter** — 把 SDK 已分类并固定路由的终态入站失败渲染成
+  IM 用户可见消息；它不决定重试，也不保存恢复状态。
+- **IMZen App Server shared filesystem root** — 部署者对本地 App Server 可读目录的
+  显式证明；SDK 仍负责把每个 local-image 路径限制在该目录内，未配置时 TCP
+  App Server 不接收本地图片路径。
+- **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
+  幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
+  重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并
@@ -201,7 +216,7 @@ ProjectCoordinator、调度队列或可持久化的 scheduler。进程崩了就�
 ## 目标结构
 
 概念边界先用目录表达，不为了架构图拆 package。Core 与 CLI 暂时共用一个
-Node package；IMZen 只因为复用 Python channel 生态而独立。
+Node package；IMZen 只因为复用 Python IM Agent SDK 生态而独立。
 
 ```text
 src/
@@ -224,8 +239,9 @@ apps/
 
 这里的 package 只是安装与依赖边界，不是 Zen 领域模型。Core 与 CLI 当前共用
 一个 Node package，但代码边界分别是 `src/` 与 `apps/cli/`；IMZen 因复用
-Python 的 imcodex channel adapters 而作为独立 Python 应用存在。它们不会由
-package 关系长出 Project、Agent 或调度语义。
+Python IM Agent SDK 的 Channel、Gateway、Application adapter 与 bridge state
+ports 而作为独立 Python 应用存在。IMZen 只保留产品配置、命令/呈现与 composition
+root；这些 package 关系不会长出 Project、第二套 Agent 或调度语义。
 
 自建薄 CLI 是首个稳定接入端；原版 `codex --remote` / T3 Code 作为机会型兼容
 验收，不反向塑造 Zen Core。

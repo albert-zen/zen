@@ -4,68 +4,44 @@ import json
 
 import pytest
 
-from imzen.channels import build_channel_runtime
+from imzen.channels import build_channels
 from imzen.config import ConfigurationError
 
 
-class FakeMiddleware:
-    def __init__(self) -> None:
-        self.adapters = []
-
-    def register_adapter(self, adapter) -> None:
-        self.adapters.append(adapter)
-
-
 class FakeChannel:
-    channel_id = "fake"
-
-    def __init__(self, config, middleware) -> None:
+    def __init__(self, channel_id: str, config: dict, channel_instance_id: str) -> None:
+        self.channel_id = channel_id
         self.config = config
-        self.middleware = middleware
-        self.validated = False
-        self.started = False
-        self.stopped = False
-
-    @classmethod
-    def from_config(cls, *, config, middleware):
-        return cls(config, middleware)
-
-    def validate_startup_configuration(self) -> None:
-        self.validated = True
-
-    async def start(self) -> None:
-        self.started = True
-
-    async def stop(self) -> None:
-        self.stopped = True
+        self.channel_instance_id = channel_instance_id
 
 
-@pytest.mark.asyncio
-async def test_enabled_channel_is_built_started_and_stopped_without_network(tmp_path):
+def factory(channel_id: str, *, config: dict, channel_instance_id: str) -> FakeChannel:
+    return FakeChannel(channel_id, config, channel_instance_id)
+
+
+def test_enabled_channel_is_built_by_the_sdk_factory(tmp_path):
     config = tmp_path / "channels.json"
     config.write_text(
-        json.dumps({"fake": {"enabled": True, "credential": "not-used"}}),
+        json.dumps(
+            {
+                "qq": {
+                    "enabled": True,
+                    "allowed_user_ids": ["trusted"],
+                    "app_id": "123",
+                    "client_secret": "secret",
+                }
+            }
+        ),
         encoding="utf-8",
     )
-    middleware = FakeMiddleware()
 
-    runtime = build_channel_runtime(
-        config,
-        middleware,
-        registry={"fake": FakeChannel},
-        permission_mode="approval-required",
-    )
-    await runtime.start()
+    channels = build_channels(config, factory=factory)
 
-    assert len(runtime.adapters) == 1
-    adapter = runtime.adapters[0]
-    assert adapter.config["credential"] == "not-used"
-    assert adapter.validated is True
-    assert adapter.started is True
-    assert middleware.adapters == [adapter]
-
-    await runtime.stop()
-    assert adapter.stopped is True
+    assert len(channels) == 1
+    channel = channels[0]
+    assert channel.channel_id == "qq"
+    assert channel.channel_instance_id == "qq"
+    assert channel.config["app_id"] == "123"
 
 
 def test_unknown_channel_fails_explicitly(tmp_path):
@@ -73,17 +49,13 @@ def test_unknown_channel_fails_explicitly(tmp_path):
     config.write_text('{"unknown": {"enabled": true}}', encoding="utf-8")
 
     with pytest.raises(ConfigurationError, match="unknown IM channel"):
-        build_channel_runtime(
-            config,
-            FakeMiddleware(),
-            registry={"fake": FakeChannel},
-        )
+        build_channels(config, factory=factory)
 
 
 def test_unrestricted_full_access_requires_explicit_unsafe_opt_in(tmp_path):
     config = tmp_path / "channels.json"
     config.write_text(
-        json.dumps({"fake": {"enabled": True, "credential": "not-used"}}),
+        json.dumps({"qq": {"enabled": True, "app_id": "123"}}),
         encoding="utf-8",
     )
 
@@ -91,30 +63,24 @@ def test_unrestricted_full_access_requires_explicit_unsafe_opt_in(tmp_path):
         ConfigurationError,
         match="IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS=true",
     ):
-        build_channel_runtime(
-            config,
-            FakeMiddleware(),
-            registry={"fake": FakeChannel},
-            permission_mode="full-access",
-        )
+        build_channels(config, factory=factory, permission_mode="full-access")
 
 
 def test_explicit_unsafe_opt_in_allows_unrestricted_full_access(tmp_path):
     config = tmp_path / "channels.json"
     config.write_text(
-        json.dumps({"fake": {"enabled": True, "credential": "not-used"}}),
+        json.dumps({"qq": {"enabled": True, "app_id": "123"}}),
         encoding="utf-8",
     )
 
-    runtime = build_channel_runtime(
+    channels = build_channels(
         config,
-        FakeMiddleware(),
-        registry={"fake": FakeChannel},
+        factory=factory,
         permission_mode="full-access",
         allow_unrestricted_full_access=True,
     )
 
-    assert len(runtime.adapters) == 1
+    assert len(channels) == 1
 
 
 @pytest.mark.parametrize("allowlist_key", ["allowed_user_ids", "allowed_conversation_ids"])
@@ -123,9 +89,9 @@ def test_access_allowlist_allows_full_access_without_unsafe_opt_in(tmp_path, all
     config.write_text(
         json.dumps(
             {
-                "fake": {
+                "qq": {
                     "enabled": True,
-                    "credential": "not-used",
+                    "app_id": "123",
                     allowlist_key: ["trusted"],
                 }
             }
@@ -133,47 +99,28 @@ def test_access_allowlist_allows_full_access_without_unsafe_opt_in(tmp_path, all
         encoding="utf-8",
     )
 
-    runtime = build_channel_runtime(
-        config,
-        FakeMiddleware(),
-        registry={"fake": FakeChannel},
-        permission_mode="full-access",
-    )
-
-    assert len(runtime.adapters) == 1
+    assert len(build_channels(config, factory=factory)) == 1
 
 
 def test_wildcard_access_value_remains_unrestricted(tmp_path):
     config = tmp_path / "channels.json"
     config.write_text(
-        json.dumps({"fake": {"enabled": True, "allowed_user_ids": ["*"]}}),
+        json.dumps({"qq": {"enabled": True, "allowed_user_ids": ["*"]}}),
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigurationError, match="unrestricted channel: fake"):
-        build_channel_runtime(
-            config,
-            FakeMiddleware(),
-            registry={"fake": FakeChannel},
-            permission_mode="full-access",
-        )
+    with pytest.raises(ConfigurationError, match="unrestricted channel: qq"):
+        build_channels(config, factory=factory)
 
 
 def test_disabled_unrestricted_channel_does_not_require_unsafe_opt_in(tmp_path):
     config = tmp_path / "channels.json"
     config.write_text(
-        json.dumps({"fake": {"enabled": False, "credential": "not-used"}}),
+        json.dumps({"qq": {"enabled": False, "app_id": "123"}}),
         encoding="utf-8",
     )
 
-    runtime = build_channel_runtime(
-        config,
-        FakeMiddleware(),
-        registry={"fake": FakeChannel},
-        permission_mode="full-access",
-    )
-
-    assert runtime.adapters == []
+    assert build_channels(config, factory=factory) == []
 
 
 def test_qq_credentials_are_loaded_from_an_imzen_owned_private_file(tmp_path):
@@ -197,16 +144,10 @@ def test_qq_credentials_are_loaded_from_an_imzen_owned_private_file(tmp_path):
         ),
         encoding="utf-8",
     )
-    middleware = FakeMiddleware()
 
-    runtime = build_channel_runtime(
-        config,
-        middleware,
-        registry={"qq": FakeChannel},
-    )
+    channels = build_channels(config, factory=factory)
 
-    assert len(runtime.adapters) == 1
-    resolved = runtime.adapters[0].config
+    resolved = channels[0].config
     assert resolved["app_id"] == "123456789"
     assert resolved["client_secret"] == "private-value"
     assert resolved["allowed_user_ids"] == ["none"]
@@ -223,30 +164,13 @@ def test_qq_credentials_file_must_be_private(tmp_path):
     credentials.chmod(0o644)
     config = tmp_path / "channels.json"
     config.write_text(
-        json.dumps(
-            {
-                "qq": {
-                    "enabled": True,
-                    "credentials_file": str(credentials),
-                }
-            }
-        ),
+        json.dumps({"qq": {"enabled": True, "credentials_file": str(credentials)}}),
         encoding="utf-8",
     )
 
     with pytest.raises(ConfigurationError, match="must not be readable"):
-        build_channel_runtime(
-            config,
-            FakeMiddleware(),
-            registry={"qq": FakeChannel},
-            permission_mode="approval-required",
-        )
+        build_channels(config, factory=factory, permission_mode="approval-required")
 
 
-def test_no_config_creates_empty_runtime():
-    middleware = FakeMiddleware()
-
-    runtime = build_channel_runtime(None, middleware, registry={"fake": FakeChannel})
-
-    assert runtime.adapters == []
-    assert middleware.adapters == []
+def test_no_config_creates_no_channels():
+    assert build_channels(None, factory=factory) == []
