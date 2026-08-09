@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-if (-not $IsWindows) {
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
   throw "This smoke test must run on Windows."
 }
 

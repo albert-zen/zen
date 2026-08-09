@@ -74,6 +74,7 @@ jobs:
     timeout-minutes: 20
     env:
       WINAPP_CLI_UPDATE_CHECK: "0"
+      WINAPP_CLI_TELEMETRY_OPTOUT: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
