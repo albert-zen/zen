@@ -8,6 +8,7 @@ import {
   AppServerManager,
   type AppServerHostStatus,
 } from "../src/main/app-server-manager.js";
+import type { ZenXCapabilityHost } from "../src/main/capabilities/types.js";
 
 function managerFor(directory: string): AppServerManager {
   return new AppServerManager({
@@ -91,6 +92,94 @@ test("projects outer-host startup failures as a visible terminal status", () => 
     type: "error",
     message: "ZenX trigger registry has an invalid entry shape",
   });
+});
+
+test("bridges a granted structured capability through the real App Server host", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-capability-host-"),
+  );
+  const invocations: string[] = [];
+  const capabilityHost: ZenXCapabilityHost = {
+    hostSnapshot: () => ({
+      definitions: [
+        {
+          name: "demo_inspect",
+          description: "Inspect the demo provider",
+          inputSchema: {
+            type: "object",
+            properties: { target: { type: "string" } },
+            required: ["target"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    }),
+    execute: async (invocation) => {
+      invocations.push(
+        `${invocation.name}:${String(invocation.arguments.target)}`,
+      );
+      return { output: '{"visible":"bounded"}', exitCode: 0 };
+    },
+  };
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "always",
+      provider: { type: "fake" },
+    },
+    capabilityHost,
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    const completed = deferred<void>();
+    const approvals: string[] = [];
+    manager.onApprovalRequest((request) => {
+      approvals.push(request.params.command);
+      manager.respondToApproval(request.requestId, "accept");
+    });
+    manager.onNotification((method) => {
+      if (method === "turn/completed") completed.resolve();
+    });
+    const started = await manager.request("thread/start", {
+      approvalPolicy: "on-request",
+      sandbox: "danger-full-access",
+    });
+    await manager.request("turn/start", {
+      threadId: started.thread.id,
+      input: [
+        {
+          type: "text",
+          text: '!tool demo_inspect {"target":"tab-1"}',
+        },
+      ],
+    });
+    await within(completed.promise);
+    assert.deepEqual(invocations, ["demo_inspect:tab-1"]);
+    assert.deepEqual(approvals, ['demo_inspect {"target":"tab-1"}']);
+    const read = await manager.request("thread/read", {
+      threadId: started.thread.id,
+      includeTurns: true,
+    });
+    const command = read.thread.turns[0]?.items.find(
+      (item) => item.type === "commandExecution",
+    );
+    assert.equal(command?.type, "commandExecution");
+    if (command?.type === "commandExecution") {
+      assert.match(command.command, /^demo_inspect /u);
+      assert.equal(command.aggregatedOutput, '{"visible":"bounded"}');
+      assert.equal(command.status, "completed");
+    }
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 function deferred<T>() {

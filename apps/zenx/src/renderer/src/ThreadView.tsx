@@ -503,6 +503,7 @@ function CommandItemView({
 }: {
   item: Extract<ThreadItem, { type: "commandExecution" }>;
 }) {
+  const capabilityTool = capabilityToolName(item.command);
   return (
     <article className={`command-item ${item.status}`}>
       <div className="command-heading">
@@ -514,7 +515,7 @@ function CommandItemView({
             size={13}
           />
         )}
-        <strong>shell</strong>
+        <strong>{capabilityTool ?? "shell"}</strong>
         <code>{item.command}</code>
         <span>{commandStatus(item.status)}</span>
       </div>
@@ -524,6 +525,13 @@ function CommandItemView({
       )}
     </article>
   );
+}
+
+export function capabilityToolName(command: string): string | null {
+  const candidate = command.split(" ", 1)[0] ?? "";
+  return /^(?:browser_|computer_|zenx_capability_)/u.test(candidate)
+    ? candidate
+    : null;
 }
 
 function turnLabel(turn: Turn): string {

@@ -21,6 +21,7 @@ import type {
   RoomMember,
   TriggerSnapshot,
 } from "../../main/trigger-types.js";
+import type { ZenXCapabilitySnapshot } from "../../main/capabilities/types.js";
 
 declare global {
   interface Window {
@@ -82,6 +83,20 @@ declare global {
           text: string,
         ): Promise<TriggerSnapshot>;
         onChange(listener: (snapshot: TriggerSnapshot) => void): () => void;
+      };
+      capabilities: {
+        get(): Promise<ZenXCapabilitySnapshot>;
+        grant(
+          capabilityId: string,
+          permissionIds?: string[],
+        ): Promise<ZenXCapabilitySnapshot>;
+        revoke(
+          capabilityId: string,
+          permissionIds?: string[],
+        ): Promise<ZenXCapabilitySnapshot>;
+        onChange(
+          listener: (snapshot: ZenXCapabilitySnapshot) => void,
+        ): () => void;
       };
     };
   }

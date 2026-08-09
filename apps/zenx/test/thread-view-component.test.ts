@@ -12,6 +12,7 @@ import {
   type ComposerState,
 } from "../src/renderer/src/composer-state.js";
 import { ThreadView } from "../src/renderer/src/ThreadView.js";
+import { capabilityToolName } from "../src/renderer/src/ThreadView.js";
 
 const noop = async () => undefined;
 
@@ -62,6 +63,14 @@ test("pending submission fences duplicate actions without locking the editor", (
   assert.doesNotMatch(html, /<textarea[^>]*disabled/);
   assert.match(html, /<button[^>]*disabled[^>]*>.*Steering…/s);
   assert.match(html, /Adding guidance to the current turn/);
+});
+
+test("labels capability audit cards separately from shell commands", () => {
+  assert.equal(
+    capabilityToolName('browser_inspect {"sessionId":"one"}'),
+    "browser_inspect",
+  );
+  assert.equal(capabilityToolName("printf hello"), null);
 });
 
 function render(

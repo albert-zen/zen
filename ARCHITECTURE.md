@@ -63,6 +63,9 @@
   `turn/start` 所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
 - **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
+- **ZenXCapabilityRegistry** — ZenX 主进程注册 bundled/local capability package 的 manifest、
+  显式权限与 provider，把已授权的结构化工具和 skill/prompt 资源组合进本机 host；执行历史仍只由
+  canonical tool call/result 投影，credential、浏览器会话和默认屏幕内容不进入 journal。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并

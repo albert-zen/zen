@@ -286,6 +286,46 @@ export class FakeModel implements ModelAdapter {
       };
       return;
     }
+    if (text.startsWith("!tool ")) {
+      const invocation = text.slice("!tool ".length);
+      const separator = invocation.indexOf(" ");
+      const name = separator < 0 ? invocation : invocation.slice(0, separator);
+      const definition = request.tools.find((tool) => tool.name === name);
+      if (definition === undefined) {
+        yield* streamWords(`Unknown fake tool: ${name}`, request.signal);
+        return;
+      }
+      const rawArguments =
+        separator < 0 ? "{}" : invocation.slice(separator + 1);
+      let arguments_: unknown;
+      try {
+        arguments_ = JSON.parse(rawArguments);
+      } catch {
+        yield* streamWords(
+          `Invalid fake tool arguments for ${name}`,
+          request.signal,
+        );
+        return;
+      }
+      if (
+        typeof arguments_ !== "object" ||
+        arguments_ === null ||
+        Array.isArray(arguments_)
+      ) {
+        yield* streamWords(
+          `Invalid fake tool arguments for ${name}`,
+          request.signal,
+        );
+        return;
+      }
+      yield {
+        type: "tool_call",
+        callId: `fake_${Date.now().toString(36)}`,
+        name,
+        arguments: arguments_ as Record<string, unknown>,
+      };
+      return;
+    }
 
     yield* streamWords(`Echo: ${text}`, request.signal);
     yield {

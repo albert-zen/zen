@@ -8,8 +8,10 @@ import {
   type HostCommand,
   type HostEvent,
 } from "./host-messages.js";
+import { ZenXHostToolExecutor } from "./capability-tool-executor.js";
 
 let server: CodexWebSocketServer | undefined;
+let tools: ZenXHostToolExecutor | undefined;
 let shuttingDown = false;
 
 process.on("message", (message: unknown) => {
@@ -29,6 +31,10 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "capability/result") {
+    tools?.handleResult(command);
+    return;
+  }
   if (command.type === "shutdown") {
     await shutdown();
     return;
@@ -36,8 +42,17 @@ async function handleCommand(command: HostCommand): Promise<void> {
   if (server !== undefined) {
     throw new Error("ZenX App Server host already started");
   }
+  tools = new ZenXHostToolExecutor({
+    capabilities: command.capabilities,
+    blockedEnvironmentVariables: command.config.secretEnvironmentVariables,
+    redactedValues:
+      command.config.provider.type === "openai-compatible"
+        ? [command.config.provider.apiKey]
+        : [],
+    send,
+  });
   server = await serveCodexWebSocket({
-    appServer: createHostedAppServer(command.config),
+    appServer: createHostedAppServer({ ...command.config, tools }),
     zenHome: command.config.dataDirectory,
     listen: "ws://127.0.0.1:0",
     bearerToken: command.bearerToken,
@@ -50,6 +65,8 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   await server?.close();
   server = undefined;
+  tools?.close();
+  tools = undefined;
   if (process.connected) process.disconnect();
   process.exit(process.exitCode ?? 0);
 }

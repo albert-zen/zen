@@ -14,7 +14,7 @@ import {
   JsonlThreadMetadataStore,
   type ThreadMetadataStore,
 } from "../../../src/thread-metadata.js";
-import { ShellToolExecutor } from "../../../src/tool.js";
+import { ShellToolExecutor, type ToolExecutor } from "../../../src/tool.js";
 import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
 
 export type HostProvider =
@@ -41,6 +41,7 @@ export interface ZenHostOptions {
   secretEnvironmentVariables?: readonly string[];
   journal?: ThreadJournal;
   threadMetadata?: ThreadMetadataStore;
+  tools?: ToolExecutor;
 }
 
 export function createHostedAppServer(options: ZenHostOptions): ZenAppServer {
@@ -57,13 +58,15 @@ export function createHostedAppServer(options: ZenHostOptions): ZenAppServer {
       new JsonlThreadJournal(path.join(options.dataDirectory, "threads")),
     runtime: new AgentRuntime({
       model,
-      tools: new ShellToolExecutor({
-        blockedEnvironmentVariables: options.secretEnvironmentVariables ?? [],
-        redactedValues:
-          options.provider.type === "openai-compatible"
-            ? [options.provider.apiKey]
-            : [],
-      }),
+      tools:
+        options.tools ??
+        new ShellToolExecutor({
+          blockedEnvironmentVariables: options.secretEnvironmentVariables ?? [],
+          redactedValues:
+            options.provider.type === "openai-compatible"
+              ? [options.provider.apiKey]
+              : [],
+        }),
     }),
     modelCatalog: new StaticModelCatalog(
       modelIds.map((id) => ({ id, isDefault: id === options.model })),

@@ -17,10 +17,13 @@ stub App Server 记录真实调用，在不污染 Zen Core 的前提下扩展协
 
 **ZenX 正在开发**，是与 CLI、IMZen 平级的本地桌面接入端。当前已跑通 Electron
 host、Thread 列表与恢复、流式 Item、审批、模型切换、soft steer、interrupt 与
-Interrupt & send；下一阶段把 Provider/onboarding、安全 Markdown，以及 Trigger /
-Watching / Room 这些通用编排工具难以完整表达的 ZenX 外层产品体验做成可运行的
-vertical slice。上述外层配置和调度状态不进入 Zen Core，命中 Trigger 仍只通过
-App Server 发起普通 Turn；在真实桌面验收完成前不夸大为稳定发布。
+Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / Room，
+以及可显式授权的 bundled/local capability registry 已形成可运行 vertical slice。
+首批 browser provider 以独立临时 session 暴露有界 DOM 操作，computer provider
+以短时截图 artifact 和带目标上下文的 macOS 输入操作暴露本机能力；manifest、权限、
+provider 与 skill/prompt 均由 ZenX 持有，不进入 Zen Core 或 Codex 协议。上述外层配置
+和调度状态不进入 Zen Core，命中 Trigger 仍只通过 App Server 发起普通 Turn；在真实
+桌面验收完成前不夸大为稳定发布。
 
 固定版本 T3 Code 仍是机会型兼容目标：它可以通过协议直接把 Zen 当 provider
 驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。

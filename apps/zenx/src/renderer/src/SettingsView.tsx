@@ -6,6 +6,7 @@ import type {
   ZenXProviderProfile,
 } from "../../main/host-profile.js";
 import { Icon } from "./icons.js";
+import { CapabilitySettings } from "./CapabilitySettings.js";
 
 export function SettingsView({ onClose }: { onClose(): void }) {
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
@@ -284,6 +285,7 @@ export function SettingsView({ onClose }: { onClose(): void }) {
             their ZAS-authoritative model until you change it explicitly.
           </p>
         </div>
+        <CapabilitySettings />
         {error === null ? null : (
           <div className="settings-error" role="alert">
             <Icon name="warning" size={14} />

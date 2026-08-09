@@ -9,6 +9,7 @@
     "build": "electron-vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false",
     "test": "tsx --test test/**/*.test.ts",
+    "smoke:capabilities": "npm run build && electron ./out/main/capability-smoke.js",
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
