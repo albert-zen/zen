@@ -50,6 +50,28 @@ Capability grants, per-call approval, and the execution sandbox remain separate
 concepts. A host may impose a background-only execution policy without treating
 that restriction as a missing grant.
 
+### Bundled self-control provider
+
+The `zenx-self-control` package is a bundled, cross-platform,
+`background_safe` capability. It is hidden from the Agent until the existing
+Capabilities UI grants its workspace-read and local-device-control permissions;
+grant/revoke uses the same host restart behavior as every other package. Its
+provider-valid tools are `zenx_projects_list`, `zenx_threads_list`,
+`zenx_threads_create`, `zenx_threads_read`, `zenx_threads_status`, and
+`zenx_threads_send`.
+
+Projects are bounded groupings derived from the configured workspace and
+canonical Thread cwd metadata, not runtime objects. Reads expose bounded recent
+Turn/item projections and omit command output. Create and send operations use a
+narrow in-memory request port attached to the current `AppServerManager`, and
+that port issues only typed `thread/list`, `thread/start`, `thread/read`,
+`turn/start`, `turn/steer`, and `turn/replace` requests. `steer` and `replace`
+require the expected active Turn ID; all sends require a stable client message
+ID. Tool calls, results, interruption, and replacement remain auditable in the
+canonical ItemLists and capability audit projection. Mutual `turn_completed`
+relays are intentionally allowed; there is no blanket cycle ban or second
+transcript/queue.
+
 The bundled browser provider uses hidden Electron windows in a dedicated,
 ephemeral Chromium partition. Its list/open/navigate/inspect/click/type/close tools
 target one explicit `sessionId` and `tabId` through Chromium DevTools Protocol
@@ -188,6 +210,10 @@ The automated integration suite runs the timer → wakeup → App Server Turn �
 streamed response → history chain, explicit cyclic/self relay and cancellation,
 bounded source snapshots, two-member Room routing, strict persisted-state
 validation, long timers, OAuth cleanup, link policy, and local signal routing.
+The self-control tracer explicitly grants its bundled package before exercising
+the child-host capability bridge, derived projects, Thread create/list/read/status,
+active `start | steer | replace`, follow-up delivery, bounded redaction, canonical
+command audit, and the real OpenAI subscription tool serialization boundary.
 The packaged capability smoke covers a real hidden dedicated browser
 open/inspect/navigate/click/type/close, including forged/stale/changed/hidden and
 password target rejection. It also seeds a cookie and session storage, closes
