@@ -76,6 +76,9 @@
   协商实际影响且禁止静默降级。
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
+- **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA/WGC JSON
+  投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
+  不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 capability registry 暴露 Project/Thread 自控工具，
   只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
   不持有第二套 Project、Thread、Turn、transcript 或调度状态。

@@ -95,7 +95,7 @@ automation product.
 
 The computer contract is platform-neutral: tools describe semantic observation,
 press/value/capture operations and their interaction impact, while a platform
-provider reports what it implements. The current macOS provider offers targeted
+provider reports what it implements. The macOS provider offers targeted
 AXUIElement inspect/AXPress/AXValue and window-scoped capture as
 `background_safe`; these operations require an exact window title, expose at
 most 32 controls, issue short-lived opaque IDs, and revalidate semantic identity
@@ -112,9 +112,18 @@ reported as unsupported/foreground-required.
 
 The macOS provider requires Accessibility permission; window capture also
 requires Screen Recording, and first-use helper compilation requires Apple
-Command Line Tools. A Windows provider remains required after this tracer bullet
-and can implement the same semantic backend with UI Automation, Windows Graphics
-Capture, and SendInput. Linux is currently unsupported for computer control.
+Command Line Tools. On Windows, ZenX selects an optional thin adapter over
+Microsoft's Public Preview `winapp` CLI. Install it explicitly with
+`winget install Microsoft.winappcli --source winget`; ZenX probes `winapp
+--version` at startup and reports an actionable discovery diagnostic when it is
+missing. The adapter resolves an exact title to one HWND with `ui list-windows
+--json`, maps bounded `ui inspect --json` results to ZenX opaque observation IDs,
+uses UIA `invoke` / `set-value`, and captures with the default WGC/PrintWindow
+path. It never passes `--focus` or `--capture-screen` and never silently falls
+back to `click`, `send-keys`, or other global input injection. WinApp command
+output, errors, duration, and artifacts are bounded; cancellation terminates the
+child process, secure-looking controls reject value setting, and screenshots
+expire after five minutes. Linux is currently unsupported for computer control.
 Full arbitrary GUI automation cannot always be background-safe; an isolated
 macOS/Windows session, VM, or remote host is the intended route to arbitrary
 control without disturbing the user's desktop.
@@ -133,11 +142,12 @@ mature external implementations while retaining a runnable bundled baseline:
   is therefore provisional rather than a claim that ZenX should maintain a
   complete macOS automation stack. See
   <https://github.com/openclaw/Peekaboo>.
-- Windows should begin as a thin optional adapter over Microsoft's MIT-licensed,
-  Public Preview `winapp` CLI. UIA inspect/search/get/set-value/invoke/wait and
-  WGC capture map to background-safe semantic tools; click/drag/SendInput map to
-  foreground-required tools. Provider-private HWND/UIA values must be translated
-  to observation-scoped opaque ZenX target IDs/results. See
+- Windows is a thin optional adapter over Microsoft's MIT-licensed, Public
+  Preview `winapp` CLI. UIA inspect/set-value/invoke and default WGC capture map
+  to background-safe semantic tools; provider-private HWND/UIA selectors are
+  translated to observation-scoped opaque ZenX target IDs/results. WinApp's
+  input-injecting verbs are deliberately not exposed by the current unscoped
+  ZenX foreground contract. See
   <https://github.com/microsoft/winappCli/blob/main/docs/ui-automation.md>.
 - Browser automation currently uses the bundled Chromium CDP path and an
   ephemeral partition. A Playwright adapter should preserve the same tools while
@@ -204,6 +214,8 @@ or distribution layer.
 npm --workspace apps/zenx run check
 npm run check
 npm --workspace apps/zenx run smoke:capabilities
+# Windows only, after installing Microsoft WinApp CLI:
+npm --workspace apps/zenx run smoke:windows-computer
 ```
 
 The automated integration suite runs the timer → wakeup → App Server Turn →
@@ -225,6 +237,13 @@ third-party AX window/action smoke remains permission- and target-dependent; its
 opaque latest-observation and forged/stale/secure paths are unit-covered. The
 compiled helper enforces semantic fingerprint/geometry revalidation and rejects
 ambiguous matches, but that path is not claimed as a live third-party-app smoke.
+On Windows, `smoke:windows-computer` launches Notepad and verifies exact
+PID/title→HWND resolution, bounded semantic inspection, UIA set-value, and
+WGC-default scoped capture without `--focus` or `--capture-screen`. The
+cross-platform fixture suite validates the same WinApp JSON mapping, secure and
+stale target rejection, pre-action semantic revalidation, diagnostic behavior,
+timeout/cancellation, output bounds, and exact-value error redaction when a
+Windows host is not available.
 It does
 not run foreground takeover against the user's desktop; foreground execution
 and immediate pre-input cancellation are covered by provider/bridge tests. The

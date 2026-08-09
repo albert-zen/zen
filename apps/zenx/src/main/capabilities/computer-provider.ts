@@ -9,6 +9,7 @@ import type { ZenXCapabilityManifest, ZenXCapabilityPackage } from "./types.js";
 
 export interface ComputerTarget {
   pid?: number;
+  applicationId?: string;
   bundleId?: string;
   windowTitle?: string;
 }
@@ -23,7 +24,8 @@ export interface ComputerInspection {
   observationId: string;
   target: {
     pid: number;
-    bundleId: string;
+    applicationId?: string;
+    bundleId?: string;
     applicationName: string;
     windowTitle?: string;
   };
@@ -39,10 +41,14 @@ export interface ComputerInspection {
 }
 
 export interface ZenXComputerBackend {
-  inspect(target: ComputerTarget): Promise<ComputerInspection>;
+  inspect(
+    target: ComputerTarget,
+    signal?: AbortSignal,
+  ): Promise<ComputerInspection>;
   press(
     target: ComputerTarget,
     control: ComputerControlSelector,
+    signal?: AbortSignal,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
@@ -51,12 +57,16 @@ export interface ZenXComputerBackend {
     target: ComputerTarget,
     control: ComputerControlSelector,
     value: string,
+    signal?: AbortSignal,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
     characterCount: number;
   }>;
-  screenshot(target: ComputerTarget): Promise<{
+  screenshot(
+    target: ComputerTarget,
+    signal?: AbortSignal,
+  ): Promise<{
     artifactPath: string;
     target: ComputerInspection["target"];
     width: number;
@@ -87,6 +97,8 @@ export type ComputerKey =
   | "arrowRight";
 
 export const MAX_COMPUTER_INSPECTION_CONTROLS = 32;
+export const COMPUTER_ACTION_PRESS = "press";
+export const COMPUTER_ACTION_SET_VALUE = "set_value";
 
 export const computerCapabilityManifest: ZenXCapabilityManifest = {
   schemaVersion: 1,
@@ -121,7 +133,7 @@ export const computerCapabilityManifest: ZenXCapabilityManifest = {
       id: "computer.accessibility.act",
       title: "Act on a targeted control",
       description:
-        "Perform AXPress or set AXValue on an explicitly selected accessibility control without global input.",
+        "Perform a semantic press or set a semantic value on an explicitly selected accessibility control without global input.",
       scope: "local-device",
     },
     {
@@ -143,7 +155,7 @@ export const computerCapabilityManifest: ZenXCapabilityManifest = {
     {
       name: "computer_inspect",
       description:
-        "Inspect at most 32 accessibility controls in one exact app window target without activating it or reading sibling windows. target.windowTitle is required.",
+        "Inspect at most 32 semantic accessibility controls in one exact app window target without activating it or reading sibling windows. target.windowTitle is required.",
       inputSchema: objectSchema({ target: targetSchema() }, ["target"]),
       permissions: ["computer.accessibility.inspect"],
       interactionMode: "background_safe",
@@ -157,7 +169,7 @@ export const computerCapabilityManifest: ZenXCapabilityManifest = {
     {
       name: "computer_press",
       description:
-        "Perform AXPress on one control returned by computer_inspect. Does not move the pointer, type keys, or activate the target app.",
+        "Perform a native semantic press on one control returned by computer_inspect. Does not move the pointer, type keys, or activate the target app.",
       inputSchema: objectSchema(
         { target: targetSchema(), control: controlSchema() },
         ["target", "control"],
@@ -169,7 +181,7 @@ export const computerCapabilityManifest: ZenXCapabilityManifest = {
     {
       name: "computer_set_value",
       description:
-        "Set a non-secret AXValue on one editable opaque target from the latest computer_inspect observation. Secure/password controls are rejected; supplied text is a canonical journaled tool argument.",
+        "Set a non-secret semantic value on one editable opaque target from the latest computer_inspect observation. Secure/password controls are rejected; supplied text is a canonical journaled tool argument.",
       inputSchema: objectSchema(
         {
           target: targetSchema(),
@@ -208,11 +220,15 @@ export const computerCapabilityManifest: ZenXCapabilityManifest = {
 };
 
 export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
-  readonly manifest = computerCapabilityManifest;
+  readonly manifest: ZenXCapabilityManifest;
   readonly #backend: ZenXComputerBackend;
 
-  constructor(backend: ZenXComputerBackend) {
+  constructor(
+    backend: ZenXComputerBackend,
+    manifest = computerCapabilityManifest,
+  ) {
     this.#backend = backend;
+    this.manifest = manifest;
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
@@ -223,12 +239,13 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     switch (toolName) {
       case "computer_inspect":
         requireScopedWindow(target, "computer_inspect");
-        return await this.#backend.inspect(target);
+        return await this.#backend.inspect(target, invocation.signal);
       case "computer_press":
         requireScopedWindow(target, "computer_press");
         return await this.#backend.press(
           target,
           requiredControl(invocation.arguments),
+          invocation.signal,
         );
       case "computer_set_value": {
         requireScopedWindow(target, "computer_set_value");
@@ -240,13 +257,14 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           target,
           requiredControl(invocation.arguments),
           value,
+          invocation.signal,
         );
       }
       case "computer_screenshot":
         if (target.windowTitle === undefined) {
           throw new Error("computer_screenshot requires target.windowTitle");
         }
-        return await this.#backend.screenshot(target);
+        return await this.#backend.screenshot(target, invocation.signal);
       default:
         throw new Error(`Unsupported computer tool: ${toolName}`);
     }
@@ -347,9 +365,12 @@ export class ComputerObservationLedger {
     if (fingerprint === undefined) {
       throw new Error("Computer target ID is forged, stale, or unknown");
     }
-    if (action === "press" && !fingerprint.actions.includes("AXPress")) {
+    if (
+      action === "press" &&
+      !fingerprint.actions.includes(COMPUTER_ACTION_PRESS)
+    ) {
       throw new Error(
-        "Control does not support background-safe semantic press; foreground_required",
+        "Control no longer supports background-safe semantic press; foreground_required",
       );
     }
     if (action === "set_value") {
@@ -358,9 +379,9 @@ export class ComputerObservationLedger {
           "computer_set_value rejects password or secure controls; supplied text is a journaled non-secret-only tool argument",
         );
       }
-      if (!fingerprint.actions.includes("AXSetValue")) {
+      if (!fingerprint.actions.includes(COMPUTER_ACTION_SET_VALUE)) {
         throw new Error(
-          "Control does not support background-safe semantic set value; foreground_required",
+          "Control no longer supports background-safe semantic set value; foreground_required",
         );
       }
     }
@@ -401,8 +422,15 @@ function rawControlFingerprint(
   return {
     ...control.selector,
     secure: control.secure === true,
-    actions: [...control.actions],
+    actions: canonicalMacActions(control.actions),
   };
+}
+
+function canonicalMacActions(actions: readonly string[]): string[] {
+  return [
+    ...(actions.includes("AXPress") ? [COMPUTER_ACTION_PRESS] : []),
+    ...(actions.includes("AXSetValue") ? [COMPUTER_ACTION_SET_VALUE] : []),
+  ];
 }
 
 function semanticControlSelector(
@@ -415,6 +443,7 @@ function semanticControlSelector(
 function computerTargetKey(target: ComputerTarget): string {
   return JSON.stringify({
     pid: target.pid ?? null,
+    applicationId: target.applicationId ?? null,
     bundleId: target.bundleId ?? null,
     windowTitle: target.windowTitle ?? null,
   });
@@ -461,7 +490,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
         role: control.role,
         title: control.title,
         enabled: control.enabled,
-        actions: control.actions,
+        actions: rawControlFingerprint(control).actions,
         ...(control.secure ? { secure: true } : {}),
       })),
       truncated:
@@ -1150,16 +1179,28 @@ function foregroundTools(): ZenXCapabilityManifest["tools"] {
 function requiredTarget(arguments_: Record<string, unknown>): ComputerTarget {
   const raw = requiredObject(arguments_, "target");
   const pid = optionalPositiveInteger(raw, "pid");
+  const applicationId = optionalString(raw, "applicationId");
   const bundleId = optionalString(raw, "bundleId");
   const windowTitle = optionalString(raw, "windowTitle");
-  if (pid === undefined && bundleId === undefined) {
-    throw new Error("target requires pid or bundleId");
+  if (
+    pid === undefined &&
+    applicationId === undefined &&
+    bundleId === undefined
+  ) {
+    throw new Error("target requires pid, applicationId, or bundleId");
   }
   if (windowTitle !== undefined && windowTitle.length > 256) {
     throw new Error("target.windowTitle is limited to 256 characters");
   }
+  if (applicationId !== undefined && applicationId.length > 256) {
+    throw new Error("target.applicationId is limited to 256 characters");
+  }
+  if (bundleId !== undefined && bundleId.length > 256) {
+    throw new Error("target.bundleId is limited to 256 characters");
+  }
   return {
     ...(pid === undefined ? {} : { pid }),
+    ...(applicationId === undefined ? {} : { applicationId }),
     ...(bundleId === undefined ? {} : { bundleId }),
     ...(windowTitle === undefined ? {} : { windowTitle }),
   };
@@ -1289,11 +1330,16 @@ function targetSchema(): Record<string, unknown> {
     type: "object",
     properties: {
       pid: { type: "integer", minimum: 1 },
+      applicationId: stringSchema(),
       bundleId: stringSchema(),
       windowTitle: stringSchema(),
     },
     additionalProperties: false,
-    anyOf: [{ required: ["pid"] }, { required: ["bundleId"] }],
+    anyOf: [
+      { required: ["pid"] },
+      { required: ["applicationId"] },
+      { required: ["bundleId"] },
+    ],
   };
 }
 

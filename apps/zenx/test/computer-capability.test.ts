@@ -61,7 +61,7 @@ test("computer observation IDs are target-scoped, latest-only, and reject secure
       title: "Mark",
       frame: "10.0,10.0,20.0,20.0",
       secure: false,
-      actions: ["AXPress"],
+      actions: ["press"],
     },
   ]);
   const firstControl = first.selectors[0]!;
@@ -71,7 +71,7 @@ test("computer observation IDs are target-scoped, latest-only, and reject secure
       title: "Mark",
       frame: "20.0,10.0,20.0,20.0",
       secure: false,
-      actions: ["AXPress"],
+      actions: ["press"],
     },
   ]);
   assert.throws(
@@ -98,7 +98,7 @@ test("computer observation IDs are target-scoped, latest-only, and reject secure
       subrole: "AXSecureTextField",
       frame: "10.0,40.0,100.0,20.0",
       secure: true,
-      actions: ["AXSetValue"],
+      actions: ["set_value"],
     },
   ]);
   assert.throws(
@@ -193,14 +193,14 @@ function computerBackend(calls: string[]): ZenXComputerBackend {
             role: "AXButton",
             title: "Mark",
             enabled: true,
-            actions: ["AXPress"],
+            actions: ["press"],
           },
           {
             selector: fieldControl,
             role: "AXTextField",
             title: "Name",
             enabled: true,
-            actions: ["AXSetValue"],
+            actions: ["set_value"],
           },
         ],
         truncated: false,

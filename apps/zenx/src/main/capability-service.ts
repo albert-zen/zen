@@ -7,6 +7,7 @@ import {
   type ZenXBrowserBackend,
 } from "./capabilities/browser-provider.js";
 import {
+  computerCapabilityManifest,
   ComputerZenXCapabilityPackage,
   ElectronMacComputerBackend,
   type ZenXComputerBackend,
@@ -20,13 +21,19 @@ import type {
   ZenXCapabilityHostSnapshot,
   ZenXCapabilityPackage,
   ZenXCapabilitySnapshot,
+  ZenXCapabilityManifest,
 } from "./capabilities/types.js";
+import {
+  windowsComputerCapabilityManifest,
+  WinAppCliComputerBackend,
+} from "./capabilities/windows-computer-provider.js";
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #registry: ZenXCapabilityRegistry;
   readonly #localDirectory: string;
   readonly #browserBackend: ZenXBrowserBackend;
   readonly #computerBackend: ZenXComputerBackend;
+  readonly #computerManifest: ZenXCapabilityManifest;
 
   constructor(options: {
     userDataDirectory: string;
@@ -34,6 +41,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     localDirectory?: string;
     browserBackend?: ZenXBrowserBackend;
     computerBackend?: ZenXComputerBackend;
+    computerManifest?: ZenXCapabilityManifest;
   }) {
     this.#registry = new ZenXCapabilityRegistry(
       options.grantStore ??
@@ -46,8 +54,13 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       path.join(options.userDataDirectory, "capabilities");
     this.#browserBackend =
       options.browserBackend ?? new ElectronBrowserBackend();
-    this.#computerBackend =
-      options.computerBackend ?? new ElectronMacComputerBackend();
+    const bundledComputer = defaultComputerProvider();
+    this.#computerBackend = options.computerBackend ?? bundledComputer.backend;
+    this.#computerManifest =
+      options.computerManifest ??
+      (options.computerBackend === undefined
+        ? bundledComputer.manifest
+        : computerCapabilityManifest);
   }
 
   async initialize(): Promise<void> {
@@ -57,9 +70,20 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       "bundled",
     );
     this.#registry.register(
-      new ComputerZenXCapabilityPackage(this.#computerBackend),
+      new ComputerZenXCapabilityPackage(
+        this.#computerBackend,
+        this.#computerManifest,
+      ),
       "bundled",
     );
+    if (this.#computerBackend instanceof WinAppCliComputerBackend) {
+      const diagnostic = await this.#computerBackend.diagnose();
+      if (!diagnostic.ready) {
+        this.#registry.recordDiscoveryError(
+          `Windows computer provider: ${diagnostic.message}`,
+        );
+      }
+    }
     const discovered = await discoverLocalCapabilityPackages(
       this.#localDirectory,
     );
@@ -121,6 +145,21 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   async close(): Promise<void> {
     await this.#registry.close();
   }
+}
+
+function defaultComputerProvider(): {
+  backend: ZenXComputerBackend;
+  manifest: ZenXCapabilityManifest;
+} {
+  return process.platform === "win32"
+    ? {
+        backend: new WinAppCliComputerBackend(),
+        manifest: windowsComputerCapabilityManifest,
+      }
+    : {
+        backend: new ElectronMacComputerBackend(),
+        manifest: computerCapabilityManifest,
+      };
 }
 
 function describeError(error: unknown): string {
