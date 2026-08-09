@@ -497,13 +497,15 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       await rm(artifactPath, { force: true });
       throw error;
     }
-    if (
-      !sameHwnd(result.hwnd, window.hwnd) ||
-      path.resolve(result.filePath ?? "") !== path.resolve(artifactPath)
-    ) {
+    const hwndConfirmed = sameHwnd(result.hwnd, window.hwnd);
+    const artifactConfirmed = sameWindowsPath(
+      result.filePath ?? "",
+      artifactPath,
+    );
+    if (!hwndConfirmed || !artifactConfirmed) {
       await rm(artifactPath, { force: true });
       throw new Error(
-        "WinApp CLI screenshot did not confirm the explicitly targeted window and artifact path",
+        `WinApp CLI screenshot did not confirm the explicitly targeted window and artifact path (HWND confirmed: ${String(hwndConfirmed)}; artifact confirmed: ${String(artifactConfirmed)})`,
       );
     }
     const metadata = await stat(artifactPath);
@@ -1126,9 +1128,20 @@ function normalizeHwnd(value: unknown, label: string): string {
     throw new Error(`WinApp CLI returned an invalid ${label}`);
   }
   const normalized = value.trim().toLowerCase();
-  if (/^0x[0-9a-f]+$/u.test(normalized)) return normalized;
-  if (/^[1-9][0-9]*$/u.test(normalized)) return normalized;
+  if (/^0x[0-9a-f]+$/u.test(normalized)) {
+    return BigInt(normalized).toString(10);
+  }
+  if (/^[1-9][0-9]*$/u.test(normalized)) {
+    return BigInt(normalized).toString(10);
+  }
   throw new Error(`WinApp CLI returned an invalid ${label}`);
+}
+
+function sameWindowsPath(actual: string, expected: string): boolean {
+  if (actual.length === 0) return false;
+  const normalize = (value: string): string =>
+    path.resolve(value).replace(/^\\\\\?\\/u, "").toLocaleLowerCase("en-US");
+  return normalize(actual) === normalize(expected);
 }
 
 function nonNegativeInteger(value: unknown, label: string): number {

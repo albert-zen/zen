@@ -76,7 +76,7 @@ test("Windows provider maps WinApp JSON into opaque bounded UIA controls", async
     "invoke",
     "provider-button-selector",
     "--window",
-    "0x2329",
+    "9001",
     "--json",
   ]);
   const setCommand = runner.commands.find((args) => args[1] === "set-value");
@@ -106,7 +106,7 @@ test("Windows provider captures only the exact HWND through WGC-default screensh
       "ui",
       "screenshot",
       "--window",
-      "0x2329",
+      "9001",
       "--output",
     ]);
     assert.equal(screenshotCommand.includes("--capture-screen"), false);
@@ -383,7 +383,7 @@ class FixtureWinAppRunner implements WinAppCliRunner {
         JSON.stringify({
           elementId: args[2],
           pattern: "Invoke",
-          hwnd: "0x2329",
+          hwnd: 9001,
         }),
       );
     }
