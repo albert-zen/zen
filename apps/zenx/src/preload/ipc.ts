@@ -22,4 +22,8 @@ export const ipcChannels = {
   roomsAddMember: "zenx:rooms:add-member",
   roomsRemoveMember: "zenx:rooms:remove-member",
   roomsPost: "zenx:rooms:post",
+  capabilitiesGet: "zenx:capabilities:get",
+  capabilitiesGrant: "zenx:capabilities:grant",
+  capabilitiesRevoke: "zenx:capabilities:revoke",
+  capabilitiesChanged: "zenx:capabilities:changed",
 } as const;

@@ -9,6 +9,10 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, "src/main/index.ts"),
           "app-server-host": resolve(__dirname, "src/main/app-server-host.ts"),
+          "capability-smoke": resolve(
+            __dirname,
+            "src/main/capability-smoke.ts",
+          ),
         },
       },
     },

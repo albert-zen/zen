@@ -482,12 +482,12 @@ function readCommand(toolCall: {
   arguments: Record<string, unknown>;
 }): string {
   if (
-    toolCall.name !== "shell" ||
-    typeof toolCall.arguments.command !== "string"
+    toolCall.name === "shell" &&
+    typeof toolCall.arguments.command === "string"
   ) {
-    throw new Error(`Unsupported tool call: ${toolCall.name}`);
+    return toolCall.arguments.command;
   }
-  return toolCall.arguments.command;
+  return `${toolCall.name} ${JSON.stringify(toolCall.arguments)}`;
 }
 
 function isAbortError(error: unknown): boolean {

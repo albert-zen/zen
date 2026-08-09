@@ -18,6 +18,7 @@ import {
   type HostCommand,
   type ZenXHostConfig,
 } from "./host-messages.js";
+import type { ZenXCapabilityHost } from "./capabilities/types.js";
 
 export type AppServerHostStatus =
   | { type: "starting" }
@@ -34,6 +35,7 @@ export interface AppServerManagerOptions {
   execArgv?: string[];
   environment?: NodeJS.ProcessEnv;
   startupTimeoutMs?: number;
+  capabilityHost?: ZenXCapabilityHost;
 }
 
 type NotificationListener = (
@@ -72,6 +74,7 @@ export class AppServerManager {
     (event: ApprovalResolvedEvent) => void
   >();
   readonly #pendingApprovals = new Map<string, PendingApproval>();
+  readonly #activeCapabilityInvocations = new Map<string, AbortController>();
   #status: AppServerHostStatus = { type: "stopped" };
   #child: ChildProcess | undefined;
   #client: ZenXProtocolClient | undefined;
@@ -131,8 +134,12 @@ export class AppServerManager {
           type: "start",
           config: this.#options.hostConfig,
           bearerToken,
+          capabilities: this.#options.capabilityHost?.hostSnapshot() ?? {
+            definitions: [],
+          },
         },
       );
+      this.#installCapabilityBridge(child);
       this.#client = await ZenXProtocolClient.connect({
         url,
         clientInfo: { name: "zenx", title: "ZenX", version: "0.1.0" },
@@ -152,6 +159,10 @@ export class AppServerManager {
     await this.stop();
     this.#options.hostConfig = hostConfig;
     await this.start();
+  }
+
+  async restartCapabilities(): Promise<void> {
+    await this.restart(this.#options.hostConfig);
   }
 
   async request<M extends ClientRequestMethod>(
@@ -210,6 +221,7 @@ export class AppServerManager {
     if (this.#stopping) return;
     this.#stopping = true;
     this.#cancelPendingApprovals();
+    this.#cancelCapabilityInvocations();
     this.#client?.close();
     this.#client = undefined;
     const child = this.#child;
@@ -308,6 +320,7 @@ export class AppServerManager {
     if (this.#child !== child) return;
     this.#child = undefined;
     this.#cancelPendingApprovals();
+    this.#cancelCapabilityInvocations();
     this.#client?.close();
     this.#client = undefined;
     if (!this.#stopping) {
@@ -330,6 +343,73 @@ export class AppServerManager {
       pending.resolve({ decision: "cancel" });
     }
     this.#pendingApprovals.clear();
+  }
+
+  #installCapabilityBridge(child: ChildProcess): void {
+    child.on("message", (message: unknown) => {
+      if (!isHostEvent(message) || this.#child !== child) return;
+      if (message.type === "capability/cancel") {
+        this.#activeCapabilityInvocations
+          .get(message.invocationId)
+          ?.abort(
+            new DOMException("Capability invocation cancelled", "AbortError"),
+          );
+        return;
+      }
+      if (message.type !== "capability/invoke") return;
+      const host = this.#options.capabilityHost;
+      if (host === undefined) {
+        child.send({
+          type: "capability/result",
+          invocationId: message.invocationId,
+          error: "ZenX capability host is unavailable",
+        } satisfies HostCommand);
+        return;
+      }
+      if (this.#activeCapabilityInvocations.has(message.invocationId)) {
+        child.send({
+          type: "capability/result",
+          invocationId: message.invocationId,
+          error: `Duplicate capability invocation ${message.invocationId}`,
+        } satisfies HostCommand);
+        return;
+      }
+      const controller = new AbortController();
+      this.#activeCapabilityInvocations.set(message.invocationId, controller);
+      void host
+        .execute({ ...message.invocation, signal: controller.signal })
+        .then((result) => {
+          if (this.#child === child && child.connected) {
+            child.send({
+              type: "capability/result",
+              invocationId: message.invocationId,
+              output: result.output,
+              exitCode: result.exitCode,
+            } satisfies HostCommand);
+          }
+        })
+        .catch((error: unknown) => {
+          if (this.#child === child && child.connected) {
+            child.send({
+              type: "capability/result",
+              invocationId: message.invocationId,
+              error: asError(error).message,
+            } satisfies HostCommand);
+          }
+        })
+        .finally(() => {
+          this.#activeCapabilityInvocations.delete(message.invocationId);
+        });
+    });
+  }
+
+  #cancelCapabilityInvocations(): void {
+    for (const controller of this.#activeCapabilityInvocations.values()) {
+      controller.abort(
+        new DOMException("ZenX App Server host stopped", "AbortError"),
+      );
+    }
+    this.#activeCapabilityInvocations.clear();
   }
 }
 
@@ -373,6 +453,7 @@ async function waitForReady(
     };
     const onMessage = (message: unknown): void => {
       if (!isHostEvent(message)) return;
+      if (message.type !== "ready" && message.type !== "error") return;
       cleanup();
       if (message.type === "ready") resolve(message.url);
       else reject(new Error(message.message));

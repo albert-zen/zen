@@ -39,18 +39,170 @@ bounded recent context window. Agent replies in the Room link back to their
 source Thread and Turn. Thread watches similarly inject a bounded completed-Turn
 snapshot rather than copying a second authoritative transcript.
 
+## Capabilities
+
+ZenX owns a capability registry outside Zen Core. Settings shows every bundled
+or local package, its provider/platform metadata, requested permission scopes,
+tool capabilities and interaction mode, instruction resources, and recent
+in-memory audit projection. Granting or revoking a package restarts the local
+host so the Agent sees exactly the currently authorized tool definitions.
+Capability grants, per-call approval, and the execution sandbox remain separate
+concepts. A host may impose a background-only execution policy without treating
+that restriction as a missing grant.
+
+The bundled browser provider uses hidden Electron windows in a dedicated,
+ephemeral Chromium partition. Its list/open/navigate/inspect/click/type/close tools
+target one explicit `sessionId` and `tabId` through Chromium DevTools Protocol
+(CDP) DOM evaluation, without
+moving the OS pointer or activating a browser window. Inspection returns bounded
+visible text plus opaque IDs bound to the latest tab/document observation, never
+raw CSS selectors, cookies, storage, headers, or unrelated tabs. Actions
+revalidate visibility, supported action, and semantic identity, then invalidate
+the observation; navigation and close do likewise. Password values are omitted
+and secure controls reject typing. `browser_type` is deliberately non-secret-only
+because its text argument is part of the canonical tool call. Sessions have hard
+per-session/global tab caps plus explicit tab/session close tools.
+`browser_close_session` destroys all session windows, awaits storage/cache/auth
+cleanup, and advances the partition generation; reopening the same `sessionId`
+therefore starts without the prior cookies or session storage. Generation state
+exists only for active/pending sessions, so logical session bookkeeping is bounded.
+Attaching the user's existing Chrome profile or tabs is not implemented; it
+would be a separate explicit opt-in mode with different privacy and interaction
+impact. This implementation does not claim parity with any proprietary browser
+automation product.
+
+The computer contract is platform-neutral: tools describe semantic observation,
+press/value/capture operations and their interaction impact, while a platform
+provider reports what it implements. The current macOS provider offers targeted
+AXUIElement inspect/AXPress/AXValue and window-scoped capture as
+`background_safe`; these operations require an exact window title, expose at
+most 32 controls, issue short-lived opaque IDs, and revalidate semantic identity
+plus geometry before acting. Stale, moved, or ambiguous controls fail closed.
+It also offers a reliable `foreground_required` baseline for
+global click/key/scroll through a private Swift/CGEvent helper. Arbitrary
+foreground text entry is omitted from this tracer bullet because an untargeted
+text tool cannot prove that the focused control is non-secret. Foreground
+tool names and the running card explicitly warn that the real pointer, keyboard,
+or focused application can be taken over; execution waits briefly so the user
+can press Stop, and cancellation terminates the helper. A background-safe action
+never falls back to foreground input: missing accessibility semantics is
+reported as unsupported/foreground-required.
+
+The macOS provider requires Accessibility permission; window capture also
+requires Screen Recording, and first-use helper compilation requires Apple
+Command Line Tools. A Windows provider remains required after this tracer bullet
+and can implement the same semantic backend with UI Automation, Windows Graphics
+Capture, and SendInput. Linux is currently unsupported for computer control.
+Full arbitrary GUI automation cannot always be background-safe; an isolated
+macOS/Windows session, VM, or remote host is the intended route to arbitrary
+control without disturbing the user's desktop.
+
+### Provider reuse route
+
+This tracer bullet deliberately keeps the provider boundary compatible with
+mature external implementations while retaining a runnable bundled baseline:
+
+- macOS follows Peekaboo's observe → opaque observation element ID → native semantic action
+  → explicit foreground fallback layering. Peekaboo is MIT and is the preferred
+  next adapter, but it is not bundled here: the CLI is not currently a ZenX
+  dependency, its released/source toolchain and permission-onboarding lifecycle
+  must be packaged and signed deliberately, and its JSON compatibility must be
+  pinned before ZenX can rely on it. The current minimal Swift AX/CGEvent helper
+  is therefore provisional rather than a claim that ZenX should maintain a
+  complete macOS automation stack. See
+  <https://github.com/openclaw/Peekaboo>.
+- Windows should begin as a thin optional adapter over Microsoft's MIT-licensed,
+  Public Preview `winapp` CLI. UIA inspect/search/get/set-value/invoke/wait and
+  WGC capture map to background-safe semantic tools; click/drag/SendInput map to
+  foreground-required tools. Provider-private HWND/UIA values must be translated
+  to observation-scoped opaque ZenX target IDs/results. See
+  <https://github.com/microsoft/winappCli/blob/main/docs/ui-automation.md>.
+- Browser automation currently uses the bundled Chromium CDP path and an
+  ephemeral partition. A Playwright adapter should preserve the same tools while
+  using isolated non-persistent `BrowserContext`s; attaching an existing user
+  profile remains a separate opt-in provider. See
+  <https://playwright.dev/docs/api/class-browsercontext>.
+- A future `isolated` interaction mode/provider can place arbitrary control in a
+  VM, cloud desktop, or remote host. OSWorld's provider separation across
+  VMware/VirtualBox/Docker/cloud is a useful reference, but no VM lifecycle is
+  implemented in this PR. See <https://github.com/xlang-ai/OSWorld>.
+
+Local packages are JSON manifests placed in Electron `userData/capabilities`.
+They use schema version 1, declare permissions, structured tools and optional
+`skill`/`prompt` resources, and point at an executable inside the same package
+directory:
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "local-example",
+  "displayName": "Local example",
+  "version": "1.0.0",
+  "description": "One narrow local operation",
+  "provider": {
+    "id": "local-example-process",
+    "platforms": ["darwin", "win32"],
+    "interactionModes": ["background_safe"],
+    "capabilities": ["example.run"]
+  },
+  "permissions": [
+    {
+      "id": "local-example.run",
+      "title": "Run example",
+      "description": "Run the local example executable",
+      "scope": "workspace"
+    }
+  ],
+  "tools": [
+    {
+      "name": "local_example_run",
+      "description": "Run the example",
+      "inputSchema": { "type": "object" },
+      "permissions": ["local-example.run"],
+      "interactionMode": "background_safe",
+      "capabilities": ["example.run"]
+    }
+  ],
+  "resources": [],
+  "runtime": { "type": "process", "command": "./provider" }
+}
+```
+
+The executable receives one JSON request on stdin and returns one JSON value on
+stdout. It runs without a shell, with a minimal environment and bounded
+transport/output. Tool `maxOutputBytes` must be an integer from 1 KiB through
+1 MiB, and the result envelope still honors that bound when provider metadata is
+large. Discovery failures stay visible; ZenX does not retry them with
+a durable repair workflow. There is no marketplace, signing, remote discovery,
+or distribution layer.
+
 ## Verification
 
 ```sh
 npm --workspace apps/zenx run check
 npm run check
+npm --workspace apps/zenx run smoke:capabilities
 ```
 
 The automated integration suite runs the timer → wakeup → App Server Turn →
 streamed response → history chain, explicit cyclic/self relay and cancellation,
 bounded source snapshots, two-member Room routing, strict persisted-state
 validation, long timers, OAuth cleanup, link policy, and local signal routing.
-The 2026-08-09 packaged Electron smoke also covered onboarding/host
+The packaged capability smoke covers a real hidden dedicated browser
+open/inspect/navigate/click/type/close, including forged/stale/changed/hidden and
+password target rejection. It also seeds a cookie and session storage, closes
+the session, reopens the same ID, and verifies both are absent. It asserts those
+background-safe browser operations
+leave the real pointer position and foreground application unchanged. The macOS
+AX helper and foreground helper compile in that packaged run, but arbitrary
+third-party AX window/action smoke remains permission- and target-dependent; its
+opaque latest-observation and forged/stale/secure paths are unit-covered. The
+compiled helper enforces semantic fingerprint/geometry revalidation and rejects
+ambiguous matches, but that path is not claimed as a live third-party-app smoke.
+It does
+not run foreground takeover against the user's desktop; foreground execution
+and immediate pre-input cancellation are covered by provider/bridge tests. The
+2026-08-09 packaged Electron smoke also covered onboarding/host
 restart, Thread creation, Markdown rendering and copy affordances, the persistent
 Projects/Inbox toggle, Watching, and a real timer wakeup card.
 

@@ -16,10 +16,12 @@ import type {
   CreateTriggerInput,
   RoomMember,
 } from "./trigger-types.js";
+import { ZenXCapabilityService } from "./capability-service.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let triggerService: ZenXTriggerService | undefined;
+let capabilityService: ZenXCapabilityService | undefined;
 let quitting = false;
 
 function createWindow(): BrowserWindow {
@@ -69,6 +71,8 @@ app.whenReady().then(async () => {
     ),
   });
   try {
+    capabilityService = new ZenXCapabilityService({ userDataDirectory });
+    await capabilityService.initialize();
     await settingsService.initialize(process.env);
     let startupError: unknown;
     let hostConfig;
@@ -90,8 +94,10 @@ app.whenReady().then(async () => {
       tokenFile,
       hostConfig,
       execPath: process.execPath,
+      capabilityHost: capabilityService,
     });
     installProtocolIpc(appServerManager);
+    installCapabilityIpc(capabilityService, appServerManager);
     triggerService = new ZenXTriggerService(
       appServerManager,
       new ZenXTriggerStore(join(userDataDirectory, "trigger-registry.json")),
@@ -118,6 +124,7 @@ app.whenReady().then(async () => {
         tokenFile,
         hostConfig,
         execPath: process.execPath,
+        capabilityHost: capabilityService,
       });
       await appServerManager.start();
     } else {
@@ -136,7 +143,10 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   quitting = true;
   triggerService?.stop();
-  void appServerManager.stop().finally(() => app.quit());
+  void appServerManager
+    .stop()
+    .then(async () => await capabilityService?.close())
+    .finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {
@@ -316,6 +326,56 @@ function installTriggerIpc(triggers: ZenXTriggerService): void {
     for (const window of BrowserWindow.getAllWindows())
       window.webContents.send(ipcChannels.triggersChanged, snapshot);
   });
+}
+
+function installCapabilityIpc(
+  capabilities: ZenXCapabilityService,
+  manager: AppServerManager,
+): void {
+  ipcMain.handle(ipcChannels.capabilitiesGet, () => capabilities.snapshot());
+  ipcMain.handle(
+    ipcChannels.capabilitiesGrant,
+    async (_event, capabilityId: unknown, permissionIds: unknown) => {
+      const parsed = capabilityPermissionRequest(capabilityId, permissionIds);
+      await capabilities.grant(parsed.capabilityId, parsed.permissionIds);
+      await manager.restartCapabilities();
+      return capabilities.snapshot();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.capabilitiesRevoke,
+    async (_event, capabilityId: unknown, permissionIds: unknown) => {
+      const parsed = capabilityPermissionRequest(capabilityId, permissionIds);
+      await capabilities.revoke(parsed.capabilityId, parsed.permissionIds);
+      await manager.restartCapabilities();
+      return capabilities.snapshot();
+    },
+  );
+  capabilities.onChange((snapshot) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(ipcChannels.capabilitiesChanged, snapshot);
+    }
+  });
+}
+
+function capabilityPermissionRequest(
+  capabilityId: unknown,
+  permissionIds: unknown,
+): { capabilityId: string; permissionIds?: string[] } {
+  if (typeof capabilityId !== "string" || capabilityId.length === 0) {
+    throw new Error("Invalid capability ID");
+  }
+  if (permissionIds === undefined) return { capabilityId };
+  if (
+    !Array.isArray(permissionIds) ||
+    permissionIds.some(
+      (permissionId) =>
+        typeof permissionId !== "string" || permissionId.length === 0,
+    )
+  ) {
+    throw new Error("Invalid capability permission list");
+  }
+  return { capabilityId, permissionIds };
 }
 
 function isApprovalDecision(value: unknown): value is ApprovalDecision {

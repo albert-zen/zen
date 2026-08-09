@@ -909,6 +909,99 @@ summary:focus-visible {
   padding-top: 5px;
 }
 
+.capability-heading,
+.capability-card header,
+.capability-card li,
+.capability-audit > div {
+  display: flex;
+  align-items: center;
+}
+
+.capability-heading,
+.capability-card header {
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.capability-heading > span,
+.capability-card header span,
+.capability-card footer,
+.capability-card small,
+.capability-audit span,
+.capability-audit time {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.capability-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.capability-card {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--color-panel) 86%, white 2%);
+}
+
+.capability-card header > div,
+.capability-card li > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.capability-card > p {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.capability-card ul {
+  display: grid;
+  gap: 9px;
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.capability-card li {
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.capability-audit {
+  margin-top: 18px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 14px;
+}
+
+.capability-audit h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.capability-audit > div {
+  gap: 9px;
+  min-height: 28px;
+}
+
+.capability-audit time {
+  margin-left: auto;
+}
+
+.danger-button {
+  border: 1px solid color-mix(in srgb, var(--color-red) 42%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 6px 11px;
+  color: var(--color-red);
+  background: var(--color-red-dim);
+  cursor: pointer;
+}
+
 .messages {
   min-height: 0;
   flex: 1;
@@ -1343,6 +1436,16 @@ summary:focus-visible {
   font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.command-impact-warning {
+  margin: 0;
+  padding: 9px 12px;
+  border-top: 1px solid rgba(244, 184, 96, 0.3);
+  color: var(--color-warning, #f4b860);
+  background: rgba(244, 184, 96, 0.08);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
 }
 
 .command-item pre {
