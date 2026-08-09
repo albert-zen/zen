@@ -1,4 +1,11 @@
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  safeStorage,
+  session,
+  shell,
+} from "electron";
 import { join, resolve } from "node:path";
 
 import { isAllowedZenXExternalUrl } from "../external-link-policy.js";
@@ -9,6 +16,7 @@ import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
 import type { ZenXHostProfile } from "./host-profile.js";
 import { ZenXSettingsService } from "./settings-service.js";
+import { zenXProviderTransport } from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
 import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
@@ -91,6 +99,10 @@ app.whenReady().then(async () => {
     let hostConfig;
     try {
       hostConfig = await settingsService.hostConfig();
+      hostConfig.transport = await zenXProviderTransport(
+        hostConfig,
+        async (url) => await session.defaultSession.resolveProxy(url),
+      );
     } catch (error) {
       startupError = error;
       hostConfig = {
@@ -145,6 +157,10 @@ app.whenReady().then(async () => {
   }
   installSettingsIpc(settingsService, async () => {
     const hostConfig = await settingsService!.hostConfig();
+    hostConfig.transport = await zenXProviderTransport(
+      hostConfig,
+      async (url) => await session.defaultSession.resolveProxy(url),
+    );
     if (appServerManager === undefined) {
       appServerManager = new AppServerManager({
         entryPath,

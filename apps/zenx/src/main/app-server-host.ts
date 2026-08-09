@@ -1,4 +1,7 @@
-import { createHostedAppServer } from "../../../../apps/cli/src/host.js";
+import {
+  createHostedAppServer,
+  type HostedZenAppServer,
+} from "../../../../apps/cli/src/host.js";
 import {
   serveCodexWebSocket,
   type CodexWebSocketServer,
@@ -11,6 +14,7 @@ import {
 import { ZenXHostToolExecutor } from "./capability-tool-executor.js";
 
 let server: CodexWebSocketServer | undefined;
+let appServer: HostedZenAppServer | undefined;
 let tools: ZenXHostToolExecutor | undefined;
 let shuttingDown = false;
 
@@ -51,8 +55,9 @@ async function handleCommand(command: HostCommand): Promise<void> {
         : [],
     send,
   });
+  appServer = createHostedAppServer({ ...command.config, tools });
   server = await serveCodexWebSocket({
-    appServer: createHostedAppServer({ ...command.config, tools }),
+    appServer,
     zenHome: command.config.dataDirectory,
     listen: "ws://127.0.0.1:0",
     bearerToken: command.bearerToken,
@@ -65,6 +70,8 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   await server?.close();
   server = undefined;
+  await appServer?.closeProviderTransport();
+  appServer = undefined;
   tools?.close();
   tools = undefined;
   if (process.connected) process.disconnect();

@@ -1,5 +1,6 @@
 dist/
 apps/zenx/out/
+apps/zenx/.smoke/
 node_modules/
 .zen/
 .env
