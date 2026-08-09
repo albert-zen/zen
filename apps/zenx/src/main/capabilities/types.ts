@@ -79,6 +79,18 @@ export interface ZenXCapabilityAuditRecord {
   summary?: string;
 }
 
+export interface ZenXCapabilityProviderDiagnostic {
+  capabilityId: string;
+  providerId: string;
+  status: "available" | "fallback" | "selected" | "unavailable";
+  interactionModes: ZenXCapabilityInteractionMode[];
+  capabilities: string[];
+  executable?: string;
+  version?: string;
+  permissionSummary?: string;
+  reason?: string;
+}
+
 export interface ZenXCapabilitySummary {
   manifest: Omit<ZenXCapabilityManifest, "resources"> & {
     resources: Array<Omit<ZenXCapabilityResource, "content">>;
@@ -94,6 +106,7 @@ export interface ZenXCapabilitySummary {
 export interface ZenXCapabilitySnapshot {
   capabilities: ZenXCapabilitySummary[];
   recentInvocations: ZenXCapabilityAuditRecord[];
+  providerDiagnostics: ZenXCapabilityProviderDiagnostic[];
   discoveryErrors: string[];
 }
 

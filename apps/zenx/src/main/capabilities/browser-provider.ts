@@ -28,19 +28,32 @@ export interface BrowserInspection extends BrowserTabSummary {
 }
 
 export interface ZenXBrowserBackend {
-  listTabs(sessionId: string): Promise<BrowserTabSummary[]>;
-  open(sessionId: string, url: string): Promise<BrowserTabSummary>;
+  listTabs(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary[]>;
+  open(
+    sessionId: string,
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary>;
   navigate(
     sessionId: string,
     tabId: string,
     url: string,
+    signal?: AbortSignal,
   ): Promise<BrowserTabSummary>;
-  inspect(sessionId: string, tabId: string): Promise<BrowserInspection>;
+  inspect(
+    sessionId: string,
+    tabId: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserInspection>;
   click(
     sessionId: string,
     tabId: string,
     observationId: string,
     targetId: string,
+    signal?: AbortSignal,
   ): Promise<BrowserTabSummary>;
   type(
     sessionId: string,
@@ -49,9 +62,17 @@ export interface ZenXBrowserBackend {
     targetId: string,
     text: string,
     submit: boolean,
+    signal?: AbortSignal,
   ): Promise<BrowserTabSummary>;
-  closeTab(sessionId: string, tabId: string): Promise<void> | void;
-  closeSession(sessionId: string): Promise<number> | number;
+  closeTab(
+    sessionId: string,
+    tabId: string,
+    signal?: AbortSignal,
+  ): Promise<void> | void;
+  closeSession(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<number> | number;
   close(): Promise<void> | void;
 }
 
@@ -209,33 +230,40 @@ export const browserCapabilityManifest: ZenXCapabilityManifest = {
 };
 
 export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
-  readonly manifest = browserCapabilityManifest;
+  readonly manifest: ZenXCapabilityManifest;
   readonly #backend: ZenXBrowserBackend;
 
-  constructor(backend: ZenXBrowserBackend) {
+  constructor(
+    backend: ZenXBrowserBackend,
+    manifest: ZenXCapabilityManifest = browserCapabilityManifest,
+  ) {
     this.#backend = backend;
+    this.manifest = manifest;
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
     const sessionId = requiredTargetId(invocation.arguments, "sessionId");
     switch (toolName) {
       case "browser_list_tabs":
-        return await this.#backend.listTabs(sessionId);
+        return await this.#backend.listTabs(sessionId, invocation.signal);
       case "browser_open":
         return await this.#backend.open(
           sessionId,
           safeBrowserUrl(requiredString(invocation.arguments, "url")),
+          invocation.signal,
         );
       case "browser_navigate":
         return await this.#backend.navigate(
           sessionId,
           requiredTargetId(invocation.arguments, "tabId"),
           safeBrowserUrl(requiredString(invocation.arguments, "url")),
+          invocation.signal,
         );
       case "browser_inspect":
         return await this.#backend.inspect(
           sessionId,
           requiredTargetId(invocation.arguments, "tabId"),
+          invocation.signal,
         );
       case "browser_click":
         return await this.#backend.click(
@@ -243,6 +271,7 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           requiredTargetId(invocation.arguments, "tabId"),
           requiredTargetId(invocation.arguments, "observationId"),
           requiredTargetId(invocation.arguments, "targetId"),
+          invocation.signal,
         );
       case "browser_type":
         return await this.#backend.type(
@@ -252,15 +281,19 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           requiredTargetId(invocation.arguments, "targetId"),
           requiredString(invocation.arguments, "text", true),
           optionalBoolean(invocation.arguments, "submit") ?? false,
+          invocation.signal,
         );
       case "browser_close": {
         const tabId = requiredTargetId(invocation.arguments, "tabId");
-        await this.#backend.closeTab(sessionId, tabId);
+        await this.#backend.closeTab(sessionId, tabId, invocation.signal);
         return { closed: true, sessionId, tabId };
       }
       case "browser_close_session":
         return {
-          closedTabs: await this.#backend.closeSession(sessionId),
+          closedTabs: await this.#backend.closeSession(
+            sessionId,
+            invocation.signal,
+          ),
           sessionId,
         };
       default:

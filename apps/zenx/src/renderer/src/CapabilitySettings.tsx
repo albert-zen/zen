@@ -157,6 +157,31 @@ export function CapabilitySettings() {
           );
         })}
       </div>
+      {snapshot.providerDiagnostics.length === 0 ? null : (
+        <div className="capability-audit">
+          <h3>Execution providers</h3>
+          {snapshot.providerDiagnostics.map((provider) => (
+            <div
+              key={`${provider.capabilityId}:${provider.providerId}`}
+              title={provider.reason ?? provider.permissionSummary}
+            >
+              <Icon
+                name={
+                  provider.status === "selected" ||
+                  provider.status === "available"
+                    ? "check"
+                    : "warning"
+                }
+                size={12}
+              />
+              <code>{provider.providerId}</code>
+              <span>{provider.status}</span>
+              <span>{provider.interactionModes.join(", ")}</span>
+              <span>{provider.version ?? "bundled"}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {snapshot.recentInvocations.length === 0 ? null : (
         <div className="capability-audit">
           <h3>Recent capability use</h3>

@@ -139,27 +139,35 @@ control without disturbing the user's desktop.
 This tracer bullet deliberately keeps the provider boundary compatible with
 mature external implementations while retaining a runnable bundled baseline:
 
-- macOS follows Peekaboo's observe → opaque observation element ID → native semantic action
-  → explicit foreground fallback layering. Peekaboo is MIT and is the preferred
-  next adapter, but it is not bundled here: the CLI is not currently a ZenX
-  dependency, its released/source toolchain and permission-onboarding lifecycle
-  must be packaged and signed deliberately, and its JSON compatibility must be
-  pinned before ZenX can rely on it. The current minimal Swift AX/CGEvent helper
-  is therefore provisional rather than a claim that ZenX should maintain a
-  complete macOS automation stack. See
-  <https://github.com/openclaw/Peekaboo>.
-- Windows is a thin optional adapter over Microsoft's MIT-licensed, Public
+- macOS now discovers an optional Peekaboo 3.x CLI and pins its JSON envelope,
+  permission probe, snapshot and action assumptions. It uses a fresh exact-window
+  `see` before every semantic action, revalidates identity/security/actions, and
+  invokes background `click` or `set-value` with the fresh snapshot and element
+  IDs. Foreground pointer/key/scroll remains explicitly labeled. Missing,
+  incompatible, or malformed Peekaboo installations produce terminal provider
+  diagnostics and select the bundled Swift AX/CGEvent baseline; they never cause
+  a background operation to become foreground. Install Peekaboo separately or
+  set `ZENX_PEEKABOO_CLI` to an exact executable. See the upstream command and
+  background validation contracts at <https://github.com/openclaw/Peekaboo/blob/main/docs/cli-command-reference.md>
+  and <https://github.com/openclaw/Peekaboo/blob/main/docs/testing/background-computer-use.md>.
+- Windows uses a thin optional adapter over Microsoft's MIT-licensed, Public
   Preview `winapp` CLI. UIA inspect/set-value/invoke and default WGC capture map
   to background-safe semantic tools; provider-private HWND/UIA selectors are
-  translated to observation-scoped opaque ZenX target IDs/results. WinApp's
-  input-injecting verbs are deliberately not exposed by the current unscoped
-  ZenX foreground contract. See
+  translated to observation-scoped opaque ZenX target IDs/results. Startup pins
+  the supported version/schema and required commands before registration.
+  WinApp input-injecting verbs are deliberately not exposed by the current
+  unscoped ZenX foreground contract. See
   <https://github.com/microsoft/winappCli/blob/main/docs/ui-automation.md>.
-- Browser automation currently uses the bundled Chromium CDP path and an
-  ephemeral partition. A Playwright adapter should preserve the same tools while
-  using isolated non-persistent `BrowserContext`s; attaching an existing user
-  profile remains a separate opt-in provider. See
-  <https://playwright.dev/docs/api/class-browsercontext>.
+- Browser automation now prefers an optional compatible Playwright CLI (currently
+  pinned to `>=0.1.0 <0.2.0`) and validates its `--json` version/list schema
+  before selection. Its default headless session is reported as `isolated`, and
+  every action re-snapshots and revalidates Playwright ref plus DOM
+  role/name/type/security/visibility/action fingerprint. Missing or incompatible
+  CLI installations remain explicit in provider diagnostics and use the existing
+  bundled Chromium CDP ephemeral-partition provider. Install `@playwright/cli`
+  plus its browser separately or set `ZENX_PLAYWRIGHT_CLI`; attaching a user
+  profile is still unsupported. See <https://playwright.dev/agent-cli/introduction>
+  and <https://playwright.dev/docs/api/class-browsercontext>.
 - A future `isolated` interaction mode/provider can place arbitrary control in a
   VM, cloud desktop, or remote host. OSWorld's provider separation across
   VMware/VirtualBox/Docker/cloud is a useful reference, but no VM lifecycle is
@@ -222,6 +230,7 @@ npm run check
 npm --workspace apps/zenx run smoke:capabilities
 # Windows only, after installing Microsoft WinApp CLI:
 npm --workspace apps/zenx run smoke:windows-computer
+npm --workspace apps/zenx run smoke:providers
 ```
 
 The automated integration suite runs the timer → wakeup → App Server Turn →
@@ -255,6 +264,12 @@ official setup action. The cross-platform fixture suite validates the same WinAp
 pre-action semantic revalidation, startup version/schema diagnostics,
 timeout/cancellation, output bounds, and exact-value error redaction when a
 Windows host is not available.
+The provider smoke exercises the selected Playwright-or-Electron browser against
+a local page through open → inspect → action → verify → close and prints bounded
+provider/version/permission diagnostics. CI installs the pinned official
+`@playwright/cli` and requires that provider to be selected; a local run may
+exercise the Electron fallback when the CLI is absent. The smoke only probes
+Peekaboo availability and permissions; it never sends desktop input.
 It does
 not run foreground takeover against the user's desktop; foreground execution
 and immediate pre-input cancellation are covered by provider/bridge tests. The

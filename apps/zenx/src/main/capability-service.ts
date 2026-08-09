@@ -3,18 +3,20 @@ import path from "node:path";
 import type { ToolInvocation } from "../../../../src/tool.js";
 import {
   BrowserZenXCapabilityPackage,
-  ElectronBrowserBackend,
   type ZenXBrowserBackend,
 } from "./capabilities/browser-provider.js";
 import {
-  computerCapabilityManifest,
   ComputerZenXCapabilityPackage,
-  ElectronMacComputerBackend,
   type ZenXComputerBackend,
 } from "./capabilities/computer-provider.js";
 import { JsonZenXCapabilityGrantStore } from "./capabilities/grant-store.js";
 import { discoverLocalCapabilityPackages } from "./capabilities/local-package.js";
 import { ZenXCapabilityRegistry } from "./capabilities/registry.js";
+import {
+  selectBrowserProvider,
+  selectComputerProvider,
+} from "./capabilities/provider-catalog.js";
+import { WinAppCliComputerBackend } from "./capabilities/windows-computer-provider.js";
 import type {
   ZenXCapabilityGrantStore,
   ZenXCapabilityHost,
@@ -23,17 +25,14 @@ import type {
   ZenXCapabilitySnapshot,
   ZenXCapabilityManifest,
 } from "./capabilities/types.js";
-import {
-  windowsComputerCapabilityManifest,
-  WinAppCliComputerBackend,
-} from "./capabilities/windows-computer-provider.js";
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #registry: ZenXCapabilityRegistry;
+  readonly #userDataDirectory: string;
   readonly #localDirectory: string;
-  readonly #browserBackend: ZenXBrowserBackend;
-  readonly #computerBackend: ZenXComputerBackend;
-  readonly #computerManifest: ZenXCapabilityManifest;
+  readonly #browserBackend?: ZenXBrowserBackend;
+  readonly #computerBackend?: ZenXComputerBackend;
+  readonly #computerManifest?: ZenXCapabilityManifest;
   #computerRegistered = false;
 
   constructor(options: {
@@ -50,29 +49,50 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           path.join(options.userDataDirectory, "capability-grants.json"),
         ),
     );
+    this.#userDataDirectory = options.userDataDirectory;
     this.#localDirectory =
       options.localDirectory ??
       path.join(options.userDataDirectory, "capabilities");
-    this.#browserBackend =
-      options.browserBackend ?? new ElectronBrowserBackend();
-    const bundledComputer = defaultComputerProvider();
-    this.#computerBackend = options.computerBackend ?? bundledComputer.backend;
-    this.#computerManifest =
-      options.computerManifest ??
-      (options.computerBackend === undefined
-        ? bundledComputer.manifest
-        : computerCapabilityManifest);
+    this.#browserBackend = options.browserBackend;
+    this.#computerBackend = options.computerBackend;
+    this.#computerManifest = options.computerManifest;
   }
 
   async initialize(): Promise<void> {
     await this.#registry.initialize();
+    const browser =
+      this.#browserBackend === undefined
+        ? await selectBrowserProvider({
+            userDataDirectory: this.#userDataDirectory,
+          })
+        : {
+            backend: this.#browserBackend,
+            manifest: undefined,
+            diagnostics: [],
+          };
     this.#registry.register(
-      new BrowserZenXCapabilityPackage(this.#browserBackend),
+      new BrowserZenXCapabilityPackage(browser.backend, browser.manifest),
       "bundled",
     );
-    let registerComputer = true;
-    if (this.#computerBackend instanceof WinAppCliComputerBackend) {
-      const diagnostic = await this.#computerBackend.diagnose();
+    for (const diagnostic of browser.diagnostics) {
+      this.#registry.recordProviderDiagnostic(diagnostic);
+    }
+    const computer =
+      this.#computerBackend === undefined
+        ? await selectComputerProvider({
+            userDataDirectory: this.#userDataDirectory,
+          })
+        : {
+            backend: this.#computerBackend,
+            manifest: this.#computerManifest,
+            diagnostics: [],
+          };
+    let registerComputer = computer.backend !== undefined;
+    if (
+      this.#computerBackend !== undefined &&
+      computer.backend instanceof WinAppCliComputerBackend
+    ) {
+      const diagnostic = await computer.backend.diagnose();
       if (!diagnostic.ready) {
         registerComputer = false;
         this.#registry.recordDiscoveryError(
@@ -80,15 +100,23 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         );
       }
     }
-    if (registerComputer) {
+    if (registerComputer && computer.backend !== undefined) {
       this.#registry.register(
-        new ComputerZenXCapabilityPackage(
-          this.#computerBackend,
-          this.#computerManifest,
-        ),
+        new ComputerZenXCapabilityPackage(computer.backend, computer.manifest),
         "bundled",
       );
       this.#computerRegistered = true;
+    }
+    for (const diagnostic of computer.diagnostics) {
+      this.#registry.recordProviderDiagnostic(diagnostic);
+      if (
+        diagnostic.providerId === "microsoft-winapp-cli" &&
+        diagnostic.status === "unavailable"
+      ) {
+        this.#registry.recordDiscoveryError(
+          `Windows computer provider: ${diagnostic.reason ?? "unavailable"}`,
+        );
+      }
     }
     const discovered = await discoverLocalCapabilityPackages(
       this.#localDirectory,
@@ -150,23 +178,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   async close(): Promise<void> {
     await this.#registry.close();
-    if (!this.#computerRegistered) await this.#computerBackend.close();
+    if (!this.#computerRegistered) await this.#computerBackend?.close();
   }
-}
-
-function defaultComputerProvider(): {
-  backend: ZenXComputerBackend;
-  manifest: ZenXCapabilityManifest;
-} {
-  return process.platform === "win32"
-    ? {
-        backend: new WinAppCliComputerBackend(),
-        manifest: windowsComputerCapabilityManifest,
-      }
-    : {
-        backend: new ElectronMacComputerBackend(),
-        manifest: computerCapabilityManifest,
-      };
 }
 
 function describeError(error: unknown): string {

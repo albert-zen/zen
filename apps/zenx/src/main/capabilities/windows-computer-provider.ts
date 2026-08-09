@@ -9,6 +9,7 @@ import {
   COMPUTER_ACTION_SET_VALUE,
   computerCapabilityManifest,
   ComputerObservationLedger,
+  type ComputerControlAction,
   type ComputerControlFingerprint,
   type ComputerControlSelector,
   type ComputerInspection,
@@ -813,7 +814,7 @@ function flattenElements(roots: readonly WinAppElement[]): WinAppElement[] {
 
 function winAppFingerprint(element: WinAppElement): ComputerControlFingerprint {
   const secure = isSecureElement(element);
-  const actions: string[] = [];
+  const actions: ComputerControlAction[] = [];
   if (element.isInvokable === true) actions.push(COMPUTER_ACTION_PRESS);
   if (!secure && isEditableElement(element)) {
     actions.push(COMPUTER_ACTION_SET_VALUE);

@@ -19,6 +19,11 @@ export interface ComputerControlSelector {
   targetId: string;
 }
 
+export const COMPUTER_ACTION_PRESS = "press";
+export const COMPUTER_ACTION_SET_VALUE = "set_value";
+export type ComputerControlAction =
+  typeof COMPUTER_ACTION_PRESS | typeof COMPUTER_ACTION_SET_VALUE;
+
 export interface ComputerInspection {
   platform: NodeJS.Platform;
   observationId: string;
@@ -34,7 +39,7 @@ export interface ComputerInspection {
     role: string;
     title: string;
     enabled: boolean;
-    actions: string[];
+    actions: ComputerControlAction[];
     secure?: true;
   }>;
   truncated: boolean;
@@ -97,8 +102,6 @@ export type ComputerKey =
   | "arrowRight";
 
 export const MAX_COMPUTER_INSPECTION_CONTROLS = 32;
-export const COMPUTER_ACTION_PRESS = "press";
-export const COMPUTER_ACTION_SET_VALUE = "set_value";
 
 export const computerCapabilityManifest: ZenXCapabilityManifest = {
   schemaVersion: 1,
@@ -225,7 +228,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
 
   constructor(
     backend: ZenXComputerBackend,
-    manifest = computerCapabilityManifest,
+    manifest: ZenXCapabilityManifest = computerCapabilityManifest,
   ) {
     this.#backend = backend;
     this.manifest = manifest;
@@ -321,7 +324,7 @@ export interface ComputerControlFingerprint {
   description?: string;
   frame?: string;
   secure: boolean;
-  actions: string[];
+  actions: ComputerControlAction[];
 }
 
 interface ComputerObservation {
@@ -350,7 +353,7 @@ export class ComputerObservationLedger {
   consume(
     targetKey: string,
     selector: ComputerControlSelector,
-    action: "press" | "set_value",
+    action: ComputerControlAction,
   ): ComputerControlFingerprint {
     const observation = this.#latest.get(targetKey);
     if (
@@ -366,14 +369,14 @@ export class ComputerObservationLedger {
       throw new Error("Computer target ID is forged, stale, or unknown");
     }
     if (
-      action === "press" &&
+      action === COMPUTER_ACTION_PRESS &&
       !fingerprint.actions.includes(COMPUTER_ACTION_PRESS)
     ) {
       throw new Error(
         "Control no longer supports background-safe semantic press; foreground_required",
       );
     }
-    if (action === "set_value") {
+    if (action === COMPUTER_ACTION_SET_VALUE) {
       if (fingerprint.secure) {
         throw new Error(
           "computer_set_value rejects password or secure controls; supplied text is a journaled non-secret-only tool argument",
@@ -422,15 +425,19 @@ function rawControlFingerprint(
   return {
     ...control.selector,
     secure: control.secure === true,
-    actions: canonicalMacActions(control.actions),
+    actions: canonicalComputerActions(control.actions),
   };
 }
 
-function canonicalMacActions(actions: readonly string[]): string[] {
-  return [
-    ...(actions.includes("AXPress") ? [COMPUTER_ACTION_PRESS] : []),
-    ...(actions.includes("AXSetValue") ? [COMPUTER_ACTION_SET_VALUE] : []),
-  ];
+function canonicalComputerActions(
+  actions: readonly string[],
+): ComputerControlAction[] {
+  const canonical: ComputerControlAction[] = [];
+  if (actions.includes("AXPress")) canonical.push(COMPUTER_ACTION_PRESS);
+  if (actions.includes("AXSetValue")) {
+    canonical.push(COMPUTER_ACTION_SET_VALUE);
+  }
+  return canonical;
 }
 
 function semanticControlSelector(
@@ -527,7 +534,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     const fingerprint = this.#observations.consume(
       computerTargetKey(target),
       control,
-      "press",
+      COMPUTER_ACTION_PRESS,
     );
     const response = (await this.#accessibility.run({
       operation: "press",
@@ -550,7 +557,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     const fingerprint = this.#observations.consume(
       computerTargetKey(target),
       control,
-      "set_value",
+      COMPUTER_ACTION_SET_VALUE,
     );
     const response = (await this.#accessibility.run({
       operation: "setValue",
