@@ -17,11 +17,16 @@ import type {
   RoomMember,
 } from "./trigger-types.js";
 import { ZenXCapabilityService } from "./capability-service.js";
+import {
+  MutableAppServerRequestPort,
+  ZenXSelfControlCapabilityPackage,
+} from "./capabilities/self-control-package.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let triggerService: ZenXTriggerService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
+const selfControlPort = new MutableAppServerRequestPort();
 let quitting = false;
 
 function createWindow(): BrowserWindow {
@@ -73,6 +78,9 @@ app.whenReady().then(async () => {
   try {
     capabilityService = new ZenXCapabilityService({ userDataDirectory });
     await capabilityService.initialize();
+    capabilityService.register(
+      new ZenXSelfControlCapabilityPackage({ appServer: selfControlPort }),
+    );
     await settingsService.initialize(process.env);
     let startupError: unknown;
     let hostConfig;
@@ -96,6 +104,7 @@ app.whenReady().then(async () => {
       execPath: process.execPath,
       capabilityHost: capabilityService,
     });
+    selfControlPort.attach(appServerManager, hostConfig.cwd);
     installProtocolIpc(appServerManager);
     installCapabilityIpc(capabilityService, appServerManager);
     triggerService = new ZenXTriggerService(
@@ -126,8 +135,10 @@ app.whenReady().then(async () => {
         execPath: process.execPath,
         capabilityHost: capabilityService,
       });
+      selfControlPort.attach(appServerManager, hostConfig.cwd);
       await appServerManager.start();
     } else {
+      selfControlPort.attach(appServerManager, hostConfig.cwd);
       await appServerManager.restart(hostConfig);
     }
   });
@@ -145,7 +156,10 @@ app.on("before-quit", (event) => {
   triggerService?.stop();
   void appServerManager
     .stop()
-    .then(async () => await capabilityService?.close())
+    .then(async () => {
+      selfControlPort.detach();
+      await capabilityService?.close();
+    })
     .finally(() => app.quit());
 });
 

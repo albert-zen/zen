@@ -27,6 +27,13 @@ provider 与 skill/prompt 均由 ZenX 持有，不进入 Zen Core 或 Codex 协�
 和调度状态不进入 Zen Core，命中 Trigger 仍只通过 App Server 发起普通 Turn；在真实
 桌面验收完成前不夸大为稳定发布。
 
+ZenX Agent 的自控工具同样属于产品层：bundled capability package 经现有 registry
+显式授权 workspace/local-device 权限后才向 Agent 暴露；Project 列表只按已配置
+workspace 与 Thread 实际 cwd 派生；Thread 的创建、读取、状态与
+`start | steer | replace` 发送全部经由 App Server。工具调用和目标 Thread 的结果分别
+进入各自权威 ItemList，不另建委派记录、消息队列或 transcript；互相监听
+`turn_completed` 后继续发起普通 Turn 是允许的。
+
 固定版本 T3 Code 仍是机会型兼容目标：它可以通过协议直接把 Zen 当 provider
 驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。
 

@@ -71,6 +71,9 @@
   协商实际影响且禁止静默降级。
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
+- **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 capability registry 暴露 Project/Thread 自控工具，
+  只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
+  不持有第二套 Project、Thread、Turn、transcript 或调度状态。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并
