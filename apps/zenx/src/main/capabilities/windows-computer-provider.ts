@@ -24,6 +24,7 @@ const MAX_WINAPP_STDOUT_BYTES = 2 * 1024 * 1024;
 const MAX_WINAPP_STDERR_BYTES = 16 * 1024;
 const WINAPP_INSTALL_COMMAND =
   "winget install Microsoft.winappcli --source winget";
+export const MINIMUM_WINAPP_CLI_VERSION = "0.3.1";
 
 export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
   ...structuredClone(computerCapabilityManifest),
@@ -38,6 +39,7 @@ export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
       "uia.inspect",
       "uia.invoke",
       "uia.set_value",
+      "uia.get_value.verify",
       "wgc.capture",
       "cancellable",
       "bounded_output",
@@ -109,7 +111,9 @@ export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
     dependency: "Microsoft WinApp CLI (Public Preview)",
     executable: "winapp",
     installCommand: WINAPP_INSTALL_COMMAND,
-    jsonContract: "ui list-windows/inspect/invoke/set-value/screenshot --json",
+    jsonContract:
+      "ui list-windows/inspect/invoke/set-value/get-value/screenshot --json",
+    minimumVersion: MINIMUM_WINAPP_CLI_VERSION,
     docs: "https://learn.microsoft.com/windows/apps/dev-tools/winapp-cli/ui-automation",
   },
 };
@@ -119,6 +123,8 @@ export interface WinAppCliDiagnostic {
   platform: NodeJS.Platform;
   executable: string;
   version?: string;
+  requiredVersion: string;
+  schemaCompatible: boolean;
   installCommand: string;
   message: string;
 }
@@ -145,7 +151,7 @@ export interface WinAppCliRunner {
 }
 
 interface WinAppWindow {
-  hwnd: number;
+  hwnd: string;
   processId: number;
   processName: string;
   title?: string;
@@ -154,6 +160,7 @@ interface WinAppWindow {
 }
 
 interface WinAppElement {
+  controlType?: string;
   type?: string;
   name?: string;
   automationId?: string;
@@ -172,8 +179,12 @@ interface WinAppElement {
 }
 
 interface WinAppInspectEnvelope {
+  depth?: number;
+  interactive?: boolean;
+  hideDisabled?: boolean;
+  hideOffscreen?: boolean;
   windows?: Array<{
-    hwnd?: number;
+    hwnd?: unknown;
     title?: string;
     elementCount?: number;
     elements?: WinAppElement[];
@@ -186,7 +197,7 @@ interface WinAppScreenshotEnvelope {
   height?: number;
   processId?: number;
   windowTitle?: string;
-  hwnd?: number;
+  hwnd?: unknown;
 }
 
 export class SpawnWinAppCliRunner implements WinAppCliRunner {
@@ -229,10 +240,13 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
         ready: false,
         platform: this.#platform,
         executable: this.#command,
+        requiredVersion: MINIMUM_WINAPP_CLI_VERSION,
+        schemaCompatible: false,
         installCommand: WINAPP_INSTALL_COMMAND,
         message: "Microsoft WinApp CLI is only available on Windows",
       };
     }
+    let detectedVersion: string | undefined;
     try {
       const result = await this.#runner.run(this.#command, ["--version"], {
         timeoutMs: 5_000,
@@ -240,22 +254,73 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
         maxStdoutBytes: 4 * 1024,
         maxStderrBytes: 4 * 1024,
       });
-      const version = result.stdout.trim().slice(0, 128);
+      const version = parseWinAppVersion(result.stdout);
+      if (version === undefined) {
+        return {
+          ready: false,
+          platform: this.#platform,
+          executable: this.#command,
+          requiredVersion: MINIMUM_WINAPP_CLI_VERSION,
+          schemaCompatible: false,
+          installCommand: WINAPP_INSTALL_COMMAND,
+          message: `Microsoft WinApp CLI version is unknown; ${MINIMUM_WINAPP_CLI_VERSION} or newer is required`,
+        };
+      }
+      if (compareVersions(version, MINIMUM_WINAPP_CLI_VERSION) < 0) {
+        return {
+          ready: false,
+          platform: this.#platform,
+          executable: this.#command,
+          version,
+          requiredVersion: MINIMUM_WINAPP_CLI_VERSION,
+          schemaCompatible: false,
+          installCommand: WINAPP_INSTALL_COMMAND,
+          message: `Microsoft WinApp CLI ${version} is incompatible; ${MINIMUM_WINAPP_CLI_VERSION} or newer is required`,
+        };
+      }
+      detectedVersion = version;
+      const cliSchemaResult = await this.#runner.run(
+        this.#command,
+        ["--cli-schema"],
+        {
+          timeoutMs: 5_000,
+          signal,
+          maxStdoutBytes: 512 * 1024,
+          maxStderrBytes: 4 * 1024,
+        },
+      );
+      validateCliSchema(cliSchemaResult.stdout, version);
+      const probe = await this.#runner.run(
+        this.#command,
+        ["ui", "list-windows", "--json"],
+        {
+          timeoutMs: 5_000,
+          signal,
+          maxStdoutBytes: 256 * 1024,
+          maxStderrBytes: 4 * 1024,
+        },
+      );
+      validateWindowListProbe(probe.stdout);
       return {
         ready: true,
         platform: this.#platform,
         executable: this.#command,
-        ...(version.length === 0 ? {} : { version }),
+        version,
+        requiredVersion: MINIMUM_WINAPP_CLI_VERSION,
+        schemaCompatible: true,
         installCommand: WINAPP_INSTALL_COMMAND,
-        message: "Microsoft WinApp CLI is ready",
+        message: `Microsoft WinApp CLI ${version} is ready (requires ${MINIMUM_WINAPP_CLI_VERSION}+)`,
       };
     } catch (error) {
       return {
         ready: false,
         platform: this.#platform,
         executable: this.#command,
+        ...(detectedVersion === undefined ? {} : { version: detectedVersion }),
+        requiredVersion: MINIMUM_WINAPP_CLI_VERSION,
+        schemaCompatible: false,
         installCommand: WINAPP_INSTALL_COMMAND,
-        message: `${describeError(error)}. Install with: ${WINAPP_INSTALL_COMMAND}`,
+        message: `${describeError(error)} (detected ${detectedVersion ?? "unknown"}; requires ${MINIMUM_WINAPP_CLI_VERSION}+). Install with: ${WINAPP_INSTALL_COMMAND}`,
       };
     }
   }
@@ -282,7 +347,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       target: resolvedTarget(window),
       controls: controls.map((control, index) => ({
         selector: observation.selectors[index]!,
-        role: boundedText(control.type ?? "Control", 80),
+        role: boundedText(winAppControlType(control) ?? "Control", 80),
         title: boundedText(control.name ?? control.automationId ?? "", 256),
         enabled: control.isEnabled !== false,
         actions: fingerprints[index]!.actions,
@@ -312,7 +377,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     const selector = requiredProviderSelector(fingerprint);
     const window = await this.#resolveWindow(target, signal);
     await this.#revalidateControl(window, fingerprint, "press", signal);
-    const result = await this.#json<{ hwnd?: number }>(
+    const result = await this.#json<{ hwnd?: unknown }>(
       ["ui", "invoke", selector, "--window", String(window.hwnd), "--json"],
       10_000,
       signal,
@@ -340,7 +405,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     const selector = requiredProviderSelector(fingerprint);
     const window = await this.#resolveWindow(target, signal);
     await this.#revalidateControl(window, fingerprint, "set_value", signal);
-    const result = await this.#json<{ hwnd?: number }>(
+    const result = await this.#json<{ hwnd?: unknown }>(
       [
         "ui",
         "set-value",
@@ -355,8 +420,24 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       [value],
     );
     requireConfirmedHwnd(result.hwnd, window.hwnd, "set-value");
+    const readback = await this.#json<{ elementId?: string; text?: unknown }>(
+      ["ui", "get-value", selector, "--window", window.hwnd, "--json"],
+      10_000,
+      signal,
+      [value],
+    );
+    if (
+      readback.elementId !== selector ||
+      typeof readback.text !== "string" ||
+      normalizeUiText(readback.text) !== normalizeUiText(value)
+    ) {
+      throw new Error(
+        "WinApp CLI set-value did not produce the expected UI Automation readback",
+      );
+    }
+    const refreshedWindow = await this.#refreshWindow(window, signal);
     return {
-      target: resolvedTarget(window),
+      target: resolvedTarget(refreshedWindow),
       control,
       characterCount: value.length,
     };
@@ -400,7 +481,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       throw error;
     }
     if (
-      result.hwnd !== window.hwnd ||
+      !sameHwnd(result.hwnd, window.hwnd) ||
       path.resolve(result.filePath ?? "") !== path.resolve(artifactPath)
     ) {
       await rm(artifactPath, { force: true });
@@ -487,6 +568,33 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     return matches[0]!;
   }
 
+  async #refreshWindow(
+    previous: WinAppWindow,
+    signal?: AbortSignal,
+  ): Promise<WinAppWindow> {
+    const result = await this.#json<unknown>(
+      ["ui", "list-windows", "--app", String(previous.processId), "--json"],
+      10_000,
+      signal,
+    );
+    if (!Array.isArray(result)) {
+      throw new Error("WinApp CLI list-windows returned an invalid JSON shape");
+    }
+    const matches = result
+      .map(parseWindow)
+      .filter(
+        (candidate) =>
+          candidate.processId === previous.processId &&
+          candidate.hwnd === previous.hwnd,
+      );
+    if (matches.length !== 1) {
+      throw new Error(
+        "The targeted Windows HWND changed or became ambiguous after set-value",
+      );
+    }
+    return matches[0]!;
+  }
+
   async #inspectWindow(
     window: WinAppWindow,
     signal?: AbortSignal,
@@ -506,8 +614,9 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       DEFAULT_TIMEOUT_MS,
       signal,
     );
-    const inspectedWindow = envelope.windows?.find(
-      (candidate) => candidate.hwnd === window.hwnd,
+    validateInspectEnvelope(envelope);
+    const inspectedWindow = envelope.windows?.find((candidate) =>
+      sameHwnd(candidate.hwnd, window.hwnd),
     );
     if (inspectedWindow === undefined) {
       throw new Error(
@@ -692,7 +801,7 @@ function winAppFingerprint(element: WinAppElement): ComputerControlFingerprint {
   }
   return {
     identifier: element.selector,
-    role: element.type,
+    role: winAppControlType(element),
     title: boundedText(element.name ?? "", 256),
     description: boundedText(element.automationId ?? "", 256),
     frame: [element.x, element.y, element.width, element.height]
@@ -720,13 +829,18 @@ function sameSemanticFingerprint(
 function isEditableElement(element: WinAppElement): boolean {
   if (element.value !== undefined && element.value !== null) return true;
   return /(?:edit|textbox|document|combobox|spinner|slider)/iu.test(
-    `${element.type ?? ""} ${element.className ?? ""}`,
+    `${winAppControlType(element) ?? ""} ${element.className ?? ""}`,
   );
 }
 
 function isSecureElement(element: WinAppElement): boolean {
   return /(?:password|passwd|passcode|pin|secret|secure|credential|token)/iu.test(
-    [element.type, element.name, element.automationId, element.className]
+    [
+      winAppControlType(element),
+      element.name,
+      element.automationId,
+      element.className,
+    ]
       .filter((value): value is string => typeof value === "string")
       .join(" "),
   );
@@ -761,13 +875,187 @@ function computerTargetKey(target: ComputerTarget): string {
   });
 }
 
+function winAppControlType(element: WinAppElement): string | undefined {
+  return element.controlType ?? element.type;
+}
+
+function normalizeUiText(value: string): string {
+  return value.replaceAll("\r", "").replace(/\n$/u, "");
+}
+
+function parseWinAppVersion(output: string): string | undefined {
+  const match = output
+    .trim()
+    .match(
+      /(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?(?:$|[^0-9])/u,
+    );
+  if (match === null) return undefined;
+  return `${match[1]}.${match[2]}.${match[3]}`;
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = left.split(".").map(Number);
+  const rightParts = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function validateWindowListProbe(stdout: string): void {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch {
+    throw new Error(
+      `Microsoft WinApp CLI ${MINIMUM_WINAPP_CLI_VERSION}+ JSON schema probe returned malformed JSON`,
+    );
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(
+      `Microsoft WinApp CLI ${MINIMUM_WINAPP_CLI_VERSION}+ JSON schema probe returned an incompatible list-windows shape`,
+    );
+  }
+  for (const entry of value) parseWindow(entry);
+}
+
+function validateCliSchema(stdout: string, detectedVersion: string): void {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch {
+    throw new Error(
+      "Microsoft WinApp CLI --cli-schema returned malformed JSON",
+    );
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Microsoft WinApp CLI returned an incompatible CLI schema");
+  }
+  const root = value as Record<string, unknown>;
+  const schemaVersion = root.schemaVersion;
+  const schemaCliVersion =
+    typeof root.version === "string"
+      ? parseWinAppVersion(root.version)
+      : undefined;
+  if (schemaVersion !== "1.0" || schemaCliVersion !== detectedVersion) {
+    throw new Error(
+      `Microsoft WinApp CLI schema/version mismatch (schema ${String(schemaVersion)}, CLI ${schemaCliVersion ?? "unknown"})`,
+    );
+  }
+  const ui = nestedCommand(root, "subcommands", "ui");
+  const subcommands = commandMap(ui.subcommands, "ui subcommands");
+  const required = [
+    "get-value",
+    "inspect",
+    "invoke",
+    "list-windows",
+    "screenshot",
+    "set-value",
+  ];
+  const missing = required.filter(
+    (command) => subcommands[command] === undefined,
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `Microsoft WinApp CLI schema is missing required UI commands: ${missing.join(", ")}`,
+    );
+  }
+}
+
+function nestedCommand(
+  parent: Record<string, unknown>,
+  collectionKey: string,
+  command: string,
+): Record<string, unknown> {
+  const commands = commandMap(parent[collectionKey], collectionKey);
+  const value = commands[command];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(
+      `Microsoft WinApp CLI schema is missing required command ${command}`,
+    );
+  }
+  return value as Record<string, unknown>;
+}
+
+function commandMap(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Microsoft WinApp CLI returned invalid ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function validateInspectEnvelope(
+  envelope: WinAppInspectEnvelope,
+): asserts envelope is WinAppInspectEnvelope & {
+  windows: Array<{
+    hwnd: unknown;
+    title?: string;
+    elementCount?: number;
+    elements?: WinAppElement[];
+  }>;
+} {
+  if (
+    typeof envelope !== "object" ||
+    envelope === null ||
+    !Array.isArray(envelope.windows)
+  ) {
+    throw new Error(
+      `WinApp CLI inspect returned an incompatible JSON shape; ${MINIMUM_WINAPP_CLI_VERSION}+ is required`,
+    );
+  }
+  for (const window of envelope.windows) {
+    if (typeof window !== "object" || window === null) {
+      throw new Error("WinApp CLI inspect returned an invalid window entry");
+    }
+    normalizeHwnd(window.hwnd, "inspect window hwnd");
+    if (window.elements !== undefined) {
+      if (!Array.isArray(window.elements)) {
+        throw new Error("WinApp CLI inspect returned invalid elements");
+      }
+      validateElements(window.elements);
+    }
+  }
+}
+
+function validateElements(elements: readonly WinAppElement[]): void {
+  const stack = [...elements];
+  let visited = 0;
+  while (stack.length > 0) {
+    const element = stack.pop();
+    if (typeof element !== "object" || element === null) {
+      throw new Error("WinApp CLI inspect returned an invalid element");
+    }
+    visited += 1;
+    if (visited > 4_096) {
+      throw new Error(
+        "WinApp CLI inspect exceeded its schema validation bound",
+      );
+    }
+    if (
+      element.selector !== undefined &&
+      typeof winAppControlType(element) !== "string"
+    ) {
+      throw new Error(
+        `WinApp CLI inspect uses an incompatible element schema; ${MINIMUM_WINAPP_CLI_VERSION}+ element type metadata is required`,
+      );
+    }
+    if (element.children !== undefined) {
+      if (!Array.isArray(element.children)) {
+        throw new Error("WinApp CLI inspect returned invalid element children");
+      }
+      stack.push(...element.children);
+    }
+  }
+}
+
 function parseWindow(value: unknown): WinAppWindow {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("WinApp CLI returned an invalid window entry");
   }
   const record = value as Record<string, unknown>;
   return {
-    hwnd: positiveInteger(record.hwnd, "window hwnd"),
+    hwnd: normalizeHwnd(record.hwnd, "window hwnd"),
     processId: positiveInteger(record.processId, "window processId"),
     processName: requiredBoundedString(record.processName, "processName", 256),
     ...(typeof record.title === "string"
@@ -796,14 +1084,38 @@ function positiveInteger(value: unknown, label: string): number {
 
 function requireConfirmedHwnd(
   actual: unknown,
-  expected: number,
+  expected: string,
   action: string,
 ): void {
-  if (actual !== expected) {
+  if (!sameHwnd(actual, expected)) {
     throw new Error(
       `WinApp CLI ${action} did not confirm the explicitly targeted HWND`,
     );
   }
+}
+
+function sameHwnd(actual: unknown, expected: string): boolean {
+  try {
+    return normalizeHwnd(actual, "HWND") === expected;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeHwnd(value: unknown, label: string): string {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error(`WinApp CLI returned an invalid ${label}`);
+    }
+    return String(value);
+  }
+  if (typeof value !== "string") {
+    throw new Error(`WinApp CLI returned an invalid ${label}`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (/^0x[0-9a-f]+$/u.test(normalized)) return normalized;
+  if (/^[1-9][0-9]*$/u.test(normalized)) return normalized;
+  throw new Error(`WinApp CLI returned an invalid ${label}`);
 }
 
 function nonNegativeInteger(value: unknown, label: string): number {

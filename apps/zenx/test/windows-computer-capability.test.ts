@@ -8,6 +8,8 @@ import {
   ComputerZenXCapabilityPackage,
   type ComputerInspection,
 } from "../src/main/capabilities/computer-provider.js";
+import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
+import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import {
   runBoundedProcess,
   windowsComputerCapabilityManifest,
@@ -74,7 +76,7 @@ test("Windows provider maps WinApp JSON into opaque bounded UIA controls", async
     "invoke",
     "provider-button-selector",
     "--window",
-    "9001",
+    "0x2329",
     "--json",
   ]);
   const setCommand = runner.commands.find((args) => args[1] === "set-value");
@@ -104,7 +106,7 @@ test("Windows provider captures only the exact HWND through WGC-default screensh
       "ui",
       "screenshot",
       "--window",
-      "9001",
+      "0x2329",
       "--output",
     ]);
     assert.equal(screenshotCommand.includes("--capture-screen"), false);
@@ -172,6 +174,19 @@ test("Windows provider revalidates secure state and semantic identity immediatel
   );
 });
 
+test("Windows provider rejects legacy inspect envelopes instead of silently misparsing them", async () => {
+  const runner = new FixtureWinAppRunner();
+  runner.legacyInspectEnvelope = true;
+  const backend = new WinAppCliComputerBackend({
+    platform: "win32",
+    runner,
+  });
+  await assert.rejects(
+    backend.inspect(target),
+    /incompatible JSON shape.*0\.3\.1/u,
+  );
+});
+
 test("Windows manifest exposes background-safe WinApp operations without unscoped input injection", () => {
   assert.equal(
     windowsComputerCapabilityManifest.provider.id,
@@ -201,7 +216,44 @@ test("WinApp diagnostic is actionable without installing on non-Windows test hos
     runner: new FixtureWinAppRunner(),
   }).diagnose();
   assert.equal(ready.ready, true);
-  assert.equal(ready.version, "1.2.3-preview");
+  assert.equal(ready.version, "1.2.3");
+  assert.equal(ready.requiredVersion, "0.3.1");
+  assert.equal(ready.schemaCompatible, true);
+
+  const oldRunner = new FixtureWinAppRunner();
+  oldRunner.versionOutput = "winapp 0.3.0\n";
+  const old = await new WinAppCliComputerBackend({
+    platform: "win32",
+    runner: oldRunner,
+  }).diagnose();
+  assert.equal(old.ready, false);
+  assert.equal(old.version, "0.3.0");
+  assert.match(old.message, /0\.3\.0.*0\.3\.1/u);
+  assert.equal(
+    oldRunner.commands.some((args) => args[1] === "list-windows"),
+    false,
+  );
+
+  const unknownRunner = new FixtureWinAppRunner();
+  unknownRunner.versionOutput = "WinApp CLI public preview\n";
+  const unknown = await new WinAppCliComputerBackend({
+    platform: "win32",
+    runner: unknownRunner,
+  }).diagnose();
+  assert.equal(unknown.ready, false);
+  assert.equal(unknown.version, undefined);
+  assert.match(unknown.message, /unknown.*0\.3\.1/u);
+
+  const incompatibleSchemaRunner = new FixtureWinAppRunner();
+  incompatibleSchemaRunner.schemaProbeOutput = '{"elements":[]}';
+  const incompatibleSchema = await new WinAppCliComputerBackend({
+    platform: "win32",
+    runner: incompatibleSchemaRunner,
+  }).diagnose();
+  assert.equal(incompatibleSchema.ready, false);
+  assert.equal(incompatibleSchema.version, "1.2.3");
+  assert.equal(incompatibleSchema.schemaCompatible, false);
+  assert.match(incompatibleSchema.message, /incompatible.*detected 1\.2\.3/u);
 
   const unavailable = await new WinAppCliComputerBackend({
     platform: "darwin",
@@ -209,6 +261,46 @@ test("WinApp diagnostic is actionable without installing on non-Windows test hos
   assert.equal(unavailable.ready, false);
   assert.match(unavailable.message, /only available on Windows/u);
   assert.match(unavailable.installCommand, /winget install/u);
+});
+
+test("ZenX startup does not expose an incompatible WinApp provider", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-winapp-startup-"),
+  );
+  const runner = new FixtureWinAppRunner();
+  runner.versionOutput = "winapp 0.3.0\n";
+  const service = new ZenXCapabilityService({
+    userDataDirectory: directory,
+    localDirectory: path.join(directory, "no-local-capabilities"),
+    grantStore: new MemoryZenXCapabilityGrantStore(),
+    computerBackend: new WinAppCliComputerBackend({
+      platform: "win32",
+      runner,
+    }),
+    computerManifest: windowsComputerCapabilityManifest,
+  });
+  try {
+    await service.initialize();
+    const snapshot = service.snapshot();
+    assert.equal(
+      snapshot.capabilities.some(
+        (capability) => capability.manifest.id === "computer",
+      ),
+      false,
+    );
+    assert.match(snapshot.discoveryErrors.join("\n"), /0\.3\.0.*0\.3\.1/u);
+    assert.equal(
+      service
+        .hostSnapshot()
+        .definitions.some((definition) =>
+          definition.name.startsWith("computer_"),
+        ),
+      false,
+    );
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("WinApp process runner enforces cancellation, timeout, and output bounds", async () => {
@@ -251,6 +343,10 @@ class FixtureWinAppRunner implements WinAppCliRunner {
   ambiguous = false;
   buttonX = 10;
   secureField = false;
+  legacyInspectEnvelope = false;
+  schemaProbeOutput: string | undefined;
+  versionOutput = "winapp 1.2.3-preview\n";
+  writtenValue = "";
 
   async run(
     _executable: string,
@@ -259,14 +355,25 @@ class FixtureWinAppRunner implements WinAppCliRunner {
   ): Promise<WinAppCliRunResult> {
     this.commands.push([...args]);
     if (args[0] === "--version") {
-      return output("1.2.3-preview\n");
+      return output(this.versionOutput);
+    }
+    if (args[0] === "--cli-schema") {
+      const version =
+        this.versionOutput.match(/\d+\.\d+\.\d+/u)?.[0] ?? "0.0.0";
+      return output(JSON.stringify(fixtureCliSchema(version)));
     }
     if (args[1] === "list-windows") {
+      if (!args.includes("--app") && this.schemaProbeOutput !== undefined) {
+        return output(this.schemaProbeOutput);
+      }
       const windows = [fixtureWindow()];
       if (this.ambiguous) windows.push(fixtureWindow());
       return output(JSON.stringify(windows));
     }
     if (args[1] === "inspect") {
+      if (this.legacyInspectEnvelope) {
+        return output(JSON.stringify({ elements: [] }));
+      }
       return output(
         JSON.stringify(fixtureInspection(this.buttonX, this.secureField)),
       );
@@ -276,12 +383,18 @@ class FixtureWinAppRunner implements WinAppCliRunner {
         JSON.stringify({
           elementId: args[2],
           pattern: "Invoke",
-          hwnd: 9001,
+          hwnd: "0x2329",
         }),
       );
     }
     if (args[1] === "set-value") {
-      return output(JSON.stringify({ elementId: args[2], hwnd: 9001 }));
+      this.writtenValue = args[3] ?? "";
+      return output(JSON.stringify({ elementId: args[2], hwnd: "0x2329" }));
+    }
+    if (args[1] === "get-value") {
+      return output(
+        JSON.stringify({ elementId: args[2], text: this.writtenValue }),
+      );
     }
     if (args[1] === "screenshot") {
       const outputIndex = args.indexOf("--output");
@@ -294,7 +407,7 @@ class FixtureWinAppRunner implements WinAppCliRunner {
           height: 720,
           processId: 4242,
           windowTitle: "Fixture Window",
-          hwnd: 9001,
+          hwnd: "0x2329",
         }),
       );
     }
@@ -304,12 +417,34 @@ class FixtureWinAppRunner implements WinAppCliRunner {
 
 function fixtureWindow() {
   return {
-    hwnd: 9001,
+    hwnd: "0x2329",
     processId: 4242,
     processName: "FixtureApp",
     title: "Fixture Window",
     width: 1280,
     height: 720,
+  };
+}
+
+function fixtureCliSchema(version: string) {
+  return {
+    name: "winapp",
+    version,
+    schemaVersion: "1.0",
+    subcommands: {
+      ui: {
+        subcommands: Object.fromEntries(
+          [
+            "get-value",
+            "inspect",
+            "invoke",
+            "list-windows",
+            "screenshot",
+            "set-value",
+          ].map((name) => [name, { description: name }]),
+        ),
+      },
+    },
   };
 }
 
@@ -321,7 +456,7 @@ function fixtureInspection(buttonX = 10, secureField = false) {
     hideOffscreen: true,
     windows: [
       {
-        hwnd: 9001,
+        hwnd: "0x2329",
         title: "Fixture Window",
         elementCount: 3,
         elements: [

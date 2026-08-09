@@ -34,6 +34,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #browserBackend: ZenXBrowserBackend;
   readonly #computerBackend: ZenXComputerBackend;
   readonly #computerManifest: ZenXCapabilityManifest;
+  #computerRegistered = false;
 
   constructor(options: {
     userDataDirectory: string;
@@ -69,20 +70,25 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       new BrowserZenXCapabilityPackage(this.#browserBackend),
       "bundled",
     );
-    this.#registry.register(
-      new ComputerZenXCapabilityPackage(
-        this.#computerBackend,
-        this.#computerManifest,
-      ),
-      "bundled",
-    );
+    let registerComputer = true;
     if (this.#computerBackend instanceof WinAppCliComputerBackend) {
       const diagnostic = await this.#computerBackend.diagnose();
       if (!diagnostic.ready) {
+        registerComputer = false;
         this.#registry.recordDiscoveryError(
           `Windows computer provider: ${diagnostic.message}`,
         );
       }
+    }
+    if (registerComputer) {
+      this.#registry.register(
+        new ComputerZenXCapabilityPackage(
+          this.#computerBackend,
+          this.#computerManifest,
+        ),
+        "bundled",
+      );
+      this.#computerRegistered = true;
     }
     const discovered = await discoverLocalCapabilityPackages(
       this.#localDirectory,
@@ -144,6 +150,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   async close(): Promise<void> {
     await this.#registry.close();
+    if (!this.#computerRegistered) await this.#computerBackend.close();
   }
 }
 
