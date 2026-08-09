@@ -14,6 +14,7 @@ import type {
   ZenXCapabilityHostSnapshot,
   ZenXCapabilityManifest,
   ZenXCapabilityPackage,
+  ZenXCapabilityProviderDiagnostic,
   ZenXCapabilitySnapshot,
   ZenXCapabilityTool,
   ZenXCapabilityInteractionMode,
@@ -43,6 +44,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   >();
   readonly #listeners = new Set<(snapshot: ZenXCapabilitySnapshot) => void>();
   readonly #audit: ZenXCapabilityAuditRecord[] = [];
+  readonly #providerDiagnostics: ZenXCapabilityProviderDiagnostic[] = [];
   readonly #discoveryErrors: string[] = [];
   readonly #options: ZenXCapabilityRegistryOptions;
   #grants: Record<string, ZenXCapabilityGrant[]> = {};
@@ -99,6 +101,18 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
 
   recordDiscoveryError(message: string): void {
     this.#discoveryErrors.push(message);
+    this.#emit();
+  }
+
+  recordProviderDiagnostic(diagnostic: ZenXCapabilityProviderDiagnostic): void {
+    const index = this.#providerDiagnostics.findIndex(
+      (candidate) =>
+        candidate.capabilityId === diagnostic.capabilityId &&
+        candidate.providerId === diagnostic.providerId,
+    );
+    if (index === -1)
+      this.#providerDiagnostics.push(structuredClone(diagnostic));
+    else this.#providerDiagnostics[index] = structuredClone(diagnostic);
     this.#emit();
   }
 
@@ -194,6 +208,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         };
       }),
       recentInvocations: structuredClone(this.#audit),
+      providerDiagnostics: structuredClone(this.#providerDiagnostics),
       discoveryErrors: [...this.#discoveryErrors],
     };
   }

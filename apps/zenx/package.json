@@ -12,6 +12,7 @@
     "smoke:capabilities": "npm run build && electron ./out/main/capability-smoke.js",
     "smoke:real": "npm run build && electron ./out/main/real-smoke.js",
     "smoke:windows-computer": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-winapp-smoke.ps1",
+    "smoke:providers": "npm run build && electron ./out/main/provider-smoke.js",
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

@@ -19,9 +19,11 @@ stub App Server 记录真实调用，在不污染 Zen Core 的前提下扩展协
 host、Thread 列表与恢复、流式 Item、审批、模型切换、soft steer、interrupt 与
 Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / Room，
 以及可显式授权的 bundled/local capability registry 已形成可运行 vertical slice。
-首批 browser provider 以独立临时 profile/session 暴露跨平台有界 DOM 操作，computer
+首批 browser provider 优先复用 Playwright CLI 的跨平台 headless 隔离 session，缺失或不兼容时
+回落到 bundled Electron/CDP 临时 profile；两者都只暴露有界 DOM 操作。computer
 公共 contract 暴露语义动作、平台能力与 background-safe/foreground-required 影响协商；
-当前 macOS provider 以 AX/窗口定向截图和明确提示、可取消的前台输入形成 tracer bullet，
+当前 macOS provider 优先复用 Peekaboo 3.x 的 background-first 操作，缺失或不兼容时以 bundled
+AX/窗口定向截图和明确提示、可取消的前台输入形成基线；
 后续 Windows provider 可用 UIA/Windows Graphics Capture/SendInput 接入同一 seam；manifest、权限、
 provider 与 skill/prompt 均由 ZenX 持有，不进入 Zen Core 或 Codex 协议。上述外层配置
 和调度状态不进入 Zen Core，命中 Trigger 仍只通过 App Server 发起普通 Turn；在真实

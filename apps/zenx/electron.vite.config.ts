@@ -14,6 +14,7 @@ export default defineConfig({
             "src/main/capability-smoke.ts",
           ),
           "real-smoke": resolve(__dirname, "src/main/real-smoke.ts"),
+          "provider-smoke": resolve(__dirname, "src/main/provider-smoke.ts"),
         },
       },
     },
