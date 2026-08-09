@@ -74,6 +74,15 @@
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 capability registry 暴露 Project/Thread 自控工具，
   只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
   不持有第二套 Project、Thread、Turn、transcript 或调度状态。
+- **ZenXThreadTitleProjection** — ZenX 外层产品按 threadId 持久化 provisional、generating、
+  generated、manual 与 failed 标题生命周期及单调版本；它不进入 canonical ItemList，
+  每次异步生成完成都用版本比较避免覆盖手动改名或重启后的新状态。
+- **ZenXTitleInference** — ZenX 主进程使用独立配置的标题模型执行一次不写 journal、
+  不创建 Turn 的辅助推理；credential 仍只在主进程内存中按当前 Provider 解析。
+- **ZenXThreadTitleCoordinator** — ZenX 主进程从首条有意义的来源标注输入立即建立
+  provisional 投影，并异步协调生成、显式重试与 authoritative manual rename。
+- **ZenXThreadTitleNotificationObserver** — ZenX 主进程在 App Server canonical
+  `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并

@@ -1,6 +1,9 @@
 import path from "node:path";
 
 import { OpenAiSubscriptionAuthProfile } from "../../../../apps/cli/src/subscription-auth.js";
+import type { ModelAdapter } from "../../../../src/model.js";
+import { OpenAiCompatibleModel } from "../../../../src/model/openai-compatible.js";
+import { OpenAiSubscriptionModel } from "../../../../src/model/openai-subscription.js";
 import type { ZenXHostConfig } from "./host-messages.js";
 import {
   hostConfigFromProfile,
@@ -19,7 +22,8 @@ export class ZenXSettingsService {
   readonly #subscription: Pick<
     OpenAiSubscriptionAuthProfile,
     "login" | "logout" | "status"
-  >;
+  > &
+    Partial<Pick<OpenAiSubscriptionAuthProfile, "acquireAccessLease">>;
   readonly #vault: ZenXCredentialVault;
   #profile: ZenXHostProfile | undefined;
   #loginInProgress = false;
@@ -86,6 +90,44 @@ export class ZenXSettingsService {
       subscriptionProfilePath: this.#profilePath,
       apiKey: await this.#vault.readApiKey(),
     });
+  }
+
+  configuredTitleModel(): string {
+    return this.#requireProfile().titleModel;
+  }
+
+  async titleModel(): Promise<{ adapter: ModelAdapter | null; model: string }> {
+    const profile = this.#requireProfile();
+    if (profile.provider.type === "fake") {
+      return { adapter: null, model: profile.titleModel };
+    }
+    if (profile.provider.type === "openai-subscription") {
+      const acquireAccessLease = this.#subscription.acquireAccessLease;
+      if (acquireAccessLease === undefined) {
+        throw new Error("Title model subscription is unavailable");
+      }
+      return {
+        adapter: new OpenAiSubscriptionModel({
+          acquireAccessLease: async (signal) =>
+            await acquireAccessLease.call(this.#subscription, signal),
+          instructions:
+            "Return only a concise display title of at most 64 characters. Do not include quotes, IDs, labels, or punctuation boilerplate.",
+        }),
+        model: profile.titleModel,
+      };
+    }
+    const apiKey = await this.#vault.readApiKey();
+    if (apiKey === undefined)
+      throw new Error("Title model provider has no API key");
+    return {
+      adapter: new OpenAiCompatibleModel({
+        baseUrl: profile.provider.baseUrl,
+        apiKey,
+        provider: profile.provider.name,
+        defaultParams: { temperature: 0.2, max_tokens: 40 },
+      }),
+      model: profile.titleModel,
+    };
   }
 
   async save(profile: ZenXHostProfile, apiKey?: string): Promise<void> {
@@ -180,6 +222,7 @@ function profileFromLegacy(config: ZenXHostConfig): ZenXHostProfile {
     onboardingComplete: false,
     provider,
     defaultModel: config.model,
+    titleModel: "gpt-5.6-luna",
     models: [...(config.models ?? [config.model])],
     workspace: config.cwd,
     approvalPolicy: config.approvalPolicy,

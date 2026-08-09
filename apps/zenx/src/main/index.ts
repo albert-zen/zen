@@ -11,6 +11,10 @@ import type { ZenXHostProfile } from "./host-profile.js";
 import { ZenXSettingsService } from "./settings-service.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
+import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
+import { ZenXThreadTitleStore } from "./thread-title-store.js";
+import { observeCompletedUserMessageTitle } from "./thread-title-notification.js";
+import { ZenXConfiguredTitleInference } from "./title-inference.js";
 import type {
   CreateRoomInput,
   CreateTriggerInput,
@@ -27,6 +31,7 @@ let settingsService: ZenXSettingsService | undefined;
 let triggerService: ZenXTriggerService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
 const selfControlPort = new MutableAppServerRequestPort();
+let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
 let quitting = false;
 
 function createWindow(): BrowserWindow {
@@ -105,11 +110,24 @@ app.whenReady().then(async () => {
       capabilityHost: capabilityService,
     });
     selfControlPort.attach(appServerManager, hostConfig.cwd);
-    installProtocolIpc(appServerManager);
+    titleCoordinator = new ZenXThreadTitleCoordinator({
+      store: new ZenXThreadTitleStore(
+        join(userDataDirectory, "thread-title-projections.json"),
+      ),
+      inference: new ZenXConfiguredTitleInference(settingsService),
+      titleModel: () => settingsService!.configuredTitleModel(),
+      setNativeName: async (threadId, name) => {
+        await appServerManager!.request("thread/name/set", { threadId, name });
+      },
+    });
+    await titleCoordinator.initialize();
+    installProtocolIpc(appServerManager, titleCoordinator);
     installCapabilityIpc(capabilityService, appServerManager);
+    installTitleIpc(titleCoordinator);
     triggerService = new ZenXTriggerService(
       appServerManager,
       new ZenXTriggerStore(join(userDataDirectory, "trigger-registry.json")),
+      { titles: titleCoordinator },
     );
     await triggerService.start();
     installTriggerIpc(triggerService);
@@ -167,7 +185,10 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-function installProtocolIpc(manager: AppServerManager): void {
+function installProtocolIpc(
+  manager: AppServerManager,
+  titles: ZenXThreadTitleCoordinator,
+): void {
   ipcMain.handle(ipcChannels.getStatus, () => manager.status);
   ipcMain.handle(
     ipcChannels.getPendingApprovals,
@@ -197,6 +218,7 @@ function installProtocolIpc(manager: AppServerManager): void {
     }
   });
   manager.onNotification((method, params) => {
+    void observeCompletedUserMessageTitle(titles, method, params);
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(ipcChannels.notification, method, params);
     }
@@ -210,6 +232,34 @@ function installProtocolIpc(manager: AppServerManager): void {
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(ipcChannels.approvalResolved, approval);
     }
+  });
+}
+
+function installTitleIpc(titles: ZenXThreadTitleCoordinator): void {
+  ipcMain.handle(ipcChannels.titlesGet, () => titles.snapshot());
+  ipcMain.handle(
+    ipcChannels.titlesObserve,
+    async (_event, threadId: unknown, input: unknown) => {
+      if (typeof threadId !== "string" || typeof input !== "string")
+        throw new Error("Invalid thread title input");
+      return await titles.observe(threadId, input);
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.titlesRename,
+    async (_event, threadId: unknown, title: unknown) => {
+      if (typeof threadId !== "string" || typeof title !== "string")
+        throw new Error("Invalid thread rename");
+      return await titles.rename(threadId, title);
+    },
+  );
+  ipcMain.handle(ipcChannels.titlesRetry, async (_event, threadId: unknown) => {
+    if (typeof threadId !== "string") throw new Error("Invalid thread ID");
+    return await titles.retry(threadId);
+  });
+  titles.onChange((snapshot) => {
+    for (const window of BrowserWindow.getAllWindows())
+      window.webContents.send(ipcChannels.titlesChanged, snapshot);
   });
 }
 

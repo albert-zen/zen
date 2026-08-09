@@ -33,9 +33,14 @@ export interface ZenXTriggerAppServerPort {
   ): () => void;
 }
 
+export interface ZenXTriggerTitlePort {
+  observe(threadId: string, input: string): Promise<unknown>;
+}
+
 export class ZenXTriggerService {
   readonly #manager: ZenXTriggerAppServerPort;
   readonly #store: ZenXTriggerStore;
+  readonly #titles: ZenXTriggerTitlePort | undefined;
   readonly #listeners = new Set<(snapshot: TriggerSnapshot) => void>();
   readonly #timers = new Map<string, unknown>();
   readonly #completedAgentMessages = new Map<string, string>();
@@ -53,10 +58,12 @@ export class ZenXTriggerService {
       now?: () => number;
       schedule?: (callback: () => void, delayMs: number) => unknown;
       cancelScheduled?: (handle: unknown) => void;
+      titles?: ZenXTriggerTitlePort;
     } = {},
   ) {
     this.#manager = manager;
     this.#store = store;
+    this.#titles = options.titles;
     this.#now = options.now ?? Date.now;
     this.#schedule = options.schedule ?? setTimeout;
     this.#cancelScheduled =
@@ -399,6 +406,16 @@ export class ZenXTriggerService {
     });
     this.#rescheduleTimers();
     try {
+      await this.#titles
+        ?.observe(
+          trigger.threadId,
+          meaningfulWakeupTitleInput(trigger, wakeup.projection),
+        )
+        .catch((error: unknown) =>
+          console.warn(
+            `Could not stage trigger title: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
       const result = await this.#manager.request("turn/start", {
         threadId: trigger.threadId,
         clientUserMessageId,
@@ -475,6 +492,19 @@ export class ZenXTriggerService {
     await this.#store.write(this.#snapshot);
     for (const listener of this.#listeners) listener(this.snapshot());
   }
+}
+
+function meaningfulWakeupTitleInput(
+  trigger: ZenXTrigger,
+  projection?: string,
+): string {
+  return [
+    `Trigger: ${trigger.label}`,
+    `Task: ${trigger.prompt}`,
+    ...(projection === undefined
+      ? []
+      : [`Source context: ${bounded(projection, 1_200)}`]),
+  ].join("\n");
 }
 
 function message(

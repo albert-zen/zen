@@ -25,6 +25,10 @@ import type {
   TriggerSnapshot,
 } from "../main/trigger-types.js";
 import type { ZenXCapabilitySnapshot } from "../main/capabilities/types.js";
+import type {
+  ThreadTitleProjection,
+  ThreadTitleSnapshot,
+} from "../main/thread-title-types.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -110,6 +114,32 @@ contextBridge.exposeInMainWorld("zenx", {
       ipcRenderer.on(ipcChannels.subscriptionManualRequested, wrapped);
       return () =>
         ipcRenderer.off(ipcChannels.subscriptionManualRequested, wrapped);
+    },
+  },
+  titles: {
+    get: async (): Promise<ThreadTitleSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.titlesGet),
+    observe: async (
+      threadId: string,
+      input: string,
+    ): Promise<ThreadTitleProjection | undefined> =>
+      await ipcRenderer.invoke(ipcChannels.titlesObserve, threadId, input),
+    rename: async (
+      threadId: string,
+      title: string,
+    ): Promise<ThreadTitleProjection> =>
+      await ipcRenderer.invoke(ipcChannels.titlesRename, threadId, title),
+    retry: async (threadId: string): Promise<ThreadTitleProjection> =>
+      await ipcRenderer.invoke(ipcChannels.titlesRetry, threadId),
+    onChange: (
+      listener: (snapshot: ThreadTitleSnapshot) => void,
+    ): (() => void) => {
+      const wrapped = (
+        _event: Electron.IpcRendererEvent,
+        snapshot: ThreadTitleSnapshot,
+      ) => listener(snapshot);
+      ipcRenderer.on(ipcChannels.titlesChanged, wrapped);
+      return () => ipcRenderer.off(ipcChannels.titlesChanged, wrapped);
     },
   },
   triggers: {
