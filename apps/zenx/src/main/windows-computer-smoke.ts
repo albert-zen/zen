@@ -120,7 +120,7 @@ try {
   }
 
   console.log(
-    `ZenX WinApp adapter smoke passed with WinApp CLI ${diagnostic.version}: inspect -> opaque observation -> set_value with UIA readback -> re-inspect -> scoped screenshot.`,
+    `ZenX WinApp adapter smoke passed with WinApp CLI ${diagnostic.version}: inspect -> opaque observation -> set_value with bounded UIA assertion -> re-inspect -> scoped screenshot.`,
   );
 } finally {
   clearTimeout(timeout);

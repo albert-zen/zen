@@ -122,7 +122,9 @@ uses UIA `invoke` / `set-value`, and captures with the default WGC/PrintWindow
 path. It never passes `--focus` or `--capture-screen` and never silently falls
 back to `click`, `send-keys`, or other global input injection. WinApp command
 output, errors, duration, and artifacts are bounded; cancellation terminates the
-child process, and screenshots expire after five minutes. WinApp CLI 0.3.1's
+child process, and screenshots expire after five minutes. Set-value completion is
+confirmed by WinApp CLI's bounded native `wait-for --value` assertion without
+projecting the value back to the Agent. WinApp CLI 0.3.1's
 inspect JSON does not expose a stable password-state field, so ZenX conservatively
 rejects controls whose control type, name, automation ID, or class name looks
 secret-bearing; regardless of that heuristic, all `computer_set_value` calls are
@@ -245,7 +247,7 @@ On Windows, `smoke:windows-computer` launches a deterministic WinForms fixture
 with a real UIA-editable control and drives the real
 `WinAppCliComputerBackend` through `ComputerZenXCapabilityPackage` and the
 capability registry, verifying exact PID/title→HWND resolution, bounded semantic
-inspection, UIA set-value with internal readback verification, a post-action
+inspection, UIA set-value with a bounded native value assertion, a post-action
 re-inspection, and WGC-default scoped capture without `--focus`
 or `--capture-screen`. GitHub CI runs that path on `windows-latest` with Microsoft's
 official setup action. The cross-platform fixture suite validates the same WinApp

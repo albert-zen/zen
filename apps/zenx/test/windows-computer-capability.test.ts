@@ -391,9 +391,13 @@ class FixtureWinAppRunner implements WinAppCliRunner {
       this.writtenValue = args[3] ?? "";
       return output(JSON.stringify({ elementId: args[2], hwnd: "0x2329" }));
     }
-    if (args[1] === "get-value") {
+    if (args[1] === "wait-for") {
       return output(
-        JSON.stringify({ elementId: args[2], text: this.writtenValue }),
+        JSON.stringify({
+          found: args.includes(this.writtenValue),
+          timedOut: false,
+          waitedMs: 100,
+        }),
       );
     }
     if (args[1] === "screenshot") {
@@ -435,12 +439,12 @@ function fixtureCliSchema(version: string) {
       ui: {
         subcommands: Object.fromEntries(
           [
-            "get-value",
             "inspect",
             "invoke",
             "list-windows",
             "screenshot",
             "set-value",
+            "wait-for",
           ].map((name) => [name, { description: name }]),
         ),
       },

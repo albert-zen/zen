@@ -39,7 +39,7 @@ export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
       "uia.inspect",
       "uia.invoke",
       "uia.set_value",
-      "uia.get_value.verify",
+      "uia.wait_for.verify",
       "wgc.capture",
       "cancellable",
       "bounded_output",
@@ -112,7 +112,7 @@ export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
     executable: "winapp",
     installCommand: WINAPP_INSTALL_COMMAND,
     jsonContract:
-      "ui list-windows/inspect/invoke/set-value/get-value/screenshot --json",
+      "ui list-windows/inspect/invoke/set-value/wait-for/screenshot --json",
     minimumVersion: MINIMUM_WINAPP_CLI_VERSION,
     docs: "https://learn.microsoft.com/windows/apps/dev-tools/winapp-cli/ui-automation",
   },
@@ -420,19 +420,36 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       [value],
     );
     requireConfirmedHwnd(result.hwnd, window.hwnd, "set-value");
-    const readback = await this.#json<{ elementId?: string; text?: unknown }>(
-      ["ui", "get-value", selector, "--window", window.hwnd, "--json"],
-      10_000,
+    const verification = await this.#json<{
+      found?: boolean;
+      timedOut?: boolean;
+      waitedMs?: number;
+    }>(
+      [
+        "ui",
+        "wait-for",
+        selector,
+        "--window",
+        window.hwnd,
+        "--value",
+        value,
+        "--timeout",
+        "3000",
+        "--json",
+      ],
+      5_000,
       signal,
       [value],
     );
     if (
-      readback.elementId !== selector ||
-      typeof readback.text !== "string" ||
-      normalizeUiText(readback.text) !== normalizeUiText(value)
+      verification.found !== true ||
+      verification.timedOut === true ||
+      !Number.isSafeInteger(verification.waitedMs) ||
+      (verification.waitedMs as number) < 0 ||
+      (verification.waitedMs as number) > 3_500
     ) {
       throw new Error(
-        "WinApp CLI set-value did not produce the expected UI Automation readback",
+        "WinApp CLI set-value did not satisfy the bounded UI Automation value assertion",
       );
     }
     const refreshedWindow = await this.#refreshWindow(window, signal);
@@ -879,10 +896,6 @@ function winAppControlType(element: WinAppElement): string | undefined {
   return element.controlType ?? element.type;
 }
 
-function normalizeUiText(value: string): string {
-  return value.replaceAll("\r", "").replace(/\n$/u, "");
-}
-
 function parseWinAppVersion(output: string): string | undefined {
   const match = output
     .trim()
@@ -946,12 +959,12 @@ function validateCliSchema(stdout: string, detectedVersion: string): void {
   const ui = nestedCommand(root, "subcommands", "ui");
   const subcommands = commandMap(ui.subcommands, "ui subcommands");
   const required = [
-    "get-value",
     "inspect",
     "invoke",
     "list-windows",
     "screenshot",
     "set-value",
+    "wait-for",
   ];
   const missing = required.filter(
     (command) => subcommands[command] === undefined,
