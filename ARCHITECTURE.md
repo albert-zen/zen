@@ -52,6 +52,11 @@
 - **ZenXCredentialVault** — ZenX 通过操作系统安全存储保护的 Provider credential
   存放点；解密后的 secret 只在主进程内存中交给 host，绝不进入 renderer、进程环境、
   App Server 协议或 canonical ItemList。
+- **ZenXSystemProxyProjection** — ZenX 主进程把操作系统为当前 Provider endpoint
+  解析出的代理投影为 host 子进程的 Provider transport；它是可丢弃的外部连接配置，不进入
+  Zen Core、Thread、journal 或 credential store。
+- **ProviderTransport** — 宿主为 Provider HTTP 请求注入的显式连接策略；首版只接受
+  无 credential 的 HTTP(S) proxy URL，并保证 abort 与脱敏错误，不进入 Agent Runtime 状态。
 - **ZenXTriggerRegistry** — ZenX 外层产品持久化的可审计唤醒条件与命中历史；每次
   命中只以稳定幂等 key 通过 App Server 发起普通新 Turn，失败明确记录且不自动补偿。
 - **ZenXRoom** — ZenX 外层产品持有的共享协作转录与 Thread 路由表面；Room 本身不是
