@@ -1438,6 +1438,16 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
+.command-impact-warning {
+  margin: 0;
+  padding: 9px 12px;
+  border-top: 1px solid rgba(244, 184, 96, 0.3);
+  color: var(--color-warning, #f4b860);
+  background: rgba(244, 184, 96, 0.08);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
 .command-item pre {
   max-height: 280px;
   margin: 0;

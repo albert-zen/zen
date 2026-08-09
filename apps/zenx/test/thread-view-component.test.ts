@@ -12,7 +12,10 @@ import {
   type ComposerState,
 } from "../src/renderer/src/composer-state.js";
 import { ThreadView } from "../src/renderer/src/ThreadView.js";
-import { capabilityToolName } from "../src/renderer/src/ThreadView.js";
+import {
+  capabilityToolName,
+  isForegroundTakeoverTool,
+} from "../src/renderer/src/ThreadView.js";
 
 const noop = async () => undefined;
 
@@ -71,6 +74,11 @@ test("labels capability audit cards separately from shell commands", () => {
     "browser_inspect",
   );
   assert.equal(capabilityToolName("printf hello"), null);
+  assert.equal(
+    isForegroundTakeoverTool('computer_foreground_click {"x":1,"y":2}'),
+    true,
+  );
+  assert.equal(isForegroundTakeoverTool("computer_press {}"), false);
 });
 
 function render(

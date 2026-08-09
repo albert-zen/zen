@@ -33,6 +33,12 @@ process.stdout.write(JSON.stringify({ tool: request.tool, value: request.argumen
         displayName: "Local fixture",
         version: "1.0.0",
         description: "Local process fixture",
+        provider: {
+          id: "fixture-process",
+          platforms: [process.platform],
+          interactionModes: ["background_safe"],
+          capabilities: ["fixture.run"],
+        },
         permissions: [
           {
             id: "local-fixture.run",
@@ -47,6 +53,8 @@ process.stdout.write(JSON.stringify({ tool: request.tool, value: request.argumen
             description: "Run fixture",
             inputSchema: { type: "object" },
             permissions: ["local-fixture.run"],
+            interactionMode: "background_safe",
+            capabilities: ["fixture.run"],
           },
         ],
         resources: [],
@@ -86,9 +94,45 @@ test("reports malformed local manifests without hiding other packages", async ()
   );
   try {
     await writeFile(path.join(directory, "bad.json"), "{}", "utf8");
+    await writeFile(
+      path.join(directory, "bad-output-bound.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "bad-output-bound",
+        displayName: "Bad output bound",
+        version: "1.0.0",
+        description: "Invalid local output bound",
+        provider: {
+          id: "fixture",
+          platforms: [process.platform],
+          interactionModes: ["background_safe"],
+          capabilities: ["fixture.run"],
+        },
+        permissions: [],
+        tools: [
+          {
+            name: "bad_output_bound",
+            description: "Invalid",
+            inputSchema: { type: "object" },
+            permissions: [],
+            interactionMode: "background_safe",
+            capabilities: ["fixture.run"],
+            maxOutputBytes: -1,
+          },
+        ],
+        resources: [],
+        runtime: { type: "process", command: "./missing" },
+      }),
+      "utf8",
+    );
     const discovered = await discoverLocalCapabilityPackages(directory);
     assert.equal(discovered.packages.length, 0);
-    assert.match(discovered.errors[0] ?? "", /manifest shape is invalid/u);
+    assert.equal(discovered.errors.length, 2);
+    assert.ok(
+      discovered.errors.every((error) =>
+        /manifest shape is invalid/u.test(error),
+      ),
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

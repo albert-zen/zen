@@ -3,7 +3,12 @@ import { readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import type { ToolInvocation } from "../../../../../src/tool.js";
-import type { ZenXCapabilityManifest, ZenXCapabilityPackage } from "./types.js";
+import {
+  MAX_CAPABILITY_OUTPUT_BYTES,
+  MIN_CAPABILITY_OUTPUT_BYTES,
+  type ZenXCapabilityManifest,
+  type ZenXCapabilityPackage,
+} from "./types.js";
 
 interface LocalCapabilityFile extends ZenXCapabilityManifest {
   runtime: {
@@ -188,7 +193,8 @@ export class ProcessZenXCapabilityPackage implements ZenXCapabilityPackage {
 }
 
 function isLocalCapabilityFile(value: unknown): value is LocalCapabilityFile {
-  if (!isRecord(value) || !isRecord(value.runtime)) return false;
+  if (!isRecord(value) || !isRecord(value.runtime) || !isRecord(value.provider))
+    return false;
   return (
     value.schemaVersion === 1 &&
     typeof value.id === "string" &&
@@ -197,7 +203,27 @@ function isLocalCapabilityFile(value: unknown): value is LocalCapabilityFile {
     typeof value.description === "string" &&
     Array.isArray(value.permissions) &&
     Array.isArray(value.tools) &&
+    value.tools.every(
+      (tool) =>
+        isRecord(tool) &&
+        (tool.maxOutputBytes === undefined ||
+          (Number.isSafeInteger(tool.maxOutputBytes) &&
+            (tool.maxOutputBytes as number) >= MIN_CAPABILITY_OUTPUT_BYTES &&
+            (tool.maxOutputBytes as number) <= MAX_CAPABILITY_OUTPUT_BYTES)),
+    ) &&
     Array.isArray(value.resources) &&
+    typeof value.provider.id === "string" &&
+    Array.isArray(value.provider.platforms) &&
+    value.provider.platforms.every((entry) => typeof entry === "string") &&
+    Array.isArray(value.provider.interactionModes) &&
+    value.provider.interactionModes.every(
+      (entry) =>
+        entry === "background_safe" ||
+        entry === "foreground_required" ||
+        entry === "isolated",
+    ) &&
+    Array.isArray(value.provider.capabilities) &&
+    value.provider.capabilities.every((entry) => typeof entry === "string") &&
     value.runtime.type === "process" &&
     typeof value.runtime.command === "string" &&
     (value.runtime.args === undefined ||

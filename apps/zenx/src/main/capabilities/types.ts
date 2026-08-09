@@ -4,6 +4,9 @@ import type {
   ToolInvocation,
 } from "../../../../../src/tool.js";
 
+export const MIN_CAPABILITY_OUTPUT_BYTES = 1024;
+export const MAX_CAPABILITY_OUTPUT_BYTES = 1024 * 1024;
+
 export type ZenXCapabilityPermissionScope =
   "browser-session" | "local-device" | "workspace";
 
@@ -14,8 +17,13 @@ export interface ZenXCapabilityPermission {
   scope: ZenXCapabilityPermissionScope;
 }
 
+export type ZenXCapabilityInteractionMode =
+  "background_safe" | "foreground_required" | "isolated";
+
 export interface ZenXCapabilityTool extends ModelTool {
   permissions: string[];
+  interactionMode: ZenXCapabilityInteractionMode;
+  capabilities: string[];
   maxOutputBytes?: number;
 }
 
@@ -33,6 +41,12 @@ export interface ZenXCapabilityManifest {
   displayName: string;
   version: string;
   description: string;
+  provider: {
+    id: string;
+    platforms: string[];
+    interactionModes: ZenXCapabilityInteractionMode[];
+    capabilities: string[];
+  };
   permissions: ZenXCapabilityPermission[];
   tools: ZenXCapabilityTool[];
   resources: ZenXCapabilityResource[];
@@ -54,9 +68,11 @@ export interface ZenXCapabilityGrant {
 export interface ZenXCapabilityAuditRecord {
   id: string;
   capabilityId: string;
+  providerId: string;
   toolName: string;
   callId: string;
   cwd: string;
+  interactionMode: ZenXCapabilityInteractionMode;
   startedAt: string;
   completedAt?: string;
   status: "running" | "completed" | "failed" | "cancelled";
@@ -68,8 +84,11 @@ export interface ZenXCapabilitySummary {
     resources: Array<Omit<ZenXCapabilityResource, "content">>;
   };
   source: "bundled" | "local";
+  available: boolean;
+  unavailableReason?: string;
   granted: ZenXCapabilityGrant[];
   enabledTools: string[];
+  blockedTools: string[];
 }
 
 export interface ZenXCapabilitySnapshot {

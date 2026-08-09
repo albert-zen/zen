@@ -16,6 +16,11 @@ import type {
   ZenXCapabilityPackage,
   ZenXCapabilitySnapshot,
   ZenXCapabilityTool,
+  ZenXCapabilityInteractionMode,
+} from "./types.js";
+import {
+  MAX_CAPABILITY_OUTPUT_BYTES,
+  MIN_CAPABILITY_OUTPUT_BYTES,
 } from "./types.js";
 
 export const CAPABILITY_RESOURCE_TOOL = "zenx_capability_resource";
@@ -23,6 +28,11 @@ const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024;
 const MAX_AUDIT_RECORDS = 100;
 const SENSITIVE_KEY =
   /(?:authorization|cookie|credential|password|secret|sessionMaterial|storageState|token)/iu;
+
+export interface ZenXCapabilityRegistryOptions {
+  allowForegroundRequired: boolean;
+  platform: string;
+}
 
 export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   readonly #grantStore: ZenXCapabilityGrantStore;
@@ -34,10 +44,19 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   readonly #listeners = new Set<(snapshot: ZenXCapabilitySnapshot) => void>();
   readonly #audit: ZenXCapabilityAuditRecord[] = [];
   readonly #discoveryErrors: string[] = [];
+  readonly #options: ZenXCapabilityRegistryOptions;
   #grants: Record<string, ZenXCapabilityGrant[]> = {};
 
-  constructor(grantStore: ZenXCapabilityGrantStore) {
+  constructor(
+    grantStore: ZenXCapabilityGrantStore,
+    options: Partial<ZenXCapabilityRegistryOptions> = {},
+  ) {
     this.#grantStore = grantStore;
+    this.#options = {
+      allowForegroundRequired: true,
+      platform: process.platform,
+      ...options,
+    };
   }
 
   async initialize(): Promise<void> {
@@ -155,10 +174,21 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
             ),
           },
           source: registered.source,
+          available: this.#isProviderAvailable(manifest),
+          ...(this.#isProviderAvailable(manifest)
+            ? {}
+            : {
+                unavailableReason: `Provider ${manifest.provider.id} does not support ${this.#options.platform}`,
+              }),
           granted: structuredClone(this.#grants[manifest.id] ?? []),
           enabledTools: manifest.tools
-            .filter((tool) =>
-              this.#hasPermissions(manifest.id, tool.permissions),
+            .filter((tool) => this.#isToolExposed(manifest.id, tool))
+            .map((tool) => tool.name),
+          blockedTools: manifest.tools
+            .filter(
+              (tool) =>
+                this.#hasPermissions(manifest.id, tool.permissions) &&
+                !this.#isInteractionAllowed(tool.interactionMode),
             )
             .map((tool) => tool.name),
         };
@@ -173,8 +203,9 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     const resources: string[] = [];
     for (const registered of this.#registered.values()) {
       const manifest = registered.package.manifest;
+      if (!this.#isProviderAvailable(manifest)) continue;
       for (const tool of manifest.tools) {
-        if (this.#hasPermissions(manifest.id, tool.permissions)) {
+        if (this.#isToolExposed(manifest.id, tool)) {
           definitions.push({
             name: tool.name,
             description: tool.description,
@@ -227,6 +258,10 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         invocation.name,
         output.value,
         output.maxOutputBytes,
+        output.capabilityId,
+        output.provider,
+        output.interactionMode,
+        output.capabilities,
       );
       this.#finishAudit(audit, "completed", summarize(result));
       return { output: result, exitCode: 0 };
@@ -255,6 +290,10 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   async #executeProvider(invocation: ToolInvocation): Promise<{
     value: unknown;
     maxOutputBytes: number;
+    capabilityId: string;
+    provider: { id: string; platforms: string[] };
+    interactionMode: ZenXCapabilityInteractionMode;
+    capabilities: string[];
   }> {
     const owner = this.#toolOwners.get(invocation.name);
     if (owner === undefined) {
@@ -265,21 +304,47 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         `Capability ${owner.capabilityId} is not granted for ${invocation.name}`,
       );
     }
-    invocation.signal.throwIfAborted();
     const registered = this.#requireCapability(owner.capabilityId);
+    if (!this.#isProviderAvailable(registered.package.manifest)) {
+      throw new Error(
+        `Capability provider ${registered.package.manifest.provider.id} does not support ${this.#options.platform}`,
+      );
+    }
+    if (!this.#isInteractionAllowed(owner.tool.interactionMode)) {
+      throw new Error(
+        `ZenX blocked ${invocation.name}: this operation is foreground_required and could move the global pointer, synthesize foreground keyboard input, or change app/workspace focus. This host is configured for background-safe execution only; granting capability permissions does not override that execution restriction.`,
+      );
+    }
+    invocation.signal.throwIfAborted();
     return {
       value: await registered.package.invoke(invocation.name, invocation),
       maxOutputBytes: owner.tool.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
+      capabilityId: owner.capabilityId,
+      provider: {
+        id: registered.package.manifest.provider.id,
+        platforms: [...registered.package.manifest.provider.platforms],
+      },
+      interactionMode: owner.tool.interactionMode,
+      capabilities: [...owner.tool.capabilities],
     };
   }
 
   #readResource(arguments_: Record<string, unknown>): {
     value: unknown;
     maxOutputBytes: number;
+    capabilityId: string;
+    provider: { id: string; platforms: string[] };
+    interactionMode: ZenXCapabilityInteractionMode;
+    capabilities: string[];
   } {
     const capabilityId = requiredString(arguments_, "capabilityId");
     const resourceId = requiredString(arguments_, "resourceId");
     const manifest = this.#requireCapability(capabilityId).package.manifest;
+    if (!this.#isProviderAvailable(manifest)) {
+      throw new Error(
+        `Capability provider ${manifest.provider.id} does not support ${this.#options.platform}`,
+      );
+    }
     if (
       !this.#hasPermissions(
         capabilityId,
@@ -305,7 +370,37 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         content: resource.content,
       },
       maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+      capabilityId,
+      provider: {
+        id: manifest.provider.id,
+        platforms: [...manifest.provider.platforms],
+      },
+      interactionMode: "background_safe",
+      capabilities: ["skill_prompt.read"],
     };
+  }
+
+  #isToolExposed(capabilityId: string, tool: ZenXCapabilityTool): boolean {
+    return (
+      this.#isProviderAvailable(
+        this.#requireCapability(capabilityId).package.manifest,
+      ) &&
+      this.#hasPermissions(capabilityId, tool.permissions) &&
+      this.#isInteractionAllowed(tool.interactionMode)
+    );
+  }
+
+  #isInteractionAllowed(mode: ZenXCapabilityInteractionMode): boolean {
+    return (
+      mode !== "foreground_required" || this.#options.allowForegroundRequired
+    );
+  }
+
+  #isProviderAvailable(manifest: ZenXCapabilityManifest): boolean {
+    return (
+      manifest.provider.platforms.includes(this.#options.platform) ||
+      manifest.provider.platforms.includes("*")
+    );
   }
 
   #hasPermissions(capabilityId: string, required: readonly string[]): boolean {
@@ -331,9 +426,22 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         invocation.name === CAPABILITY_RESOURCE_TOOL
           ? String(invocation.arguments.capabilityId ?? "unknown")
           : (owner?.capabilityId ?? "unknown"),
+      providerId:
+        owner === undefined
+          ? invocation.name === CAPABILITY_RESOURCE_TOOL
+            ? (this.#registered.get(
+                String(invocation.arguments.capabilityId ?? "unknown"),
+              )?.package.manifest.provider.id ?? "unknown")
+            : "unknown"
+          : (this.#registered.get(owner.capabilityId)?.package.manifest.provider
+              .id ?? "unknown"),
       toolName: invocation.name,
       callId: invocation.callId,
       cwd: invocation.cwd,
+      interactionMode:
+        invocation.name === CAPABILITY_RESOURCE_TOOL
+          ? "background_safe"
+          : (owner?.tool.interactionMode ?? "background_safe"),
       startedAt: new Date().toISOString(),
       status: "running",
     };
@@ -377,6 +485,13 @@ function validateManifest(
   if (permissionIds.size !== manifest.permissions.length) {
     throw new Error(`Capability ${manifest.id} has duplicate permissions`);
   }
+  if (
+    manifest.provider.id.length === 0 ||
+    manifest.provider.platforms.length === 0 ||
+    manifest.provider.interactionModes.length === 0
+  ) {
+    throw new Error(`Capability ${manifest.id} has invalid provider metadata`);
+  }
   const toolNames = new Set<string>();
   for (const tool of manifest.tools) {
     if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/u.test(tool.name)) {
@@ -388,6 +503,19 @@ function validateManifest(
       );
     }
     toolNames.add(tool.name);
+    if (tool.capabilities.length === 0) {
+      throw new Error(`Capability tool ${tool.name} declares no capabilities`);
+    }
+    if (
+      tool.maxOutputBytes !== undefined &&
+      (!Number.isSafeInteger(tool.maxOutputBytes) ||
+        tool.maxOutputBytes < MIN_CAPABILITY_OUTPUT_BYTES ||
+        tool.maxOutputBytes > MAX_CAPABILITY_OUTPUT_BYTES)
+    ) {
+      throw new Error(
+        `Capability tool ${tool.name} maxOutputBytes must be an integer between ${String(MIN_CAPABILITY_OUTPUT_BYTES)} and ${String(MAX_CAPABILITY_OUTPUT_BYTES)}`,
+      );
+    }
     for (const permission of tool.permissions) {
       if (!permissionIds.has(permission)) {
         throw new Error(
@@ -403,19 +531,45 @@ function boundedResult(
   toolName: string,
   value: unknown,
   maxBytes: number,
+  capabilityId: string,
+  provider: { id: string; platforms: readonly string[] },
+  interactionMode: ZenXCapabilityInteractionMode,
+  capabilities: readonly string[],
 ): string {
   const safe = redactSensitive(value);
-  const serialized = JSON.stringify({ tool: toolName, result: safe });
-  if (Buffer.byteLength(serialized, "utf8") <= maxBytes) return serialized;
-  const budget = Math.max(0, maxBytes - 160);
-  const preview = Buffer.from(JSON.stringify(safe), "utf8")
-    .subarray(0, budget)
-    .toString("utf8");
-  return JSON.stringify({
+  const envelope = {
+    capabilityId,
+    provider,
     tool: toolName,
-    resultPreview: preview,
+    interactionMode,
+    capabilities,
+    result: safe,
+  };
+  const serialized = JSON.stringify(envelope);
+  if (Buffer.byteLength(serialized, "utf8") <= maxBytes) return serialized;
+  let preview = JSON.stringify(safe);
+  const truncated = (): string =>
+    JSON.stringify({
+      capabilityId,
+      provider,
+      tool: toolName,
+      interactionMode,
+      capabilities,
+      resultPreview: preview,
+      truncated: true,
+      originalBytes: Buffer.byteLength(serialized, "utf8"),
+    });
+  let output = truncated();
+  while (Buffer.byteLength(output, "utf8") > maxBytes && preview.length > 0) {
+    const excess = Buffer.byteLength(output, "utf8") - maxBytes;
+    preview = preview.slice(0, Math.max(0, preview.length - excess));
+    output = truncated();
+  }
+  if (Buffer.byteLength(output, "utf8") <= maxBytes) return output;
+  return JSON.stringify({
+    tool: toolName.slice(0, 64),
     truncated: true,
-    originalBytes: Buffer.byteLength(serialized, "utf8"),
+    error: "Result metadata exceeded the configured output bound",
   });
 }
 

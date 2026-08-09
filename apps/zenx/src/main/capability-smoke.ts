@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 
-import { app } from "electron";
+import { app, screen } from "electron";
 
 import {
   BrowserZenXCapabilityPackage,
@@ -23,15 +23,41 @@ const web = createServer((request, response) => {
     );
     return;
   }
+  if (request.url === "/storage-seed") {
+    response.end(`<!doctype html><title>Storage seed</title>
+      <main>Storage seeded</main>
+      <script>
+        document.cookie = "zenx_smoke_cookie=present; SameSite=Lax";
+        sessionStorage.setItem("zenx_smoke_session", "present");
+      </script>`);
+    return;
+  }
+  if (request.url === "/storage-check") {
+    response.end(`<!doctype html><title>Storage check</title>
+      <main></main>
+      <script>
+        const cookieLeaked = document.cookie.includes("zenx_smoke_cookie=present");
+        const sessionLeaked = sessionStorage.getItem("zenx_smoke_session") === "present";
+        document.querySelector("main").textContent = cookieLeaked || sessionLeaked ? "Storage leaked" : "Storage clean";
+      </script>`);
+    return;
+  }
   response.end(`<!doctype html>
     <title>ZenX capability smoke</title>
     <input id="name" aria-label="Name">
+    <input id="password" type="password" aria-label="Password" value="must-not-leak">
+    <button id="hidden" hidden>Hidden</button>
     <button id="mark" onclick="document.querySelector('output').textContent = 'Marked ' + document.querySelector('#name').value">Mark</button>
+    <button id="volatile">Original identity</button>
     <output></output>
-    <a id="next" href="/next">Next</a>`);
+    <a id="next" href="/next">Next</a>
+    <script>setTimeout(() => document.querySelector('#volatile').textContent = 'Changed identity', 5000)</script>`);
 });
 
+app.commandLine.appendSwitch("force-renderer-accessibility");
+
 void app.whenReady().then(async () => {
+  app.setAccessibilitySupportEnabled(true);
   const registry = new ZenXCapabilityRegistry(
     new MemoryZenXCapabilityGrantStore(),
   );
@@ -41,11 +67,13 @@ void app.whenReady().then(async () => {
     registry.register(
       new BrowserZenXCapabilityPackage(new ElectronBrowserBackend()),
     );
-    registry.register(
-      new ComputerZenXCapabilityPackage(new ElectronMacComputerBackend()),
-    );
+    const computerBackend = new ElectronMacComputerBackend();
+    await computerBackend.prepareForegroundInput(new AbortController().signal);
+    registry.register(new ComputerZenXCapabilityPackage(computerBackend));
     await registry.grant("browser");
     await registry.grant("computer");
+    const cursorBefore = screen.getCursorScreenPoint();
+    const foregroundBefore = await computerBackend.desktopContext();
 
     const opened = await invoke(registry, "browser_open", {
       sessionId: "desktop-smoke",
@@ -57,76 +85,158 @@ void app.whenReady().then(async () => {
       tabId,
     })) as BrowserInspection;
     assert.match(inspected.visibleText, /Mark/u);
+    assert.equal(
+      inspected.targets.some(({ name }) => name === "Hidden"),
+      false,
+    );
+    const password = inspected.targets.find(({ name }) => name === "Password");
+    assert.equal(password?.secure, true);
+    assert.equal(password?.value, undefined);
+    assert.equal(password?.actions.includes("type"), false);
+    if (password !== undefined) {
+      await assert.rejects(
+        invoke(registry, "browser_type", {
+          sessionId: "desktop-smoke",
+          tabId,
+          observationId: inspected.observationId,
+          targetId: password.targetId,
+          text: "not-a-secret",
+        }),
+        /password or secure controls/u,
+      );
+    }
+    const input = requiredBrowserTarget(inspected, "Name", "type");
     await invoke(registry, "browser_type", {
       sessionId: "desktop-smoke",
       tabId,
-      selector: "#name",
+      observationId: inspected.observationId,
+      targetId: input.targetId,
       text: "Browser",
     });
+    await assert.rejects(
+      invoke(registry, "browser_click", {
+        sessionId: "desktop-smoke",
+        tabId,
+        observationId: inspected.observationId,
+        targetId: input.targetId,
+      }),
+      /stale or unknown/u,
+    );
+    inspected = (await invoke(registry, "browser_inspect", {
+      sessionId: "desktop-smoke",
+      tabId,
+    })) as BrowserInspection;
+    await assert.rejects(
+      invoke(registry, "browser_click", {
+        sessionId: "desktop-smoke",
+        tabId,
+        observationId: inspected.observationId,
+        targetId: "forged-target",
+      }),
+      /forged/u,
+    );
+    const mark = requiredBrowserTarget(inspected, "Mark", "click");
     await invoke(registry, "browser_click", {
       sessionId: "desktop-smoke",
       tabId,
-      selector: "#mark",
+      observationId: inspected.observationId,
+      targetId: mark.targetId,
     });
     inspected = (await invoke(registry, "browser_inspect", {
       sessionId: "desktop-smoke",
       tabId,
     })) as BrowserInspection;
     assert.match(inspected.visibleText, /Marked Browser/u);
+    const volatile = requiredBrowserTarget(
+      inspected,
+      "Original identity",
+      "click",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5200));
+    await assert.rejects(
+      invoke(registry, "browser_click", {
+        sessionId: "desktop-smoke",
+        tabId,
+        observationId: inspected.observationId,
+        targetId: volatile.targetId,
+      }),
+      /identity-changed/u,
+    );
+    inspected = (await invoke(registry, "browser_inspect", {
+      sessionId: "desktop-smoke",
+      tabId,
+    })) as BrowserInspection;
+    const staleNavigationTarget = requiredBrowserTarget(
+      inspected,
+      "Next",
+      "click",
+    );
     await invoke(registry, "browser_navigate", {
       sessionId: "desktop-smoke",
       tabId,
       url: `http://127.0.0.1:${String(port)}/next`,
     });
+    await assert.rejects(
+      invoke(registry, "browser_click", {
+        sessionId: "desktop-smoke",
+        tabId,
+        observationId: inspected.observationId,
+        targetId: staleNavigationTarget.targetId,
+      }),
+      /stale or unknown/u,
+    );
     inspected = (await invoke(registry, "browser_inspect", {
       sessionId: "desktop-smoke",
       tabId,
     })) as BrowserInspection;
     assert.match(inspected.visibleText, /Navigation complete/u);
 
-    const computer = await invoke(registry, "computer_inspect", {});
-    assert.equal((computer as { platform: string }).platform, "darwin");
-    const screenshot = await invoke(registry, "computer_screenshot", {});
-    assert.ok((screenshot as { bytes: number }).bytes > 0);
+    await invoke(registry, "browser_navigate", {
+      sessionId: "desktop-smoke",
+      tabId,
+      url: `http://127.0.0.1:${String(port)}/storage-seed`,
+    });
+    inspected = (await invoke(registry, "browser_inspect", {
+      sessionId: "desktop-smoke",
+      tabId,
+    })) as BrowserInspection;
+    assert.match(inspected.visibleText, /Storage seeded/u);
+    const closedSeedSession = await invoke(registry, "browser_close_session", {
+      sessionId: "desktop-smoke",
+    });
+    assert.equal((closedSeedSession as { closedTabs: number }).closedTabs, 1);
+    const remainingTabs = (await invoke(registry, "browser_list_tabs", {
+      sessionId: "desktop-smoke",
+    })) as unknown[];
+    assert.deepEqual(remainingTabs, []);
 
-    if (process.env["ZENX_SMOKE_COMPUTER_INPUT"] === "1") {
-      await invoke(registry, "browser_navigate", {
-        sessionId: "desktop-smoke",
-        tabId,
-        url: `http://127.0.0.1:${String(port)}/`,
-      });
-      const targetInspection = (await invoke(registry, "browser_inspect", {
-        sessionId: "desktop-smoke",
-        tabId,
-      })) as BrowserInspection;
-      const input = targetInspection.targets.find(
-        (target) => target.selector === "#name",
-      );
-      if (input?.screenPoint === undefined) {
-        throw new Error("Browser smoke input did not expose a screen target");
-      }
-      await invoke(registry, "computer_click", {
-        ...input.screenPoint,
-        context: "ZenX Browser / capability smoke / Name input",
-      });
-      await invoke(registry, "computer_type", {
-        text: "Computer",
-        context: "ZenX Browser / capability smoke / Name input",
-      });
-      const afterInput = (await invoke(registry, "browser_inspect", {
-        sessionId: "desktop-smoke",
-        tabId,
-      })) as BrowserInspection;
-      assert.equal(
-        afterInput.targets.find((target) => target.selector === "#name")?.value,
-        "Computer",
-      );
-    }
+    const reopened = await invoke(registry, "browser_open", {
+      sessionId: "desktop-smoke",
+      url: `http://127.0.0.1:${String(port)}/storage-check`,
+    });
+    const reopenedTabId = requiredResultString(reopened, "tabId");
+    inspected = (await invoke(registry, "browser_inspect", {
+      sessionId: "desktop-smoke",
+      tabId: reopenedTabId,
+    })) as BrowserInspection;
+    assert.match(inspected.visibleText, /Storage clean/u);
+    assert.doesNotMatch(inspected.visibleText, /Storage leaked/u);
+    await invoke(registry, "browser_close", {
+      sessionId: "desktop-smoke",
+      tabId: reopenedTabId,
+    });
+    const closedSession = await invoke(registry, "browser_close_session", {
+      sessionId: "desktop-smoke",
+    });
+    assert.equal((closedSession as { closedTabs: number }).closedTabs, 0);
+    const cursorAfter = screen.getCursorScreenPoint();
+    const foregroundAfter = await computerBackend.desktopContext();
+    assert.deepEqual(cursorAfter, cursorBefore);
+    assert.equal(foregroundAfter.pid, foregroundBefore.pid);
+    assert.equal(foregroundAfter.bundleId, foregroundBefore.bundleId);
 
     console.log(
-      `ZenX capability desktop smoke passed: browser open/inspect/navigate/click/type; computer inspect/screenshot${
-        process.env["ZENX_SMOKE_COMPUTER_INPUT"] === "1" ? "/click/type" : ""
-      }`,
+      "ZenX capability desktop smoke passed: opaque browser observe/act IDs reject forged, stale, hidden, changed, and password targets; close-session resets cookie/session storage before same-ID reopen; foreground helper compiled without running input; pointer and foreground app unchanged",
     );
   } catch (error) {
     console.error("ZenX capability desktop smoke failed", error);
@@ -166,6 +276,23 @@ function requiredResultString(value: unknown, key: string): string {
     throw new Error(`Smoke result is missing ${key}`);
   }
   return (value as Record<string, string>)[key]!;
+}
+
+function requiredBrowserTarget(
+  inspection: BrowserInspection,
+  name: string,
+  action: "click" | "type",
+): BrowserInspection["targets"][number] {
+  const target = inspection.targets.find(
+    (candidate) =>
+      candidate.name === name && candidate.actions.includes(action),
+  );
+  if (target === undefined) {
+    throw new Error(
+      `Smoke inspection did not return ${action} target ${name}: ${JSON.stringify(inspection.targets)}`,
+    );
+  }
+  return target;
 }
 
 async function listen(): Promise<number> {

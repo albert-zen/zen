@@ -2,127 +2,252 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  computerCapabilityManifest,
+  ComputerObservationLedger,
   ComputerZenXCapabilityPackage,
-  type ComputerState,
+  type ComputerControlSelector,
+  type ComputerInspection,
+  type ComputerTarget,
   type ZenXComputerBackend,
 } from "../src/main/capabilities/computer-provider.js";
 
-test("computer vertical slice audits explicit target context without echoing typed text", async () => {
+const target: ComputerTarget = { pid: 42, windowTitle: "Smoke" };
+const fieldControl: ComputerControlSelector = {
+  observationId: "observation-1",
+  targetId: "field",
+};
+const buttonControl: ComputerControlSelector = {
+  observationId: "observation-1",
+  targetId: "button",
+};
+
+test("computer vertical slice uses only targeted AX operations and does not echo set values", async () => {
   const calls: string[] = [];
   const capability = new ComputerZenXCapabilityPackage(computerBackend(calls));
   const inspected = (await capability.invoke(
     "computer_inspect",
-    invocation({}),
-  )) as ComputerState;
-  assert.equal(inspected.frontmostApplication, "ZenX");
-  const clicked = await capability.invoke(
-    "computer_click",
-    invocation({ x: 120, y: 80, context: "ZenX / Smoke / Continue" }),
+    invocation({ target }),
+  )) as ComputerInspection;
+  assert.equal(inspected.target.applicationName, "Fixture");
+  const pressed = await capability.invoke(
+    "computer_press",
+    invocation({ target, control: buttonControl }),
   );
-  assert.deepEqual((clicked as { action: unknown }).action, {
-    x: 120,
-    y: 80,
-    button: "left",
-    context: "ZenX / Smoke / Continue",
-  });
-  const typed = await capability.invoke(
-    "computer_type",
+  assert.deepEqual((pressed as { control: unknown }).control, buttonControl);
+  await capability.invoke("computer_inspect", invocation({ target }));
+  const set = await capability.invoke(
+    "computer_set_value",
     invocation({
-      text: "private deliberate text",
-      context: "ZenX / Smoke / Name",
+      target,
+      control: fieldControl,
+      value: "private deliberate text",
     }),
   );
-  assert.deepEqual((typed as { action: unknown }).action, {
-    characterCount: 23,
-    context: "ZenX / Smoke / Name",
-  });
-  assert.doesNotMatch(JSON.stringify(typed), /private deliberate/u);
-  await capability.invoke(
-    "computer_key_press",
-    invocation({ key: "enter", context: "ZenX / Smoke / Name" }),
-  );
-  await capability.invoke(
-    "computer_scroll",
-    invocation({ deltaY: 500, context: "ZenX / Smoke / List" }),
-  );
+  assert.equal((set as { characterCount: number }).characterCount, 23);
+  assert.doesNotMatch(JSON.stringify(set), /private deliberate/u);
   assert.deepEqual(calls, [
-    "inspect",
-    "click:120:80:left",
-    "type:23",
-    "key:enter",
-    "scroll:500",
+    "inspect:42",
+    "press:button",
+    "inspect:42",
+    "set:field:23",
   ]);
 });
 
-test("computer input requires explicit context and bounded operations", async () => {
-  const capability = new ComputerZenXCapabilityPackage(computerBackend([]));
-  await assert.rejects(
-    capability.invoke("computer_click", invocation({ x: 1, y: 2 })),
-    /context/u,
+test("computer observation IDs are target-scoped, latest-only, and reject secure values", () => {
+  const ledger = new ComputerObservationLedger();
+  const first = ledger.observe("app-a", [
+    {
+      role: "AXButton",
+      title: "Mark",
+      frame: "10.0,10.0,20.0,20.0",
+      secure: false,
+      actions: ["AXPress"],
+    },
+  ]);
+  const firstControl = first.selectors[0]!;
+  const second = ledger.observe("app-a", [
+    {
+      role: "AXButton",
+      title: "Mark",
+      frame: "20.0,10.0,20.0,20.0",
+      secure: false,
+      actions: ["AXPress"],
+    },
+  ]);
+  assert.throws(
+    () => ledger.consume("app-a", firstControl, "press"),
+    /stale, unknown/u,
   );
-  await assert.rejects(
-    capability.invoke(
-      "computer_scroll",
-      invocation({ deltaY: 20_000, context: "target" }),
-    ),
-    /between -10000 and 10000/u,
+  assert.throws(
+    () =>
+      ledger.consume(
+        "app-a",
+        { ...second.selectors[0]!, targetId: "forged" },
+        "press",
+      ),
+    /forged/u,
+  );
+  assert.throws(
+    () => ledger.consume("app-b", second.selectors[0]!, "press"),
+    /another target/u,
+  );
+
+  const secure = ledger.observe("app-a", [
+    {
+      role: "AXTextField",
+      subrole: "AXSecureTextField",
+      frame: "10.0,40.0,100.0,20.0",
+      secure: true,
+      actions: ["AXSetValue"],
+    },
+  ]);
+  assert.throws(
+    () => ledger.consume("app-a", secure.selectors[0]!, "set_value"),
+    /rejects password or secure controls/u,
   );
 });
 
+test("declares background-safe semantics separately from foreground takeover", async () => {
+  const modes = Object.fromEntries(
+    computerCapabilityManifest.tools.map((tool) => [
+      tool.name,
+      tool.interactionMode,
+    ]),
+  );
+  assert.equal(modes.computer_inspect, "background_safe");
+  assert.equal(modes.computer_press, "background_safe");
+  assert.equal(modes.computer_set_value, "background_safe");
+  assert.equal(modes.computer_foreground_click, "foreground_required");
+  assert.equal(modes.computer_foreground_type, undefined);
+
+  const capability = new ComputerZenXCapabilityPackage(computerBackend([]));
+  await assert.rejects(
+    capability.invoke(
+      "computer_set_value",
+      invocation({ target, control: fieldControl, value: "x".repeat(4_001) }),
+    ),
+    /limited to 4000/u,
+  );
+  await assert.rejects(
+    capability.invoke(
+      "computer_screenshot",
+      invocation({ target: { pid: 42 } }),
+    ),
+    /windowTitle/u,
+  );
+  await assert.rejects(
+    capability.invoke("computer_inspect", invocation({ target: { pid: 42 } })),
+    /cannot inspect or act across sibling windows/u,
+  );
+});
+
+test("cancels foreground takeover before global input begins", async () => {
+  const calls: string[] = [];
+  const capability = new ComputerZenXCapabilityPackage(computerBackend(calls));
+  const controller = new AbortController();
+  controller.abort(new DOMException("stopped", "AbortError"));
+  await assert.rejects(
+    capability.invoke(
+      "computer_foreground_click",
+      invocation({ x: 10, y: 20 }, controller.signal),
+    ),
+    /stopped/u,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("executes the explicitly labeled foreground baseline after its cancellation window", async () => {
+  const calls: string[] = [];
+  const capability = new ComputerZenXCapabilityPackage(computerBackend(calls));
+  const result = await capability.invoke(
+    "computer_foreground_click",
+    invocation({ x: 10, y: 20, button: "right" }),
+  );
+  assert.deepEqual(result, {
+    action: "click",
+    x: 10,
+    y: 20,
+    button: "right",
+    impact: "foreground_takeover",
+  });
+  assert.deepEqual(calls, ["foreground-click:10:20:right"]);
+});
+
 function computerBackend(calls: string[]): ZenXComputerBackend {
-  const state: ComputerState = {
-    platform: "darwin",
-    frontmostApplication: "ZenX",
-    frontmostWindowTitle: "Smoke",
-    cursor: { x: 10, y: 10 },
-    displays: [
-      {
-        id: "1",
-        bounds: { x: 0, y: 0, width: 1440, height: 900 },
-        scaleFactor: 2,
-      },
-    ],
+  const resolvedTarget = {
+    pid: 42,
+    bundleId: "dev.zen.fixture",
+    applicationName: "Fixture",
+    windowTitle: "Smoke",
   };
   return {
-    inspect: async () => {
-      calls.push("inspect");
-      return state;
+    inspect: async (inspectedTarget) => {
+      calls.push(`inspect:${String(inspectedTarget.pid)}`);
+      return {
+        platform: "darwin",
+        observationId: "observation-1",
+        target: resolvedTarget,
+        controls: [
+          {
+            selector: buttonControl,
+            role: "AXButton",
+            title: "Mark",
+            enabled: true,
+            actions: ["AXPress"],
+          },
+          {
+            selector: fieldControl,
+            role: "AXTextField",
+            title: "Name",
+            enabled: true,
+            actions: ["AXSetValue"],
+          },
+        ],
+        truncated: false,
+      };
+    },
+    press: async (_target, selected) => {
+      calls.push(`press:${selected.targetId}`);
+      return { target: resolvedTarget, control: selected };
+    },
+    setValue: async (_target, selected, value) => {
+      calls.push(`set:${selected.targetId}:${String(value.length)}`);
+      return {
+        target: resolvedTarget,
+        control: selected,
+        characterCount: value.length,
+      };
     },
     screenshot: async () => ({
       artifactPath: "/private/tmp/fixture.png",
-      sourceId: "screen:1",
-      sourceName: "Display 1",
+      target: resolvedTarget,
       width: 1200,
       height: 800,
       bytes: 100,
       expiresAt: new Date(0).toISOString(),
     }),
-    click: async (x, y, button) => {
-      calls.push(`click:${String(x)}:${String(y)}:${button}`);
-      return state;
+    foregroundClick: async (x, y, button) => {
+      calls.push(`foreground-click:${String(x)}:${String(y)}:${button}`);
     },
-    type: async (text) => {
-      calls.push(`type:${String(text.length)}`);
-      return state;
+    foregroundKeyPress: async (key) => {
+      calls.push(`foreground-key:${key}`);
     },
-    keyPress: async (key) => {
-      calls.push(`key:${key}`);
-      return state;
-    },
-    scroll: async (deltaY) => {
-      calls.push(`scroll:${String(deltaY)}`);
-      return state;
+    foregroundScroll: async (deltaY) => {
+      calls.push(`foreground-scroll:${String(deltaY)}`);
     },
     close: () => undefined,
   };
 }
 
-function invocation(arguments_: Record<string, unknown>) {
+function invocation(
+  arguments_: Record<string, unknown>,
+  signal = new AbortController().signal,
+) {
   return {
     callId: "call-1",
     name: "test",
     arguments: arguments_,
     cwd: "/workspace",
-    signal: new AbortController().signal,
+    signal,
   };
 }

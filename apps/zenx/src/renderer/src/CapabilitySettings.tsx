@@ -61,7 +61,9 @@ export function CapabilitySettings() {
           <p className="settings-note">
             Grants control which structured tools the Agent can discover and
             execute. Per-call approval and the execution sandbox remain
-            separate.
+            separate. Foreground-required tools are labeled because they may
+            temporarily take over pointer, keyboard, or focus; Stop cancels a
+            running operation.
           </p>
         </div>
         <span>{snapshot.capabilities.length} installed</span>
@@ -79,11 +81,18 @@ export function CapabilitySettings() {
                   <span>
                     {capability.source} · v{capability.manifest.version}
                   </span>
+                  <span>
+                    {capability.manifest.provider.id} ·{" "}
+                    {capability.manifest.provider.platforms.join(", ")}
+                  </span>
+                  {capability.available ? null : (
+                    <span>{capability.unavailableReason}</span>
+                  )}
                 </div>
                 <button
                   className={granted ? "danger-button" : "primary-button"}
                   type="button"
-                  disabled={busy !== null}
+                  disabled={busy !== null || !capability.available}
                   onClick={() => void setGranted(capability, !granted)}
                 >
                   {busy === capability.manifest.id
@@ -112,10 +121,37 @@ export function CapabilitySettings() {
                   );
                 })}
               </ul>
+              <ul>
+                {capability.manifest.tools.map((tool) => (
+                  <li key={tool.name}>
+                    <Icon
+                      name={
+                        tool.interactionMode !== "foreground_required"
+                          ? "check"
+                          : "warning"
+                      }
+                      size={12}
+                    />
+                    <span>
+                      <strong>{tool.name}</strong>
+                      <small>
+                        {tool.interactionMode} · {tool.capabilities.join(", ")}
+                      </small>
+                    </span>
+                  </li>
+                ))}
+              </ul>
               <footer>
                 {capability.enabledTools.length} of{" "}
                 {capability.manifest.tools.length} tools exposed ·{" "}
-                {capability.manifest.resources.length} instruction resources
+                {
+                  capability.manifest.tools.filter(
+                    (tool) => tool.interactionMode === "background_safe",
+                  ).length
+                }{" "}
+                background-safe · {capability.blockedTools.length} foreground
+                blocked · {capability.manifest.resources.length} instruction
+                resources
               </footer>
             </article>
           );
@@ -131,6 +167,7 @@ export function CapabilitySettings() {
                 size={12}
               />
               <code>{invocation.toolName}</code>
+              <span>{invocation.interactionMode}</span>
               <span>{invocation.status}</span>
               <time>{new Date(invocation.startedAt).toLocaleTimeString()}</time>
             </div>
