@@ -18,6 +18,7 @@ export interface ZenXHostProfile {
   onboardingComplete: boolean;
   provider: ZenXProviderProfile;
   defaultModel: string;
+  titleModel: string;
   models: string[];
   workspace: string;
   approvalPolicy: "always" | "never";
@@ -87,6 +88,10 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
   }
   const provider = validateProvider(value.provider);
   const defaultModel = nonEmpty(value.defaultModel, "default model");
+  const titleModel =
+    value.titleModel === undefined
+      ? "gpt-5.6-luna"
+      : nonEmpty(value.titleModel, "title model");
   if (!Array.isArray(value.models))
     throw new Error("ZenX model list is invalid");
   const models = [
@@ -103,6 +108,7 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     onboardingComplete: value.onboardingComplete === true,
     provider,
     defaultModel,
+    titleModel,
     models,
     workspace: path.resolve(nonEmpty(value.workspace, "workspace")),
     approvalPolicy: value.approvalPolicy,

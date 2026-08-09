@@ -17,6 +17,10 @@ import { TriggerRail } from "./TriggerRail";
 import { ScheduledView } from "./ScheduledView";
 import { RoomView } from "./RoomView";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
+import type {
+  ThreadTitleProjection,
+  ThreadTitleSnapshot,
+} from "../../main/thread-title-types.js";
 import {
   addApprovalRequest,
   markApprovalResponding,
@@ -63,6 +67,7 @@ export function App() {
     history: [],
     rooms: [],
   });
+  const [titleSnapshot, setTitleSnapshot] = useState<ThreadTitleSnapshot>({});
   const [serverStatus, setServerStatus] = useState<AppServerHostStatus>({
     type: "starting",
   });
@@ -251,10 +256,26 @@ export function App() {
       .catch(() => undefined);
   }, []);
 
-  const selectedThread =
+  useEffect(() => {
+    const dispose = window.zenx.titles.onChange(setTitleSnapshot);
+    void window.zenx.titles
+      .get()
+      .then(setTitleSnapshot)
+      .catch((error: unknown) => {
+        setRequestError(`ZenX title metadata failed: ${describeError(error)}`);
+      });
+    return dispose;
+  }, []);
+
+  const projectedThreads = threads.map((thread) =>
+    projectThreadTitle(thread, titleSnapshot),
+  );
+  const selectedThread = projectOptionalThreadTitle(
     threadDetail ??
-    threads.find((thread) => thread.id === selectedThreadId) ??
-    null;
+      threads.find((thread) => thread.id === selectedThreadId) ??
+      null,
+    titleSnapshot,
+  );
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
 
   const selectThread = resumeThread;
@@ -325,6 +346,20 @@ export function App() {
     const submission = started.submission;
     if (submission === null || submission.status !== "pending") return;
     try {
+      await window.zenx.titles
+        .observe(threadId, submission.text)
+        .then((projection) => {
+          if (projection !== undefined)
+            setTitleSnapshot((current) => ({
+              ...current,
+              [threadId]: projection,
+            }));
+        })
+        .catch((error: unknown) =>
+          setRequestError(
+            `Thread title could not be staged: ${describeError(error)}`,
+          ),
+        );
       const input = [{ type: "text" as const, text: submission.text }];
       if (submission.intent === "start") {
         await window.zenx.protocol.request("turn/start", {
@@ -422,6 +457,25 @@ export function App() {
       // A disabled localStorage keeps the in-memory preference for this window.
     }
   };
+  const renameThread = async (title: string) => {
+    if (selectedThread === null) return;
+    const projection = await window.zenx.titles.rename(
+      selectedThread.id,
+      title,
+    );
+    setTitleSnapshot((current) => ({
+      ...current,
+      [selectedThread.id]: projection,
+    }));
+  };
+  const retryThreadTitle = async () => {
+    if (selectedThread === null) return;
+    const projection = await window.zenx.titles.retry(selectedThread.id);
+    setTitleSnapshot((current) => ({
+      ...current,
+      [selectedThread.id]: projection,
+    }));
+  };
 
   return (
     <div className="app-shell">
@@ -448,7 +502,7 @@ export function App() {
         pendingApprovalThreadIds={pendingThreadIds}
         selectedThreadId={selectedThreadId}
         serverReady={serverStatus.type === "ready"}
-        threads={threads}
+        threads={projectedThreads}
         triggerSnapshot={triggerSnapshot}
       />
 
@@ -476,11 +530,16 @@ export function App() {
           <>
             <header className="workspace-header">
               <div>
-                <h1>
-                  {selectedThread === null
-                    ? "Start a conversation"
-                    : threadTitle(selectedThread)}
-                </h1>
+                {selectedThread === null ? (
+                  <h1>Start a conversation</h1>
+                ) : (
+                  <ThreadTitleEditor
+                    onRename={renameThread}
+                    onRetry={retryThreadTitle}
+                    projection={titleSnapshot[selectedThread.id]}
+                    title={threadTitle(selectedThread)}
+                  />
+                )}
                 <p>
                   {selectedThread === null
                     ? "Select a thread or create a new one."
@@ -634,6 +693,105 @@ export function App() {
           />
         )}
       </aside>
+    </div>
+  );
+}
+
+function projectThreadTitle(
+  thread: Thread,
+  snapshot: ThreadTitleSnapshot,
+): Thread {
+  const title = snapshot[thread.id]?.title;
+  return title === undefined ? thread : { ...thread, name: title };
+}
+
+function projectOptionalThreadTitle(
+  thread: Thread | null,
+  snapshot: ThreadTitleSnapshot,
+): Thread | null {
+  return thread === null ? null : projectThreadTitle(thread, snapshot);
+}
+
+function ThreadTitleEditor({
+  title,
+  projection,
+  onRename,
+  onRetry,
+}: {
+  title: string;
+  projection: ThreadTitleProjection | undefined;
+  onRename(title: string): Promise<void>;
+  onRetry(): Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!editing) setDraft(title);
+  }, [editing, title]);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onRename(draft);
+      setEditing(false);
+    } catch (reason) {
+      setError(describeError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="thread-title-editor">
+      {editing ? (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+        >
+          <input
+            autoFocus
+            aria-label="Thread title"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <button type="submit" disabled={busy || !draft.trim()}>
+            Save
+          </button>
+          <button type="button" onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        </form>
+      ) : (
+        <div className="thread-title-line">
+          <h1>{title}</h1>
+          <button
+            type="button"
+            aria-label="Rename thread"
+            onClick={() => setEditing(true)}
+          >
+            Rename
+          </button>
+          {projection?.status === "generating" ? (
+            <small>Generating title…</small>
+          ) : null}
+          {projection?.status === "failed" ? (
+            <button
+              className="title-retry"
+              type="button"
+              onClick={() => void onRetry()}
+            >
+              Retry title
+            </button>
+          ) : null}
+        </div>
+      )}
+      {projection?.status === "failed" ? (
+        <span className="title-error">{projection.error}</span>
+      ) : null}
+      {error === null ? null : <span className="title-error">{error}</span>}
     </div>
   );
 }

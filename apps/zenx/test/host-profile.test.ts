@@ -20,6 +20,7 @@ const profile = {
     baseUrl: "http://localhost:11434/v1",
   },
   defaultModel: "qwen3",
+  titleModel: "gpt-5.6-luna",
   models: ["qwen3", "deepseek-r1"],
   workspace: "/tmp/workspace",
   approvalPolicy: "always" as const,
@@ -64,6 +65,11 @@ test("rejects embedded URL credentials and missing default models", () => {
     () => validateHostProfile({ ...profile, models: ["other"] }),
     /include the default model/u,
   );
+});
+
+test("defaults legacy profiles to the independent Luna title model", () => {
+  const { titleModel: _titleModel, ...legacy } = profile;
+  assert.equal(validateHostProfile(legacy).titleModel, "gpt-5.6-luna");
 });
 
 test("reports a corrupt persisted host profile instead of silently replacing it", async () => {

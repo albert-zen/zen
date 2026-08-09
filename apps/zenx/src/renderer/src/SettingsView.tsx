@@ -265,6 +265,11 @@ export function SettingsView({ onClose }: { onClose(): void }) {
               onChange={(value) => setDraft({ ...draft, defaultModel: value })}
             />
             <Field
+              label="Title model"
+              value={draft.titleModel}
+              onChange={(value) => setDraft({ ...draft, titleModel: value })}
+            />
+            <Field
               label="Workspace"
               value={draft.workspace}
               onChange={(value) => setDraft({ ...draft, workspace: value })}
@@ -281,8 +286,9 @@ export function SettingsView({ onClose }: { onClose(): void }) {
             </label>
           </div>
           <p className="settings-note">
-            This list becomes the App Server ModelCatalog. Existing threads keep
-            their ZAS-authoritative model until you change it explicitly.
+            The title model is independent from the thread ModelCatalog and
+            defaults to gpt-5.6-luna. Existing threads keep their
+            ZAS-authoritative model until you change it explicitly.
           </p>
         </div>
         <CapabilitySettings />

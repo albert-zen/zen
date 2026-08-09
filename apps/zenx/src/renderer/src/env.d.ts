@@ -22,6 +22,10 @@ import type {
   TriggerSnapshot,
 } from "../../main/trigger-types.js";
 import type { ZenXCapabilitySnapshot } from "../../main/capabilities/types.js";
+import type {
+  ThreadTitleProjection,
+  ThreadTitleSnapshot,
+} from "../../main/thread-title-types.js";
 
 declare global {
   interface Window {
@@ -62,6 +66,16 @@ declare global {
         submitManualCode(code: string): Promise<void>;
         logoutSubscription(): Promise<PublicHostSettings>;
         onManualCodeRequested(listener: () => void): () => void;
+      };
+      titles: {
+        get(): Promise<ThreadTitleSnapshot>;
+        observe(
+          threadId: string,
+          input: string,
+        ): Promise<ThreadTitleProjection | undefined>;
+        rename(threadId: string, title: string): Promise<ThreadTitleProjection>;
+        retry(threadId: string): Promise<ThreadTitleProjection>;
+        onChange(listener: (snapshot: ThreadTitleSnapshot) => void): () => void;
       };
       triggers: {
         get(): Promise<TriggerSnapshot>;
