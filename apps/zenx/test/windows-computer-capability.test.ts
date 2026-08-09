@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -111,6 +111,35 @@ test("Windows provider captures only the exact HWND through WGC-default screensh
     ]);
     assert.equal(screenshotCommand.includes("--capture-screen"), false);
     assert.equal(screenshotCommand.includes("--focus"), false);
+    await backend.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Windows provider confirms a screenshot through its real file identity", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-winapp-test-"));
+  const artifactDirectory = path.join(directory, "artifacts");
+  const aliasDirectory = path.join(directory, "artifact-alias");
+  try {
+    await mkdir(artifactDirectory);
+    await symlink(
+      artifactDirectory,
+      aliasDirectory,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const runner = new FixtureWinAppRunner();
+    runner.screenshotPath = (artifactPath) =>
+      path.join(aliasDirectory, path.basename(artifactPath));
+    const backend = new WinAppCliComputerBackend({
+      artifactDirectory,
+      platform: "win32",
+      runner,
+    });
+
+    const result = await backend.screenshot(target);
+
+    assert.equal(path.dirname(result.artifactPath), artifactDirectory);
     await backend.close();
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -347,6 +376,7 @@ class FixtureWinAppRunner implements WinAppCliRunner {
   schemaProbeOutput: string | undefined;
   versionOutput = "winapp 1.2.3-preview\n";
   writtenValue = "";
+  screenshotPath: ((artifactPath: string) => string) | undefined;
 
   async run(
     _executable: string,
@@ -406,7 +436,7 @@ class FixtureWinAppRunner implements WinAppCliRunner {
       await writeFile(artifactPath, "fixture", "utf8");
       return output(
         JSON.stringify({
-          filePath: artifactPath,
+          filePath: this.screenshotPath?.(artifactPath) ?? artifactPath,
           width: 1280,
           height: 720,
           processId: 4242,

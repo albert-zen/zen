@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, stat } from "node:fs/promises";
+import { mkdir, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -498,7 +498,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       throw error;
     }
     const hwndConfirmed = sameHwnd(result.hwnd, window.hwnd);
-    const artifactConfirmed = sameWindowsPath(
+    const artifactConfirmed = await sameWindowsFile(
       result.filePath ?? "",
       artifactPath,
     );
@@ -1137,11 +1137,25 @@ function normalizeHwnd(value: unknown, label: string): string {
   throw new Error(`WinApp CLI returned an invalid ${label}`);
 }
 
-function sameWindowsPath(actual: string, expected: string): boolean {
+async function sameWindowsFile(
+  actual: string,
+  expected: string,
+): Promise<boolean> {
   if (actual.length === 0) return false;
-  const normalize = (value: string): string =>
-    path.resolve(value).replace(/^\\\\\?\\/u, "").toLocaleLowerCase("en-US");
-  return normalize(actual) === normalize(expected);
+  try {
+    const [actualRealPath, expectedRealPath] = await Promise.all([
+      realpath(actual),
+      realpath(expected),
+    ]);
+    const normalize = (value: string): string =>
+      path
+        .resolve(value)
+        .replace(/^\\\\\?\\/u, "")
+        .toLocaleLowerCase("en-US");
+    return normalize(actualRealPath) === normalize(expectedRealPath);
+  } catch {
+    return false;
+  }
 }
 
 function nonNegativeInteger(value: unknown, label: string): number {
