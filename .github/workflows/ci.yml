@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-cli-imzen:
+    name: Core, CLI, and IMZen
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Authenticate the private IM Agent SDK dependency
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.IM_AGENT_SDK_DEPLOY_KEY }}
+      - name: Route the pinned SDK dependency through its read-only deploy key
+        run: >-
+          git config --global
+          url."git@github.com:albert-zen/im-agent-sdk.git".insteadOf
+          "https://github.com/albert-zen/im-agent-sdk.git"
+      - run: npm ci
+      - run: npm run check
+
+  zenx:
+    name: ZenX typecheck, tests, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm --workspace apps/zenx run check
+
+  zenx-capability-smoke:
+    name: ZenX packaged capability smoke
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm --workspace apps/zenx run smoke:capabilities
