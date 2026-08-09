@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
 
 import type { Thread } from "../../protocol-client/index.js";
+import type { TriggerSnapshot } from "../../main/trigger-types.js";
 import { Icon } from "./icons";
 import {
   deriveInboxSections,
   deriveProjectGroups,
+  threadPreview,
   threadTitle,
   type SidebarMode,
 } from "./thread-list";
@@ -13,23 +15,36 @@ interface SidebarProps {
   mode: SidebarMode;
   onModeChange(mode: SidebarMode): void;
   onNewThread(): void;
+  onOpenSettings(): void;
+  onOpenScheduled(): void;
+  onSelectRoom(roomId: string): void;
   onSelectThread(threadId: string): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   selectedThreadId: string | null;
   serverReady: boolean;
   threads: readonly Thread[];
+  triggerSnapshot: TriggerSnapshot;
 }
 
 export function Sidebar({
   mode,
   onModeChange,
   onNewThread,
+  onOpenSettings,
+  onOpenScheduled,
+  onSelectRoom,
   onSelectThread,
   pendingApprovalThreadIds,
   selectedThreadId,
   serverReady,
   threads,
+  triggerSnapshot,
 }: SidebarProps) {
+  const watchingThreadIds = new Set(
+    triggerSnapshot.triggers
+      .filter((trigger) => trigger.active)
+      .map((trigger) => trigger.threadId),
+  );
   return (
     <aside className="sidebar" aria-label="Thread navigation">
       <header className="sidebar-header">
@@ -47,15 +62,13 @@ export function Sidebar({
           <Icon name="search" />
         </button>
         <button
-          className="icon-button"
+          className={`icon-button${mode === "inbox" ? " active" : ""}`}
           type="button"
-          aria-label={
-            mode === "inbox" ? "Switch to project view" : "Switch to inbox view"
-          }
-          aria-pressed={mode === "projects"}
+          aria-label={mode === "inbox" ? "Exit Inbox" : "Open Inbox"}
+          aria-pressed={mode === "inbox"}
           onClick={() => onModeChange(mode === "inbox" ? "projects" : "inbox")}
         >
-          <Icon name={mode === "inbox" ? "tree" : "inbox"} />
+          <Icon name="inbox" />
         </button>
       </header>
 
@@ -63,6 +76,20 @@ export function Sidebar({
         <button className="nav-item" type="button" onClick={onNewThread}>
           <Icon name="compose" />
           New conversation
+        </button>
+        <button className="nav-item" type="button" onClick={onOpenSettings}>
+          <Icon name="settings" />
+          Settings
+        </button>
+        <button className="nav-item" type="button" onClick={onOpenScheduled}>
+          <Icon name="trigger" />
+          Scheduled
+          <span className="nav-count">
+            {
+              triggerSnapshot.triggers.filter((trigger) => trigger.active)
+                .length
+            }
+          </span>
         </button>
       </nav>
 
@@ -72,6 +99,22 @@ export function Sidebar({
       </div>
 
       <div className="thread-list">
+        {triggerSnapshot.rooms.length > 0 ? (
+          <section className="thread-section compact-section room-list">
+            <h2>Rooms</h2>
+            {triggerSnapshot.rooms.map((room) => (
+              <button
+                className="compact-thread"
+                type="button"
+                key={room.id}
+                onClick={() => onSelectRoom(room.id)}
+              >
+                <span># {room.name}</span>
+                <small>{room.messages.length}</small>
+              </button>
+            ))}
+          </section>
+        ) : null}
         {!serverReady ? (
           <p className="sidebar-empty">Waiting for the local App Server.</p>
         ) : threads.length === 0 ? (
@@ -82,6 +125,7 @@ export function Sidebar({
             pendingApprovalThreadIds={pendingApprovalThreadIds}
             selectedThreadId={selectedThreadId}
             threads={threads}
+            watchingThreadIds={watchingThreadIds}
           />
         ) : (
           <ProjectsView
@@ -89,6 +133,7 @@ export function Sidebar({
             pendingApprovalThreadIds={pendingApprovalThreadIds}
             selectedThreadId={selectedThreadId}
             threads={threads}
+            watchingThreadIds={watchingThreadIds}
           />
         )}
       </div>
@@ -101,11 +146,16 @@ function InboxView({
   selectedThreadId,
   onSelectThread,
   pendingApprovalThreadIds,
+  watchingThreadIds,
 }: Pick<
   SidebarProps,
   "threads" | "selectedThreadId" | "onSelectThread" | "pendingApprovalThreadIds"
->) {
-  const sections = deriveInboxSections(threads, pendingApprovalThreadIds);
+> & { watchingThreadIds: ReadonlySet<string> }) {
+  const sections = deriveInboxSections(
+    threads,
+    pendingApprovalThreadIds,
+    watchingThreadIds,
+  );
   return (
     <>
       {sections.map((section) =>
@@ -121,19 +171,15 @@ function InboxView({
                 pendingApproval={pendingApprovalThreadIds.has(thread.id)}
                 selected={thread.id === selectedThreadId}
                 thread={thread}
+                watching={
+                  watchingThreadIds.has(thread.id) &&
+                  thread.status.type === "idle"
+                }
               />
             ))}
           </section>
         ),
       )}
-      <section
-        className="thread-section watching-placeholder"
-        aria-disabled="true"
-      >
-        <h2>
-          Watching <span>v1</span>
-        </h2>
-      </section>
     </>
   );
 }
@@ -143,10 +189,11 @@ function ProjectsView({
   selectedThreadId,
   onSelectThread,
   pendingApprovalThreadIds,
+  watchingThreadIds,
 }: Pick<
   SidebarProps,
   "threads" | "selectedThreadId" | "onSelectThread" | "pendingApprovalThreadIds"
->) {
+> & { watchingThreadIds: ReadonlySet<string> }) {
   const groups = deriveProjectGroups(threads);
   const pinned = threads.filter((thread) => thread.isPinned);
   return (
@@ -161,6 +208,10 @@ function ProjectsView({
               pendingApproval={pendingApprovalThreadIds.has(thread.id)}
               selected={thread.id === selectedThreadId}
               thread={thread}
+              watching={
+                watchingThreadIds.has(thread.id) &&
+                thread.status.type === "idle"
+              }
             />
           ))}
         </section>
@@ -174,6 +225,7 @@ function ProjectsView({
             onSelectThread={onSelectThread}
             pendingApprovalThreadIds={pendingApprovalThreadIds}
             selectedThreadId={selectedThreadId}
+            watchingThreadIds={watchingThreadIds}
           />
         ))}
       </section>
@@ -186,11 +238,13 @@ function ProjectRows({
   selectedThreadId,
   onSelectThread,
   pendingApprovalThreadIds,
+  watchingThreadIds,
 }: {
   group: ReturnType<typeof deriveProjectGroups>[number];
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
+  watchingThreadIds: ReadonlySet<string>;
 }) {
   const [open, setOpen] = useState(true);
   const activeCount = useMemo(
@@ -225,6 +279,10 @@ function ProjectRows({
               pendingApproval={pendingApprovalThreadIds.has(thread.id)}
               selected={thread.id === selectedThreadId}
               thread={thread}
+              watching={
+                watchingThreadIds.has(thread.id) &&
+                thread.status.type === "idle"
+              }
             />
           ))
         : null}
@@ -237,28 +295,38 @@ function ThreadCard({
   selected,
   onSelectThread,
   pendingApproval,
+  watching,
 }: {
   thread: Thread;
   selected: boolean;
   onSelectThread(threadId: string): void;
   pendingApproval: boolean;
+  watching: boolean;
 }) {
   const content = (
     <>
       <div className="thread-card-title-row">
-        <StatusDot pendingApproval={pendingApproval} thread={thread} />
+        <StatusDot
+          pendingApproval={pendingApproval}
+          thread={thread}
+          watching={watching}
+        />
         <strong>{threadTitle(thread)}</strong>
         <time>{formatRecency(thread.updatedAt)}</time>
       </div>
       <div className="thread-card-meta">
-        <StatusPill pendingApproval={pendingApproval} thread={thread} />
+        <StatusPill
+          pendingApproval={pendingApproval}
+          thread={thread}
+          watching={watching}
+        />
         {thread.cwd.length > 0 ? <span>{projectName(thread.cwd)}</span> : null}
         {thread.modelProvider.length > 0 ? (
           <span>{thread.modelProvider}</span>
         ) : null}
       </div>
       <p>
-        {thread.preview ||
+        {threadPreview(thread) ||
           (thread.status.type === "systemError"
             ? "Thread journal could not be loaded."
             : "No messages yet.")}
@@ -285,16 +353,22 @@ function CompactThreadRow({
   selected,
   onSelectThread,
   pendingApproval,
+  watching,
 }: {
   thread: Thread;
   selected: boolean;
   onSelectThread(threadId: string): void;
   pendingApproval: boolean;
+  watching: boolean;
 }) {
   const contents = (
     <>
       <span>{threadTitle(thread)}</span>
-      <StatusGlyph pendingApproval={pendingApproval} thread={thread} />
+      <StatusGlyph
+        pendingApproval={pendingApproval}
+        thread={thread}
+        watching={watching}
+      />
     </>
   );
   return thread.status.type === "systemError" ? (
@@ -315,13 +389,15 @@ function CompactThreadRow({
 function StatusDot({
   thread,
   pendingApproval,
+  watching,
 }: {
   thread: Thread;
   pendingApproval: boolean;
+  watching: boolean;
 }) {
   return (
     <span
-      className={`status-dot ${statusClass(thread, pendingApproval)}`}
+      className={`status-dot ${statusClass(thread, pendingApproval, watching)}`}
       aria-hidden="true"
     />
   );
@@ -330,19 +406,25 @@ function StatusDot({
 function StatusPill({
   thread,
   pendingApproval,
+  watching,
 }: {
   thread: Thread;
   pendingApproval: boolean;
+  watching: boolean;
 }) {
   const label = pendingApproval
     ? "Approval needed"
-    : thread.status.type === "active"
-      ? "Running"
-      : thread.status.type === "systemError"
-        ? "Unavailable"
-        : "Complete";
+    : watching
+      ? "Watching"
+      : thread.status.type === "active"
+        ? "Running"
+        : thread.status.type === "systemError"
+          ? "Unavailable"
+          : "Complete";
   return (
-    <span className={`status-pill ${statusClass(thread, pendingApproval)}`}>
+    <span
+      className={`status-pill ${statusClass(thread, pendingApproval, watching)}`}
+    >
       {label}
     </span>
   );
@@ -351,13 +433,19 @@ function StatusPill({
 function StatusGlyph({
   thread,
   pendingApproval,
+  watching,
 }: {
   thread: Thread;
   pendingApproval: boolean;
+  watching: boolean;
 }) {
   return pendingApproval ? (
     <span className="status-approval" aria-label="Approval needed">
       <Icon name="warning" size={13} />
+    </span>
+  ) : watching ? (
+    <span className="status-watching" aria-label="Watching">
+      <Icon name="moon" size={13} />
     </span>
   ) : thread.status.type === "active" ? (
     <span className="mini-spinner" aria-label="Running" />
@@ -368,14 +456,20 @@ function StatusGlyph({
   ) : null;
 }
 
-function statusClass(thread: Thread, pendingApproval: boolean): string {
+function statusClass(
+  thread: Thread,
+  pendingApproval: boolean,
+  watching: boolean,
+): string {
   return pendingApproval
     ? "approval"
-    : thread.status.type === "active"
-      ? "active"
-      : thread.status.type === "systemError"
-        ? "error"
-        : "settled";
+    : watching
+      ? "watching"
+      : thread.status.type === "active"
+        ? "active"
+        : thread.status.type === "systemError"
+          ? "error"
+          : "settled";
 }
 
 function projectName(cwd: string): string {

@@ -12,7 +12,7 @@ interface SidebarStorage {
 }
 
 export interface InboxSection {
-  key: "needs" | "active" | "settled";
+  key: "needs" | "active" | "watching" | "settled";
   label: string;
   threads: Thread[];
 }
@@ -26,9 +26,9 @@ export interface ProjectGroup {
 export function readSidebarMode(
   storage: Pick<SidebarStorage, "getItem">,
 ): SidebarMode {
-  return storage.getItem("zenx-sidebar-mode") === "projects"
-    ? "projects"
-    : "inbox";
+  return storage.getItem("zenx-sidebar-mode") === "inbox"
+    ? "inbox"
+    : "projects";
 }
 
 export function writeSidebarMode(
@@ -41,6 +41,7 @@ export function writeSidebarMode(
 export function deriveInboxSections(
   threads: readonly Thread[],
   pendingApprovalThreadIds: ReadonlySet<string> = new Set(),
+  watchingThreadIds: ReadonlySet<string> = new Set(),
 ): InboxSection[] {
   const sorted = sortByRecency(threads);
   return [
@@ -63,11 +64,22 @@ export function deriveInboxSections(
       ),
     },
     {
+      key: "watching",
+      label: "Watching",
+      threads: sorted.filter(
+        (thread) =>
+          thread.status.type === "idle" &&
+          watchingThreadIds.has(thread.id) &&
+          !pendingApprovalThreadIds.has(thread.id),
+      ),
+    },
+    {
       key: "settled",
       label: "Completed",
       threads: sorted.filter(
         (thread) =>
           thread.status.type === "idle" &&
+          !watchingThreadIds.has(thread.id) &&
           !pendingApprovalThreadIds.has(thread.id),
       ),
     },
@@ -173,11 +185,32 @@ export function applyThreadNotification(
 }
 
 export function threadTitle(thread: Thread): string {
-  if (thread.name !== null && thread.name.trim().length > 0) return thread.name;
-  if (thread.preview.trim().length > 0) return thread.preview;
+  const named = thread.name?.trim() ?? "";
+  const preview = thread.preview.trim();
+  const wakeup = wakeupLabel(named) ?? wakeupLabel(preview);
+  if (wakeup !== null) return wakeup;
+  if (named.length > 0) return named;
+  if (preview.length > 0) return preview;
   return thread.status.type === "systemError"
     ? `Unavailable thread · ${thread.id.slice(0, 8)}`
     : "Untitled thread";
+}
+
+export function threadPreview(thread: Thread): string {
+  const preview = thread.preview.trim();
+  const wakeup = wakeupLabel(preview) ?? wakeupLabel(thread.name ?? "");
+  return wakeup === null ? preview : `${wakeup} · system-level wakeup`;
+}
+
+function wakeupLabel(value: string): string | null {
+  if (!value.trimStart().startsWith("[ZenX trigger wakeup]")) return null;
+  const sourceThread = /Source Thread:\s*([^\s]+)/u.exec(value)?.[1];
+  if (sourceThread !== undefined)
+    return `Relay from ${sourceThread.slice(0, 8)}`;
+  const sourceRoom = /Source Room:\s*([^\s]+)/u.exec(value)?.[1];
+  if (sourceRoom !== undefined)
+    return `Room wakeup · ${sourceRoom.slice(0, 8)}`;
+  return "Trigger wakeup";
 }
 
 function sortByRecency(threads: readonly Thread[]): Thread[] {

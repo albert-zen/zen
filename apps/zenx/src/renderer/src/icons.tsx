@@ -7,10 +7,13 @@ type IconName =
   | "compose"
   | "folder"
   | "inbox"
+  | "moon"
   | "panel-right"
   | "reasoning"
+  | "settings"
   | "search"
   | "thread"
+  | "trigger"
   | "tree"
   | "stop"
   | "warning";
@@ -39,6 +42,7 @@ const paths: Record<IconName, ReactNode> = {
       <path d="M3.4 3.4h9.2L14 9.5v3.1c0 .6-.5 1-1 1H3c-.5 0-1-.4-1-1V9.5l1.4-6.1Z" />
     </>
   ),
+  moon: <path d="M13.4 9.4A5.8 5.8 0 0 1 6.6 2.6a5.8 5.8 0 1 0 6.8 6.8Z" />,
   "panel-right": (
     <>
       <rect x="1.8" y="2.2" width="12.4" height="11.6" rx="1.5" />
@@ -49,6 +53,12 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="M8 2.1a4.4 4.4 0 0 0-2.7 7.9c.5.4.8.9.8 1.5h3.8c0-.6.3-1.1.8-1.5A4.4 4.4 0 0 0 8 2.1Z" />
       <path d="M6.5 13.8h3M6.2 11.5h3.6" />
+    </>
+  ),
+  settings: (
+    <>
+      <circle cx="8" cy="8" r="2.2" />
+      <path d="M8 1.8v1.3M8 12.9v1.3M1.8 8h1.3M12.9 8h1.3M3.6 3.6l.9.9M11.5 11.5l.9.9M12.4 3.6l-.9.9M4.5 11.5l-.9.9" />
     </>
   ),
   search: (
@@ -64,6 +74,7 @@ const paths: Record<IconName, ReactNode> = {
       <circle cx="3" cy="12.5" r=".2" />
     </>
   ),
+  trigger: <path d="M8.8 1.6 3.4 9h3.4l-.9 5.4L11.3 7H7.9l.9-5.4Z" />,
   stop: <rect x="3.2" y="3.2" width="9.6" height="9.6" rx="1.5" />,
   tree: (
     <>

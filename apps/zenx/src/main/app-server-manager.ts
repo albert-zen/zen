@@ -89,6 +89,13 @@ export class AppServerManager {
     return this.#child?.pid;
   }
 
+  reportStartupError(error: unknown): void {
+    if (this.#child !== undefined) {
+      throw new Error("Cannot replace the status of a running App Server host");
+    }
+    this.#setStatus({ type: "error", message: asError(error).message });
+  }
+
   async start(): Promise<void> {
     if (this.#child !== undefined) {
       throw new Error("ZenX App Server host is already running");
@@ -139,6 +146,12 @@ export class AppServerManager {
       child.kill("SIGTERM");
       throw new Error(message);
     }
+  }
+
+  async restart(hostConfig: ZenXHostConfig): Promise<void> {
+    await this.stop();
+    this.#options.hostConfig = hostConfig;
+    await this.start();
   }
 
   async request<M extends ClientRequestMethod>(

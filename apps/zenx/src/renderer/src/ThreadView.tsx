@@ -9,12 +9,16 @@ import {
   type ComposerState,
 } from "./composer-state.js";
 import { Icon } from "./icons.js";
+import { Markdown } from "./Markdown.js";
+import type { TriggerHistoryEntry } from "../../main/trigger-types.js";
 import { activeTurn } from "./thread-view-state.js";
 
 interface ThreadViewProps {
   approvals: readonly ApprovalCardState[];
   composer: ComposerState;
   thread: Thread;
+  wakeups?: readonly TriggerHistoryEntry[];
+  watching?: boolean;
   onDraftChange(draft: string): void;
   onInterrupt(turnId: string): Promise<void>;
   onRespondToApproval(
@@ -31,6 +35,8 @@ export function ThreadView({
   approvals,
   composer,
   thread,
+  wakeups = [],
+  watching = false,
   onDraftChange,
   onInterrupt,
   onRespondToApproval,
@@ -96,6 +102,7 @@ export function ThreadView({
                 key={turn.id}
                 onRespondToApproval={onRespondToApproval}
                 turn={turn}
+                wakeups={wakeups}
               />
             ))
           )}
@@ -115,7 +122,9 @@ export function ThreadView({
             }}
             placeholder={
               runningTurn === null
-                ? "Send a message…"
+                ? watching
+                  ? "Send a message to wake this thread…"
+                  : "Send a message…"
                 : "Steer the active turn…"
             }
             rows={1}
@@ -141,6 +150,7 @@ export function ThreadView({
                 runningTurn !== null,
                 pendingApproval,
                 interruptError,
+                watching,
               )}
             </span>
             {runningTurn === null ? (
@@ -204,6 +214,7 @@ function composerStatus(
   active: boolean,
   pendingApproval: boolean,
   interruptError: string | null,
+  watching: boolean,
 ): string {
   if (interruptError !== null) return interruptError;
   if (composer.submission?.status === "failed") {
@@ -216,7 +227,10 @@ function composerStatus(
         ? "Adding guidance to the current turn…"
         : "Starting a new turn…";
   }
-  if (!active) return "Enter to send · Shift+Enter for a new line";
+  if (!active)
+    return watching
+      ? "A direct message wakes this thread; registered triggers stay active"
+      : "Enter to send · Shift+Enter for a new line";
   if (pendingApproval) {
     return "Steering adds guidance but does not approve the pending command. Interrupt & send cancels it.";
   }
@@ -228,6 +242,7 @@ function TurnBlock({
   index,
   approvals,
   onRespondToApproval,
+  wakeups,
 }: {
   turn: Turn;
   index: number;
@@ -236,6 +251,7 @@ function TurnBlock({
     requestId: string,
     decision: ApprovalDecision,
   ): Promise<void>;
+  wakeups: readonly TriggerHistoryEntry[];
 }) {
   return (
     <section
@@ -248,7 +264,16 @@ function TurnBlock({
       </div>
       {turn.items.map((item) => (
         <div key={item.id}>
-          <ItemView item={item} />
+          <ItemView
+            item={item}
+            wakeup={
+              item.type === "userMessage"
+                ? wakeups.find(
+                    (entry) => entry.clientUserMessageId === item.clientId,
+                  )
+                : undefined
+            }
+          />
           {approvals
             .filter((approval) => approval.params.itemId === item.id)
             .map((approval) => (
@@ -368,8 +393,59 @@ function approvalResultLabel(approval: ApprovalCardState): string {
   }
 }
 
-function ItemView({ item }: { item: ThreadItem }) {
+function ItemView({
+  item,
+  wakeup,
+}: {
+  item: ThreadItem;
+  wakeup?: TriggerHistoryEntry;
+}) {
   if (item.type === "userMessage") {
+    if (wakeup !== undefined) {
+      return (
+        <article className={`wakeup-card ${wakeup.status}`}>
+          <header>
+            <Icon name="trigger" size={14} />
+            <strong>Trigger wakeup</strong>
+            <span>{kindLabel(wakeup.kind)}</span>
+            <time>
+              {new Date(wakeup.startedAt).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </time>
+          </header>
+          <p>{wakeup.reason}</p>
+          <dl className="wakeup-source">
+            <div>
+              <dt>Trigger</dt>
+              <dd>{wakeup.triggerId}</dd>
+            </div>
+            {wakeup.sourceThreadId ? (
+              <div>
+                <dt>Relay source</dt>
+                <dd>
+                  Thread {wakeup.sourceThreadId} · Turn {wakeup.sourceTurnId}
+                </dd>
+              </div>
+            ) : wakeup.sourceRoomId ? (
+              <div>
+                <dt>Room source</dt>
+                <dd>
+                  Room {wakeup.sourceRoomId} · Message{" "}
+                  {wakeup.sourceRoomMessageId}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+          <div>
+            <span>Injected prompt</span>
+            <Markdown text={wakeup.prompt} />
+          </div>
+          {wakeup.error ? <small>{wakeup.error}</small> : null}
+        </article>
+      );
+    }
     return (
       <article className="message-item user-message">
         <div className="message-author">
@@ -377,7 +453,9 @@ function ItemView({ item }: { item: ThreadItem }) {
           <strong>You</strong>
         </div>
         <div className="user-bubble">
-          {item.content.map((content) => content.text).join("\n")}
+          <Markdown
+            text={item.content.map((content) => content.text).join("\n")}
+          />
         </div>
       </article>
     );
@@ -390,7 +468,7 @@ function ItemView({ item }: { item: ThreadItem }) {
           <strong>Zen</strong>
         </div>
         <div className="agent-copy">
-          {item.text}
+          <Markdown text={item.text} />
           {item.text.length === 0 ? <span className="stream-cursor" /> : null}
         </div>
       </article>
@@ -409,6 +487,15 @@ function ItemView({ item }: { item: ThreadItem }) {
     );
   }
   return <CommandItemView item={item} />;
+}
+
+function kindLabel(kind: TriggerHistoryEntry["kind"]): string {
+  return {
+    timer: "Timer",
+    thread: "Thread event",
+    roomMention: "Room mention",
+    signal: "External signal",
+  }[kind];
 }
 
 function CommandItemView({
