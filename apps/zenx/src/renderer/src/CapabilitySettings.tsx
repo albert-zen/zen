@@ -177,7 +177,7 @@ export function CapabilitySettings() {
       {snapshot.discoveryErrors.map((message) => (
         <div className="settings-error" role="alert" key={message}>
           <Icon name="warning" size={14} />
-          Local capability: {message}
+          Capability: {message}
         </div>
       ))}
       {error === null ? null : (

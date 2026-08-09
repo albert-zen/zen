@@ -67,3 +67,25 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm --workspace apps/zenx run smoke:capabilities
+
+  zenx-windows-computer-smoke:
+    name: ZenX Windows WinApp adapter smoke
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      WINAPP_CLI_UPDATE_CHECK: "0"
+      WINAPP_CLI_TELEMETRY_OPTOUT: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install Microsoft WinApp CLI
+        uses: microsoft/setup-WinAppCli@b93bbddc1f7abc061ca0d3a8119e3a0c7dd71495 # v0.2
+        with:
+          version: v0.3.1
+      - name: Report WinApp CLI version
+        run: winapp --version
+      - run: npm ci
+      - run: npm --workspace apps/zenx run smoke:windows-computer
