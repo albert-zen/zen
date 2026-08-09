@@ -185,11 +185,32 @@ export function applyThreadNotification(
 }
 
 export function threadTitle(thread: Thread): string {
-  if (thread.name !== null && thread.name.trim().length > 0) return thread.name;
-  if (thread.preview.trim().length > 0) return thread.preview;
+  const named = thread.name?.trim() ?? "";
+  const preview = thread.preview.trim();
+  const wakeup = wakeupLabel(named) ?? wakeupLabel(preview);
+  if (wakeup !== null) return wakeup;
+  if (named.length > 0) return named;
+  if (preview.length > 0) return preview;
   return thread.status.type === "systemError"
     ? `Unavailable thread · ${thread.id.slice(0, 8)}`
     : "Untitled thread";
+}
+
+export function threadPreview(thread: Thread): string {
+  const preview = thread.preview.trim();
+  const wakeup = wakeupLabel(preview) ?? wakeupLabel(thread.name ?? "");
+  return wakeup === null ? preview : `${wakeup} · system-level wakeup`;
+}
+
+function wakeupLabel(value: string): string | null {
+  if (!value.trimStart().startsWith("[ZenX trigger wakeup]")) return null;
+  const sourceThread = /Source Thread:\s*([^\s]+)/u.exec(value)?.[1];
+  if (sourceThread !== undefined)
+    return `Relay from ${sourceThread.slice(0, 8)}`;
+  const sourceRoom = /Source Room:\s*([^\s]+)/u.exec(value)?.[1];
+  if (sourceRoom !== undefined)
+    return `Room wakeup · ${sourceRoom.slice(0, 8)}`;
+  return "Trigger wakeup";
 }
 
 function sortByRecency(threads: readonly Thread[]): Thread[] {

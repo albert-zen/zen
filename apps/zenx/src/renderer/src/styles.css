@@ -1235,6 +1235,28 @@ summary:focus-visible {
   color: var(--color-text-muted);
   font-size: 12px;
 }
+.wakeup-source {
+  display: grid;
+  gap: 3px;
+  margin: 0 0 9px;
+  font-size: 10px;
+}
+.wakeup-source > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 7px;
+}
+.wakeup-source dt {
+  color: var(--color-text-faint);
+}
+.wakeup-source dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .wakeup-card > div {
   padding: 8px 10px;
   border-radius: 7px;
@@ -1564,6 +1586,28 @@ summary:focus-visible {
 .scheduled-row + .scheduled-row {
   margin-top: 7px;
 }
+.scheduled-trigger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  margin-top: 7px;
+}
+.scheduled-trigger:first-of-type {
+  margin-top: 0;
+}
+.scheduled-trigger .form-error {
+  grid-column: 1 / -1;
+}
+.scheduled-cancel {
+  padding: 7px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+}
 .trigger-kind {
   color: var(--color-violet);
   font-size: 10px;
@@ -1621,6 +1665,40 @@ summary:focus-visible {
   grid-template-columns: 1fr 1fr 1.5fr auto;
   gap: 6px;
 }
+.create-room > input {
+  width: 100%;
+  margin-bottom: 7px;
+}
+.create-room > .room-member-editor {
+  grid-template-columns: 1fr 1.5fr auto;
+}
+.create-room > .room-member-drafts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 8px 0;
+}
+.room-member-drafts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  background: var(--color-panel-raised);
+  font-size: 10px;
+}
+.room-member-drafts button,
+.room-members button {
+  padding: 0;
+  border: 0;
+  color: var(--color-text-faint);
+  background: transparent;
+  cursor: pointer;
+}
+.create-room > .primary-button {
+  padding: 7px 10px;
+}
 .signal-console {
   margin-top: 22px;
 }
@@ -1674,11 +1752,37 @@ summary:focus-visible {
   gap: 6px;
 }
 .room-members span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 3px 7px;
   border-radius: 6px;
   color: var(--color-text-muted);
   background: var(--color-panel-raised);
   font-size: 10px;
+}
+.room-member-manager {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr auto;
+  gap: 6px;
+  padding: 9px 32px;
+  border-bottom: 1px solid var(--color-border-soft);
+  background: rgba(15, 18, 24, 0.58);
+}
+.room-member-manager input,
+.room-member-manager select,
+.room-member-manager button {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  background: #0d1015;
+  font: inherit;
+  font-size: 10.5px;
+}
+.room-member-manager .form-error {
+  grid-column: 1 / -1;
 }
 .room-messages {
   width: min(100%, 780px);

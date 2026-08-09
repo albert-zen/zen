@@ -21,6 +21,7 @@ import type {
 import type {
   CreateRoomInput,
   CreateTriggerInput,
+  RoomMember,
   TriggerSnapshot,
 } from "../main/trigger-types.js";
 
@@ -121,6 +122,16 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.triggersSignal, name, detail),
     createRoom: async (input: CreateRoomInput): Promise<TriggerSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.roomsCreate, input),
+    addRoomMember: async (
+      roomId: string,
+      member: RoomMember,
+    ): Promise<TriggerSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.roomsAddMember, roomId, member),
+    removeRoomMember: async (
+      roomId: string,
+      threadId: string,
+    ): Promise<TriggerSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.roomsRemoveMember, roomId, threadId),
     postRoomMessage: async (
       roomId: string,
       author: string,

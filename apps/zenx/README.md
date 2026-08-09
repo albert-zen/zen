@@ -22,15 +22,22 @@ journals, App Server protocol history, or shell environment.
 ## Triggers and Rooms
 
 The per-Thread Trigger rail can register one-shot or recurring timers,
-`turn_completed` watches, Room mentions, and named external signals. `Scheduled`
-lists every active trigger, recent history, Rooms, and the external signal entry
-point. A hit persists an auditable occurrence with a stable client message ID,
-then starts a normal App Server Turn. Failures remain visible and are never
-silently retried.
+`turn_completed` watches, Room mentions, and named signal conditions. `Scheduled`
+lists every active trigger, recent history, Rooms, and a renderer-IPC signal
+simulator for local testing. A hit persists an auditable occurrence with a stable
+client message ID, then starts a normal App Server Turn. Failures remain visible
+and are never silently retried.
+
+Agent-callable `trigger.create` / `trigger.cancel` tools and a production external
+signal ingress are not part of this slice. They remain follow-up ZenX-host
+features; neither should be added to Zen Core or the Codex-compatible protocol.
 
 A Room is shared transcription and routing, not an Agent Thread. Only an explicit
 member mention with a matching trigger delivers Room content to that member's
-Thread; Agent replies in the Room link back to their source Thread and Turn.
+Thread. Rooms support multiple unique member names/Threads and inject only a
+bounded recent context window. Agent replies in the Room link back to their
+source Thread and Turn. Thread watches similarly inject a bounded completed-Turn
+snapshot rather than copying a second authoritative transcript.
 
 ## Verification
 
@@ -40,8 +47,10 @@ npm run check
 ```
 
 The automated integration suite runs the timer → wakeup → App Server Turn →
-streamed response → history chain, plus Thread-event, Room-mention, and signal
-routing. The 2026-08-09 packaged Electron smoke also covered onboarding/host
+streamed response → history chain, explicit cyclic/self relay and cancellation,
+bounded source snapshots, two-member Room routing, strict persisted-state
+validation, long timers, OAuth cleanup, link policy, and local signal routing.
+The 2026-08-09 packaged Electron smoke also covered onboarding/host
 restart, Thread creation, Markdown rendering and copy affordances, the persistent
 Projects/Inbox toggle, Watching, and a real timer wakeup card.
 

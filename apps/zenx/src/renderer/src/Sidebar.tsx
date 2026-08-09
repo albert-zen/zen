@@ -6,6 +6,7 @@ import { Icon } from "./icons";
 import {
   deriveInboxSections,
   deriveProjectGroups,
+  threadPreview,
   threadTitle,
   type SidebarMode,
 } from "./thread-list";
@@ -325,7 +326,7 @@ function ThreadCard({
         ) : null}
       </div>
       <p>
-        {thread.preview ||
+        {threadPreview(thread) ||
           (thread.status.type === "systemError"
             ? "Thread journal could not be loaded."
             : "No messages yet.")}

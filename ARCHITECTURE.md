@@ -57,7 +57,12 @@
 - **ZenXRoom** — ZenX 外层产品持有的共享协作转录与 Thread 路由表面；Room 本身不是
   Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread。
 - **ZenXWakeupProjection** — ZenX 把 Trigger 命中的 `clientUserMessageId` 与外部审计记录
-  关联成系统级唤醒卡片；canonical `user_message` 仍是 App Server 新 Turn 的唯一输入事实。
+  关联成系统级唤醒卡片，并把有界、带明确来源的 completed Turn / Room 上下文作为
+  新 Turn 输入投影；它不是第二份权威 transcript，canonical `user_message` 仍是唯一输入事实。
+- **ZenXTriggerAppServerPort** — ZenX Trigger 服务观察 completed Item/Turn 并发起普通
+  `turn/start` 所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
+- **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
+  只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并

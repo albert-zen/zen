@@ -1,4 +1,5 @@
 import { Fragment, useState, type ReactNode } from "react";
+import { classifyZenXLink } from "../../external-link-policy.js";
 
 export type MarkdownBlock =
   | { type: "paragraph"; text: string }
@@ -199,13 +200,17 @@ function inlineMarkdown(text: string): ReactNode[] {
       output.push(<code key={`code-${match.index}`}>{match[2]}</code>);
     } else {
       const label = match[3] ?? "";
-      const href = safeHref(match[4] ?? "");
+      const target = classifyZenXLink(match[4] ?? "");
       output.push(
-        href === null ? (
+        target.kind === "rejected" ? (
           <Fragment key={`link-${match.index}`}>{label}</Fragment>
+        ) : target.kind === "anchor" ? (
+          <a href={target.href} key={`link-${match.index}`}>
+            {label}
+          </a>
         ) : (
           <a
-            href={href}
+            href={target.href}
             key={`link-${match.index}`}
             rel="noreferrer"
             target="_blank"
@@ -219,27 +224,6 @@ function inlineMarkdown(text: string): ReactNode[] {
   }
   if (cursor < text.length) output.push(text.slice(cursor));
   return output;
-}
-
-function safeHref(raw: string): string | null {
-  if (
-    raw.startsWith("#") ||
-    raw.startsWith("/") ||
-    raw.startsWith("./") ||
-    raw.startsWith("../")
-  ) {
-    return raw;
-  }
-  try {
-    const url = new URL(raw);
-    return url.protocol === "http:" ||
-      url.protocol === "https:" ||
-      url.protocol === "mailto:"
-      ? url.toString()
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 function startsBlock(lines: string[], index: number): boolean {

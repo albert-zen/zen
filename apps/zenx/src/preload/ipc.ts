@@ -19,5 +19,7 @@ export const ipcChannels = {
   triggersSignal: "zenx:triggers:signal",
   triggersChanged: "zenx:triggers:changed",
   roomsCreate: "zenx:rooms:create",
+  roomsAddMember: "zenx:rooms:add-member",
+  roomsRemoveMember: "zenx:rooms:remove-member",
   roomsPost: "zenx:rooms:post",
 } as const;

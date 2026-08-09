@@ -234,7 +234,11 @@ export function App() {
     void window.zenx.triggers
       .get()
       .then(setTriggerSnapshot)
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        setRequestError(
+          `ZenX orchestration state failed: ${describeError(error)}`,
+        );
+      });
     return dispose;
   }, []);
 
@@ -465,6 +469,7 @@ export function App() {
           <RoomView
             roomId={selectedRoomId}
             snapshot={triggerSnapshot}
+            threads={threads}
             onOpenThread={(id) => void resumeThread(id)}
           />
         ) : (

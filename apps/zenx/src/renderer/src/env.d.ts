@@ -18,6 +18,7 @@ import type {
 import type {
   CreateRoomInput,
   CreateTriggerInput,
+  RoomMember,
   TriggerSnapshot,
 } from "../../main/trigger-types.js";
 
@@ -67,6 +68,14 @@ declare global {
         cancel(triggerId: string): Promise<TriggerSnapshot>;
         signal(name: string, detail: string): Promise<TriggerSnapshot>;
         createRoom(input: CreateRoomInput): Promise<TriggerSnapshot>;
+        addRoomMember(
+          roomId: string,
+          member: RoomMember,
+        ): Promise<TriggerSnapshot>;
+        removeRoomMember(
+          roomId: string,
+          threadId: string,
+        ): Promise<TriggerSnapshot>;
         postRoomMessage(
           roomId: string,
           author: string,

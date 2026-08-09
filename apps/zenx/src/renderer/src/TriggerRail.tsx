@@ -20,6 +20,8 @@ export function TriggerRail({
   const [condition, setCondition] = useState("5");
   const [recurring, setRecurring] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<Set<string>>(new Set());
+  const [cancelErrors, setCancelErrors] = useState<Record<string, string>>({});
   const triggers = snapshot.triggers.filter(
     (item) => item.threadId === thread.id && item.active,
   );
@@ -56,6 +58,28 @@ export function TriggerRail({
       setError(describeError(reason));
     }
   };
+  const cancel = async (triggerId: string) => {
+    setCancelling((current) => new Set(current).add(triggerId));
+    setCancelErrors((current) => {
+      const next = { ...current };
+      delete next[triggerId];
+      return next;
+    });
+    try {
+      await window.zenx.triggers.cancel(triggerId);
+    } catch (reason) {
+      setCancelErrors((current) => ({
+        ...current,
+        [triggerId]: describeError(reason),
+      }));
+    } finally {
+      setCancelling((current) => {
+        const next = new Set(current);
+        next.delete(triggerId);
+        return next;
+      });
+    }
+  };
   return (
     <div className="rail-content trigger-rail-content">
       <h2>
@@ -72,14 +96,20 @@ export function TriggerRail({
             <button
               type="button"
               aria-label={`Cancel ${trigger.label}`}
-              onClick={() => void window.zenx.triggers.cancel(trigger.id)}
+              disabled={cancelling.has(trigger.id)}
+              onClick={() => void cancel(trigger.id)}
             >
-              ×
+              {cancelling.has(trigger.id) ? "…" : "×"}
             </button>
           </header>
           <strong>{trigger.label}</strong>
           <p>{conditionLabel(trigger, snapshot)}</p>
           <small>↳ {trigger.prompt}</small>
+          {cancelErrors[trigger.id] ? (
+            <span className="form-error" role="alert">
+              {cancelErrors[trigger.id]} · retry cancel explicitly
+            </span>
+          ) : null}
         </article>
       ))}
       {triggers.length === 0 ? (
@@ -119,13 +149,11 @@ export function TriggerRail({
                 onChange={(event) => setCondition(event.target.value)}
               >
                 <option value="">Choose thread</option>
-                {threads
-                  .filter((item) => item.id !== thread.id)
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name ?? item.preview ?? item.id}
-                    </option>
-                  ))}
+                {threads.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name ?? item.preview ?? item.id}
+                  </option>
+                ))}
               </select>
             </label>
           ) : kind === "roomMention" ? (
@@ -218,6 +246,12 @@ export function TriggerRail({
             <span>
               {entry.status}
               {entry.error ? ` · ${entry.error}` : ""}
+            </span>
+            <span>
+              trigger {entry.triggerId.slice(0, 8)}
+              {entry.sourceThreadId
+                ? ` · from ${entry.sourceThreadId.slice(0, 8)} / ${entry.sourceTurnId?.slice(0, 8) ?? "unknown turn"}`
+                : ""}
             </span>
           </div>
         </div>

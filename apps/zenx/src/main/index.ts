@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, safeStorage, shell } from "electron";
 import { join, resolve } from "node:path";
 
+import { isAllowedZenXExternalUrl } from "../external-link-policy.js";
 import { isClientRequestMethod } from "../protocol-client/index.js";
 import { ipcChannels } from "../preload/ipc.js";
 import { AppServerManager } from "./app-server-manager.js";
@@ -10,7 +11,11 @@ import type { ZenXHostProfile } from "./host-profile.js";
 import { ZenXSettingsService } from "./settings-service.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
-import type { CreateRoomInput, CreateTriggerInput } from "./trigger-types.js";
+import type {
+  CreateRoomInput,
+  CreateTriggerInput,
+  RoomMember,
+} from "./trigger-types.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -35,7 +40,7 @@ function createWindow(): BrowserWindow {
 
   window.once("ready-to-show", () => window.show());
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isAllowedZenXExternalUrl(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
 
@@ -101,6 +106,8 @@ app.whenReady().then(async () => {
       installFailedProtocolIpc(
         error instanceof Error ? error.message : String(error),
       );
+    } else if (appServerManager.status.type !== "error") {
+      appServerManager.reportStartupError(error);
     }
   }
   installSettingsIpc(settingsService, async () => {
@@ -214,7 +221,11 @@ function installSettingsIpc(
   );
   ipcMain.handle(ipcChannels.subscriptionLogin, async () => {
     await settings.login(
-      (url) => void shell.openExternal(url),
+      (url) => {
+        if (!isAllowedZenXExternalUrl(url))
+          throw new Error("OpenAI login returned an unsafe authorization URL");
+        void shell.openExternal(url);
+      },
       () => {
         for (const window of BrowserWindow.getAllWindows()) {
           window.webContents.send(ipcChannels.subscriptionManualRequested);
@@ -271,6 +282,24 @@ function installTriggerIpc(triggers: ZenXTriggerService): void {
     },
   );
   ipcMain.handle(
+    ipcChannels.roomsAddMember,
+    async (_event, roomId: unknown, member: unknown) => {
+      if (typeof roomId !== "string" || !isRoomMember(member))
+        throw new Error("Invalid Room member");
+      await triggers.addRoomMember(roomId, member);
+      return triggers.snapshot();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.roomsRemoveMember,
+    async (_event, roomId: unknown, threadId: unknown) => {
+      if (typeof roomId !== "string" || typeof threadId !== "string")
+        throw new Error("Invalid Room member removal");
+      await triggers.removeRoomMember(roomId, threadId);
+      return triggers.snapshot();
+    },
+  );
+  ipcMain.handle(
     ipcChannels.roomsPost,
     async (_event, roomId: unknown, author: unknown, text: unknown) => {
       if (
@@ -295,5 +324,14 @@ function isApprovalDecision(value: unknown): value is ApprovalDecision {
     value === "acceptForSession" ||
     value === "decline" ||
     value === "cancel"
+  );
+}
+
+function isRoomMember(value: unknown): value is RoomMember {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Partial<RoomMember>).name === "string" &&
+    typeof (value as Partial<RoomMember>).threadId === "string"
   );
 }

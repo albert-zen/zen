@@ -7,6 +7,7 @@ import {
   deriveInboxSections,
   deriveProjectGroups,
   readSidebarMode,
+  threadPreview,
   threadTitle,
   writeSidebarMode,
 } from "../src/renderer/src/thread-list.js";
@@ -77,6 +78,23 @@ test("projects idle threads with triggers as Watching instead of Completed", () 
   assert.deepEqual(
     sections.map((section) => section.threads.map((thread) => thread.id)),
     [[], [], ["watching"], []],
+  );
+});
+
+test("presents trigger-first Threads as system relays instead of raw user titles", () => {
+  const thread = makeThread("relay", 20, { type: "idle" });
+  const wakeup = [
+    "[ZenX trigger wakeup]",
+    "Trigger ID: trigger-a",
+    "Source Thread: source-thread-123",
+    "Source Turn: source-turn-456",
+  ].join("\n");
+  thread.name = wakeup;
+  thread.preview = wakeup;
+  assert.equal(threadTitle(thread), "Relay from source-t");
+  assert.equal(
+    threadPreview(thread),
+    "Relay from source-t · system-level wakeup",
   );
 });
 

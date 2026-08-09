@@ -27,6 +27,10 @@ export interface TriggerHistoryEntry {
   status: "starting" | "running" | "completed" | "failed";
   turnId: string | null;
   error: string | null;
+  sourceThreadId: string | null;
+  sourceTurnId: string | null;
+  sourceRoomId: string | null;
+  sourceRoomMessageId: string | null;
 }
 
 export interface RoomMember {
@@ -92,4 +96,9 @@ export type CreateTriggerInput =
 export interface CreateRoomInput {
   name: string;
   members: RoomMember[];
+}
+
+export interface UpdateRoomMemberInput {
+  roomId: string;
+  member: RoomMember;
 }

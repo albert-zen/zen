@@ -82,6 +82,17 @@ test("reports a killed App Server as a terminal error without restarting", async
   }
 });
 
+test("projects outer-host startup failures as a visible terminal status", () => {
+  const manager = managerFor(os.tmpdir());
+  manager.reportStartupError(
+    new Error("ZenX trigger registry has an invalid entry shape"),
+  );
+  assert.deepEqual(manager.status, {
+    type: "error",
+    message: "ZenX trigger registry has an invalid entry shape",
+  });
+});
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((resolvePromise) => {

@@ -416,6 +416,28 @@ function ItemView({
             </time>
           </header>
           <p>{wakeup.reason}</p>
+          <dl className="wakeup-source">
+            <div>
+              <dt>Trigger</dt>
+              <dd>{wakeup.triggerId}</dd>
+            </div>
+            {wakeup.sourceThreadId ? (
+              <div>
+                <dt>Relay source</dt>
+                <dd>
+                  Thread {wakeup.sourceThreadId} · Turn {wakeup.sourceTurnId}
+                </dd>
+              </div>
+            ) : wakeup.sourceRoomId ? (
+              <div>
+                <dt>Room source</dt>
+                <dd>
+                  Room {wakeup.sourceRoomId} · Message{" "}
+                  {wakeup.sourceRoomMessageId}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
           <div>
             <span>Injected prompt</span>
             <Markdown text={wakeup.prompt} />

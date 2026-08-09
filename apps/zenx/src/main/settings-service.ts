@@ -16,15 +16,30 @@ export class ZenXSettingsService {
   readonly #dataDirectory: string;
   readonly #profilePath: string;
   readonly #profileStore: ZenXHostProfileStore;
-  readonly #subscription: OpenAiSubscriptionAuthProfile;
+  readonly #subscription: Pick<
+    OpenAiSubscriptionAuthProfile,
+    "login" | "logout" | "status"
+  >;
   readonly #vault: ZenXCredentialVault;
   #profile: ZenXHostProfile | undefined;
-  #manualCode: ((value: string) => void) | undefined;
+  #loginInProgress = false;
+  #manualCode:
+    | {
+        resolve(value: string): void;
+        reject(error: Error): void;
+        signal: AbortSignal;
+        aborted(): void;
+      }
+    | undefined;
 
   constructor(options: {
     userDataDirectory: string;
     zenDataDirectory: string;
     vault: ZenXCredentialVault;
+    subscription?: Pick<
+      OpenAiSubscriptionAuthProfile,
+      "login" | "logout" | "status"
+    >;
   }) {
     this.#dataDirectory = options.zenDataDirectory;
     this.#profilePath = path.join(
@@ -34,7 +49,9 @@ export class ZenXSettingsService {
     this.#profileStore = new ZenXHostProfileStore(
       path.join(options.userDataDirectory, "host-profile.json"),
     );
-    this.#subscription = new OpenAiSubscriptionAuthProfile(this.#profilePath);
+    this.#subscription =
+      options.subscription ??
+      new OpenAiSubscriptionAuthProfile(this.#profilePath);
     this.#vault = options.vault;
   }
 
@@ -89,30 +106,47 @@ export class ZenXSettingsService {
     openBrowser: (url: string) => void,
     manualCodeRequested: () => void,
   ): Promise<void> {
-    if (this.#manualCode !== undefined)
+    if (this.#loginInProgress)
       throw new Error("OpenAI login is already in progress");
-    await this.#subscription.login({
-      notifyAuthUrl: openBrowser,
-      readManualCode: async ({ signal }) =>
-        await new Promise<string>((resolve, reject) => {
-          const aborted = () => reject(new Error("OpenAI login was cancelled"));
-          signal.addEventListener("abort", aborted, { once: true });
-          this.#manualCode = (value) => {
-            signal.removeEventListener("abort", aborted);
-            this.#manualCode = undefined;
-            resolve(value);
-          };
-          manualCodeRequested();
-        }),
-    });
-    this.#manualCode = undefined;
+    this.#loginInProgress = true;
+    try {
+      await this.#subscription.login({
+        notifyAuthUrl: openBrowser,
+        readManualCode: async ({ signal }) =>
+          await new Promise<string>((resolve, reject) => {
+            const waiter = {
+              resolve,
+              reject: (error: Error) => reject(error),
+              signal,
+              aborted: () => {
+                if (this.#manualCode !== waiter) return;
+                this.#manualCode = undefined;
+                reject(new Error("OpenAI login was cancelled"));
+              },
+            };
+            this.#manualCode = waiter;
+            signal.addEventListener("abort", waiter.aborted, { once: true });
+            manualCodeRequested();
+          }),
+      });
+    } finally {
+      const waiter = this.#manualCode;
+      this.#manualCode = undefined;
+      this.#loginInProgress = false;
+      if (waiter !== undefined) {
+        waiter.signal.removeEventListener("abort", waiter.aborted);
+        waiter.reject(new Error("OpenAI login ended before a code was used"));
+      }
+    }
   }
 
   submitManualCode(value: string): void {
-    const resolve = this.#manualCode;
-    if (resolve === undefined)
+    const waiter = this.#manualCode;
+    if (waiter === undefined)
       throw new Error("No OpenAI login is waiting for a code");
-    resolve(value);
+    this.#manualCode = undefined;
+    waiter.signal.removeEventListener("abort", waiter.aborted);
+    waiter.resolve(value);
   }
 
   async logout(): Promise<void> {
