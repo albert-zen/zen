@@ -30,6 +30,15 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+      - name: Authenticate the private IM Agent SDK dependency
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.IM_AGENT_SDK_DEPLOY_KEY }}
+      - name: Route the pinned SDK dependency through its read-only deploy key
+        run: >-
+          git config --global
+          url."git@github.com:albert-zen/im-agent-sdk.git".insteadOf
+          "https://github.com/albert-zen/im-agent-sdk.git"
       - run: npm ci
       - run: npm run check
 
