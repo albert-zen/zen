@@ -12,6 +12,11 @@ import { Icon } from "./icons";
 import { Sidebar } from "./Sidebar";
 import { ThreadView } from "./ThreadView";
 import { ModelSelector } from "./ModelSelector";
+import { SettingsView } from "./SettingsView";
+import { TriggerRail } from "./TriggerRail";
+import { ScheduledView } from "./ScheduledView";
+import { RoomView } from "./RoomView";
+import type { TriggerSnapshot } from "../../main/trigger-types.js";
 import {
   addApprovalRequest,
   markApprovalResponding,
@@ -50,6 +55,14 @@ export function App() {
   const selectedThreadIdRef = useRef<string | null>(null);
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
   const [railOpen, setRailOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [scheduledOpen, setScheduledOpen] = useState(false);
+  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [triggerSnapshot, setTriggerSnapshot] = useState<TriggerSnapshot>({
+    triggers: [],
+    history: [],
+    rooms: [],
+  });
   const [serverStatus, setServerStatus] = useState<AppServerHostStatus>({
     type: "starting",
   });
@@ -71,7 +84,7 @@ export function App() {
     try {
       return readSidebarMode(window.localStorage);
     } catch {
-      return "inbox";
+      return "projects";
     }
   });
   const [requestError, setRequestError] = useState<string | null>(null);
@@ -82,6 +95,9 @@ export function App() {
   const resumeThread = async (threadId: string) => {
     const epoch = ++selectionEpoch.current;
     selectedThreadIdRef.current = threadId;
+    setSettingsOpen(false);
+    setScheduledOpen(false);
+    setSelectedRoomId(null);
     setSelectedThreadId(threadId);
     setThreadDetail(null);
     setSelectedSettings(null);
@@ -213,6 +229,24 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const dispose = window.zenx.triggers.onChange(setTriggerSnapshot);
+    void window.zenx.triggers
+      .get()
+      .then(setTriggerSnapshot)
+      .catch(() => undefined);
+    return dispose;
+  }, []);
+
+  useEffect(() => {
+    void window.zenx.settings
+      .get()
+      .then((value) => {
+        if (!value.profile.onboardingComplete) setSettingsOpen(true);
+      })
+      .catch(() => undefined);
+  }, []);
+
   const selectedThread =
     threadDetail ??
     threads.find((thread) => thread.id === selectedThreadId) ??
@@ -230,6 +264,9 @@ export function App() {
       const result = await window.zenx.protocol.request("thread/start", {});
       if (selectionEpoch.current !== epoch) return;
       selectedThreadIdRef.current = result.thread.id;
+      setSettingsOpen(false);
+      setScheduledOpen(false);
+      setSelectedRoomId(null);
       setSelectedThreadId(result.thread.id);
       setThreadDetail(result.thread);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
@@ -388,171 +425,209 @@ export function App() {
         mode={sidebarMode}
         onModeChange={changeSidebarMode}
         onNewThread={() => void newThread()}
+        onOpenSettings={() => {
+          setSettingsOpen(true);
+          setScheduledOpen(false);
+          setSelectedRoomId(null);
+        }}
+        onOpenScheduled={() => {
+          setSettingsOpen(false);
+          setScheduledOpen(true);
+          setSelectedRoomId(null);
+        }}
+        onSelectRoom={(roomId) => {
+          setSettingsOpen(false);
+          setScheduledOpen(false);
+          setSelectedRoomId(roomId);
+        }}
         onSelectThread={(threadId) => void selectThread(threadId)}
         pendingApprovalThreadIds={pendingThreadIds}
         selectedThreadId={selectedThreadId}
         serverReady={serverStatus.type === "ready"}
         threads={threads}
+        triggerSnapshot={triggerSnapshot}
       />
 
       <main className="workspace">
-        <header className="workspace-header">
-          <div>
-            <h1>
-              {selectedThread === null
-                ? "Start a conversation"
-                : threadTitle(selectedThread)}
-            </h1>
-            <p>
-              {selectedThread === null
-                ? "Select a thread or create a new one."
-                : `${selectedThread.cwd} · ${selectedSettings?.model ?? selectedThread.modelProvider}`}
-            </p>
-          </div>
-          {selectedSettings === null ? null : (
-            <ModelSelector
-              disabled={
-                threadDetail === null || !canChangeThreadModel(threadDetail)
-              }
-              error={modelUpdateError ?? modelCatalogError}
-              models={models}
-              onChange={(model) => void changeModel(model)}
-              selectedModel={selectedSettings.model}
-              switching={switchingModel}
-            />
-          )}
-          <button
-            className={`toolbar-button${railOpen ? " active" : ""}`}
-            type="button"
-            aria-expanded={railOpen}
-            aria-label={railOpen ? "Hide details panel" : "Show details panel"}
-            onClick={() => setRailOpen((open) => !open)}
-          >
-            <Icon name="panel-right" size={15} />
-            Details
-          </button>
-        </header>
-
-        {serverStatus.type === "error" || requestError !== null ? (
-          <section className="empty-canvas server-error" role="alert">
-            <div className="empty-glyph" aria-hidden="true">
-              <Icon name="thread" size={22} />
-            </div>
-            <h2>Zen App Server stopped</h2>
-            <p>
-              {serverStatus.type === "error"
-                ? serverStatus.message
-                : requestError}
-            </p>
-            <span>Restart ZenX after checking the host configuration.</span>
-          </section>
-        ) : serverStatus.type !== "ready" ? (
-          <section
-            className="empty-canvas"
-            aria-live="polite"
-            role={serverStatus.type === "stopped" ? "alert" : undefined}
-          >
-            {serverStatus.type === "starting" ? (
-              <div className="loading-ring" aria-hidden="true" />
-            ) : (
-              <div className="empty-glyph" aria-hidden="true">
-                <Icon name="warning" size={22} />
-              </div>
-            )}
-            <h2>
-              {serverStatus.type === "starting"
-                ? "Starting Zen App Server"
-                : serverStatus.type === "reconnecting"
-                  ? "Reconnecting to Zen App Server"
-                  : "Zen App Server disconnected"}
-            </h2>
-            <p>
-              {serverStatus.type === "starting"
-                ? "Connecting to the local agent runtime…"
-                : serverStatus.type === "reconnecting"
-                  ? `Attempt ${serverStatus.attempt}. Your draft is preserved; the current thread will be rebuilt from App Server history after reconnecting.`
-                  : "Your draft is preserved. Restart ZenX to reconnect and rebuild the thread from App Server history."}
-            </p>
-          </section>
-        ) : threadLoading ? (
-          <section className="empty-canvas" aria-live="polite">
-            <div className="loading-ring" aria-hidden="true" />
-            <h2>Loading conversation</h2>
-            <p>Reconstructing this thread from its journal…</p>
-          </section>
-        ) : threadError !== null ? (
-          <section className="empty-canvas thread-load-error" role="alert">
-            <div className="empty-glyph" aria-hidden="true">
-              <Icon name="warning" size={22} />
-            </div>
-            <h2>Could not open conversation</h2>
-            <p>{threadError}</p>
-          </section>
-        ) : selectedThread === null ? (
-          <section className="empty-canvas" aria-label="Empty conversation">
-            <div className="empty-glyph" aria-hidden="true">
-              <Icon name="thread" size={22} />
-            </div>
-            <h2>No thread selected</h2>
-            <p>Create a conversation to start working with Zen.</p>
-            <button
-              className="primary-button"
-              type="button"
-              onClick={() => void newThread()}
-            >
-              <Icon name="compose" size={15} />
-              New conversation
-            </button>
-          </section>
-        ) : threadDetail !== null ? (
-          <ThreadView
-            approvals={approvals.filter(
-              (approval) => approval.params.threadId === threadDetail.id,
-            )}
-            composer={composerStates[threadDetail.id] ?? emptyComposerState()}
-            onDraftChange={(draft) => changeDraft(threadDetail.id, draft)}
-            onInterrupt={interruptTurn}
-            onRespondToApproval={respondToApproval}
-            onSubmit={submitComposer}
-            thread={threadDetail}
+        {settingsOpen ? (
+          <SettingsView onClose={() => setSettingsOpen(false)} />
+        ) : scheduledOpen ? (
+          <ScheduledView
+            snapshot={triggerSnapshot}
+            threads={threads}
+            onOpenThread={(id) => void resumeThread(id)}
+            onOpenRoom={(id) => {
+              setScheduledOpen(false);
+              setSelectedRoomId(id);
+            }}
+          />
+        ) : selectedRoomId !== null ? (
+          <RoomView
+            roomId={selectedRoomId}
+            snapshot={triggerSnapshot}
+            onOpenThread={(id) => void resumeThread(id)}
           />
         ) : (
-          <section className="empty-canvas" aria-live="polite">
-            <div className="loading-ring" aria-hidden="true" />
-          </section>
+          <>
+            <header className="workspace-header">
+              <div>
+                <h1>
+                  {selectedThread === null
+                    ? "Start a conversation"
+                    : threadTitle(selectedThread)}
+                </h1>
+                <p>
+                  {selectedThread === null
+                    ? "Select a thread or create a new one."
+                    : `${selectedThread.cwd} · ${selectedSettings?.model ?? selectedThread.modelProvider}`}
+                </p>
+              </div>
+              {selectedSettings === null ? null : (
+                <ModelSelector
+                  disabled={
+                    threadDetail === null || !canChangeThreadModel(threadDetail)
+                  }
+                  error={modelUpdateError ?? modelCatalogError}
+                  models={models}
+                  onChange={(model) => void changeModel(model)}
+                  selectedModel={selectedSettings.model}
+                  switching={switchingModel}
+                />
+              )}
+              <button
+                className={`toolbar-button${railOpen ? " active" : ""}`}
+                type="button"
+                aria-expanded={railOpen}
+                aria-label={
+                  railOpen ? "Hide triggers panel" : "Show triggers panel"
+                }
+                onClick={() => setRailOpen((open) => !open)}
+              >
+                <Icon name="panel-right" size={15} />
+                Triggers
+              </button>
+            </header>
+
+            {serverStatus.type === "error" || requestError !== null ? (
+              <section className="empty-canvas server-error" role="alert">
+                <div className="empty-glyph" aria-hidden="true">
+                  <Icon name="thread" size={22} />
+                </div>
+                <h2>Zen App Server stopped</h2>
+                <p>
+                  {serverStatus.type === "error"
+                    ? serverStatus.message
+                    : requestError}
+                </p>
+                <span>Restart ZenX after checking the host configuration.</span>
+              </section>
+            ) : serverStatus.type !== "ready" ? (
+              <section
+                className="empty-canvas"
+                aria-live="polite"
+                role={serverStatus.type === "stopped" ? "alert" : undefined}
+              >
+                {serverStatus.type === "starting" ? (
+                  <div className="loading-ring" aria-hidden="true" />
+                ) : (
+                  <div className="empty-glyph" aria-hidden="true">
+                    <Icon name="warning" size={22} />
+                  </div>
+                )}
+                <h2>
+                  {serverStatus.type === "starting"
+                    ? "Starting Zen App Server"
+                    : serverStatus.type === "reconnecting"
+                      ? "Reconnecting to Zen App Server"
+                      : "Zen App Server disconnected"}
+                </h2>
+                <p>
+                  {serverStatus.type === "starting"
+                    ? "Connecting to the local agent runtime…"
+                    : serverStatus.type === "reconnecting"
+                      ? `Attempt ${serverStatus.attempt}. Your draft is preserved; the current thread will be rebuilt from App Server history after reconnecting.`
+                      : "Your draft is preserved. Restart ZenX to reconnect and rebuild the thread from App Server history."}
+                </p>
+              </section>
+            ) : threadLoading ? (
+              <section className="empty-canvas" aria-live="polite">
+                <div className="loading-ring" aria-hidden="true" />
+                <h2>Loading conversation</h2>
+                <p>Reconstructing this thread from its journal…</p>
+              </section>
+            ) : threadError !== null ? (
+              <section className="empty-canvas thread-load-error" role="alert">
+                <div className="empty-glyph" aria-hidden="true">
+                  <Icon name="warning" size={22} />
+                </div>
+                <h2>Could not open conversation</h2>
+                <p>{threadError}</p>
+              </section>
+            ) : selectedThread === null ? (
+              <section className="empty-canvas" aria-label="Empty conversation">
+                <div className="empty-glyph" aria-hidden="true">
+                  <Icon name="thread" size={22} />
+                </div>
+                <h2>No thread selected</h2>
+                <p>Create a conversation to start working with Zen.</p>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => void newThread()}
+                >
+                  <Icon name="compose" size={15} />
+                  New conversation
+                </button>
+              </section>
+            ) : threadDetail !== null ? (
+              <ThreadView
+                approvals={approvals.filter(
+                  (approval) => approval.params.threadId === threadDetail.id,
+                )}
+                composer={
+                  composerStates[threadDetail.id] ?? emptyComposerState()
+                }
+                onDraftChange={(draft) => changeDraft(threadDetail.id, draft)}
+                onInterrupt={interruptTurn}
+                onRespondToApproval={respondToApproval}
+                onSubmit={submitComposer}
+                thread={threadDetail}
+                wakeups={triggerSnapshot.history.filter(
+                  (entry) => entry.threadId === threadDetail.id,
+                )}
+                watching={triggerSnapshot.triggers.some(
+                  (trigger) =>
+                    trigger.active && trigger.threadId === threadDetail.id,
+                )}
+              />
+            ) : (
+              <section className="empty-canvas" aria-live="polite">
+                <div className="loading-ring" aria-hidden="true" />
+              </section>
+            )}
+          </>
         )}
       </main>
 
       <aside
-        className={`detail-rail${railOpen ? " open" : ""}`}
-        aria-label="Thread details"
-        aria-hidden={!railOpen}
+        className={`detail-rail${railOpen && !settingsOpen && !scheduledOpen && selectedRoomId === null ? " open" : ""}`}
+        aria-label="Thread triggers"
+        aria-hidden={
+          !railOpen || settingsOpen || scheduledOpen || selectedRoomId !== null
+        }
       >
-        <div className="rail-content">
-          <h2>Details</h2>
-          {selectedThread === null ? (
-            <p>Select a conversation to inspect its runtime context.</p>
-          ) : (
-            <dl className="thread-facts">
-              <div>
-                <dt>Workspace</dt>
-                <dd>{selectedThread.cwd}</dd>
-              </div>
-              <div>
-                <dt>Provider</dt>
-                <dd>{selectedThread.modelProvider}</dd>
-              </div>
-              <div>
-                <dt>Turns</dt>
-                <dd>{selectedThread.turns.length}</dd>
-              </div>
-              <div>
-                <dt>Thread ID</dt>
-                <dd>{selectedThread.id}</dd>
-              </div>
-            </dl>
-          )}
-        </div>
+        {selectedThread === null ? (
+          <div className="rail-content">
+            <h2>Triggers</h2>
+            <p>Select a conversation to manage wakeup conditions.</p>
+          </div>
+        ) : (
+          <TriggerRail
+            thread={selectedThread}
+            snapshot={triggerSnapshot}
+            threads={threads}
+          />
+        )}
       </aside>
     </div>
   );

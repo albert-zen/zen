@@ -12,7 +12,7 @@ interface SidebarStorage {
 }
 
 export interface InboxSection {
-  key: "needs" | "active" | "settled";
+  key: "needs" | "active" | "watching" | "settled";
   label: string;
   threads: Thread[];
 }
@@ -26,9 +26,9 @@ export interface ProjectGroup {
 export function readSidebarMode(
   storage: Pick<SidebarStorage, "getItem">,
 ): SidebarMode {
-  return storage.getItem("zenx-sidebar-mode") === "projects"
-    ? "projects"
-    : "inbox";
+  return storage.getItem("zenx-sidebar-mode") === "inbox"
+    ? "inbox"
+    : "projects";
 }
 
 export function writeSidebarMode(
@@ -41,6 +41,7 @@ export function writeSidebarMode(
 export function deriveInboxSections(
   threads: readonly Thread[],
   pendingApprovalThreadIds: ReadonlySet<string> = new Set(),
+  watchingThreadIds: ReadonlySet<string> = new Set(),
 ): InboxSection[] {
   const sorted = sortByRecency(threads);
   return [
@@ -63,11 +64,22 @@ export function deriveInboxSections(
       ),
     },
     {
+      key: "watching",
+      label: "Watching",
+      threads: sorted.filter(
+        (thread) =>
+          thread.status.type === "idle" &&
+          watchingThreadIds.has(thread.id) &&
+          !pendingApprovalThreadIds.has(thread.id),
+      ),
+    },
+    {
       key: "settled",
       label: "Completed",
       threads: sorted.filter(
         (thread) =>
           thread.status.type === "idle" &&
+          !watchingThreadIds.has(thread.id) &&
           !pendingApprovalThreadIds.has(thread.id),
       ),
     },

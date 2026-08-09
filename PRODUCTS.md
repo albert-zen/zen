@@ -15,9 +15,15 @@ stub App Server 记录真实调用，在不污染 Zen Core 的前提下扩展协
 
 ## 桌面
 
-近期不自建：目标是固定版本的 T3 Code 通过协议直接把 Zen 当 provider 驱动
-（在验收跑通前不宣称已兼容）。ZenX 作为自研桌面应用**推迟**，直到出现
-T3 Code / Traycer 这类通用编排工具表达不了的 Zen 特有需求。
+**ZenX 正在开发**，是与 CLI、IMZen 平级的本地桌面接入端。当前已跑通 Electron
+host、Thread 列表与恢复、流式 Item、审批、模型切换、soft steer、interrupt 与
+Interrupt & send；下一阶段把 Provider/onboarding、安全 Markdown，以及 Trigger /
+Watching / Room 这些通用编排工具难以完整表达的 ZenX 外层产品体验做成可运行的
+vertical slice。上述外层配置和调度状态不进入 Zen Core，命中 Trigger 仍只通过
+App Server 发起普通 Turn；在真实桌面验收完成前不夸大为稳定发布。
+
+固定版本 T3 Code 仍是机会型兼容目标：它可以通过协议直接把 Zen 当 provider
+驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。
 
 ## IMZen
 
@@ -62,6 +68,7 @@ presenter；其他扩展位置缺席，因此保持 SDK 默认行为。
 | 6    | 薄 Zen CLI；stdio 与 loopback WebSocket                                   | 完成                                 |
 | 7    | OpenAI-compatible 与 ChatGPT subscription adapters；两轮 tool-call        | 实现完成；订阅真实网络闭环已通过     |
 | 8    | 独立 IMZen；组合固定提交的 IM Agent SDK                                   | SDK/本地闭环通过；真实 QQ 需频道凭证 |
+| 9    | ZenX 桌面 vertical slice；Provider、Markdown、Trigger / Watching / Room   | 开发中                               |
 
 原版 `codex --remote` 0.146.0 还会调用账户、模型、配置、hooks 等 bootstrap
 方法，Zen 当前明确返回 unsupported，因此不宣称兼容原版 TUI。这不阻塞 Zen CLI，

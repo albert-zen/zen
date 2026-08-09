@@ -11,6 +11,15 @@ import type {
   ServerNotificationMethod,
   ServerNotificationParams,
 } from "../../protocol-client/index.js";
+import type {
+  PublicHostSettings,
+  ZenXHostProfile,
+} from "../../main/host-profile.js";
+import type {
+  CreateRoomInput,
+  CreateTriggerInput,
+  TriggerSnapshot,
+} from "../../main/trigger-types.js";
 
 declare global {
   interface Window {
@@ -40,6 +49,30 @@ declare global {
             params: ServerNotificationParams[M],
           ) => void,
         ): () => void;
+      };
+      settings: {
+        get(): Promise<PublicHostSettings>;
+        save(
+          profile: ZenXHostProfile,
+          apiKey?: string,
+        ): Promise<PublicHostSettings>;
+        loginSubscription(): Promise<PublicHostSettings>;
+        submitManualCode(code: string): Promise<void>;
+        logoutSubscription(): Promise<PublicHostSettings>;
+        onManualCodeRequested(listener: () => void): () => void;
+      };
+      triggers: {
+        get(): Promise<TriggerSnapshot>;
+        create(input: CreateTriggerInput): Promise<TriggerSnapshot>;
+        cancel(triggerId: string): Promise<TriggerSnapshot>;
+        signal(name: string, detail: string): Promise<TriggerSnapshot>;
+        createRoom(input: CreateRoomInput): Promise<TriggerSnapshot>;
+        postRoomMessage(
+          roomId: string,
+          author: string,
+          text: string,
+        ): Promise<TriggerSnapshot>;
+        onChange(listener: (snapshot: TriggerSnapshot) => void): () => void;
       };
     };
   }

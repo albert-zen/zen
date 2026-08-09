@@ -11,17 +11,17 @@ import {
   writeSidebarMode,
 } from "../src/renderer/src/thread-list.js";
 
-test("persists the selected sidebar mode and defaults invalid values to inbox", () => {
+test("persists the selected sidebar mode and defaults invalid values to projects", () => {
   const values = new Map<string, string>();
   const storage = {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => values.set(key, value),
   };
-  assert.equal(readSidebarMode(storage), "inbox");
-  writeSidebarMode(storage, "projects");
   assert.equal(readSidebarMode(storage), "projects");
-  values.set("zenx-sidebar-mode", "unexpected");
+  writeSidebarMode(storage, "inbox");
   assert.equal(readSidebarMode(storage), "inbox");
+  values.set("zenx-sidebar-mode", "unexpected");
+  assert.equal(readSidebarMode(storage), "projects");
 });
 
 test("derives recency-first inbox groups and preserves system errors", () => {
@@ -41,6 +41,7 @@ test("derives recency-first inbox groups and preserves system errors", () => {
     [
       ["needs", ["broken"]],
       ["active", ["active"]],
+      ["watching", []],
       ["settled", ["newer", "older"]],
     ],
   );
@@ -62,7 +63,20 @@ test("moves active approval threads to Needs you without duplicating them", () =
   );
   assert.deepEqual(
     sections.map((section) => section.threads.map((thread) => thread.id)),
-    [["pending"], ["active"], []],
+    [["pending"], ["active"], [], []],
+  );
+});
+
+test("projects idle threads with triggers as Watching instead of Completed", () => {
+  const watching = makeThread("watching", 20, { type: "idle" });
+  const sections = deriveInboxSections(
+    [watching],
+    new Set(),
+    new Set([watching.id]),
+  );
+  assert.deepEqual(
+    sections.map((section) => section.threads.map((thread) => thread.id)),
+    [[], [], ["watching"], []],
   );
 });
 
