@@ -49,6 +49,7 @@ export class ZenXThreadTitleCoordinator {
   #snapshot: ThreadTitleSnapshot = {};
   #mutation = Promise.resolve();
   #initializationError: Error | undefined;
+  #nativeMirrorCapacityWarned = false;
 
   constructor(options: {
     store: ZenXThreadTitleStore;
@@ -330,9 +331,7 @@ export class ZenXThreadTitleCoordinator {
             record,
           )
         ) {
-          console.warn(
-            `Could not mirror ZenX thread title: ${String(MAX_NATIVE_MIRROR_RECORDS)} unresolved native mirror outcomes are already quarantined`,
-          );
+          this.#warnNativeMirrorCapacity();
           return;
         }
         try {
@@ -373,13 +372,10 @@ export class ZenXThreadTitleCoordinator {
 
   #consumeExpectedNativeMirror(threadId: string, title: string): boolean {
     this.#quarantineRetiredExpectedMirrors(threadId);
-    return (
-      this.#consumeMirrorRecord(
-        this.#quarantinedNativeMirrors,
-        threadId,
-        title,
-      ) ||
-      this.#consumeMirrorRecord(this.#expectedNativeMirrors, threadId, title)
+    return this.#consumeMirrorRecord(
+      this.#expectedNativeMirrors,
+      threadId,
+      title,
     );
   }
 
@@ -480,6 +476,7 @@ export class ZenXThreadTitleCoordinator {
     records[index]!.consumed = true;
     records.splice(index, 1);
     if (records.length === 0) recordsByThread.delete(threadId);
+    this.#refreshNativeMirrorCapacityWarning();
     return true;
   }
 
@@ -494,6 +491,7 @@ export class ZenXThreadTitleCoordinator {
       records.splice(index, 1);
       if (records.length === 0) recordsByThread.delete(threadId);
     }
+    this.#refreshNativeMirrorCapacityWarning();
   }
 
   #moveMirrorRecordToQuarantine(
@@ -513,6 +511,25 @@ export class ZenXThreadTitleCoordinator {
         threadId,
         record,
       );
+    }
+    this.#refreshNativeMirrorCapacityWarning();
+  }
+
+  #warnNativeMirrorCapacity(): void {
+    if (this.#nativeMirrorCapacityWarned) return;
+    this.#nativeMirrorCapacityWarned = true;
+    console.warn(
+      `Could not mirror ZenX thread title: ${String(MAX_NATIVE_MIRROR_RECORDS)} unresolved native mirror outcomes are already quarantined`,
+    );
+  }
+
+  #refreshNativeMirrorCapacityWarning(): void {
+    if (
+      mirrorRecordCount(this.#expectedNativeMirrors) +
+        mirrorRecordCount(this.#quarantinedNativeMirrors) <
+      MAX_NATIVE_MIRROR_RECORDS
+    ) {
+      this.#nativeMirrorCapacityWarned = false;
     }
   }
 
