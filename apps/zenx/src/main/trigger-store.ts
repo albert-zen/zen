@@ -11,7 +11,12 @@ import type {
 } from "./trigger-types.js";
 
 interface StoredState extends TriggerSnapshot {
+  version: 3;
+}
+
+interface Version2StoredState extends Omit<TriggerSnapshot, "history"> {
   version: 2;
+  history: Array<Omit<TriggerHistoryEntry, "replyRoomId" | "replyAuthor">>;
 }
 
 interface LegacyStoredState extends Omit<TriggerSnapshot, "history"> {
@@ -19,7 +24,12 @@ interface LegacyStoredState extends Omit<TriggerSnapshot, "history"> {
   history: Array<
     Omit<
       TriggerHistoryEntry,
-      "sourceThreadId" | "sourceTurnId" | "sourceRoomId" | "sourceRoomMessageId"
+      | "sourceThreadId"
+      | "sourceTurnId"
+      | "sourceRoomId"
+      | "sourceRoomMessageId"
+      | "replyRoomId"
+      | "replyAuthor"
     >
   >;
 }
@@ -42,6 +52,17 @@ export class ZenXTriggerStore {
     try {
       const value = JSON.parse(await handle.readFile("utf8")) as unknown;
       if (isStoredState(value)) return snapshotFrom(value);
+      if (isVersion2StoredState(value)) {
+        return {
+          triggers: value.triggers,
+          history: value.history.map((entry) => ({
+            ...entry,
+            replyRoomId: null,
+            replyAuthor: null,
+          })),
+          rooms: value.rooms,
+        };
+      }
       if (isLegacyStoredState(value)) {
         return {
           triggers: value.triggers,
@@ -51,6 +72,8 @@ export class ZenXTriggerStore {
             sourceTurnId: null,
             sourceRoomId: null,
             sourceRoomMessageId: null,
+            replyRoomId: null,
+            replyAuthor: null,
           })),
           rooms: value.rooms,
         };
@@ -71,7 +94,7 @@ export class ZenXTriggerStore {
     const directory = path.dirname(this.#filePath);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const temporary = `${this.#filePath}.${process.pid}.tmp`;
-    const value: StoredState = { version: 2, ...snapshot };
+    const value: StoredState = { version: 3, ...snapshot };
     if (!isStoredState(value))
       throw new Error("ZenX refused to persist an invalid trigger registry");
     await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
@@ -98,9 +121,20 @@ function isStoredState(value: unknown): value is StoredState {
   const state = record(value);
   return (
     state !== null &&
-    state["version"] === 2 &&
+    state["version"] === 3 &&
     arrayOf(state["triggers"], isTrigger) &&
     arrayOf(state["history"], isHistory) &&
+    arrayOf(state["rooms"], isRoom)
+  );
+}
+
+function isVersion2StoredState(value: unknown): value is Version2StoredState {
+  const state = record(value);
+  return (
+    state !== null &&
+    state["version"] === 2 &&
+    arrayOf(state["triggers"], isTrigger) &&
+    arrayOf(state["history"], isVersion2History) &&
     arrayOf(state["rooms"], isRoom)
   );
 }
@@ -156,6 +190,18 @@ function isTrigger(value: unknown): value is ZenXTrigger {
 }
 
 function isHistory(value: unknown): value is TriggerHistoryEntry {
+  const entry = record(value);
+  return (
+    isVersion2History(value) &&
+    entry !== null &&
+    nullableString(entry["replyRoomId"]) &&
+    nullableString(entry["replyAuthor"])
+  );
+}
+
+function isVersion2History(
+  value: unknown,
+): value is Version2StoredState["history"][number] {
   const entry = record(value);
   return (
     isLegacyHistory(value) &&

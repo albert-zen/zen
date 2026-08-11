@@ -53,6 +53,8 @@ test("migrates fully validated version 1 history to nullable source metadata", a
       sourceTurnId: _sourceTurnId,
       sourceRoomId: _sourceRoomId,
       sourceRoomMessageId: _sourceRoomMessageId,
+      replyRoomId: _replyRoomId,
+      replyAuthor: _replyAuthor,
       ...entry
     }) => entry,
   );
@@ -66,16 +68,39 @@ test("migrates fully validated version 1 history to nullable source metadata", a
     const migrated = await store.read();
     assert.equal(migrated.history[0]?.sourceThreadId, null);
     assert.equal(migrated.history[0]?.sourceTurnId, null);
+    assert.equal(migrated.history[0]?.replyRoomId, null);
     await store.write(migrated);
-    assert.equal(JSON.parse(await readFile(file, "utf8")).version, 2);
+    assert.equal(JSON.parse(await readFile(file, "utf8")).version, 3);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-function validState(): TriggerSnapshot & { version: 2 } {
+test("migrates version 2 history to nullable immutable reply routing", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-store-v2-"));
+  const file = path.join(directory, "triggers.json");
+  const state = validState();
+  const history = state.history.map(
+    ({ replyRoomId: _replyRoomId, replyAuthor: _replyAuthor, ...entry }) =>
+      entry,
+  );
+  try {
+    await writeFile(
+      file,
+      JSON.stringify({ ...state, version: 2, history }),
+      "utf8",
+    );
+    const migrated = await new ZenXTriggerStore(file).read();
+    assert.equal(migrated.history[0]?.replyRoomId, null);
+    assert.equal(migrated.history[0]?.replyAuthor, null);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function validState(): TriggerSnapshot & { version: 3 } {
   return {
-    version: 2,
+    version: 3,
     triggers: [
       {
         id: "trigger-a",
@@ -106,6 +131,8 @@ function validState(): TriggerSnapshot & { version: 2 } {
         sourceTurnId: "turn-b",
         sourceRoomId: null,
         sourceRoomMessageId: null,
+        replyRoomId: null,
+        replyAuthor: null,
       },
     ],
     rooms: [
