@@ -117,7 +117,10 @@ One transient provider-local operation closure serializes every public request,
 including tab/session/backend close, and preserves bounded create/attach/enable/
 mutation/detach outcome evidence until closure is known. Inspect/action dispatch
 is bound to a provider-owned CDP execution document and mutations retain their
-tab lease through post-confirmation. Target discovery is enabled before relying
+tab lease through post-confirmation. The actual CDP send boundary classifies
+known setup/protocol failures separately from dispatched outcome uncertainty.
+Active logical sessions have a fixed fail-closed admission bound and are removed
+only by explicit session/backend closure. Target discovery is enabled before relying
 on created/destroyed events. Logical close sends `Target.detachFromTarget` only
 for ZenX-owned attachments, compensates late attachment outcomes when possible,
 never reports success over remaining taint, and never sends `Target.closeTarget`.

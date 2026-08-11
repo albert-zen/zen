@@ -10,6 +10,7 @@ import {
   UserBrowserCdpBackend,
   UserBrowserDocumentChangedAfterDispatchError,
   UserBrowserDocumentChangedBeforeDispatchError,
+  UserBrowserMutationOutcomeUnknownError,
   type UserBrowserCdpClient,
   validateUserBrowserVersion,
   windowsBrowserExecutableCandidates,
@@ -582,7 +583,7 @@ test("listing after external navigation invalidates the old observation before d
       inspection.observationId,
       target.targetId,
     ),
-    /stale or unknown/u,
+    /stale or unknown|tainted/u,
   );
   assert.equal(client.actionCount, 0);
 });
@@ -606,17 +607,15 @@ test("cancelled action is outcome-unknown and its observation cannot be retried"
   await client.actionStarted;
   controller.abort(new DOMException("cancelled", "AbortError"));
   await assert.rejects(action, /outcome is unknown/u);
-  let inspectionSettled = false;
-  const queuedInspection = backend.inspect("work", "target-1").finally(() => {
-    inspectionSettled = true;
-  });
-  const queuedNavigation = backend.navigate(
-    "work",
-    "target-1",
-    "https://example.test/retry",
+  const queuedInspection = assert.rejects(
+    backend.inspect("work", "target-1"),
+    /tainted/u,
+  );
+  const queuedNavigation = assert.rejects(
+    backend.navigate("work", "target-1", "https://example.test/retry"),
+    /tainted/u,
   );
   await nextTurn();
-  assert.equal(inspectionSettled, false);
   assert.equal(client.actionCount, 1);
   assert.equal(client.navigateCount, 0);
   await assert.rejects(
@@ -626,7 +625,7 @@ test("cancelled action is outcome-unknown and its observation cannot be retried"
       inspection.observationId,
       target.targetId,
     ),
-    /stale or unknown/u,
+    /stale or unknown|tainted/u,
   );
   client.releaseAction();
   await client.actionSettled;
@@ -698,7 +697,7 @@ test("inspection refuses publication when its execution document invalidates", a
   );
 });
 
-test("target disappearance and disconnect fail before action dispatch", async () => {
+test("target disappearance and disconnect are known before action dispatch", async () => {
   for (const failure of ["target disappeared", "CDP disconnected"]) {
     const client = new FakeUserBrowserClient();
     const backend = new UserBrowserCdpBackend(client);
@@ -714,9 +713,10 @@ test("target disappearance and disconnect fail before action dispatch", async ()
         inspection.observationId,
         target.targetId,
       ),
-      /outcome is unknown/u,
+      new RegExp(failure, "u"),
     );
     assert.equal(client.actionCount, 0, failure);
+    assert.equal(await backend.closeSession("work"), 1);
   }
 });
 
@@ -739,17 +739,15 @@ test("post-confirmation cancellation retains the tab fence until confirmation se
   await client.postConfirmationStarted;
   controller.abort();
   await assert.rejects(action, /outcome is unknown/u);
-  let inspectionSettled = false;
-  const queuedInspection = backend.inspect("work", "target-1").finally(() => {
-    inspectionSettled = true;
-  });
-  const queuedNavigation = backend.navigate(
-    "work",
-    "target-1",
-    "https://example.test/retry",
+  const queuedInspection = assert.rejects(
+    backend.inspect("work", "target-1"),
+    /tainted/u,
+  );
+  const queuedNavigation = assert.rejects(
+    backend.navigate("work", "target-1", "https://example.test/retry"),
+    /tainted/u,
   );
   await nextTurn();
-  assert.equal(inspectionSettled, false);
   assert.equal(client.navigateCount, 0);
   client.releasePostConfirmation();
   await client.postConfirmationSettled;
@@ -1359,6 +1357,127 @@ test("connection loss after attach dispatch remains session-owned uncertainty", 
   }
 });
 
+test("post-attach connection loss taints closeSession before backend cleanup", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    await connection.backend.inspect("work", "target-1");
+    cdp.disconnect();
+    await nextTurn();
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /connection|outcome is unknown|tainted/u,
+    );
+    await assert.rejects(
+      async () => await connection.backend.close(),
+      /connection|outcome is unknown|tainted/u,
+    );
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("vanished target detach uncertainty transfers through list cleanup", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    await connection.backend.inspect("work", "target-1");
+    cdp.dropNextDetachReply();
+    cdp.removeTarget("target-1");
+    await assert.rejects(
+      connection.backend.listTabs("work"),
+      /detach|outcome is unknown|tainted/u,
+    );
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /detach|outcome is unknown|tainted/u,
+    );
+    await assert.rejects(
+      async () => await connection.backend.close(),
+      /detach|outcome is unknown|tainted/u,
+    );
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("known attach or setup failure before navigate does not poison cleanup", async () => {
+  for (const failure of ["attach", "enable"] as const) {
+    const cdp = await createFakeCdpServer();
+    try {
+      const connection = await connectUserBrowserCdp(cdp.endpoint);
+      await connection.backend.listTabs("work");
+      if (failure === "attach") cdp.failNextAttachReply();
+      else cdp.failNextEnableReply();
+      await assert.rejects(
+        connection.backend.navigate(
+          "work",
+          "target-1",
+          "https://example.test/known-failure",
+        ),
+        /known attach failure|known enable failure|command failed/u,
+      );
+      assert.equal(cdp.count("Page.navigate"), 0);
+      assert.equal(await connection.backend.closeSession("work"), 1);
+      await connection.backend.close();
+    } finally {
+      await cdp.close();
+    }
+  }
+});
+
+test("known reattach or setup failure before action does not poison cleanup", async () => {
+  for (const failure of ["attach", "enable"] as const) {
+    const cdp = await createFakeCdpServer();
+    try {
+      const connection = await connectUserBrowserCdp(cdp.endpoint);
+      await connection.backend.listTabs("work");
+      const inspection = await connection.backend.inspect("work", "target-1");
+      const target = inspection.targets[0];
+      assert.ok(target);
+      const evaluationsBefore = cdp.count("Runtime.evaluate");
+      cdp.detachSession();
+      await nextTurn();
+      if (failure === "attach") cdp.failNextAttachReply();
+      else cdp.failNextEnableReply();
+      await assert.rejects(
+        connection.backend.click(
+          "work",
+          "target-1",
+          inspection.observationId,
+          target.targetId,
+        ),
+        /known attach failure|known enable failure|command failed/u,
+      );
+      assert.equal(cdp.count("Runtime.evaluate"), evaluationsBefore);
+      assert.equal(await connection.backend.closeSession("work"), 1);
+      await connection.backend.close();
+    } finally {
+      await cdp.close();
+    }
+  }
+});
+
+test("logical user-browser session admission is explicitly bounded", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  const sessionIds = Array.from(
+    { length: 32 },
+    (_, index) => `bounded-session-${String(index)}`,
+  );
+  for (const sessionId of sessionIds) await backend.listTabs(sessionId);
+  await assert.rejects(
+    backend.listTabs("bounded-session-overflow"),
+    /session.*bound|capacity/u,
+  );
+  for (const sessionId of sessionIds) await backend.closeSession(sessionId);
+  await backend.listTabs("bounded-session-after-close");
+  await backend.closeSession("bounded-session-after-close");
+  await backend.close();
+});
+
 test("healthy-socket detach reply loss terminates close with an explicit error", async () => {
   const cdp = await createFakeCdpServer();
   try {
@@ -1659,7 +1778,17 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     if (this.detachFailure !== undefined) throw this.detachFailure;
   }
 
-  async navigate(targetId: string, url: string) {
+  closureProblem(): string | undefined {
+    return undefined;
+  }
+
+  async navigate(
+    targetId: string,
+    url: string,
+    _signal?: AbortSignal,
+    onDispatched?: () => void,
+  ) {
+    onDispatched?.();
     this.calls.push("Page.navigate");
     this.navigateCount += 1;
     if (this.holdNavigations) {
@@ -1669,7 +1798,10 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     if (this.navigateFailureOnce !== undefined) {
       const error = this.navigateFailureOnce;
       this.navigateFailureOnce = undefined;
-      throw error;
+      throw new UserBrowserMutationOutcomeUnknownError(
+        "Page.navigate",
+        error.message,
+      );
     }
     this.createdTargets.set(targetId, url);
   }
@@ -1679,6 +1811,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     expression: string,
     expectedDocumentIdentity?: string,
     _signal?: AbortSignal,
+    onDispatched?: () => void,
   ): Promise<{ value: unknown; documentIdentity: string }> {
     this.calls.push("Runtime.evaluate");
     if (this.identityFailure !== undefined) throw this.identityFailure;
@@ -1708,6 +1841,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       }
       return result;
     }
+    onDispatched?.();
     this.actionCount += 1;
     if (this.identityChangePhase === "during-evaluate") {
       this.advanceDocument("during-evaluate");
@@ -1716,6 +1850,11 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       this.#actionStarted.resolve();
       try {
         await this.#heldAction.promise;
+      } catch (error) {
+        throw new UserBrowserMutationOutcomeUnknownError(
+          "Runtime.evaluate",
+          error instanceof Error ? error.message : String(error),
+        );
       } finally {
         this.#actionSettled.resolve();
       }
@@ -1798,6 +1937,7 @@ async function createFakeCdpServer(): Promise<{
   detachInspector(): void;
   invalidateNextAttachment(): void;
   destroyTarget(targetId: string): void;
+  removeTarget(targetId: string): void;
   addTargets(count: number): void;
   disconnect(): void;
   close(): Promise<void>;
@@ -2101,6 +2241,9 @@ async function createFakeCdpServer(): Promise<{
           }),
         );
       }
+    },
+    removeTarget: (targetId) => {
+      targets.delete(targetId);
     },
     addTargets: (count) => {
       for (let index = targets.size; index < count; index += 1) {
