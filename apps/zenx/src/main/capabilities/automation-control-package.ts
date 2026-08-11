@@ -174,7 +174,7 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
         const snapshot = this.#port.snapshot();
         return {
           triggers: snapshot.triggers,
-          history: snapshot.history.slice(-50),
+          history: snapshot.history.slice(0, 50),
         };
       }
       case "zenx_triggers_create":

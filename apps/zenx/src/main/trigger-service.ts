@@ -377,12 +377,9 @@ export class ZenXTriggerService {
           event.turn.status === "completed" ? "completed" : "failed";
         entry.completedAt = this.#now();
         entry.error = event.turn.error?.message ?? null;
-        const trigger = this.#snapshot.triggers.find(
-          (item) => item.id === entry.triggerId,
-        );
-        if (trigger?.kind === "roomMention" && trigger.room !== undefined) {
+        if (entry.replyRoomId !== null && entry.replyAuthor !== null) {
           const room = this.#snapshot.rooms.find(
-            (item) => item.id === trigger.room?.roomId,
+            (item) => item.id === entry.replyRoomId,
           );
           const projectedAnswer = [...completedItems]
             .reverse()
@@ -395,7 +392,7 @@ export class ZenXTriggerService {
             room.messages.push(
               message(
                 room.id,
-                trigger.room.mention,
+                entry.replyAuthor,
                 answer,
                 "agent",
                 entry.threadId,
@@ -441,48 +438,62 @@ export class ZenXTriggerService {
       scheduledAt?: number;
     },
   ): Promise<void> {
-    const trigger = this.#snapshot.triggers.find(
-      (item) => item.id === triggerId && item.active,
-    );
-    if (trigger === undefined) return;
-    const clientUserMessageId = stableWakeupId(
-      trigger.id,
-      wakeup.occurrenceKey,
-    );
-    if (
-      this.#snapshot.history.some(
-        (entry) => entry.clientUserMessageId === clientUserMessageId,
+    const committed = await this.#mutate(async () => {
+      const trigger = this.#snapshot.triggers.find(
+        (item) => item.id === triggerId && item.active,
+      );
+      if (trigger === undefined) return undefined;
+      const clientUserMessageId = stableWakeupId(
+        trigger.id,
+        wakeup.occurrenceKey,
+      );
+      if (
+        this.#snapshot.history.some(
+          (entry) => entry.clientUserMessageId === clientUserMessageId,
+        )
       )
-    )
-      return;
-    const history: TriggerHistoryEntry = {
-      id: randomUUID(),
-      triggerId: trigger.id,
-      threadId: trigger.threadId,
-      kind: trigger.kind,
-      reason: wakeup.reason,
-      prompt: trigger.prompt,
-      clientUserMessageId,
-      startedAt: this.#now(),
-      completedAt: null,
-      status: "starting",
-      turnId: null,
-      error: null,
-      sourceThreadId: wakeup.sourceThreadId ?? null,
-      sourceTurnId: wakeup.sourceTurnId ?? null,
-      sourceRoomId: wakeup.sourceRoomId ?? null,
-      sourceRoomMessageId: wakeup.sourceRoomMessageId ?? null,
-    };
-    await this.#mutate(async () => {
+        return undefined;
+      const committedTrigger = structuredClone(trigger);
+      const history: TriggerHistoryEntry = {
+        id: randomUUID(),
+        triggerId: committedTrigger.id,
+        threadId: committedTrigger.threadId,
+        kind: committedTrigger.kind,
+        reason: wakeup.reason,
+        prompt: committedTrigger.prompt,
+        clientUserMessageId,
+        startedAt: this.#now(),
+        completedAt: null,
+        status: "starting",
+        turnId: null,
+        error: null,
+        sourceThreadId: wakeup.sourceThreadId ?? null,
+        sourceTurnId: wakeup.sourceTurnId ?? null,
+        sourceRoomId: wakeup.sourceRoomId ?? null,
+        sourceRoomMessageId: wakeup.sourceRoomMessageId ?? null,
+        replyRoomId: committedTrigger.room?.roomId ?? null,
+        replyAuthor: committedTrigger.room?.mention ?? null,
+      };
       this.#snapshot.history.unshift(history);
-      if (trigger.timer !== undefined) {
-        if (trigger.timer.intervalMinutes === null) trigger.active = false;
+      const currentTrigger = this.#snapshot.triggers.find(
+        (item) => item.id === committedTrigger.id,
+      );
+      if (currentTrigger?.timer !== undefined) {
+        if (currentTrigger.timer.intervalMinutes === null)
+          currentTrigger.active = false;
         else
-          trigger.timer.nextRunAt =
+          currentTrigger.timer.nextRunAt =
             Math.max(this.#now(), wakeup.scheduledAt ?? this.#now()) +
-            trigger.timer.intervalMinutes * 60_000;
+            currentTrigger.timer.intervalMinutes * 60_000;
       }
+      return {
+        trigger: committedTrigger,
+        history,
+        clientUserMessageId,
+      };
     });
+    if (committed === undefined) return;
+    const { trigger, history, clientUserMessageId } = committed;
     this.#rescheduleTimers();
     try {
       await this.#titles

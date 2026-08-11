@@ -45,13 +45,15 @@ export class ZenXTriggerStore {
       if (isLegacyStoredState(value)) {
         return {
           triggers: value.triggers,
-          history: value.history.map((entry) => ({
-            ...entry,
-            sourceThreadId: null,
-            sourceTurnId: null,
-            sourceRoomId: null,
-            sourceRoomMessageId: null,
-          })),
+          history: value.history.map((entry) =>
+            historyWithReplyRoute({
+              ...entry,
+              sourceThreadId: null,
+              sourceTurnId: null,
+              sourceRoomId: null,
+              sourceRoomMessageId: null,
+            }),
+          ),
           rooms: value.rooms,
         };
       }
@@ -89,7 +91,7 @@ function emptySnapshot(): TriggerSnapshot {
 function snapshotFrom(value: StoredState): TriggerSnapshot {
   return {
     triggers: value.triggers,
-    history: value.history,
+    history: value.history.map(historyWithReplyRoute),
     rooms: value.rooms,
   };
 }
@@ -163,8 +165,21 @@ function isHistory(value: unknown): value is TriggerHistoryEntry {
     nullableString(entry["sourceThreadId"]) &&
     nullableString(entry["sourceTurnId"]) &&
     nullableString(entry["sourceRoomId"]) &&
-    nullableString(entry["sourceRoomMessageId"])
+    nullableString(entry["sourceRoomMessageId"]) &&
+    nullableString(entry["replyRoomId"] ?? null) &&
+    nullableString(entry["replyAuthor"] ?? null)
   );
+}
+
+function historyWithReplyRoute(
+  entry: Omit<TriggerHistoryEntry, "replyRoomId" | "replyAuthor"> &
+    Partial<Pick<TriggerHistoryEntry, "replyRoomId" | "replyAuthor">>,
+): TriggerHistoryEntry {
+  return {
+    ...entry,
+    replyRoomId: entry.replyRoomId ?? null,
+    replyAuthor: entry.replyAuthor ?? null,
+  };
 }
 
 function isLegacyHistory(

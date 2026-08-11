@@ -66,6 +66,8 @@ test("migrates fully validated version 1 history to nullable source metadata", a
     const migrated = await store.read();
     assert.equal(migrated.history[0]?.sourceThreadId, null);
     assert.equal(migrated.history[0]?.sourceTurnId, null);
+    assert.equal(migrated.history[0]?.replyRoomId, null);
+    assert.equal(migrated.history[0]?.replyAuthor, null);
     await store.write(migrated);
     assert.equal(JSON.parse(await readFile(file, "utf8")).version, 2);
   } finally {
@@ -106,6 +108,8 @@ function validState(): TriggerSnapshot & { version: 2 } {
         sourceTurnId: "turn-b",
         sourceRoomId: null,
         sourceRoomMessageId: null,
+        replyRoomId: null,
+        replyAuthor: null,
       },
     ],
     rooms: [

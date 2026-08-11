@@ -19,6 +19,135 @@ import type {
   ThreadItem,
   Turn,
 } from "../src/protocol-client/index.js";
+import type { TriggerSnapshot } from "../src/main/trigger-types.js";
+
+test("fire revalidates an active Trigger after a queued cancellation", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-trigger-race-"));
+  const store = new BlockingTriggerStore(path.join(directory, "triggers.json"));
+  const manager = new ControlledManager();
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    const trigger = await triggers.create({
+      threadId: "thread-target",
+      kind: "signal",
+      label: "Deploy",
+      prompt: "Inspect deploy.",
+      signalName: "deploy",
+    });
+    const blocked = store.blockNextWrite();
+    const blocker = triggers.createRoom({
+      name: "queue blocker",
+      members: [{ name: "Target", threadId: "thread-target" }],
+    });
+    await blocked.started;
+
+    const cancellation = triggers.cancel(trigger.id);
+    const fire = triggers.signal("deploy", "completed");
+    blocked.release.resolve();
+    await Promise.all([blocker, cancellation, fire]);
+
+    assert.equal(triggers.snapshot().history.length, 0);
+    assert.equal(manager.requests.length, 0);
+    assert.equal(
+      triggers.snapshot().triggers.find((entry) => entry.id === trigger.id)
+        ?.active,
+      false,
+    );
+  } finally {
+    triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("fire revalidates Trigger existence after a queued deletion", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-trigger-delete-race-"),
+  );
+  const store = new BlockingTriggerStore(path.join(directory, "triggers.json"));
+  const manager = new ControlledManager();
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    const trigger = await triggers.create({
+      threadId: "thread-target",
+      kind: "signal",
+      label: "Deploy",
+      prompt: "Inspect deploy.",
+      signalName: "deploy",
+    });
+    const blocked = store.blockNextWrite();
+    const blocker = triggers.createRoom({
+      name: "queue blocker",
+      members: [{ name: "Target", threadId: "thread-target" }],
+    });
+    await blocked.started;
+
+    const deletion = triggers.delete(trigger.id);
+    const fire = triggers.signal("deploy", "completed");
+    blocked.release.resolve();
+    await Promise.all([blocker, deletion, fire]);
+
+    assert.equal(triggers.snapshot().history.length, 0);
+    assert.equal(manager.requests.length, 0);
+    assert.equal(
+      triggers.snapshot().triggers.some((entry) => entry.id === trigger.id),
+      false,
+    );
+  } finally {
+    triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("fire uses the Trigger snapshot committed by a queued update", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-trigger-update-race-"),
+  );
+  const store = new BlockingTriggerStore(path.join(directory, "triggers.json"));
+  const manager = new ControlledManager();
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    const trigger = await triggers.create({
+      threadId: "thread-target",
+      kind: "signal",
+      label: "Old deploy",
+      prompt: "Inspect the old deployment.",
+      signalName: "deploy",
+    });
+    const blocked = store.blockNextWrite();
+    const blocker = triggers.createRoom({
+      name: "queue blocker",
+      members: [{ name: "Target", threadId: "thread-target" }],
+    });
+    await blocked.started;
+
+    const update = triggers.update({
+      id: trigger.id,
+      threadId: "thread-new-target",
+      kind: "signal",
+      label: "New deploy",
+      prompt: "Inspect the new deployment.",
+      signalName: "deploy",
+    });
+    const fire = triggers.signal("deploy", "completed");
+    blocked.release.resolve();
+    await Promise.all([blocker, update, fire]);
+
+    const history = triggers.snapshot().history[0];
+    assert.equal(history?.threadId, "thread-new-target");
+    assert.equal(history?.prompt, "Inspect the new deployment.");
+    assert.equal(manager.requests[0]?.threadId, "thread-new-target");
+    assert.match(
+      manager.requests[0]?.input[0]?.text ?? "",
+      /Inspect the new deployment\./u,
+    );
+  } finally {
+    triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("timer expiry creates one explicit App Server turn and auditable history", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-trigger-"));
@@ -203,6 +332,118 @@ test("thread snapshots and two-member Room context route through target Threads"
     triggers.stop();
   } finally {
     await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("completed Room wakeups keep their original reply route after Trigger update", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-route-update-"),
+  );
+  const manager = new ControlledManager();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    const oldRoom = await triggers.createRoom({
+      name: "old",
+      members: [{ name: "OldBot", threadId: "thread-target" }],
+    });
+    const newRoom = await triggers.createRoom({
+      name: "new",
+      members: [{ name: "NewBot", threadId: "thread-target" }],
+    });
+    const trigger = await triggers.create({
+      threadId: "thread-target",
+      kind: "roomMention",
+      label: "Answer old Room",
+      prompt: "Answer the Room.",
+      roomId: oldRoom.id,
+      mention: "OldBot",
+    });
+    await triggers.postRoomMessage(oldRoom.id, "You", "@OldBot status?");
+    const running = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "running",
+    );
+    const wakeup = running.history[0];
+    await triggers.update({
+      id: trigger.id,
+      threadId: "thread-target",
+      kind: "roomMention",
+      label: "Answer new Room",
+      prompt: "Answer the new Room.",
+      roomId: newRoom.id,
+      mention: "NewBot",
+    });
+    manager.complete(
+      "thread-target",
+      completedTurn(wakeup?.turnId ?? "missing", "answer"),
+    );
+    await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "completed",
+    );
+
+    const snapshot = triggers.snapshot();
+    assert.equal(
+      snapshot.rooms.find((room) => room.id === oldRoom.id)?.messages.at(-1)
+        ?.author,
+      "OldBot",
+    );
+    assert.equal(
+      snapshot.rooms.find((room) => room.id === newRoom.id)?.messages.length,
+      0,
+    );
+  } finally {
+    triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("completed Room wakeups keep their original reply route after Trigger deletion", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-route-delete-"),
+  );
+  const manager = new ControlledManager();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "thread-target" }],
+    });
+    const trigger = await triggers.create({
+      threadId: "thread-target",
+      kind: "roomMention",
+      label: "Answer Room",
+      prompt: "Answer the Room.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    await triggers.postRoomMessage(room.id, "You", "@Bot status?");
+    const running = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "running",
+    );
+    const wakeup = running.history[0];
+    await triggers.delete(trigger.id);
+    manager.complete(
+      "thread-target",
+      completedTurn(wakeup?.turnId ?? "missing", "answer"),
+    );
+    await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "completed",
+    );
+    assert.equal(triggers.snapshot().rooms[0]?.messages.at(-1)?.author, "Bot");
+  } finally {
+    triggers.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -535,6 +776,42 @@ class ControlledManager implements ZenXTriggerAppServerPort {
   complete(threadId: string, turn: Turn): void {
     this.#listener?.("turn/completed", { threadId, turn });
   }
+}
+
+class BlockingTriggerStore extends ZenXTriggerStore {
+  #blocked:
+    | {
+        started: ReturnType<typeof deferred<void>>;
+        release: ReturnType<typeof deferred<void>>;
+      }
+    | undefined;
+
+  blockNextWrite() {
+    const blocked = {
+      started: deferred<void>(),
+      release: deferred<void>(),
+    };
+    this.#blocked = blocked;
+    return blocked;
+  }
+
+  override async write(snapshot: TriggerSnapshot): Promise<void> {
+    const blocked = this.#blocked;
+    this.#blocked = undefined;
+    if (blocked !== undefined) {
+      blocked.started.resolve();
+      await blocked.release.promise;
+    }
+    await super.write(snapshot);
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function completedTurn(

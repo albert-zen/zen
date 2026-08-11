@@ -31,6 +31,8 @@ export interface TriggerHistoryEntry {
   sourceTurnId: string | null;
   sourceRoomId: string | null;
   sourceRoomMessageId: string | null;
+  replyRoomId: string | null;
+  replyAuthor: string | null;
 }
 
 export interface RoomMember {
