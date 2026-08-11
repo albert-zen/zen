@@ -1158,13 +1158,13 @@ test("stale detachedFromTarget for s1 cannot reap successor s2", async () => {
     await connection.backend.inspect("work", "target-1");
     const s1 = cdp.latestSessionId();
     cdp.emitDetached(s1, "target-1");
-    await nextTurn();
+    await connection.backend.listTabs("work");
     await connection.backend.inspect("work", "target-1");
     const s2 = cdp.latestSessionId();
     assert.notEqual(s2, s1);
 
     cdp.emitDetached(s1, "target-1");
-    await nextTurn();
+    await connection.backend.listTabs("work");
     assert.equal(await connection.backend.closeSession("work"), 1);
     assert.deepEqual(cdp.detachedSessionIds(), [s2]);
     await connection.backend.close();
@@ -1181,7 +1181,7 @@ test("unknown detachedFromTarget cannot use deprecated targetId to reap current 
     await connection.backend.inspect("work", "target-1");
     const current = cdp.latestSessionId();
     cdp.emitDetached("unknown-session", "target-1");
-    await nextTurn();
+    await connection.backend.listTabs("work");
 
     await assert.rejects(
       async () => await connection.backend.closeSession("work"),
@@ -1229,14 +1229,14 @@ test("repeated stale and unknown detach evidence stays bounded and preserves cur
     await connection.backend.inspect("work", "target-1");
     const s1 = cdp.latestSessionId();
     cdp.emitDetached(s1, "target-1");
-    await nextTurn();
+    await connection.backend.listTabs("work");
     await connection.backend.inspect("work", "target-1");
     const s2 = cdp.latestSessionId();
     for (let index = 0; index < 256; index += 1) {
       cdp.emitDetached(s1, "target-1");
       cdp.emitDetached("unknown-session", "target-1");
     }
-    await nextTurn();
+    await connection.backend.listTabs("work");
 
     const failure = await Promise.resolve(
       connection.backend.closeSession("work"),
