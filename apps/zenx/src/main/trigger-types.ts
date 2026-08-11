@@ -93,6 +93,8 @@ export type CreateTriggerInput =
       signalName: string;
     };
 
+export type UpdateTriggerInput = CreateTriggerInput & { id: string };
+
 export interface CreateRoomInput {
   name: string;
   members: RoomMember[];

@@ -8,7 +8,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false",
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "tsx --test test/*.test.ts",
     "smoke:capabilities": "npm run build && electron ./out/main/capability-smoke.js",
     "smoke:real": "npm run build && electron ./out/main/real-smoke.js",
     "smoke:windows-computer": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-winapp-smoke.ps1",

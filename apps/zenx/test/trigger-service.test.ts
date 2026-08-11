@@ -356,6 +356,29 @@ test("Room membership enforces unique names and Threads and supports add/remove"
   }
 });
 
+test("concurrent Room deletion makes a queued Agent post fail explicitly", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-room-race-"));
+  const triggers = new ZenXTriggerService(
+    new ControlledManager(),
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Reviewer", threadId: "thread-a" }],
+    });
+    const deletion = triggers.deleteRoom(room.id);
+    const posting = triggers.postAgentRoomMessage(room.id, "Status?");
+    await deletion;
+    await assert.rejects(posting, /Room was not found/u);
+    assert.deepEqual(triggers.snapshot().rooms, []);
+  } finally {
+    triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("failed relay is terminal and is not hidden, queued, or retried", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-relay-fail-"));
   const manager = new ControlledManager();

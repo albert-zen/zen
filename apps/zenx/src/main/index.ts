@@ -29,6 +29,7 @@ import type {
   RoomMember,
 } from "./trigger-types.js";
 import { ZenXCapabilityService } from "./capability-service.js";
+import { ZenXAutomationControlCapabilityPackage } from "./capabilities/automation-control-package.js";
 import {
   MutableAppServerRequestPort,
   ZenXSelfControlCapabilityPackage,
@@ -142,6 +143,9 @@ app.whenReady().then(async () => {
       { titles: titleCoordinator },
     );
     await triggerService.start();
+    capabilityService.register(
+      new ZenXAutomationControlCapabilityPackage(triggerService),
+    );
     installTriggerIpc(triggerService);
     if (startupError === undefined) await appServerManager.start();
     else appServerManager.reportStartupError(startupError);

@@ -36,6 +36,10 @@ workspace 与 Thread 实际 cwd 派生；Thread 的创建、读取、状态与
 进入各自权威 ItemList，不另建委派记录、消息队列或 transcript；互相监听
 `turn_completed` 后继续发起普通 Turn 是允许的。
 
+Trigger 与 Room 管理也作为显式授权的 bundled capability 提供给 Agent：Agent 可以列举、创建、
+更新、取消或删除 Trigger，并可列举、创建、改名和删除 Room、管理成员及发送消息；这些操作只修改
+ZenX 外层注册表/协作转录，Trigger 命中仍通过 App Server 发起普通 Turn。
+
 固定版本 T3 Code 仍是机会型兼容目标：它可以通过协议直接把 Zen 当 provider
 驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。
 

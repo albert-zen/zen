@@ -84,6 +84,9 @@
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 capability registry 暴露 Project/Thread 自控工具，
   只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
   不持有第二套 Project、Thread、Turn、transcript 或调度状态。
+- **ZenXAutomationControlCapabilityPackage** — ZenX 产品层通过 capability registry 与进程内 typed
+  Trigger/Room service port 暴露 Trigger 和 Room 管理工具；注册表仍是外层产品配置，命中只发起普通 Turn，
+  工具调用与结果仍进入调用方的 canonical ItemList，且不复制 scheduler、queue 或 transcript。
 - **ZenXThreadTitleProjection** — ZenX 外层产品按 threadId 持久化 provisional、generating、
   generated、manual 与 failed 标题生命周期及单调版本；它不进入 canonical ItemList，
   每次异步生成完成都用版本比较避免覆盖手动改名或重启后的新状态。

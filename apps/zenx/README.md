@@ -28,9 +28,13 @@ simulator for local testing. A hit persists an auditable occurrence with a stabl
 client message ID, then starts a normal App Server Turn. Failures remain visible
 and are never silently retried.
 
-Agent-callable `trigger.create` / `trigger.cancel` tools and a production external
-signal ingress are not part of this slice. They remain follow-up ZenX-host
-features; neither should be added to Zen Core or the Codex-compatible protocol.
+The explicitly granted bundled `zenx-automation-control` capability exposes
+Trigger list/create/update/cancel/delete and Room
+list/create/rename/delete/member/message tools to Agents. Trigger history remains
+auditable after a definition is deleted, and deleting a Room with active mention
+Triggers fails closed. A production external signal ingress remains a follow-up
+ZenX-host feature; none of these operations belong in Zen Core or the
+Codex-compatible protocol.
 
 A Room is shared transcription and routing, not an Agent Thread. Only an explicit
 member mention with a matching trigger delivers Room content to that member's

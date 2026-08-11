@@ -12,6 +12,7 @@ import { ZenXTriggerStore } from "./trigger-store.js";
 import type {
   CreateRoomInput,
   CreateTriggerInput,
+  UpdateTriggerInput,
   RoomMember,
   RoomMessage,
   TriggerHistoryEntry,
@@ -177,6 +178,40 @@ export class ZenXTriggerService {
     });
   }
 
+  async update(input: UpdateTriggerInput): Promise<ZenXTrigger> {
+    const replacement = await this.#mutate(async () => {
+      const index = this.#snapshot.triggers.findIndex(
+        (item) => item.id === input.id,
+      );
+      if (index < 0) throw new Error("Trigger was not found");
+      const existing = this.#snapshot.triggers[index]!;
+      const replacement = triggerFromInput(
+        input,
+        existing.id,
+        existing.createdAt,
+        existing.active,
+        this.#now(),
+      );
+      this.#snapshot.triggers[index] = replacement;
+      return replacement;
+    });
+    this.#rescheduleTimers();
+    return replacement;
+  }
+
+  async delete(triggerId: string): Promise<void> {
+    await this.#mutate(async () => {
+      const index = this.#snapshot.triggers.findIndex(
+        (item) => item.id === required(triggerId, "trigger"),
+      );
+      if (index < 0) throw new Error("Trigger was not found");
+      this.#snapshot.triggers.splice(index, 1);
+    });
+    const timer = this.#timers.get(triggerId);
+    if (timer !== undefined) this.#cancelScheduled(timer);
+    this.#timers.delete(triggerId);
+  }
+
   async signal(name: string, detail: string): Promise<void> {
     const signalName = required(name, "signal name");
     const signalDetail = detail.trim();
@@ -206,6 +241,36 @@ export class ZenXTriggerService {
       };
       this.#snapshot.rooms.push(room);
       return room;
+    });
+  }
+
+  async renameRoom(roomId: string, name: string): Promise<void> {
+    await this.#mutate(async () => {
+      const room = this.#snapshot.rooms.find(
+        (entry) => entry.id === required(roomId, "room"),
+      );
+      if (room === undefined) throw new Error("Room was not found");
+      room.name = required(name, "room name");
+    });
+  }
+
+  async deleteRoom(roomId: string): Promise<void> {
+    await this.#mutate(async () => {
+      const normalized = required(roomId, "room");
+      if (
+        this.#snapshot.triggers.some(
+          (trigger) => trigger.active && trigger.room?.roomId === normalized,
+        )
+      ) {
+        throw new Error(
+          "Room has active mention triggers; cancel or delete them first",
+        );
+      }
+      const index = this.#snapshot.rooms.findIndex(
+        (entry) => entry.id === normalized,
+      );
+      if (index < 0) throw new Error("Room was not found");
+      this.#snapshot.rooms.splice(index, 1);
     });
   }
 
@@ -241,19 +306,33 @@ export class ZenXTriggerService {
     author: string,
     text: string,
   ): Promise<void> {
-    const room = this.#snapshot.rooms.find((entry) => entry.id === roomId);
-    if (room === undefined) throw new Error("Room was not found");
-    const posted = message(
-      room.id,
-      required(author, "author"),
-      required(text, "message"),
-      "human",
-      null,
-      null,
-      this.#now(),
-    );
-    await this.#mutate(async () => {
+    await this.#postRoomMessage(roomId, author, text, "human");
+  }
+
+  async postAgentRoomMessage(roomId: string, text: string): Promise<void> {
+    await this.#postRoomMessage(roomId, "ZenX Agent", text, "agent");
+  }
+
+  async #postRoomMessage(
+    roomId: string,
+    author: string,
+    text: string,
+    kind: "human" | "agent",
+  ): Promise<void> {
+    const { posted, room } = await this.#mutate(async () => {
+      const room = this.#snapshot.rooms.find((entry) => entry.id === roomId);
+      if (room === undefined) throw new Error("Room was not found");
+      const posted = message(
+        room.id,
+        required(author, "author"),
+        required(text, "message"),
+        kind,
+        null,
+        null,
+        this.#now(),
+      );
       room.messages.push(posted);
+      return { posted, room: structuredClone(room) };
     });
     const mentions = room.members.filter((member) =>
       new RegExp(
@@ -541,6 +620,62 @@ function validFuture(value: number, now: number): number {
   if (!Number.isFinite(value) || value <= now)
     throw new Error("Timer must be scheduled in the future");
   return value;
+}
+
+function triggerFromInput(
+  input: CreateTriggerInput,
+  id: string,
+  createdAt: number,
+  active: boolean,
+  now: number,
+): ZenXTrigger {
+  const common = {
+    id,
+    threadId: required(input.threadId, "thread"),
+    kind: input.kind,
+    label: required(input.label, "label"),
+    prompt: required(input.prompt, "prompt"),
+    createdAt,
+    active,
+  };
+  if (input.kind === "timer") {
+    return {
+      ...common,
+      kind: "timer",
+      timer: {
+        nextRunAt: validFuture(input.runAt, now),
+        intervalMinutes:
+          input.intervalMinutes === undefined
+            ? null
+            : positive(input.intervalMinutes),
+      },
+    };
+  }
+  if (input.kind === "thread") {
+    return {
+      ...common,
+      kind: "thread",
+      watch: {
+        threadId: required(input.watchedThreadId, "watched thread"),
+        event: "turn_completed",
+      },
+    };
+  }
+  if (input.kind === "roomMention") {
+    return {
+      ...common,
+      kind: "roomMention",
+      room: {
+        roomId: required(input.roomId, "room"),
+        mention: required(input.mention, "mention"),
+      },
+    };
+  }
+  return {
+    ...common,
+    kind: "signal",
+    signal: { name: required(input.signalName, "signal name") },
+  };
 }
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
