@@ -634,6 +634,96 @@ test("synchronizes ZAS-owned thread names without adding Agent items", async () 
   }
 });
 
+test("archives Threads through the fixed Codex lifecycle and filters lists", async () => {
+  const appServer = testHost();
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const initiating = await CodexClient.connect(server.url);
+  const observing = await CodexClient.connect(server.url);
+  try {
+    await initiating.initialize({
+      name: "initiating",
+      title: "Initiating",
+      version: "1",
+    });
+    await observing.initialize({
+      name: "observing",
+      title: "Observing",
+      version: "1",
+    });
+    const started = await initiating.request("thread/start", {});
+    const thread = responseResult<Record<string, unknown>>(started, "thread");
+    assert.equal(typeof thread.id, "string");
+    const threadId = thread.id as string;
+
+    const archived = deferred<Record<string, unknown>>();
+    const unarchived = deferred<Record<string, unknown>>();
+    observing.onNotification("thread/archived", (params) => {
+      if (isRecord(params)) archived.resolve(params);
+    });
+    observing.onNotification("thread/unarchived", (params) => {
+      if (isRecord(params)) unarchived.resolve(params);
+    });
+
+    assert.deepEqual(
+      await initiating.request("thread/archive", { threadId }),
+      {},
+    );
+    assert.deepEqual(await within(archived.promise), { threadId });
+    const activeList = await initiating.request("thread/list", {});
+    assert(isRecord(activeList) && Array.isArray(activeList.data));
+    assert.equal(activeList.data.length, 0);
+    const archivedList = await initiating.request("thread/list", {
+      archived: true,
+    });
+    assert(isRecord(archivedList) && Array.isArray(archivedList.data));
+    assert.equal(archivedList.data.length, 1);
+    await assert.rejects(
+      initiating.request("thread/list", { archived: "yes" }),
+      (error: unknown) =>
+        error instanceof CodexClientError && error.code === -32602,
+    );
+    assert.equal(
+      responseResult<Record<string, unknown>>(
+        await initiating.request("thread/read", { threadId }),
+        "thread",
+      ).id,
+      threadId,
+    );
+
+    const restored = await initiating.request("thread/unarchive", {
+      threadId,
+    });
+    assert.equal(
+      responseResult<Record<string, unknown>>(restored, "thread").id,
+      threadId,
+    );
+    assert.deepEqual(await within(unarchived.promise), { threadId });
+    const restoredList = await initiating.request("thread/list", {});
+    assert(isRecord(restoredList) && Array.isArray(restoredList.data));
+    assert.equal(restoredList.data.length, 1);
+    assert.equal(
+      (await appServer.readThread(threadId)).items.some(
+        (item) => "archived" in item,
+      ),
+      false,
+    );
+
+    await assert.rejects(
+      initiating.request("thread/archive", { threadId: "missing" }),
+      (error: unknown) =>
+        error instanceof CodexClientError && error.code === -32000,
+    );
+  } finally {
+    initiating.close();
+    observing.close();
+    await server.close();
+  }
+});
+
 test("streams the minimal Codex Thread/Turn/Item lifecycle over WebSocket", async () => {
   const server = await serveCodexWebSocket({
     appServer: testHost(),

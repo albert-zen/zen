@@ -53,6 +53,7 @@ export interface ThreadSnapshot {
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
   name?: string;
+  archived: boolean;
 }
 
 export interface UnavailableThreadSnapshot {
@@ -60,6 +61,7 @@ export interface UnavailableThreadSnapshot {
   status: "systemError";
   error: string;
   name?: string;
+  archived: boolean;
 }
 
 export type ThreadListEntry = ThreadSnapshot | UnavailableThreadSnapshot;
@@ -95,8 +97,17 @@ export interface ThreadNameUpdatedEvent {
   name: string;
 }
 
+export interface ThreadArchivedUpdatedEvent {
+  type: "thread_archived_updated";
+  threadId: string;
+  archived: boolean;
+}
+
 export type AppServerEvent =
-  RuntimeEvent | ThreadSettingsUpdatedEvent | ThreadNameUpdatedEvent;
+  | RuntimeEvent
+  | ThreadSettingsUpdatedEvent
+  | ThreadNameUpdatedEvent
+  | ThreadArchivedUpdatedEvent;
 
 export interface UpdateThreadSettingsInput {
   model: string;
@@ -185,7 +196,9 @@ export class ZenAppServer {
     return await this.#snapshot(thread);
   }
 
-  async listThreads(): Promise<ThreadListEntry[]> {
+  async listThreads(
+    options: { archived?: boolean } = {},
+  ): Promise<ThreadListEntry[]> {
     const threadIds = await this.#journal.listThreadIds();
     const snapshots: ThreadListEntry[] = [];
     for (const threadId of threadIds) {
@@ -204,7 +217,8 @@ export class ZenAppServer {
         snapshots.push(await this.#unavailableSnapshot(threadId, error));
       }
     }
-    return snapshots;
+    const archived = options.archived ?? false;
+    return snapshots.filter((snapshot) => snapshot.archived === archived);
   }
 
   async readThread(threadId: string): Promise<ThreadSnapshot> {
@@ -261,6 +275,32 @@ export class ZenAppServer {
       thread,
       this.#activeTurns.get(threadId)?.turnId,
     );
+  }
+
+  async setThreadArchived(
+    threadId: string,
+    archived: boolean,
+  ): Promise<ThreadSnapshot> {
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const current = await this.#threadMetadata.read(threadId);
+      if ((current.archived ?? false) === archived) {
+        return await this.#snapshot(
+          thread,
+          this.#activeTurns.get(threadId)?.turnId,
+        );
+      }
+      await this.#threadMetadata.setArchived(threadId, archived);
+      this.#emit({
+        type: "thread_archived_updated",
+        threadId,
+        archived,
+      });
+      return await this.#snapshot(
+        thread,
+        this.#activeTurns.get(threadId)?.turnId,
+      );
+    });
   }
 
   async startTurn(
@@ -843,6 +883,7 @@ export class ZenAppServer {
       provider: configuration.provider,
       sandbox: configuration.sandbox,
       approvalPolicy: configuration.approvalPolicy,
+      archived: productMetadata.archived ?? false,
       ...(productMetadata.name === undefined
         ? {}
         : { name: productMetadata.name }),
@@ -866,6 +907,7 @@ export class ZenAppServer {
       id: threadId,
       status: "systemError",
       error: error instanceof Error ? error.message : String(error),
+      archived: productMetadata.archived ?? false,
       ...(productMetadata.name === undefined
         ? {}
         : { name: productMetadata.name }),

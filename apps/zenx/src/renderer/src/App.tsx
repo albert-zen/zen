@@ -168,6 +168,9 @@ export function App() {
     const disposeNotifications = window.zenx.protocol.onNotification(
       (method, params) => {
         if (active) {
+          if (method === "thread/archived" || method === "thread/unarchived") {
+            void loadThreads();
+          }
           setThreads((current) =>
             applyThreadNotification(current, method, params),
           );

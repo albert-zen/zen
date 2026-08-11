@@ -48,6 +48,9 @@ const SELF_CONTROL_TOOL_NAMES = [
   "zenx_threads_create",
   "zenx_threads_read",
   "zenx_threads_status",
+  "zenx_threads_rename",
+  "zenx_threads_archive",
+  "zenx_threads_unarchive",
   "zenx_threads_send",
 ];
 
@@ -153,6 +156,39 @@ test("real ZenX host control tools make active semantics explicit", async () => 
       (listed.threads as Array<{ threadId: string }>)[0]?.threadId,
       threadId,
     );
+
+    const renamed = await invoke(tools, "zenx_threads_rename", {
+      threadId,
+      name: "Agent-managed Thread",
+    });
+    assert.equal(renamed.name, "Agent-managed Thread");
+    const archived = await invoke(tools, "zenx_threads_archive", { threadId });
+    assert.equal(archived.archived, true);
+    const activeAfterArchive = await invoke(tools, "zenx_threads_list", {
+      limit: 10,
+    });
+    assert.equal(
+      (activeAfterArchive.threads as Array<{ threadId: string }>).some(
+        (thread) => thread.threadId === threadId,
+      ),
+      false,
+    );
+    const archivedList = await invoke(tools, "zenx_threads_list", {
+      archived: true,
+      limit: 10,
+    });
+    assert.equal(
+      (
+        archivedList.threads as Array<{ threadId: string; archived: boolean }>
+      )[0]?.archived,
+      true,
+    );
+    const archivedRead = await invoke(tools, "zenx_threads_read", { threadId });
+    assert.equal(archivedRead.threadId, threadId);
+    const unarchived = await invoke(tools, "zenx_threads_unarchive", {
+      threadId,
+    });
+    assert.equal(unarchived.archived, false);
 
     const bridgeThread = await manager.request("thread/start", {
       cwd: directory,

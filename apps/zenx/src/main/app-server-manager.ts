@@ -271,6 +271,8 @@ export class AppServerManager {
     for (const method of [
       "thread/started",
       "thread/name/updated",
+      "thread/archived",
+      "thread/unarchived",
       "thread/settings/updated",
       "turn/started",
       "item/started",

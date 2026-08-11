@@ -9,7 +9,10 @@ import {
 import { join, resolve } from "node:path";
 
 import { isAllowedZenXExternalUrl } from "../external-link-policy.js";
-import { isClientRequestMethod } from "../protocol-client/index.js";
+import {
+  isClientRequestMethod,
+  type ServerNotificationParams,
+} from "../protocol-client/index.js";
 import { ipcChannels } from "../preload/ipc.js";
 import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
@@ -235,6 +238,18 @@ function installProtocolIpc(
   });
   manager.onNotification((method, params) => {
     void observeCompletedUserMessageTitle(titles, method, params);
+    if (method === "thread/name/updated") {
+      const event = params as ServerNotificationParams["thread/name/updated"];
+      void titles
+        .synchronizeNativeName(event.threadId, event.threadName)
+        .catch((error: unknown) => {
+          console.warn(
+            `Could not synchronize native Thread name: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+    }
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(ipcChannels.notification, method, params);
     }

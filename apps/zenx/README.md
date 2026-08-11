@@ -57,15 +57,18 @@ The `zenx-self-control` package is a bundled, cross-platform,
 Capabilities UI grants its workspace-read and local-device-control permissions;
 grant/revoke uses the same host restart behavior as every other package. Its
 provider-valid tools are `zenx_projects_list`, `zenx_threads_list`,
-`zenx_threads_create`, `zenx_threads_read`, `zenx_threads_status`, and
-`zenx_threads_send`.
+`zenx_threads_create`, `zenx_threads_read`, `zenx_threads_status`,
+`zenx_threads_rename`, `zenx_threads_archive`, `zenx_threads_unarchive`, and
+`zenx_threads_send`. Archived Threads remain readable and are returned from
+`zenx_threads_list` only when `archived: true` is requested.
 
 Projects are bounded groupings derived from the configured workspace and
 canonical Thread cwd metadata, not runtime objects. Reads expose bounded recent
 Turn/item projections and omit command output. Create and send operations use a
 narrow in-memory request port attached to the current `AppServerManager`, and
 that port issues only typed `thread/list`, `thread/start`, `thread/read`,
-`turn/start`, `turn/steer`, and `turn/replace` requests. `steer` and `replace`
+`thread/name/set`, `thread/archive`, `thread/unarchive`, `turn/start`,
+`turn/steer`, and `turn/replace` requests. `steer` and `replace`
 require the expected active Turn ID; all sends require a stable client message
 ID. Tool calls, results, interruption, and replacement remain auditable in the
 canonical ItemLists and capability audit projection. Mutual `turn_completed`

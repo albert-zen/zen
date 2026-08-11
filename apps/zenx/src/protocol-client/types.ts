@@ -101,8 +101,14 @@ export interface ClientRequestParams {
   "thread/start": ThreadConfigurationParams;
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
   "thread/read": { threadId: string; includeTurns?: boolean };
-  "thread/list": { limit?: number; cursor?: string | null };
+  "thread/list": {
+    limit?: number;
+    cursor?: string | null;
+    archived?: boolean | null;
+  };
   "thread/name/set": { threadId: string; name: string };
+  "thread/archive": { threadId: string };
+  "thread/unarchive": { threadId: string };
   "thread/settings/update": { threadId: string; model: string };
   "thread/unsubscribe": { threadId: string };
   "turn/start": {
@@ -141,6 +147,8 @@ export interface ClientRequestResults {
     backwardsCursor: null;
   };
   "thread/name/set": Record<string, never>;
+  "thread/archive": Record<string, never>;
+  "thread/unarchive": { thread: Thread };
   "thread/settings/update": Record<string, never>;
   "thread/unsubscribe": {
     status: "unsubscribed" | "notSubscribed";
@@ -156,6 +164,8 @@ export type ClientRequestMethod = keyof ClientRequestParams;
 export interface ServerNotificationParams {
   "thread/started": { thread: Thread };
   "thread/name/updated": { threadId: string; threadName: string };
+  "thread/archived": { threadId: string };
+  "thread/unarchived": { threadId: string };
   "thread/settings/updated": {
     threadId: string;
     threadSettings: UpdatedThreadSettings;

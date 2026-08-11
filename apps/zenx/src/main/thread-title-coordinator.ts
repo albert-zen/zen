@@ -119,6 +119,27 @@ export class ZenXThreadTitleCoordinator {
     });
   }
 
+  async synchronizeNativeName(
+    threadId: string,
+    title: string,
+  ): Promise<ThreadTitleProjection> {
+    this.#assertAvailable();
+    const normalized = normalizeManualTitle(title);
+    return await this.#serial(async () => {
+      const current = this.#snapshot[threadId];
+      if (current?.title === normalized) return current;
+      const projection: ThreadTitleProjection = {
+        threadId,
+        title: normalized,
+        status: "manual",
+        version: (current?.version ?? 0) + 1,
+        source: current?.source ?? normalized,
+      };
+      await this.#commit(projection);
+      return projection;
+    });
+  }
+
   async retry(threadId: string): Promise<ThreadTitleProjection> {
     this.#assertAvailable();
     const generating = await this.#serial(async () => {

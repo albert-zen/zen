@@ -62,6 +62,25 @@ test("a canonical duplicate cannot restart generation or overwrite a pre-observe
   });
 });
 
+test("an App Server rename becomes authoritative over pending generation", async () => {
+  await withCoordinator(async ({ titles, inference }) => {
+    await titles.observe("thread-agent-renamed", "Original title source");
+    await titles.synchronizeNativeName(
+      "thread-agent-renamed",
+      "Agent-managed name",
+    );
+    inference.resolve("Late generated name");
+    await tick();
+    assert.deepEqual(titles.snapshot()["thread-agent-renamed"], {
+      threadId: "thread-agent-renamed",
+      title: "Agent-managed name",
+      status: "manual",
+      version: 3,
+      source: "Original title source",
+    });
+  });
+});
+
 test("observer bounds canonical text and logs failures without rejecting", async () => {
   const observed: string[] = [];
   const warnings: string[] = [];

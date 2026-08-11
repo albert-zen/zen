@@ -270,6 +270,29 @@ export class CodexConnection {
         this.#send({ id: request.id, result: {} });
         return;
       }
+      case "thread/archive": {
+        rejectUnsupportedValues(params, ["threadId"]);
+        await this.#appServer.setThreadArchived(
+          requiredString(params, "threadId"),
+          true,
+        );
+        this.#send({ id: request.id, result: {} });
+        return;
+      }
+      case "thread/unarchive": {
+        rejectUnsupportedValues(params, ["threadId"]);
+        const snapshot = await this.#appServer.setThreadArchived(
+          requiredString(params, "threadId"),
+          false,
+        );
+        this.#send({
+          id: request.id,
+          result: {
+            thread: projectThread(snapshot, { includeTurns: false }),
+          },
+        });
+        return;
+      }
       case "thread/settings/update": {
         rejectUnsupportedValues(params, ["threadId", "model"]);
         const threadId = requiredString(params, "threadId");
@@ -293,7 +316,8 @@ export class CodexConnection {
         return;
       }
       case "thread/list": {
-        const snapshots = await this.#appServer.listThreads();
+        const archived = optionalBoolean(params.archived, "archived") ?? false;
+        const snapshots = await this.#appServer.listThreads({ archived });
         const limit =
           typeof params.limit === "number" && params.limit >= 0
             ? params.limit
@@ -449,6 +473,13 @@ export class CodexConnection {
   }
 
   async #projectEvent(event: AppServerEvent): Promise<void> {
+    if (event.type === "thread_archived_updated") {
+      this.#send({
+        method: event.archived ? "thread/archived" : "thread/unarchived",
+        params: { threadId: event.threadId },
+      });
+      return;
+    }
     if (event.type === "thread_name_updated") {
       if (this.#subscribedThreads.has(event.threadId)) {
         this.#send({
@@ -766,7 +797,8 @@ export class CodexConnection {
   #sendErrorNotification(error: unknown, event: AppServerEvent): void {
     if (
       event.type === "thread_name_updated" ||
-      event.type === "thread_settings_updated"
+      event.type === "thread_settings_updated" ||
+      event.type === "thread_archived_updated"
     ) {
       console.warn(`Could not project ${event.type} notification`, error);
       return;
@@ -880,6 +912,16 @@ function optionalNonEmptyString(
   }
   if (typeof value !== "string" || value.length === 0) {
     throw new InvalidParamsError(`${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalBoolean(value: unknown, key: string): boolean | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    throw new InvalidParamsError(`${key} must be a boolean`);
   }
   return value;
 }

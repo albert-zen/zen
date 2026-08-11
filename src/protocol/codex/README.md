@@ -17,6 +17,8 @@ Client requests：
 - `thread/read`
 - `thread/list`
 - `thread/name/set`
+- `thread/archive`
+- `thread/unarchive`
 - `thread/settings/update`
 - `thread/unsubscribe`
 - `turn/start`
@@ -33,6 +35,8 @@ Server notifications：
 
 - `thread/started`
 - `thread/name/updated`
+- `thread/archived`
+- `thread/unarchived`
 - `thread/settings/updated`
 - `turn/started`
 - `item/started`
