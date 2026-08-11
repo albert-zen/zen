@@ -50,6 +50,7 @@ export class ZenXThreadTitleCoordinator {
   #mutation = Promise.resolve();
   #initializationError: Error | undefined;
   #nativeMirrorCapacityWarned = false;
+  #pendingNativeMirrorAdmissions = 0;
 
   constructor(options: {
     store: ZenXThreadTitleStore;
@@ -194,12 +195,9 @@ export class ZenXThreadTitleCoordinator {
       const current = this.#snapshot[threadId];
       if (current !== undefined) return current;
     }
-    const unchanged = this.#snapshot[threadId];
-    if (unchanged?.title === normalized) return unchanged;
     this.#recordNativeAuthority(threadId);
     const projection = await this.#serial(async () => {
       const current = this.#snapshot[threadId];
-      if (current?.title === normalized) return current;
       const projection: ThreadTitleProjection = {
         threadId,
         title: normalized,
@@ -303,9 +301,13 @@ export class ZenXThreadTitleCoordinator {
     fence?: ZenXThreadTitleObservationFence,
   ): Promise<boolean> {
     if (!observationIsCurrent(fence)) return false;
+    const previous = this.#snapshot;
     const next = { ...this.#snapshot, [projection.threadId]: projection };
-    await this.#store.write(next);
-    if (!observationIsCurrent(fence)) return false;
+    await this.#store.write(next, () => observationIsCurrent(fence));
+    if (!observationIsCurrent(fence)) {
+      await this.#store.write(previous);
+      return false;
+    }
     this.#snapshot = next;
     for (const listener of this.#listeners) listener(this.snapshot());
     return true;
@@ -316,13 +318,21 @@ export class ZenXThreadTitleCoordinator {
     title: string,
     fence?: ZenXThreadTitleObservationFence,
   ): Promise<void> {
+    if (!this.#reserveNativeMirrorAdmission()) {
+      this.#warnNativeMirrorCapacity();
+      return;
+    }
     this.#registerMirrorOwner(fence);
     const previous =
       this.#nativeMirrorTails.get(threadId)?.tail ?? Promise.resolve();
     const operation = previous
       .catch(() => undefined)
       .then(async () => {
-        if (!observationIsCurrent(fence)) return;
+        this.#pendingNativeMirrorAdmissions -= 1;
+        if (!observationIsCurrent(fence)) {
+          this.#refreshNativeMirrorCapacityWarning();
+          return;
+        }
         const record = { title, owner: fence, consumed: false };
         if (
           !this.#appendMirrorRecord(
@@ -331,6 +341,7 @@ export class ZenXThreadTitleCoordinator {
             record,
           )
         ) {
+          this.#refreshNativeMirrorCapacityWarning();
           this.#warnNativeMirrorCapacity();
           return;
         }
@@ -453,11 +464,7 @@ export class ZenXThreadTitleCoordinator {
     threadId: string,
     record: NativeMirrorRecord,
   ): boolean {
-    if (
-      mirrorRecordCount(this.#expectedNativeMirrors) +
-        mirrorRecordCount(this.#quarantinedNativeMirrors) >=
-      MAX_NATIVE_MIRROR_RECORDS
-    )
+    if (this.#nativeMirrorOutstandingCount() >= MAX_NATIVE_MIRROR_RECORDS)
       return false;
     const records = recordsByThread.get(threadId) ?? [];
     records.push(record);
@@ -524,13 +531,24 @@ export class ZenXThreadTitleCoordinator {
   }
 
   #refreshNativeMirrorCapacityWarning(): void {
-    if (
-      mirrorRecordCount(this.#expectedNativeMirrors) +
-        mirrorRecordCount(this.#quarantinedNativeMirrors) <
-      MAX_NATIVE_MIRROR_RECORDS
-    ) {
+    if (this.#nativeMirrorOutstandingCount() < MAX_NATIVE_MIRROR_RECORDS) {
       this.#nativeMirrorCapacityWarned = false;
     }
+  }
+
+  #reserveNativeMirrorAdmission(): boolean {
+    if (this.#nativeMirrorOutstandingCount() >= MAX_NATIVE_MIRROR_RECORDS)
+      return false;
+    this.#pendingNativeMirrorAdmissions += 1;
+    return true;
+  }
+
+  #nativeMirrorOutstandingCount(): number {
+    return (
+      mirrorRecordCount(this.#expectedNativeMirrors) +
+      mirrorRecordCount(this.#quarantinedNativeMirrors) +
+      this.#pendingNativeMirrorAdmissions
+    );
   }
 
   #recordNativeAuthority(threadId: string): void {

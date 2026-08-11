@@ -96,7 +96,8 @@
 - **ZenXTitleInference** — ZenX 主进程使用独立配置的标题模型执行一次不写 journal、
   不创建 Turn 的辅助推理；credential 仍只在主进程内存中按当前 Provider 解析。
 - **ZenXThreadTitleCoordinator** — ZenX 主进程从首条有意义的来源标注输入立即建立
-  provisional 投影，并异步协调生成、显式重试与 authoritative manual rename。
+  provisional 投影，以 owner-fenced durable replacement 持久化，并异步协调生成、显式重试与
+  authoritative manual rename。
 - **ZenXThreadTitleNotificationObserver** — ZenX 主进程在 App Server canonical
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
 

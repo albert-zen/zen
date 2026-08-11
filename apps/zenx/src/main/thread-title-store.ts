@@ -1,4 +1,4 @@
-import { mkdir, open, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -40,7 +40,10 @@ export class ZenXThreadTitleStore {
     }
   }
 
-  async write(snapshot: ThreadTitleSnapshot): Promise<void> {
+  async write(
+    snapshot: ThreadTitleSnapshot,
+    isCurrent: () => boolean = () => true,
+  ): Promise<void> {
     const directory = path.dirname(this.#filePath);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const temporary = `${this.#filePath}.${process.pid}.tmp`;
@@ -48,6 +51,10 @@ export class ZenXThreadTitleStore {
       encoding: "utf8",
       mode: 0o600,
     });
+    if (!isCurrent()) {
+      await rm(temporary, { force: true });
+      return;
+    }
     await rename(temporary, this.#filePath);
   }
 }

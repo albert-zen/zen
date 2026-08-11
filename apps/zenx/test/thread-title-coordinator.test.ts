@@ -126,6 +126,45 @@ test("a retired observation queued behind a title mutation cannot commit or mirr
   }
 });
 
+test("retirement during an entered title-store write leaves no durable projection", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-title-durable-fence-"),
+  );
+  try {
+    const store = new BlockingTitleStore(path.join(directory, "titles.json"));
+    const owner = new ZenXTriggerGenerationQuiescence({ deadlineMs: 20 });
+    const instance = coordinator(store, new ControlledInference());
+    await instance.initialize();
+
+    store.blockNextWrite();
+    const staleObservation = instance.observe("thread-a", "Stale title", owner);
+    await store.writeEntered;
+    const retirement = owner.retire();
+    store.releaseWrite();
+    assert.equal(await staleObservation, undefined);
+    await retirement;
+
+    assert.equal(instance.snapshot()["thread-a"], undefined);
+    assert.deepEqual(await store.read(), {});
+
+    const successorOwner = new ZenXTriggerGenerationQuiescence({
+      deadlineMs: 20,
+    });
+    const successor = coordinator(store, new ControlledInference());
+    await successor.initialize();
+    assert.equal(successor.snapshot()["thread-a"], undefined);
+    const observed = await successor.observe(
+      "thread-a",
+      "Successor title",
+      successorOwner,
+    );
+    assert.equal(observed?.source, "Successor title");
+    await successorOwner.retire();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("retirement aborts background title generation before commit and mirror", async () => {
   await withCoordinator(async ({ coordinator, inference, events, names }) => {
     const controller = new AbortController();
@@ -189,6 +228,7 @@ test("quarantined stale title cannot swallow a newer authoritative native rename
     const secondMirror = deferred<void>();
     const mirrorEntered = deferred<void>();
     const successorMirrorEntered = deferred<void>();
+    const firstMirrorDone = deferred<void>();
     const mirrored: string[] = [];
     let instance!: ZenXThreadTitleCoordinator;
     let mirrorCalls = 0;
@@ -198,17 +238,18 @@ test("quarantined stale title cannot swallow a newer authoritative native rename
       titleModel: () => "gpt-5.6-luna",
       setNativeName: async (threadId, title) => {
         mirrorCalls += 1;
+        const call = mirrorCalls;
         mirrored.push(title);
-        if (mirrorCalls === 1) {
+        if (call === 1) {
           mirrorEntered.resolve();
           await firstMirror.promise;
-          return;
         }
-        if (mirrorCalls === 2) {
+        if (call === 2) {
           successorMirrorEntered.resolve();
           await secondMirror.promise;
         }
         await instance.synchronizeNativeName(threadId, title);
+        if (call === 1) firstMirrorDone.resolve();
       },
     });
     await instance.initialize();
@@ -254,8 +295,80 @@ test("quarantined stale title cannot swallow a newer authoritative native rename
     assert.equal(instance.snapshot()["thread-a"]?.title, "Old source");
     assert.equal(instance.snapshot()["thread-a"]?.status, "manual");
     firstMirror.resolve();
-    await firstObservation;
+    await Promise.all([firstObservation, firstMirrorDone.promise]);
     assert.deepEqual(mirrored.slice(0, 2), ["Old source", "New title"]);
+    await secondOwner.retire();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("same-title native notification is authoritative after successor mirror completion", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-title-same-native-authority-"),
+  );
+  try {
+    const inference = new ControlledInference();
+    const firstMirror = deferred<void>();
+    const secondMirror = deferred<void>();
+    const firstMirrorEntered = deferred<void>();
+    const secondMirrorEntered = deferred<void>();
+    const firstMirrorDone = deferred<void>();
+    const secondMirrorDone = deferred<void>();
+    let mirrorCalls = 0;
+    let instance!: ZenXThreadTitleCoordinator;
+    instance = new ZenXThreadTitleCoordinator({
+      store: new ZenXThreadTitleStore(path.join(directory, "titles.json")),
+      inference,
+      titleModel: () => "gpt-5.6-luna",
+      setNativeName: async (threadId, title) => {
+        mirrorCalls += 1;
+        const call = mirrorCalls;
+        if (call === 1) {
+          firstMirrorEntered.resolve();
+          await firstMirror.promise;
+        } else if (call === 2) {
+          secondMirrorEntered.resolve();
+          await secondMirror.promise;
+        }
+        await instance.synchronizeNativeName(threadId, title);
+        if (call === 1) firstMirrorDone.resolve();
+        if (call === 2) secondMirrorDone.resolve();
+      },
+    });
+    await instance.initialize();
+
+    const firstOwner = new ZenXTriggerGenerationQuiescence({ deadlineMs: 20 });
+    const firstObservation = instance.observe(
+      "thread-a",
+      "Old source",
+      firstOwner,
+    );
+    await firstMirrorEntered.promise;
+    await firstOwner.retire();
+
+    const secondOwner = new ZenXTriggerGenerationQuiescence({
+      deadlineMs: 20,
+    });
+    await instance.observe("thread-a", "Old source", secondOwner);
+    inference.resolve("Old source");
+    await until(() => instance.snapshot()["thread-a"]?.status === "generated");
+    await secondMirrorEntered.promise;
+    secondMirror.resolve();
+    await secondMirrorDone.promise;
+    const generated = instance.snapshot()["thread-a"]!;
+
+    const authoritative = await instance.synchronizeNativeName(
+      "thread-a",
+      "Old source",
+    );
+    assert.equal(authoritative.status, "manual");
+    assert.equal(authoritative.version, generated.version + 1);
+
+    firstMirror.resolve();
+    await Promise.all([firstObservation, firstMirrorDone.promise]);
+    assert.equal(instance.snapshot()["thread-a"]?.title, "Old source");
+    assert.equal(instance.snapshot()["thread-a"]?.status, "manual");
     await secondOwner.retire();
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -322,15 +435,24 @@ test("native mirror quarantine fails closed at 64 without evicting stale evidenc
       await owner.retire();
     }
     assert.equal(mirrorCalls, 64);
-    await instance.synchronizeNativeName(
-      "thread-95",
-      "Authoritative after capacity",
+    const overflow = Array.from({ length: 96 }, (_, index) =>
+      instance.synchronizeNativeName(
+        "thread-0",
+        `Authoritative after capacity ${String(index)}`,
+      ),
     );
+    const overflowOutcome = await Promise.race([
+      Promise.all(overflow).then(() => "settled" as const),
+      new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), 500),
+      ),
+    ]);
+    assert.equal(overflowOutcome, "settled");
     assert.equal(
-      instance.snapshot()["thread-95"]?.title,
-      "Authoritative after capacity",
+      instance.snapshot()["thread-0"]?.title,
+      "Authoritative after capacity 95",
     );
-    assert.equal(instance.snapshot()["thread-95"]?.status, "manual");
+    assert.equal(instance.snapshot()["thread-0"]?.status, "manual");
     assert.equal(mirrorCalls, 64);
     assert.equal(
       warnings.filter((warning) =>
