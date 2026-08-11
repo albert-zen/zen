@@ -92,6 +92,14 @@
   不创建 Turn 的辅助推理；credential 仍只在主进程内存中按当前 Provider 解析。
 - **ZenXThreadTitleCoordinator** — ZenX 主进程从首条有意义的来源标注输入立即建立
   provisional 投影，并异步协调生成、显式重试与 authoritative manual rename。
+- **ZenXThreadTitleOwnershipTransaction** — ZenX 标题投影的瞬时单 owner 事务把
+  claim/read/stage/atomic replace/失败补偿、原生名称镜像及 250ms 有界退休收进同一因果边界；
+  successor 先同步撤销旧 owner，再经串行 store contract 读取，未带 App Server correlation token
+  的名称通知始终保留 native authority，因此 provisional 只先在 ZenX 投影可见，generated/manual
+  才镜像到原生名称，且所有 expected/quarantined/queued 镜像证据合计硬限 64。
+- **ZenXThreadTitleOwnershipStore** — 默认文件存储与任何 custom store 都必须在同一 durable projection
+  上实现共享的同步 owner claim、串行 read/commit 与退休后不可发布契约，不能用 coordinator 的事后补偿
+  猜测提交是否仍然有效。
 - **ZenXThreadTitleNotificationObserver** — ZenX 主进程在 App Server canonical
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
 

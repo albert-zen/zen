@@ -158,6 +158,7 @@ async function assertRenameWinsGenerationRace(
     const inference = new ControlledInference();
     let nativeName = "";
     let synchronization: Promise<unknown> | undefined;
+    const synchronizations: Promise<unknown>[] = [];
     let injected = false;
     let titles!: ZenXThreadTitleCoordinator;
     titles = new ZenXThreadTitleCoordinator({
@@ -176,10 +177,13 @@ async function assertRenameWinsGenerationRace(
             "thread-race",
             "Agent authority",
           );
+          synchronizations.push(synchronization);
           await tick();
         }
         nativeName = title;
-        void titles.synchronizeNativeName("thread-race", title);
+        synchronizations.push(
+          titles.synchronizeNativeName("thread-race", title),
+        );
       },
     });
     if (phase === "after-generated-commit") {
@@ -191,6 +195,7 @@ async function assertRenameWinsGenerationRace(
           "thread-race",
           "Agent authority",
         );
+        synchronizations.push(synchronization);
       });
     }
     await titles.initialize();
@@ -213,6 +218,9 @@ async function assertRenameWinsGenerationRace(
       source: "Original title source",
     });
     assert.equal(nativeName, "Agent authority");
+    for (let index = 0; index < synchronizations.length; index += 1)
+      await synchronizations[index];
+    await titles.stop();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
