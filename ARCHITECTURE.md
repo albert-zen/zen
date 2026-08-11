@@ -68,7 +68,8 @@
 - **ZenXTriggerAppServerPort** — ZenX Trigger 服务观察 completed Item/Turn 并发起普通
   `turn/start` 所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
 - **ZenXTriggerLifecycleGeneration** — ZenX Trigger 服务每段 start→stop 生命周期独占 notification、timer、
-  in-flight wakeup 与有界 completion correlation 容器的内存 fence；旧 generation 只能退休或清理自己的瞬态状态，且只有当前 generation 能修改外层审计历史或 Room。
+  in-flight wakeup、有界 completion correlation 容器与可取消 title observation 的内存 fence；退休以 best-effort
+  清理该 generation 并等待已经进入的 durable/title mutation boundary，且只有当前 generation 能继续修改外层审计历史、Room 或 title projection。
 - **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
 - **ZenXCapabilityRegistry** — ZenX 主进程注册 bundled/local capability package 的 manifest、

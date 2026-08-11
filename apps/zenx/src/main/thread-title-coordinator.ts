@@ -9,6 +9,12 @@ const MAX_TITLE_LENGTH = 64;
 const identifierNoise =
   /\b(?:zenx-wakeup:[^\s]+|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\b/giu;
 
+export interface ZenXThreadTitleObservationFence {
+  readonly signal: AbortSignal;
+  isCurrent(): boolean;
+  track(operation: Promise<void>): void;
+}
+
 export class ZenXThreadTitleCoordinator {
   readonly #store: ZenXThreadTitleStore;
   readonly #inference: ThreadTitleInference;
@@ -17,6 +23,13 @@ export class ZenXThreadTitleCoordinator {
   readonly #listeners = new Set<(snapshot: ThreadTitleSnapshot) => void>();
   readonly #expectedNativeMirrors = new Map<string, string[]>();
   readonly #nativeAuthorityVersions = new Map<string, number>();
+  readonly #generationOwners = new Map<
+    string,
+    {
+      version: number;
+      fence: ZenXThreadTitleObservationFence | undefined;
+    }
+  >();
   #snapshot: ThreadTitleSnapshot = {};
   #mutation = Promise.resolve();
   #initializationError: Error | undefined;
@@ -71,14 +84,39 @@ export class ZenXThreadTitleCoordinator {
   async observe(
     threadId: string,
     input: string,
+    fence?: ZenXThreadTitleObservationFence,
   ): Promise<ThreadTitleProjection | undefined> {
     this.#assertAvailable();
+    if (!observationIsCurrent(fence)) return undefined;
     const source = meaningfulTitleSource(input);
     if (source === null) return undefined;
     const result = await this.#serial(async () => {
+      if (!observationIsCurrent(fence)) return undefined;
       const existing = this.#snapshot[threadId];
-      if (existing !== undefined)
-        return { projection: existing, created: false };
+      if (existing !== undefined) {
+        if (
+          fence === undefined ||
+          !["provisional", "generating"].includes(existing.status) ||
+          this.#hasCurrentGenerationOwner(existing)
+        ) {
+          return { projection: existing, created: false };
+        }
+        const generating = {
+          ...existing,
+          status: "generating" as const,
+          version:
+            existing.status === "provisional"
+              ? existing.version + 1
+              : existing.version,
+        };
+        if (
+          existing.status === "provisional" &&
+          !(await this.#commit(generating, fence))
+        ) {
+          return { projection: existing, created: false };
+        }
+        return { projection: generating, created: true };
+      }
       const provisional: ThreadTitleProjection = {
         threadId,
         title: normalizeThreadTitle(source),
@@ -86,17 +124,24 @@ export class ZenXThreadTitleCoordinator {
         version: 1,
         source,
       };
-      await this.#commit(provisional);
-      await this.#mirror(threadId, provisional.title);
+      if (!(await this.#commit(provisional, fence))) return undefined;
+      if (!observationIsCurrent(fence))
+        return { projection: provisional, created: false };
+      await this.#mirror(threadId, provisional.title, fence);
+      if (!observationIsCurrent(fence))
+        return { projection: provisional, created: false };
       const generating = {
         ...provisional,
         status: "generating" as const,
         version: 2,
       };
-      await this.#commit(generating);
+      if (!(await this.#commit(generating, fence)))
+        return { projection: provisional, created: false };
       return { projection: generating, created: true };
     });
-    if (result.created) this.#startGeneration(result.projection);
+    if (result === undefined) return undefined;
+    if (result.created && observationIsCurrent(fence))
+      this.#startGeneration(result.projection, fence);
     return result.projection;
   }
 
@@ -171,16 +216,22 @@ export class ZenXThreadTitleCoordinator {
     return generating;
   }
 
-  async #generate(started: ThreadTitleProjection): Promise<void> {
+  async #generate(
+    started: ThreadTitleProjection,
+    fence?: ZenXThreadTitleObservationFence,
+  ): Promise<void> {
     try {
+      if (!observationIsCurrent(fence)) return;
       const generated = normalizeGeneratedTitle(
         await this.#inference.generate(
           started.source,
           this.#titleModel(),
-          new AbortController().signal,
+          fence?.signal ?? new AbortController().signal,
         ),
       );
+      if (!observationIsCurrent(fence)) return;
       await this.#serial(async () => {
+        if (!observationIsCurrent(fence)) return;
         const current = this.#snapshot[started.threadId];
         if (
           current?.status !== "generating" ||
@@ -196,40 +247,57 @@ export class ZenXThreadTitleCoordinator {
         const nativeAuthorityVersion = this.#nativeAuthorityVersion(
           started.threadId,
         );
-        await this.#commit(projection);
+        if (!(await this.#commit(projection, fence))) return;
         if (
+          observationIsCurrent(fence) &&
           this.#nativeAuthorityVersion(started.threadId) ===
-          nativeAuthorityVersion
+            nativeAuthorityVersion
         ) {
-          await this.#mirror(started.threadId, generated);
+          await this.#mirror(started.threadId, generated, fence);
         }
       });
     } catch (error) {
+      if (!observationIsCurrent(fence)) return;
       await this.#serial(async () => {
+        if (!observationIsCurrent(fence)) return;
         const current = this.#snapshot[started.threadId];
         if (
           current?.status !== "generating" ||
           current.version !== started.version
         )
           return;
-        await this.#commit({
-          ...current,
-          status: "failed",
-          version: current.version + 1,
-          error: describeError(error),
-        });
+        await this.#commit(
+          {
+            ...current,
+            status: "failed",
+            version: current.version + 1,
+            error: describeError(error),
+          },
+          fence,
+        );
       });
     }
   }
 
-  async #commit(projection: ThreadTitleProjection): Promise<void> {
+  async #commit(
+    projection: ThreadTitleProjection,
+    fence?: ZenXThreadTitleObservationFence,
+  ): Promise<boolean> {
+    if (!observationIsCurrent(fence)) return false;
     const next = { ...this.#snapshot, [projection.threadId]: projection };
     await this.#store.write(next);
+    if (!observationIsCurrent(fence)) return false;
     this.#snapshot = next;
     for (const listener of this.#listeners) listener(this.snapshot());
+    return true;
   }
 
-  async #mirror(threadId: string, title: string): Promise<void> {
+  async #mirror(
+    threadId: string,
+    title: string,
+    fence?: ZenXThreadTitleObservationFence,
+  ): Promise<void> {
+    if (!observationIsCurrent(fence)) return;
     const expected = this.#expectedNativeMirrors.get(threadId) ?? [];
     expected.push(title);
     this.#expectedNativeMirrors.set(threadId, expected);
@@ -267,12 +335,30 @@ export class ZenXThreadTitleCoordinator {
     return this.#nativeAuthorityVersions.get(threadId) ?? 0;
   }
 
-  #startGeneration(projection: ThreadTitleProjection): void {
-    void this.#generate(projection).catch((error: unknown) => {
+  #startGeneration(
+    projection: ThreadTitleProjection,
+    fence?: ZenXThreadTitleObservationFence,
+  ): void {
+    if (!observationIsCurrent(fence)) return;
+    const owner = { version: projection.version, fence };
+    this.#generationOwners.set(projection.threadId, owner);
+    const operation = this.#generate(projection, fence).finally(() => {
+      if (this.#generationOwners.get(projection.threadId) === owner)
+        this.#generationOwners.delete(projection.threadId);
+    });
+    fence?.track(operation);
+    void operation.catch((error: unknown) => {
       console.error(
         `Could not persist title generation result: ${asError(error).message}`,
       );
     });
+  }
+
+  #hasCurrentGenerationOwner(projection: ThreadTitleProjection): boolean {
+    const owner = this.#generationOwners.get(projection.threadId);
+    return (
+      owner?.version === projection.version && observationIsCurrent(owner.fence)
+    );
   }
 
   #assertAvailable(): void {
@@ -350,4 +436,10 @@ function describeError(error: unknown): string {
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function observationIsCurrent(
+  fence?: ZenXThreadTitleObservationFence,
+): boolean {
+  return fence === undefined || (!fence.signal.aborted && fence.isCurrent());
 }

@@ -602,6 +602,262 @@ test("failed start retires its generation and a clean retry can run", async () =
   }
 });
 
+test("stop cleanup faults still drain the durable boundary and leave no active generation", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-stop-cleanup-fault-"),
+  );
+  const manager = new ControlledManager();
+  const store = new BlockingTriggerStore(path.join(directory, "triggers.json"));
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "signal",
+      label: "Deploy",
+      prompt: "Inspect once.",
+      signalName: "deploy",
+    });
+    const entered = store.blockNextWrite();
+    const firing = triggers.signal("deploy", "ready");
+    await entered;
+    manager.disposeError = new Error("dispose failed");
+    let stopSettled = false;
+    const stopping = triggers
+      .stop()
+      .then(
+        () => null,
+        (error: unknown) => error,
+      )
+      .finally(() => {
+        stopSettled = true;
+      });
+    await settle();
+    assert.equal(stopSettled, false);
+    await assert.rejects(
+      async () => await triggers.signal("deploy", "after stop"),
+      /not running/u,
+    );
+
+    store.releaseWrite();
+    await firing;
+    assert.match(String(await stopping), /dispose failed/u);
+    assert.equal(manager.activeListeners, 0);
+
+    await triggers.start();
+    assert.equal(manager.activeListeners, 1);
+  } finally {
+    store.releaseWrite();
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("restart cancellation faults retire the old generation completely before retry", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-restart-cancel-fault-"),
+  );
+  const manager = new ControlledManager();
+  let failCancellation = true;
+  const scheduled: Array<{ callback(): void }> = [];
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+    {
+      schedule: (callback) => {
+        const task = { callback };
+        scheduled.push(task);
+        return task;
+      },
+      cancelScheduled: () => {
+        if (failCancellation) {
+          failCancellation = false;
+          throw new Error("cancel failed");
+        }
+      },
+    },
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "timer",
+      label: "Later",
+      prompt: "Run later.",
+      runAt: Date.now() + 60_000,
+    });
+    assert.equal(scheduled.length, 1);
+
+    await assert.rejects(async () => await triggers.start(), /cancel failed/u);
+    await assert.rejects(
+      async () =>
+        await triggers.create({
+          threadId: "thread-target",
+          kind: "signal",
+          label: "Unavailable",
+          prompt: "Must not persist.",
+          signalName: "unavailable",
+        }),
+      /not running/u,
+    );
+    scheduled[0]!.callback();
+    await settle();
+    assert.equal(manager.requests.length, 0);
+
+    await triggers.start();
+    assert.equal(manager.activeListeners, 1);
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("timer scheduling failure during start retires the partial generation", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-start-schedule-fault-"),
+  );
+  const manager = new ControlledManager();
+  let failSchedule = false;
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+    {
+      schedule: (callback) => {
+        if (failSchedule) throw new Error("schedule failed");
+        return { callback };
+      },
+      cancelScheduled: () => undefined,
+    },
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "timer",
+      label: "Later",
+      prompt: "Run later.",
+      runAt: Date.now() + 60_000,
+    });
+    await triggers.stop();
+
+    failSchedule = true;
+    await assert.rejects(
+      async () => await triggers.start(),
+      /schedule failed/u,
+    );
+    await assert.rejects(
+      async () => await triggers.signal("anything", "after failed start"),
+      /not running/u,
+    );
+    assert.equal(manager.activeListeners, 0);
+
+    failSchedule = false;
+    await triggers.start();
+    assert.equal(manager.activeListeners, 1);
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("slow title observation cannot write after its generation is stopped and restarted", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-slow-title-fence-"),
+  );
+  const manager = new ControlledManager();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const writes: string[] = [];
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+    {
+      titles: {
+        observe: async (threadId, _input, fence?: { isCurrent(): boolean }) => {
+          entered.resolve();
+          await release.promise;
+          if (fence?.isCurrent() === false) return;
+          writes.push(threadId);
+        },
+      },
+    },
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "signal",
+      label: "Deploy",
+      prompt: "Inspect once.",
+      signalName: "deploy",
+    });
+    const firing = triggers.signal("deploy", "ready");
+    await entered.promise;
+
+    const stopping = triggers.stop();
+    const restarting = triggers.start();
+    release.resolve();
+    await Promise.all([firing, stopping, restarting]);
+
+    assert.deepEqual(writes, []);
+    assert.equal(manager.requests.length, 0);
+    assert.equal(triggers.snapshot().history[0]?.status, "failed");
+  } finally {
+    release.resolve();
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a slow throwing title observation cannot poison the restarted generation", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-throwing-title-fence-"),
+  );
+  const manager = new ControlledManager();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  let attempts = 0;
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+    {
+      titles: {
+        observe: async () => {
+          attempts += 1;
+          if (attempts !== 1) return;
+          entered.resolve();
+          await release.promise;
+          throw new Error("stale title failed");
+        },
+      },
+    },
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "signal",
+      label: "Deploy",
+      prompt: "Inspect once.",
+      signalName: "deploy",
+    });
+    const staleFiring = triggers.signal("deploy", "first");
+    await entered.promise;
+    const stopping = triggers.stop();
+    const restarting = triggers.start();
+    release.resolve();
+    await Promise.all([staleFiring, stopping, restarting]);
+
+    await triggers.signal("deploy", "second");
+    assert.equal(attempts, 2);
+    assert.equal(manager.requests.length, 1);
+  } finally {
+    release.resolve();
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("early completion uses canonical client identity and replies to the captured Room once", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-early-exact-"));
   const manager = new ControlledManager();
@@ -1847,6 +2103,7 @@ test("completed Turn projection is bounded and includes commands/results", () =>
 class ControlledManager implements ZenXTriggerAppServerPort {
   readonly requests: ClientRequestParams["turn/start"][] = [];
   requestError: Error | null = null;
+  disposeError: Error | null = null;
   requestHandler:
     | ((
         params: ClientRequestParams["turn/start"],
@@ -1897,7 +2154,12 @@ class ControlledManager implements ZenXTriggerAppServerPort {
     this.#retainedListeners.push(listener);
     this.#lastListener = listener;
     return () => {
-      if (this.#listeners.delete(listener)) this.disposeCount += 1;
+      if (this.#listeners.delete(listener)) {
+        this.disposeCount += 1;
+        const error = this.disposeError;
+        this.disposeError = null;
+        if (error !== null) throw error;
+      }
     };
   }
 

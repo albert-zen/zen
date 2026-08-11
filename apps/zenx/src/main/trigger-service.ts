@@ -9,6 +9,7 @@ import type {
   Turn,
 } from "../protocol-client/index.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
+import type { ZenXThreadTitleObservationFence } from "./thread-title-coordinator.js";
 import type {
   CreateRoomInput,
   CreateTriggerInput,
@@ -34,7 +35,11 @@ export interface ZenXTriggerAppServerPort {
 }
 
 export interface ZenXTriggerTitlePort {
-  observe(threadId: string, input: string): Promise<unknown>;
+  observe(
+    threadId: string,
+    input: string,
+    fence: ZenXThreadTitleObservationFence,
+  ): Promise<unknown>;
 }
 
 const MAX_TRANSIENT_TURNS = 64;
@@ -63,11 +68,17 @@ class ZenXTriggerLifecycleGeneration {
   readonly completedTurnItems = new Map<string, CompletedItemBuffer>();
   readonly pendingCompletedTurns = new Map<string, PendingCompletion>();
   readonly inFlightWakeups = new Map<string, InFlightWakeup>();
+  readonly #titleAbort = new AbortController();
+  readonly #titleObservations = new Set<Promise<void>>();
   #active = true;
   #disposeNotifications: (() => void) | undefined;
 
   get active(): boolean {
     return this.#active;
+  }
+
+  get titleSignal(): AbortSignal {
+    return this.#titleAbort.signal;
   }
 
   attachNotifications(dispose: () => void): void {
@@ -82,11 +93,51 @@ class ZenXTriggerLifecycleGeneration {
   retire(cancelScheduled: (handle: unknown) => void): void {
     if (!this.#active) return;
     this.#active = false;
-    this.#disposeNotifications?.();
+    const errors: unknown[] = [];
+    try {
+      this.#titleAbort.abort();
+    } catch (error) {
+      errors.push(error);
+    }
+    const dispose = this.#disposeNotifications;
     this.#disposeNotifications = undefined;
-    for (const timer of this.timers.values()) cancelScheduled(timer);
-    this.timers.clear();
-    this.clearTransientState();
+    try {
+      dispose?.();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      for (const timer of this.timers.values()) {
+        try {
+          cancelScheduled(timer);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+    } finally {
+      this.timers.clear();
+      this.clearTransientState();
+    }
+    if (errors.length > 0)
+      throw new AggregateError(
+        errors,
+        `Could not fully retire Trigger generation: ${errors.map(describeError).join("; ")}`,
+      );
+  }
+
+  trackTitleObservation<T>(operation: Promise<T>): Promise<T> {
+    const drained = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#titleObservations.add(drained);
+    void drained.finally(() => this.#titleObservations.delete(drained));
+    return operation;
+  }
+
+  async drainTitleObservations(): Promise<void> {
+    while (this.#titleObservations.size > 0)
+      await Promise.all([...this.#titleObservations]);
   }
 
   clearTransientState(): void {
@@ -118,6 +169,7 @@ export class ZenXTriggerService {
   readonly #cancelScheduled: (handle: unknown) => void;
   #snapshot: TriggerSnapshot = { triggers: [], history: [], rooms: [] };
   #mutation: Promise<void> = Promise.resolve();
+  readonly #retirements = new Set<Promise<void>>();
   #activeGeneration: ZenXTriggerLifecycleGeneration | null = null;
 
   constructor(
@@ -141,7 +193,7 @@ export class ZenXTriggerService {
   }
 
   async start(): Promise<void> {
-    const generation = this.#beginGeneration();
+    const generation = await this.#beginGeneration();
     const previous = this.#mutation;
     let release!: () => void;
     this.#mutation = new Promise<void>((resolve) => {
@@ -191,8 +243,18 @@ export class ZenXTriggerService {
       };
       generation.attachNotifications(this.#manager.onNotification(listener));
     } catch (error) {
-      this.#retireGeneration(generation);
-      if (!(error instanceof StaleTriggerGenerationError)) throw error;
+      let retirementError: unknown;
+      try {
+        this.#retireGeneration(generation);
+      } catch (retireError) {
+        retirementError = retireError;
+      }
+      const retirement = generation.drainTitleObservations();
+      this.#trackRetirement(retirement);
+      await retirement;
+      if (!(error instanceof StaleTriggerGenerationError))
+        throw combinedError(error, retirementError);
+      if (retirementError !== undefined) throw retirementError;
     } finally {
       release();
     }
@@ -202,14 +264,29 @@ export class ZenXTriggerService {
     const drain = this.#mutation;
     const generation = this.#activeGeneration;
     this.#activeGeneration = null;
-    generation?.retire(this.#cancelScheduled);
-    await drain;
+    let retirementError: unknown;
+    try {
+      generation?.retire(this.#cancelScheduled);
+    } catch (error) {
+      retirementError = error;
+    }
+    const retirement = Promise.all([
+      drain,
+      generation?.drainTitleObservations(),
+    ]).then(() => undefined);
+    this.#trackRetirement(retirement);
+    await retirement;
+    if (retirementError !== undefined) throw retirementError;
   }
 
   async close(): Promise<void> {
-    await this.stop();
-    this.#listeners.clear();
+    try {
+      await this.stop();
+    } finally {
+      this.#listeners.clear();
+    }
   }
+
   snapshot(): TriggerSnapshot {
     return structuredClone(this.#snapshot);
   }
@@ -522,16 +599,7 @@ export class ZenXTriggerService {
       const { trigger, historyId, clientUserMessageId } = committed;
       this.#rescheduleTimers(generation);
       if (!this.#isActive(generation)) return;
-      await this.#titles
-        ?.observe(
-          trigger.threadId,
-          meaningfulWakeupTitleInput(trigger, wakeup.projection),
-        )
-        .catch((error: unknown) =>
-          console.warn(
-            `Could not stage trigger title: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-        );
+      await this.#observeTitle(generation, trigger, wakeup.projection);
       if (!this.#isActive(generation)) return;
       activeWakeup = {
         historyId,
@@ -594,6 +662,37 @@ export class ZenXTriggerService {
         generation.inFlightWakeups.delete(activeWakeup.clientUserMessageId);
       }
       this.#evictUnmatchablePending(generation);
+    }
+  }
+
+  async #observeTitle(
+    generation: ZenXTriggerLifecycleGeneration,
+    trigger: ZenXTrigger,
+    projection?: string,
+  ): Promise<void> {
+    if (this.#titles === undefined || !this.#isActive(generation)) return;
+    const fence = {
+      signal: generation.titleSignal,
+      isCurrent: (): boolean => this.#isActive(generation),
+      track: (operation: Promise<void>): void => {
+        generation.trackTitleObservation(operation);
+      },
+    };
+    const observation = (async () => {
+      if (!fence.isCurrent()) return;
+      await this.#titles!.observe(
+        trigger.threadId,
+        meaningfulWakeupTitleInput(trigger, projection),
+        fence,
+      );
+    })();
+    try {
+      await generation.trackTitleObservation(observation);
+    } catch (error) {
+      if (fence.isCurrent())
+        console.warn(
+          `Could not stage trigger title: ${error instanceof Error ? error.message : String(error)}`,
+        );
     }
   }
 
@@ -688,12 +787,37 @@ export class ZenXTriggerService {
     for (const listener of this.#listeners) listener(this.snapshot());
   }
 
-  #beginGeneration(): ZenXTriggerLifecycleGeneration {
+  async #beginGeneration(): Promise<ZenXTriggerLifecycleGeneration> {
+    await this.#awaitRetirement();
     const previous = this.#activeGeneration;
+    this.#activeGeneration = null;
+    let retirementError: unknown;
+    try {
+      previous?.retire(this.#cancelScheduled);
+    } catch (error) {
+      retirementError = error;
+    }
+    const retirement = previous?.drainTitleObservations() ?? Promise.resolve();
+    this.#trackRetirement(retirement);
+    await retirement;
+    if (retirementError !== undefined) throw retirementError;
     const generation = new ZenXTriggerLifecycleGeneration();
     this.#activeGeneration = generation;
-    previous?.retire(this.#cancelScheduled);
     return generation;
+  }
+
+  async #awaitRetirement(): Promise<void> {
+    while (this.#retirements.size > 0)
+      await Promise.all([...this.#retirements]);
+  }
+
+  #trackRetirement(operation: Promise<void>): void {
+    const drained = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#retirements.add(drained);
+    void drained.finally(() => this.#retirements.delete(drained));
   }
 
   #retireGeneration(generation: ZenXTriggerLifecycleGeneration): void {
@@ -1165,4 +1289,16 @@ function mergeCompletedItems(
 function bounded(value: string, limit: number): string {
   if (value.length <= limit) return value;
   return `${value.slice(0, Math.max(0, limit - 24))}\n…[truncated by ZenX]`;
+}
+
+function combinedError(primary: unknown, secondary: unknown): unknown {
+  if (secondary === undefined) return primary;
+  return new AggregateError(
+    [primary, secondary],
+    `${describeError(primary)}; cleanup also failed: ${describeError(secondary)}`,
+  );
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

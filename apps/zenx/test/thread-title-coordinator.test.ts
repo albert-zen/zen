@@ -93,6 +93,91 @@ test("duplicate first messages launch only one generation", async () => {
   });
 });
 
+test("a retired observation queued behind a title mutation cannot commit or mirror", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-title-fence-"));
+  try {
+    const store = new BlockingTitleStore(path.join(directory, "titles.json"));
+    const inference = new ControlledInference();
+    const names: string[] = [];
+    const instance = coordinator(store, inference, names);
+    await instance.initialize();
+
+    store.blockNextWrite();
+    const first = instance.observe("thread-a", "Current generation title");
+    await store.writeEntered;
+    const controller = new AbortController();
+    let current = true;
+    const retired = instance.observe("thread-b", "Retired generation title", {
+      signal: controller.signal,
+      isCurrent: () => current,
+      track: () => undefined,
+    });
+    current = false;
+    controller.abort();
+    store.releaseWrite();
+
+    await first;
+    assert.equal(await retired, undefined);
+    assert.equal(instance.snapshot()["thread-b"], undefined);
+    assert.equal(names.includes("Retired generation title"), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("retirement aborts background title generation before commit and mirror", async () => {
+  await withCoordinator(async ({ coordinator, inference, events, names }) => {
+    const controller = new AbortController();
+    let current = true;
+    const background: Promise<void>[] = [];
+    const observed = await coordinator.observe(
+      "thread-a",
+      "Generation-owned title",
+      {
+        signal: controller.signal,
+        isCurrent: () => current,
+        track: (operation) => background.push(operation),
+      },
+    );
+    assert.equal(observed?.status, "generating");
+    current = false;
+    controller.abort();
+    inference.resolve("Retired generated title");
+    await Promise.all(background);
+
+    assert.equal(coordinator.snapshot()["thread-a"]?.status, "generating");
+    assert.equal(
+      events.some(
+        (snapshot) => snapshot["thread-a"]?.title === "Retired generated title",
+      ),
+      false,
+    );
+    assert.equal(names.includes("Retired generated title"), false);
+    assert.equal(inference.signals[0]?.aborted, true);
+
+    const restartedController = new AbortController();
+    const restartedBackground: Promise<void>[] = [];
+    const restarted = await coordinator.observe(
+      "thread-a",
+      "Generation-owned title",
+      {
+        signal: restartedController.signal,
+        isCurrent: () => true,
+        track: (operation) => restartedBackground.push(operation),
+      },
+    );
+    assert.equal(restarted?.status, "generating");
+    assert.equal(inference.calls, 2);
+    inference.resolve("Restarted generated title");
+    await Promise.all(restartedBackground);
+    assert.equal(
+      coordinator.snapshot()["thread-a"]?.title,
+      "Restarted generated title",
+    );
+    assert.equal(names.includes("Restarted generated title"), true);
+  });
+});
+
 test("trigger envelopes and IDs are excluded from fallback title input", () => {
   const source = meaningfulTitleSource(
     [
@@ -193,13 +278,19 @@ function coordinator(
 
 class ControlledInference implements ThreadTitleInference {
   calls = 0;
+  readonly signals: AbortSignal[] = [];
   #pending: Array<{
     resolve(value: string): void;
     reject(error: Error): void;
   }> = [];
 
-  async generate(): Promise<string> {
+  async generate(
+    _source: string,
+    _model: string,
+    signal: AbortSignal,
+  ): Promise<string> {
     this.calls += 1;
+    this.signals.push(signal);
     return await new Promise<string>((resolve, reject) =>
       this.#pending.push({ resolve, reject }),
     );
@@ -210,6 +301,39 @@ class ControlledInference implements ThreadTitleInference {
   }
   reject(error: Error): void {
     this.#pending.shift()?.reject(error);
+  }
+}
+
+class BlockingTitleStore extends ZenXThreadTitleStore {
+  #block = false;
+  #releaseWrite: (() => void) | undefined;
+  #writeEntered: Promise<void> = Promise.resolve();
+  #markWriteEntered: (() => void) | undefined;
+
+  get writeEntered(): Promise<void> {
+    return this.#writeEntered;
+  }
+
+  blockNextWrite(): void {
+    this.#block = true;
+    this.#writeEntered = new Promise<void>((resolve) => {
+      this.#markWriteEntered = resolve;
+    });
+  }
+
+  releaseWrite(): void {
+    this.#releaseWrite?.();
+  }
+
+  override async write(snapshot: ThreadTitleSnapshot): Promise<void> {
+    if (this.#block) {
+      this.#block = false;
+      this.#markWriteEntered?.();
+      await new Promise<void>((resolve) => {
+        this.#releaseWrite = resolve;
+      });
+    }
+    await super.write(snapshot);
   }
 }
 
