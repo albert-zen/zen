@@ -660,18 +660,18 @@ test("CDP target attachments detach, reap, and reattach after destroy and reconn
     assert.equal(cdp.count("Target.attachToTarget"), 2);
 
     cdp.detachSession();
-    await nextTurn();
+    await first.backend.listTabs("two");
     await first.backend.inspect("two", "target-1");
     assert.equal(cdp.count("Target.attachToTarget"), 3);
 
     cdp.destroyTarget("target-1");
-    await nextTurn();
+    await first.backend.listTabs("two");
     await first.backend.inspect("two", "target-1");
     assert.equal(cdp.count("Target.attachToTarget"), 4);
 
     cdp.invalidateNextAttachment();
     cdp.detachSession();
-    await nextTurn();
+    await first.backend.listTabs("two");
     await assert.rejects(
       first.backend.inspect("two", "target-1"),
       /detached during attachment/u,
