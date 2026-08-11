@@ -90,6 +90,19 @@ jobs:
       - run: npm ci
       - run: npm --workspace apps/zenx run smoke:windows-computer
 
+  zenx-windows-user-browser-smoke:
+    name: ZenX Windows attached user-browser smoke
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm --workspace apps/zenx run smoke:windows-user-browser
+
   zenx-playwright-provider-smoke:
     name: ZenX real Playwright provider smoke
     runs-on: macos-latest

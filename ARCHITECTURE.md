@@ -82,6 +82,7 @@
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
 - **ZenXCapabilityProviderCatalog** — ZenX 产品层探测并诊断可选的成熟外部执行后端，按显式优先级选择
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
+- **ZenXUserBrowserCdpProvider** — ZenX 产品层仅在用户显式选择 user-session 模式并提供 loopback CDP endpoint 时附着到已运行的 Chrome/Edge/Chromium，把目标页投影为既有的 opaque observation 工具且关闭时只断开连接，不导出认证材料、关闭标签或清理用户 profile。
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 capability registry 暴露 Project/Thread 自控工具，
   只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
   不持有第二套 Project、Thread、Turn、transcript 或调度状态。

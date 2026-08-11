@@ -177,6 +177,13 @@ export function CapabilitySettings() {
               <code>{provider.providerId}</code>
               <span>{provider.status}</span>
               <span>{provider.interactionModes.join(", ")}</span>
+              {provider.capabilityId === "browser" ? (
+                <span>
+                  {provider.capabilities.includes("user_session")
+                    ? "user-session"
+                    : "isolated-session"}
+                </span>
+              ) : null}
               <span>{provider.version ?? "bundled"}</span>
             </div>
           ))}
