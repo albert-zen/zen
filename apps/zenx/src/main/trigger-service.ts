@@ -50,6 +50,7 @@ interface PendingCompletion {
   event: ServerNotificationParams["turn/completed"];
   clientUserMessageId: string | null;
   rejected: boolean;
+  claimed: boolean;
 }
 
 interface CompletedItemBuffer {
@@ -94,9 +95,10 @@ class ZenXTriggerLifecycleGeneration {
     this.inFlightWakeups.clear();
   }
 
-  clearTransientTurn(turnId: string): void {
-    this.completedTurnItems.delete(turnId);
-    this.pendingCompletedTurns.delete(turnId);
+  clearTransientTurn(threadId: string, turnId: string): void {
+    const key = transientTurnKey(threadId, turnId);
+    this.completedTurnItems.delete(key);
+    this.pendingCompletedTurns.delete(key);
   }
 }
 
@@ -189,6 +191,7 @@ export class ZenXTriggerService {
       };
       generation.attachNotifications(this.#manager.onNotification(listener));
     } catch (error) {
+      this.#retireGeneration(generation);
       if (!(error instanceof StaleTriggerGenerationError)) throw error;
     } finally {
       release();
@@ -398,12 +401,17 @@ export class ZenXTriggerService {
     event: ServerNotificationParams["turn/completed"],
   ): Promise<void> {
     if (!this.#isActive(generation)) return;
+    const key = transientTurnKey(event.threadId, event.turn.id);
+    const buffered = generation.completedTurnItems.get(key);
     const completedItems = mergeCompletedItems(
       event.turn.items,
-      generation.completedTurnItems.get(event.turn.id)?.items ?? [],
+      buffered?.threadId === event.threadId ? buffered.items : [],
     );
     const running = this.#snapshot.history.find(
-      (item) => item.turnId === event.turn.id && item.status === "running",
+      (item) =>
+        item.turnId === event.turn.id &&
+        item.threadId === event.threadId &&
+        item.status === "running",
     );
     if (running !== undefined) {
       await this.#mutateMaybe(generation, async (snapshot) => {
@@ -411,13 +419,14 @@ export class ZenXTriggerService {
           (entry) =>
             entry.id === running.id &&
             entry.turnId === event.turn.id &&
+            entry.threadId === event.threadId &&
             entry.status === "running",
         );
         if (current === undefined) return undefined;
         this.#applyCompletion(snapshot, running.id, event, completedItems);
         return true;
       });
-      generation.clearTransientTurn(event.turn.id);
+      generation.clearTransientTurn(event.threadId, event.turn.id);
     } else {
       this.#bufferEarlyCompletion(generation, event, completedItems);
     }
@@ -512,6 +521,7 @@ export class ZenXTriggerService {
       if (committed === undefined) return;
       const { trigger, historyId, clientUserMessageId } = committed;
       this.#rescheduleTimers(generation);
+      if (!this.#isActive(generation)) return;
       await this.#titles
         ?.observe(
           trigger.threadId,
@@ -544,10 +554,6 @@ export class ZenXTriggerService {
         ],
       });
       if (!this.#isActive(generation)) return;
-      const pending = generation.pendingCompletedTurns.get(result.turn.id);
-      const bufferedItems = generation.completedTurnItems.get(
-        result.turn.id,
-      )?.items;
       await this.#mutate(generation, async (snapshot) => {
         const history = snapshot.history.find(
           (entry) => entry.id === historyId,
@@ -555,21 +561,14 @@ export class ZenXTriggerService {
         if (history === undefined || history.status !== "starting") return;
         history.status = "running";
         history.turnId = result.turn.id;
-        if (
-          pending !== undefined &&
-          !pending.rejected &&
-          pending.event.threadId === trigger.threadId &&
-          pending.clientUserMessageId === clientUserMessageId
-        ) {
-          this.#applyCompletion(
-            snapshot,
-            historyId,
-            pending.event,
-            mergeCompletedItems(pending.event.turn.items, bufferedItems ?? []),
-          );
-        }
       });
-      if (pending !== undefined) generation.clearTransientTurn(result.turn.id);
+      await this.#consumePendingCompletion(
+        generation,
+        historyId,
+        trigger.threadId,
+        clientUserMessageId,
+        result.turn.id,
+      );
     } catch (error) {
       if (error instanceof StaleTriggerGenerationError) return;
       if (activeWakeup === undefined) throw error;
@@ -697,6 +696,11 @@ export class ZenXTriggerService {
     return generation;
   }
 
+  #retireGeneration(generation: ZenXTriggerLifecycleGeneration): void {
+    if (this.#activeGeneration === generation) this.#activeGeneration = null;
+    generation.retire(this.#cancelScheduled);
+  }
+
   #runningGeneration(): ZenXTriggerLifecycleGeneration {
     if (this.#activeGeneration === null)
       throw new Error("ZenX Trigger service is not running");
@@ -721,21 +725,22 @@ export class ZenXTriggerService {
     generation: ZenXTriggerLifecycleGeneration,
     event: ServerNotificationParams["item/completed"],
   ): void {
+    const key = transientTurnKey(event.threadId, event.turnId);
+    const current = generation.completedTurnItems.get(key);
     if (!this.#isPotentialWakeupTurn(generation, event.threadId, event.turnId))
       return;
-    const current = generation.completedTurnItems.get(event.turnId);
     const items = (current?.items ?? []).filter(
       (item) => item.id !== event.item.id,
     );
     items.push(event.item);
     this.#setBounded(
       generation.completedTurnItems,
-      event.turnId,
+      key,
       {
         threadId: event.threadId,
         items: items.slice(-MAX_COMPLETED_ITEMS_PER_TURN),
       },
-      (turnId) => generation.pendingCompletedTurns.delete(turnId),
+      (evictedKey) => generation.pendingCompletedTurns.delete(evictedKey),
     );
   }
 
@@ -744,11 +749,16 @@ export class ZenXTriggerService {
     threadId: string,
     turnId: string,
   ): boolean {
+    const key = transientTurnKey(threadId, turnId);
     return (
       this.#snapshot.history.some(
-        (entry) => entry.turnId === turnId && entry.status === "running",
+        (entry) =>
+          entry.turnId === turnId &&
+          entry.threadId === threadId &&
+          entry.status === "running",
       ) ||
-      generation.pendingCompletedTurns.has(turnId) ||
+      generation.pendingCompletedTurns.has(key) ||
+      generation.completedTurnItems.has(key) ||
       this.#snapshot.triggers.some(
         (trigger) =>
           trigger.active &&
@@ -766,11 +776,13 @@ export class ZenXTriggerService {
     event: ServerNotificationParams["turn/completed"],
     completedItems: readonly ThreadItem[],
   ): void {
+    const key = transientTurnKey(event.threadId, event.turn.id);
+    const existing = generation.pendingCompletedTurns.get(key);
     const sameThreadWakeups = [...generation.inFlightWakeups.values()].filter(
       (entry) => entry.threadId === event.threadId,
     );
     if (sameThreadWakeups.length === 0) {
-      generation.clearTransientTurn(event.turn.id);
+      generation.clearTransientTurn(event.threadId, event.turn.id);
       return;
     }
     const clientIds = completedItems
@@ -784,7 +796,7 @@ export class ZenXTriggerService {
         : generation.inFlightWakeups.get(soleClientId);
     const clientUserMessageId =
       soleWakeup?.threadId === event.threadId ? soleClientId : null;
-    const existing = generation.pendingCompletedTurns.get(event.turn.id);
+    if (existing?.claimed === true) return;
     if (existing?.rejected === true) return;
     if (
       clientIds.length === 0 &&
@@ -794,16 +806,17 @@ export class ZenXTriggerService {
       return;
     }
     if (clientIds.length !== 1 || clientUserMessageId === null) {
-      generation.completedTurnItems.delete(event.turn.id);
+      generation.completedTurnItems.delete(key);
       this.#setBounded(
         generation.pendingCompletedTurns,
-        event.turn.id,
+        key,
         {
           event,
           clientUserMessageId: null,
           rejected: true,
+          claimed: false,
         },
-        (turnId) => generation.completedTurnItems.delete(turnId),
+        (evictedKey) => generation.completedTurnItems.delete(evictedKey),
       );
       return;
     }
@@ -811,25 +824,74 @@ export class ZenXTriggerService {
       if (existing.clientUserMessageId === clientUserMessageId) {
         return;
       }
-      generation.completedTurnItems.delete(event.turn.id);
+      generation.completedTurnItems.delete(key);
       this.#setBounded(
         generation.pendingCompletedTurns,
-        event.turn.id,
+        key,
         {
           event,
           clientUserMessageId: null,
           rejected: true,
+          claimed: false,
         },
-        (turnId) => generation.completedTurnItems.delete(turnId),
+        (evictedKey) => generation.completedTurnItems.delete(evictedKey),
       );
       return;
     }
     this.#setBounded(
       generation.pendingCompletedTurns,
-      event.turn.id,
-      { event, clientUserMessageId, rejected: false },
-      (turnId) => generation.completedTurnItems.delete(turnId),
+      key,
+      { event, clientUserMessageId, rejected: false, claimed: false },
+      (evictedKey) => generation.completedTurnItems.delete(evictedKey),
     );
+  }
+
+  async #consumePendingCompletion(
+    generation: ZenXTriggerLifecycleGeneration,
+    historyId: string,
+    threadId: string,
+    clientUserMessageId: string,
+    turnId: string,
+  ): Promise<void> {
+    const key = transientTurnKey(threadId, turnId);
+    const consumed = await this.#mutateMaybe(generation, async (snapshot) => {
+      const history = snapshot.history.find(
+        (entry) =>
+          entry.id === historyId &&
+          entry.threadId === threadId &&
+          entry.turnId === turnId &&
+          entry.status === "running",
+      );
+      if (history === undefined) return undefined;
+      const pending = generation.pendingCompletedTurns.get(key);
+      if (
+        pending === undefined ||
+        pending.claimed ||
+        pending.rejected ||
+        pending.event.threadId !== threadId ||
+        pending.clientUserMessageId !== clientUserMessageId
+      )
+        return undefined;
+      const buffer = generation.completedTurnItems.get(key);
+      if (buffer !== undefined && buffer.threadId !== threadId)
+        return undefined;
+      pending.claimed = true;
+      this.#applyCompletion(
+        snapshot,
+        historyId,
+        pending.event,
+        mergeCompletedItems(pending.event.turn.items, buffer?.items ?? []),
+      );
+      return { pending, buffer };
+    });
+    if (consumed === undefined) return;
+    if (generation.pendingCompletedTurns.get(key) === consumed.pending)
+      generation.pendingCompletedTurns.delete(key);
+    if (
+      consumed.buffer !== undefined &&
+      generation.completedTurnItems.get(key) === consumed.buffer
+    )
+      generation.completedTurnItems.delete(key);
   }
 
   #applyCompletion(
@@ -888,13 +950,16 @@ export class ZenXTriggerService {
     const activeThreads = new Set(
       [...generation.inFlightWakeups.values()].map((entry) => entry.threadId),
     );
-    for (const [turnId, pending] of generation.pendingCompletedTurns) {
+    for (const pending of generation.pendingCompletedTurns.values()) {
       if (
         pending.clientUserMessageId === null
           ? !activeThreads.has(pending.event.threadId)
           : !activeClientIds.has(pending.clientUserMessageId)
       ) {
-        generation.clearTransientTurn(turnId);
+        generation.clearTransientTurn(
+          pending.event.threadId,
+          pending.event.turn.id,
+        );
       }
     }
   }
@@ -994,6 +1059,10 @@ function stableWakeupId(triggerId: string, occurrenceKey: string): string {
     .digest("hex")
     .slice(0, 24);
   return `zenx-wakeup:${triggerId}:${occurrence}`;
+}
+
+function transientTurnKey(threadId: string, turnId: string): string {
+  return `${String(threadId.length)}:${threadId}${turnId}`;
 }
 
 function wakeupInput(

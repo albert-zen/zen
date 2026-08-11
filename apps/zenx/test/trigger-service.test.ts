@@ -370,6 +370,238 @@ test("stop invalidates synchronously while awaiting an entered store write", asy
   }
 });
 
+test("post-start reconciliation reads an exact candidate after the mutation queue unblocks", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-post-start-exact-fence-"),
+  );
+  const manager = new ControlledManager();
+  const response = deferred<ClientRequestResults["turn/start"]>();
+  manager.requestHandler = async () => await response.promise;
+  const store = new BlockingTriggerStore(path.join(directory, "triggers.json"));
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "thread-target" }],
+    });
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "roomMention",
+      label: "Answer",
+      prompt: "Answer once.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    const firing = triggers.postRoomMessage(room.id, "You", "@Bot status?");
+    const starting = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "starting",
+    );
+    const wakeup = starting.history[0]!;
+    await until(() => manager.requests.length === 1);
+
+    const entered = store.blockNextWrite();
+    const blockingMutation = triggers.create({
+      threadId: "other-thread",
+      kind: "signal",
+      label: "Block",
+      prompt: "Hold the durable boundary.",
+      signalName: "block",
+    });
+    await entered;
+    response.resolve(startResult("queued-exact-turn"));
+    await settle();
+    manager.complete(
+      "thread-target",
+      completedTurn(
+        "queued-exact-turn",
+        "exact while queued",
+        [],
+        wakeup.clientUserMessageId,
+      ),
+    );
+    store.releaseWrite();
+    await Promise.all([blockingMutation, firing]);
+
+    const snapshot = triggers.snapshot();
+    assert.equal(snapshot.history[0]?.status, "completed");
+    assert.equal(
+      snapshot.rooms[0]?.messages.filter((message) => message.kind === "agent")
+        .length,
+      1,
+    );
+  } finally {
+    store.releaseWrite();
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("post-start reconciliation honors a conflicting tombstone created while queued", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-post-start-rejected-fence-"),
+  );
+  const manager = new ControlledManager();
+  const response = deferred<ClientRequestResults["turn/start"]>();
+  manager.requestHandler = async () => await response.promise;
+  const store = new BlockingTriggerStore(path.join(directory, "triggers.json"));
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "thread-target" }],
+    });
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "roomMention",
+      label: "Answer",
+      prompt: "Answer once.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    const firing = triggers.postRoomMessage(room.id, "You", "@Bot status?");
+    const starting = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "starting",
+    );
+    const wakeup = starting.history[0]!;
+    await until(() => manager.requests.length === 1);
+    manager.complete(
+      "thread-target",
+      completedTurn(
+        "queued-rejected-turn",
+        "initial exact",
+        [],
+        wakeup.clientUserMessageId,
+      ),
+    );
+
+    const entered = store.blockNextWrite();
+    const blockingMutation = triggers.create({
+      threadId: "other-thread",
+      kind: "signal",
+      label: "Block",
+      prompt: "Hold the durable boundary.",
+      signalName: "block",
+    });
+    await entered;
+    response.resolve(startResult("queued-rejected-turn"));
+    await settle();
+    manager.complete(
+      "thread-target",
+      completedTurn(
+        "queued-rejected-turn",
+        "conflicting evidence",
+        [canonicalUserMessage("unrelated-user", "unrelated-client")],
+        wakeup.clientUserMessageId,
+      ),
+    );
+    store.releaseWrite();
+    await Promise.all([blockingMutation, firing]);
+
+    const snapshot = triggers.snapshot();
+    assert.equal(snapshot.history[0]?.status, "running");
+    assert.equal(
+      snapshot.rooms[0]?.messages.filter((message) => message.kind === "agent")
+        .length,
+      0,
+    );
+  } finally {
+    store.releaseWrite();
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("stop and restart at the history boundary fences title observation", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-title-generation-fence-"),
+  );
+  const manager = new ControlledManager();
+  const titleWrites: Array<{ threadId: string; input: string }> = [];
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+    {
+      titles: {
+        observe: async (threadId, input) => {
+          titleWrites.push({ threadId, input });
+        },
+      },
+    },
+  );
+  let restart: Promise<void> | undefined;
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "signal",
+      label: "Deploy",
+      prompt: "Inspect once.",
+      signalName: "deploy",
+    });
+    const dispose = triggers.onChange((snapshot) => {
+      if (restart !== undefined || snapshot.history[0]?.status !== "starting")
+        return;
+      const stopping = triggers.stop();
+      restart = Promise.all([stopping, triggers.start()]).then(() => undefined);
+    });
+    await triggers.signal("deploy", "ready");
+    await restart;
+    dispose();
+
+    assert.deepEqual(titleWrites, []);
+    assert.equal(manager.requests.length, 0);
+    assert.equal(triggers.snapshot().history[0]?.status, "failed");
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("failed start retires its generation and a clean retry can run", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-failed-start-generation-"),
+  );
+  const manager = new ControlledManager();
+  const store = new FailOnceReadTriggerStore(
+    path.join(directory, "triggers.json"),
+  );
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await assert.rejects(async () => await triggers.start(), /read failed/u);
+    await assert.rejects(
+      async () =>
+        await triggers.create({
+          threadId: "thread-target",
+          kind: "signal",
+          label: "Deploy",
+          prompt: "Inspect once.",
+          signalName: "deploy",
+        }),
+      /not running/u,
+    );
+    assert.equal(manager.activeListeners, 0);
+
+    await triggers.start();
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "signal",
+      label: "Deploy",
+      prompt: "Inspect once.",
+      signalName: "deploy",
+    });
+    await triggers.signal("deploy", "ready");
+    assert.equal(triggers.snapshot().history[0]?.status, "running");
+    assert.equal(manager.requests.length, 1);
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("early completion uses canonical client identity and replies to the captured Room once", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-early-exact-"));
   const manager = new ControlledManager();
@@ -432,6 +664,126 @@ test("early completion uses canonical client identity and replies to the capture
         .length,
       1,
     );
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("cross-thread turn and item notifications cannot terminalize or pollute a wakeup", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-cross-thread-completion-"),
+  );
+  const manager = new ControlledManager();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "thread-target" }],
+    });
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "roomMention",
+      label: "Answer",
+      prompt: "Answer once.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    await triggers.postRoomMessage(room.id, "You", "@Bot status?");
+    const running = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "running",
+    );
+    const wakeup = running.history[0]!;
+    const turnId = wakeup.turnId!;
+
+    manager.completeItem("thread-other", turnId, {
+      type: "agentMessage",
+      id: "cross-thread-agent",
+      text: "cross-thread injected answer",
+      phase: "final_answer",
+      memoryCitation: null,
+    });
+    manager.complete(
+      "thread-other",
+      completedTurn(turnId, "wrong thread", [], wakeup.clientUserMessageId),
+    );
+    await settle();
+    assert.equal(triggers.snapshot().history[0]?.status, "running");
+    assert.equal(
+      triggers
+        .snapshot()
+        .rooms[0]?.messages.filter((message) => message.kind === "agent")
+        .length,
+      0,
+    );
+
+    manager.complete(
+      "thread-target",
+      completedTurn(turnId, "correct thread", [], wakeup.clientUserMessageId),
+    );
+    const terminal = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "completed",
+    );
+    const reply = terminal.rooms[0]?.messages.find(
+      (message) => message.kind === "agent",
+    );
+    assert.equal(reply?.text, "Conclusion for correct thread");
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a reused turn id from another thread cannot erase an exact early candidate", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-cross-thread-reused-turn-"),
+  );
+  const manager = new ControlledManager();
+  const response = deferred<ClientRequestResults["turn/start"]>();
+  manager.requestHandler = async () => await response.promise;
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "signal",
+      label: "Deploy",
+      prompt: "Inspect once.",
+      signalName: "deploy",
+    });
+    const firing = triggers.signal("deploy", "ready");
+    const starting = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "starting",
+    );
+    const wakeup = starting.history[0]!;
+    await until(() => manager.requests.length === 1);
+    manager.complete(
+      "thread-target",
+      completedTurn(
+        "reused-turn",
+        "exact target evidence",
+        [],
+        wakeup.clientUserMessageId,
+      ),
+    );
+    manager.complete(
+      "thread-other",
+      completedTurn("reused-turn", "wrong thread reused id"),
+    );
+    response.resolve(startResult("reused-turn"));
+    await firing;
+
+    assert.equal(triggers.snapshot().history[0]?.status, "completed");
   } finally {
     await triggers.stop();
     await rm(directory, { recursive: true, force: true });
@@ -1607,6 +1959,18 @@ class BlockingTriggerStore extends ZenXTriggerStore {
       await release.promise;
     }
     await super.write(snapshot);
+  }
+}
+
+class FailOnceReadTriggerStore extends ZenXTriggerStore {
+  #failed = false;
+
+  override async read() {
+    if (!this.#failed) {
+      this.#failed = true;
+      throw new Error("read failed");
+    }
+    return await super.read();
   }
 }
 
