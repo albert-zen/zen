@@ -15,6 +15,8 @@ export class ZenXThreadTitleCoordinator {
   readonly #titleModel: () => string;
   readonly #setNativeName: (threadId: string, title: string) => Promise<void>;
   readonly #listeners = new Set<(snapshot: ThreadTitleSnapshot) => void>();
+  readonly #expectedNativeMirrors = new Map<string, string[]>();
+  readonly #nativeAuthorityVersions = new Map<string, number>();
   #snapshot: ThreadTitleSnapshot = {};
   #mutation = Promise.resolve();
   #initializationError: Error | undefined;
@@ -125,9 +127,16 @@ export class ZenXThreadTitleCoordinator {
   ): Promise<ThreadTitleProjection> {
     this.#assertAvailable();
     const normalized = normalizeManualTitle(title);
+    if (this.#consumeExpectedNativeMirror(threadId, normalized)) {
+      const current = this.#snapshot[threadId];
+      if (current !== undefined) return current;
+    }
+    this.#recordNativeAuthority(threadId);
     return await this.#serial(async () => {
       const current = this.#snapshot[threadId];
-      if (current?.title === normalized) return current;
+      if (current?.status === "manual" && current.title === normalized) {
+        return current;
+      }
       const projection: ThreadTitleProjection = {
         threadId,
         title: normalized,
@@ -136,6 +145,7 @@ export class ZenXThreadTitleCoordinator {
         source: current?.source ?? normalized,
       };
       await this.#commit(projection);
+      await this.#mirror(threadId, normalized);
       return projection;
     });
   }
@@ -183,8 +193,16 @@ export class ZenXThreadTitleCoordinator {
           status: "generated",
           version: current.version + 1,
         };
+        const nativeAuthorityVersion = this.#nativeAuthorityVersion(
+          started.threadId,
+        );
         await this.#commit(projection);
-        await this.#mirror(started.threadId, generated);
+        if (
+          this.#nativeAuthorityVersion(started.threadId) ===
+          nativeAuthorityVersion
+        ) {
+          await this.#mirror(started.threadId, generated);
+        }
       });
     } catch (error) {
       await this.#serial(async () => {
@@ -212,13 +230,41 @@ export class ZenXThreadTitleCoordinator {
   }
 
   async #mirror(threadId: string, title: string): Promise<void> {
+    const expected = this.#expectedNativeMirrors.get(threadId) ?? [];
+    expected.push(title);
+    this.#expectedNativeMirrors.set(threadId, expected);
     try {
       await this.#setNativeName(threadId, title);
     } catch (error) {
+      this.#removeExpectedNativeMirror(threadId, title);
       console.warn(
         `Could not mirror ZenX thread title: ${describeError(error)}`,
       );
     }
+  }
+
+  #consumeExpectedNativeMirror(threadId: string, title: string): boolean {
+    const expected = this.#expectedNativeMirrors.get(threadId);
+    const index = expected?.indexOf(title) ?? -1;
+    if (expected === undefined || index < 0) return false;
+    expected.splice(index, 1);
+    if (expected.length === 0) this.#expectedNativeMirrors.delete(threadId);
+    return true;
+  }
+
+  #removeExpectedNativeMirror(threadId: string, title: string): void {
+    this.#consumeExpectedNativeMirror(threadId, title);
+  }
+
+  #recordNativeAuthority(threadId: string): void {
+    this.#nativeAuthorityVersions.set(
+      threadId,
+      this.#nativeAuthorityVersion(threadId) + 1,
+    );
+  }
+
+  #nativeAuthorityVersion(threadId: string): number {
+    return this.#nativeAuthorityVersions.get(threadId) ?? 0;
   }
 
   #startGeneration(projection: ThreadTitleProjection): void {

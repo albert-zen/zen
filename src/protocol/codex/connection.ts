@@ -316,21 +316,47 @@ export class CodexConnection {
         return;
       }
       case "thread/list": {
+        rejectUnsupportedValues(params, ["archived", "cursor", "limit"]);
         const archived = optionalBoolean(params.archived, "archived") ?? false;
+        const requestedCursor = optionalNonEmptyString(params.cursor, "cursor");
+        const decodedCursor =
+          requestedCursor === undefined
+            ? undefined
+            : decodeThreadListCursor(requestedCursor);
         const snapshots = await this.#appServer.listThreads({ archived });
-        const limit =
-          typeof params.limit === "number" && params.limit >= 0
-            ? params.limit
-            : snapshots.length;
+        const limit = optionalListLimit(params.limit, snapshots.length);
+        const snapshotIds = snapshots.map((snapshot) => snapshot.id);
+        const cursor =
+          decodedCursor === undefined
+            ? {
+                version: 1 as const,
+                archived,
+                offset: 0,
+                threadIds: snapshotIds,
+              }
+            : decodedCursor;
+        if (cursor.archived !== archived) {
+          throw new InvalidParamsError(
+            "thread/list cursor does not match the requested archived filter",
+          );
+        }
+        if (!sameStrings(cursor.threadIds, snapshotIds)) {
+          throw new InvalidParamsError(
+            "thread/list cursor expired because the filtered Thread snapshot changed",
+          );
+        }
+        const page = snapshots.slice(cursor.offset, cursor.offset + limit);
+        const nextOffset = cursor.offset + page.length;
         this.#send({
           id: request.id,
           result: {
-            data: snapshots
-              .slice(0, limit)
-              .map((snapshot) =>
-                projectThread(snapshot, { includeTurns: false }),
-              ),
-            nextCursor: null,
+            data: page.map((snapshot) =>
+              projectThread(snapshot, { includeTurns: false }),
+            ),
+            nextCursor:
+              limit > 0 && nextOffset < snapshots.length
+                ? encodeThreadListCursor({ ...cursor, offset: nextOffset })
+                : null,
             backwardsCursor: null,
           },
         });
@@ -924,6 +950,71 @@ function optionalBoolean(value: unknown, key: string): boolean | undefined {
     throw new InvalidParamsError(`${key} must be a boolean`);
   }
   return value;
+}
+
+interface ThreadListCursor {
+  version: 1;
+  archived: boolean;
+  offset: number;
+  threadIds: string[];
+}
+
+function optionalListLimit(value: unknown, fallback: number): number {
+  if (value === undefined || value === null) return fallback;
+  if (
+    !Number.isInteger(value) ||
+    (value as number) < 0 ||
+    (value as number) > 0xffff_ffff
+  ) {
+    throw new InvalidParamsError("limit must be an unsigned 32-bit integer");
+  }
+  return value as number;
+}
+
+function encodeThreadListCursor(cursor: ThreadListCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeThreadListCursor(value: string): ThreadListCursor {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value)) {
+    throw new InvalidParamsError("Invalid thread/list cursor");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    throw new InvalidParamsError("Invalid thread/list cursor");
+  }
+  if (
+    !isRecord(parsed) ||
+    parsed.version !== 1 ||
+    typeof parsed.archived !== "boolean" ||
+    !Number.isInteger(parsed.offset) ||
+    (parsed.offset as number) < 0 ||
+    !Array.isArray(parsed.threadIds) ||
+    parsed.threadIds.some(
+      (threadId) => typeof threadId !== "string" || threadId.length === 0,
+    ) ||
+    (parsed.offset as number) > parsed.threadIds.length
+  ) {
+    throw new InvalidParamsError("Invalid thread/list cursor");
+  }
+  return {
+    version: 1,
+    archived: parsed.archived,
+    offset: parsed.offset as number,
+    threadIds: parsed.threadIds as string[],
+  };
+}
+
+function sameStrings(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 function requiredStringArray(
