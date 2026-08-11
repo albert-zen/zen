@@ -653,14 +653,13 @@ function playwrightTargetFingerprint(
     autocomplete: dom.autocomplete,
     href: dom.href || node.url || "",
     secure,
-    actions: playwrightNodeActions(node, dom, secure),
+    actions: playwrightNodeActions(node, dom),
   };
 }
 
 function playwrightNodeActions(
   node: PlaywrightAriaNode,
   dom: PlaywrightDomMetadata,
-  secure: boolean,
 ): Array<"click" | "type"> {
   if (node.disabled === true) return [];
   const clickRoles = new Set([
@@ -691,8 +690,7 @@ function playwrightNodeActions(
     ...(clickRoles.has(node.role) || node.cursor === "pointer"
       ? (["click"] as const)
       : []),
-    ...(!secure &&
-    typeRoles.has(node.role) &&
+    ...(typeRoles.has(node.role) &&
     !(dom.tag === "input" && nonTypeableInput.has(dom.type.toLowerCase()))
       ? (["type"] as const)
       : []),
@@ -759,11 +757,6 @@ function requireObservedTarget(
   }
   if (target.disabled || !target.actions.includes(action)) {
     throw new Error(`Browser target does not support ${action}`);
-  }
-  if (action === "type" && target.secure) {
-    throw new Error(
-      "browser_type rejects password or secure controls because supplied text is journaled",
-    );
   }
   return target;
 }

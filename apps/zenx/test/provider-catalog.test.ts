@@ -10,6 +10,12 @@ import {
   probePlaywrightCli,
   selectBrowserProvider,
 } from "../src/main/capabilities/provider-catalog.js";
+import {
+  BrowserZenXCapabilityPackage,
+  type ZenXBrowserBackend,
+} from "../src/main/capabilities/browser-provider.js";
+import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
+import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
 
 test("requested user-session mode never falls back to an isolated provider", async () => {
   const selection = await selectBrowserProvider({
@@ -20,11 +26,59 @@ test("requested user-session mode never falls back to an isolated provider", asy
   assert.equal(selection.backend, undefined);
   assert.equal(selection.diagnostics[0]?.providerId, "user-browser-cdp");
   assert.equal(selection.diagnostics[0]?.status, "unavailable");
+  assert.equal(selection.diagnostics[0]?.sessionMode, "user-session");
   assert.match(selection.diagnostics[0]?.reason ?? "", /CDP_ENDPOINT/u);
   assert.equal(
     selection.diagnostics.some((entry) => entry.status === "fallback"),
     false,
   );
+});
+
+test("selected user-session provider is registered but hidden until explicitly granted", async () => {
+  const backend = stubBrowserBackend();
+  const selection = await selectBrowserProvider({
+    userDataDirectory: "/tmp/zenx",
+    environment: {
+      ZENX_BROWSER_MODE: "user-session",
+      ZENX_USER_BROWSER_CDP_ENDPOINT: "http://127.0.0.1:9222",
+    },
+    platform: "win32",
+    userBrowserConnector: async () => ({
+      backend,
+      product: "Chrome/140.0.1.2",
+    }),
+  });
+  assert.equal(selection.backend, backend);
+  assert.equal(selection.manifest.provider.id, "user-browser-cdp");
+  assert.equal(selection.diagnostics[0]?.sessionMode, "user-session");
+
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+    { platform: "win32" },
+  );
+  await registry.initialize();
+  assert.ok(selection.backend);
+  registry.register(
+    new BrowserZenXCapabilityPackage(selection.backend, selection.manifest),
+  );
+  assert.deepEqual(registry.hostSnapshot().definitions, []);
+  await registry.grant("browser");
+  assert.ok(
+    registry
+      .hostSnapshot()
+      .definitions.some(({ name }) => name === "browser_list_tabs"),
+  );
+  await registry.close();
+});
+
+test("invalid browser modes are explicit instead of masquerading as isolated", async () => {
+  const selection = await selectBrowserProvider({
+    userDataDirectory: "/tmp/zenx",
+    environment: { ZENX_BROWSER_MODE: "surprise" },
+    platform: "win32",
+  });
+  assert.equal(selection.backend, undefined);
+  assert.equal(selection.diagnostics[0]?.sessionMode, "invalid");
 });
 
 test("pins and validates the Playwright CLI machine-readable contract", async () => {
@@ -169,4 +223,32 @@ class ScriptedRunner implements ExternalProviderProcessRunner {
   assertComplete(): void {
     assert.equal(this.#steps.length, 0);
   }
+}
+
+function stubBrowserBackend(): ZenXBrowserBackend {
+  return {
+    async listTabs() {
+      return [];
+    },
+    async open() {
+      throw new Error("not used");
+    },
+    async navigate() {
+      throw new Error("not used");
+    },
+    async inspect() {
+      throw new Error("not used");
+    },
+    async click() {
+      throw new Error("not used");
+    },
+    async type() {
+      throw new Error("not used");
+    },
+    closeTab() {},
+    closeSession() {
+      return 0;
+    },
+    close() {},
+  };
 }

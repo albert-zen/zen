@@ -89,6 +89,7 @@ export interface ZenXCapabilityProviderDiagnostic {
   version?: string;
   permissionSummary?: string;
   reason?: string;
+  sessionMode?: "isolated-session" | "user-session" | "invalid";
 }
 
 export interface ZenXCapabilitySummary {

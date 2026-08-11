@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 
 import WebSocket from "ws";
 
@@ -40,8 +41,24 @@ interface UserBrowserSession {
 
 interface UserBrowserTabState {
   documentVersion: number;
+  url: string;
+  documentIdentity?: string;
   observation?: BrowserObservation;
+  actionInFlight: boolean;
 }
+
+export const userBrowserDocumentIdentityScript = `(() => {
+    const key = "__zenxCapabilityDocumentIdentity";
+    let state = document[key];
+    if (typeof state !== "object" || state === null || typeof state.id !== "string" || typeof state.activation !== "number") {
+      state = { id: String(Date.now()) + ":" + String(Math.random()), activation: 0 };
+      Object.defineProperty(document, key, { value: state, configurable: false, enumerable: false });
+      addEventListener("pageshow", (event) => { if (event.persisted) state.activation += 1; });
+      addEventListener("popstate", () => { state.activation += 1; });
+      addEventListener("hashchange", () => { state.activation += 1; });
+    }
+    return JSON.stringify({ href: location.href, origin: location.origin, id: state.id, activation: state.activation });
+  })()`;
 
 export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   readonly #client: UserBrowserCdpClient;
@@ -72,8 +89,18 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     }
     for (const target of targets) {
       session.targetIds.add(target.targetId);
-      if (!this.#tabs.has(target.targetId)) {
-        this.#tabs.set(target.targetId, { documentVersion: 1 });
+      const tab = this.#tabs.get(target.targetId);
+      if (tab === undefined) {
+        this.#tabs.set(target.targetId, {
+          documentVersion: 1,
+          url: target.url,
+          actionInFlight: false,
+        });
+      } else if (tab.url !== target.url) {
+        tab.url = target.url;
+        tab.documentVersion += 1;
+        tab.documentIdentity = undefined;
+        tab.observation = undefined;
       }
     }
     return targets
@@ -89,7 +116,11 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     const session = this.#session(sessionId);
     const targetId = await this.#client.createTarget(url, signal);
     session.targetIds.add(targetId);
-    this.#tabs.set(targetId, { documentVersion: 1 });
+    this.#tabs.set(targetId, {
+      documentVersion: 1,
+      url,
+      actionInFlight: false,
+    });
     return await this.#summary(sessionId, targetId, signal);
   }
 
@@ -100,8 +131,13 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
     const tab = this.#tab(sessionId, tabId);
+    if (tab.actionInFlight) {
+      throw new Error("User browser action is already in flight for this tab");
+    }
     await this.#client.navigate(tabId, url, signal);
     tab.documentVersion += 1;
+    tab.url = url;
+    tab.documentIdentity = undefined;
     tab.observation = undefined;
     return await this.#summary(sessionId, tabId, signal);
   }
@@ -112,10 +148,19 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     signal?: AbortSignal,
   ): Promise<BrowserInspection> {
     const tab = this.#tab(sessionId, tabId);
-    const raw = asRecord(
-      await this.#client.evaluate(tabId, browserInspectScript, signal),
+    if (tab.actionInFlight) {
+      throw new Error("User browser action is already in flight for this tab");
+    }
+    const envelope = asRecord(
+      await this.#client.evaluate(
+        tabId,
+        `(() => ({ documentIdentity: ${userBrowserDocumentIdentityScript}, inspection: ${browserInspectScript} }))()`,
+        signal,
+      ),
     );
+    const raw = asRecord(envelope?.inspection);
     if (
+      typeof envelope?.documentIdentity !== "string" ||
       raw === undefined ||
       typeof raw.visibleText !== "string" ||
       !Array.isArray(raw.targets)
@@ -141,6 +186,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       };
     });
     const observationId = randomUUID();
+    tab.documentIdentity = envelope.documentIdentity;
     tab.observation = {
       id: observationId,
       documentVersion: tab.documentVersion,
@@ -230,6 +276,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
     const tab = this.#tab(sessionId, tabId);
+    if (tab.actionInFlight) {
+      throw new Error("User browser action is already in flight for this tab");
+    }
     const target = resolveBrowserObservedTarget(
       tab.observation,
       tab.documentVersion,
@@ -237,21 +286,45 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       targetId,
       action,
     );
-    const response = asRecord(
-      await this.#client.evaluate(
-        tabId,
-        browserActionScript(target, action, text, submit),
-        signal,
-      ),
-    );
+    const expectedDocumentIdentity = tab.documentIdentity;
     tab.observation = undefined;
+    tab.documentIdentity = undefined;
+    tab.actionInFlight = true;
+    let response: Record<string, unknown> | undefined;
+    try {
+      response = asRecord(
+        await this.#client.evaluate(
+          tabId,
+          userBrowserActionScript(
+            expectedDocumentIdentity,
+            target,
+            action,
+            text,
+            submit,
+          ),
+          signal,
+        ),
+      );
+    } catch (error) {
+      throw new Error(
+        `User browser action outcome is unknown after cancellation or connection failure; inspect the current tab before another action (${describeError(error)})`,
+      );
+    } finally {
+      tab.actionInFlight = false;
+    }
     if (response?.ok !== true) {
       throw new Error(
         `User browser target changed or action was rejected (${String(response?.reason ?? "unknown")}); inspect again`,
       );
     }
     tab.documentVersion += 1;
-    return await this.#summary(sessionId, tabId, signal);
+    try {
+      return await this.#summary(sessionId, tabId, signal);
+    } catch (error) {
+      throw new Error(
+        `User browser action outcome is unknown because post-action confirmation failed; inspect the current tab before another action (${describeError(error)})`,
+      );
+    }
   }
 
   #session(sessionId: string): UserBrowserSession {
@@ -296,7 +369,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
 }
 
 export interface UserBrowserConnection {
-  backend: UserBrowserCdpBackend;
+  backend: ZenXBrowserBackend;
   product: string;
 }
 
@@ -311,7 +384,12 @@ export async function connectUserBrowserCdp(
   const response = await fetch(new URL("/json/version", base), {
     signal: probeSignal,
     headers: { accept: "application/json" },
+    redirect: "error",
   });
+  const finalUrl = validateCdpEndpoint(response.url);
+  if (finalUrl.pathname !== "/json/version") {
+    throw new Error("User browser CDP version response URL is invalid");
+  }
   if (!response.ok) {
     throw new Error(
       `User browser CDP version probe failed with HTTP ${String(response.status)}`,
@@ -333,7 +411,9 @@ export async function connectUserBrowserCdp(
     socketUrl.protocol !== "ws:" ||
     !isLoopbackHostname(socketUrl.hostname) ||
     socketUrl.username.length > 0 ||
-    socketUrl.password.length > 0
+    socketUrl.password.length > 0 ||
+    socketUrl.search.length > 0 ||
+    socketUrl.hash.length > 0
   ) {
     throw new Error(
       "User browser CDP WebSocket must be an unauthenticated loopback ws:// endpoint",
@@ -599,6 +679,46 @@ function validateCdpEndpoint(raw: string): URL {
     );
   }
   return url;
+}
+
+export function windowsBrowserExecutableCandidates(
+  environment: NodeJS.ProcessEnv,
+): string[] {
+  const roots = [
+    environment.ProgramFiles,
+    environment["ProgramFiles(x86)"],
+    environment.LOCALAPPDATA,
+  ].filter((entry): entry is string => entry !== undefined && entry.length > 0);
+  return [
+    ...roots.map((root) =>
+      path.win32.join(root, "Google", "Chrome", "Application", "chrome.exe"),
+    ),
+    ...roots.map((root) =>
+      path.win32.join(root, "Microsoft", "Edge", "Application", "msedge.exe"),
+    ),
+    ...roots.map((root) =>
+      path.win32.join(root, "Chromium", "Application", "chrome.exe"),
+    ),
+  ];
+}
+
+function userBrowserActionScript(
+  expectedDocumentIdentity: string | undefined,
+  target: BrowserTargetFingerprint,
+  action: "click" | "type",
+  text: string,
+  submit: boolean,
+): string {
+  return `(() => {
+    const expectedDocumentIdentity = ${JSON.stringify(expectedDocumentIdentity)};
+    const actualDocumentIdentity = ${userBrowserDocumentIdentityScript};
+    if (actualDocumentIdentity !== expectedDocumentIdentity) return { ok: false, reason: "document-changed" };
+    return ${browserActionScript(target, action, text, submit)};
+  })()`;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isLoopbackHostname(hostname: string): boolean {
