@@ -4,11 +4,43 @@ import test from "node:test";
 
 import {
   connectUserBrowserCdp,
+  userBrowserDocumentEventInvalidates,
   UserBrowserCdpBackend,
   type UserBrowserCdpClient,
   validateUserBrowserVersion,
   windowsBrowserExecutableCandidates,
 } from "../src/main/capabilities/user-browser-provider.js";
+
+test("CDP lifecycle contract invalidates history, reload, activation, and top-frame navigation", () => {
+  for (const method of [
+    "Page.navigatedWithinDocument",
+    "Page.frameStartedLoading",
+    "Page.backForwardCacheNotUsed",
+  ]) {
+    assert.equal(
+      userBrowserDocumentEventInvalidates(method, { frameId: "main" }, "main"),
+      true,
+      method,
+    );
+    assert.equal(
+      userBrowserDocumentEventInvalidates(method, { frameId: "child" }, "main"),
+      false,
+      `${method} subframe`,
+    );
+  }
+  assert.equal(
+    userBrowserDocumentEventInvalidates("Page.frameNavigated", {
+      frame: { id: "main", loaderId: "loader", url: "https://example.test" },
+    }),
+    true,
+  );
+  assert.equal(
+    userBrowserDocumentEventInvalidates("Page.frameNavigated", {
+      frame: { id: "child", parentId: "main" },
+    }),
+    false,
+  );
+});
 
 test("user browser mode inherits visible authenticated state without exposing session material", async () => {
   const client = new FakeUserBrowserClient();
@@ -66,7 +98,7 @@ test("detaching a user tab keeps it open and out of the logical ZenX session", a
   const client = new FakeUserBrowserClient();
   const backend = new UserBrowserCdpBackend(client);
   await backend.listTabs("work");
-  backend.closeTab("work", "target-1");
+  await backend.closeTab("work", "target-1");
   assert.deepEqual(await backend.listTabs("work"), []);
   assert.deepEqual(client.closedTargets, []);
 });
@@ -80,7 +112,7 @@ test("external navigation makes an attached-tab observation fail closed", async 
   assert.ok(target);
 
   client.currentUrl = "https://example.test/other";
-  client.documentIdentity = "document-b";
+  client.documentToken = "document-b";
   await assert.rejects(
     backend.click(
       "work",
@@ -88,7 +120,7 @@ test("external navigation makes an attached-tab observation fail closed", async 
       inspection.observationId,
       target.targetId,
     ),
-    /document-changed/u,
+    /document changed/u,
   );
   await assert.rejects(
     backend.click(
@@ -142,6 +174,16 @@ test("cancelled action is outcome-unknown and its observation cannot be retried"
   controller.abort(new DOMException("cancelled", "AbortError"));
   await assert.rejects(action, /outcome is unknown/u);
   await assert.rejects(
+    backend.inspect("work", "target-1"),
+    /operation is already in flight/u,
+  );
+  await assert.rejects(
+    backend.navigate("work", "target-1", "https://example.test/retry"),
+    /operation is already in flight/u,
+  );
+  assert.equal(client.actionCount, 1);
+  assert.equal(client.navigateCount, 0);
+  await assert.rejects(
     backend.click(
       "work",
       "target-1",
@@ -151,6 +193,179 @@ test("cancelled action is outcome-unknown and its observation cannot be retried"
     /stale or unknown/u,
   );
   client.releaseAction();
+  await client.actionSettled;
+  await nextTurn();
+  await backend.inspect("work", "target-1");
+});
+
+test("provider-owned lifecycle invalidates same-document history reload and activation observations", async () => {
+  for (const lifecycle of [
+    "pushState",
+    "replaceState-same-url",
+    "reload",
+    "bfcache-activation",
+  ]) {
+    const client = new FakeUserBrowserClient();
+    const backend = new UserBrowserCdpBackend(client);
+    await backend.listTabs("work");
+    const inspection = await backend.inspect("work", "target-1");
+    const target = inspection.targets[0];
+    assert.ok(target);
+    client.advanceDocument(lifecycle);
+    await assert.rejects(
+      backend.click(
+        "work",
+        "target-1",
+        inspection.observationId,
+        target.targetId,
+      ),
+      /document changed/u,
+    );
+    assert.equal(client.actionCount, 0, lifecycle);
+  }
+});
+
+test("target disappearance and disconnect fail before action dispatch", async () => {
+  for (const failure of ["target disappeared", "CDP disconnected"]) {
+    const client = new FakeUserBrowserClient();
+    const backend = new UserBrowserCdpBackend(client);
+    await backend.listTabs("work");
+    const inspection = await backend.inspect("work", "target-1");
+    const target = inspection.targets[0];
+    assert.ok(target);
+    client.identityFailure = new Error(failure);
+    await assert.rejects(
+      backend.click(
+        "work",
+        "target-1",
+        inspection.observationId,
+        target.targetId,
+      ),
+      /outcome is unknown/u,
+    );
+    assert.equal(client.actionCount, 0, failure);
+  }
+});
+
+test("post-confirmation cancellation retains the tab fence until confirmation settles", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  const inspection = await backend.inspect("work", "target-1");
+  const target = inspection.targets[0];
+  assert.ok(target);
+  client.holdPostConfirmation = true;
+  const controller = new AbortController();
+  const action = backend.click(
+    "work",
+    "target-1",
+    inspection.observationId,
+    target.targetId,
+    controller.signal,
+  );
+  await client.postConfirmationStarted;
+  controller.abort();
+  await assert.rejects(action, /outcome is unknown/u);
+  await assert.rejects(backend.inspect("work", "target-1"), /in flight/u);
+  await assert.rejects(
+    backend.navigate("work", "target-1", "https://example.test/retry"),
+    /in flight/u,
+  );
+  assert.equal(client.navigateCount, 0);
+  client.releasePostConfirmation();
+  await client.postConfirmationSettled;
+  await nextTurn();
+  await backend.inspect("work", "target-1");
+  assert.equal(client.actionCount, 1);
+});
+
+test("navigate is exclusive and detach waits for an already dispatched action", async () => {
+  const navigationClient = new FakeUserBrowserClient();
+  const navigationBackend = new UserBrowserCdpBackend(navigationClient);
+  await navigationBackend.listTabs("work");
+  navigationClient.holdNavigations = true;
+  const firstNavigate = navigationBackend.navigate(
+    "work",
+    "target-1",
+    "https://example.test/next",
+  );
+  await navigationClient.navigationStarted;
+  await assert.rejects(
+    navigationBackend.navigate(
+      "work",
+      "target-1",
+      "https://example.test/other",
+    ),
+    /operation is already in flight/u,
+  );
+  assert.equal(navigationClient.navigateCount, 1);
+  navigationClient.releaseNavigation();
+  await firstNavigate;
+
+  const actionClient = new FakeUserBrowserClient();
+  const actionBackend = new UserBrowserCdpBackend(actionClient);
+  await actionBackend.listTabs("work");
+  const inspection = await actionBackend.inspect("work", "target-1");
+  const target = inspection.targets[0];
+  assert.ok(target);
+  actionClient.holdActions = true;
+  const action = actionBackend.click(
+    "work",
+    "target-1",
+    inspection.observationId,
+    target.targetId,
+  );
+  await actionClient.actionStarted;
+  let detached = false;
+  const detach = actionBackend.closeSession("work").then((count) => {
+    detached = true;
+    return count;
+  });
+  await assert.rejects(actionBackend.inspect("work", "target-1"), /detaching/u);
+  await assert.rejects(
+    actionBackend.open("work", "https://example.test/late"),
+    /session is detaching/u,
+  );
+  assert.equal(detached, false);
+  assert.equal(actionClient.actionCount, 1);
+  assert.equal(actionClient.calls.includes("Target.createTarget"), false);
+  actionClient.releaseAction();
+  await action;
+  assert.equal(await detach, 1);
+  assert.equal(actionClient.actionCount, 1);
+  assert.deepEqual(actionClient.closedTargets, []);
+});
+
+test("closeTab fences the tab immediately and waits for its held mutation", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  const inspection = await backend.inspect("work", "target-1");
+  const target = inspection.targets[0];
+  assert.ok(target);
+  client.holdActions = true;
+  const action = backend.click(
+    "work",
+    "target-1",
+    inspection.observationId,
+    target.targetId,
+  );
+  await client.actionStarted;
+  let detached = false;
+  const closeTab = backend.closeTab("work", "target-1").then(() => {
+    detached = true;
+  });
+  await assert.rejects(
+    backend.navigate("work", "target-1", "https://example.test/late"),
+    /detaching/u,
+  );
+  assert.equal(detached, false);
+  assert.equal(client.navigateCount, 0);
+  client.releaseAction();
+  await action;
+  await closeTab;
+  assert.equal(client.actionCount, 1);
+  assert.deepEqual(client.closedTargets, []);
 });
 
 test("disconnect makes action outcome unknown and concurrent observation reuse dispatches once", async () => {
@@ -315,12 +530,16 @@ test("Windows browser discovery covers machine and per-user Chrome Edge and Chro
 
 class FakeUserBrowserClient implements UserBrowserCdpClient {
   actionCount = 0;
+  navigateCount = 0;
   closeCount = 0;
   readonly closedTargets: string[] = [];
   readonly calls: string[] = [];
   currentUrl = "https://example.test/account";
-  documentIdentity = "document-a";
+  documentToken = "document-a";
+  identityFailure?: Error;
   holdActions = false;
+  holdNavigations = false;
+  holdPostConfirmation = false;
   inspectionTarget = {
     selector: "#continue",
     tag: "button",
@@ -336,13 +555,47 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   };
   readonly #actionStarted = deferred<void>();
   #heldAction = deferred<void>();
+  readonly #actionSettled = deferred<void>();
+  readonly #navigationStarted = deferred<void>();
+  readonly #heldNavigation = deferred<void>();
+  readonly #postConfirmationStarted = deferred<void>();
+  readonly #heldPostConfirmation = deferred<void>();
+  readonly #postConfirmationSettled = deferred<void>();
 
   get actionStarted(): Promise<void> {
     return this.#actionStarted.promise;
   }
 
+  get actionSettled(): Promise<void> {
+    return this.#actionSettled.promise;
+  }
+
+  get navigationStarted(): Promise<void> {
+    return this.#navigationStarted.promise;
+  }
+
+  get postConfirmationStarted(): Promise<void> {
+    return this.#postConfirmationStarted.promise;
+  }
+
+  get postConfirmationSettled(): Promise<void> {
+    return this.#postConfirmationSettled.promise;
+  }
+
+  advanceDocument(reason: string): void {
+    this.documentToken = `${this.documentToken}:${reason}`;
+  }
+
   releaseAction(): void {
     this.#heldAction.resolve();
+  }
+
+  releaseNavigation(): void {
+    this.#heldNavigation.resolve();
+  }
+
+  releasePostConfirmation(): void {
+    this.#heldPostConfirmation.resolve();
   }
 
   rejectAction(error: Error): void {
@@ -351,6 +604,12 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
 
   async listTargets() {
     this.calls.push("Target.getTargets");
+    if (this.holdPostConfirmation && this.actionCount > 0) {
+      this.#postConfirmationStarted.resolve();
+      await this.#heldPostConfirmation.promise;
+      this.#postConfirmationSettled.resolve();
+      this.holdPostConfirmation = false;
+    }
     return [
       {
         targetId: "target-1",
@@ -368,30 +627,39 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
 
   async navigate(_targetId: string, _url: string) {
     this.calls.push("Page.navigate");
+    this.navigateCount += 1;
+    if (this.holdNavigations) {
+      this.#navigationStarted.resolve();
+      await this.#heldNavigation.promise;
+    }
+  }
+
+  async documentIdentity(): Promise<string> {
+    this.calls.push("Page.getFrameTree");
+    if (this.identityFailure !== undefined) throw this.identityFailure;
+    return this.documentToken;
   }
 
   async evaluate(
     _targetId: string,
     expression: string,
-    signal?: AbortSignal,
+    _signal?: AbortSignal,
   ): Promise<unknown> {
     this.calls.push("Runtime.evaluate");
-    if (!expression.includes("const expected")) {
+    if (!expression.includes("const expected =")) {
       return {
-        documentIdentity: this.documentIdentity,
-        inspection: {
-          visibleText: "Signed in as Alice",
-          targets: [this.inspectionTarget],
-        },
+        visibleText: "Signed in as Alice",
+        targets: [this.inspectionTarget],
       };
     }
     this.actionCount += 1;
-    if (!expression.includes(JSON.stringify(this.documentIdentity))) {
-      return { ok: false, reason: "document-changed" };
-    }
     if (this.holdActions) {
       this.#actionStarted.resolve();
-      await Promise.race([this.#heldAction.promise, abortPromise(signal)]);
+      try {
+        await this.#heldAction.promise;
+      } finally {
+        this.#actionSettled.resolve();
+      }
     }
     return { ok: true };
   }
@@ -399,20 +667,6 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   async close() {
     this.closeCount += 1;
   }
-}
-
-function abortPromise(signal?: AbortSignal): Promise<never> {
-  return new Promise((_, reject) => {
-    if (signal === undefined) return;
-    const abort = () =>
-      reject(
-        signal.reason instanceof Error
-          ? signal.reason
-          : new DOMException("cancelled", "AbortError"),
-      );
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) abort();
-  });
 }
 
 function deferred<T>() {
@@ -423,6 +677,10 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+async function nextTurn(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 async function listen(
