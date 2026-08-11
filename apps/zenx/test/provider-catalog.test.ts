@@ -8,7 +8,24 @@ import type {
 import {
   probePeekabooCli,
   probePlaywrightCli,
+  selectBrowserProvider,
 } from "../src/main/capabilities/provider-catalog.js";
+
+test("requested user-session mode never falls back to an isolated provider", async () => {
+  const selection = await selectBrowserProvider({
+    userDataDirectory: "/tmp/zenx",
+    environment: { ZENX_BROWSER_MODE: "user-session" },
+    platform: "win32",
+  });
+  assert.equal(selection.backend, undefined);
+  assert.equal(selection.diagnostics[0]?.providerId, "user-browser-cdp");
+  assert.equal(selection.diagnostics[0]?.status, "unavailable");
+  assert.match(selection.diagnostics[0]?.reason ?? "", /CDP_ENDPOINT/u);
+  assert.equal(
+    selection.diagnostics.some((entry) => entry.status === "fallback"),
+    false,
+  );
+});
 
 test("pins and validates the Playwright CLI machine-readable contract", async () => {
   const runner = new ScriptedRunner([

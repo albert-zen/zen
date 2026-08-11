@@ -440,7 +440,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     const inspected = await evaluateInTab<{
       visibleText: string;
       targets: BrowserTargetFingerprint[];
-    }>(tab, INSPECT_SCRIPT);
+    }>(tab, browserInspectScript);
     const observationId = randomUUID();
     const targets = new Map<string, BrowserTargetFingerprint>();
     const projectedTargets = inspected.targets.slice(0, 80).map((target) => {
@@ -485,7 +485,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     tab.observation = undefined;
     const result = await evaluateInTab<{ ok: boolean; reason?: string }>(
       tab,
-      actionScript(target, "click"),
+      browserActionScript(target, "click"),
     );
     if (!result.ok) {
       throw new Error(
@@ -519,7 +519,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     tab.observation = undefined;
     const result = await evaluateInTab<{ ok: boolean; reason?: string }>(
       tab,
-      actionScript(target, "type", text, submit),
+      browserActionScript(target, "type", text, submit),
     );
     if (!result.ok) {
       throw new Error(
@@ -691,7 +691,7 @@ export function resolveBrowserObservedTarget(
   return target;
 }
 
-const INSPECT_SCRIPT = `(() => {
+export const browserInspectScript = `(() => {
   const visible = (element) => {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -753,7 +753,7 @@ const INSPECT_SCRIPT = `(() => {
   };
 })()`;
 
-function actionScript(
+export function browserActionScript(
   target: BrowserTargetFingerprint,
   action: "click" | "type",
   text = "",
@@ -850,7 +850,7 @@ function summarizeTab(tab: BrowserTab): BrowserTabSummary {
     sessionId: tab.sessionId,
     tabId: tab.tabId,
     title: tab.window.getTitle().slice(0, 256),
-    url: redactUrl(tab.window.webContents.getURL()),
+    url: redactBrowserUrl(tab.window.webContents.getURL()),
     loading: tab.window.webContents.isLoading(),
   };
 }
@@ -875,7 +875,7 @@ function safeBrowserUrl(raw: string): string {
   return url.toString();
 }
 
-function redactUrl(raw: string): string {
+export function redactBrowserUrl(raw: string): string {
   if (raw.length === 0) return "";
   const url = new URL(raw);
   url.username = "";

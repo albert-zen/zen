@@ -88,10 +88,32 @@ per-session/global tab caps plus explicit tab/session close tools.
 cleanup, and advances the partition generation; reopening the same `sessionId`
 therefore starts without the prior cookies or session storage. Generation state
 exists only for active/pending sessions, so logical session bookkeeping is bounded.
-Attaching the user's existing Chrome profile or tabs is not implemented; it
-would be a separate explicit opt-in mode with different privacy and interaction
-impact. This implementation does not claim parity with any proprietary browser
-automation product.
+User-browser attachment is a separate explicit opt-in mode. Start a supported
+Chrome, Edge, or Chromium 100+ yourself with a loopback remote-debugging port,
+open or sign into the pages you want ZenX to use, then start ZenX with:
+
+```powershell
+$env:ZENX_BROWSER_MODE = "user-session"
+$env:ZENX_USER_BROWSER_CDP_ENDPOINT = "http://127.0.0.1:9222"
+npm --workspace apps/zenx run dev
+```
+
+Modern Chromium releases may require the user to choose an explicit non-default
+`--user-data-dir` when enabling `--remote-debugging-port=9222`; ZenX never starts
+the browser, copies cookie databases, or attempts to unlock a profile directory.
+The endpoint must be unauthenticated loopback HTTP and must identify Chrome,
+Edge, or Chromium. Unavailable or incompatible endpoints remain terminal
+`user-browser-cdp` diagnostics and never fall back to Playwright/Electron.
+Inspection and action reuse authenticated page state in place, but only bounded
+visible text and opaque target IDs reach the Agent; cookies, storage state, auth
+headers, and credentials are never requested or returned. Closing a tab/session
+in this mode only detaches ZenX state, and closing ZenX only disconnects CDP; the
+user's tabs, browser process, storage, and profile remain intact. Settings labels
+browser provider diagnostics as `user-session` or `isolated-session`.
+
+The default `ZENX_BROWSER_MODE=isolated` continues to select Playwright CLI or
+the bundled ephemeral Electron/CDP provider. This implementation does not claim
+parity with any proprietary browser automation product.
 
 The computer contract is platform-neutral: tools describe semantic observation,
 press/value/capture operations and their interaction impact, while a platform
@@ -230,6 +252,7 @@ npm run check
 npm --workspace apps/zenx run smoke:capabilities
 # Windows only, after installing Microsoft WinApp CLI:
 npm --workspace apps/zenx run smoke:windows-computer
+npm --workspace apps/zenx run smoke:windows-user-browser
 npm --workspace apps/zenx run smoke:providers
 ```
 
@@ -270,6 +293,11 @@ provider/version/permission diagnostics. CI installs the pinned official
 `@playwright/cli` and requires that provider to be selected; a local run may
 exercise the Electron fallback when the CLI is absent. The smoke only probes
 Peekaboo availability and permissions; it never sends desktop input.
+The Windows user-browser smoke launches a real installed Chrome/Edge process
+with an explicit temporary profile and CDP port, establishes authenticated state
+inside that browser, attaches ZenX, lists/inspects/acts in the existing tab, and
+then verifies ZenX detach leaves the browser process and tabs alive without
+projecting cookie material.
 It does
 not run foreground takeover against the user's desktop; foreground execution
 and immediate pre-input cancellation are covered by provider/bridge tests. The

@@ -19,8 +19,10 @@ stub App Server 记录真实调用，在不污染 Zen Core 的前提下扩展协
 host、Thread 列表与恢复、流式 Item、审批、模型切换、soft steer、interrupt 与
 Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / Room，
 以及可显式授权的 bundled/local capability registry 已形成可运行 vertical slice。
-首批 browser provider 优先复用 Playwright CLI 的跨平台 headless 隔离 session，缺失或不兼容时
-回落到 bundled Electron/CDP 临时 profile；两者都只暴露有界 DOM 操作。computer
+首批 browser provider 默认优先复用 Playwright CLI 的跨平台 headless 隔离 session，缺失或不兼容时
+回落到 bundled Electron/CDP 临时 profile；用户也可显式选择 loopback CDP user-session
+provider 附着到自己预先开启的 Chrome/Edge/Chromium，原位使用认证状态而不导出 cookie、
+storage 或 auth header，连接失败时绝不回落到隔离登录态；三者都只暴露有界 DOM 操作。computer
 公共 contract 暴露语义动作、平台能力与 background-safe/foreground-required 影响协商；
 当前 macOS provider 优先复用 Peekaboo 3.x 的 background-first 操作，缺失或不兼容时以 bundled
 AX/窗口定向截图和明确提示、可取消的前台输入形成基线；
