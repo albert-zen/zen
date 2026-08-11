@@ -30,6 +30,36 @@ test("same-title and distinct native notifications always advance authority", as
   });
 });
 
+test("newer same-title authority cancels an older queued conflict repair", async () => {
+  await withDirectory(async (file) => {
+    const active = deferred<void>();
+    const dispatches: string[] = [];
+    const instance = coordinator(
+      file,
+      new ControlledInference(),
+      async (_threadId, title) => {
+        dispatches.push(title);
+        if (dispatches.length === 1) await active.promise;
+      },
+    );
+    await instance.initialize();
+    await instance.rename("thread-a", "A");
+    await until(() => dispatches.length === 1);
+
+    const conflict = await instance.synchronizeNativeName("thread-a", "C");
+    const newer = await instance.synchronizeNativeName("thread-a", "A");
+    assert.equal(conflict.version + 1, newer.version);
+    assert.equal(newer.title, "A");
+
+    active.resolve();
+    await tick();
+    await tick();
+    assert.deepEqual(dispatches, ["A"]);
+    assert.deepEqual(instance.snapshot()["thread-a"], newer);
+    await instance.close();
+  });
+});
+
 test("retired same-title evidence cannot consume a successor mirror or native authority", async () => {
   await withDirectory(async (file) => {
     const firstInference = new ControlledInference();

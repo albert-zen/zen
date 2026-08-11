@@ -180,10 +180,9 @@ export class ZenXThreadTitleCoordinator {
     const normalized = normalizeManualTitle(title);
     // App Server exposes no dispatch correlation token. Title equality is not
     // provenance, so every notification is conservatively authoritative. A
-    // conflicting in-flight dispatch is followed by one queued repair; its
-    // same-title echo is still authoritative but cannot enqueue another repair.
-    const repairAfterConflictingDispatch =
-      this.#nativeMirrors.hasConflictingActive(threadId, normalized);
+    // successful authority commit cancels any older queued repair before the
+    // current active dispatch is reconciled. A same-title echo is still
+    // authoritative but cannot enqueue a recursive repair.
     const nativeAuthorityVersion = this.#nativeAuthorityVersion(threadId) + 1;
     this.#nativeAuthorityVersions.set(threadId, nativeAuthorityVersion);
     const projection = await this.#serial(owner, async () => {
@@ -199,8 +198,7 @@ export class ZenXThreadTitleCoordinator {
         throw new Error("Title ownership changed during native rename");
       return projection;
     });
-    if (repairAfterConflictingDispatch)
-      this.#nativeMirrors.enqueue(threadId, normalized, owner);
+    this.#nativeMirrors.reconcileAuthoritative(threadId, normalized, owner);
     return projection;
   }
 
@@ -453,9 +451,16 @@ class NativeMirrorQueue {
     this.#setNativeName = setNativeName;
   }
 
-  hasConflictingActive(threadId: string, title: string): boolean {
+  reconcileAuthoritative(
+    threadId: string,
+    title: string,
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): void {
+    const queued = this.#queued.get(threadId);
+    if (queued !== undefined) this.#retireJob(queued, true);
     const active = this.#active.get(threadId);
-    return active !== undefined && active.title !== title;
+    if (active !== undefined && active.title !== title)
+      this.enqueue(threadId, title, owner);
   }
 
   enqueue(

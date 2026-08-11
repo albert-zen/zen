@@ -85,7 +85,7 @@ test("an App Server rename between generated commit and mirror restores native a
   await assertRenameWinsGenerationRace("after-generated-commit");
 });
 
-test("an App Server rename while generated mirror is in flight restores native authority", async () => {
+test("a later dispatch notification supersedes authority observed while that dispatch was in flight", async () => {
   await assertRenameWinsGenerationRace("during-generated-mirror");
 });
 
@@ -178,12 +178,15 @@ async function assertRenameWinsGenerationRace(
             "Agent authority",
           );
           synchronizations.push(synchronization);
-          await tick();
+          await synchronization;
         }
         nativeName = title;
-        synchronizations.push(
-          titles.synchronizeNativeName("thread-race", title),
+        const mirrorNotification = titles.synchronizeNativeName(
+          "thread-race",
+          title,
         );
+        synchronizations.push(mirrorNotification);
+        await mirrorNotification;
       },
     });
     if (phase === "after-generated-commit") {
@@ -210,16 +213,26 @@ async function assertRenameWinsGenerationRace(
     }
     assert.notEqual(synchronization, undefined);
     await synchronization;
-    assert.deepEqual(titles.snapshot()["thread-race"], {
-      threadId: "thread-race",
-      title: "Agent authority",
-      status: "manual",
-      version: 4,
-      source: "Original title source",
-    });
-    assert.equal(nativeName, "Agent authority");
+    if (phase === "during-generated-mirror")
+      await until(() => synchronizations.length === 2);
     for (let index = 0; index < synchronizations.length; index += 1)
       await synchronizations[index];
+    assert.deepEqual(titles.snapshot()["thread-race"], {
+      threadId: "thread-race",
+      title:
+        phase === "during-generated-mirror"
+          ? "Late generated"
+          : "Agent authority",
+      status: "manual",
+      version: phase === "during-generated-mirror" ? 5 : 4,
+      source: "Original title source",
+    });
+    assert.equal(
+      nativeName,
+      phase === "during-generated-mirror"
+        ? "Late generated"
+        : "Agent authority",
+    );
     await titles.stop();
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -253,6 +266,14 @@ async function waitForStatus(
     await tick();
   }
   assert.fail(`Timed out waiting for title status ${status}`);
+}
+
+async function until(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 5_000; attempt += 1) {
+    if (predicate()) return;
+    await tick();
+  }
+  assert.fail("Timed out waiting for condition");
 }
 
 async function tick(): Promise<void> {
