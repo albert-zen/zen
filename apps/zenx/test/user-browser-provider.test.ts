@@ -1439,7 +1439,9 @@ test("known reattach or setup failure before action does not poison cleanup", as
       assert.ok(target);
       const evaluationsBefore = cdp.count("Runtime.evaluate");
       cdp.detachSession();
-      await nextTurn();
+      // Fence delivery of the preceding Target.detachedFromTarget notification on
+      // the same ordered CDP connection before exercising the reattach path.
+      await connection.backend.listTabs("work");
       if (failure === "attach") cdp.failNextAttachReply();
       else cdp.failNextEnableReply();
       await assert.rejects(
