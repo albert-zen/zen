@@ -173,6 +173,205 @@ test("early completion uses canonical client identity and replies to the capture
   }
 });
 
+test("early completion rejects matching plus unrelated canonical client IDs", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-early-contradictory-"),
+  );
+  const manager = new ControlledManager();
+  const response = deferred<ClientRequestResults["turn/start"]>();
+  manager.requestHandler = async () => await response.promise;
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "thread-target" }],
+    });
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "roomMention",
+      label: "Answer",
+      prompt: "Answer once.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    const firing = triggers.postRoomMessage(room.id, "You", "@Bot status?");
+    const starting = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "starting",
+    );
+    const clientId = starting.history[0]!.clientUserMessageId;
+    await until(() => manager.requests.length === 1);
+    manager.complete(
+      "thread-target",
+      completedTurn(
+        "contradictory-turn",
+        "matching",
+        [canonicalUserMessage("unrelated-user", "unrelated-client")],
+        clientId,
+      ),
+    );
+    response.resolve(startResult("contradictory-turn"));
+    await firing;
+
+    assert.equal(triggers.snapshot().history[0]?.status, "running");
+    assert.equal(
+      triggers
+        .snapshot()
+        .rooms[0]?.messages.filter((message) => message.kind === "agent")
+        .length,
+      0,
+    );
+    manager.complete(
+      "thread-target",
+      completedTurn("contradictory-turn", "exact late", [], clientId),
+    );
+    await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "completed",
+    );
+    assert.equal(
+      triggers
+        .snapshot()
+        .rooms[0]?.messages.filter((message) => message.kind === "agent")
+        .length,
+      1,
+    );
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("early completion rejects duplicate canonical occurrences of one client ID", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-early-duplicate-evidence-"),
+  );
+  const manager = new ControlledManager();
+  const response = deferred<ClientRequestResults["turn/start"]>();
+  manager.requestHandler = async () => await response.promise;
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "signal",
+      label: "Deploy",
+      prompt: "Inspect once.",
+      signalName: "deploy",
+    });
+    const firing = triggers.signal("deploy", "ready");
+    const starting = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "starting",
+    );
+    const clientId = starting.history[0]!.clientUserMessageId;
+    await until(() => manager.requests.length === 1);
+    manager.complete(
+      "thread-target",
+      completedTurn(
+        "duplicate-evidence-turn",
+        "matching",
+        [canonicalUserMessage("duplicate-user", clientId)],
+        clientId,
+      ),
+    );
+    response.resolve(startResult("duplicate-evidence-turn"));
+    await firing;
+
+    assert.equal(triggers.snapshot().history[0]?.status, "running");
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("late unidentifiable duplicate preserves an exact concurrent same-thread candidate", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-late-unidentified-"),
+  );
+  const manager = new ControlledManager();
+  const responses = new Map<
+    string,
+    ReturnType<typeof deferred<ClientRequestResults["turn/start"]>>
+  >();
+  manager.requestHandler = async (params) => {
+    const response = deferred<ClientRequestResults["turn/start"]>();
+    responses.set(params.clientUserMessageId!, response);
+    return await response.promise;
+  };
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "shared-thread",
+      kind: "signal",
+      label: "Alpha",
+      prompt: "Run alpha.",
+      signalName: "alpha",
+    });
+    await triggers.create({
+      threadId: "shared-thread",
+      kind: "signal",
+      label: "Beta",
+      prompt: "Run beta.",
+      signalName: "beta",
+    });
+    const alpha = triggers.signal("alpha", "one");
+    const beta = triggers.signal("beta", "two");
+    const starting = await snapshotWhen(
+      triggers,
+      (snapshot) =>
+        snapshot.history.filter((entry) => entry.status === "starting")
+          .length === 2,
+    );
+    const alphaEntry = starting.history.find(
+      (entry) => entry.prompt === "Run alpha.",
+    )!;
+    const betaEntry = starting.history.find(
+      (entry) => entry.prompt === "Run beta.",
+    )!;
+    await until(() => responses.size === 2);
+    manager.complete(
+      "shared-thread",
+      completedTurn("turn-beta", "exact", [], betaEntry.clientUserMessageId),
+    );
+    manager.complete(
+      "shared-thread",
+      completedTurn("turn-beta", "late without identity"),
+    );
+    responses
+      .get(alphaEntry.clientUserMessageId)!
+      .resolve(startResult("turn-alpha"));
+    responses
+      .get(betaEntry.clientUserMessageId)!
+      .resolve(startResult("turn-beta"));
+    await Promise.all([alpha, beta]);
+
+    const snapshot = triggers.snapshot();
+    assert.equal(
+      snapshot.history.find((entry) => entry.id === betaEntry.id)?.status,
+      "completed",
+    );
+    assert.equal(
+      snapshot.history.find((entry) => entry.id === alphaEntry.id)?.status,
+      "running",
+    );
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("concurrent same-thread starts correlate only by exact completion evidence", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-concurrent-correlation-"),
@@ -955,6 +1154,15 @@ function completedTurn(
     startedAt: 1,
     completedAt: 2,
     durationMs: 1,
+  };
+}
+
+function canonicalUserMessage(id: string, clientId: string): ThreadItem {
+  return {
+    type: "userMessage",
+    id,
+    clientId,
+    content: [{ type: "text", text: id, text_elements: [] }],
   };
 }
 

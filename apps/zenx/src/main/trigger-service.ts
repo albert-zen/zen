@@ -51,6 +51,7 @@ interface PendingCompletion {
   generation: number;
   event: ServerNotificationParams["turn/completed"];
   clientUserMessageId: string | null;
+  rejected: boolean;
 }
 
 interface CompletedItemBuffer {
@@ -524,6 +525,7 @@ export class ZenXTriggerService {
         history.turnId = result.turn.id;
         if (
           pending !== undefined &&
+          !pending.rejected &&
           pending.generation === generation &&
           pending.event.threadId === trigger.threadId &&
           (pending.clientUserMessageId === null ||
@@ -748,49 +750,85 @@ export class ZenXTriggerService {
     event: ServerNotificationParams["turn/completed"],
     completedItems: readonly ThreadItem[],
   ): void {
-    const clientIds = new Set(
-      completedItems
-        .filter((item) => item.type === "userMessage")
-        .map((item) => item.clientId)
-        .filter((clientId): clientId is string => clientId !== null),
+    const sameThreadWakeups = [...this.#inFlightWakeups.values()].filter(
+      (entry) =>
+        entry.generation === generation && entry.threadId === event.threadId,
     );
-    const matchingWakeups = new Map<string, InFlightWakeup>();
-    for (const clientId of clientIds) {
-      const wakeup = this.#inFlightWakeups.get(clientId);
-      if (
-        wakeup?.generation === generation &&
-        wakeup.threadId === event.threadId
-      ) {
-        matchingWakeups.set(clientId, wakeup);
-      }
-    }
-    let clientUserMessageId: string | null = null;
-    if (matchingWakeups.size === 1) {
-      clientUserMessageId = matchingWakeups.keys().next().value ?? null;
-    } else if (matchingWakeups.size > 1 || clientIds.size > 0) {
-      this.#clearTransientTurn(event.turn.id);
-      return;
-    } else if (
-      ![...this.#inFlightWakeups.values()].some(
-        (entry) =>
-          entry.generation === generation && entry.threadId === event.threadId,
-      )
-    ) {
+    if (sameThreadWakeups.length === 0) {
       this.#clearTransientTurn(event.turn.id);
       return;
     }
+    const clientIds = completedItems
+      .filter((item) => item.type === "userMessage")
+      .map((item) => item.clientId)
+      .filter((clientId): clientId is string => clientId !== null);
+    const soleClientId = clientIds.length === 1 ? clientIds[0]! : null;
+    const soleWakeup =
+      soleClientId === null
+        ? undefined
+        : this.#inFlightWakeups.get(soleClientId);
+    const clientUserMessageId =
+      soleWakeup?.generation === generation &&
+      soleWakeup.threadId === event.threadId
+        ? soleClientId
+        : null;
+    const rejected =
+      clientIds.length > 1 ||
+      (clientIds.length === 1 && clientUserMessageId === null);
     const existing = this.#pendingCompletedTurns.get(event.turn.id);
-    if (
-      existing !== undefined &&
-      existing.clientUserMessageId !== clientUserMessageId
-    ) {
-      this.#clearTransientTurn(event.turn.id);
+    if (existing?.rejected === true) return;
+    if (rejected) {
+      this.#completedTurnItems.delete(event.turn.id);
+      this.#setBounded(
+        this.#pendingCompletedTurns,
+        event.turn.id,
+        {
+          generation,
+          event,
+          clientUserMessageId: null,
+          rejected: true,
+        },
+        (turnId) => this.#completedTurnItems.delete(turnId),
+      );
       return;
+    }
+    if (existing !== undefined) {
+      if (
+        existing.clientUserMessageId !== null &&
+        (clientUserMessageId === null ||
+          existing.clientUserMessageId === clientUserMessageId)
+      ) {
+        return;
+      }
+      if (
+        existing.clientUserMessageId === null &&
+        clientUserMessageId === null
+      ) {
+        return;
+      }
+      if (
+        existing.clientUserMessageId !== null &&
+        existing.clientUserMessageId !== clientUserMessageId
+      ) {
+        this.#completedTurnItems.delete(event.turn.id);
+        this.#setBounded(
+          this.#pendingCompletedTurns,
+          event.turn.id,
+          {
+            generation,
+            event,
+            clientUserMessageId: null,
+            rejected: true,
+          },
+          (turnId) => this.#completedTurnItems.delete(turnId),
+        );
+        return;
+      }
     }
     this.#setBounded(
       this.#pendingCompletedTurns,
       event.turn.id,
-      { generation, event, clientUserMessageId },
+      { generation, event, clientUserMessageId, rejected: false },
       (turnId) => this.#completedTurnItems.delete(turnId),
     );
   }
