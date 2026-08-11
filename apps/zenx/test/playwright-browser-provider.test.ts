@@ -64,7 +64,7 @@ test("Playwright provider fails closed on an incompatible snapshot schema", asyn
   );
 });
 
-test("Playwright provider revalidates DOM identity and rejects secure fill", async () => {
+test("Playwright provider revalidates DOM identity and dispatches password fill normally", async () => {
   const runner = new FakePlaywrightRunner();
   const backend = new PlaywrightCliBrowserBackend({
     executable: "/opt/playwright-cli",
@@ -75,19 +75,30 @@ test("Playwright provider revalidates DOM identity and rejects secure fill", asy
   const inspected = await backend.inspect("research", opened.tabId);
   const password = inspected.targets.find(({ name }) => name === "Password");
   assert.equal(password?.secure, true);
-  assert.deepEqual(password?.actions, ["click"]);
+  assert.deepEqual(password?.actions, ["click", "type"]);
+  assert.ok(password);
+  await backend.type(
+    "research",
+    opened.tabId,
+    inspected.observationId,
+    password.targetId,
+    "ordinary argument",
+    false,
+  );
+  assert.equal(runner.calls.filter((args) => args.includes("fill")).length, 1);
+  const refreshed = await backend.inspect("research", opened.tabId);
   assert.equal(
     inspected.targets.some(({ name }) => name === "Hidden"),
     false,
   );
-  const button = inspected.targets.find(({ name }) => name === "Run");
+  const button = refreshed.targets.find(({ name }) => name === "Run");
   assert.ok(button);
   runner.changeIdentity = true;
   await assert.rejects(
     backend.click(
       "research",
       opened.tabId,
-      inspected.observationId,
+      refreshed.observationId,
       button.targetId,
     ),
     /identity, security, visibility, or actions changed/u,

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { selectBrowserProvider } from "./capabilities/provider-catalog.js";
+import { windowsBrowserExecutableCandidates } from "./capabilities/user-browser-provider.js";
 
 if (process.platform !== "win32") {
   throw new Error("The real user-browser CDP smoke is Windows-only");
@@ -140,41 +141,7 @@ try {
 async function findBrowserExecutable(): Promise<string> {
   const candidates = [
     process.env.ZENX_USER_BROWSER_EXECUTABLE,
-    path.join(
-      process.env.ProgramFiles ?? "",
-      "Google",
-      "Chrome",
-      "Application",
-      "chrome.exe",
-    ),
-    path.join(
-      process.env["ProgramFiles(x86)"] ?? "",
-      "Google",
-      "Chrome",
-      "Application",
-      "chrome.exe",
-    ),
-    path.join(
-      process.env.LOCALAPPDATA ?? "",
-      "Google",
-      "Chrome",
-      "Application",
-      "chrome.exe",
-    ),
-    path.join(
-      process.env.ProgramFiles ?? "",
-      "Microsoft",
-      "Edge",
-      "Application",
-      "msedge.exe",
-    ),
-    path.join(
-      process.env["ProgramFiles(x86)"] ?? "",
-      "Microsoft",
-      "Edge",
-      "Application",
-      "msedge.exe",
-    ),
+    ...windowsBrowserExecutableCandidates(process.env),
   ].filter(
     (candidate): candidate is string =>
       candidate !== undefined && candidate.length > 0,

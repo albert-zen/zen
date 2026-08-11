@@ -153,7 +153,7 @@ export const browserCapabilityManifest: ZenXCapabilityManifest = {
     {
       name: "browser_inspect",
       description:
-        "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs for visible controls. Password/secure values are never returned and secure controls cannot be typed.",
+        "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs for visible controls. Existing input values are not returned.",
       inputSchema: browserTargetSchema(),
       permissions: ["browser.tabs.read"],
       interactionMode: "background_safe",
@@ -175,7 +175,7 @@ export const browserCapabilityManifest: ZenXCapabilityManifest = {
     {
       name: "browser_type",
       description:
-        "Replace a non-secret value in one visible, typeable opaque target from the latest browser_inspect observation, optionally submitting its form. Password/secure controls and secret text are unsupported because tool arguments are journaled.",
+        "Replace the value in one visible, typeable opaque target from the latest browser_inspect observation, optionally submitting its form. Text is dispatched as an ordinary tool argument regardless of field metadata.",
       inputSchema: browserTargetSchema(
         {
           observationId: stringSchema(),
@@ -216,7 +216,7 @@ export const browserCapabilityManifest: ZenXCapabilityManifest = {
       description:
         "Instructions for targeted, inspect-before-act browser automation.",
       content:
-        "Choose a stable sessionId for the task. List or open tabs, then inspect the exact tab before clicking or typing. Act only with the observationId and opaque targetId from the latest inspect; re-inspect after navigation or every action. Typing is for non-secret text only because tool arguments are journaled, and password/secure controls are rejected. Close tabs or the session when done; close_session clears the current partition so a later same-ID session starts clean. Never ask for cookies, storage state, auth headers, or hidden page content.",
+        "Choose a stable sessionId for the task. List or open tabs, then inspect the exact tab before clicking or typing. Act only with the observationId and opaque targetId from the latest inspect; re-inspect after navigation or every action. Text is dispatched as an ordinary tool argument regardless of field metadata. Close tabs or the session when done; close_session clears the current partition so a later same-ID session starts clean. Never ask for cookies, storage state, auth headers, or hidden page content.",
     },
     {
       id: "browser-research",
@@ -511,11 +511,6 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       targetId,
       "type",
     );
-    if (target.secure) {
-      throw new Error(
-        "Browser typing into password or secure controls is unsupported; browser_type is non-secret-only because tool arguments are journaled",
-      );
-    }
     tab.observation = undefined;
     const result = await evaluateInTab<{ ok: boolean; reason?: string }>(
       tab,
@@ -681,11 +676,6 @@ export function resolveBrowserObservedTarget(
     throw new Error("Browser target ID is forged, stale, or unknown");
   }
   if (!target.actions.includes(action)) {
-    if (action === "type" && target.secure) {
-      throw new Error(
-        "Browser typing into password or secure controls is unsupported; browser_type is non-secret-only because tool arguments are journaled",
-      );
-    }
     throw new Error(`Browser target does not support ${action}`);
   }
   return target;
@@ -703,7 +693,7 @@ export const browserInspectScript = `(() => {
     ["current-password", "new-password", "one-time-code"].includes(element.autocomplete.toLowerCase())
   );
   const typeable = (element) => {
-    if (secure(element) || element.hasAttribute("disabled") || element.hasAttribute("readonly")) return false;
+    if (element.hasAttribute("disabled") || element.hasAttribute("readonly")) return false;
     if (element instanceof HTMLTextAreaElement) return true;
     if (!(element instanceof HTMLInputElement)) return false;
     return !["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(element.type.toLowerCase());
@@ -747,7 +737,6 @@ export const browserInspectScript = `(() => {
         href: element instanceof HTMLAnchorElement ? element.getAttribute("href") ?? "" : "",
         secure: isSecure,
         actions,
-        ...(!isSecure && (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) ? { value: element.value.slice(0, 160) } : {}),
       };
     }),
   };
@@ -804,7 +793,6 @@ export function browserActionScript(
       element.click();
       return { ok: true };
     }
-    if (secure) return { ok: false, reason: "secure-control" };
     if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || element.disabled || element.readOnly) return { ok: false, reason: "not-typeable" };
     if (element instanceof HTMLInputElement && ["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(element.type.toLowerCase())) return { ok: false, reason: "not-typeable" };
     const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;

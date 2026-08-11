@@ -20,6 +20,7 @@ import {
 import { PeekabooComputerBackend } from "./peekaboo-computer-provider.js";
 import { PlaywrightCliBrowserBackend } from "./playwright-browser-provider.js";
 import { connectUserBrowserCdp } from "./user-browser-provider.js";
+import type { UserBrowserConnection } from "./user-browser-provider.js";
 import {
   windowsComputerCapabilityManifest,
   WinAppCliComputerBackend,
@@ -46,6 +47,10 @@ export interface ZenXCapabilityProviderCatalogOptions {
   environment?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   runner?: ExternalProviderProcessRunner;
+  userBrowserConnector?: (
+    endpoint: string,
+    signal?: AbortSignal,
+  ) => Promise<UserBrowserConnection>;
 }
 
 // @playwright/cli has its own 0.1.x package version. It embeds Playwright
@@ -69,18 +74,23 @@ export async function selectBrowserProvider(
       return {
         manifest: userBrowserManifest(),
         diagnostics: [
-          unavailableDiagnostic(
-            "browser",
-            "user-browser-cdp",
-            ["background_safe"],
-            ["user_session", "authenticated_state_in_place", "cdp"],
-            "User-session browser mode requires an explicit ZENX_USER_BROWSER_CDP_ENDPOINT",
-          ),
+          {
+            ...unavailableDiagnostic(
+              "browser",
+              "user-browser-cdp",
+              ["background_safe"],
+              ["user_session", "authenticated_state_in_place", "cdp"],
+              "User-session browser mode requires an explicit ZENX_USER_BROWSER_CDP_ENDPOINT",
+            ),
+            sessionMode: "user-session",
+          },
         ],
       };
     }
     try {
-      const connection = await connectUserBrowserCdp(endpoint);
+      const connection = await (
+        options.userBrowserConnector ?? connectUserBrowserCdp
+      )(endpoint);
       return {
         backend: connection.backend,
         manifest: userBrowserManifest(),
@@ -100,6 +110,7 @@ export async function selectBrowserProvider(
             version: connection.product,
             permissionSummary:
               "Explicit loopback CDP attachment; uses authenticated page state in place and never exports cookies, storage, headers, or credentials",
+            sessionMode: "user-session",
           },
         ],
       };
@@ -107,13 +118,16 @@ export async function selectBrowserProvider(
       return {
         manifest: userBrowserManifest(),
         diagnostics: [
-          unavailableDiagnostic(
-            "browser",
-            "user-browser-cdp",
-            ["background_safe"],
-            ["user_session", "authenticated_state_in_place", "cdp"],
-            describeError(error),
-          ),
+          {
+            ...unavailableDiagnostic(
+              "browser",
+              "user-browser-cdp",
+              ["background_safe"],
+              ["user_session", "authenticated_state_in_place", "cdp"],
+              describeError(error),
+            ),
+            sessionMode: "user-session",
+          },
         ],
       };
     }
@@ -122,13 +136,16 @@ export async function selectBrowserProvider(
     return {
       manifest: browserCapabilityManifest,
       diagnostics: [
-        unavailableDiagnostic(
-          "browser",
-          "browser-mode",
-          ["isolated", "background_safe"],
-          ["explicit_mode_selection"],
-          `Unsupported ZENX_BROWSER_MODE ${browserMode}; expected isolated or user-session`,
-        ),
+        {
+          ...unavailableDiagnostic(
+            "browser",
+            "browser-mode",
+            ["isolated", "background_safe"],
+            ["explicit_mode_selection"],
+            `Unsupported ZENX_BROWSER_MODE ${browserMode}; expected isolated or user-session`,
+          ),
+          sessionMode: "invalid",
+        },
       ],
     };
   }
@@ -145,15 +162,18 @@ export async function selectBrowserProvider(
       backend: new ElectronBrowserBackend(),
       manifest: browserCapabilityManifest,
       diagnostics: [
-        unavailableDiagnostic(
-          "browser",
-          "playwright-cli",
-          ["isolated"],
-          ["headless", "browser_context", "aria_snapshot", "auto_wait"],
-          configured === undefined
-            ? "playwright-cli is not installed; install @playwright/cli and its browser, or set ZENX_PLAYWRIGHT_CLI"
-            : `Configured Playwright CLI is not executable: ${configured}`,
-        ),
+        {
+          ...unavailableDiagnostic(
+            "browser",
+            "playwright-cli",
+            ["isolated"],
+            ["headless", "browser_context", "aria_snapshot", "auto_wait"],
+            configured === undefined
+              ? "playwright-cli is not installed; install @playwright/cli and its browser, or set ZENX_PLAYWRIGHT_CLI"
+              : `Configured Playwright CLI is not executable: ${configured}`,
+          ),
+          sessionMode: "isolated-session",
+        },
         fallbackDiagnostic,
       ],
     };
@@ -189,6 +209,7 @@ export async function selectBrowserProvider(
           version,
           permissionSummary:
             "Isolated in-memory Playwright session; no foreground desktop input",
+          sessionMode: "isolated-session",
         },
         fallbackDiagnostic,
       ],
@@ -198,14 +219,17 @@ export async function selectBrowserProvider(
       backend: new ElectronBrowserBackend(),
       manifest: browserCapabilityManifest,
       diagnostics: [
-        unavailableDiagnostic(
-          "browser",
-          "playwright-cli",
-          ["isolated"],
-          ["headless", "browser_context", "aria_snapshot", "auto_wait"],
-          describeError(error),
-          executable,
-        ),
+        {
+          ...unavailableDiagnostic(
+            "browser",
+            "playwright-cli",
+            ["isolated"],
+            ["headless", "browser_context", "aria_snapshot", "auto_wait"],
+            describeError(error),
+            executable,
+          ),
+          sessionMode: "isolated-session",
+        },
         electronBrowserDiagnostic("fallback"),
       ],
     };
@@ -255,7 +279,7 @@ function userBrowserManifest(): ZenXCapabilityManifest {
         ? {
             ...resource,
             content:
-              "This provider is attached to a user-opened browser and may use authenticated page state in place. List tabs, inspect the exact tab, and act only with the latest opaque observation and target IDs. Never ask for or return cookies, storage state, auth headers, or credentials. Typing is non-secret-only. Closing a tab/session detaches ZenX state only and must not close or clear the user's browser/profile.",
+              "This provider is attached to a user-opened browser and may use authenticated page state in place. List tabs, inspect the exact tab, and act only with the latest opaque observation and target IDs. Text is dispatched as an ordinary tool argument regardless of field metadata. Never request or return browser session internals such as cookies, storage state, or auth headers. Closing a tab/session detaches ZenX state only and must not close or clear the user's browser/profile.",
           }
         : resource,
     ),
@@ -568,6 +592,7 @@ function electronBrowserDiagnostic(
     interactionModes: ["background_safe"],
     capabilities: ["dedicated_profile", "cdp", "dom.inspect", "dom.interact"],
     permissionSummary: "Bundled hidden ephemeral Electron partition",
+    sessionMode: "isolated-session",
   };
 }
 

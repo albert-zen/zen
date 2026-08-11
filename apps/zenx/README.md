@@ -80,9 +80,9 @@ moving the OS pointer or activating a browser window. Inspection returns bounded
 visible text plus opaque IDs bound to the latest tab/document observation, never
 raw CSS selectors, cookies, storage, headers, or unrelated tabs. Actions
 revalidate visibility, supported action, and semantic identity, then invalidate
-the observation; navigation and close do likewise. Password values are omitted
-and secure controls reject typing. `browser_type` is deliberately non-secret-only
-because its text argument is part of the canonical tool call. Sessions have hard
+the observation; navigation and close do likewise. Existing input values are
+omitted, while text arguments dispatch normally regardless of password or
+autocomplete metadata and remain ordinary canonical tool-call arguments. Sessions have hard
 per-session/global tab caps plus explicit tab/session close tools.
 `browser_close_session` destroys all session windows, awaits storage/cache/auth
 cleanup, and advances the partition generation; reopening the same `sessionId`
@@ -187,8 +187,8 @@ mature external implementations while retaining a runnable bundled baseline:
   role/name/type/security/visibility/action fingerprint. Missing or incompatible
   CLI installations remain explicit in provider diagnostics and use the existing
   bundled Chromium CDP ephemeral-partition provider. Install `@playwright/cli`
-  plus its browser separately or set `ZENX_PLAYWRIGHT_CLI`; attaching a user
-  profile is still unsupported. See <https://playwright.dev/agent-cli/introduction>
+  plus its browser separately or set `ZENX_PLAYWRIGHT_CLI`; user-session attachment
+  remains a separate explicit CDP provider. See <https://playwright.dev/agent-cli/introduction>
   and <https://playwright.dev/docs/api/class-browsercontext>.
 - A future `isolated` interaction mode/provider can place arbitrary control in a
   VM, cloud desktop, or remote host. OSWorld's provider separation across
@@ -265,8 +265,8 @@ the child-host capability bridge, derived projects, Thread create/list/read/stat
 active `start | steer | replace`, follow-up delivery, bounded redaction, canonical
 command audit, and the real OpenAI subscription tool serialization boundary.
 The packaged capability smoke covers a real hidden dedicated browser
-open/inspect/navigate/click/type/close, including forged/stale/changed/hidden and
-password target rejection. It also seeds a cookie and session storage, closes
+open/inspect/navigate/click/type/close, including forged/stale/changed/hidden
+rejection and ordinary password-field input dispatch. It also seeds a cookie and session storage, closes
 the session, reopens the same ID, and verifies both are absent. It asserts those
 background-safe browser operations
 leave the real pointer position and foreground application unchanged. The macOS
