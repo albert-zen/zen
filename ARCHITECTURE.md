@@ -76,12 +76,17 @@
   、必须接管前台的 `foreground_required` 或在独立桌面执行的 `isolated`，让产品提示、调度和 host policy
   协商实际影响且禁止静默降级。
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
-  重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
+  与 provider-owned execution/document identity 重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
+- **ZenXUserBrowserOperationClosure** — ZenX user-browser provider 用可丢弃的单一 session operation tail、
+  每 target create/attach/enable/action/navigate/detach 终态与有界 taint/marker 证据，在返回 close 成功前证明所有已发送
+  CDP 副作用和 provider-owned attachment 已闭合；它同时绑定 isolated-world 文档身份，但不关闭用户
+  tab/profile，也不进入 Zen Core、journal 或 durable coordinator。
 - **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA/WGC JSON
   投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
 - **ZenXCapabilityProviderCatalog** — ZenX 产品层探测并诊断可选的成熟外部执行后端，按显式优先级选择
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
+- **ZenXUserBrowserCdpProvider** — ZenX 产品层仅在用户显式选择 user-session 模式并提供 loopback CDP endpoint 时附着到已运行的 Chrome/Edge/Chromium，把目标页投影为既有的 opaque observation 工具且关闭时只断开连接，不导出认证材料、关闭标签或清理用户 profile。
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 capability registry 暴露 Project/Thread 自控工具，
   只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
   不持有第二套 Project、Thread、Turn、transcript 或调度状态。
