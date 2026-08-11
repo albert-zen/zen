@@ -25,6 +25,10 @@ export interface UserBrowserCdpTarget {
 export interface UserBrowserCdpClient {
   listTargets(signal?: AbortSignal): Promise<UserBrowserCdpTarget[]>;
   createTarget(url: string, signal?: AbortSignal): Promise<string>;
+  findTargetByUrl(
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<UserBrowserCdpTarget | undefined>;
   navigate(targetId: string, url: string, signal?: AbortSignal): Promise<void>;
   evaluateDocument(
     targetId: string,
@@ -41,6 +45,8 @@ interface UserBrowserSession {
   targetIds: Set<string>;
   ignoredTargetIds: Set<string>;
   operations: Set<Promise<void>>;
+  unresolvedCreates: Set<string>;
+  detachFailures: unknown[];
   detaching: boolean;
 }
 
@@ -59,6 +65,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   readonly #client: UserBrowserCdpClient;
   readonly #sessions = new Map<string, UserBrowserSession>();
   readonly #tabs = new Map<string, UserBrowserTabState>();
+  readonly #detachOperations = new Map<string, Promise<void>>();
+  readonly #sessionCloseOperations = new Map<string, Promise<number>>();
+  #closeOperation?: Promise<void>;
   #closing = false;
 
   constructor(client: UserBrowserCdpClient) {
@@ -73,7 +82,21 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     const session = this.#session(sessionId);
     this.#assertSessionIdle(session);
     const operation = this.#startSessionOperation(session, async () => {
-      const targets = (await this.#client.listTargets()).filter(
+      const listed = await this.#client.listTargets();
+      for (const target of listed) {
+        if (!isPendingCreateUrl(target.url)) continue;
+        session.targetIds.add(target.targetId);
+        if (!this.#tabs.has(target.targetId)) {
+          this.#tabs.set(target.targetId, {
+            ownerSessionId: session.id,
+            documentVersion: 1,
+            url: target.url,
+            detaching: false,
+            tainted: "provider-created target requires cleanup",
+          });
+        }
+      }
+      const targets = listed.filter(
         (target) =>
           target.type === "page" &&
           isInspectableUrl(target.url) &&
@@ -92,7 +115,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         }
       }
       const detached = await Promise.allSettled(
-        disappeared.map((targetId) => this.#client.detachTarget(targetId)),
+        disappeared.map((targetId) => this.#detachTarget(targetId)),
       );
       const detachFailure = detached.find(
         (result): result is PromiseRejectedResult =>
@@ -133,20 +156,41 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     throwIfAborted(signal);
     const session = this.#session(sessionId);
     const operation = this.#startSessionOperation(session, async () => {
-      const targetId = await this.#client.createTarget(url);
+      const pendingUrl = `about:blank#zenx-pending-${randomUUID()}`;
+      let targetId: string;
+      try {
+        targetId = await this.#client.createTarget(pendingUrl);
+      } catch (error) {
+        const recovered = await this.#client
+          .findTargetByUrl(pendingUrl)
+          .catch(() => undefined);
+        if (recovered === undefined) {
+          session.unresolvedCreates.add(pendingUrl);
+          throw new Error(
+            `User browser create outcome is unknown (${describeError(error)})`,
+          );
+        }
+        this.#accountTarget(session, recovered.targetId, recovered.url, true);
+        throw new Error(
+          `User browser create outcome is unknown; recovered provider target ${recovered.targetId} for cleanup (${describeError(error)})`,
+        );
+      }
       // Account for the target before observing the session fence. A concurrent
       // close can then deterministically detach it instead of orphaning it.
-      session.targetIds.add(targetId);
-      this.#tabs.set(targetId, {
-        ownerSessionId: session.id,
-        documentVersion: 1,
-        url,
-        detaching: session.detaching,
-      });
+      this.#accountTarget(session, targetId, pendingUrl, false);
       this.#assertSessionCurrent(session);
-      const summary = await this.#summary(sessionId, targetId);
-      this.#assertSessionCurrent(session);
-      return summary;
+      const tab = this.#tabs.get(targetId);
+      try {
+        await this.#client.navigate(targetId, url);
+        if (tab !== undefined) tab.url = url;
+        this.#assertSessionCurrent(session);
+        const summary = await this.#summary(sessionId, targetId);
+        this.#assertSessionCurrent(session);
+        return summary;
+      } catch (error) {
+        if (tab !== undefined) tab.tainted = describeError(error);
+        throw error;
+      }
     });
     return await raceAbort(operation, signal);
   }
@@ -295,64 +339,112 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     const tab = this.#tabs.get(tabId);
     if (tab === undefined) throw new Error("User browser tab was closed");
     tab.detaching = true;
-    await tab.operation;
-    try {
-      await this.#client.detachTarget(tabId);
-    } finally {
-      session.targetIds.delete(tabId);
-      session.ignoredTargetIds.add(tabId);
-      this.#tabs.delete(tabId);
-    }
+    const operation = (async () => {
+      await tab.operation;
+      try {
+        await this.#detachTarget(tabId);
+      } catch (error) {
+        session.detachFailures.push(error);
+        throw error;
+      } finally {
+        session.targetIds.delete(tabId);
+        session.ignoredTargetIds.add(tabId);
+        this.#tabs.delete(tabId);
+      }
+    })();
+    const settled = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    session.operations.add(settled);
+    void settled.then(() => session.operations.delete(settled));
+    await operation;
   }
 
   async closeSession(sessionId: string): Promise<number> {
+    const existing = this.#sessionCloseOperations.get(sessionId);
+    if (existing !== undefined) return await existing;
     const session = this.#requireSession(sessionId);
     session.detaching = true;
     for (const targetId of session.targetIds) {
       const tab = this.#tabs.get(targetId);
       if (tab !== undefined) tab.detaching = true;
     }
-    await Promise.all([...session.operations]);
-    const targetIds = [...session.targetIds];
-    const count = targetIds.length;
-    const detached = await Promise.allSettled(
-      targetIds.map((targetId) => this.#client.detachTarget(targetId)),
-    );
-    for (const targetId of targetIds) this.#tabs.delete(targetId);
-    this.#sessions.delete(sessionId);
-    const failure = detached.find(
-      (result): result is PromiseRejectedResult => result.status === "rejected",
-    );
-    if (failure !== undefined) throw failure.reason;
-    return count;
+    const closing = (async () => {
+      await Promise.all([...session.operations]);
+      const targetIds = [...session.targetIds];
+      const count = targetIds.length;
+      const detached = await Promise.allSettled(
+        targetIds.map((targetId) => this.#detachTarget(targetId)),
+      );
+      for (const targetId of targetIds) this.#tabs.delete(targetId);
+      this.#sessions.delete(sessionId);
+      const failure = detached.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+      if (failure !== undefined) throw failure.reason;
+      if (session.detachFailures[0] !== undefined)
+        throw session.detachFailures[0];
+      if (session.unresolvedCreates.size > 0) {
+        throw new Error(
+          "User browser create outcome is unknown; provider session is tainted",
+        );
+      }
+      return count;
+    })();
+    this.#sessionCloseOperations.set(sessionId, closing);
+    void closing
+      .finally(() => {
+        if (this.#sessionCloseOperations.get(sessionId) === closing)
+          this.#sessionCloseOperations.delete(sessionId);
+      })
+      .catch(() => undefined);
+    return await closing;
   }
 
   async close(): Promise<void> {
+    if (this.#closeOperation !== undefined) return await this.#closeOperation;
     this.#closing = true;
     for (const session of this.#sessions.values()) session.detaching = true;
     for (const tab of this.#tabs.values()) tab.detaching = true;
-    const operations = [...this.#sessions.values()].flatMap((session) => [
-      ...session.operations,
-    ]);
-    await Promise.all(operations);
-    const detached = await Promise.allSettled(
-      [...this.#tabs.keys()].map((targetId) =>
-        this.#client.detachTarget(targetId),
-      ),
-    );
-    let closeFailure: unknown;
-    try {
-      await this.#client.close();
-    } catch (error) {
-      closeFailure = error;
-    }
-    this.#sessions.clear();
-    this.#tabs.clear();
-    const detachFailure = detached.find(
-      (result): result is PromiseRejectedResult => result.status === "rejected",
-    );
-    if (detachFailure !== undefined) throw detachFailure.reason;
-    if (closeFailure !== undefined) throw closeFailure;
+    const closing = (async () => {
+      const operations = [
+        ...this.#sessionCloseOperations.values(),
+        ...[...this.#sessions.values()].flatMap((session) => [
+          ...session.operations,
+        ]),
+      ];
+      const settledOperations = await Promise.allSettled(operations);
+      const detached = await Promise.allSettled(
+        [...this.#tabs.keys()].map((targetId) => this.#detachTarget(targetId)),
+      );
+      let closeFailure: unknown;
+      try {
+        await this.#client.close();
+      } catch (error) {
+        closeFailure = error;
+      }
+      const priorDetachFailure = [...this.#sessions.values()]
+        .flatMap((session) => session.detachFailures)
+        .at(0);
+      this.#sessions.clear();
+      this.#tabs.clear();
+      const detachFailure = detached.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+      const operationFailure = settledOperations.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+      if (operationFailure !== undefined) throw operationFailure.reason;
+      if (priorDetachFailure !== undefined) throw priorDetachFailure;
+      if (detachFailure !== undefined) throw detachFailure.reason;
+      if (closeFailure !== undefined) throw closeFailure;
+    })();
+    this.#closeOperation = closing;
+    return await closing;
   }
 
   async #act(
@@ -493,6 +585,8 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         targetIds: new Set(),
         ignoredTargetIds: new Set(),
         operations: new Set(),
+        unresolvedCreates: new Set(),
+        detachFailures: [],
         detaching: false,
       };
       this.#sessions.set(sessionId, session);
@@ -538,6 +632,38 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     );
     if (target === undefined) throw new Error("User browser tab was closed");
     return summarizeTarget(sessionId, target);
+  }
+
+  #accountTarget(
+    session: UserBrowserSession,
+    targetId: string,
+    url: string,
+    tainted: boolean,
+  ): void {
+    session.targetIds.add(targetId);
+    this.#tabs.set(targetId, {
+      ownerSessionId: session.id,
+      documentVersion: 1,
+      url,
+      detaching: session.detaching,
+      ...(tainted ? { tainted: "create outcome requires cleanup" } : {}),
+    });
+  }
+
+  #detachTarget(targetId: string): Promise<void> {
+    const existing = this.#detachOperations.get(targetId);
+    if (existing !== undefined) return existing;
+    const operation = Promise.resolve().then(() =>
+      this.#client.detachTarget(targetId),
+    );
+    this.#detachOperations.set(targetId, operation);
+    void operation
+      .finally(() => {
+        if (this.#detachOperations.get(targetId) === operation)
+          this.#detachOperations.delete(targetId);
+      })
+      .catch(() => undefined);
+    return operation;
   }
 }
 
@@ -594,6 +720,7 @@ export async function connectUserBrowserCdp(
   }
   const client = await JsonRpcUserBrowserCdpClient.connect(
     socketUrl.toString(),
+    base,
     probeSignal,
   );
   return { backend: new UserBrowserCdpBackend(client), product };
@@ -623,6 +750,7 @@ export function validateUserBrowserVersion(
 
 class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   readonly #socket: WebSocket;
+  readonly #httpBase: URL;
   readonly #pending = new Map<
     number,
     { resolve(value: unknown): void; reject(error: Error): void }
@@ -646,8 +774,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   #nextId = 1;
   #closed = false;
 
-  private constructor(socket: WebSocket) {
+  private constructor(socket: WebSocket, httpBase: URL) {
     this.#socket = socket;
+    this.#httpBase = httpBase;
     socket.on("message", (data) => this.#receive(data.toString()));
     socket.on("close", () =>
       this.#failAll(new Error("User browser CDP connection closed")),
@@ -657,6 +786,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
 
   static async connect(
     url: string,
+    httpBase: URL,
     signal?: AbortSignal,
   ): Promise<JsonRpcUserBrowserCdpClient> {
     const socket = new WebSocket(url, { handshakeTimeout: 5_000 });
@@ -680,7 +810,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted === true) abort();
     });
-    return new JsonRpcUserBrowserCdpClient(socket);
+    return new JsonRpcUserBrowserCdpClient(socket, httpBase);
   }
 
   async listTargets(signal?: AbortSignal): Promise<UserBrowserCdpTarget[]> {
@@ -712,11 +842,58 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
 
   async createTarget(url: string, signal?: AbortSignal): Promise<string> {
     const response = asRecord(
-      await this.#send("Target.createTarget", { url }, undefined, signal),
+      await this.#send(
+        "Target.createTarget",
+        { url, background: true, focus: false },
+        undefined,
+        signal,
+      ),
     );
     if (typeof response?.targetId !== "string")
       throw new Error("User browser CDP createTarget response is invalid");
     return response.targetId;
+  }
+
+  async findTargetByUrl(
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<UserBrowserCdpTarget | undefined> {
+    const timeout = AbortSignal.timeout(5_000);
+    const requestSignal =
+      signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
+    const response = await fetch(new URL("/json/list", this.#httpBase), {
+      signal: requestSignal,
+      headers: { accept: "application/json" },
+      redirect: "error",
+    });
+    const finalUrl = validateCdpEndpoint(response.url);
+    if (finalUrl.pathname !== "/json/list" || !response.ok) {
+      throw new Error("User browser CDP target reconciliation failed");
+    }
+    const value: unknown = await response.json();
+    if (!Array.isArray(value)) {
+      throw new Error(
+        "User browser CDP target reconciliation response is invalid",
+      );
+    }
+    for (const item of value) {
+      const target = asRecord(item);
+      const targetId = target?.id ?? target?.targetId;
+      if (
+        typeof targetId === "string" &&
+        typeof target?.type === "string" &&
+        typeof target?.url === "string" &&
+        target.url === url
+      ) {
+        return {
+          targetId,
+          type: target.type,
+          title: typeof target.title === "string" ? target.title : "",
+          url: target.url,
+        };
+      }
+    }
+    return undefined;
   }
 
   async navigate(
@@ -1096,22 +1273,19 @@ export function userBrowserDocumentEventInvalidates(
     const frame = asRecord(params.frame);
     return frame !== undefined && frame.parentId === undefined;
   }
-  if (method === "Page.lifecycleEvent") {
-    return (
-      typeof params.frameId === "string" &&
-      params.frameId === mainFrameId &&
-      (params.name === "backForwardCacheRestore" ||
-        params.name === "bfCacheRestore")
-    );
-  }
   if (
     method !== "Page.navigatedWithinDocument" &&
+    method !== "Page.frameStartedNavigating" &&
     method !== "Page.frameStartedLoading" &&
     method !== "Page.backForwardCacheNotUsed"
   ) {
     return false;
   }
   return typeof params.frameId === "string" && params.frameId === mainFrameId;
+}
+
+function isPendingCreateUrl(url: string): boolean {
+  return url.startsWith("about:blank#zenx-pending-");
 }
 
 function validateCdpEndpoint(raw: string): URL {

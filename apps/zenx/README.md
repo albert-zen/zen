@@ -117,6 +117,10 @@ Inspect/action dispatch is bound to a provider-owned CDP execution document and
 mutations retain their tab lease through post-confirmation. Logical close sends
 `Target.detachFromTarget` only for ZenX-owned attachments and never sends
 `Target.closeTarget` for user tabs.
+Provider-created tabs start with a unique transient marker in background,
+non-focused mode and are then navigated to the requested URL; the marker lets a
+lost `Target.createTarget` reply be reconciled without mistaking a user tab for
+ZenX-owned work.
 
 The default `ZENX_BROWSER_MODE=isolated` continues to select Playwright CLI or
 the bundled ephemeral Electron/CDP provider. This implementation does not claim
