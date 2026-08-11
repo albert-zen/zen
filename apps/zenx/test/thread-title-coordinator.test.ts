@@ -8,6 +8,7 @@ import {
   meaningfulTitleSource,
   ZenXThreadTitleCoordinator,
 } from "../src/main/thread-title-coordinator.js";
+import { ZenXTriggerGenerationQuiescence } from "../src/main/trigger-generation-quiescence.js";
 import { ZenXThreadTitleStore } from "../src/main/thread-title-store.js";
 import type {
   ThreadTitleInference,
@@ -91,6 +92,235 @@ test("duplicate first messages launch only one generation", async () => {
     inference.resolve("Done");
     await waitFor(events, "thread-a", "generated");
   });
+});
+
+test("a retired observation queued behind a title mutation cannot commit or mirror", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-title-fence-"));
+  try {
+    const store = new BlockingTitleStore(path.join(directory, "titles.json"));
+    const inference = new ControlledInference();
+    const names: string[] = [];
+    const instance = coordinator(store, inference, names);
+    await instance.initialize();
+
+    store.blockNextWrite();
+    const first = instance.observe("thread-a", "Current generation title");
+    await store.writeEntered;
+    const controller = new AbortController();
+    let current = true;
+    const retired = instance.observe("thread-b", "Retired generation title", {
+      signal: controller.signal,
+      isCurrent: () => current,
+      track: () => undefined,
+    });
+    current = false;
+    controller.abort();
+    store.releaseWrite();
+
+    await first;
+    assert.equal(await retired, undefined);
+    assert.equal(instance.snapshot()["thread-b"], undefined);
+    assert.equal(names.includes("Retired generation title"), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("retirement aborts background title generation before commit and mirror", async () => {
+  await withCoordinator(async ({ coordinator, inference, events, names }) => {
+    const controller = new AbortController();
+    let current = true;
+    const background: Promise<void>[] = [];
+    const observed = await coordinator.observe(
+      "thread-a",
+      "Generation-owned title",
+      {
+        signal: controller.signal,
+        isCurrent: () => current,
+        track: (operation) => background.push(operation),
+      },
+    );
+    assert.equal(observed?.status, "generating");
+    current = false;
+    controller.abort();
+    inference.resolve("Retired generated title");
+    await Promise.all(background);
+
+    assert.equal(coordinator.snapshot()["thread-a"]?.status, "generating");
+    assert.equal(
+      events.some(
+        (snapshot) => snapshot["thread-a"]?.title === "Retired generated title",
+      ),
+      false,
+    );
+    assert.equal(names.includes("Retired generated title"), false);
+    assert.equal(inference.signals[0]?.aborted, true);
+
+    const restartedController = new AbortController();
+    const restartedBackground: Promise<void>[] = [];
+    const restarted = await coordinator.observe(
+      "thread-a",
+      "Generation-owned title",
+      {
+        signal: restartedController.signal,
+        isCurrent: () => true,
+        track: (operation) => restartedBackground.push(operation),
+      },
+    );
+    assert.equal(restarted?.status, "generating");
+    assert.equal(inference.calls, 2);
+    inference.resolve("Restarted generated title");
+    await Promise.all(restartedBackground);
+    assert.equal(
+      coordinator.snapshot()["thread-a"]?.title,
+      "Restarted generated title",
+    );
+    assert.equal(names.includes("Restarted generated title"), true);
+  });
+});
+
+test("retired held native mirror cannot poison the same-title successor owner", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-title-mirror-owner-"),
+  );
+  try {
+    const inference = new ControlledInference();
+    const firstMirror = deferred<void>();
+    const mirrorEntered = deferred<void>();
+    const mirrored: string[] = [];
+    let instance!: ZenXThreadTitleCoordinator;
+    let mirrorCalls = 0;
+    instance = new ZenXThreadTitleCoordinator({
+      store: new ZenXThreadTitleStore(path.join(directory, "titles.json")),
+      inference,
+      titleModel: () => "gpt-5.6-luna",
+      setNativeName: async (threadId, title) => {
+        mirrorCalls += 1;
+        mirrored.push(title);
+        if (mirrorCalls === 1) {
+          mirrorEntered.resolve();
+          await firstMirror.promise;
+          return;
+        }
+        await instance.synchronizeNativeName(threadId, title);
+      },
+    });
+    await instance.initialize();
+    const firstOwner = new ZenXTriggerGenerationQuiescence({
+      deadlineMs: 20,
+    });
+    const firstObservation = instance.observe(
+      "thread-a",
+      "Shared generation title",
+      firstOwner,
+    );
+    await mirrorEntered.promise;
+    await firstOwner.retire();
+
+    const secondOwner = new ZenXTriggerGenerationQuiescence({
+      deadlineMs: 20,
+    });
+    const second = await instance.observe(
+      "thread-a",
+      "Shared generation title",
+      secondOwner,
+    );
+    assert.equal(second?.status, "generating");
+    inference.resolve("Shared generation title");
+    await until(() => mirrorCalls === 2);
+    firstMirror.resolve();
+    await firstObservation;
+    await until(() => instance.snapshot()["thread-a"]?.status === "generated");
+    const beforeStaleNotification = instance.snapshot()["thread-a"];
+    await instance.synchronizeNativeName("thread-a", "Shared generation title");
+    assert.deepEqual(instance.snapshot()["thread-a"], beforeStaleNotification);
+
+    await instance.synchronizeNativeName(
+      "thread-a",
+      "Authoritative native rename",
+    );
+    assert.equal(
+      instance.snapshot()["thread-a"]?.title,
+      "Authoritative native rename",
+    );
+    assert.equal(instance.snapshot()["thread-a"]?.status, "manual");
+    assert.deepEqual(mirrored.slice(0, 2), [
+      "Shared generation title",
+      "Shared generation title",
+    ]);
+    await secondOwner.retire();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("throwing native mirrors do not block generation or later authoritative rename", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-title-mirror-throw-"),
+  );
+  try {
+    const inference = new ControlledInference();
+    let mirrorCalls = 0;
+    const instance = new ZenXThreadTitleCoordinator({
+      store: new ZenXThreadTitleStore(path.join(directory, "titles.json")),
+      inference,
+      titleModel: () => "gpt-5.6-luna",
+      setNativeName: async () => {
+        mirrorCalls += 1;
+        throw new Error("native mirror failed");
+      },
+    });
+    await instance.initialize();
+    await instance.observe("thread-a", "Mirror failure title");
+    inference.resolve("Generated despite mirror failure");
+    await until(() => instance.snapshot()["thread-a"]?.status === "generated");
+    await instance.synchronizeNativeName("thread-a", "Native authority");
+    assert.equal(instance.snapshot()["thread-a"]?.title, "Native authority");
+    assert(mirrorCalls >= 2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("native mirror quarantine fails closed at 64 without evicting stale evidence", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-title-mirror-bound-"),
+  );
+  try {
+    let mirrorCalls = 0;
+    const instance = new ZenXThreadTitleCoordinator({
+      store: new ZenXThreadTitleStore(path.join(directory, "titles.json")),
+      inference: { generate: async () => await new Promise<string>(() => {}) },
+      titleModel: () => "gpt-5.6-luna",
+      setNativeName: async () => {
+        mirrorCalls += 1;
+        await new Promise<void>(() => {});
+      },
+    });
+    await instance.initialize();
+    for (let index = 0; index < 65; index += 1) {
+      const owner = new ZenXTriggerGenerationQuiescence({ deadlineMs: 0 });
+      await instance.observe(
+        `thread-${String(index)}`,
+        `Bounded mirror ${String(index)}`,
+        owner,
+      );
+      await tick();
+      await owner.retire();
+    }
+    assert.equal(mirrorCalls, 64);
+    await instance.synchronizeNativeName(
+      "thread-64",
+      "Authoritative after capacity",
+    );
+    assert.equal(
+      instance.snapshot()["thread-64"]?.title,
+      "Authoritative after capacity",
+    );
+    assert.equal(mirrorCalls, 64);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("trigger envelopes and IDs are excluded from fallback title input", () => {
@@ -193,13 +423,19 @@ function coordinator(
 
 class ControlledInference implements ThreadTitleInference {
   calls = 0;
+  readonly signals: AbortSignal[] = [];
   #pending: Array<{
     resolve(value: string): void;
     reject(error: Error): void;
   }> = [];
 
-  async generate(): Promise<string> {
+  async generate(
+    _source: string,
+    _model: string,
+    signal: AbortSignal,
+  ): Promise<string> {
     this.calls += 1;
+    this.signals.push(signal);
     return await new Promise<string>((resolve, reject) =>
       this.#pending.push({ resolve, reject }),
     );
@@ -210,6 +446,58 @@ class ControlledInference implements ThreadTitleInference {
   }
   reject(error: Error): void {
     this.#pending.shift()?.reject(error);
+  }
+}
+
+class BlockingTitleStore extends ZenXThreadTitleStore {
+  #block = false;
+  #releaseWrite: (() => void) | undefined;
+  #writeEntered: Promise<void> = Promise.resolve();
+  #markWriteEntered: (() => void) | undefined;
+
+  get writeEntered(): Promise<void> {
+    return this.#writeEntered;
+  }
+
+  blockNextWrite(): void {
+    this.#block = true;
+    this.#writeEntered = new Promise<void>((resolve) => {
+      this.#markWriteEntered = resolve;
+    });
+  }
+
+  releaseWrite(): void {
+    this.#releaseWrite?.();
+  }
+
+  override async write(snapshot: ThreadTitleSnapshot): Promise<void> {
+    if (this.#block) {
+      this.#block = false;
+      this.#markWriteEntered?.();
+      await new Promise<void>((resolve) => {
+        this.#releaseWrite = resolve;
+      });
+    }
+    await super.write(snapshot);
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function until(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline)
+      throw new Error("Timed out waiting for condition");
+    await tick();
   }
 }
 

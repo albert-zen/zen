@@ -6,8 +6,27 @@ import type {
 import { ZenXThreadTitleStore } from "./thread-title-store.js";
 
 const MAX_TITLE_LENGTH = 64;
+const MAX_NATIVE_MIRROR_RECORDS = 64;
 const identifierNoise =
   /\b(?:zenx-wakeup:[^\s]+|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\b/giu;
+
+export interface ZenXThreadTitleObservationFence {
+  readonly signal: AbortSignal;
+  isCurrent(): boolean;
+  track(operation: Promise<void>): void;
+  onRetire?(callback: () => void): () => void;
+}
+
+interface NativeMirrorRecord {
+  readonly title: string;
+  readonly owner: ZenXThreadTitleObservationFence | undefined;
+  consumed: boolean;
+}
+
+interface NativeMirrorDispatch {
+  readonly owner: ZenXThreadTitleObservationFence | undefined;
+  readonly tail: Promise<void>;
+}
 
 export class ZenXThreadTitleCoordinator {
   readonly #store: ZenXThreadTitleStore;
@@ -15,8 +34,18 @@ export class ZenXThreadTitleCoordinator {
   readonly #titleModel: () => string;
   readonly #setNativeName: (threadId: string, title: string) => Promise<void>;
   readonly #listeners = new Set<(snapshot: ThreadTitleSnapshot) => void>();
-  readonly #expectedNativeMirrors = new Map<string, string[]>();
+  readonly #expectedNativeMirrors = new Map<string, NativeMirrorRecord[]>();
+  readonly #quarantinedNativeMirrors = new Map<string, NativeMirrorRecord[]>();
+  readonly #nativeMirrorTails = new Map<string, NativeMirrorDispatch>();
+  readonly #registeredMirrorOwners = new WeakSet<object>();
   readonly #nativeAuthorityVersions = new Map<string, number>();
+  readonly #generationOwners = new Map<
+    string,
+    {
+      version: number;
+      fence: ZenXThreadTitleObservationFence | undefined;
+    }
+  >();
   #snapshot: ThreadTitleSnapshot = {};
   #mutation = Promise.resolve();
   #initializationError: Error | undefined;
@@ -71,14 +100,39 @@ export class ZenXThreadTitleCoordinator {
   async observe(
     threadId: string,
     input: string,
+    fence?: ZenXThreadTitleObservationFence,
   ): Promise<ThreadTitleProjection | undefined> {
     this.#assertAvailable();
+    if (!observationIsCurrent(fence)) return undefined;
     const source = meaningfulTitleSource(input);
     if (source === null) return undefined;
     const result = await this.#serial(async () => {
+      if (!observationIsCurrent(fence)) return undefined;
       const existing = this.#snapshot[threadId];
-      if (existing !== undefined)
-        return { projection: existing, created: false };
+      if (existing !== undefined) {
+        if (
+          fence === undefined ||
+          !["provisional", "generating"].includes(existing.status) ||
+          this.#hasCurrentGenerationOwner(existing)
+        ) {
+          return { projection: existing, created: false };
+        }
+        const generating = {
+          ...existing,
+          status: "generating" as const,
+          version:
+            existing.status === "provisional"
+              ? existing.version + 1
+              : existing.version,
+        };
+        if (
+          existing.status === "provisional" &&
+          !(await this.#commit(generating, fence))
+        ) {
+          return { projection: existing, created: false };
+        }
+        return { projection: generating, created: true };
+      }
       const provisional: ThreadTitleProjection = {
         threadId,
         title: normalizeThreadTitle(source),
@@ -86,17 +140,24 @@ export class ZenXThreadTitleCoordinator {
         version: 1,
         source,
       };
-      await this.#commit(provisional);
-      await this.#mirror(threadId, provisional.title);
+      if (!(await this.#commit(provisional, fence))) return undefined;
+      if (!observationIsCurrent(fence))
+        return { projection: provisional, created: false };
+      this.#startMirror(threadId, provisional.title, fence);
+      if (!observationIsCurrent(fence))
+        return { projection: provisional, created: false };
       const generating = {
         ...provisional,
         status: "generating" as const,
         version: 2,
       };
-      await this.#commit(generating);
+      if (!(await this.#commit(generating, fence)))
+        return { projection: provisional, created: false };
       return { projection: generating, created: true };
     });
-    if (result.created) this.#startGeneration(result.projection);
+    if (result === undefined) return undefined;
+    if (result.created && observationIsCurrent(fence))
+      this.#startGeneration(result.projection, fence);
     return result.projection;
   }
 
@@ -106,7 +167,7 @@ export class ZenXThreadTitleCoordinator {
   ): Promise<ThreadTitleProjection> {
     this.#assertAvailable();
     const normalized = normalizeManualTitle(title);
-    return await this.#serial(async () => {
+    const projection = await this.#serial(async () => {
       const current = this.#snapshot[threadId];
       const projection: ThreadTitleProjection = {
         threadId,
@@ -116,9 +177,10 @@ export class ZenXThreadTitleCoordinator {
         source: current?.source ?? normalized,
       };
       await this.#commit(projection);
-      await this.#mirror(threadId, normalized);
       return projection;
     });
+    await this.#mirror(threadId, normalized);
+    return projection;
   }
 
   async synchronizeNativeName(
@@ -131,12 +193,12 @@ export class ZenXThreadTitleCoordinator {
       const current = this.#snapshot[threadId];
       if (current !== undefined) return current;
     }
+    const unchanged = this.#snapshot[threadId];
+    if (unchanged?.title === normalized) return unchanged;
     this.#recordNativeAuthority(threadId);
-    return await this.#serial(async () => {
+    const projection = await this.#serial(async () => {
       const current = this.#snapshot[threadId];
-      if (current?.status === "manual" && current.title === normalized) {
-        return current;
-      }
+      if (current?.title === normalized) return current;
       const projection: ThreadTitleProjection = {
         threadId,
         title: normalized,
@@ -145,9 +207,10 @@ export class ZenXThreadTitleCoordinator {
         source: current?.source ?? normalized,
       };
       await this.#commit(projection);
-      await this.#mirror(threadId, normalized);
       return projection;
     });
+    await this.#mirror(threadId, normalized);
+    return projection;
   }
 
   async retry(threadId: string): Promise<ThreadTitleProjection> {
@@ -171,16 +234,22 @@ export class ZenXThreadTitleCoordinator {
     return generating;
   }
 
-  async #generate(started: ThreadTitleProjection): Promise<void> {
+  async #generate(
+    started: ThreadTitleProjection,
+    fence?: ZenXThreadTitleObservationFence,
+  ): Promise<void> {
     try {
+      if (!observationIsCurrent(fence)) return;
       const generated = normalizeGeneratedTitle(
         await this.#inference.generate(
           started.source,
           this.#titleModel(),
-          new AbortController().signal,
+          fence?.signal ?? new AbortController().signal,
         ),
       );
+      if (!observationIsCurrent(fence)) return;
       await this.#serial(async () => {
+        if (!observationIsCurrent(fence)) return;
         const current = this.#snapshot[started.threadId];
         if (
           current?.status !== "generating" ||
@@ -196,64 +265,255 @@ export class ZenXThreadTitleCoordinator {
         const nativeAuthorityVersion = this.#nativeAuthorityVersion(
           started.threadId,
         );
-        await this.#commit(projection);
+        if (!(await this.#commit(projection, fence))) return;
         if (
+          observationIsCurrent(fence) &&
           this.#nativeAuthorityVersion(started.threadId) ===
-          nativeAuthorityVersion
+            nativeAuthorityVersion
         ) {
-          await this.#mirror(started.threadId, generated);
+          this.#startMirror(started.threadId, generated, fence);
         }
       });
     } catch (error) {
+      if (!observationIsCurrent(fence)) return;
       await this.#serial(async () => {
+        if (!observationIsCurrent(fence)) return;
         const current = this.#snapshot[started.threadId];
         if (
           current?.status !== "generating" ||
           current.version !== started.version
         )
           return;
-        await this.#commit({
-          ...current,
-          status: "failed",
-          version: current.version + 1,
-          error: describeError(error),
-        });
+        await this.#commit(
+          {
+            ...current,
+            status: "failed",
+            version: current.version + 1,
+            error: describeError(error),
+          },
+          fence,
+        );
       });
     }
   }
 
-  async #commit(projection: ThreadTitleProjection): Promise<void> {
+  async #commit(
+    projection: ThreadTitleProjection,
+    fence?: ZenXThreadTitleObservationFence,
+  ): Promise<boolean> {
+    if (!observationIsCurrent(fence)) return false;
     const next = { ...this.#snapshot, [projection.threadId]: projection };
     await this.#store.write(next);
+    if (!observationIsCurrent(fence)) return false;
     this.#snapshot = next;
     for (const listener of this.#listeners) listener(this.snapshot());
+    return true;
   }
 
-  async #mirror(threadId: string, title: string): Promise<void> {
-    const expected = this.#expectedNativeMirrors.get(threadId) ?? [];
-    expected.push(title);
-    this.#expectedNativeMirrors.set(threadId, expected);
-    try {
-      await this.#setNativeName(threadId, title);
-    } catch (error) {
-      this.#removeExpectedNativeMirror(threadId, title);
-      console.warn(
-        `Could not mirror ZenX thread title: ${describeError(error)}`,
+  async #mirror(
+    threadId: string,
+    title: string,
+    fence?: ZenXThreadTitleObservationFence,
+  ): Promise<void> {
+    this.#registerMirrorOwner(fence);
+    const previous =
+      this.#nativeMirrorTails.get(threadId)?.tail ?? Promise.resolve();
+    const operation = previous
+      .catch(() => undefined)
+      .then(async () => {
+        if (!observationIsCurrent(fence)) return;
+        const record = { title, owner: fence, consumed: false };
+        if (
+          !this.#appendMirrorRecord(
+            this.#expectedNativeMirrors,
+            threadId,
+            record,
+          )
+        ) {
+          console.warn(
+            `Could not mirror ZenX thread title: ${String(MAX_NATIVE_MIRROR_RECORDS)} unresolved native mirror outcomes are already quarantined`,
+          );
+          return;
+        }
+        try {
+          if (!observationIsCurrent(fence)) return;
+          await this.#setNativeName(threadId, title);
+          if (!observationIsCurrent(fence)) return;
+        } catch (error) {
+          if (observationIsCurrent(fence)) {
+            console.warn(
+              `Could not mirror ZenX thread title: ${describeError(error)}`,
+            );
+          }
+        } finally {
+          if (
+            fence !== undefined &&
+            !observationIsCurrent(fence) &&
+            !record.consumed
+          ) {
+            this.#moveMirrorRecordToQuarantine(threadId, record);
+          } else {
+            this.#removeMirrorRecord(threadId, record);
+          }
+        }
+      });
+    const tail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    const dispatch = { owner: fence, tail };
+    this.#nativeMirrorTails.set(threadId, dispatch);
+    void tail.finally(() => {
+      if (this.#nativeMirrorTails.get(threadId) === dispatch)
+        this.#nativeMirrorTails.delete(threadId);
+    });
+    fence?.track(operation);
+    await operation;
+  }
+
+  #consumeExpectedNativeMirror(threadId: string, title: string): boolean {
+    this.#quarantineRetiredExpectedMirrors(threadId);
+    return (
+      this.#consumeMirrorRecord(
+        this.#quarantinedNativeMirrors,
+        threadId,
+        title,
+      ) ||
+      this.#consumeMirrorRecord(this.#expectedNativeMirrors, threadId, title)
+    );
+  }
+
+  #startMirror(
+    threadId: string,
+    title: string,
+    fence?: ZenXThreadTitleObservationFence,
+  ): void {
+    const operation = this.#mirror(threadId, title, fence);
+    void operation.catch((error: unknown) => {
+      if (observationIsCurrent(fence)) {
+        console.warn(
+          `Could not mirror ZenX thread title: ${describeError(error)}`,
+        );
+      }
+    });
+  }
+
+  #registerMirrorOwner(
+    owner: ZenXThreadTitleObservationFence | undefined,
+  ): void {
+    if (
+      owner === undefined ||
+      owner.onRetire === undefined ||
+      this.#registeredMirrorOwners.has(owner)
+    )
+      return;
+    this.#registeredMirrorOwners.add(owner);
+    owner.onRetire(() => this.#retireMirrorOwner(owner));
+  }
+
+  #retireMirrorOwner(owner: ZenXThreadTitleObservationFence): void {
+    for (const [threadId, dispatch] of this.#nativeMirrorTails) {
+      if (dispatch.owner === owner) this.#nativeMirrorTails.delete(threadId);
+    }
+    for (const [threadId, records] of this.#expectedNativeMirrors) {
+      const retired = records.filter((record) => record.owner === owner);
+      if (retired.length === 0) continue;
+      const retained = records.filter((record) => record.owner !== owner);
+      if (retained.length === 0) this.#expectedNativeMirrors.delete(threadId);
+      else this.#expectedNativeMirrors.set(threadId, retained);
+      for (const record of retired) {
+        this.#appendMirrorRecord(
+          this.#quarantinedNativeMirrors,
+          threadId,
+          record,
+        );
+      }
+    }
+  }
+
+  #quarantineRetiredExpectedMirrors(threadId: string): void {
+    const expected = this.#expectedNativeMirrors.get(threadId);
+    if (expected === undefined) return;
+    const retired = expected.filter(
+      (record) => !observationIsCurrent(record.owner),
+    );
+    if (retired.length === 0) return;
+    const retained = expected.filter((record) =>
+      observationIsCurrent(record.owner),
+    );
+    if (retained.length === 0) this.#expectedNativeMirrors.delete(threadId);
+    else this.#expectedNativeMirrors.set(threadId, retained);
+    for (const record of retired) {
+      this.#appendMirrorRecord(
+        this.#quarantinedNativeMirrors,
+        threadId,
+        record,
       );
     }
   }
 
-  #consumeExpectedNativeMirror(threadId: string, title: string): boolean {
-    const expected = this.#expectedNativeMirrors.get(threadId);
-    const index = expected?.indexOf(title) ?? -1;
-    if (expected === undefined || index < 0) return false;
-    expected.splice(index, 1);
-    if (expected.length === 0) this.#expectedNativeMirrors.delete(threadId);
+  #appendMirrorRecord(
+    recordsByThread: Map<string, NativeMirrorRecord[]>,
+    threadId: string,
+    record: NativeMirrorRecord,
+  ): boolean {
+    if (
+      mirrorRecordCount(this.#expectedNativeMirrors) +
+        mirrorRecordCount(this.#quarantinedNativeMirrors) >=
+      MAX_NATIVE_MIRROR_RECORDS
+    )
+      return false;
+    const records = recordsByThread.get(threadId) ?? [];
+    records.push(record);
+    recordsByThread.set(threadId, records);
     return true;
   }
 
-  #removeExpectedNativeMirror(threadId: string, title: string): void {
-    this.#consumeExpectedNativeMirror(threadId, title);
+  #consumeMirrorRecord(
+    recordsByThread: Map<string, NativeMirrorRecord[]>,
+    threadId: string,
+    title: string,
+  ): boolean {
+    const records = recordsByThread.get(threadId);
+    const index = records?.findIndex((record) => record.title === title) ?? -1;
+    if (records === undefined || index < 0) return false;
+    records[index]!.consumed = true;
+    records.splice(index, 1);
+    if (records.length === 0) recordsByThread.delete(threadId);
+    return true;
+  }
+
+  #removeMirrorRecord(threadId: string, record: NativeMirrorRecord): void {
+    for (const recordsByThread of [
+      this.#expectedNativeMirrors,
+      this.#quarantinedNativeMirrors,
+    ]) {
+      const records = recordsByThread.get(threadId);
+      const index = records?.indexOf(record) ?? -1;
+      if (records === undefined || index < 0) continue;
+      records.splice(index, 1);
+      if (records.length === 0) recordsByThread.delete(threadId);
+    }
+  }
+
+  #moveMirrorRecordToQuarantine(
+    threadId: string,
+    record: NativeMirrorRecord,
+  ): void {
+    const expected = this.#expectedNativeMirrors.get(threadId);
+    const expectedIndex = expected?.indexOf(record) ?? -1;
+    if (expected !== undefined && expectedIndex >= 0) {
+      expected.splice(expectedIndex, 1);
+      if (expected.length === 0) this.#expectedNativeMirrors.delete(threadId);
+    }
+    const quarantined = this.#quarantinedNativeMirrors.get(threadId) ?? [];
+    if (!quarantined.includes(record)) {
+      this.#appendMirrorRecord(
+        this.#quarantinedNativeMirrors,
+        threadId,
+        record,
+      );
+    }
   }
 
   #recordNativeAuthority(threadId: string): void {
@@ -267,12 +527,35 @@ export class ZenXThreadTitleCoordinator {
     return this.#nativeAuthorityVersions.get(threadId) ?? 0;
   }
 
-  #startGeneration(projection: ThreadTitleProjection): void {
-    void this.#generate(projection).catch((error: unknown) => {
+  #startGeneration(
+    projection: ThreadTitleProjection,
+    fence?: ZenXThreadTitleObservationFence,
+  ): void {
+    if (!observationIsCurrent(fence)) return;
+    const owner = { version: projection.version, fence };
+    this.#generationOwners.set(projection.threadId, owner);
+    const disposeRetirement = fence?.onRetire?.(() => {
+      if (this.#generationOwners.get(projection.threadId) === owner)
+        this.#generationOwners.delete(projection.threadId);
+    });
+    const operation = this.#generate(projection, fence).finally(() => {
+      disposeRetirement?.();
+      if (this.#generationOwners.get(projection.threadId) === owner)
+        this.#generationOwners.delete(projection.threadId);
+    });
+    fence?.track(operation);
+    void operation.catch((error: unknown) => {
       console.error(
         `Could not persist title generation result: ${asError(error).message}`,
       );
     });
+  }
+
+  #hasCurrentGenerationOwner(projection: ThreadTitleProjection): boolean {
+    const owner = this.#generationOwners.get(projection.threadId);
+    return (
+      owner?.version === projection.version && observationIsCurrent(owner.fence)
+    );
   }
 
   #assertAvailable(): void {
@@ -344,10 +627,24 @@ function normalizeManualTitle(input: string): string {
   return title;
 }
 
+function mirrorRecordCount(
+  recordsByThread: Map<string, NativeMirrorRecord[]>,
+): number {
+  let count = 0;
+  for (const records of recordsByThread.values()) count += records.length;
+  return count;
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function observationIsCurrent(
+  fence?: ZenXThreadTitleObservationFence,
+): boolean {
+  return fence === undefined || (!fence.signal.aborted && fence.isCurrent());
 }

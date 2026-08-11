@@ -190,14 +190,30 @@ app.on("before-quit", (event) => {
   if (quitting || appServerManager === undefined) return;
   event.preventDefault();
   quitting = true;
-  triggerService?.stop();
-  void appServerManager
-    .stop()
-    .then(async () => {
+  void (async () => {
+    const errors: unknown[] = [];
+    try {
+      await triggerService?.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await appServerManager!.stop();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
       selfControlPort.detach();
       await capabilityService?.close();
-    })
-    .finally(() => app.quit());
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length > 0)
+      console.error(
+        "Could not fully stop ZenX before quit",
+        new AggregateError(errors),
+      );
+  })().finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {
