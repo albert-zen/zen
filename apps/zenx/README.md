@@ -119,8 +119,10 @@ mutations retain their tab lease through post-confirmation. Logical close sends
 `Target.closeTarget` for user tabs.
 Provider-created tabs start with a unique transient marker in background,
 non-focused mode and are then navigated to the requested URL; the marker lets a
-lost `Target.createTarget` reply be reconciled without mistaking a user tab for
-ZenX-owned work.
+lost `Target.createTarget` reply be reconciled against the operation's
+pre-create target snapshot without mistaking a user tab for ZenX-owned work.
+CDP commands have bounded outcomes, and HTTP reconciliation plus the browser
+WebSocket are restricted to the same numeric loopback authority.
 
 The default `ZENX_BROWSER_MODE=isolated` continues to select Playwright CLI or
 the bundled ephemeral Electron/CDP provider. This implementation does not claim
@@ -307,8 +309,9 @@ Peekaboo availability and permissions; it never sends desktop input.
 The Windows user-browser smoke launches a real installed Chrome/Edge process
 with an explicit temporary profile and CDP port, establishes authenticated state
 inside that browser, attaches ZenX, lists/inspects/acts in the existing tab, and
-then verifies ZenX detach leaves the browser process and tabs alive without
-projecting cookie material.
+opens a provider-created background tab while checking the foreground HWND and
+both tabs' document visibility. It then verifies ZenX detach leaves the browser
+process and tabs alive without projecting cookie material.
 It does
 not run foreground takeover against the user's desktop; foreground execution
 and immediate pre-input cancellation are covered by provider/bridge tests. The

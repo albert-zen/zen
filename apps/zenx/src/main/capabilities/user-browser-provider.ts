@@ -15,6 +15,8 @@ import {
   type ZenXBrowserBackend,
 } from "./browser-provider.js";
 
+const USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS = 2_000;
+
 export interface UserBrowserCdpTarget {
   targetId: string;
   type: string;
@@ -25,10 +27,10 @@ export interface UserBrowserCdpTarget {
 export interface UserBrowserCdpClient {
   listTargets(signal?: AbortSignal): Promise<UserBrowserCdpTarget[]>;
   createTarget(url: string, signal?: AbortSignal): Promise<string>;
-  findTargetByUrl(
+  findTargetsByUrl(
     url: string,
     signal?: AbortSignal,
-  ): Promise<UserBrowserCdpTarget | undefined>;
+  ): Promise<UserBrowserCdpTarget[]>;
   navigate(targetId: string, url: string, signal?: AbortSignal): Promise<void>;
   evaluateDocument(
     targetId: string,
@@ -45,7 +47,8 @@ interface UserBrowserSession {
   targetIds: Set<string>;
   ignoredTargetIds: Set<string>;
   operations: Set<Promise<void>>;
-  unresolvedCreates: Set<string>;
+  operationTail: Promise<void>;
+  unresolvedCreates: Map<string, Set<string>>;
   detachFailures: unknown[];
   detaching: boolean;
 }
@@ -83,19 +86,6 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     this.#assertSessionIdle(session);
     const operation = this.#startSessionOperation(session, async () => {
       const listed = await this.#client.listTargets();
-      for (const target of listed) {
-        if (!isPendingCreateUrl(target.url)) continue;
-        session.targetIds.add(target.targetId);
-        if (!this.#tabs.has(target.targetId)) {
-          this.#tabs.set(target.targetId, {
-            ownerSessionId: session.id,
-            documentVersion: 1,
-            url: target.url,
-            detaching: false,
-            tainted: "provider-created target requires cleanup",
-          });
-        }
-      }
       const targets = listed.filter(
         (target) =>
           target.type === "page" &&
@@ -157,27 +147,59 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     const session = this.#session(sessionId);
     const operation = this.#startSessionOperation(session, async () => {
       const pendingUrl = `about:blank#zenx-pending-${randomUUID()}`;
+      const beforeTargets = await this.#client.listTargets();
+      const beforeTargetIds = new Set(
+        beforeTargets.map((target) => target.targetId),
+      );
+      if (beforeTargets.some((target) => target.url === pendingUrl)) {
+        throw new Error("User browser create marker already exists");
+      }
       let targetId: string;
       try {
         targetId = await this.#client.createTarget(pendingUrl);
       } catch (error) {
-        const recovered = await this.#client
-          .findTargetByUrl(pendingUrl)
-          .catch(() => undefined);
+        session.unresolvedCreates.set(pendingUrl, beforeTargetIds);
+        const recovered = await this.#reconcileCreate(
+          session,
+          pendingUrl,
+          beforeTargetIds,
+        );
         if (recovered === undefined) {
-          session.unresolvedCreates.add(pendingUrl);
           throw new Error(
             `User browser create outcome is unknown (${describeError(error)})`,
           );
         }
-        this.#accountTarget(session, recovered.targetId, recovered.url, true);
         throw new Error(
           `User browser create outcome is unknown; recovered provider target ${recovered.targetId} for cleanup (${describeError(error)})`,
         );
       }
+      if (beforeTargetIds.has(targetId)) {
+        session.unresolvedCreates.set(pendingUrl, beforeTargetIds);
+        throw new Error("User browser create returned a pre-existing target");
+      }
       // Account for the target before observing the session fence. A concurrent
       // close can then deterministically detach it instead of orphaning it.
       this.#accountTarget(session, targetId, pendingUrl, false);
+      const matches = await this.#client
+        .findTargetsByUrl(pendingUrl)
+        .catch(() => []);
+      const createdMatches = matches.filter(
+        (target) =>
+          target.type === "page" && !beforeTargetIds.has(target.targetId),
+      );
+      if (
+        createdMatches.length !== 1 ||
+        createdMatches[0]?.targetId !== targetId
+      ) {
+        const tab = this.#tabs.get(targetId);
+        if (tab !== undefined) tab.tainted = "create marker was ambiguous";
+        if (createdMatches.some((target) => target.targetId !== targetId)) {
+          session.unresolvedCreates.set(pendingUrl, beforeTargetIds);
+        }
+        throw new Error(
+          "User browser create marker reconciliation is ambiguous",
+        );
+      }
       this.#assertSessionCurrent(session);
       const tab = this.#tabs.get(targetId);
       try {
@@ -340,6 +362,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     if (tab === undefined) throw new Error("User browser tab was closed");
     tab.detaching = true;
     const operation = (async () => {
+      await session.operationTail;
       await tab.operation;
       try {
         await this.#detachTarget(tabId);
@@ -372,6 +395,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     }
     const closing = (async () => {
       await Promise.all([...session.operations]);
+      await this.#reconcileUnresolvedCreates(session);
       const targetIds = [...session.targetIds];
       const count = targetIds.length;
       const detached = await Promise.allSettled(
@@ -416,6 +440,11 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         ]),
       ];
       const settledOperations = await Promise.allSettled(operations);
+      await Promise.allSettled(
+        [...this.#sessions.values()].map((session) =>
+          this.#reconcileUnresolvedCreates(session),
+        ),
+      );
       const detached = await Promise.allSettled(
         [...this.#tabs.keys()].map((targetId) => this.#detachTarget(targetId)),
       );
@@ -428,6 +457,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       const priorDetachFailure = [...this.#sessions.values()]
         .flatMap((session) => session.detachFailures)
         .at(0);
+      const unresolvedCreate = [...this.#sessions.values()].some(
+        (session) => session.unresolvedCreates.size > 0,
+      );
       this.#sessions.clear();
       this.#tabs.clear();
       const detachFailure = detached.find(
@@ -440,6 +472,11 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       );
       if (operationFailure !== undefined) throw operationFailure.reason;
       if (priorDetachFailure !== undefined) throw priorDetachFailure;
+      if (unresolvedCreate) {
+        throw new Error(
+          "User browser create outcome is unknown; provider backend is tainted",
+        );
+      }
       if (detachFailure !== undefined) throw detachFailure.reason;
       if (closeFailure !== undefined) throw closeFailure;
     })();
@@ -543,12 +580,18 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     run: () => Promise<T>,
   ): Promise<T> {
     this.#assertSessionCurrent(session);
-    const result = run();
+    const previous = session.operationTail;
+    const result = (async () => {
+      await previous;
+      this.#assertSessionCurrent(session);
+      return await run();
+    })();
     const settled = result.then(
       () => undefined,
       () => undefined,
     );
     session.operations.add(settled);
+    session.operationTail = settled;
     void settled.then(() => session.operations.delete(settled));
     return result;
   }
@@ -585,7 +628,8 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         targetIds: new Set(),
         ignoredTargetIds: new Set(),
         operations: new Set(),
-        unresolvedCreates: new Set(),
+        operationTail: Promise.resolve(),
+        unresolvedCreates: new Map(),
         detachFailures: [],
         detaching: false,
       };
@@ -665,6 +709,36 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       .catch(() => undefined);
     return operation;
   }
+
+  async #reconcileCreate(
+    session: UserBrowserSession,
+    markerUrl: string,
+    beforeTargetIds: Set<string>,
+  ): Promise<UserBrowserCdpTarget | undefined> {
+    const matches = await this.#client
+      .findTargetsByUrl(markerUrl)
+      .catch(() => []);
+    const candidates = matches.filter(
+      (target) =>
+        target.type === "page" && !beforeTargetIds.has(target.targetId),
+    );
+    if (candidates.length !== 1) return undefined;
+    const recovered = candidates[0];
+    if (recovered === undefined) return undefined;
+    session.unresolvedCreates.delete(markerUrl);
+    if (!session.targetIds.has(recovered.targetId)) {
+      this.#accountTarget(session, recovered.targetId, recovered.url, true);
+    }
+    return recovered;
+  }
+
+  async #reconcileUnresolvedCreates(
+    session: UserBrowserSession,
+  ): Promise<void> {
+    for (const [markerUrl, beforeTargetIds] of session.unresolvedCreates) {
+      await this.#reconcileCreate(session, markerUrl, beforeTargetIds);
+    }
+  }
 }
 
 export interface UserBrowserConnection {
@@ -709,13 +783,16 @@ export async function connectUserBrowserCdp(
   if (
     socketUrl.protocol !== "ws:" ||
     !isLoopbackHostname(socketUrl.hostname) ||
+    socketUrl.hostname !== base.hostname ||
+    effectivePort(socketUrl) !== effectivePort(base) ||
+    !/^\/devtools\/browser\/[^/]+$/u.test(socketUrl.pathname) ||
     socketUrl.username.length > 0 ||
     socketUrl.password.length > 0 ||
     socketUrl.search.length > 0 ||
     socketUrl.hash.length > 0
   ) {
     throw new Error(
-      "User browser CDP WebSocket must be an unauthenticated loopback ws:// endpoint",
+      "User browser CDP WebSocket must use the same loopback authority as the HTTP endpoint",
     );
   }
   const client = await JsonRpcUserBrowserCdpClient.connect(
@@ -847,6 +924,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         { url, background: true, focus: false },
         undefined,
         signal,
+        USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
       ),
     );
     if (typeof response?.targetId !== "string")
@@ -854,10 +932,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     return response.targetId;
   }
 
-  async findTargetByUrl(
+  async findTargetsByUrl(
     url: string,
     signal?: AbortSignal,
-  ): Promise<UserBrowserCdpTarget | undefined> {
+  ): Promise<UserBrowserCdpTarget[]> {
     const timeout = AbortSignal.timeout(5_000);
     const requestSignal =
       signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
@@ -876,6 +954,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         "User browser CDP target reconciliation response is invalid",
       );
     }
+    const matches: UserBrowserCdpTarget[] = [];
     for (const item of value) {
       const target = asRecord(item);
       const targetId = target?.id ?? target?.targetId;
@@ -885,15 +964,15 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         typeof target?.url === "string" &&
         target.url === url
       ) {
-        return {
+        matches.push({
           targetId,
           type: target.type,
           title: typeof target.title === "string" ? target.title : "",
           url: target.url,
-        };
+        });
       }
     }
-    return undefined;
+    return matches;
   }
 
   async navigate(
@@ -1047,7 +1126,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       return;
     }
     try {
-      await this.#send("Target.detachFromTarget", { sessionId });
+      await this.#send(
+        "Target.detachFromTarget",
+        { sessionId },
+        undefined,
+        undefined,
+        USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
+      );
     } finally {
       this.#reapTarget(targetId);
     }
@@ -1120,14 +1205,21 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     params: Record<string, unknown>,
     sessionId?: string,
     signal?: AbortSignal,
+    outcomeTimeoutMs = USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
   ): Promise<unknown> {
     if (this.#closed || this.#socket.readyState !== WebSocket.OPEN) {
       throw new Error("User browser CDP connection is unavailable");
     }
     const id = this.#nextId++;
     return await new Promise((resolve, reject) => {
+      let timeout: NodeJS.Timeout | undefined;
+      const finish = () => {
+        signal?.removeEventListener("abort", abort);
+        if (timeout !== undefined) clearTimeout(timeout);
+      };
       const abort = () => {
         this.#pending.delete(id);
+        finish();
         reject(
           signal?.reason instanceof Error
             ? signal.reason
@@ -1136,14 +1228,23 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       };
       this.#pending.set(id, {
         resolve: (value) => {
-          signal?.removeEventListener("abort", abort);
+          finish();
           resolve(value);
         },
         reject: (error) => {
-          signal?.removeEventListener("abort", abort);
+          finish();
           reject(error);
         },
       });
+      timeout = setTimeout(() => {
+        if (!this.#pending.delete(id)) return;
+        finish();
+        reject(
+          new Error(
+            `User browser CDP ${method} outcome timed out after dispatch`,
+          ),
+        );
+      }, outcomeTimeoutMs);
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted === true) {
         abort();
@@ -1284,10 +1385,6 @@ export function userBrowserDocumentEventInvalidates(
   return typeof params.frameId === "string" && params.frameId === mainFrameId;
 }
 
-function isPendingCreateUrl(url: string): boolean {
-  return url.startsWith("about:blank#zenx-pending-");
-}
-
 function validateCdpEndpoint(raw: string): URL {
   let url: URL;
   try {
@@ -1381,9 +1478,19 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 function isLoopbackHostname(hostname: string): boolean {
+  if (hostname === "[::1]") return true;
+  const octets = hostname.split(".");
   return (
-    hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]"
+    octets.length === 4 &&
+    octets[0] === "127" &&
+    octets.every((octet) => /^\d{1,3}$/u.test(octet)) &&
+    octets.every((octet) => Number(octet) <= 255)
   );
+}
+
+function effectivePort(url: URL): string {
+  if (url.port.length > 0) return url.port;
+  return url.protocol === "http:" || url.protocol === "ws:" ? "80" : "";
 }
 
 function isInspectableUrl(raw: string): boolean {

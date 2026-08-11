@@ -78,7 +78,7 @@
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   与 provider-owned execution/document identity 重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
 - **ZenXUserBrowserSessionFence** — ZenX user-browser provider 用可丢弃的 session incarnation 与 operation lease
-  串行化 open/list/inspect/mutation/detach/close，以 transient marker 对已发送但丢失响应的 create 进行重对账，并在 logical close、target detach/destroy 或连接失败时回收 CDP attachment；它不关闭用户 tab/profile，也不进入 durable 状态。
+  串行化 open/list/inspect/mutation/detach/close，以 operation-owned transient marker、pre-create target snapshot 与有界 CDP command outcome 对已发送但丢失响应的 create 进行同 endpoint 重对账，并在 logical close、target detach/destroy 或连接失败时回收 CDP attachment；它不关闭用户 tab/profile，也不进入 durable 状态。
 - **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA/WGC JSON
   投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。

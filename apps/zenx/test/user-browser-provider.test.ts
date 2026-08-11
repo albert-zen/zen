@@ -194,10 +194,86 @@ test("unreconciled create loss taints close while backend still disconnects", as
     backend.open("work", "https://example.test/new"),
     /create outcome is unknown/u,
   );
-  await assert.rejects(backend.closeSession("work"), /session is tainted/u);
-  await backend.close();
+  await assert.rejects(
+    backend.close(),
+    /outcome is unknown|backend is tainted/u,
+  );
   assert.equal(client.closeCount, 1);
   assert.deepEqual(client.closedTargets, []);
+});
+
+test("open serializes list publication until the created target is navigated", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  client.holdNavigations = true;
+  const opening = backend.open("work", "https://example.test/new");
+  await client.navigationStarted;
+  let listed = false;
+  const listing = backend.listTabs("work").then((tabs) => {
+    listed = true;
+    return tabs;
+  });
+  await nextTurn();
+  assert.equal(listed, false);
+  client.releaseNavigation();
+  const opened = await opening;
+  assert.equal(opened.url, "https://example.test/new");
+  const tabs = await listing;
+  assert.ok(tabs.some((tab) => tab.tabId === opened.tabId));
+  await backend.closeTab("work", opened.tabId);
+});
+
+test("two opens in one session dispatch and publish in order", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  client.holdNavigations = true;
+  const first = backend.open("work", "https://example.test/first");
+  await client.navigationStarted;
+  const second = backend.open("work", "https://example.test/second");
+  await nextTurn();
+  assert.equal(
+    client.calls.filter((call) => call === "Target.createTarget").length,
+    1,
+  );
+  client.releaseNavigation();
+  const [firstTab, secondTab] = await Promise.all([first, second]);
+  assert.equal(firstTab.url, "https://example.test/first");
+  assert.equal(secondTab.url, "https://example.test/second");
+  assert.notEqual(firstTab.tabId, secondTab.tabId);
+  assert.deepEqual(
+    [...client.createdTargets.values()],
+    ["https://example.test/first", "https://example.test/second"],
+  );
+});
+
+test("marker-like user targets are never adopted across sessions", async () => {
+  const client = new FakeUserBrowserClient();
+  client.createdTargets.set(
+    "user-owned",
+    "about:blank#zenx-pending-user-owned",
+  );
+  const backend = new UserBrowserCdpBackend(client);
+  const tabs = await backend.listTabs("work");
+  assert.equal(
+    tabs.some((tab) => tab.tabId === "user-owned"),
+    false,
+  );
+  assert.equal(await backend.closeSession("work"), 1);
+  assert.deepEqual(client.detachedTargets, ["target-1"]);
+});
+
+test("ambiguous duplicate create markers taint cleanup without adopting extras", async () => {
+  const client = new FakeUserBrowserClient();
+  client.duplicateCreatedMarker = true;
+  const backend = new UserBrowserCdpBackend(client);
+  await assert.rejects(
+    backend.open("work", "https://example.test/new"),
+    /marker reconciliation is ambiguous/u,
+  );
+  await assert.rejects(backend.closeSession("work"), /session is tainted/u);
+  assert.deepEqual(client.detachedTargets, ["target-2"]);
+  assert.equal(client.createdTargets.has("target-3"), true);
 });
 
 test("closeSession fences a pending open and waits until its created target is accounted for", async () => {
@@ -691,6 +767,39 @@ test("user browser attachment rejects remote or credential-bearing CDP endpoints
     connectUserBrowserCdp("http://user:secret@127.0.0.1:9222"),
     /unauthenticated loopback http/u,
   );
+  await assert.rejects(
+    connectUserBrowserCdp("http://localhost:9222"),
+    /unauthenticated loopback http/u,
+  );
+});
+
+test("user browser attachment binds the WebSocket to the probed HTTP authority", async () => {
+  for (const mismatch of ["port", "host", "path"] as const) {
+    let endpoint = "";
+    let socketUrl = "";
+    const server = createServer((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          Browser: "Chrome/140.0.1.2",
+          webSocketDebuggerUrl: socketUrl,
+        }),
+      );
+    });
+    const port = await listen(server);
+    endpoint = `http://127.0.0.1:${String(port)}`;
+    socketUrl =
+      mismatch === "port"
+        ? "ws://127.0.0.1:1/devtools/browser/id"
+        : mismatch === "host"
+          ? `ws://127.0.0.2:${String(port)}/devtools/browser/id`
+          : `ws://127.0.0.1:${String(port)}/not-a-browser-socket`;
+    await assert.rejects(
+      connectUserBrowserCdp(endpoint),
+      /same loopback authority/u,
+    );
+    await close(server);
+  }
 });
 
 test("user browser attachment rejects redirects and query-authenticated WebSockets", async () => {
@@ -706,20 +815,20 @@ test("user browser attachment rejects redirects and query-authenticated WebSocke
   );
   await close(redirect);
 
+  let queryPort = 0;
   const querySocket = createServer((_request, response) => {
     response.setHeader("content-type", "application/json");
     response.end(
       JSON.stringify({
         Browser: "Chrome/140.0.1.2",
-        webSocketDebuggerUrl:
-          "ws://127.0.0.1:9222/devtools/browser/id?token=secret",
+        webSocketDebuggerUrl: `ws://127.0.0.1:${String(queryPort)}/devtools/browser/id?token=secret`,
       }),
     );
   });
-  const queryPort = await listen(querySocket);
+  queryPort = await listen(querySocket);
   await assert.rejects(
     connectUserBrowserCdp(`http://127.0.0.1:${String(queryPort)}`),
-    /unauthenticated loopback ws/u,
+    /same loopback authority/u,
   );
   await close(querySocket);
 });
@@ -818,6 +927,54 @@ test("CDP create reply loss reconciles the marker over HTTP after disconnect", a
   }
 });
 
+test("healthy-socket create reply loss reaches a bounded reconciled close", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    cdp.dropNextCreateReply();
+    const controller = new AbortController();
+    const opening = connection.backend.open(
+      "work",
+      "https://example.test/new",
+      controller.signal,
+    );
+    await waitUntil(() => cdp.count("Target.createTarget") === 1);
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    await assert.rejects(opening, /cancelled/u);
+    const started = Date.now();
+    assert.equal(await connection.backend.closeSession("work"), 2);
+    assert.ok(
+      Date.now() - started < 5_000,
+      "close must have a bounded outcome",
+    );
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("healthy-socket detach reply loss terminates close with an explicit error", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    await connection.backend.inspect("work", "target-1");
+    cdp.dropNextDetachReply();
+    const started = Date.now();
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /detachFromTarget outcome timed out/u,
+    );
+    assert.ok(
+      Date.now() - started < 5_000,
+      "detach must have a bounded outcome",
+    );
+    await connection.backend.close();
+  } finally {
+    await cdp.close();
+  }
+});
+
 test("frameStartedNavigating during evaluate or confirmation makes action outcome unknown", async () => {
   for (const phase of ["evaluate", "confirmation"] as const) {
     const cdp = await createFakeCdpServer();
@@ -894,7 +1051,10 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   detachFailure?: Error;
   rejectCreateAfterCreation = false;
   failCreateRecovery = false;
+  duplicateCreatedMarker = false;
   createdUrl?: string;
+  readonly createdTargets = new Map<string, string>();
+  nextCreatedTarget = 2;
   identityChangePhase?: "during-evaluate" | "post-confirmation";
   invalidateInspection = false;
   inspectionTarget = {
@@ -1024,12 +1184,24 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
         title: "Account",
         url: this.currentUrl,
       },
+      ...[...this.createdTargets].map(([targetId, url]) => ({
+        targetId,
+        type: "page",
+        title: "",
+        url,
+      })),
     ];
   }
 
   async createTarget(url: string) {
     this.calls.push("Target.createTarget");
     this.createdUrl = url;
+    const targetId = `target-${String(this.nextCreatedTarget++)}`;
+    this.createdTargets.set(targetId, url);
+    if (this.duplicateCreatedMarker) {
+      const duplicateId = `target-${String(this.nextCreatedTarget++)}`;
+      this.createdTargets.set(duplicateId, url);
+    }
     if (this.holdCreates) {
       this.#createStarted.resolve();
       await this.#heldCreate.promise;
@@ -1037,18 +1209,19 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       this.holdCreates = false;
     }
     if (this.rejectCreateAfterCreation) throw new Error("CDP response lost");
-    return "target-2";
+    return targetId;
   }
 
-  async findTargetByUrl(url: string) {
-    if (this.failCreateRecovery) return undefined;
-    if (this.createdUrl !== url) return undefined;
-    return {
-      targetId: "target-2",
-      type: "page",
-      title: "",
-      url,
-    };
+  async findTargetsByUrl(url: string) {
+    if (this.failCreateRecovery) return [];
+    return [...this.createdTargets]
+      .filter(([, targetUrl]) => targetUrl === url)
+      .map(([targetId]) => ({
+        targetId,
+        type: "page",
+        title: "",
+        url,
+      }));
   }
 
   async detachTarget(targetId: string) {
@@ -1061,13 +1234,14 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     if (this.detachFailure !== undefined) throw this.detachFailure;
   }
 
-  async navigate(_targetId: string, _url: string) {
+  async navigate(targetId: string, url: string) {
     this.calls.push("Page.navigate");
     this.navigateCount += 1;
     if (this.holdNavigations) {
       this.#navigationStarted.resolve();
       await this.#heldNavigation.promise;
     }
+    this.createdTargets.set(targetId, url);
   }
 
   async evaluateDocument(
@@ -1146,6 +1320,14 @@ async function nextTurn(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("test condition timed out");
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 async function listen(
   server: ReturnType<typeof createServer>,
 ): Promise<number> {
@@ -1173,6 +1355,8 @@ async function createFakeCdpServer(): Promise<{
   requests(method: string): Record<string, unknown>[];
   invalidateActionAt(phase: "evaluate" | "confirmation"): void;
   loseNextCreateReply(): void;
+  dropNextCreateReply(): void;
+  dropNextDetachReply(): void;
   detachSession(): void;
   invalidateNextAttachment(): void;
   destroyTarget(targetId: string): void;
@@ -1193,6 +1377,8 @@ async function createFakeCdpServer(): Promise<{
   let invalidateNextAttachment = false;
   let invalidationPhase: "evaluate" | "confirmation" | undefined;
   let loseCreateReply = false;
+  let dropCreateReply = false;
+  let dropDetachReply = false;
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
     if (request.url === "/json/list") {
@@ -1211,7 +1397,8 @@ async function createFakeCdpServer(): Promise<{
     response.end(
       JSON.stringify({
         Browser: "Chrome/140.0.1.2",
-        webSocketDebuggerUrl: endpoint.replace("http:", "ws:") + "/cdp",
+        webSocketDebuggerUrl:
+          endpoint.replace("http:", "ws:") + "/devtools/browser/id",
       }),
     );
   });
@@ -1249,6 +1436,10 @@ async function createFakeCdpServer(): Promise<{
         if (loseCreateReply) {
           loseCreateReply = false;
           socket.terminate();
+          return;
+        }
+        if (dropCreateReply) {
+          dropCreateReply = false;
           return;
         }
         result = { targetId };
@@ -1335,6 +1526,12 @@ async function createFakeCdpServer(): Promise<{
         const targetId = sessionTargets.get(request.sessionId ?? "");
         assert.ok(targetId);
         targets.set(targetId, String(request.params.url ?? "about:blank"));
+      } else if (
+        request.method === "Target.detachFromTarget" &&
+        dropDetachReply
+      ) {
+        dropDetachReply = false;
+        return;
       }
       socket.send(JSON.stringify({ id: request.id, result }));
     });
@@ -1354,6 +1551,12 @@ async function createFakeCdpServer(): Promise<{
     },
     loseNextCreateReply: () => {
       loseCreateReply = true;
+    },
+    dropNextCreateReply: () => {
+      dropCreateReply = true;
+    },
+    dropNextDetachReply: () => {
+      dropDetachReply = true;
     },
     detachSession: () => {
       for (const socket of sockets) {

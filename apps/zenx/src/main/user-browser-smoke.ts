@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -27,7 +27,7 @@ const server = createServer((request, response) => {
     request.headers.cookie?.includes("zenx_smoke_auth=present") === true;
   response.setHeader("content-type", "text/html; charset=utf-8");
   response.end(
-    `<!doctype html><title>User session smoke</title><main><p>${authenticated ? "Signed in through existing browser state" : "Signed out"}</p><button id="continue" onclick="this.textContent='Attached action complete'">Continue</button></main>`,
+    `<!doctype html><title>User session smoke</title><main><p>${authenticated ? "Signed in through existing browser state" : "Signed out"}</p><p id="visibility">Visibility ${"${document.visibilityState}"}</p><button id="continue" onclick="this.textContent='Attached action complete'">Continue</button><script>const visibility = document.querySelector('#visibility'); const updateVisibility = () => visibility.textContent = 'Visibility ' + document.visibilityState; updateVisibility(); document.addEventListener('visibilitychange', updateVisibility);</script></main>`,
   );
 });
 
@@ -98,9 +98,36 @@ try {
   );
   const verified = await backend.inspect("windows-smoke", account.tabId);
   assert.match(verified.visibleText, /Attached action complete/u);
+  const accountVisibilityBeforeOpen = visibilityState(verified.visibleText);
+  const foregroundBeforeOpen = foregroundWindowHandle();
+  const opened = await backend.open(
+    "windows-smoke",
+    `http://127.0.0.1:${String(port)}/opened`,
+  );
+  const foregroundAfterOpen = foregroundWindowHandle();
+  assert.equal(
+    foregroundAfterOpen,
+    foregroundBeforeOpen,
+    "background_safe browser_open must not change the foreground window",
+  );
+  const accountAfterOpen = await backend.inspect(
+    "windows-smoke",
+    account.tabId,
+  );
+  assert.equal(
+    visibilityState(accountAfterOpen.visibleText),
+    accountVisibilityBeforeOpen,
+    "background_safe browser_open must preserve existing-tab visibility",
+  );
+  const openedInspection = await backend.inspect("windows-smoke", opened.tabId);
+  assert.equal(
+    visibilityState(openedInspection.visibleText),
+    "hidden",
+    "background_safe browser_open must leave the created tab hidden",
+  );
   const detached = await backend.closeSession("windows-smoke");
   await backend.close();
-  assert.equal(detached, tabs.length);
+  assert.equal(detached, tabs.length + 1);
   assert.equal(
     browser.exitCode,
     null,
@@ -121,6 +148,8 @@ try {
       inheritedAuthenticatedState: true,
       agentReceivedSessionMaterial: false,
       browserAndTabsSurvivedDetach: true,
+      providerOpenPreservedForegroundWindow: true,
+      providerOpenPreservedActiveTab: true,
     }),
   );
 } finally {
@@ -136,6 +165,24 @@ try {
       retryDelay: 250,
     });
   }
+}
+
+function foregroundWindowHandle(): string {
+  const script = [
+    "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class ZenXForeground { [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); }'",
+    "[ZenXForeground]::GetForegroundWindow().ToInt64()",
+  ].join("; ");
+  return execFileSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    { encoding: "utf8", windowsHide: true },
+  ).trim();
+}
+
+function visibilityState(visibleText: string): "visible" | "hidden" {
+  const match = /Visibility (visible|hidden)/u.exec(visibleText);
+  assert.ok(match, "Expected the smoke page to expose document visibility");
+  return match[1] as "visible" | "hidden";
 }
 
 async function findBrowserExecutable(): Promise<string> {
