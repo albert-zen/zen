@@ -486,7 +486,7 @@ void app.whenReady().then(async () => {
       durationMs: 0,
     });
   } finally {
-    triggers?.stop();
+    await triggers?.stop();
     await closeServer(webServer).catch(() => {
       cleanup = "failed";
     });

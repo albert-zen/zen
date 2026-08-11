@@ -67,6 +67,8 @@
   新 Turn 输入投影；它不是第二份权威 transcript，canonical `user_message` 仍是唯一输入事实。
 - **ZenXTriggerAppServerPort** — ZenX Trigger 服务观察 completed Item/Turn 并发起普通
   `turn/start` 所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
+- **ZenXTriggerLifecycleGeneration** — ZenX Trigger 服务每段 start→stop 生命周期的单调内存 fence；
+  notification、timer、`turn/start` 与 completion callback 只有仍属于当前 generation 才能修改外层审计历史、Room 或瞬态关联状态。
 - **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
 - **ZenXCapabilityRegistry** — ZenX 主进程注册 bundled/local capability package 的 manifest、

@@ -190,9 +190,8 @@ app.on("before-quit", (event) => {
   if (quitting || appServerManager === undefined) return;
   event.preventDefault();
   quitting = true;
-  triggerService?.stop();
-  void appServerManager
-    .stop()
+  void Promise.resolve(triggerService?.stop())
+    .then(async () => await appServerManager!.stop())
     .then(async () => {
       selfControlPort.detach();
       await capabilityService?.close();
