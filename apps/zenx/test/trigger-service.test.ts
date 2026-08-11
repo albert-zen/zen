@@ -292,6 +292,137 @@ test("early completion rejects duplicate canonical occurrences of one client ID"
   }
 });
 
+test("early completion rejects zero non-null canonical identity for one wakeup", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-early-no-identity-"),
+  );
+  const manager = new ControlledManager();
+  const response = deferred<ClientRequestResults["turn/start"]>();
+  manager.requestHandler = async () => await response.promise;
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "thread-target" }],
+    });
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "roomMention",
+      label: "Answer",
+      prompt: "Answer once.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    const firing = triggers.postRoomMessage(room.id, "You", "@Bot status?");
+    const starting = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "starting",
+    );
+    await until(() => manager.requests.length === 1);
+    manager.complete(
+      "thread-target",
+      completedTurn("turn-no-identity", "missing identity"),
+    );
+    manager.complete(
+      "thread-target",
+      completedTurn(
+        "turn-no-identity",
+        "late exact evidence",
+        [],
+        starting.history[0]!.clientUserMessageId,
+      ),
+    );
+    response.resolve(startResult("turn-no-identity"));
+    await firing;
+
+    const snapshot = triggers.snapshot();
+    assert.equal(snapshot.history[0]?.status, "running");
+    assert.equal(snapshot.history[0]?.turnId, "turn-no-identity");
+    assert.equal(
+      snapshot.rooms[0]?.messages.filter((message) => message.kind === "agent")
+        .length,
+      0,
+    );
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("early completion rejects zero identity with concurrent same-thread wakeups", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-early-no-identity-concurrent-"),
+  );
+  const manager = new ControlledManager();
+  const responses = new Map<
+    string,
+    ReturnType<typeof deferred<ClientRequestResults["turn/start"]>>
+  >();
+  manager.requestHandler = async (params) => {
+    const response = deferred<ClientRequestResults["turn/start"]>();
+    responses.set(params.clientUserMessageId!, response);
+    return await response.promise;
+  };
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "shared-thread" }],
+    });
+    await triggers.create({
+      threadId: "shared-thread",
+      kind: "roomMention",
+      label: "Answer",
+      prompt: "Answer once.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    const first = triggers.postRoomMessage(room.id, "One", "@Bot first?");
+    const second = triggers.postRoomMessage(room.id, "Two", "@Bot second?");
+    const starting = await snapshotWhen(
+      triggers,
+      (snapshot) =>
+        snapshot.history.filter((entry) => entry.status === "starting")
+          .length === 2,
+    );
+    await until(() => responses.size === 2);
+    manager.complete(
+      "shared-thread",
+      completedTurn("turn-no-identity", "ambiguous identity"),
+    );
+    const [firstEntry, secondEntry] = starting.history;
+    responses
+      .get(firstEntry!.clientUserMessageId)!
+      .resolve(startResult("turn-no-identity"));
+    responses
+      .get(secondEntry!.clientUserMessageId)!
+      .resolve(startResult("turn-other"));
+    await Promise.all([first, second]);
+
+    const snapshot = triggers.snapshot();
+    assert.equal(
+      snapshot.history.filter((entry) => entry.status === "running").length,
+      2,
+    );
+    assert.equal(
+      snapshot.rooms[0]?.messages.filter((message) => message.kind === "agent")
+        .length,
+      0,
+    );
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("late unidentifiable duplicate preserves an exact concurrent same-thread candidate", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-late-unidentified-"),

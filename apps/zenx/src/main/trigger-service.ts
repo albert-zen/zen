@@ -528,8 +528,7 @@ export class ZenXTriggerService {
           !pending.rejected &&
           pending.generation === generation &&
           pending.event.threadId === trigger.threadId &&
-          (pending.clientUserMessageId === null ||
-            pending.clientUserMessageId === clientUserMessageId)
+          pending.clientUserMessageId === clientUserMessageId
         ) {
           this.#applyCompletion(
             snapshot,
@@ -772,12 +771,16 @@ export class ZenXTriggerService {
       soleWakeup.threadId === event.threadId
         ? soleClientId
         : null;
-    const rejected =
-      clientIds.length > 1 ||
-      (clientIds.length === 1 && clientUserMessageId === null);
     const existing = this.#pendingCompletedTurns.get(event.turn.id);
     if (existing?.rejected === true) return;
-    if (rejected) {
+    if (
+      clientIds.length === 0 &&
+      existing !== undefined &&
+      existing.clientUserMessageId !== null
+    ) {
+      return;
+    }
+    if (clientIds.length !== 1 || clientUserMessageId === null) {
       this.#completedTurnItems.delete(event.turn.id);
       this.#setBounded(
         this.#pendingCompletedTurns,
@@ -793,37 +796,22 @@ export class ZenXTriggerService {
       return;
     }
     if (existing !== undefined) {
-      if (
-        existing.clientUserMessageId !== null &&
-        (clientUserMessageId === null ||
-          existing.clientUserMessageId === clientUserMessageId)
-      ) {
+      if (existing.clientUserMessageId === clientUserMessageId) {
         return;
       }
-      if (
-        existing.clientUserMessageId === null &&
-        clientUserMessageId === null
-      ) {
-        return;
-      }
-      if (
-        existing.clientUserMessageId !== null &&
-        existing.clientUserMessageId !== clientUserMessageId
-      ) {
-        this.#completedTurnItems.delete(event.turn.id);
-        this.#setBounded(
-          this.#pendingCompletedTurns,
-          event.turn.id,
-          {
-            generation,
-            event,
-            clientUserMessageId: null,
-            rejected: true,
-          },
-          (turnId) => this.#completedTurnItems.delete(turnId),
-        );
-        return;
-      }
+      this.#completedTurnItems.delete(event.turn.id);
+      this.#setBounded(
+        this.#pendingCompletedTurns,
+        event.turn.id,
+        {
+          generation,
+          event,
+          clientUserMessageId: null,
+          rejected: true,
+        },
+        (turnId) => this.#completedTurnItems.delete(turnId),
+      );
+      return;
     }
     this.#setBounded(
       this.#pendingCompletedTurns,
