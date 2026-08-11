@@ -403,6 +403,52 @@ test("completed Room wakeups keep their original reply route after Trigger updat
   }
 });
 
+test("Room wakeup reconciles a completion delivered before turn/start returns", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-early-completion-"),
+  );
+  const manager = new ControlledManager();
+  manager.earlyCompletion = {
+    threadId: "thread-target",
+    turn: completedTurn("turn-1", "early answer"),
+  };
+  const store = new ZenXTriggerStore(path.join(directory, "triggers.json"));
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "thread-target" }],
+    });
+    await triggers.create({
+      threadId: "thread-target",
+      kind: "roomMention",
+      label: "Answer Room",
+      prompt: "Answer the Room.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    await triggers.postRoomMessage(room.id, "You", "@Bot status?");
+
+    const terminal = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "completed",
+    );
+    assert.equal(terminal.history[0]?.turnId, "turn-1");
+    assert.equal(terminal.rooms[0]?.messages.at(-1)?.author, "Bot");
+    assert.match(
+      terminal.rooms[0]?.messages.at(-1)?.text ?? "",
+      /Conclusion for early answer/u,
+    );
+    const persisted = await store.read();
+    assert.equal(persisted.history[0]?.status, "completed");
+    assert.equal(persisted.rooms[0]?.messages.at(-1)?.author, "Bot");
+  } finally {
+    triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("completed Room wakeups keep their original reply route after Trigger deletion", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-room-route-delete-"),
@@ -734,6 +780,7 @@ test("completed Turn projection is bounded and includes commands/results", () =>
 class ControlledManager implements ZenXTriggerAppServerPort {
   readonly requests: ClientRequestParams["turn/start"][] = [];
   requestError: Error | null = null;
+  earlyCompletion: { threadId: string; turn: Turn } | null = null;
   #listener:
     | ((
         method: ServerNotificationMethod,
@@ -747,9 +794,14 @@ class ControlledManager implements ZenXTriggerAppServerPort {
   ): Promise<ClientRequestResults["turn/start"]> {
     this.requests.push(params);
     if (this.requestError !== null) throw this.requestError;
+    const earlyCompletion = this.earlyCompletion;
+    this.earlyCompletion = null;
+    if (earlyCompletion !== null) {
+      this.#listener?.("turn/completed", earlyCompletion);
+    }
     return {
       turn: {
-        id: `wakeup-turn-${this.requests.length}`,
+        id: earlyCompletion?.turn.id ?? `wakeup-turn-${this.requests.length}`,
         items: [],
         itemsView: "full",
         status: "inProgress",

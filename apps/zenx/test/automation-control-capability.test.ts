@@ -20,6 +20,7 @@ import type {
   CreateRoomInput,
   CreateTriggerInput,
   RoomMember,
+  RoomMessage,
   TriggerSnapshot,
   UpdateTriggerInput,
   ZenXRoom,
@@ -169,47 +170,65 @@ test("granted automation tools are exposed to and executable through the hosted 
       "zenx_rooms_post_message",
     ]);
 
-    for (const [name, args] of [
-      ["zenx_rooms_list", {}],
-      [
-        "zenx_rooms_create",
-        { name: "release", members: [{ name: "Bot", threadId: "thread-1" }] },
-      ],
-      ["zenx_rooms_rename", { roomId: "room-1", name: "ship" }],
-      ["zenx_rooms_delete", { roomId: "room-1" }],
-      [
-        "zenx_rooms_add_member",
-        { roomId: "room-1", name: "Reviewer", threadId: "thread-2" },
-      ],
-      ["zenx_rooms_remove_member", { roomId: "room-1", threadId: "thread-2" }],
-      ["zenx_rooms_post_message", { roomId: "room-1", text: "Ready" }],
-    ] as const) {
-      const result = await registry.execute({
-        name,
-        arguments: args,
-        cwd: directory,
-        signal: new AbortController().signal,
-        callId: `call-${name}`,
-      });
-      assert.equal(result.exitCode, 0);
-    }
-
     port.calls.length = 0;
-    const completed = deferred<void>();
-    manager.onNotification((method) => {
-      if (method === "turn/completed") completed.resolve();
-    });
     await manager.start();
     const started = await manager.request("thread/start", {});
-    await manager.request("turn/start", {
-      threadId: started.thread.id,
-      input: [{ type: "text", text: "!tool zenx_rooms_list {}" }],
+    const hostedTool = async (name: string, args: Record<string, unknown>) => {
+      const completed = deferred<void>();
+      const dispose = manager.onNotification((method, params) => {
+        if (
+          method === "turn/completed" &&
+          (params as { threadId: string }).threadId === started.thread.id
+        ) {
+          dispose();
+          completed.resolve();
+        }
+      });
+      await manager.request("turn/start", {
+        threadId: started.thread.id,
+        input: [
+          { type: "text", text: `!tool ${name} ${JSON.stringify(args)}` },
+        ],
+      });
+      await within(completed.promise);
+    };
+
+    await hostedTool("zenx_rooms_list", {});
+    await hostedTool("zenx_rooms_create", {
+      name: "release",
+      members: [{ name: "Bot", threadId: "thread-1" }],
     });
-    await within(completed.promise);
-    assert(
-      port.calls.some(([name]) => name === "snapshot"),
-      "the hosted App Server must execute the exposed Room list tool",
+    await hostedTool("zenx_rooms_rename", {
+      roomId: "room-1",
+      name: "ship",
+    });
+    await hostedTool("zenx_rooms_add_member", {
+      roomId: "room-1",
+      name: "Reviewer",
+      threadId: "thread-2",
+    });
+    await hostedTool("zenx_rooms_remove_member", {
+      roomId: "room-1",
+      threadId: "thread-2",
+    });
+    await hostedTool("zenx_rooms_post_message", {
+      roomId: "room-1",
+      text: "Ready",
+    });
+    await hostedTool("zenx_rooms_delete", { roomId: "room-1" });
+    assert.deepEqual(
+      port.calls.map(([name]) => name),
+      [
+        "snapshot",
+        "createRoom",
+        "renameRoom",
+        "addRoomMember",
+        "removeRoomMember",
+        "postAgentRoomMessage",
+        "deleteRoom",
+      ],
     );
+    assert.deepEqual(port.rooms, []);
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });
@@ -233,7 +252,7 @@ async function invoke(
 
 class FakePort implements ZenXAutomationControlPort {
   readonly calls: Array<[string, unknown]> = [];
-  readonly #state: TriggerSnapshot;
+  #state: TriggerSnapshot;
 
   constructor(
     state: TriggerSnapshot = { triggers: [], history: [], rooms: [] },
@@ -244,6 +263,9 @@ class FakePort implements ZenXAutomationControlPort {
   snapshot(): TriggerSnapshot {
     this.calls.push(["snapshot", null]);
     return structuredClone(this.#state);
+  }
+  get rooms(): ZenXRoom[] {
+    return structuredClone(this.#state.rooms);
   }
   async create(input: CreateTriggerInput): Promise<ZenXTrigger> {
     this.calls.push(["create", input]);
@@ -261,22 +283,52 @@ class FakePort implements ZenXAutomationControlPort {
   }
   async createRoom(input: CreateRoomInput): Promise<ZenXRoom> {
     this.calls.push(["createRoom", input]);
-    return { id: "room-1", createdAt: 1, messages: [], ...input };
+    const room: ZenXRoom = {
+      id: `room-${this.#state.rooms.length + 1}`,
+      createdAt: 1,
+      messages: [],
+      ...structuredClone(input),
+    };
+    this.#state.rooms.push(room);
+    return structuredClone(room);
   }
   async renameRoom(id: string, name: string): Promise<void> {
     this.calls.push(["renameRoom", { id, name }]);
+    this.#room(id).name = name;
   }
   async deleteRoom(id: string): Promise<void> {
     this.calls.push(["deleteRoom", id]);
+    this.#state.rooms = this.#state.rooms.filter((room) => room.id !== id);
   }
   async addRoomMember(id: string, member: RoomMember): Promise<void> {
     this.calls.push(["addRoomMember", { id, member }]);
+    this.#room(id).members.push(structuredClone(member));
   }
   async removeRoomMember(id: string, threadId: string): Promise<void> {
     this.calls.push(["removeRoomMember", { id, threadId }]);
+    this.#room(id).members = this.#room(id).members.filter(
+      (member) => member.threadId !== threadId,
+    );
   }
   async postAgentRoomMessage(id: string, text: string): Promise<void> {
     this.calls.push(["postAgentRoomMessage", { id, text }]);
+    const room = this.#room(id);
+    const posted: RoomMessage = {
+      id: `message-${room.messages.length + 1}`,
+      roomId: id,
+      author: "ZenX Agent",
+      text,
+      createdAt: 1,
+      kind: "agent",
+      originThreadId: null,
+      originTurnId: null,
+    };
+    room.messages.push(posted);
+  }
+  #room(id: string): ZenXRoom {
+    const room = this.#state.rooms.find((candidate) => candidate.id === id);
+    if (room === undefined) throw new Error(`Room ${id} was not found`);
+    return room;
   }
 }
 

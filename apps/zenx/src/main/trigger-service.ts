@@ -46,6 +46,10 @@ export class ZenXTriggerService {
   readonly #timers = new Map<string, unknown>();
   readonly #completedAgentMessages = new Map<string, string>();
   readonly #completedTurnItems = new Map<string, ThreadItem[]>();
+  readonly #pendingCompletedTurns = new Map<
+    string,
+    ServerNotificationParams["turn/completed"]
+  >();
   readonly #now: () => number;
   readonly #schedule: (callback: () => void, delayMs: number) => unknown;
   readonly #cancelScheduled: (handle: unknown) => void;
@@ -105,6 +109,7 @@ export class ZenXTriggerService {
   stop(): void {
     for (const timer of this.#timers.values()) this.#cancelScheduled(timer);
     this.#timers.clear();
+    this.#pendingCompletedTurns.clear();
   }
   snapshot(): TriggerSnapshot {
     return structuredClone(this.#snapshot);
@@ -368,44 +373,10 @@ export class ZenXTriggerService {
       event.turn.items,
       this.#completedTurnItems.get(event.turn.id) ?? [],
     );
-    await this.#mutate(async () => {
-      const entry = this.#snapshot.history.find(
-        (item) => item.turnId === event.turn.id && item.status === "running",
-      );
-      if (entry !== undefined) {
-        entry.status =
-          event.turn.status === "completed" ? "completed" : "failed";
-        entry.completedAt = this.#now();
-        entry.error = event.turn.error?.message ?? null;
-        if (entry.replyRoomId !== null && entry.replyAuthor !== null) {
-          const room = this.#snapshot.rooms.find(
-            (item) => item.id === entry.replyRoomId,
-          );
-          const projectedAnswer = [...completedItems]
-            .reverse()
-            .find((item) => item.type === "agentMessage");
-          const answer =
-            projectedAnswer?.type === "agentMessage"
-              ? projectedAnswer.text
-              : (this.#completedAgentMessages.get(event.turn.id) ?? "");
-          if (room !== undefined && answer.length > 0) {
-            room.messages.push(
-              message(
-                room.id,
-                entry.replyAuthor,
-                answer,
-                "agent",
-                entry.threadId,
-                event.turn.id,
-                this.#now(),
-              ),
-            );
-          }
-        }
-      }
-    });
-    this.#completedAgentMessages.delete(event.turn.id);
-    this.#completedTurnItems.delete(event.turn.id);
+    const outcome = await this.#mutate(async () =>
+      this.#applyTurnCompletion(event, completedItems, true),
+    );
+    if (outcome !== "pending") this.#clearCompletedTurn(event.turn.id);
     const watchers = this.#snapshot.triggers.filter(
       (trigger) =>
         trigger.active &&
@@ -423,6 +394,78 @@ export class ZenXTriggerService {
           items: completedItems,
         }),
       });
+  }
+
+  async #reconcileEarlyCompletion(
+    event: ServerNotificationParams["turn/completed"],
+  ): Promise<void> {
+    const completedItems = mergeCompletedItems(
+      event.turn.items,
+      this.#completedTurnItems.get(event.turn.id) ?? [],
+    );
+    const outcome = await this.#mutate(async () =>
+      this.#applyTurnCompletion(event, completedItems, false),
+    );
+    if (outcome !== "pending") this.#clearCompletedTurn(event.turn.id);
+  }
+
+  #applyTurnCompletion(
+    event: ServerNotificationParams["turn/completed"],
+    completedItems: readonly ThreadItem[],
+    bufferStarting: boolean,
+  ): "completed" | "pending" | "ignored" {
+    const entry = this.#snapshot.history.find(
+      (item) => item.turnId === event.turn.id && item.status === "running",
+    );
+    if (entry === undefined) {
+      if (
+        bufferStarting &&
+        this.#snapshot.history.some(
+          (item) =>
+            item.threadId === event.threadId &&
+            item.status === "starting" &&
+            item.turnId === null,
+        )
+      ) {
+        this.#pendingCompletedTurns.set(event.turn.id, event);
+        return "pending";
+      }
+      return "ignored";
+    }
+    entry.status = event.turn.status === "completed" ? "completed" : "failed";
+    entry.completedAt = this.#now();
+    entry.error = event.turn.error?.message ?? null;
+    if (entry.replyRoomId !== null && entry.replyAuthor !== null) {
+      const room = this.#snapshot.rooms.find(
+        (item) => item.id === entry.replyRoomId,
+      );
+      const projectedAnswer = [...completedItems]
+        .reverse()
+        .find((item) => item.type === "agentMessage");
+      const answer =
+        projectedAnswer?.type === "agentMessage"
+          ? projectedAnswer.text
+          : (this.#completedAgentMessages.get(event.turn.id) ?? "");
+      if (room !== undefined && answer.length > 0) {
+        room.messages.push(
+          message(
+            room.id,
+            entry.replyAuthor,
+            answer,
+            "agent",
+            entry.threadId,
+            event.turn.id,
+            this.#now(),
+          ),
+        );
+      }
+    }
+    return "completed";
+  }
+
+  #clearCompletedTurn(turnId: string): void {
+    this.#completedAgentMessages.delete(turnId);
+    this.#completedTurnItems.delete(turnId);
   }
 
   async #fire(
@@ -516,15 +559,26 @@ export class ZenXTriggerService {
           },
         ],
       });
-      await this.#mutate(async () => {
+      const earlyCompletion = await this.#mutate(async () => {
         history.status = "running";
         history.turnId = result.turn.id;
+        const completion = this.#pendingCompletedTurns.get(result.turn.id);
+        this.#pendingCompletedTurns.delete(result.turn.id);
+        return completion;
       });
+      if (earlyCompletion !== undefined)
+        await this.#reconcileEarlyCompletion(earlyCompletion);
     } catch (error) {
       await this.#mutate(async () => {
         history.status = "failed";
         history.completedAt = this.#now();
         history.error = error instanceof Error ? error.message : String(error);
+        for (const [turnId, completion] of this.#pendingCompletedTurns) {
+          if (completion.threadId === trigger.threadId) {
+            this.#pendingCompletedTurns.delete(turnId);
+            this.#clearCompletedTurn(turnId);
+          }
+        }
       });
     }
   }
