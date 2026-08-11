@@ -19,8 +19,9 @@
 - **ComposerSubmission** — 接入端一次待确认的用户提交；只在 UI 内保留草稿、
   发送意图和稳定 `clientUserMessageId`，是否已进入会话仍完全由 App Server 的
   canonical Item 投影决定。
-- **ThreadMetadataStore** — ZAS 按 threadId 持久化名称等产品元数据的
-  append-only 外部索引；它由 App Server 投影，但不进入 Agent 上下文或
+- **ThreadMetadataStore** — ZAS 按 threadId 持久化名称与归档状态等产品元数据的
+  append-only 外部索引；归档只影响标准 `thread/list.archived` 产品筛选与生命周期通知，
+  它由 App Server 投影但不进入 Agent 上下文或
   canonical ItemList。损坏或暂时不可读的产品元数据不得阻断 Thread 的创建、
   读取或列表；ZAS 降级为无展示名称并明确记录 warning，而 metadata 写入失败
   仍须返回错误。
@@ -216,6 +217,9 @@ Zen 只在 Codex 0.146.0 没有等价原子语义时增加一项明确命名的�
 - `thread/name/set` 修改 ZAS 的 ThreadMetadataStore 并广播
   `thread/name/updated`；名称不是 Agent Item。`thread/list`、`thread/read` 与
   `thread/resume` 返回当前名称。
+- Codex 标准 `thread/archive` / `thread/unarchive` 修改同一 ThreadMetadataStore
+  并广播对应生命周期通知；`thread/list` 默认只返回未归档 Thread，只有
+  `archived: true` 才返回已归档 Thread，而 `thread/read` / `thread/resume` 始终可读。
 - `thread/list` 必须隔离单个损坏 journal，并使用 Codex 标准
   `status: systemError` 显式返回该 threadId；`thread/read` / `thread/resume`
   仍明确失败，且不得用默认配置伪造可恢复的 Thread snapshot。

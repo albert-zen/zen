@@ -239,6 +239,53 @@ test("persists user-facing names outside the canonical ItemList", async () => {
   }
 });
 
+test("persists archive state as product metadata and filters listings", async () => {
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-thread-archive-test-"),
+  );
+  try {
+    const journal = new InMemoryThreadJournal();
+    const filename = path.join(temporaryDirectory, "thread-metadata.jsonl");
+    const server = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    const thread = await server.startThread();
+    const originalItems = thread.items;
+
+    const archived = await server.setThreadArchived(thread.id, true);
+    assert.equal(archived.archived, true);
+    assert.deepEqual(archived.items, originalItems);
+    assert.deepEqual(await server.listThreads(), []);
+    assert.equal(
+      (await server.listThreads({ archived: true }))[0]?.id,
+      thread.id,
+    );
+    await server.setThreadName(thread.id, "Archived work");
+    assert.equal(
+      (await server.listThreads({ archived: true }))[0]?.name,
+      "Archived work",
+    );
+    assert.equal((await server.readThread(thread.id)).id, thread.id);
+
+    const replayed = createServer({
+      journal,
+      threadMetadata: new JsonlThreadMetadataStore(filename),
+    });
+    assert.equal((await replayed.readThread(thread.id)).archived, true);
+    assert.equal((await replayed.readThread(thread.id)).name, "Archived work");
+    await replayed.setThreadArchived(thread.id, false);
+    assert.equal((await replayed.listThreads())[0]?.id, thread.id);
+    assert.deepEqual(await replayed.listThreads({ archived: true }), []);
+    assert.deepEqual(
+      (await journal.read(thread.id)).map((item) => item.type),
+      ["thread_metadata"],
+    );
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
 test("product metadata corruption never blocks canonical threads", async (t) => {
   t.mock.method(console, "warn", () => undefined);
   const temporaryDirectory = await mkdtemp(

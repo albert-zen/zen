@@ -132,6 +132,10 @@ export function applyThreadNotification(
         : thread,
     );
   }
+  if (method === "thread/archived") {
+    const event = params as ServerNotificationParams["thread/archived"];
+    return threads.filter((thread) => thread.id !== event.threadId);
+  }
   if (method === "thread/settings/updated") {
     const update =
       params as ServerNotificationParams["thread/settings/updated"];

@@ -21,6 +21,9 @@ type SelfControlRequestMethod = Extract<
   | "thread/list"
   | "thread/start"
   | "thread/read"
+  | "thread/name/set"
+  | "thread/archive"
+  | "thread/unarchive"
   | "turn/start"
   | "turn/steer"
   | "turn/replace"
@@ -113,7 +116,7 @@ const manifest: ZenXCapabilityManifest = {
       id: ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION,
       title: "Control local Zen Threads",
       description:
-        "Create local Threads and start, steer, or replace their active Turns through App Server.",
+        "Create, rename, archive, or unarchive local Threads and start, steer, or replace their active Turns through App Server.",
       scope: "local-device",
     },
   ],
@@ -138,6 +141,7 @@ const manifest: ZenXCapabilityManifest = {
           workspace: { type: "string" },
           cwd: { type: "string" },
           query: { type: "string" },
+          archived: { type: "boolean" },
           limit: { type: "integer", minimum: 1, maximum: MAX_LIST_LIMIT },
         },
         additionalProperties: false,
@@ -209,6 +213,53 @@ const manifest: ZenXCapabilityManifest = {
       maxOutputBytes: 64 * 1024,
     },
     {
+      name: "zenx_threads_rename",
+      description:
+        "Set the authoritative user-facing name for a Thread through App Server thread/name/set.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: { type: "string" },
+          name: { type: "string" },
+        },
+        required: ["threadId", "name"],
+        additionalProperties: false,
+      },
+      permissions: [
+        ZENX_SELF_CONTROL_WORKSPACE_PERMISSION,
+        ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION,
+      ],
+      interactionMode: "background_safe",
+      capabilities: ["zenx.threads.control"],
+      maxOutputBytes: 64 * 1024,
+    },
+    {
+      name: "zenx_threads_archive",
+      description:
+        "Archive a Thread through the standard App Server lifecycle without changing its canonical history.",
+      inputSchema: threadIdSchema(),
+      permissions: [
+        ZENX_SELF_CONTROL_WORKSPACE_PERMISSION,
+        ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION,
+      ],
+      interactionMode: "background_safe",
+      capabilities: ["zenx.threads.control"],
+      maxOutputBytes: 64 * 1024,
+    },
+    {
+      name: "zenx_threads_unarchive",
+      description:
+        "Restore an archived Thread to normal listings through the standard App Server lifecycle.",
+      inputSchema: threadIdSchema(),
+      permissions: [
+        ZENX_SELF_CONTROL_WORKSPACE_PERMISSION,
+        ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION,
+      ],
+      interactionMode: "background_safe",
+      capabilities: ["zenx.threads.control"],
+      maxOutputBytes: 64 * 1024,
+    },
+    {
       name: "zenx_threads_send",
       description:
         "Send input through explicit App Server start, steer, or replace semantics. steer and replace require the expected active Turn ID; every mode requires a stable clientUserMessageId.",
@@ -271,6 +322,12 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         return await this.#readThread(args);
       case "zenx_threads_status":
         return await this.#threadStatus(args);
+      case "zenx_threads_rename":
+        return await this.#renameThread(args);
+      case "zenx_threads_archive":
+        return await this.#setArchived(args, true);
+      case "zenx_threads_unarchive":
+        return await this.#setArchived(args, false);
       case "zenx_threads_send":
         return await this.#send(args);
       default:
@@ -327,7 +384,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async #listThreads(args: Record<string, unknown>): Promise<unknown> {
-    assertOnly(args, ["workspace", "cwd", "query", "limit"]);
+    assertOnly(args, ["workspace", "cwd", "query", "archived", "limit"]);
     const workspace = optionalString(args.workspace, "workspace");
     const cwd = optionalString(args.cwd, "cwd");
     if (workspace !== undefined && cwd !== undefined) {
@@ -341,13 +398,16 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     const resolvedFilter =
       cwdFilter === undefined ? undefined : path.resolve(cwdFilter);
     const query = optionalString(args.query, "query")?.toLocaleLowerCase();
+    const archived = optionalBoolean(args.archived, "archived") ?? false;
     const limit = boundedInteger(
       args.limit,
       "limit",
       DEFAULT_LIST_LIMIT,
       MAX_LIST_LIMIT,
     );
-    const threads = (await this.#appServer.request("thread/list", {})).data
+    const threads = (
+      await this.#appServer.request("thread/list", { archived })
+    ).data
       .filter(
         (thread) =>
           resolvedFilter === undefined ||
@@ -358,7 +418,9 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       .sort((left, right) => right.updatedAt - left.updatedAt);
     return {
       source: SOURCE,
-      threads: threads.slice(0, limit).map(projectThreadSummary),
+      threads: threads
+        .slice(0, limit)
+        .map((thread) => projectThreadSummary(thread, archived)),
       truncated: threads.length > limit,
     };
   }
@@ -470,6 +532,32 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     };
   }
 
+  async #renameThread(args: Record<string, unknown>): Promise<unknown> {
+    assertOnly(args, ["threadId", "name"]);
+    const threadId = requiredString(args.threadId, "threadId");
+    await this.#appServer.request("thread/name/set", {
+      threadId,
+      name: requiredString(args.name, "name"),
+    });
+    const thread = (await this.#appServer.request("thread/read", { threadId }))
+      .thread;
+    return { source: SOURCE, threadId, name: thread.name };
+  }
+
+  async #setArchived(
+    args: Record<string, unknown>,
+    archived: boolean,
+  ): Promise<unknown> {
+    assertOnly(args, ["threadId"]);
+    const threadId = requiredString(args.threadId, "threadId");
+    if (archived) {
+      await this.#appServer.request("thread/archive", { threadId });
+    } else {
+      await this.#appServer.request("thread/unarchive", { threadId });
+    }
+    return { source: SOURCE, threadId, archived };
+  }
+
   async #send(args: Record<string, unknown>): Promise<unknown> {
     assertOnly(args, [
       "threadId",
@@ -558,15 +646,28 @@ function boundedListSchema(): Record<string, unknown> {
   };
 }
 
-function projectThreadSummary(thread: Thread): Record<string, unknown> {
+function projectThreadSummary(
+  thread: Thread,
+  archived = false,
+): Record<string, unknown> {
   return {
     threadId: thread.id,
     cwd: thread.cwd,
     name: thread.name,
     preview: clip(thread.preview),
     status: statusType(thread),
+    archived,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
+  };
+}
+
+function threadIdSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: { threadId: { type: "string" } },
+    required: ["threadId"],
+    additionalProperties: false,
   };
 }
 
@@ -645,6 +746,14 @@ function limitedString(
 function optionalString(value: unknown, label: string): string | undefined {
   if (value === undefined) return undefined;
   return requiredString(value, label);
+}
+
+function optionalBoolean(value: unknown, label: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    throw new Error(`${label} must be a boolean`);
+  }
+  return value;
 }
 
 function boundedInteger(

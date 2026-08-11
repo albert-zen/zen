@@ -17,6 +17,8 @@ Client requests：
 - `thread/read`
 - `thread/list`
 - `thread/name/set`
+- `thread/archive`
+- `thread/unarchive`
 - `thread/settings/update`
 - `thread/unsubscribe`
 - `turn/start`
@@ -33,6 +35,8 @@ Server notifications：
 
 - `thread/started`
 - `thread/name/updated`
+- `thread/archived`
+- `thread/unarchived`
 - `thread/settings/updated`
 - `turn/started`
 - `item/started`
@@ -53,6 +57,13 @@ plan collaboration mode 等未实现配置返回 `-32602`。T3 总会发送的
 必须匹配宿主，reasoning effort 必须为默认值；developer instructions 不进入
 Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，避免发送
 不完整的 0.146.0 类型。
+
+`thread/list` 当前只接受 `archived`、`limit` 与 `cursor`。非终页返回的 opaque
+cursor 绑定 archived filter、按 threadId 排序的筛选快照与当前位置，但不绑定 page
+limit；续页可以省略或改变 limit。跨筛选器、无效或已过期 cursor 返回 `-32602`，
+不得静默重放第一页。终页的 `nextCursor` 为 null。固定子集不支持 `sortKey` /
+`sortDirection`，因此不伪造依赖反向排序 watermark 语义的 `backwardsCursor`，该字段
+始终为 null，排序参数仍返回 `-32602`。
 
 ## Transport
 

@@ -10,9 +10,19 @@ import { serveCodexWebSocket } from "../../../src/protocol/codex/websocket.js";
 import {
   readBearerTokenFile,
   ZenXProtocolClient,
+  type ClientRequestResults,
   type ConnectionStatus,
   type ServerNotificationMethod,
 } from "../src/protocol-client/index.js";
+
+test("types paginated thread/list cursors from the wire response", () => {
+  const nextCursor: ClientRequestResults["thread/list"]["nextCursor"] =
+    "opaque-next-cursor";
+  const backwardsCursor: ClientRequestResults["thread/list"]["backwardsCursor"] =
+    null;
+  assert.equal(nextCursor, "opaque-next-cursor");
+  assert.equal(backwardsCursor, null);
+});
 
 function testHost(models: readonly string[] = ["fake"]) {
   return createHostedAppServer({
@@ -53,6 +63,34 @@ test("reads bearer credentials only from a private regular file", async () => {
     }
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("continues a paginated thread/list through the typed client", async () => {
+  const server = await serveCodexWebSocket({
+    appServer: testHost(),
+    zenHome: path.join(os.tmpdir(), "zenx-pagination-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const client = await ZenXProtocolClient.connect(
+    clientOptions(server.url, "zenx-pagination"),
+  );
+  try {
+    await client.request("thread/start", {});
+    await client.request("thread/start", {});
+
+    const first = await client.request("thread/list", { limit: 1 });
+    assert.equal(first.data.length, 1);
+    assert.equal(typeof first.nextCursor, "string");
+    const second = await client.request("thread/list", {
+      cursor: first.nextCursor,
+    });
+    assert.equal(second.data.length, 1);
+    assert.equal(second.nextCursor, null);
+    assert.equal(second.backwardsCursor, null);
+  } finally {
+    client.close();
+    await server.close();
   }
 });
 

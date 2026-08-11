@@ -3,11 +3,16 @@ import path from "node:path";
 
 export interface ThreadProductMetadata {
   name?: string;
+  archived?: boolean;
 }
 
 export interface ThreadMetadataStore {
   read(threadId: string): Promise<ThreadProductMetadata>;
   setName(threadId: string, name: string): Promise<ThreadProductMetadata>;
+  setArchived(
+    threadId: string,
+    archived: boolean,
+  ): Promise<ThreadProductMetadata>;
 }
 
 interface ThreadNameSetEvent {
@@ -16,6 +21,15 @@ interface ThreadNameSetEvent {
   name: string;
   updatedAt: string;
 }
+
+interface ThreadArchivedSetEvent {
+  type: "thread_archived_set";
+  threadId: string;
+  archived: boolean;
+  updatedAt: string;
+}
+
+type ThreadMetadataEvent = ThreadNameSetEvent | ThreadArchivedSetEvent;
 
 export class InMemoryThreadMetadataStore implements ThreadMetadataStore {
   readonly #metadata = new Map<string, ThreadProductMetadata>();
@@ -28,7 +42,16 @@ export class InMemoryThreadMetadataStore implements ThreadMetadataStore {
     threadId: string,
     name: string,
   ): Promise<ThreadProductMetadata> {
-    const metadata = { name };
+    const metadata = { ...this.#metadata.get(threadId), name };
+    this.#metadata.set(threadId, metadata);
+    return structuredClone(metadata);
+  }
+
+  async setArchived(
+    threadId: string,
+    archived: boolean,
+  ): Promise<ThreadProductMetadata> {
+    const metadata = { ...this.#metadata.get(threadId), archived };
     this.#metadata.set(threadId, metadata);
     return structuredClone(metadata);
   }
@@ -54,12 +77,28 @@ export class JsonlThreadMetadataStore implements ThreadMetadataStore {
     name: string,
   ): Promise<ThreadProductMetadata> {
     await this.#load();
-    const event: ThreadNameSetEvent = {
+    return await this.#append({
       type: "thread_name_set",
       threadId,
       name,
       updatedAt: new Date().toISOString(),
-    };
+    });
+  }
+
+  async setArchived(
+    threadId: string,
+    archived: boolean,
+  ): Promise<ThreadProductMetadata> {
+    await this.#load();
+    return await this.#append({
+      type: "thread_archived_set",
+      threadId,
+      archived,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  async #append(event: ThreadMetadataEvent): Promise<ThreadProductMetadata> {
     const write = this.#writeChain.then(async () => {
       await mkdir(path.dirname(this.#filename), { recursive: true });
       const file = await open(this.#filename, "a", 0o600);
@@ -69,11 +108,17 @@ export class JsonlThreadMetadataStore implements ThreadMetadataStore {
       } finally {
         await file.close();
       }
-      this.#metadata.set(threadId, { name });
+      const current = this.#metadata.get(event.threadId) ?? {};
+      this.#metadata.set(
+        event.threadId,
+        event.type === "thread_name_set"
+          ? { ...current, name: event.name }
+          : { ...current, archived: event.archived },
+      );
     });
     this.#writeChain = write.catch(() => undefined);
     await write;
-    return { name };
+    return structuredClone(this.#metadata.get(event.threadId) ?? {});
   }
 
   async #load(): Promise<void> {
@@ -112,13 +157,19 @@ export class JsonlThreadMetadataStore implements ThreadMetadataStore {
         );
         continue;
       }
-      if (!isThreadNameSetEvent(event)) {
+      if (!isThreadMetadataEvent(event)) {
         console.warn(
           `Ignoring invalid thread metadata in ${this.#filename} at line ${String(index + 1)}`,
         );
         continue;
       }
-      this.#metadata.set(event.threadId, { name: event.name });
+      const current = this.#metadata.get(event.threadId) ?? {};
+      this.#metadata.set(
+        event.threadId,
+        event.type === "thread_name_set"
+          ? { ...current, name: event.name }
+          : { ...current, archived: event.archived },
+      );
     }
   }
 }
@@ -149,6 +200,28 @@ function isThreadNameSetEvent(value: unknown): value is ThreadNameSetEvent {
     "updatedAt" in value &&
     typeof value.updatedAt === "string"
   );
+}
+
+function isThreadArchivedSetEvent(
+  value: unknown,
+): value is ThreadArchivedSetEvent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === "thread_archived_set" &&
+    "threadId" in value &&
+    typeof value.threadId === "string" &&
+    value.threadId.length > 0 &&
+    "archived" in value &&
+    typeof value.archived === "boolean" &&
+    "updatedAt" in value &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function isThreadMetadataEvent(value: unknown): value is ThreadMetadataEvent {
+  return isThreadNameSetEvent(value) || isThreadArchivedSetEvent(value);
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

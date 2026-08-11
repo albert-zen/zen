@@ -162,6 +162,17 @@ test("applies name and turn lifecycle notifications without altering errors", ()
   assert.equal(settled[1]?.status.type, "systemError");
 });
 
+test("removes archived Threads from the active renderer projection", () => {
+  const first = makeThread("first", 20, { type: "idle" });
+  const archived = makeThread("archived", 10, { type: "idle" });
+  assert.deepEqual(
+    applyThreadNotification([first, archived], "thread/archived", {
+      threadId: archived.id,
+    }).map((thread) => thread.id),
+    ["first"],
+  );
+});
+
 function makeThread(
   id: string,
   updatedAt: number,

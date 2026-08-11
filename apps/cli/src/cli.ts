@@ -222,7 +222,9 @@ async function threadsCommand(args: ParsedArguments): Promise<void> {
   assertNoPositionals(args);
   const session = await connectClient(args);
   try {
-    const response = await session.client.request("thread/list", {});
+    const response = await session.client.request("thread/list", {
+      archived: flag(args, "archived"),
+    });
     if (!isRecord(response) || !Array.isArray(response.data)) {
       throw new Error("App Server returned an invalid thread list");
     }
@@ -527,11 +529,12 @@ function hostOptions(args: ParsedArguments) {
 function parseArguments(args: string[]): ParsedArguments {
   const options = new Map<string, string | true>();
   const positionals: string[] = [];
-  const booleanOptions = new Set(["approve", "deny"]);
+  const booleanOptions = new Set(["approve", "archived", "deny"]);
   const allowedOptions = new Set([
     "api-key-env",
     "approval",
     "approve",
+    "archived",
     "auth-token-file",
     "base-url",
     "cwd",
@@ -784,6 +787,7 @@ Core options:
   --remote <ws://...>          Connect to an existing Zen App Server
   --auth-token-file <path>     Bearer token file for WebSocket transport
   --thread <id>                Resume an existing Thread
+  --archived                   List archived Threads with zen threads
   --provider fake|openai-subscription|openai-compatible
   --base-url <url>             OpenAI-compatible API base URL
   --api-key-env <name>         Name of the host environment variable containing the key

@@ -9,6 +9,8 @@ export const clientRequestMethods = [
   "thread/read",
   "thread/list",
   "thread/name/set",
+  "thread/archive",
+  "thread/unarchive",
   "thread/settings/update",
   "thread/unsubscribe",
   "turn/start",
