@@ -143,7 +143,7 @@ export interface ClientRequestResults {
   "thread/read": { thread: Thread };
   "thread/list": {
     data: Thread[];
-    nextCursor: null;
+    nextCursor: string | null;
     backwardsCursor: null;
   };
   "thread/name/set": Record<string, never>;
