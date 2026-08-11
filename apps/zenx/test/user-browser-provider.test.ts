@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 
+import { WebSocketServer, type WebSocket } from "ws";
+
 import {
   connectUserBrowserCdp,
   userBrowserDocumentEventInvalidates,
   UserBrowserCdpBackend,
+  UserBrowserDocumentChangedAfterDispatchError,
+  UserBrowserDocumentChangedBeforeDispatchError,
   type UserBrowserCdpClient,
   validateUserBrowserVersion,
   windowsBrowserExecutableCandidates,
@@ -40,6 +44,17 @@ test("CDP lifecycle contract invalidates history, reload, activation, and top-fr
     }),
     false,
   );
+  for (const name of ["backForwardCacheRestore", "bfCacheRestore"]) {
+    assert.equal(
+      userBrowserDocumentEventInvalidates(
+        "Page.lifecycleEvent",
+        { frameId: "main", name },
+        "main",
+      ),
+      true,
+      name,
+    );
+  }
 });
 
 test("user browser mode inherits visible authenticated state without exposing session material", async () => {
@@ -101,6 +116,95 @@ test("detaching a user tab keeps it open and out of the logical ZenX session", a
   await backend.closeTab("work", "target-1");
   assert.deepEqual(await backend.listTabs("work"), []);
   assert.deepEqual(client.closedTargets, []);
+  assert.deepEqual(client.detachedTargets, ["target-1"]);
+});
+
+test("closeSession fences a pending open and waits until its created target is accounted for", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  client.holdCreates = true;
+  const opened = backend.open("work", "https://example.test/new");
+  await client.createStarted;
+
+  let closed = false;
+  const closing = backend.closeSession("work").then((count) => {
+    closed = true;
+    return count;
+  });
+  await assert.rejects(backend.listTabs("work"), /session is detaching/u);
+  assert.equal(closed, false);
+  client.releaseCreate();
+  await assert.rejects(opened, /session is detaching/u);
+  assert.equal(await closing, 2);
+  assert.deepEqual(client.detachedTargets.sort(), ["target-1", "target-2"]);
+});
+
+test("caller abort after createTarget dispatch does not orphan an untracked target", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  client.holdCreates = true;
+  const controller = new AbortController();
+  const opened = backend.open(
+    "work",
+    "https://example.test/new",
+    controller.signal,
+  );
+  await client.createStarted;
+  controller.abort(new DOMException("cancelled", "AbortError"));
+  client.releaseCreate();
+  await assert.rejects(opened, /cancelled/u);
+  await client.createSettled;
+  await nextTurn();
+
+  assert.equal(await backend.closeSession("work"), 2);
+  assert.deepEqual(client.detachedTargets.sort(), ["target-1", "target-2"]);
+  assert.deepEqual(client.closedTargets, []);
+});
+
+test("backend close fences pending open before disconnecting CDP", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  client.holdCreates = true;
+  const opened = backend.open("work", "https://example.test/new");
+  await client.createStarted;
+  let closed = false;
+  const closing = backend.close().then(() => {
+    closed = true;
+  });
+  assert.equal(closed, false);
+  client.releaseCreate();
+  await assert.rejects(opened, /session is detaching/u);
+  await closing;
+  assert.equal(client.closeCount, 1);
+  assert.deepEqual(client.detachedTargets.sort(), ["target-1", "target-2"]);
+  assert.deepEqual(client.closedTargets, []);
+});
+
+test("closeSession fences pending list and inspection publication", async () => {
+  const listClient = new FakeUserBrowserClient();
+  const listBackend = new UserBrowserCdpBackend(listClient);
+  await listBackend.listTabs("work");
+  listClient.holdListings = true;
+  const listing = listBackend.listTabs("work");
+  await listClient.listStarted;
+  const listClose = listBackend.closeSession("work");
+  listClient.releaseList();
+  await assert.rejects(listing, /session is detaching/u);
+  assert.equal(await listClose, 1);
+
+  const inspectClient = new FakeUserBrowserClient();
+  const inspectBackend = new UserBrowserCdpBackend(inspectClient);
+  await inspectBackend.listTabs("work");
+  inspectClient.holdInspections = true;
+  const inspection = inspectBackend.inspect("work", "target-1");
+  await inspectClient.inspectionStarted;
+  const inspectClose = inspectBackend.closeSession("work");
+  inspectClient.releaseInspection();
+  await assert.rejects(inspection, /session is detaching/u);
+  assert.equal(await inspectClose, 1);
 });
 
 test("external navigation makes an attached-tab observation fail closed", async () => {
@@ -129,7 +233,7 @@ test("external navigation makes an attached-tab observation fail closed", async 
       inspection.observationId,
       target.targetId,
     ),
-    /stale or unknown/u,
+    /stale or unknown|tainted/u,
   );
 });
 
@@ -202,8 +306,10 @@ test("provider-owned lifecycle invalidates same-document history reload and acti
   for (const lifecycle of [
     "pushState",
     "replaceState-same-url",
+    "history-back-same-url-restoration",
     "reload",
     "bfcache-activation",
+    "main-frame-navigation",
   ]) {
     const client = new FakeUserBrowserClient();
     const backend = new UserBrowserCdpBackend(client);
@@ -223,6 +329,41 @@ test("provider-owned lifecycle invalidates same-document history reload and acti
     );
     assert.equal(client.actionCount, 0, lifecycle);
   }
+});
+
+test("document identity changes during evaluate or post-confirmation are outcome-unknown", async () => {
+  for (const phase of ["during-evaluate", "post-confirmation"] as const) {
+    const client = new FakeUserBrowserClient();
+    const backend = new UserBrowserCdpBackend(client);
+    await backend.listTabs("work");
+    const inspection = await backend.inspect("work", "target-1");
+    const target = inspection.targets[0];
+    assert.ok(target);
+    client.identityChangePhase = phase;
+    await assert.rejects(
+      backend.click(
+        "work",
+        "target-1",
+        inspection.observationId,
+        target.targetId,
+      ),
+      /outcome is unknown/u,
+      phase,
+    );
+    assert.equal(client.actionCount, 1, phase);
+    await assert.rejects(backend.inspect("work", "target-1"), /tainted/u);
+  }
+});
+
+test("inspection refuses publication when its execution document invalidates", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  client.invalidateInspection = true;
+  await assert.rejects(
+    backend.inspect("work", "target-1"),
+    /document changed during inspection/u,
+  );
 });
 
 test("target disappearance and disconnect fail before action dispatch", async () => {
@@ -402,7 +543,7 @@ test("disconnect makes action outcome unknown and concurrent observation reuse d
       inspection.observationId,
       target.targetId,
     ),
-    /stale or unknown/u,
+    /stale or unknown|tainted/u,
   );
 });
 
@@ -502,6 +643,62 @@ test("user browser attachment rejects redirects and query-authenticated WebSocke
   await close(querySocket);
 });
 
+test("CDP target attachments detach, reap, and reattach after destroy and reconnect", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const first = await connectUserBrowserCdp(cdp.endpoint);
+    await first.backend.listTabs("one");
+    await first.backend.inspect("one", "target-1");
+    assert.equal(cdp.count("Target.attachToTarget"), 1);
+
+    await first.backend.closeTab("one", "target-1");
+    assert.equal(cdp.count("Target.detachFromTarget"), 1);
+    assert.equal(cdp.count("Target.closeTarget"), 0);
+
+    await first.backend.listTabs("two");
+    await first.backend.inspect("two", "target-1");
+    assert.equal(cdp.count("Target.attachToTarget"), 2);
+
+    cdp.detachSession();
+    await nextTurn();
+    await first.backend.inspect("two", "target-1");
+    assert.equal(cdp.count("Target.attachToTarget"), 3);
+
+    cdp.destroyTarget("target-1");
+    await nextTurn();
+    await first.backend.inspect("two", "target-1");
+    assert.equal(cdp.count("Target.attachToTarget"), 4);
+
+    cdp.invalidateNextAttachment();
+    cdp.detachSession();
+    await nextTurn();
+    await assert.rejects(
+      first.backend.inspect("two", "target-1"),
+      /detached during attachment/u,
+    );
+    await first.backend.inspect("two", "target-1");
+    assert.equal(cdp.count("Target.attachToTarget"), 6);
+
+    cdp.disconnect();
+    await nextTurn();
+    await assert.rejects(
+      first.backend.inspect("two", "target-1"),
+      /connection|unavailable|closed/u,
+    );
+
+    const second = await connectUserBrowserCdp(cdp.endpoint);
+    await second.backend.listTabs("three");
+    await second.backend.inspect("three", "target-1");
+    assert.equal(cdp.count("Target.attachToTarget"), 7);
+    await second.backend.closeSession("three");
+    assert.equal(cdp.count("Target.detachFromTarget"), 3);
+    await second.backend.close();
+    assert.equal(cdp.count("Target.closeTarget"), 0);
+  } finally {
+    await cdp.close();
+  }
+});
+
 test("Windows browser discovery covers machine and per-user Chrome Edge and Chromium", () => {
   const candidates = windowsBrowserExecutableCandidates({
     ProgramFiles: "C:\\Program Files",
@@ -533,6 +730,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   navigateCount = 0;
   closeCount = 0;
   readonly closedTargets: string[] = [];
+  readonly detachedTargets: string[] = [];
   readonly calls: string[] = [];
   currentUrl = "https://example.test/account";
   documentToken = "document-a";
@@ -540,6 +738,11 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   holdActions = false;
   holdNavigations = false;
   holdPostConfirmation = false;
+  holdCreates = false;
+  holdListings = false;
+  holdInspections = false;
+  identityChangePhase?: "during-evaluate" | "post-confirmation";
+  invalidateInspection = false;
   inspectionTarget = {
     selector: "#continue",
     tag: "button",
@@ -561,6 +764,13 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   readonly #postConfirmationStarted = deferred<void>();
   readonly #heldPostConfirmation = deferred<void>();
   readonly #postConfirmationSettled = deferred<void>();
+  readonly #createStarted = deferred<void>();
+  readonly #heldCreate = deferred<void>();
+  readonly #createSettled = deferred<void>();
+  readonly #listStarted = deferred<void>();
+  readonly #heldList = deferred<void>();
+  readonly #inspectionStarted = deferred<void>();
+  readonly #heldInspection = deferred<void>();
 
   get actionStarted(): Promise<void> {
     return this.#actionStarted.promise;
@@ -582,6 +792,22 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     return this.#postConfirmationSettled.promise;
   }
 
+  get createStarted(): Promise<void> {
+    return this.#createStarted.promise;
+  }
+
+  get createSettled(): Promise<void> {
+    return this.#createSettled.promise;
+  }
+
+  get listStarted(): Promise<void> {
+    return this.#listStarted.promise;
+  }
+
+  get inspectionStarted(): Promise<void> {
+    return this.#inspectionStarted.promise;
+  }
+
   advanceDocument(reason: string): void {
     this.documentToken = `${this.documentToken}:${reason}`;
   }
@@ -598,12 +824,29 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     this.#heldPostConfirmation.resolve();
   }
 
+  releaseCreate(): void {
+    this.#heldCreate.resolve();
+  }
+
+  releaseList(): void {
+    this.#heldList.resolve();
+  }
+
+  releaseInspection(): void {
+    this.#heldInspection.resolve();
+  }
+
   rejectAction(error: Error): void {
     this.#heldAction.reject(error);
   }
 
   async listTargets() {
     this.calls.push("Target.getTargets");
+    if (this.holdListings) {
+      this.#listStarted.resolve();
+      await this.#heldList.promise;
+      this.holdListings = false;
+    }
     if (this.holdPostConfirmation && this.actionCount > 0) {
       this.#postConfirmationStarted.resolve();
       await this.#heldPostConfirmation.promise;
@@ -622,7 +865,18 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
 
   async createTarget(_url: string) {
     this.calls.push("Target.createTarget");
+    if (this.holdCreates) {
+      this.#createStarted.resolve();
+      await this.#heldCreate.promise;
+      this.#createSettled.resolve();
+      this.holdCreates = false;
+    }
     return "target-2";
+  }
+
+  async detachTarget(targetId: string) {
+    this.calls.push("Target.detachFromTarget");
+    this.detachedTargets.push(targetId);
   }
 
   async navigate(_targetId: string, _url: string) {
@@ -634,25 +888,44 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     }
   }
 
-  async documentIdentity(): Promise<string> {
-    this.calls.push("Page.getFrameTree");
-    if (this.identityFailure !== undefined) throw this.identityFailure;
-    return this.documentToken;
-  }
-
-  async evaluate(
+  async evaluateDocument(
     _targetId: string,
     expression: string,
+    expectedDocumentIdentity?: string,
     _signal?: AbortSignal,
-  ): Promise<unknown> {
+  ): Promise<{ value: unknown; documentIdentity: string }> {
     this.calls.push("Runtime.evaluate");
+    if (this.identityFailure !== undefined) throw this.identityFailure;
+    const before = this.documentToken;
+    if (
+      expectedDocumentIdentity !== undefined &&
+      before !== expectedDocumentIdentity
+    ) {
+      throw new UserBrowserDocumentChangedBeforeDispatchError();
+    }
     if (!expression.includes("const expected =")) {
-      return {
-        visibleText: "Signed in as Alice",
-        targets: [this.inspectionTarget],
+      if (this.holdInspections) {
+        this.#inspectionStarted.resolve();
+        await this.#heldInspection.promise;
+        this.holdInspections = false;
+      }
+      const result = {
+        value: {
+          visibleText: "Signed in as Alice",
+          targets: [this.inspectionTarget],
+        },
+        documentIdentity: this.documentToken,
       };
+      if (this.invalidateInspection) {
+        this.advanceDocument("inspection-evaluate");
+        throw new UserBrowserDocumentChangedAfterDispatchError();
+      }
+      return result;
     }
     this.actionCount += 1;
+    if (this.identityChangePhase === "during-evaluate") {
+      this.advanceDocument("during-evaluate");
+    }
     if (this.holdActions) {
       this.#actionStarted.resolve();
       try {
@@ -661,7 +934,15 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
         this.#actionSettled.resolve();
       }
     }
-    return { ok: true };
+    const response = { ok: true };
+    if (this.identityChangePhase === "post-confirmation") {
+      queueMicrotask(() => this.advanceDocument("post-confirmation"));
+    }
+    await nextTurn();
+    if (this.documentToken !== before) {
+      throw new UserBrowserDocumentChangedAfterDispatchError();
+    }
+    return { value: response, documentIdentity: this.documentToken };
   }
 
   async close() {
@@ -702,4 +983,159 @@ async function close(server: ReturnType<typeof createServer>): Promise<void> {
   await new Promise<void>((resolve, reject) =>
     server.close((error) => (error === undefined ? resolve() : reject(error))),
   );
+}
+
+async function createFakeCdpServer(): Promise<{
+  endpoint: string;
+  count(method: string): number;
+  detachSession(): void;
+  invalidateNextAttachment(): void;
+  destroyTarget(targetId: string): void;
+  disconnect(): void;
+  close(): Promise<void>;
+}> {
+  const sockets = new Set<WebSocket>();
+  const methods: string[] = [];
+  const sessionContexts = new Map<string, number>();
+  let nextSession = 1;
+  let latestSession = "";
+  let nextContext = 100;
+  let endpoint = "";
+  let invalidateNextAttachment = false;
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(
+      JSON.stringify({
+        Browser: "Chrome/140.0.1.2",
+        webSocketDebuggerUrl: endpoint.replace("http:", "ws:") + "/cdp",
+      }),
+    );
+  });
+  const webSockets = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (request, socket, head) => {
+    webSockets.handleUpgrade(request, socket, head, (webSocket) => {
+      webSockets.emit("connection", webSocket, request);
+    });
+  });
+  webSockets.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("message", (raw) => {
+      const request = JSON.parse(raw.toString()) as {
+        id: number;
+        method: string;
+        params: Record<string, unknown>;
+        sessionId?: string;
+      };
+      methods.push(request.method);
+      let result: unknown = {};
+      if (request.method === "Target.getTargets") {
+        result = {
+          targetInfos: [
+            {
+              targetId: "target-1",
+              type: "page",
+              title: "Account",
+              url: "https://example.test/account",
+            },
+          ],
+        };
+      } else if (request.method === "Target.attachToTarget") {
+        latestSession = `session-${String(nextSession++)}`;
+        if (invalidateNextAttachment) {
+          invalidateNextAttachment = false;
+          socket.send(
+            JSON.stringify({
+              method: "Target.detachedFromTarget",
+              params: { sessionId: latestSession, targetId: "target-1" },
+            }),
+          );
+        }
+        result = { sessionId: latestSession };
+      } else if (request.method === "Page.getFrameTree") {
+        result = {
+          frameTree: {
+            frame: {
+              id: "main",
+              loaderId: "loader",
+              url: "https://example.test/account",
+            },
+          },
+        };
+      } else if (request.method === "Page.createIsolatedWorld") {
+        const sessionId = request.sessionId ?? "";
+        let context = sessionContexts.get(sessionId);
+        if (context === undefined) {
+          context = nextContext++;
+          sessionContexts.set(sessionId, context);
+        }
+        result = { executionContextId: context };
+      } else if (request.method === "Runtime.evaluate") {
+        const expression = String(request.params.expression ?? "");
+        result = {
+          result: {
+            value: expression.includes("const expected =")
+              ? { ok: true }
+              : {
+                  visibleText: "Signed in as Alice",
+                  targets: [
+                    {
+                      selector: "#continue",
+                      tag: "button",
+                      role: "button",
+                      name: "Continue",
+                      type: "",
+                      id: "continue",
+                      fieldName: "",
+                      autocomplete: "",
+                      href: "",
+                      secure: false,
+                      actions: ["click"],
+                    },
+                  ],
+                },
+          },
+        };
+      }
+      socket.send(JSON.stringify({ id: request.id, result }));
+    });
+  });
+  const port = await listen(server);
+  endpoint = `http://127.0.0.1:${String(port)}`;
+  return {
+    endpoint,
+    count: (method) =>
+      methods.filter((candidate) => candidate === method).length,
+    detachSession: () => {
+      for (const socket of sockets) {
+        socket.send(
+          JSON.stringify({
+            method: "Target.detachedFromTarget",
+            params: { sessionId: latestSession, targetId: "target-1" },
+          }),
+        );
+      }
+    },
+    invalidateNextAttachment: () => {
+      invalidateNextAttachment = true;
+    },
+    destroyTarget: (targetId) => {
+      for (const socket of sockets) {
+        socket.send(
+          JSON.stringify({
+            method: "Target.targetDestroyed",
+            params: { targetId },
+          }),
+        );
+      }
+    },
+    disconnect: () => {
+      for (const socket of sockets) socket.terminate();
+    },
+    close: async () => {
+      for (const socket of sockets) socket.terminate();
+      await new Promise<void>((resolve) => webSockets.close(() => resolve()));
+      await close(server);
+    },
+  };
 }

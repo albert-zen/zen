@@ -113,6 +113,10 @@ headers, and credentials are never requested or returned. Closing a tab/session
 in this mode only detaches ZenX state, and closing ZenX only disconnects CDP; the
 user's tabs, browser process, storage, and profile remain intact. Settings labels
 browser provider diagnostics as `user-session` or `isolated-session`.
+Inspect/action dispatch is bound to a provider-owned CDP execution document and
+mutations retain their tab lease through post-confirmation. Logical close sends
+`Target.detachFromTarget` only for ZenX-owned attachments and never sends
+`Target.closeTarget` for user tabs.
 
 The default `ZENX_BROWSER_MODE=isolated` continues to select Playwright CLI or
 the bundled ephemeral Electron/CDP provider. This implementation does not claim
