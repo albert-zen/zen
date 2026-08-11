@@ -121,6 +121,9 @@ tab lease through post-confirmation. Target discovery is enabled before relying
 on created/destroyed events. Logical close sends `Target.detachFromTarget` only
 for ZenX-owned attachments, compensates late attachment outcomes when possible,
 never reports success over remaining taint, and never sends `Target.closeTarget`.
+Outcome-unknown evidence is monotonic even when compensation, target lifecycle
+events, or a later detach safely close resource ownership; reconnect or logical
+session reuse cannot adopt a quarantined stale attachment mapping.
 Provider-created tabs start with a unique transient marker in background,
 non-focused mode and are then navigated to the requested URL; the marker lets a
 lost `Target.createTarget` reply be reconciled against the operation's

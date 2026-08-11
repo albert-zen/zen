@@ -295,7 +295,11 @@ test("lost createTarget reply is reconciled and retained for deterministic clean
     backend.open("work", "https://example.test/new"),
     /recovered provider target target-2/u,
   );
-  assert.equal(await backend.closeSession("work"), 2);
+  await assert.rejects(
+    backend.closeSession("work"),
+    /outcome is unknown|tainted/u,
+  );
+  await assert.rejects(backend.close(), /outcome is unknown|tainted/u);
   assert.deepEqual(client.detachedTargets.sort(), ["target-1", "target-2"]);
   assert.deepEqual(client.closedTargets, []);
 });
@@ -1135,31 +1139,30 @@ test("late attach response is compensated without stale mapping reuse", async ()
 });
 
 test("Page.enable timeout compensates detach and failed compensation taints close", async () => {
-  for (const detachReply of ["reply", "drop"] as const) {
+  for (const detachReply of ["reply", "drop-once"] as const) {
     const cdp = await createFakeCdpServer();
     try {
       const connection = await connectUserBrowserCdp(cdp.endpoint);
       await connection.backend.listTabs("work");
       cdp.dropNextEnableReply();
-      if (detachReply === "drop") cdp.dropDetachReplies(2);
+      if (detachReply === "drop-once") cdp.dropNextDetachReply();
       await assert.rejects(
         connection.backend.inspect("work", "target-1"),
         /Page.enable outcome is unknown|document changed/u,
       );
       assert.equal(cdp.count("Target.detachFromTarget"), 1);
-      if (detachReply === "reply") {
-        assert.equal(await connection.backend.closeSession("work"), 1);
-        await connection.backend.close();
-      } else {
-        await assert.rejects(
-          async () => await connection.backend.closeSession("work"),
-          /outcome is unknown|tainted/u,
-        );
-        await assert.rejects(
-          async () => await connection.backend.close(),
-          /outcome is unknown|tainted/u,
-        );
-      }
+      await assert.rejects(
+        async () => await connection.backend.closeSession("work"),
+        /outcome is unknown|tainted/u,
+      );
+      assert.equal(
+        cdp.count("Target.detachFromTarget"),
+        detachReply === "drop-once" ? 2 : 1,
+      );
+      await assert.rejects(
+        async () => await connection.backend.close(),
+        /outcome is unknown|tainted/u,
+      );
     } finally {
       await cdp.close();
     }
@@ -1213,7 +1216,14 @@ test("CDP create reply loss reconciles the marker over HTTP after disconnect", a
       connection.backend.open("work", "https://example.test/new"),
       /recovered provider target target-2/u,
     );
-    assert.equal(await connection.backend.closeSession("work"), 2);
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /outcome is unknown|tainted/u,
+    );
+    await assert.rejects(
+      async () => await connection.backend.close(),
+      /outcome is unknown|tainted/u,
+    );
     assert.equal(cdp.count("Target.closeTarget"), 0);
   } finally {
     await cdp.close();
@@ -1236,10 +1246,113 @@ test("healthy-socket create reply loss reaches a bounded reconciled close", asyn
     controller.abort(new DOMException("cancelled", "AbortError"));
     await assert.rejects(opening, /cancelled/u);
     const started = Date.now();
-    assert.equal(await connection.backend.closeSession("work"), 2);
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /outcome is unknown|tainted/u,
+    );
     assert.ok(
       Date.now() - started < 5_000,
       "close must have a bounded outcome",
+    );
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("attachment uncertainty survives target destroy and detach lifecycle reaping", async () => {
+  for (const lifecycle of [
+    "destroy",
+    "target-detach",
+    "inspector-detach",
+  ] as const) {
+    const cdp = await createFakeCdpServer();
+    try {
+      const connection = await connectUserBrowserCdp(cdp.endpoint);
+      await connection.backend.listTabs("work");
+      cdp.dropNextAttachReply();
+      await assert.rejects(
+        connection.backend.inspect("work", "target-1"),
+        /attachToTarget outcome is unknown|document changed/u,
+      );
+      if (lifecycle === "destroy") cdp.destroyTarget("target-1");
+      else if (lifecycle === "target-detach") cdp.detachSession();
+      else cdp.detachInspector();
+      await nextTurn();
+      await assert.rejects(
+        async () => await connection.backend.closeSession("work"),
+        /outcome is unknown|tainted/u,
+      );
+      await assert.rejects(
+        async () => await connection.backend.close(),
+        /outcome is unknown|tainted/u,
+      );
+    } finally {
+      await cdp.close();
+    }
+  }
+});
+
+test("tainted mutation survives target disappearance and map cleanup", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  client.navigateFailureOnce = new Error("navigate outcome was lost");
+  await assert.rejects(
+    backend.navigate("work", "target-1", "https://example.test/lost"),
+    /outcome is unknown/u,
+  );
+  client.primaryTargetPresent = false;
+  await assert.rejects(backend.listTabs("work"), /outcome is unknown|tainted/u);
+  assert.deepEqual(client.detachedTargets, ["target-1"]);
+  await assert.rejects(
+    backend.closeSession("work"),
+    /outcome is unknown|tainted/u,
+  );
+  await assert.rejects(backend.close(), /outcome is unknown|tainted/u);
+});
+
+test("unknown detach mapping cannot be reused by a reopened logical session", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    await connection.backend.inspect("work", "target-1");
+    cdp.dropNextDetachReply();
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /outcome is unknown|tainted/u,
+    );
+    await connection.backend.listTabs("work");
+    await assert.rejects(
+      connection.backend.inspect("work", "target-1"),
+      /outcome is unknown|tainted/u,
+    );
+    await assert.rejects(
+      async () => await connection.backend.close(),
+      /outcome is unknown|tainted/u,
+    );
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("connection loss after attach dispatch remains session-owned uncertainty", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    cdp.holdNextAttachReply();
+    const inspection = connection.backend.inspect("work", "target-1");
+    await waitUntil(() => cdp.count("Target.attachToTarget") === 1);
+    cdp.disconnect();
+    await assert.rejects(inspection, /connection|outcome is unknown/u);
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /outcome is unknown|tainted/u,
+    );
+    await assert.rejects(
+      async () => await connection.backend.close(),
+      /outcome is unknown|tainted/u,
     );
   } finally {
     await cdp.close();
@@ -1335,6 +1448,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   readonly detachedTargets: string[] = [];
   readonly calls: string[] = [];
   currentUrl = "https://example.test/account";
+  primaryTargetPresent = true;
   documentToken = "document-a";
   identityFailure?: Error;
   listFailureOnce?: Error;
@@ -1482,12 +1596,16 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       this.holdPostConfirmation = false;
     }
     return [
-      {
-        targetId: "target-1",
-        type: "page",
-        title: "Account",
-        url: this.currentUrl,
-      },
+      ...(this.primaryTargetPresent
+        ? [
+            {
+              targetId: "target-1",
+              type: "page",
+              title: "Account",
+              url: this.currentUrl,
+            },
+          ]
+        : []),
       ...[...this.createdTargets].map(([targetId, url]) => ({
         targetId,
         type: "page",
@@ -1677,6 +1795,7 @@ async function createFakeCdpServer(): Promise<{
   dropNextDetachReply(): void;
   dropDetachReplies(count: number): void;
   detachSession(): void;
+  detachInspector(): void;
   invalidateNextAttachment(): void;
   destroyTarget(targetId: string): void;
   addTargets(count: number): void;
@@ -1955,6 +2074,17 @@ async function createFakeCdpServer(): Promise<{
           JSON.stringify({
             method: "Target.detachedFromTarget",
             params: { sessionId: latestSession, targetId: "target-1" },
+          }),
+        );
+      }
+    },
+    detachInspector: () => {
+      for (const socket of sockets) {
+        socket.send(
+          JSON.stringify({
+            method: "Inspector.detached",
+            sessionId: latestSession,
+            params: { reason: "target_closed" },
           }),
         );
       }

@@ -32,6 +32,7 @@ interface UserBrowserAttachmentClosure {
   attach: UserBrowserCdpOutcome;
   enable: UserBrowserCdpOutcome;
   detach: UserBrowserCdpOutcome;
+  unknownEvidence: Partial<Record<"attach" | "enable" | "detach", string>>;
   taint?: string;
 }
 
@@ -172,7 +173,6 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     throwIfAborted(signal);
     const session = this.#session(sessionId);
     const operation = this.#startSessionOperation(session, async () => {
-      this.#assertSessionIdle(session);
       const listed = await this.#client.listTargets();
       const targets = listed.filter(
         (target) =>
@@ -187,6 +187,10 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       const disappeared: string[] = [];
       for (const targetId of session.targetIds) {
         if (!live.has(targetId)) {
+          const tab = this.#tabs.get(targetId);
+          if (tab?.tainted !== undefined) {
+            this.#taintSession(session, `target ${targetId}: ${tab.tainted}`);
+          }
           session.targetIds.delete(targetId);
           this.#tabs.delete(targetId);
           disappeared.push(targetId);
@@ -200,6 +204,8 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           result.status === "rejected",
       );
       if (detachFailure !== undefined) throw detachFailure.reason;
+      this.#assertSessionIdle(session);
+      this.#throwIfSessionTainted(session, "target reconciliation");
       this.#assertSessionCurrent(session);
       for (const target of targets) {
         session.targetIds.add(target.targetId);
@@ -476,10 +482,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           );
           throw error;
         } finally {
-          if (
-            tab.tainted !== undefined &&
-            !(detached && tab.tainted === "create outcome requires cleanup")
-          ) {
+          if (tab.tainted !== undefined) {
             this.#taintSession(session, `target ${tabId}: ${tab.tainted}`);
           }
           session.targetIds.delete(tabId);
@@ -514,13 +517,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         );
         for (const [index, targetId] of targetIds.entries()) {
           const tab = this.#tabs.get(targetId);
-          if (
-            tab?.tainted !== undefined &&
-            !(
-              detached[index]?.status === "fulfilled" &&
-              tab.tainted === "create outcome requires cleanup"
-            )
-          ) {
+          if (tab?.tainted !== undefined) {
             this.#taintSession(session, `target ${targetId}: ${tab.tainted}`);
           }
           this.#tabs.delete(targetId);
@@ -826,6 +823,12 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       detaching: session.detaching,
       ...(tainted ? { tainted: "create outcome requires cleanup" } : {}),
     });
+    if (tainted) {
+      this.#taintSession(
+        session,
+        `target ${targetId}: create outcome requires cleanup`,
+      );
+    }
   }
 
   #assertTabCurrent(
@@ -1038,7 +1041,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   readonly #httpBase: URL;
   readonly #pending = new Map<
     number,
-    { resolve(value: unknown): void; reject(error: Error): void }
+    {
+      method: string;
+      dispatched: boolean;
+      resolve(value: unknown): void;
+      reject(error: Error): void;
+    }
   >();
   readonly #targetSessions = new Map<string, string>();
   readonly #sessionTargets = new Map<string, string>();
@@ -1352,24 +1360,25 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (attaching !== undefined) {
       try {
         await attaching.promise;
-      } catch (error) {
-        const closure = this.#attachmentClosures.get(targetId);
-        if (closure?.taint !== undefined) throw error;
+      } catch {
+        // The terminal closure below, not the rejected attach promise, decides
+        // whether known ownership can be retried or uncertainty must surface.
       }
     }
     const closure = this.#attachmentClosures.get(targetId);
-    if (closure?.attach === "outcome-unknown") {
+    if (closure?.unknownEvidence.attach !== undefined) {
       throw new UserBrowserCdpOutcomeUnknownError(
         "Target.attachToTarget",
-        closure.taint ?? "attachment ownership is unknown",
+        closure.unknownEvidence.attach,
       );
     }
     const sessionId = this.#targetSessions.get(targetId);
     if (sessionId === undefined) {
-      if (closure?.taint !== undefined) {
+      const problem = this.#attachmentProblem(closure);
+      if (problem !== undefined) {
         throw new UserBrowserCdpOutcomeUnknownError(
           "Target.detachFromTarget",
-          closure.taint,
+          problem,
         );
       }
       this.#reapTarget(targetId, true);
@@ -1383,17 +1392,29 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         undefined,
         USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
       );
-      if (closure !== undefined) closure.detach = "known-success";
-      this.#reapTarget(targetId, true);
+      if (closure !== undefined) {
+        closure.detach = "known-success";
+        closure.taint = undefined;
+      }
     } catch (error) {
       if (closure !== undefined) {
-        closure.detach =
-          error instanceof UserBrowserCdpOutcomeUnknownError
-            ? "outcome-unknown"
-            : "known-failure";
-        closure.taint = describeError(error);
+        if (error instanceof UserBrowserCdpOutcomeUnknownError) {
+          closure.detach = "outcome-unknown";
+          closure.unknownEvidence.detach ??= describeError(error);
+        } else {
+          closure.detach = "known-failure";
+          closure.taint = describeError(error);
+        }
       }
       throw error;
+    }
+    this.#reapTarget(targetId, true);
+    const problem = this.#attachmentProblem(closure);
+    if (problem !== undefined) {
+      throw new UserBrowserCdpOutcomeUnknownError(
+        "Target.detachFromTarget",
+        problem,
+      );
     }
   }
 
@@ -1410,17 +1431,19 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   }
 
   async #attach(targetId: string, signal?: AbortSignal): Promise<string> {
+    const closure = this.#attachmentClosures.get(targetId);
+    const problem = this.#attachmentProblem(closure);
+    if (problem !== undefined) {
+      throw new UserBrowserCdpOutcomeUnknownError(
+        "Target.attachToTarget",
+        problem,
+      );
+    }
     const existing = this.#targetSessions.get(targetId);
     if (existing !== undefined) return existing;
     const pending = this.#targetAttachments.get(targetId);
     if (pending !== undefined) return await pending.promise;
-    const closure = this.#attachmentClosure(targetId);
-    if (closure.taint !== undefined) {
-      throw new UserBrowserCdpOutcomeUnknownError(
-        "Target.attachToTarget",
-        closure.taint,
-      );
-    }
+    const attachmentClosure = this.#attachmentClosure(targetId);
     const attachment = { promise: Promise.resolve(""), invalidated: false };
     const attaching = (async () => {
       let response: Record<string, unknown> | undefined;
@@ -1435,25 +1458,26 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             async (late) => await this.#compensateLateAttach(targetId, late),
           ),
         );
-        closure.attach = "known-success";
+        attachmentClosure.attach = "known-success";
       } catch (error) {
-        closure.attach =
+        attachmentClosure.attach =
           error instanceof UserBrowserCdpOutcomeUnknownError
             ? "outcome-unknown"
             : "known-failure";
-        if (closure.attach === "outcome-unknown") {
-          closure.taint = describeError(error);
+        if (attachmentClosure.attach === "outcome-unknown") {
+          attachmentClosure.unknownEvidence.attach = describeError(error);
         }
         throw error;
       }
       if (typeof response?.sessionId !== "string")
         throw new Error("User browser CDP attach response is invalid");
-      closure.sessionId = response.sessionId;
+      attachmentClosure.sessionId = response.sessionId;
       if (attachment.invalidated) {
         try {
           await this.#compensateAttachment(targetId, response.sessionId);
         } catch {
-          closure.taint = "attachment invalidation compensation failed";
+          attachmentClosure.taint =
+            "attachment invalidation compensation failed";
         }
         throw new Error("User browser target detached during attachment");
       }
@@ -1468,17 +1492,20 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       });
       try {
         await this.#send("Page.enable", {}, response.sessionId, signal);
-        closure.enable = "known-success";
+        attachmentClosure.enable = "known-success";
         return response.sessionId;
       } catch (error) {
-        closure.enable =
+        attachmentClosure.enable =
           error instanceof UserBrowserCdpOutcomeUnknownError
             ? "outcome-unknown"
             : "known-failure";
+        if (attachmentClosure.enable === "outcome-unknown") {
+          attachmentClosure.unknownEvidence.enable = describeError(error);
+        }
         try {
           await this.#compensateAttachment(targetId, response.sessionId);
         } catch (compensationError) {
-          closure.taint = `Page.enable closure failed (${describeError(error)}; ${describeError(compensationError)})`;
+          attachmentClosure.taint = `Page.enable closure failed (${describeError(error)}; ${describeError(compensationError)})`;
         }
         throw error;
       }
@@ -1511,6 +1538,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       attach: "known-failure",
       enable: "known-failure",
       detach: "known-failure",
+      unknownEvidence: {},
     };
     this.#attachmentClosures.set(targetId, closure);
     return closure;
@@ -1534,11 +1562,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       closure.taint = undefined;
       this.#reapTarget(targetId, true);
     } catch (error) {
-      closure.detach =
-        error instanceof UserBrowserCdpOutcomeUnknownError
-          ? "outcome-unknown"
-          : "known-failure";
-      closure.taint = describeError(error);
+      if (error instanceof UserBrowserCdpOutcomeUnknownError) {
+        closure.detach = "outcome-unknown";
+        closure.unknownEvidence.detach ??= describeError(error);
+      } else {
+        closure.detach = "known-failure";
+        closure.taint = describeError(error);
+      }
       throw error;
     }
   }
@@ -1551,6 +1581,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const protocolError = asRecord(message.error);
     if (protocolError !== undefined) {
       closure.attach = "known-failure";
+      delete closure.unknownEvidence.attach;
       closure.taint = undefined;
       this.#reapTarget(targetId, true);
       return;
@@ -1561,6 +1592,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       return;
     }
     closure.attach = "known-success";
+    delete closure.unknownEvidence.attach;
     closure.sessionId = sessionId;
     await this.#compensateAttachment(targetId, sessionId);
   }
@@ -1579,7 +1611,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const taints = [
       ...this.#connectionTaints,
       ...[...this.#attachmentClosures.values()]
-        .map((closure) => closure.taint)
+        .map((closure) => this.#attachmentProblem(closure))
         .filter((detail): detail is string => detail !== undefined),
     ];
     if (taints.length > 0) {
@@ -1632,7 +1664,14 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             : abortReason(signal ?? AbortSignal.abort()),
         );
       };
-      this.#pending.set(id, {
+      const pending: {
+        method: string;
+        dispatched: boolean;
+        resolve(value: unknown): void;
+        reject(error: Error): void;
+      } = {
+        method,
+        dispatched: false,
         resolve: (value) => {
           finish();
           resolve(value);
@@ -1641,7 +1680,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
           finish();
           reject(error);
         },
-      });
+      };
+      this.#pending.set(id, pending);
       timeout = setTimeout(() => {
         if (!this.#pending.delete(id)) return;
         finish();
@@ -1670,6 +1710,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
           }),
         );
         dispatched = true;
+        pending.dispatched = true;
       } catch (error) {
         this.#pending.delete(id);
         finish();
@@ -1802,7 +1843,22 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (sessionId !== undefined) this.#sessionTargets.delete(sessionId);
     this.#targetSessions.delete(targetId);
     this.#targetDocuments.delete(targetId);
-    if (ownershipClosed) this.#attachmentClosures.delete(targetId);
+    const closure = this.#attachmentClosures.get(targetId);
+    if (ownershipClosed && this.#attachmentProblem(closure) === undefined) {
+      this.#attachmentClosures.delete(targetId);
+    }
+  }
+
+  #attachmentProblem(
+    closure: UserBrowserAttachmentClosure | undefined,
+  ): string | undefined {
+    if (closure === undefined) return undefined;
+    const unknown = Object.values(closure.unknownEvidence);
+    const evidence = [
+      ...unknown,
+      ...(closure.taint === undefined ? [] : [closure.taint]),
+    ];
+    return evidence.length === 0 ? undefined : evidence.join("; ");
   }
 
   #failAll(error: Error): void {
@@ -1813,7 +1869,16 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     this.#targetSessions.clear();
     this.#sessionTargets.clear();
     this.#targetDocuments.clear();
-    for (const pending of this.#pending.values()) pending.reject(error);
+    for (const pending of this.#pending.values()) {
+      pending.reject(
+        pending.dispatched
+          ? new UserBrowserCdpOutcomeUnknownError(
+              pending.method,
+              `connection failed after dispatch (${error.message})`,
+            )
+          : error,
+      );
+    }
     this.#pending.clear();
   }
 }
@@ -1882,7 +1947,7 @@ export function windowsBrowserExecutableCandidates(
 }
 
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return (error instanceof Error ? error.message : String(error)).slice(0, 512);
 }
 
 export class UserBrowserDocumentChangedBeforeDispatchError extends Error {
