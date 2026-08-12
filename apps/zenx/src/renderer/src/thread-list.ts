@@ -21,6 +21,9 @@ export interface ProjectGroup {
   key: string;
   label: string;
   threads: Thread[];
+  configured: boolean;
+  isDefault: boolean;
+  workspace: string | null;
 }
 
 export function readSidebarMode(
@@ -88,13 +91,23 @@ export function deriveInboxSections(
 
 export function deriveProjectGroups(
   threads: readonly Thread[],
+  configuredWorkspaces: readonly string[] = [],
+  defaultWorkspace: string | null = null,
 ): ProjectGroup[] {
   const groups = new Map<string, Thread[]>();
+  const configured = new Map<string, string>();
+  for (const workspace of configuredWorkspaces) {
+    const key = pathKey(workspace);
+    configured.set(key, workspace);
+    if (!groups.has(key)) groups.set(key, []);
+  }
   for (const thread of sortByRecency(threads)) {
     const key =
       thread.status.type === "systemError" || thread.cwd.length === 0
         ? "__unavailable__"
-        : thread.cwd;
+        : isPackagedArtifactPath(thread.cwd)
+          ? "__unassigned__"
+          : pathKey(thread.cwd);
     const list = groups.get(key) ?? [];
     list.push(thread);
     groups.set(key, list);
@@ -103,8 +116,20 @@ export function deriveProjectGroups(
     .map(([key, groupedThreads]) => ({
       key,
       label:
-        key === "__unavailable__" ? "Unavailable journals" : projectLabel(key),
+        key === "__unavailable__"
+          ? "Unavailable journals"
+          : key === "__unassigned__"
+            ? "Unassigned threads"
+            : projectLabel(
+                configured.get(key) ?? groupedThreads[0]?.cwd ?? key,
+              ),
       threads: groupedThreads,
+      configured: configured.has(key),
+      isDefault:
+        key !== "__unavailable__" &&
+        defaultWorkspace !== null &&
+        pathKey(defaultWorkspace) === key,
+      workspace: configured.get(key) ?? groupedThreads[0]?.cwd ?? null,
     }))
     .sort((left, right) => {
       if (left.key === "__unavailable__") return 1;
@@ -206,6 +231,14 @@ export function threadPreview(thread: Thread): string {
   return wakeup === null ? preview : `${wakeup} · system-level wakeup`;
 }
 
+export function isPackagedArtifactPath(cwd: string): boolean {
+  const normalized = cwd.replaceAll("\\", "/").toLocaleLowerCase();
+  return (
+    normalized.includes("/.packaged/artifact/") ||
+    /\/(?:zenx|electron)-win32-(?:x64|arm64)(?:\/|$)/u.test(normalized)
+  );
+}
+
 function wakeupLabel(value: string): string | null {
   if (!value.trimStart().startsWith("[ZenX trigger wakeup]")) return null;
   const sourceThread = /Source Thread:\s*([^\s]+)/u.exec(value)?.[1];
@@ -228,4 +261,8 @@ function projectLabel(cwd: string): string {
   const normalized = cwd.replace(/[\\/]+$/u, "");
   const parts = normalized.split(/[\\/]/u).filter(Boolean);
   return parts.at(-1) ?? cwd;
+}
+
+function pathKey(cwd: string): string {
+  return cwd.replace(/[\\/]+$/u, "").toLocaleLowerCase();
 }

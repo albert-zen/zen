@@ -6,6 +6,7 @@ interface ModelSelectorProps {
   error: string | null;
   models: readonly ModelSummary[];
   onChange(model: string): void;
+  repairModel: string | null;
   selectedModel: string;
   switching: boolean;
 }
@@ -15,10 +16,14 @@ export function ModelSelector({
   error,
   models,
   onChange,
+  repairModel,
   selectedModel,
   switching,
 }: ModelSelectorProps) {
   const options = modelOptions(models, selectedModel);
+  const unavailable = options.find(
+    (model) => model.id === selectedModel,
+  )?.unavailable;
   return (
     <div className="model-control">
       <label htmlFor="thread-model">Model</label>
@@ -42,6 +47,22 @@ export function ModelSelector({
           {error}
         </span>
       )}
+      {unavailable ? (
+        <div className="model-repair" role="status">
+          <span>
+            This thread’s model is unavailable. Its setting has not changed.
+          </span>
+          {repairModel === null || repairModel === selectedModel ? null : (
+            <button
+              type="button"
+              disabled={disabled || switching}
+              onClick={() => onChange(repairModel)}
+            >
+              Switch to {repairModel}
+            </button>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
