@@ -36,16 +36,18 @@
   快捷命令的产品 UX；`/model` 是当前 typed contracts 外的 Zen native operation，
   Controller 仍不拥有 Thread、Turn、binding 或调度语义。
 - **ImZenContentTransformer** — 在 SDK I1 强类型位置把已暂存的通用文件投影为
-  Zen 可读 manifest，并保留图片的 typed content；它不改变消息身份、binding、
-  continuation 或 correlation。
+  Zen 可读 manifest，并保留图片的 typed content；固定 v1 wheel 当前对
+  path-only image 的 public App Server dispatch 仍不支持，IMZen 不在 Core 外
+  复制兼容层；它不改变消息身份、binding、continuation 或 correlation。
 - **ImZenFailurePresenter** — 把 SDK 已分类并固定路由的终态入站失败渲染成
   IM 用户可见消息；它不决定重试，也不保存恢复状态。
 - **IMZen App Server shared filesystem root** — 部署者对本地 App Server 可读目录的
   显式证明；SDK 仍负责把每个 local-image 路径限制在该目录内，未配置时 TCP
   App Server 不接收本地图片路径。
-- **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
-  幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
-  重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
+- **IMZen Gateway state file** — SDK SQLite repository 持久化 binding、projection
+  checkpoint 与 inbound/outbound 幂等 claim 等可重建 bridge state，使
+  `side_effect_started` 在进程重启后仍不被重新授权；它不是 Zen Thread、
+  transcript、queue 或 Agent state。
 - **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、workspace 与
   审批默认值；它只用于组合本机 App Server host，不包含 credential，也不覆盖已存
   Thread 的生效设置。

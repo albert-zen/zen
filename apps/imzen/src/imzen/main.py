@@ -3,12 +3,9 @@ from __future__ import annotations
 import asyncio
 import signal
 
+from imagent import Gateway, GatewayExtensions, GatewayLimits, ProjectionPolicy, SQLiteGatewayStore
 from imagent.applications import ZenApplicationAdapter
-from imagent.applications.appserver_client import AppServerClient, AppServerSupervisor
-from imagent.bindings import InMemoryBindingRepository
-from imagent.contracts import ProjectionPolicy
-from imagent.gateway import GatewayExtensions, GatewayRepositories, ImAgentGateway
-from imagent.storage import SQLiteGatewayState
+from imagent.applications.adapters.appserver.client import AppServerClient, AppServerSupervisor
 
 from .channels import build_channels
 from .config import Settings
@@ -27,6 +24,7 @@ async def run(settings: Settings | None = None) -> None:
     application = ZenApplicationAdapter(
         application_instance_id="zen-main",
         client=client,
+        workspace_id="imzen-workspace",
         cwd=str(resolved.cwd),
         shared_filesystem_root=resolved.app_server_shared_filesystem_root,
         thread_start_options=thread_start_options(resolved.permission_mode),
@@ -36,21 +34,24 @@ async def run(settings: Settings | None = None) -> None:
         client=client,
         default_permission_mode=resolved.permission_mode,
     )
-    gateway_state = SQLiteGatewayState(resolved.gateway_state_file)
-    gateway = ImAgentGateway(
+    gateway = Gateway(
+        gateway_id="imzen",
         channels=build_channels(
             resolved.channels_config_file,
             permission_mode=resolved.permission_mode,
             allow_unrestricted_full_access=resolved.allow_unrestricted_full_access,
         ),
         applications=[application],
-        repositories=GatewayRepositories(
-            bindings=InMemoryBindingRepository(),
-            idempotency=gateway_state,
-        ),
+        store=SQLiteGatewayStore(resolved.gateway_state_file),
+        controller=controller,
         projection_policy=ProjectionPolicy.FOREGROUND_ONLY,
+        limits=GatewayLimits(
+            delivery_submission_max_records=4096,
+            conversation_serialization_max_active_keys=4096,
+            idempotency_max_records=4096,
+            projection_max_active_threads=4096,
+        ),
         extensions=GatewayExtensions(
-            controller=controller,
             inbound_content_transformer=ImZenContentTransformer(),
             inbound_failure_presenter=ImZenFailurePresenter(),
             request_presenter=ImZenRequestPresenter(),
@@ -77,11 +78,8 @@ async def run(settings: Settings | None = None) -> None:
     finally:
         for registered in registered_signals:
             loop.remove_signal_handler(registered)
-        try:
-            if gateway_started:
-                await gateway.stop()
-        finally:
-            await gateway_state.close()
+        if gateway_started:
+            await gateway.stop()
 
 
 def _build_app_server_client(settings: Settings) -> AppServerClient:

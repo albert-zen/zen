@@ -4,46 +4,38 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
+from imagent import Failed, OutcomeUnknown, Partial, Succeeded
 from imagent.applications import ZenApplicationAdapter
-from imagent.applications.appserver_client import AppServerClient, AppServerError
-from imagent.contracts import (
-    ApplicationOperationFailed,
-    ApprovalRequest,
-    ApprovalResponse,
-    AttachmentContent,
-    BindConversationToThread,
-    ClearConversationThread,
-    Content,
-    ConversationBinding,
-    ConversationBound,
-    ConversationRef,
-    GatewayOperationFailed,
-    GetThread,
-    InboundMessage,
-    LocalPath,
-    OutboundMessage,
-    RequestRef,
-    RequestResponseRouted,
-    RespondToRequest,
-    SelectApplication,
-    TextContent,
-    TextFormat,
-    ThreadRead,
-)
-from imagent.controllers import (
-    ControllerActions,
+from imagent.applications.adapters.appserver.client import AppServerClient, AppServerError
+from imagent.applications.requests import ApprovalRequest, ApprovalResponse, RequestRef
+from imagent.gateway import ConversationActions
+from imagent.gateway.input import InboundFailurePhase
+from imagent.interaction.controllers import (
+    CommandArgumentContract,
+    CommandDefinition,
+    CommandExecutionSafety,
+    CommandInvocation,
+    CommandRegistry,
+    CommandResult,
     MarkdownRequestPresenter,
     RequestPresentation,
-    SlashController,
+    include_common_commands,
 )
-from imagent.controllers.markdown import MarkdownSlashPresenter
-from imagent.controllers.slash import SlashCommand, parse_slash_command
-from imagent.gateway import InboundFailurePhase
+from imagent.interaction.media import AttachmentContent, LocalPath
+from imagent.interaction.messages import (
+    Content,
+    InboundMessage,
+    OutboundMessage,
+    TextContent,
+    TextFormat,
+)
 
 from .config import PermissionMode
 
 
 def thread_start_options(mode: PermissionMode) -> dict[str, object]:
+    """Return the Zen-native profile owned by the IMZen product."""
+
     return {
         "sandbox": "danger-full-access",
         "approval_policy": "never" if mode == "full-access" else "on-request",
@@ -52,6 +44,7 @@ def thread_start_options(mode: PermissionMode) -> dict[str, object]:
 
 def adapt_inbound_content(message: InboundMessage) -> tuple[Content, ...]:
     """Preserve images and encode generic staged files as Zen-readable text."""
+
     text = "\n".join(part.text for part in message.content if isinstance(part, TextContent)).strip()
     images: list[AttachmentContent] = []
     file_lines: list[str] = []
@@ -82,7 +75,21 @@ class ImZenContentTransformer:
 
 
 class ImZenController:
-    """Compose IMZen-only commands and presets over SDK typed operations."""
+    """Compose IMZen commands and presets over SDK v1 scoped actions."""
+
+    _COMMON_COMMANDS = (
+        "apps",
+        "app",
+        "projects",
+        "use",
+        "threads",
+        "pick",
+        "delete",
+        "catchup",
+        "history",
+        "respond",
+        "answer",
+    )
 
     def __init__(
         self,
@@ -94,161 +101,282 @@ class ImZenController:
         self._application = application
         self._client = client
         self._default_permission_mode = default_permission_mode
-        self._permission_by_conversation: dict[ConversationRef, PermissionMode] = {}
-        self._slash = SlashController()
-        self._presenter = MarkdownSlashPresenter()
+        self._permission_by_conversation: dict[object, PermissionMode] = {}
+        self._commands = CommandRegistry()
+        include_common_commands(self._commands, names=self._COMMON_COMMANDS)
+        self._register_product_commands()
+        self._commands.freeze()
+
+    def validate_startup(self) -> None:
+        self._commands.validate_startup()
+
+    async def close(self) -> None:
+        await self._commands.close()
 
     async def handle(
         self,
         message: InboundMessage,
-        actions: ControllerActions,
+        actions: ConversationActions,
     ) -> tuple[OutboundMessage, ...] | None:
+        command_name = _first_command_name(message)
+        if command_name is not None:
+            await self._prepare_command_scope(message, actions, command_name)
+        else:
+            await self._ensure_thread(message, actions)
+            return None
+        return await self._commands.handle(message, actions)
+
+    def _register_product_commands(self) -> None:
+        self._commands.register(
+            self._command_definition(
+                "help",
+                aliases=("start",),
+                maximum=0,
+                summary="Show IMZen commands.",
+                usage="/help",
+                handler=self._help,
+            )
+        )
+        self._commands.register(
+            self._command_definition(
+                "new",
+                maximum=0,
+                summary="Clear the selected Zen Thread.",
+                usage="/new",
+                safety=CommandExecutionSafety.EFFECTFUL,
+                handler=self._new,
+            )
+        )
+        self._commands.register(
+            self._command_definition(
+                "permission",
+                maximum=1,
+                summary="Choose the next Zen Thread permission preset.",
+                usage="/permission [full-access|approval-required]",
+                safety=CommandExecutionSafety.EFFECTFUL,
+                handler=self._permission,
+            )
+        )
+        self._commands.register(
+            self._command_definition(
+                "model",
+                maximum=32,
+                summary="List or switch Zen models.",
+                usage="/model [name]",
+                safety=CommandExecutionSafety.EFFECTFUL,
+                handler=self._model,
+            )
+        )
+        self._commands.register(
+            self._command_definition(
+                "status",
+                maximum=0,
+                summary="Read the selected Zen Thread.",
+                usage="/status",
+                handler=self._status,
+            )
+        )
+        for name, choice in (
+            ("approve", "accept"),
+            ("deny", "decline"),
+            ("cancel", "cancel"),
+        ):
+            self._commands.register(
+                self._command_definition(
+                    name,
+                    minimum=1,
+                    maximum=1,
+                    summary=f"{name.title()} a Zen command approval.",
+                    usage=f"/{name} <request-id>",
+                    safety=CommandExecutionSafety.EFFECTFUL,
+                    handler=self._approval_handler(choice),
+                )
+            )
+
+    @staticmethod
+    def _command_definition(
+        name: str,
+        *,
+        handler,
+        aliases: tuple[str, ...] = (),
+        minimum: int = 0,
+        maximum: int,
+        summary: str,
+        usage: str,
+        safety: CommandExecutionSafety = CommandExecutionSafety.READ_ONLY,
+    ) -> CommandDefinition:
+        return CommandDefinition(
+            name=name,
+            handler=handler,
+            aliases=aliases,
+            arguments=CommandArgumentContract(minimum, maximum),
+            summary=summary,
+            usage=usage,
+            safety=safety,
+        )
+
+    async def _help(
+        self,
+        _invocation: CommandInvocation,
+        _actions: ConversationActions,
+    ) -> CommandResult:
+        return CommandResult.text(
+            "\n".join(
+                (
+                    self._commands_help(),
+                    "- `/model [name]` — list or switch Zen models",
+                    "- `/permission [full-access|approval-required]` — choose the next "
+                    "Thread preset",
+                    "- `/approve|/deny|/cancel <request-id>` — approval response shortcuts",
+                )
+            )
+        )
+
+    async def _new(
+        self,
+        invocation: CommandInvocation,
+        actions: ConversationActions,
+    ) -> CommandResult:
         try:
-            command = parse_slash_command(message)
-            if command is None:
-                await self._ensure_thread(message, actions)
-                return None
-            if command.name == "new":
-                text = await self._clear_thread(message, actions)
-            elif command.name == "permission":
-                text = await self._permission(message, command, actions)
-            elif command.name == "model":
-                text = await self._model(message, command, actions)
-            elif command.name == "status":
-                text = await self._status(message, actions)
-            elif command.name in {"approve", "deny", "cancel"}:
-                text = await self._approval(message, command, actions)
-            elif command.name in {"help", "start"}:
-                text = self._help()
-            else:
-                return await self._slash.handle(message, actions)
-            return (self._presenter.response(message, text),)
+            binding = await actions.get_binding()
+            if binding is not None and binding.thread_ref is not None:
+                _require_action(
+                    await actions.clear_thread(
+                        action_id=_action_id(invocation, "conversation.clear_thread"),
+                        expected_generation=binding.generation,
+                    )
+                )
+            return CommandResult.text("The next message will start a new Zen thread.")
         except Exception as error:
-            return (self._presenter.response(message, str(error), error=True),)
-
-    async def _ensure_thread(
-        self,
-        message: InboundMessage,
-        actions: ControllerActions,
-    ) -> ConversationBinding:
-        binding = await actions.get_binding(message.conversation_ref)
-        if binding is None or binding.application_ref is None:
-            selected = await actions.execute_gateway(
-                SelectApplication(
-                    operation_id=_operation_id(message, "application.select"),
-                    conversation_ref=message.conversation_ref,
-                    actor=message.sender,
-                    application_ref=self._application.summary.ref,
-                    expected_revision=binding.revision if binding is not None else None,
-                    created_at=message.created_at,
-                )
-            )
-            binding = _require_binding(selected)
-        elif binding.application_ref != self._application.summary.ref:
-            raise RuntimeError("The selected Agent application is not Zen.")
-        if binding.thread_ref is not None:
-            return binding
-        mode = self._permission_by_conversation.get(
-            message.conversation_ref,
-            self._default_permission_mode,
-        )
-        thread = await self._application.create_thread_with_options(
-            thread_start_options=thread_start_options(mode)
-        )
-        bound = await actions.execute_gateway(
-            BindConversationToThread(
-                operation_id=_operation_id(message, "conversation.bind_thread"),
-                conversation_ref=message.conversation_ref,
-                actor=message.sender,
-                thread_ref=thread.ref,
-                expected_revision=binding.revision,
-                created_at=message.created_at,
-            )
-        )
-        return _require_binding(bound)
-
-    async def _clear_thread(
-        self,
-        message: InboundMessage,
-        actions: ControllerActions,
-    ) -> str:
-        binding = await actions.get_binding(message.conversation_ref)
-        if binding is not None and binding.thread_ref is not None:
-            result = await actions.execute_gateway(
-                ClearConversationThread(
-                    operation_id=_operation_id(message, "conversation.clear_thread"),
-                    conversation_ref=message.conversation_ref,
-                    actor=message.sender,
-                    expected_revision=binding.revision,
-                    created_at=message.created_at,
-                )
-            )
-            _require_binding(result)
-        return "The next message will start a new Zen thread."
+            return CommandResult.failure(str(error))
 
     async def _permission(
         self,
-        message: InboundMessage,
-        command: SlashCommand,
-        actions: ControllerActions,
-    ) -> str:
+        invocation: CommandInvocation,
+        actions: ConversationActions,
+    ) -> CommandResult:
         current = self._permission_by_conversation.get(
-            message.conversation_ref,
+            invocation.conversation_ref,
             self._default_permission_mode,
         )
-        if not command.arguments:
-            return (
-                f"Permission mode: {current}. "
-                "Use /permission full-access or /permission approval-required."
+        if not invocation.arguments:
+            return CommandResult.text(
+                f"Permission mode: {current}. Use /permission full-access or "
+                "/permission approval-required."
             )
-        if len(command.arguments) != 1 or command.arguments[0] not in {
-            "full-access",
-            "approval-required",
-        }:
-            raise ValueError("Permission mode must be full-access or approval-required.")
-        mode: PermissionMode = command.arguments[0]  # type: ignore[assignment]
-        if mode != current:
-            await self._clear_thread(message, actions)
-            self._permission_by_conversation[message.conversation_ref] = mode
-        behavior = (
-            "Commands run without approval prompts."
-            if mode == "full-access"
-            else "Commands require approval."
-        )
-        return f"Permission mode: {mode}. {behavior} The next message will start a new Zen thread."
+        mode_text = invocation.arguments[0]
+        if mode_text not in {"full-access", "approval-required"}:
+            return CommandResult.failure(
+                "Permission mode must be full-access or approval-required."
+            )
+        mode: PermissionMode = mode_text  # type: ignore[assignment]
+        try:
+            if mode != current:
+                binding = await actions.get_binding()
+                if binding is not None and binding.thread_ref is not None:
+                    _require_action(
+                        await actions.clear_thread(
+                            action_id=_action_id(invocation, "conversation.clear_thread"),
+                            expected_generation=binding.generation,
+                        )
+                    )
+                self._permission_by_conversation[invocation.conversation_ref] = mode
+            behavior = (
+                "Commands run without approval prompts."
+                if mode == "full-access"
+                else "Commands require approval."
+            )
+            return CommandResult.text(
+                f"Permission mode: {mode}. {behavior} The next message will start a new Zen thread."
+            )
+        except Exception as error:
+            return CommandResult.failure(str(error))
 
     async def _model(
         self,
-        message: InboundMessage,
-        command: SlashCommand,
-        actions: ControllerActions,
-    ) -> str:
-        if not command.arguments:
-            return await self._model_catalog_markdown()
-        model = " ".join(command.arguments)
-        binding = await actions.get_binding(message.conversation_ref)
-        if binding is None or binding.thread_ref is None:
-            raise RuntimeError(
-                "No Zen thread is selected. Send a message or use `/threads` and `/pick`."
-            )
+        invocation: CommandInvocation,
+        actions: ConversationActions,
+    ) -> CommandResult:
+        model = " ".join(invocation.arguments)
         try:
+            if not invocation.arguments:
+                return CommandResult.text(await self._model_catalog_markdown())
+            binding = await actions.get_binding()
+            if binding is None or binding.thread_ref is None:
+                raise RuntimeError(
+                    "No Zen thread is selected. Send a message or use `/threads` and `/pick`."
+                )
             await self._client.call(
                 "thread/settings/update",
-                {"threadId": binding.thread_ref.native_thread_id, "model": model},
+                {"threadId": binding.thread_ref.thread_id, "model": model},
             )
+            return CommandResult.text(f"Model switched to **{model}** for subsequent turns.")
         except Exception as error:
             if _zen_error_code(error) == "model_unavailable":
-                text = f"Could not switch model to **{model}**: {error}"
                 try:
-                    text = f"{text}\n\n{await self._model_catalog_markdown()}"
+                    detail = (
+                        f"Could not switch model to **{model}**: {error}\n\n"
+                        f"{await self._model_catalog_markdown()}"
+                    )
                 except Exception:
-                    text = f"{text}\n\nUse `/model` to list available models."
-                raise RuntimeError(text) from error
-            raise RuntimeError(
-                f"Model update to **{model}** did not complete cleanly; "
-                "Zen may already have applied it. Retrying the same model is safe."
-            ) from error
-        return f"Model switched to **{model}** for subsequent turns."
+                    detail = (
+                        f"Could not switch model to **{model}**: {error}\n\n"
+                        "Use `/model` to list available models."
+                    )
+                return CommandResult.failure(detail)
+            if invocation.arguments:
+                return CommandResult.failure(
+                    "Model update did not complete cleanly; Zen may already have applied it. "
+                    "Retrying the same model is safe."
+                )
+            return CommandResult.failure(str(error))
+
+    async def _status(
+        self,
+        invocation: CommandInvocation,
+        actions: ConversationActions,
+    ) -> CommandResult:
+        try:
+            binding = await actions.get_binding()
+            if binding is None or binding.thread_ref is None:
+                return CommandResult.text(
+                    "No Zen thread is selected. Send a message or use `/threads` and `/pick`."
+                )
+            thread = _require_read(await actions.get_thread(binding.thread_ref))
+            preview = str(thread.metadata.get("preview") or thread.title or "(empty thread)")
+            workspace = str(thread.metadata.get("cwd") or "")
+            return CommandResult.text(
+                "## Zen thread\n"
+                f"- Status: **{thread.status.value}**\n"
+                f"- Preview: {preview}\n"
+                f"- ID: `{thread.ref.thread_id}`\n"
+                f"- Workspace: `{workspace}`"
+            )
+        except Exception as error:
+            return CommandResult.failure(str(error))
+
+    def _approval_handler(self, choice_id: str):
+        async def handle(
+            invocation: CommandInvocation,
+            actions: ConversationActions,
+        ) -> CommandResult:
+            try:
+                request_ref = RequestRef(
+                    application_ref=self._application.summary.ref,
+                    native_request_id=invocation.arguments[0],
+                )
+                _require_action(
+                    await actions.respond_request(
+                        request_ref,
+                        ApprovalResponse(choice_id),
+                        action_id=_action_id(invocation, "conversation.respond_request"),
+                    )
+                )
+                return CommandResult.text(f"Approval {invocation.arguments[0]}: {choice_id}.")
+            except Exception as error:
+                return CommandResult.failure(str(error))
+
+        return handle
 
     async def _model_catalog_markdown(self) -> str:
         result = await self._client.list_models()
@@ -272,76 +400,104 @@ class ImZenController:
         lines.append("Use `/model <name>` to switch the selected thread.")
         return "\n".join(lines)
 
-    async def _status(
+    async def _prepare_command_scope(
         self,
         message: InboundMessage,
-        actions: ControllerActions,
-    ) -> str:
-        binding = await actions.get_binding(message.conversation_ref)
-        if binding is None or binding.thread_ref is None:
-            return "No Zen thread is selected. Send a message or use `/threads` and `/pick`."
-        result = await actions.execute_application(
-            GetThread(
-                operation_id=_operation_id(message, "thread.get"),
-                application_ref=self._application.summary.ref,
-                thread_ref=binding.thread_ref,
-                created_at=message.created_at,
-            )
-        )
-        if isinstance(result, ApplicationOperationFailed):
-            raise RuntimeError(result.error.message)
-        if not isinstance(result, ThreadRead):
-            raise RuntimeError("Thread read returned an incompatible result.")
-        thread = result.thread
-        preview = str(thread.metadata.get("preview") or thread.title or "(empty thread)")
-        workspace = str(thread.metadata.get("cwd") or "")
-        return (
-            "## Zen thread\n"
-            f"- Status: **{thread.status.value}**\n"
-            f"- Preview: {preview}\n"
-            f"- ID: `{thread.ref.native_thread_id}`\n"
-            f"- Workspace: `{workspace}`"
-        )
+        actions: ConversationActions,
+        command_name: str,
+    ) -> None:
+        no_scope = {
+            "help",
+            "start",
+            "apps",
+            "app",
+            "permission",
+            "model",
+            "new",
+            "approve",
+            "deny",
+            "cancel",
+        }
+        if command_name in no_scope:
+            if command_name in {"model", "approve", "deny", "cancel"}:
+                await self._ensure_application(message, actions)
+            return
+        await self._ensure_application(message, actions)
+        if command_name not in {"projects", "respond", "answer"}:
+            await self._ensure_project(message, actions)
 
-    async def _approval(
+    async def _ensure_application(
         self,
         message: InboundMessage,
-        command: SlashCommand,
-        actions: ControllerActions,
-    ) -> str:
-        if len(command.arguments) != 1:
-            raise ValueError(f"Use /{command.name} <request-id>.")
-        request_ref = RequestRef(
-            application_ref=self._application.summary.ref,
-            native_request_id=command.arguments[0],
+        actions: ConversationActions,
+    ) -> object:
+        binding = await actions.get_binding()
+        application_ref = self._application.summary.ref
+        if binding is not None and binding.application_ref == application_ref:
+            return binding
+        if binding is not None and binding.application_ref is not None:
+            raise RuntimeError("The selected Agent application is not Zen.")
+        result = await actions.select_application(
+            application_ref,
+            action_id=_operation_id(message, "application.select"),
+            expected_generation=binding.generation if binding is not None else None,
         )
-        choice_id = {
-            "approve": "accept",
-            "deny": "decline",
-            "cancel": "cancel",
-        }[command.name]
-        result = await actions.execute_gateway(
-            RespondToRequest(
-                operation_id=_operation_id(message, "conversation.respond_request"),
-                conversation_ref=message.conversation_ref,
-                actor=message.sender,
-                request_ref=request_ref,
-                response=ApprovalResponse(choice_id),
-                created_at=message.created_at,
-            )
-        )
-        if isinstance(result, GatewayOperationFailed):
-            raise RuntimeError(result.error.message)
-        if not isinstance(result, RequestResponseRouted):
-            raise RuntimeError("Approval response returned an incompatible result.")
-        return f"Approval {command.arguments[0]}: {choice_id}."
+        _require_action(result)
+        return await actions.get_binding()
 
-    def _help(self) -> str:
+    async def _ensure_project(
+        self,
+        message: InboundMessage,
+        actions: ConversationActions,
+    ) -> object:
+        binding = await self._ensure_application(message, actions)
+        if binding is not None and binding.project_ref is not None:
+            return binding
+        page = _require_read(await actions.list_projects(self._application.summary.ref))
+        if len(page.items) != 1:
+            raise RuntimeError("Zen must expose exactly one configured workspace project.")
+        current = await actions.get_binding()
+        result = await actions.select_project(
+            page.items[0].ref,
+            action_id=_operation_id(message, "conversation.select_project"),
+            expected_generation=current.generation if current is not None else None,
+        )
+        _require_action(result)
+        return await actions.get_binding()
+
+    async def _ensure_thread(
+        self,
+        message: InboundMessage,
+        actions: ConversationActions,
+    ) -> object:
+        binding = await self._ensure_project(message, actions)
+        if binding is not None and binding.thread_ref is not None:
+            return binding
+        mode = self._permission_by_conversation.get(
+            message.conversation_ref,
+            self._default_permission_mode,
+        )
+        thread = await self._application.create_thread_with_options(
+            thread_start_options=thread_start_options(mode)
+        )
+        current = await actions.get_binding()
+        if current is None or current.project_ref is None:
+            raise RuntimeError("Zen workspace selection was lost before Thread binding.")
+        result = await actions.bind_thread(
+            thread.ref,
+            action_id=_operation_id(message, "conversation.bind_thread"),
+            expected_generation=current.generation,
+        )
+        return _require_action(result)
+
+    def _commands_help(self) -> str:
         return (
-            f"{self._presenter.help()}\n"
-            "- `/model [name]` — list or switch Zen models\n"
-            "- `/permission [full-access|approval-required]` — choose the next Thread preset\n"
-            "- `/approve|/deny|/cancel <request-id>` — approval response shortcuts"
+            "## IMZen commands\n"
+            "- `/threads [query]` and `/pick <number|id|query>` — select a Zen Thread\n"
+            "- `/status`, `/catchup [messages]`, `/history [turns] [--page N]` — read Zen\n"
+            "- `/new` — clear this Conversation's binding\n"
+            "- `/delete` — explicit unsupported Thread deletion check\n"
+            "- `/respond` and `/answer` — use SDK request actions"
         )
 
 
@@ -352,7 +508,7 @@ class ImZenRequestPresenter(MarkdownRequestPresenter):
         self,
         request,
         *,
-        conversation_ref: ConversationRef,
+        conversation_ref,
         delivery_id: str,
         reply_to_message_id: str | None,
     ) -> RequestPresentation:
@@ -369,14 +525,15 @@ class ImZenRequestPresenter(MarkdownRequestPresenter):
             return presented
         choices = {choice.choice_id for choice in request.choices}
         handle = request.request_ref.native_request_id
-        aliases = []
-        for choice, command in (
-            ("accept", "approve"),
-            ("decline", "deny"),
-            ("cancel", "cancel"),
-        ):
-            if choice in choices:
-                aliases.append(f"`/{command} {handle}`")
+        aliases = [
+            f"`/{command} {handle}`"
+            for choice, command in (
+                ("accept", "approve"),
+                ("decline", "deny"),
+                ("cancel", "cancel"),
+            )
+            if choice in choices
+        ]
         if not aliases:
             return presented
         body = f"{content.text}\n\nIMZen shortcuts: {', '.join(aliases)}."
@@ -401,7 +558,7 @@ class ImZenFailurePresenter:
         self,
         phase: InboundFailurePhase,
         *,
-        conversation_ref: ConversationRef,
+        conversation_ref,
         delivery_id: str,
         reply_to_message_id: str,
     ) -> OutboundMessage:
@@ -420,16 +577,48 @@ class ImZenFailurePresenter:
         )
 
 
-def _require_binding(result) -> ConversationBinding:
-    if isinstance(result, GatewayOperationFailed):
-        raise RuntimeError(result.error.message)
-    if not isinstance(result, ConversationBound):
-        raise RuntimeError("Binding operation returned an incompatible result.")
-    return result.binding
+def _first_command_name(message: InboundMessage) -> str | None:
+    for part in message.content:
+        if not isinstance(part, TextContent):
+            continue
+        for line in part.text.splitlines():
+            candidate = line.strip()
+            if candidate:
+                if not candidate.startswith("/"):
+                    return None
+                return candidate[1:].split(maxsplit=1)[0].casefold()
+    return None
 
 
 def _operation_id(message: InboundMessage, operation: str) -> str:
-    return f"imzen:operation:{message.message_id}:{operation}"
+    return (
+        f"imzen:operation:{message.conversation_ref.native_conversation_id}:"
+        f"{message.message_id}:{operation}"
+    )
+
+
+def _action_id(invocation: CommandInvocation, operation: str) -> str:
+    return f"imzen:command:{invocation.invocation_id}:{operation}"
+
+
+def _require_action(result):
+    if isinstance(result, Succeeded):
+        return result.value
+    if isinstance(result, Partial):
+        raise RuntimeError(f"Action completed only partially: {result.error}")
+    if isinstance(result, OutcomeUnknown):
+        raise RuntimeError(f"Action outcome is unknown: {result.error}")
+    if isinstance(result, Failed):
+        raise RuntimeError(str(result.error))
+    raise RuntimeError("Action returned an incompatible result.")
+
+
+def _require_read(result):
+    if isinstance(result, Succeeded):
+        return result.value
+    if isinstance(result, Failed):
+        raise RuntimeError(str(result.error))
+    raise RuntimeError("Read returned an incompatible result.")
 
 
 def _zen_error_code(error: Exception) -> str | None:
@@ -437,3 +626,13 @@ def _zen_error_code(error: Exception) -> str | None:
         return None
     code = error.data.get("zenCode")
     return code if isinstance(code, str) else None
+
+
+__all__ = [
+    "ImZenContentTransformer",
+    "ImZenController",
+    "ImZenFailurePresenter",
+    "ImZenRequestPresenter",
+    "adapt_inbound_content",
+    "thread_start_options",
+]

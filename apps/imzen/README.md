@@ -1,21 +1,24 @@
 # IMZen
 
 IMZen is a thin Python client of the Zen App Server. It composes the IM Agent
-SDK at the complete ADR 0015 rollout commit merged to SDK `main`,
-`57f255fb1f40a095aeabb5a6967380ba057494a3`; it does not implement a second
+SDK through its public v1 surfaces at canonical commit
+`a03f3eab218d0088192f177265b5eebfc87c2e60` (acceptance wheel SHA-256
+`1616b1079248da279068c47c4ea047dab0b4d5aefb129aa3e22017140c2831f4`); it does not implement a second
 Gateway, Channel runtime, Agent backend, transcript, scheduler, or recovery
 state machine.
 
 The SDK owns Channel lifecycle, inbound admission/idempotency, typed
 Conversation bindings, Zen App Server translation, Thread projection,
-interactive-request routing, delivery planning, and the in-memory bridge
-repositories. IMZen owns only deployment configuration, product commands and
+interactive-request routing, delivery planning, and the coherent Gateway
+store. IMZen owns only deployment configuration, product commands and
 presets, approval/error presentation, generic-file manifest mapping, and the
 composition root.
 
-Conversation-to-Thread bindings remain in memory. Restarting IMZen therefore
-starts a new Zen Thread on the next ordinary message unless the user explicitly
-selects an existing Thread again.
+The configured public v1 `SQLiteGatewayStore` persists bridge state, including
+Conversation bindings, routes, checkpoints, and idempotency/effect receipts.
+It contains no Zen transcript or native execution state. `/new` explicitly
+clears the current binding; a restart may otherwise continue the persisted
+binding and the authoritative Thread remains in Zen's App Server.
 
 ## Configuration
 
@@ -39,8 +42,9 @@ default) or `approval-required`. Both use Zen's supported
 `IMZEN_GATEWAY_STATE_FILE` is required. It holds SDK-owned bridge state such as
 durable idempotency claims, including `side_effect_started`; this prevents a
 native redelivery after process restart from reauthorizing an input whose App
-Server outcome is unknown. Conversation bindings deliberately remain in memory,
-so this database is not a second Thread, transcript, queue, or Agent runtime.
+Server outcome is unknown. The public v1 store also persists Conversation
+bindings, routes, and bounded effect receipts. This database is not a second
+Thread, transcript, queue, or Agent runtime.
 
 `IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT` is an explicit deployment
 attestation that the external App Server can read that local directory. IMZen
@@ -95,39 +99,47 @@ the same bot credentials.
   routing authority. `/respond` remains the SDK's general typed command.
 
 Downloaded generic files are represented in the Zen input as an explicit
-`[Attachments]` text manifest with staged local paths. Images remain typed
-local-image input. QQ exposes text, file, and image as separate inbound message
-shapes; IMZen accepts attachment-only file and image messages directly and
-does not synthesize or join a caption from adjacent text messages. Markdown
-Agent output is delivered unchanged.
+`[Attachments]` text manifest with staged local paths. Images remain typed at
+the IM ingress boundary. The exact v1 wheel's public
+`ZenApplicationAdapter` currently raises `NotImplementedError` for path-only
+image input before native dispatch; IMZen reports the classified failure and
+does not patch or vendor SDK Core. QQ exposes text, file, and image as separate
+inbound message shapes; IMZen accepts attachment-only file messages directly
+and does not synthesize or join a caption from adjacent text messages.
+Markdown Agent output is delivered unchanged.
 
 ## Migration behavior matrix
 
-| Behavior                                    | Before                                  | After SDK migration                                             |
-| ------------------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
-| QQ/Telegram/Feishu/Weixin lifecycle         | IMZen middleware over borrowed adapters | SDK-native Channel adapters and Gateway lifecycle               |
-| Conversation binding                        | IMZen dictionaries                      | SDK `InMemoryBindingRepository`                                 |
-| Thread/Turn calls                           | IMZen App Server wrapper                | SDK `ZenApplicationAdapter`                                     |
-| Output projection and duplicate fencing     | IMZen local Gateway                     | SDK projection/idempotency pipeline                             |
-| `/new`, `/permission`, approval aliases     | IMZen product behavior                  | Thin `ImZenController` over SDK actions/native profile seam     |
-| `/model`                                    | IMZen product behavior                  | Explicit Zen native operation outside current typed contracts   |
-| `/threads`, `/pick`, `/catchup`, `/history` | IMZen-specific parsing/list cache       | SDK Slash Controller and authoritative reads                    |
-| Native Thread activation on `/pick`         | Resume side effect                      | Deliberately absent; binding and native activation are separate |
-| Generic files and images                    | Text manifest + local image input       | Same behavior through SDK content-adapter seam                  |
-| Processing failures                         | Middleware error message                | SDK classified failure phase + bounded IMZen presenter          |
-| Durable queue/recovery state                | None                                    | None                                                            |
+| Behavior                                    | Before                                  | After SDK migration                                              |
+| ------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------- |
+| QQ/Telegram/Feishu/Weixin lifecycle         | IMZen middleware over borrowed adapters | SDK-native Channel adapters and Gateway lifecycle                |
+| Conversation binding                        | IMZen dictionaries                      | SDK public `Gateway` actions and coherent SQLite store           |
+| Thread/Turn calls                           | IMZen App Server wrapper                | SDK `ZenApplicationAdapter`                                      |
+| Output projection and duplicate fencing     | IMZen local Gateway                     | SDK projection/idempotency pipeline                              |
+| `/new`, `/permission`, approval aliases     | IMZen product behavior                  | Thin `ImZenController` over SDK actions/native profile seam      |
+| `/model`                                    | IMZen product behavior                  | Explicit Zen native operation outside current typed contracts    |
+| `/threads`, `/pick`, `/catchup`, `/history` | IMZen-specific parsing/list cache       | SDK Slash Controller and authoritative reads                     |
+| Native Thread activation on `/pick`         | Resume side effect                      | Deliberately absent; binding and native activation are separate  |
+| Generic files and images                    | Text manifest + local image input       | Files supported; pinned public image path reports SDK limitation |
+| Processing failures                         | Middleware error message                | SDK classified failure phase + bounded IMZen presenter           |
+| Durable queue/recovery state                | None                                    | None                                                             |
 
 ## SDK migration dependency
 
-The pin is the complete SDK `main` commit after the focused rollout tracked by
-[SDK issue #49](https://github.com/albert-zen/im-agent-sdk/issues/49). IMZen
-composes immutable repository and extension groups. It configures only I1
+The pin is the exact canonical SDK commit
+`a03f3eab218d0088192f177265b5eebfc87c2e60`, mechanically validated against
+the acceptance wheel named above. IMZen composes immutable public Gateway and
+extension groups. It configures only I1
 inbound content transformation, I2 classified failure presentation, and request
 presentation; A1/O1/O2 remain absent because this consumer has no product-owned
 artifact materializer, destination presentation policy, or logical delivery
 observer.
 
-One upstream limitation remains explicit: the accepted App Server adapter API
+The current wheel's path-only image rejection is an upstream generic SDK
+defect: the public App Server adapter has no supported local-image dispatch
+path. The executable acceptance test preserves the failure rather than adding
+a private compatibility layer. One other upstream limitation remains explicit:
+the accepted App Server adapter API
 keeps per-call native Thread profiles on the concrete
 `create_thread_with_options` seam. A crash after native Thread creation but
 before Conversation binding can therefore leave an unbound Zen Thread and a
@@ -160,8 +172,9 @@ uv sync --all-extras
    with the shown stable request reference.
 6. Send one small generic file as a file-only QQ message; verify exactly one
    Turn receives its `[Attachments]` manifest.
-7. Send one image as an image-only QQ message; verify exactly one Turn receives
-   native local-image input without synthetic text.
+7. Send one image as an image-only QQ message; with the pinned wheel, verify
+   IMZen reports the explicit pre-dispatch failure and does not create a Turn.
+   Native local-image input remains an upstream SDK acceptance gap.
 8. Stop the App Server or force a Turn failure; verify an explicit classified
    IM error and no self-repair queue.
 

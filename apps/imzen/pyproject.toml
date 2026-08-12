@@ -9,12 +9,12 @@ description = "Thin IM channel client for the Zen App Server"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-  "im-agent-sdk[appserver,qq,telegram,weixin] @ git+https://github.com/albert-zen/im-agent-sdk.git@57f255fb1f40a095aeabb5a6967380ba057494a3",
+  "im-agent-sdk[appserver,qq,telegram,weixin] @ git+https://github.com/albert-zen/im-agent-sdk.git@a03f3eab218d0088192f177265b5eebfc87c2e60",
 ]
 
 [project.optional-dependencies]
 feishu = [
-  "im-agent-sdk[feishu] @ git+https://github.com/albert-zen/im-agent-sdk.git@57f255fb1f40a095aeabb5a6967380ba057494a3",
+  "im-agent-sdk[feishu] @ git+https://github.com/albert-zen/im-agent-sdk.git@a03f3eab218d0088192f177265b5eebfc87c2e60",
 ]
 dev = [
   "pytest>=8.3,<10",

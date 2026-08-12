@@ -7,25 +7,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from imagent.applications import ZenApplicationAdapter
-from imagent.applications.appserver_client import AppServerError
-from imagent.bindings import InMemoryBindingRepository
-from imagent.contracts import (
-    AttachmentContent,
-    ConversationRef,
-    InboundMessage,
-    LocalPath,
-    ProjectionPolicy,
-    TextContent,
-)
-from imagent.gateway import (
+from imagent import (
+    Gateway,
     GatewayExtensions,
-    GatewayRepositories,
-    ImAgentGateway,
-    InboundFailurePhase,
+    MemoryGatewayStore,
+    ProjectionPolicy,
+    SQLiteGatewayStore,
 )
-from imagent.storage import SQLiteGatewayState
-from imagent.testing import FakeChannelAdapter
+from imagent.applications import ZenApplicationAdapter
+from imagent.applications.adapters.appserver.client import AppServerError
+from imagent.gateway.input import InboundFailurePhase
+from imagent.interaction.media import AttachmentContent, LocalPath
+from imagent.interaction.messages import ConversationRef, InboundMessage, TextContent
+from imagent.interaction.testing import FakeChannelAdapter
 
 from imzen.controller import (
     ImZenContentTransformer,
@@ -206,9 +200,8 @@ class FakeAppServer:
         message = {
             "id": request_id,
             "method": "item/commandExecution/requestApproval",
+            "_connection_epoch": self.connection_epoch,
             "params": {
-                "_transport_request_id": request_id,
-                "_connection_epoch": self.connection_epoch,
                 "threadId": thread_id,
                 "turnId": turn_id,
                 "command": "echo hello",
@@ -253,21 +246,20 @@ def compose(
     application = ZenApplicationAdapter(
         application_instance_id="zen-main",
         client=resolved_client,
+        workspace_id="test-workspace",
         cwd=str(tmp_path),
         shared_filesystem_root=tmp_path,
         thread_start_options=thread_start_options("full-access"),
     )
     controller = ImZenController(application=application, client=resolved_client)
-    gateway = ImAgentGateway(
+    gateway = Gateway(
+        gateway_id="test",
         channels=[channel],
         applications=[application],
-        repositories=GatewayRepositories(
-            bindings=InMemoryBindingRepository(),
-            idempotency=idempotency,
-        ),
+        store=idempotency or MemoryGatewayStore(),
+        controller=controller,
         projection_policy=ProjectionPolicy.FOREGROUND_ONLY,
         extensions=GatewayExtensions(
-            controller=controller,
             inbound_content_transformer=ImZenContentTransformer(),
             inbound_failure_presenter=ImZenFailurePresenter(),
             request_presenter=ImZenRequestPresenter(),
@@ -492,11 +484,9 @@ async def test_command_approval_round_trips_with_stable_sdk_request_ref(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_generic_files_become_manifest_while_images_stay_native(tmp_path: Path) -> None:
+async def test_generic_files_become_manifest_through_public_appserver(tmp_path: Path) -> None:
     document = tmp_path / "design.txt"
-    image = tmp_path / "diagram.png"
     document.write_text("design", encoding="utf-8")
-    image.write_bytes(b"png")
     gateway, channel, client = compose(tmp_path)
     message = inbound(
         "m1",
@@ -509,13 +499,6 @@ async def test_generic_files_become_manifest_while_images_stay_native(tmp_path: 
                 filename="design.txt",
                 size_bytes=document.stat().st_size,
             ),
-            AttachmentContent(
-                attachment_id="image-1",
-                media_type="image/png",
-                source=LocalPath(str(image)),
-                filename="diagram.png",
-                size_bytes=image.stat().st_size,
-            ),
         ),
     )
     await gateway.start()
@@ -524,15 +507,8 @@ async def test_generic_files_become_manifest_while_images_stay_native(tmp_path: 
     finally:
         await gateway.stop()
 
-    thread_id, text, options = client.started_turns[0]
-    assert thread_id == "thread-1"
-    assert text is None
-    assert options["input_items"] == [
-        {
-            "type": "text",
-            "text": f"Review these\n\n[Attachments]\n- design.txt: {document}",
-        },
-        {"type": "localImage", "path": str(image)},
+    assert client.started_turns == [
+        ("thread-1", f"Review these\n\n[Attachments]\n- design.txt: {document}", {})
     ]
 
 
@@ -563,7 +539,7 @@ async def test_attachment_only_file_becomes_one_manifest_turn(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_attachment_only_image_stays_native_without_synthetic_text(tmp_path: Path) -> None:
+async def test_public_sdk_image_path_defect_is_not_masked_locally(tmp_path: Path) -> None:
     image = tmp_path / "photo.png"
     image.write_bytes(b"png")
     gateway, channel, client = compose(tmp_path)
@@ -585,16 +561,11 @@ async def test_attachment_only_image_stays_native_without_synthetic_text(tmp_pat
     finally:
         await gateway.stop()
 
-    assert client.started_turns == [
-        (
-            "thread-1",
-            None,
-            {
-                "input_items": [{"type": "localImage", "path": str(image)}],
-                "expected_local_image_epoch": 1,
-            },
-        )
-    ]
+    # The exact v1 wheel's public ZenApplicationAdapter raises
+    # NotImplementedError for path-only image input. IMZen deliberately does
+    # not import or patch SDK Core to restore that generic capability.
+    assert client.started_turns == []
+    assert sent_texts(channel) == ["**Error:** Zen could not process this message."]
 
 
 @pytest.mark.asyncio
@@ -623,34 +594,30 @@ async def test_application_failure_is_reported_to_the_originating_message(tmp_pa
 async def test_outcome_unknown_is_not_reauthorized_after_restart(tmp_path: Path) -> None:
     state_path = tmp_path / "gateway.sqlite3"
     message = inbound("m1", "hello")
-    first_state = SQLiteGatewayState(state_path)
     first_client = FakeAppServer()
     first_client.fail_turn = RuntimeError("connection lost")
     first_gateway, first_channel, _ = compose(
         tmp_path,
         first_client,
-        idempotency=first_state,
+        idempotency=SQLiteGatewayStore(state_path),
     )
     await first_gateway.start()
     try:
         await first_channel.emit_message(message)
     finally:
         await first_gateway.stop()
-        await first_state.close()
 
-    reopened_state = SQLiteGatewayState(state_path, stale_claim_after_seconds=0)
     second_client = FakeAppServer()
     second_gateway, second_channel, _ = compose(
         tmp_path,
         second_client,
-        idempotency=reopened_state,
+        idempotency=SQLiteGatewayStore(state_path, stale_claim_after_seconds=0),
     )
     await second_gateway.start()
     try:
         await second_channel.emit_message(message)
     finally:
         await second_gateway.stop()
-        await reopened_state.close()
 
     assert len(first_client.started_turns) == 1
     assert second_client.started_threads == []

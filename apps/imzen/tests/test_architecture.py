@@ -20,6 +20,25 @@ def test_imzen_uses_the_sdk_without_recreating_agent_or_bridge_layers():
         assert marker not in source
 
 
+def test_imzen_composes_only_public_v1_sdk_surfaces():
+    source_root = Path(__file__).parents[1] / "src" / "imzen"
+    source = "\n".join(path.read_text(encoding="utf-8") for path in source_root.rglob("*.py"))
+    forbidden = (
+        "imagent.applications.appserver_client",
+        "imagent.bindings",
+        "imagent.contracts",
+        "imagent.controllers",
+        "imagent.storage",
+        "imagent.testing",
+        "GatewayRepositories",
+        "ImAgentGateway",
+        "SQLiteGatewayState",
+    )
+
+    for marker in forbidden:
+        assert marker not in source
+
+
 def test_imzen_keeps_only_product_composition_modules():
     source_root = Path(__file__).parents[1] / "src" / "imzen"
     modules = {path.name for path in source_root.glob("*.py")}

@@ -45,23 +45,25 @@ IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它
 架构层。实现策略是**组合 IM Agent SDK，不在产品内复制 bridge runtime**：
 
 - 固定 commit 的 `im-agent-sdk` 提供 QQ/Telegram/飞书/微信 Channel adapters、
-  `ImAgentGateway`、`ZenApplicationAdapter`、App Server client、typed contracts、
-  projection/request routing 与 in-memory binding repository。
+  public `Gateway`、`ZenApplicationAdapter`、App Server client、typed interaction
+  contracts、projection/request routing 与 coherent store。
 - IMZen 拥有自己的进程、channel 配置与 credential；不读取其他产品的配置或
   状态，也不要求共用机器人账号。
 - IMZen 代码只保留环境配置、SDK channel factory 调用、产品命令/权限预设、
   通用文件到文字 manifest 的映射、错误/审批呈现和 composition root。
-- Conversation → Thread binding 使用 SDK 的内存 repository；重启后从下一条消息
-  新建 Thread，或由用户 `/threads` + `/pick` 重新选择。SDK SQLite repository
-  只持久化 inbound/outbound 幂等等 bridge state，防止重启重新授权已有或结果未知
-  的 native message；两者都不是 Zen 会话权威，也不进入 ItemList。
+- Conversation → Thread binding 使用 SDK public Gateway actions 与 SQLite store；
+  store 只持久化 binding、projection/checkpoint、inbound/outbound 幂等等 bridge
+  state，防止重启重新授权已有或结果未知的 native message。它不是 Zen 会话权威，
+  不进入 ItemList，也不保存 transcript 或 native execution state。
 - 切换 Thread 只改变 Gateway binding，不隐式改变任何原生 UI 的 active Thread；
   status/history/catch-up 均从 Zen App Server 的权威投影读取。
 - 投递或处理失败通过 SDK 的终态 failure presenter 明确告知用户；不在 IMZen
   新建 durable queue、outbox 或自我修复状态机。
 
-SDK 依赖固定在已合入 `im-agent-sdk` `main` 的完整 ADR 0015 rollout 提交
-`57f255fb1f40a095aeabb5a6967380ba057494a3`。IMZen 只配置它实际使用的强类型
+SDK 依赖固定在 `im-agent-sdk` canonical 提交
+`a03f3eab218d0088192f177265b5eebfc87c2e60`，并以验收 wheel
+`1616b1079248da279068c47c4ea047dab0b4d5aefb129aa3e22017140c2831f4` 机械校验。
+IMZen 只配置它实际使用的 public v1 强类型
 I1 inbound content transformer、I2 classified failure presenter 与 request
 presenter；其他扩展位置缺席，因此保持 SDK 默认行为。
 
