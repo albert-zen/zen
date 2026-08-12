@@ -17,11 +17,10 @@ interface RetirementFailure {
   readonly transactionOrder: number;
   readonly ancestry: readonly number[];
   readonly occurrence: number;
-  readonly error: unknown;
+  readonly error: Error;
 }
 
-type RetirementOutcome =
-  { readonly ok: true } | { readonly ok: false; readonly error: unknown };
+type RetirementOutcome = { readonly ok: true } | { readonly ok: false };
 
 class RootRetirementClosure {
   readonly #rootOrder: number;
@@ -58,7 +57,7 @@ class RootRetirementClosure {
     if (existing !== undefined) return existing;
     const outcome = retirement.then<RetirementOutcome, RetirementOutcome>(
       () => ({ ok: true }),
-      (error: unknown) => ({ ok: false, error }),
+      () => ({ ok: false }),
     );
     if (this.#observations.size >= MAX_RETIREMENT_OUTCOMES) {
       this.record(
@@ -88,7 +87,7 @@ class RootRetirementClosure {
         transactionOrder,
         ancestry,
         occurrence,
-        error,
+        error: normalizeRetirementFailure(error),
       });
     } else {
       this.#failureEvidenceSaturated = true;
@@ -106,7 +105,7 @@ class RootRetirementClosure {
     this.#notifyFailureListeners();
   }
 
-  failuresFor(transactionOrder: number): unknown[] {
+  failuresFor(transactionOrder: number): Error[] {
     return this.#failureRecordsFor(transactionOrder).map(
       (failure) => failure.error,
     );
@@ -390,10 +389,17 @@ function describeError(error: unknown): string {
   return `${message.slice(0, MAX_RETIREMENT_ERROR_DESCRIPTION_LENGTH - 1)}…`;
 }
 
-function aggregateRetirementFailures(failures: unknown[]): AggregateError {
+function normalizeRetirementFailure(error: unknown): Error {
+  return new Error(describeError(error));
+}
+
+function aggregateRetirementFailures(
+  failures: readonly Error[],
+): AggregateError {
+  const diagnostics = failures.map(normalizeRetirementFailure);
   return new AggregateError(
-    failures,
-    `Could not fully retire title ownership transaction: ${failures
+    diagnostics,
+    `Could not fully retire title ownership transaction: ${diagnostics
       .map(describeError)
       .join("; ")}`,
   );

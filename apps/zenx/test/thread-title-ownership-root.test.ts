@@ -295,6 +295,88 @@ test("late predecessor poison closes a successor read already in flight", async 
   });
 });
 
+test("late predecessor poison fences an already initialized successor domain", async () => {
+  await withDirectory(async (directory) => {
+    const unhandled: unknown[] = [];
+    const listener = (error: unknown) => unhandled.push(error);
+    process.on("unhandledRejection", listener);
+    try {
+      const file = path.join(directory, "titles.json");
+      const mirrors: Array<ReturnType<typeof deferred<void>>> = [];
+      const store = new ZenXThreadTitleStore(file);
+      const predecessor = coordinator(store, undefined, 0);
+      await predecessor.initialize();
+      const oldRoot = predecessor.createOwnershipTransaction({
+        deadlineMs: 0,
+      }).root;
+      await predecessor.stop();
+
+      const successor = coordinator(
+        new ZenXThreadTitleStore(path.relative(process.cwd(), file)),
+        async () => {
+          const mirror = deferred<void>();
+          mirrors.push(mirror);
+          await mirror.promise;
+        },
+        0,
+      );
+      await successor.initialize();
+      await successor.rename("thread-a", "successor before poison");
+      await until(() => mirrors.length === 1);
+
+      const late = new ZenXThreadTitleOwnershipTransaction(
+        {
+          deadlineMs: 0,
+          schedule: () => {
+            throw new Error("late predecessor poison");
+          },
+        },
+        oldRoot,
+      );
+      void late.retire();
+      await tick();
+
+      assert.match(
+        oldRoot.retirementFailure()?.message ?? "",
+        /late predecessor poison/u,
+      );
+      assert.throws(() => successor.snapshot(), /late predecessor poison/u);
+      assert.throws(
+        () => successor.createOwnershipTransaction(),
+        /late predecessor poison/u,
+      );
+      await assert.rejects(
+        successor.rename("thread-b", "must not commit or mirror"),
+        /late predecessor poison/u,
+      );
+      await assert.rejects(
+        successor.synchronizeNativeName("thread-a", "native authority"),
+        /late predecessor poison/u,
+      );
+      await assert.rejects(successor.stop(), /late predecessor poison/u);
+      assert.equal(mirrors.length, 1);
+
+      const aliased = coordinator(new ZenXThreadTitleStore(file));
+      await aliased.initialize();
+      assert.throws(() => aliased.snapshot(), /late predecessor poison/u);
+
+      const unrelated = coordinator(
+        new ZenXThreadTitleStore(path.join(directory, "unrelated.json")),
+      );
+      await unrelated.initialize();
+      assert.deepEqual(unrelated.snapshot(), {});
+      await unrelated.close();
+
+      mirrors[0]?.resolve();
+      await tick();
+      assert.equal(mirrors.length, 1);
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+  });
+});
+
 test("retirement registration and failure evidence stay hard-bounded", async () => {
   const unhandled: unknown[] = [];
   const listener = (error: unknown) => unhandled.push(error);
@@ -332,6 +414,56 @@ test("retirement registration and failure evidence stay hard-bounded", async () 
       assert.ok(error.message.length <= 12_000);
       return true;
     });
+    await tick();
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", listener);
+  }
+});
+
+test("stored and exposed retirement failures are deterministic bounded copies", async () => {
+  const unhandled: unknown[] = [];
+  const listener = (error: unknown) => unhandled.push(error);
+  process.on("unhandledRejection", listener);
+  try {
+    const root = new ZenXThreadTitleOwnershipTransaction({ deadlineMs: 0 });
+    for (let index = 0; index < 64; index += 1) {
+      const child = root.fork({ deadlineMs: 0 });
+      child.onRetire(() => {
+        if (index === 0) {
+          throw {
+            message: "object-" + "x".repeat(1_000),
+            cause: { secretGraph: "must not be retained" },
+          };
+        }
+        throw new Error(`failure-${String(index)}-${"y".repeat(1_000)}`, {
+          cause: { secretGraph: "must not be retained" },
+        });
+      });
+    }
+
+    await assert.rejects(root.retire(), (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.errors.length, 64);
+      for (const entry of error.errors) {
+        assert.ok(entry instanceof Error);
+        assert.ok(entry.message.length <= 160);
+        assert.equal(entry.cause, undefined);
+      }
+      assert.equal(error.errors[0]?.message, "[object Object]");
+      assert.match(error.errors[1]?.message ?? "", /^failure-1-y+…$/u);
+      assert.ok(error.message.length <= 12_000);
+      return true;
+    });
+
+    const repeated = root.retirementFailure();
+    assert.ok(repeated instanceof AggregateError);
+    assert.deepEqual(
+      repeated.errors.map((entry) => entry.message),
+      (await rejectedAggregate(root.retire())).errors.map(
+        (entry) => entry.message,
+      ),
+    );
     await tick();
     assert.deepEqual(unhandled, []);
   } finally {
@@ -630,4 +762,16 @@ async function tick(): Promise<void> {
 
 async function delay(milliseconds: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function rejectedAggregate(
+  operation: Promise<void>,
+): Promise<AggregateError> {
+  try {
+    await operation;
+  } catch (error) {
+    assert.ok(error instanceof AggregateError);
+    return error;
+  }
+  assert.fail("Expected AggregateError rejection");
 }

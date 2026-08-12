@@ -32,7 +32,7 @@ export interface ZenXThreadTitleStoreFileSystem {
  * publishes a non-current owner.
  */
 export interface ZenXThreadTitleOwnershipStore {
-  readonly ownershipDomain: object;
+  readonly ownershipDomain: ZenXThreadTitleOwnershipDomain;
   claim(
     owner: ZenXThreadTitleOwnershipTransaction,
   ): Promise<ThreadTitleSnapshot>;
@@ -40,6 +40,11 @@ export interface ZenXThreadTitleOwnershipStore {
     snapshot: ThreadTitleSnapshot,
     owner: ZenXThreadTitleOwnershipTransaction,
   ): Promise<boolean>;
+}
+
+export interface ZenXThreadTitleOwnershipDomain {
+  failure(): Error | undefined;
+  onFailure(listener: (failure: Error) => void): () => void;
 }
 
 const nodeFileSystem: ZenXThreadTitleStoreFileSystem = {
@@ -51,6 +56,7 @@ const nodeFileSystem: ZenXThreadTitleStoreFileSystem = {
 };
 
 const MAX_OWNERSHIP_DOMAINS_PER_BACKEND = 64;
+const MAX_OWNERSHIP_DOMAIN_FAILURE_LISTENERS = 128;
 const nodeFileSystemBackendIdentity = {};
 const protocolRegistries = new WeakMap<
   object,
@@ -77,7 +83,7 @@ export function canonicalTitleProjectionKey(
 export class ZenXThreadTitleStore implements ZenXThreadTitleOwnershipStore {
   readonly #protocol: ZenXThreadTitleStoreProtocol;
 
-  get ownershipDomain(): object {
+  get ownershipDomain(): ZenXThreadTitleOwnershipDomain {
     return this.#protocol;
   }
 
@@ -195,6 +201,7 @@ function canonicalProjectionPath(
 class ZenXThreadTitleStoreProtocol {
   readonly #filePath: string;
   readonly #fileSystem: ZenXThreadTitleStoreFileSystem;
+  readonly #failureListeners = new Set<(failure: Error) => void>();
   #currentRoot: ZenXThreadTitleOwnershipTransaction | undefined;
   #tail = Promise.resolve();
   #failure: Error | undefined;
@@ -203,6 +210,28 @@ class ZenXThreadTitleStoreProtocol {
   constructor(filePath: string, fileSystem: ZenXThreadTitleStoreFileSystem) {
     this.#filePath = filePath;
     this.#fileSystem = fileSystem;
+  }
+
+  failure(): Error | undefined {
+    return this.#failure;
+  }
+
+  onFailure(listener: (failure: Error) => void): () => void {
+    if (this.#failureListeners.size >= MAX_OWNERSHIP_DOMAIN_FAILURE_LISTENERS) {
+      const failure = this.#poisonRetirement(
+        new Error(
+          `Title ownership domain reached its bounded capacity of ${String(
+            MAX_OWNERSHIP_DOMAIN_FAILURE_LISTENERS,
+          )} failure listeners`,
+        ),
+      );
+      this.#notifyFailureListener(listener, failure);
+      return () => undefined;
+    }
+    this.#failureListeners.add(listener);
+    if (this.#failure !== undefined)
+      this.#notifyFailureListener(listener, this.#failure);
+    return () => this.#failureListeners.delete(listener);
   }
 
   claim(
@@ -378,7 +407,20 @@ class ZenXThreadTitleStoreProtocol {
       `ZenX title-store ownership retirement failed: ${describeError(error)}`,
       { cause: error },
     );
+    for (const listener of this.#failureListeners)
+      this.#notifyFailureListener(listener, this.#failure);
     return this.#failure;
+  }
+
+  #notifyFailureListener(
+    listener: (failure: Error) => void,
+    failure: Error,
+  ): void {
+    try {
+      listener(failure);
+    } catch {
+      // The domain remains poisoned even if a transient observer is gone.
+    }
   }
 
   #serial<T>(operation: () => Promise<T>): Promise<T> {

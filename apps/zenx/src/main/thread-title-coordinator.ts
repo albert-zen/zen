@@ -28,11 +28,13 @@ export class ZenXThreadTitleCoordinator {
   readonly #ownershipOptions: ZenXThreadTitleOwnershipTransactionOptions;
   readonly #nativeMirrors: NativeMirrorQueue;
   readonly #setNativeName: (threadId: string, title: string) => Promise<void>;
+  readonly #disposeDomainFailure: () => void;
   readonly #generationOwners = new Map<string, GenerationOwner>();
   #owner: ZenXThreadTitleOwnershipTransaction;
   #snapshot: ThreadTitleSnapshot = {};
   #mutation = Promise.resolve();
   #initializationError: Error | undefined;
+  #domainFailure: Error | undefined;
   #initialized = false;
 
   constructor(options: {
@@ -51,6 +53,12 @@ export class ZenXThreadTitleCoordinator {
       this.#ownershipOptions,
     );
     this.#nativeMirrors = nativeMirrorQueue(options.store.ownershipDomain);
+    this.#disposeDomainFailure = options.store.ownershipDomain.onFailure(
+      (failure) => {
+        this.#domainFailure ??= failure;
+        void this.#owner.retire().catch(() => undefined);
+      },
+    );
   }
 
   async initialize(): Promise<void> {
@@ -80,6 +88,7 @@ export class ZenXThreadTitleCoordinator {
       this.#initializationError = lateFailure;
       throw lateFailure;
     }
+    if (this.#domainFailure !== undefined) throw this.#domainFailure;
   }
 
   async close(): Promise<void> {
@@ -87,6 +96,7 @@ export class ZenXThreadTitleCoordinator {
       await this.stop();
     } finally {
       this.#listeners.clear();
+      this.#disposeDomainFailure();
     }
   }
 
@@ -407,6 +417,12 @@ export class ZenXThreadTitleCoordinator {
   }
 
   #assertAvailable(): void {
+    if (this.#domainFailure !== undefined) {
+      throw new Error(
+        `ZenX thread titles are unavailable: ${this.#domainFailure.message}`,
+        { cause: this.#domainFailure },
+      );
+    }
     const retirementFailure = this.#owner.retirementFailure();
     if (retirementFailure !== undefined) {
       throw new Error(

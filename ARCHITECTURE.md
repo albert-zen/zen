@@ -102,8 +102,12 @@
   retirement outcome 与 64 条 failure evidence；超限只保留一个确定性的 saturation failure 并拒绝继续登记，
   hook/failure-listener 各自硬限 64、tracked-work 硬限 128。parent retirement 已结束后才出现的合法 child 仍立即登记到
   同一 root failure closure；store 从第一次 claim 起订阅该 closure，cached retire 曾成功也必须重新检查 late
-  poison。退休的 quiescence deadline 为 250ms，timeout 只终止等待而所有迟到 promise 仍已注册 rejection
-  observer；它不引入 durable retry、scheduler 或 queue。
+  poison；store domain 再以最多 128 个 transient listener（容纳同一 accepted coordinator handoff 上限）将 poison
+  同步投给当前 successor，使其 root、snapshot、
+  transaction 创建与 native mirror authority 一并 fenced。每条 failure 在进入 closure 时即复制为无 cause/对象图、
+  message 最多 160 字符的确定性 Error，`AggregateError.errors` 不保留原始 throw value。退休的 quiescence deadline
+  为 250ms，timeout 只终止等待而所有迟到 promise 仍已注册 rejection observer；它不引入 durable retry、scheduler
+  或 queue。
 - **ZenXThreadTitleProjectionIdentity** — 默认文件 backend 以“最近存在祖先的 native realpath + 尚不存在的规范化
   suffix”形成 process-local projection key，Windows 上再按不区分大小写的 pathname 语义折叠，因此 relative、
   absolute、symlink/canonical 与文件尚不存在时的 case aliases 共享 identity；不同 key 不共享。注入 backend
