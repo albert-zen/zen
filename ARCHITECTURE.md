@@ -91,7 +91,26 @@
 - **ZenXTitleInference** — ZenX 主进程使用独立配置的标题模型执行一次不写 journal、
   不创建 Turn 的辅助推理；credential 仍只在主进程内存中按当前 Provider 解析。
 - **ZenXThreadTitleCoordinator** — ZenX 主进程从首条有意义的来源标注输入立即建立
-  provisional 投影，并异步协调生成、显式重试与 authoritative manual rename。
+  provisional 投影，并异步协调生成、显式重试与 authoritative manual rename；同一 durable
+  projection 在一个进程内只能有一个 root ownership domain，coordinator、store 与 native mirror
+  queue 都复用该 domain，不创建第二套 runtime 或 coordinator。
+- **ZenXThreadTitleOwnershipRoot** — 每个标题 ownership domain 的瞬时 root closure 在任何 nested
+  transaction 可能拒绝前同步登记其 retirement outcome，并按 transaction/发生顺序有界聚合 abort、hook、
+  scheduler 与 cleanup 失败；`stop`、successor claim 与 fresh read 都对 predecessor 的任一 nested retirement
+  failure fail closed，且 poison 只留在该 domain。退休的 quiescence deadline 为 250ms，timeout 只终止等待而
+  所有迟到 promise 仍已注册 rejection observer；它不引入 durable retry、scheduler 或 queue。
+- **ZenXThreadTitleProjectionIdentity** — 默认文件 backend 以“最近存在祖先的 native realpath + 尚不存在的规范化
+  suffix”形成 process-local projection key，Windows 上再按不区分大小写的 pathname 语义折叠，因此 relative、
+  absolute、symlink/canonical 与文件尚不存在时的 case aliases 共享 identity；不同 key 不共享。注入 backend
+  必须提供显式稳定的 backend identity，domain key 是 backend identity 与 projection key 的二元组，pathname
+  文本绝不跨 backend 合并。每个 backend 的 process-local registry 只持有最多 64 个 stable domain entry，
+  容量用尽时明确失败；backend registry 本身以 identity 为弱键，不持久化、也不成为第二个协调层。
+- **ZenXThreadTitleOwnershipStore** — ownership-aware store 在共享 domain 内同步 claim owner、串行 read/stage/
+  atomic replace/compensation/cleanup，并禁止 retired owner 发布；任何无法确认或补偿的结果 poison 该 domain，
+  successor 不得通过别名重新取得一份健康状态。custom store 必须显式提供同等稳定的 `ownershipDomain`。
+- **ZenXThreadTitleNativeMirrorQueue** — generated/manual 标题才进入与 ownership domain 完全同 identity 的瞬时镜像
+  queue；每个 native notification 都是 authoritative，迟到 retired resolve/reject 只合并修复当前 successor，
+  active/queued/quarantined/reservation/diagnostic 状态合计硬限 64 且 exactly-once release。
 - **ZenXThreadTitleNotificationObserver** — ZenX 主进程在 App Server canonical
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
 

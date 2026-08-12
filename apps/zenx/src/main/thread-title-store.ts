@@ -1,28 +1,332 @@
-import { mkdir, open, rename, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { ZenXThreadTitleOwnershipTransaction } from "./thread-title-ownership-transaction.js";
 import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
 } from "./thread-title-types.js";
 
-export class ZenXThreadTitleStore {
-  readonly #filePath: string;
+export interface ZenXThreadTitleStoreFileSystem {
+  mkdir(
+    directory: string,
+    options: { recursive: true; mode: number },
+  ): Promise<unknown>;
+  readFile(file: string, encoding: "utf8"): Promise<string>;
+  writeFile(
+    file: string,
+    data: string,
+    options: { encoding: "utf8"; mode: number },
+  ): Promise<void>;
+  rename(source: string, destination: string): Promise<void>;
+  rm(file: string, options: { force: true }): Promise<void>;
+}
 
-  constructor(filePath: string) {
-    this.#filePath = path.resolve(filePath);
+/**
+ * Custom title stores must implement this ownership-aware contract. `claim`
+ * synchronously supersedes the prior root owner before its serialized read;
+ * every instance for the same durable projection shares that serialized
+ * ownership domain and stable `ownershipDomain` identity, predecessor
+ * retirement rejection is observed before the read, and `commit` never
+ * publishes a non-current owner.
+ */
+export interface ZenXThreadTitleOwnershipStore {
+  readonly ownershipDomain: object;
+  claim(
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): Promise<ThreadTitleSnapshot>;
+  commit(
+    snapshot: ThreadTitleSnapshot,
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): Promise<boolean>;
+}
+
+const nodeFileSystem: ZenXThreadTitleStoreFileSystem = {
+  mkdir,
+  readFile,
+  writeFile,
+  rename,
+  rm,
+};
+
+const MAX_OWNERSHIP_DOMAINS_PER_BACKEND = 64;
+const nodeFileSystemBackendIdentity = {};
+const protocolRegistries = new WeakMap<
+  object,
+  Map<string, ZenXThreadTitleStoreProtocol>
+>();
+
+export interface CanonicalTitleProjectionKeyOptions {
+  platform?: NodeJS.Platform;
+  cwd?: string;
+  realpath?: (candidate: string) => string;
+}
+
+/**
+ * Resolves aliases through the nearest existing ancestor so the key is stable
+ * even before the projection file itself exists.
+ */
+export function canonicalTitleProjectionKey(
+  filePath: string,
+  options: CanonicalTitleProjectionKeyOptions = {},
+): string {
+  return canonicalProjectionPath(filePath, options).key;
+}
+
+export class ZenXThreadTitleStore implements ZenXThreadTitleOwnershipStore {
+  readonly #protocol: ZenXThreadTitleStoreProtocol;
+
+  get ownershipDomain(): object {
+    return this.#protocol;
   }
 
-  async read(): Promise<ThreadTitleSnapshot> {
-    let handle;
-    try {
-      handle = await open(this.#filePath, "r");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-      throw error;
+  constructor(
+    filePath: string,
+    options: {
+      fileSystem?: ZenXThreadTitleStoreFileSystem;
+      backendIdentity?: object;
+    } = {},
+  ) {
+    if (
+      options.fileSystem !== undefined &&
+      options.backendIdentity === undefined
+    ) {
+      throw new Error(
+        "Injected title-store fileSystem requires an explicit stable backendIdentity",
+      );
     }
+    if (
+      options.fileSystem === undefined &&
+      options.backendIdentity !== undefined
+    ) {
+      throw new Error(
+        "backendIdentity is only valid with an injected title-store fileSystem",
+      );
+    }
+    const backendIdentity =
+      options.backendIdentity ?? nodeFileSystemBackendIdentity;
+    const canonical = canonicalProjectionPath(filePath);
+    this.#protocol = protocolFor(
+      backendIdentity,
+      canonical.key,
+      () =>
+        new ZenXThreadTitleStoreProtocol(
+          canonical.filePath,
+          options.fileSystem ?? nodeFileSystem,
+        ),
+    );
+  }
+
+  claim(
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): Promise<ThreadTitleSnapshot> {
+    return this.#protocol.claim(owner);
+  }
+
+  commit(
+    snapshot: ThreadTitleSnapshot,
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): Promise<boolean> {
+    return this.#protocol.commit(snapshot, owner);
+  }
+}
+
+function protocolFor(
+  backendIdentity: object,
+  projectionKey: string,
+  create: () => ZenXThreadTitleStoreProtocol,
+): ZenXThreadTitleStoreProtocol {
+  let registry = protocolRegistries.get(backendIdentity);
+  if (registry === undefined) {
+    registry = new Map();
+    protocolRegistries.set(backendIdentity, registry);
+  }
+  const existing = registry.get(projectionKey);
+  if (existing !== undefined) return existing;
+  if (registry.size >= MAX_OWNERSHIP_DOMAINS_PER_BACKEND) {
+    throw new Error(
+      `Title ownership-domain registry reached its bounded capacity of ${String(
+        MAX_OWNERSHIP_DOMAINS_PER_BACKEND,
+      )}`,
+    );
+  }
+  const protocol = create();
+  registry.set(projectionKey, protocol);
+  return protocol;
+}
+
+function canonicalProjectionPath(
+  filePath: string,
+  options: CanonicalTitleProjectionKeyOptions = {},
+): { readonly filePath: string; readonly key: string } {
+  const platform = options.platform ?? process.platform;
+  const pathApi = platform === "win32" ? path.win32 : path;
+  const cwd = options.cwd ?? process.cwd();
+  const resolveRealpath = options.realpath ?? realpathSync.native;
+  const unresolved: string[] = [];
+  let cursor = pathApi.resolve(cwd, filePath);
+  let canonical: string | undefined;
+
+  while (canonical === undefined) {
     try {
-      const value: unknown = JSON.parse(await handle.readFile("utf8"));
+      canonical = resolveRealpath(cursor);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = pathApi.dirname(cursor);
+      if (parent === cursor) {
+        canonical = cursor;
+        break;
+      }
+      unresolved.unshift(pathApi.basename(cursor));
+      cursor = parent;
+    }
+  }
+  const physicalPath = pathApi.normalize(
+    pathApi.join(canonical, ...unresolved),
+  );
+  return {
+    filePath: physicalPath,
+    key: platform === "win32" ? physicalPath.toLowerCase() : physicalPath,
+  };
+}
+
+class ZenXThreadTitleStoreProtocol {
+  readonly #filePath: string;
+  readonly #fileSystem: ZenXThreadTitleStoreFileSystem;
+  #currentRoot: ZenXThreadTitleOwnershipTransaction | undefined;
+  #tail = Promise.resolve();
+  #failure: Error | undefined;
+  #temporarySequence = 0;
+
+  constructor(filePath: string, fileSystem: ZenXThreadTitleStoreFileSystem) {
+    this.#filePath = filePath;
+    this.#fileSystem = fileSystem;
+  }
+
+  claim(
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): Promise<ThreadTitleSnapshot> {
+    const root = owner.root;
+    let retirement: Promise<RetirementOutcome> | undefined;
+    if (this.#currentRoot !== root) {
+      const previous = this.#currentRoot;
+      this.#currentRoot = root;
+      if (previous !== undefined) retirement = observeRetirement(previous);
+    }
+    const operation = this.#serial(async () => {
+      if (retirement !== undefined) {
+        const outcome = await retirement;
+        if (!outcome.ok) {
+          const failure = new Error(
+            `ZenX title-store ownership retirement failed: ${describeError(outcome.error)}`,
+            { cause: outcome.error },
+          );
+          this.#failure = failure;
+          throw failure;
+        }
+      }
+      this.#assertHealthy();
+      if (!this.#owns(owner))
+        throw new Error("Title ownership changed before the store read");
+      return await this.#readSnapshot();
+    });
+    return owner.track(operation);
+  }
+
+  commit(
+    snapshot: ThreadTitleSnapshot,
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): Promise<boolean> {
+    const operation = this.#serial(async () => {
+      this.#assertHealthy();
+      if (!this.#owns(owner)) return false;
+      return await this.#commitSnapshot(snapshot, owner);
+    });
+    return owner.track(operation);
+  }
+
+  async #commitSnapshot(
+    snapshot: ThreadTitleSnapshot,
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): Promise<boolean> {
+    const directory = path.dirname(this.#filePath);
+    const temporary = this.#temporaryPath(owner, "stage");
+    let staged = false;
+    let primaryError: unknown;
+    try {
+      await this.#fileSystem.mkdir(directory, { recursive: true, mode: 0o700 });
+      if (!this.#owns(owner)) return false;
+      const previous = await this.#readRaw();
+      if (!this.#owns(owner)) return false;
+      staged = true;
+      await this.#fileSystem.writeFile(
+        temporary,
+        `${JSON.stringify(snapshot, null, 2)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      if (!this.#owns(owner)) return false;
+      await this.#fileSystem.rename(temporary, this.#filePath);
+      staged = false;
+      if (this.#owns(owner)) return true;
+      try {
+        await this.#restore(previous, owner);
+      } catch (error) {
+        const failure = new Error(
+          `ZenX title-store ownership compensation failed: ${describeError(error)}`,
+          { cause: error },
+        );
+        this.#failure = failure;
+        throw failure;
+      }
+      return false;
+    } catch (error) {
+      primaryError = error;
+      throw error;
+    } finally {
+      if (staged) {
+        try {
+          await this.#fileSystem.rm(temporary, { force: true });
+        } catch (cleanupError) {
+          if (primaryError === undefined) throw cleanupError;
+          this.#failure = new AggregateError(
+            [primaryError, cleanupError],
+            "ZenX title-store write and staged-file cleanup failed",
+          );
+        }
+      }
+    }
+  }
+
+  async #restore(
+    previous: string | undefined,
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): Promise<void> {
+    if (previous === undefined) {
+      await this.#fileSystem.rm(this.#filePath, { force: true });
+      return;
+    }
+    const temporary = this.#temporaryPath(owner, "compensate");
+    let staged = false;
+    try {
+      staged = true;
+      await this.#fileSystem.writeFile(temporary, previous, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await this.#fileSystem.rename(temporary, this.#filePath);
+      staged = false;
+    } finally {
+      if (staged) await this.#fileSystem.rm(temporary, { force: true });
+    }
+  }
+
+  async #readSnapshot(): Promise<ThreadTitleSnapshot> {
+    const raw = await this.#readRaw();
+    if (raw === undefined) return {};
+    try {
+      const value: unknown = JSON.parse(raw);
       if (!isRecord(value))
         throw new Error("ZenX thread title store is invalid");
       return Object.fromEntries(
@@ -35,20 +339,59 @@ export class ZenXThreadTitleStore {
       if (error instanceof SyntaxError)
         throw new Error("ZenX thread title store contains invalid JSON");
       throw error;
-    } finally {
-      await handle.close();
     }
   }
 
-  async write(snapshot: ThreadTitleSnapshot): Promise<void> {
-    const directory = path.dirname(this.#filePath);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    const temporary = `${this.#filePath}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(snapshot, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await rename(temporary, this.#filePath);
+  async #readRaw(): Promise<string | undefined> {
+    try {
+      return await this.#fileSystem.readFile(this.#filePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
+  #owns(owner: ZenXThreadTitleOwnershipTransaction): boolean {
+    return this.#currentRoot === owner.root && owner.isCurrent();
+  }
+
+  #temporaryPath(
+    owner: ZenXThreadTitleOwnershipTransaction,
+    phase: string,
+  ): string {
+    this.#temporarySequence += 1;
+    return `${this.#filePath}.${process.pid}.${owner.id}.${String(
+      this.#temporarySequence,
+    )}.${phase}.tmp`;
+  }
+
+  #assertHealthy(): void {
+    if (this.#failure !== undefined) throw this.#failure;
+  }
+
+  #serial<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#tail.then(operation, operation);
+    this.#tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+}
+
+type RetirementOutcome =
+  { readonly ok: true } | { readonly ok: false; readonly error: unknown };
+
+function observeRetirement(
+  owner: ZenXThreadTitleOwnershipTransaction,
+): Promise<RetirementOutcome> {
+  try {
+    return owner.retire().then(
+      () => ({ ok: true }),
+      (error: unknown) => ({ ok: false, error }),
+    );
+  } catch (error) {
+    return Promise.resolve({ ok: false, error });
   }
 }
 
@@ -77,4 +420,8 @@ function validateProjection(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -85,7 +85,7 @@ test("an App Server rename between generated commit and mirror restores native a
   await assertRenameWinsGenerationRace("after-generated-commit");
 });
 
-test("an App Server rename while generated mirror is in flight restores native authority", async () => {
+test("a later dispatch notification supersedes authority observed while that dispatch was in flight", async () => {
   await assertRenameWinsGenerationRace("during-generated-mirror");
 });
 
@@ -158,6 +158,7 @@ async function assertRenameWinsGenerationRace(
     const inference = new ControlledInference();
     let nativeName = "";
     let synchronization: Promise<unknown> | undefined;
+    const synchronizations: Promise<unknown>[] = [];
     let injected = false;
     let titles!: ZenXThreadTitleCoordinator;
     titles = new ZenXThreadTitleCoordinator({
@@ -176,10 +177,16 @@ async function assertRenameWinsGenerationRace(
             "thread-race",
             "Agent authority",
           );
-          await tick();
+          synchronizations.push(synchronization);
+          await synchronization;
         }
         nativeName = title;
-        void titles.synchronizeNativeName("thread-race", title);
+        const mirrorNotification = titles.synchronizeNativeName(
+          "thread-race",
+          title,
+        );
+        synchronizations.push(mirrorNotification);
+        await mirrorNotification;
       },
     });
     if (phase === "after-generated-commit") {
@@ -191,6 +198,7 @@ async function assertRenameWinsGenerationRace(
           "thread-race",
           "Agent authority",
         );
+        synchronizations.push(synchronization);
       });
     }
     await titles.initialize();
@@ -205,14 +213,27 @@ async function assertRenameWinsGenerationRace(
     }
     assert.notEqual(synchronization, undefined);
     await synchronization;
+    if (phase === "during-generated-mirror")
+      await until(() => synchronizations.length === 2);
+    for (let index = 0; index < synchronizations.length; index += 1)
+      await synchronizations[index];
     assert.deepEqual(titles.snapshot()["thread-race"], {
       threadId: "thread-race",
-      title: "Agent authority",
+      title:
+        phase === "during-generated-mirror"
+          ? "Late generated"
+          : "Agent authority",
       status: "manual",
-      version: 4,
+      version: phase === "during-generated-mirror" ? 5 : 4,
       source: "Original title source",
     });
-    assert.equal(nativeName, "Agent authority");
+    assert.equal(
+      nativeName,
+      phase === "during-generated-mirror"
+        ? "Late generated"
+        : "Agent authority",
+    );
+    await titles.stop();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -245,6 +266,14 @@ async function waitForStatus(
     await tick();
   }
   assert.fail(`Timed out waiting for title status ${status}`);
+}
+
+async function until(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 5_000; attempt += 1) {
+    if (predicate()) return;
+    await tick();
+  }
+  assert.fail("Timed out waiting for condition");
 }
 
 async function tick(): Promise<void> {
