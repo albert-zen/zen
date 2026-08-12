@@ -307,6 +307,65 @@ test("bridges all Agent Room tools through the real child App Server", async () 
   }
 });
 
+test("real Room mention wakes one selected member and renders one sourceful reply", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-mention-host-"),
+  );
+  const manager = managerFor(directory);
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await manager.start();
+    await triggers.start();
+    const selected = (await manager.request("thread/start", {})).thread;
+    const unselected = (await manager.request("thread/start", {})).thread;
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [
+        { name: "Bot", threadId: selected.id },
+        { name: "Monitor", threadId: unselected.id },
+      ],
+    });
+    await triggers.create({
+      threadId: selected.id,
+      kind: "roomMention",
+      label: "Room answer",
+      prompt: "Answer the Room mention.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    await triggers.postRoomMessage(room.id, "Human", "@Bot status?");
+    await waitFor(() => triggers.snapshot().history[0]?.status === "completed");
+    const snapshot = triggers.snapshot();
+    const history = snapshot.history[0]!;
+    assert.equal(snapshot.history.length, 1);
+    assert.equal(history.threadId, selected.id);
+    assert.equal(history.sourceThreadId, null);
+    assert.equal(history.sourceRoomId, room.id);
+    assert.notEqual(history.sourceRoomMessageId, null);
+    assert.equal(
+      snapshot.rooms[0]!.messages.filter((message) => message.kind === "agent")
+        .length,
+      1,
+    );
+    const reply = snapshot.rooms[0]!.messages.at(-1)!;
+    assert.equal(reply.author, "Bot");
+    assert.equal(reply.originThreadId, selected.id);
+    assert.equal(reply.originTurnId, history.turnId);
+    assert.equal(
+      snapshot.history.filter((entry) => entry.threadId === unselected.id)
+        .length,
+      0,
+    );
+  } finally {
+    await triggers.stop();
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((resolvePromise) => {
