@@ -91,7 +91,42 @@
 - **ZenXTitleInference** — ZenX 主进程使用独立配置的标题模型执行一次不写 journal、
   不创建 Turn 的辅助推理；credential 仍只在主进程内存中按当前 Provider 解析。
 - **ZenXThreadTitleCoordinator** — ZenX 主进程从首条有意义的来源标注输入立即建立
-  provisional 投影，并异步协调生成、显式重试与 authoritative manual rename。
+  provisional 投影，并异步协调生成、显式重试与 authoritative manual rename；同一 durable
+  projection 在一个进程内只能有一个 root ownership domain，coordinator、store 与 native mirror
+  queue 都复用该 domain，不创建第二套 runtime 或 coordinator。
+- **ZenXThreadTitleFailureClosure** — 标题 ownership 模块用一个 total、不会抛出的有界 normalizer
+  在任意 retirement、abort、hook、scheduler、observation、tracked-work、store stage/write/rename/replace、
+  cleanup 或 compensation 失败被丢弃前复制其证据，并同步 poison 精确 ownership domain；复制后的
+  `Error` message 最多 160 字符且不保留 cause、proxy、getter 或对象图，按 transaction/occurrence 稳定排序，
+  64 条后以一条确定性 saturation evidence 收口，normalization 自身失败也只生成同样有界的 fallback evidence。
+- **ZenXThreadTitleOwnershipRoot** — 每个标题 ownership domain 的瞬时 root closure 在任何 nested
+  transaction 可能拒绝前同步登记其 retirement outcome，并通过模块自有、逐 listener 捕获异常的 safe abort
+  notification boundary 通知，而不依赖原生 `AbortSignal` 对 throwing listener 的 process-level 行为；hook、
+  scheduler、abort、child、cleanup、observation、normalization 与 listener fault 都 fence 该 root，`stop`、
+  successor claim 与 fresh read fail closed，且 poison 只留在该 domain。root 最多登记 128 个 descendant、
+  129 个含 root 的 outcome、64 条 evidence、64 个 hook、64 个 failure listener、64 个 safe abort listener 与
+  128 个 tracked operation；store domain 最多持有 128 个 transient failure listener，coordinator 最多持有 64 个
+  transient change listener，超限或 listener fault 都有界且 fail closed。parent retirement 已结束后出现的合法 child
+  仍加入同一 closure，250ms deadline 只结束等待，所有迟到 promise 仍保留 rejection observer，不引入 durable
+  retry、scheduler 或 queue。
+- **ZenXThreadTitleProjectionIdentity** — 默认文件 backend 以“最近存在祖先的 native realpath + 尚不存在的规范化
+  suffix”形成 process-local projection key，Windows 上按不区分大小写的 pathname 语义折叠，因此 relative、
+  absolute、symlink/canonical 与尚不存在文件的 case aliases 共享 identity；注入 backend 必须提供显式稳定
+  identity，domain key 是 backend identity 与 projection key 的二元组。每个 backend registry 最多 64 个
+  stable domain entry，容量用尽时明确失败；registry 以 identity 为弱键、不会持久化或成为第二个协调层。
+- **ZenXThreadTitleOwnershipStore** — ownership-aware store 在共享 domain 内同步 claim owner、串行 read/stage/
+  atomic replace/compensation/cleanup，并在任何 store boundary failure 上先以同一 failure closure 规范化、再同步
+  poison domain 与当前 initialized coordinator/root 及 canonical aliases；future/in-flight claim/read/commit、
+  snapshot、transaction 创建、native authority、stop/restart/fresh coordinator 都 fail closed，post-replace
+  compensation failure 也不能把旧 durable projection 暴露给 successor，custom store 必须显式提供稳定
+  `ownershipDomain`。
+- **ZenXThreadTitleNativeMirrorQueue** — generated/manual 标题才进入与 ownership domain 完全同 identity 的瞬时镜像
+  queue；每个 native notification 都是 authoritative，迟到 retired resolve/reject 只合并修复当前 successor，
+  active/queued/quarantined/reservation/diagnostic 状态合计硬限 64 且 exactly-once release，domain poison 后不再取得
+  authority 或派发额外 mirror。
+- **ZenXThreadTitleLifecycle** — `stop`、`close`、`restart` 与 quit 在 250ms owner retirement 边界内尝试全部 cleanup，
+  但任一 poison 都必须被报告；`restart` 只有在新 owner 完成 claim、恢复写入、native authority 激活并再次确认
+  domain/root 健康后才可成功，不能返回一个其 `snapshot` 已不可用的 coordinator。
 - **ZenXThreadTitleNotificationObserver** — ZenX 主进程在 App Server canonical
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
 
