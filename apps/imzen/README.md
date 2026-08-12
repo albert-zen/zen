@@ -135,16 +135,18 @@ presentation; A1/O1/O2 remain absent because this consumer has no product-owned
 artifact materializer, destination presentation policy, or logical delivery
 observer.
 
-The current wheel's path-only image rejection is an upstream generic SDK
-defect: the public App Server adapter has no supported local-image dispatch
-path. The executable acceptance test preserves the failure rather than adding
-a private compatibility layer. One other upstream limitation remains explicit:
+The current wheel's path-only image rejection is an explicit unsupported SDK
+capability: the public App Server adapter has no supported local-image dispatch
+path and fails closed before native mutation. The executable acceptance test
+preserves that honest result rather than adding a private compatibility layer.
+One consumer-specific limitation also remains explicit:
 the accepted App Server adapter API
 keeps per-call native Thread profiles on the concrete
 `create_thread_with_options` seam. A crash after native Thread creation but
 before Conversation binding can therefore leave an unbound Zen Thread and a
-redelivery can create another. Moving this product-specific profile through an
-SDK pre-dispatch fence requires a future typed SDK operation; IMZen does not add
+redelivery can create another. The common `CreateThread` contract intentionally
+does not accept native profile options, so changing this boundary would require
+new cross-consumer evidence and a typed SDK operation; IMZen does not add
 a local outbox or second creation authority to mask that gap. Likewise `/model`
 is a Zen-specific native operation outside current SDK contracts, so ambiguous
 transport failures are reported as “may already have applied” and same-value
