@@ -335,36 +335,11 @@ function sha256(bytes) {
 
 function canonicalDependencyLock(source) {
   const parsed = JSON.parse(source);
-  const packages = {};
-  for (const [name, value] of Object.entries(parsed.packages ?? {}).sort()) {
-    if (name === "node_modules/fsevents") continue;
-    const stable = {};
-    for (const field of [
-      "version",
-      "resolved",
-      "integrity",
-      "license",
-      "dependencies",
-      "optionalDependencies",
-      "bin",
-      "engines",
-    ]) {
-      if (value[field] !== undefined) stable[field] = sortJson(value[field]);
-    }
-    packages[name] = stable;
-  }
-  return Buffer.from(
-    `${JSON.stringify({ lockfileVersion: 3, requires: true, packages }, null, 2)}\n`,
-    "utf8",
-  );
-}
-
-function sortJson(value) {
-  if (Array.isArray(value)) return value.map(sortJson);
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => [key, sortJson(child)]),
-  );
+  const packages = Object.entries(parsed.packages ?? {})
+    .filter(([name]) => !name.endsWith("/fsevents"))
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([name, value]) =>
+      [name, value.version, value.resolved, value.integrity].join("\u001f"),
+    );
+  return Buffer.from(`${packages.join("\n")}\n`, "utf8");
 }

@@ -32,7 +32,7 @@
       "tarball": "https://registry.npmjs.org/@playwright/cli/-/cli-0.1.18.tgz",
       "integrity": "sha512-ggNfYYH+GsZTGUiBEL8f6N5j0seYEUE52v+fIWqK/A36QG36cL0EJ79qWTXYO2uZMUU7vm+jk3x0fKCPL6UuIw==",
       "sha256": "d847190000e3a3328a17ab71a52ccac8062fb2525c0f0c78b789aff1cc9ab37c",
-      "dependencyLockSha256": "34389dca07a448235ebc51f22d301f352264e0e00e7ead8a5cbcac5f391a0035",
+      "dependencyLockSha256": "654de4ecdbc802b7c3ffe0f3c87af12c00f7c529d7a47638fd96d3e781874fe0",
       "license": "Apache-2.0"
     },
     "microsoft-winapp-cli": {
