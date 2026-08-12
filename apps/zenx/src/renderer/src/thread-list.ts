@@ -53,7 +53,7 @@ export function deriveInboxSections(
       label: "Needs you",
       threads: sorted.filter(
         (thread) =>
-          thread.status.type === "systemError" ||
+          thread.status.type !== "systemError" &&
           pendingApprovalThreadIds.has(thread.id),
       ),
     },
@@ -136,6 +136,11 @@ export function deriveProjectGroups(
       if (right.key === "__unavailable__") return -1;
       return left.label.localeCompare(right.label);
     });
+}
+
+export function projectNewThreadCwd(group: ProjectGroup): string | undefined {
+  if (group.key === "__unassigned__") return undefined;
+  return group.workspace ?? undefined;
 }
 
 export function applyThreadNotification(

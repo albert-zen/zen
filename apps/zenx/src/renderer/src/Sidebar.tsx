@@ -6,6 +6,7 @@ import { Icon } from "./icons";
 import {
   deriveInboxSections,
   deriveProjectGroups,
+  projectNewThreadCwd,
   threadPreview,
   threadTitle,
   type SidebarMode,
@@ -154,6 +155,7 @@ export function Sidebar({
           <p className="sidebar-empty">Your conversations will appear here.</p>
         ) : mode === "inbox" ? (
           <InboxView
+            onOpenSettings={onOpenSettings}
             onSelectThread={onSelectThread}
             pendingApprovalThreadIds={pendingApprovalThreadIds}
             selectedThreadId={selectedThreadId}
@@ -184,19 +186,33 @@ function InboxView({
   threads,
   selectedThreadId,
   onSelectThread,
+  onOpenSettings,
   pendingApprovalThreadIds,
   watchingThreadIds,
 }: Pick<
   SidebarProps,
-  "threads" | "selectedThreadId" | "onSelectThread" | "pendingApprovalThreadIds"
+  | "threads"
+  | "selectedThreadId"
+  | "onSelectThread"
+  | "pendingApprovalThreadIds"
+  | "onOpenSettings"
 > & { watchingThreadIds: ReadonlySet<string> }) {
   const sections = deriveInboxSections(
     threads,
     pendingApprovalThreadIds,
     watchingThreadIds,
   );
+  const unavailableCount = threads.filter(
+    (thread) => thread.status.type === "systemError",
+  ).length;
   return (
     <>
+      {unavailableCount === 0 ? null : (
+        <UnavailableJournalSummary
+          count={unavailableCount}
+          onOpenSettings={onOpenSettings}
+        />
+      )}
       {sections.map((section) =>
         section.threads.length === 0 ? null : (
           <section className="thread-section" key={section.key}>
@@ -323,16 +339,10 @@ function ProjectRows({
   );
   if (group.key === "__unavailable__") {
     return (
-      <div className="legacy-summary" role="status">
-        <div className="legacy-summary-heading">
-          <Icon name="warning" size={14} />
-          <strong>{group.threads.length} unavailable journals</strong>
-        </div>
-        <p>ZenX cannot read these legacy or damaged entries.</p>
-        <button type="button" onClick={onOpenSettings} className="text-button">
-          Review cleanup in Settings
-        </button>
-      </div>
+      <UnavailableJournalSummary
+        count={group.threads.length}
+        onOpenSettings={onOpenSettings}
+      />
     );
   }
   const workspace = group.configured ? group.workspace : null;
@@ -361,14 +371,7 @@ function ProjectRows({
           className="project-actions"
           aria-label={`${group.label} project actions`}
         >
-          <button
-            type="button"
-            title={`New thread in ${group.label}`}
-            aria-label={`New thread in ${group.label}`}
-            onClick={() => onNewThread(workspace ?? group.threads[0]?.cwd)}
-          >
-            <Icon name="plus" size={13} />
-          </button>
+          <ProjectCreateThreadButton group={group} onNewThread={onNewThread} />
           {workspace !== null && !group.isDefault ? (
             <button
               type="button"
@@ -412,6 +415,48 @@ function ProjectRows({
             />
           ))
         : null}
+    </div>
+  );
+}
+
+export function ProjectCreateThreadButton({
+  group,
+  onNewThread,
+}: {
+  group: ReturnType<typeof deriveProjectGroups>[number];
+  onNewThread(cwd?: string): void;
+}) {
+  return (
+    <button
+      type="button"
+      title={`New thread in ${group.label}`}
+      aria-label={`New thread in ${group.label}`}
+      onClick={() => onNewThread(projectNewThreadCwd(group))}
+    >
+      <Icon name="plus" size={13} />
+    </button>
+  );
+}
+
+function UnavailableJournalSummary({
+  count,
+  onOpenSettings,
+}: {
+  count: number;
+  onOpenSettings(): void;
+}) {
+  return (
+    <div className="legacy-summary" role="status">
+      <div className="legacy-summary-heading">
+        <Icon name="warning" size={14} />
+        <strong>
+          {count} unavailable {count === 1 ? "journal" : "journals"}
+        </strong>
+      </div>
+      <p>ZenX cannot read these legacy or damaged entries.</p>
+      <button type="button" onClick={onOpenSettings} className="text-button">
+        Review cleanup in Settings
+      </button>
     </div>
   );
 }

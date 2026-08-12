@@ -4,12 +4,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
 import type { Thread } from "../src/protocol-client/index.js";
-import { Sidebar } from "../src/renderer/src/Sidebar.js";
+import {
+  ProjectCreateThreadButton,
+  Sidebar,
+} from "../src/renderer/src/Sidebar.js";
 import { ModelSelector } from "../src/renderer/src/ModelSelector.js";
 import {
   applyStatusCopy,
+  isProviderReady,
   LegacyJournalCard,
 } from "../src/renderer/src/SettingsView.js";
+import { deriveProjectGroups } from "../src/renderer/src/thread-list.js";
 import { ThreadTitleEditor } from "../src/renderer/src/App.js";
 
 const noop = () => undefined;
@@ -52,6 +57,70 @@ test("projects navigation has one heading, add action, empty workspace, and one 
   );
   assert.match(html, /New thread in quiet-project/);
   assert.match(html, /files stay untouched/i);
+});
+
+test("inbox aggregates unavailable journals into one cleanup summary", () => {
+  const threads = Array.from({ length: 179 }, (_, index) =>
+    thread(`broken-${index}`, { type: "systemError" }, ""),
+  );
+  const html = renderToStaticMarkup(
+    createElement(Sidebar, {
+      configuredWorkspaces: ["D:\\work"],
+      defaultWorkspace: "D:\\work",
+      mode: "inbox",
+      onModeChange: noop,
+      onNewThread: noop,
+      onAddProject: noop,
+      onRemoveProject: noop,
+      onSetDefaultProject: noop,
+      onOpenSettings: noop,
+      onOpenScheduled: noop,
+      onSelectRoom: noop,
+      onSelectThread: noop,
+      pendingApprovalThreadIds: new Set(),
+      projectActionError: null,
+      selectedThreadId: null,
+      serverReady: true,
+      threads,
+      triggerSnapshot: { triggers: [], history: [], rooms: [] },
+    }),
+  );
+  assert.match(html, /179 unavailable journals/);
+  assert.equal(
+    (html.match(/Thread journal could not be loaded/g) ?? []).length,
+    0,
+  );
+  assert.equal((html.match(/Review cleanup in Settings/g) ?? []).length, 1);
+});
+
+test("unassigned project creation uses the host default instead of artifact cwd", () => {
+  const artifact =
+    "D:\\desktop\\zen\\apps\\zenx\\.packaged\\artifact\\ZenX-win32-x64";
+  const group = deriveProjectGroups(
+    [thread("artifact", { type: "idle" }, artifact)],
+    ["D:\\work"],
+    "D:\\work",
+  ).find((candidate) => candidate.key === "__unassigned__");
+  assert.ok(group);
+  let requestedCwd: string | undefined = "not-called";
+  const onNewThread = (cwd?: string) => {
+    requestedCwd = cwd;
+  };
+  const action = ProjectCreateThreadButton({ group, onNewThread });
+  action.props.onClick();
+  assert.equal(requestedCwd, undefined);
+});
+
+test("unauthenticated subscription cannot satisfy the onboarding provider gate", () => {
+  assert.equal(
+    isProviderReady(
+      { type: "openai-subscription", displayName: "OpenAI subscription" },
+      false,
+      false,
+      "",
+    ),
+    false,
+  );
 });
 
 test("unavailable model explains no silent change and offers an explicit repair", () => {

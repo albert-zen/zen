@@ -156,11 +156,16 @@ export function SettingsView({
       JSON.stringify(settings.profile);
   const visibleApplyState =
     dirty && applyState === "applied" ? "idle" : applyState;
-  const providerReady =
-    provider.type === "fake" ||
-    (provider.type === "openai-subscription"
-      ? settings.subscription.authenticated
-      : settings.hasApiKey || apiKey.trim().length > 0);
+  const providerReady = isProviderReady(
+    provider,
+    settings.subscription.authenticated,
+    settings.hasApiKey,
+    apiKey,
+  );
+  const applyBlockedReason =
+    provider.type === "openai-subscription" && !providerReady
+      ? "Sign in with OpenAI before applying subscription settings."
+      : null;
   const steps = [
     ["Provider", providerReady],
     [
@@ -430,14 +435,18 @@ export function SettingsView({
           <div>
             <strong>{applyStatusCopy(visibleApplyState, dirty)}</strong>
             <span>
-              Provider, model, and project changes apply to new work. Active
-              threads are never silently changed.
+              {applyBlockedReason ??
+                "Provider, model, and project changes apply to new work. Active threads are never silently changed."}
             </span>
           </div>
           <button
             className="primary-button"
             type="button"
-            disabled={busy !== null || (!dirty && applyState !== "failed")}
+            disabled={
+              busy !== null ||
+              !providerReady ||
+              (!dirty && applyState !== "failed")
+            }
             onClick={() => void save()}
           >
             {busy === "save" ? "Applying…" : "Apply and restart"}
@@ -457,6 +466,20 @@ export function applyStatusCopy(
   if (state === "applied") return "Applied on this device";
   if (state === "failed") return "Changes were not applied";
   return dirty ? "Changes ready to apply" : "Settings are up to date";
+}
+
+export function isProviderReady(
+  provider: ZenXProviderProfile,
+  subscriptionAuthenticated: boolean,
+  hasApiKey: boolean,
+  apiKey: string,
+): boolean {
+  return (
+    provider.type === "fake" ||
+    (provider.type === "openai-subscription"
+      ? subscriptionAuthenticated
+      : hasApiKey || apiKey.trim().length > 0)
+  );
 }
 
 export function LegacyJournalCard({

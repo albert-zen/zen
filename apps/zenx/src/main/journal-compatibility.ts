@@ -110,7 +110,10 @@ export class ZenXJournalCompatibilityService {
       options.journal ?? new JsonlThreadJournal(this.#threadsDirectory);
     assertPathInside(this.#zenHome, this.#threadsDirectory, "threads");
     assertPathInside(this.#zenHome, this.#quarantineDirectory, "quarantine");
-    if (samePath(this.#threadsDirectory, this.#quarantineDirectory)) {
+    if (
+      samePath(this.#threadsDirectory, this.#quarantineDirectory) ||
+      isPathInside(this.#threadsDirectory, this.#quarantineDirectory)
+    ) {
       throw new Error(
         "Journal quarantine must be outside the threads directory",
       );
@@ -506,6 +509,16 @@ function assertPathInside(base: string, target: string, label: string): void {
 
 function samePath(left: string, right: string): boolean {
   return normalizePath(left) === normalizePath(right);
+}
+
+function isPathInside(base: string, target: string): boolean {
+  const relative = path.relative(base, target);
+  return (
+    relative.length > 0 &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
 }
 
 function normalizePath(value: string): string {

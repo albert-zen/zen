@@ -263,6 +263,48 @@ test("rejects a login result that is not authenticated without changing provider
   }
 });
 
+test("rejects unauthenticated subscription apply without changing onboarding or provider", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-save-status-"));
+  const subscription: Pick<
+    OpenAiSubscriptionAuthProfile,
+    "login" | "logout" | "status"
+  > = {
+    login: async () => undefined,
+    logout: async () => undefined,
+    status: async () => ({ authenticated: false, expired: false }),
+  };
+  try {
+    const service = await settingsFor(directory, subscription);
+    const before = (await service.publicSettings()).profile;
+    await assert.rejects(
+      service.save({
+        ...before,
+        onboardingComplete: true,
+        provider: {
+          type: "openai-subscription",
+          displayName: "OpenAI subscription",
+        },
+        defaultModel: "gpt-5.6-terra",
+        titleModel: "gpt-5.6-terra",
+        models: ["gpt-5.6-terra", "gpt-5.6-sol"],
+      }),
+      /Sign in with OpenAI/u,
+    );
+    const after = (await service.publicSettings()).profile;
+    assert.deepEqual(after, before);
+    assert.equal(after.onboardingComplete, false);
+    assert.equal(after.provider.type, "fake");
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(path.join(directory, "host-profile.json"), "utf8"),
+      ),
+      before,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("applies an API provider profile and exposes its catalog to the Host", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-api-apply-"));
   try {

@@ -166,6 +166,20 @@ test("rejects traversal or quarantine paths outside the official Zen root", asyn
   );
 });
 
+test("rejects a quarantine directory nested inside active threads", async () => {
+  const root = await fixtureRoot();
+  const nested = path.join(root, "threads", "quarantine");
+  assert.throws(
+    () =>
+      new ZenXJournalCompatibilityService({
+        zenHome: root,
+        quarantineDirectory: nested,
+      }),
+    /quarantine must be outside the threads directory/u,
+  );
+  await assert.rejects(readFile(nested), /ENOENT/u);
+});
+
 function service(root: string): ZenXJournalCompatibilityService {
   return new ZenXJournalCompatibilityService({ zenHome: root });
 }

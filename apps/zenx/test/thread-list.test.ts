@@ -26,7 +26,7 @@ test("persists the selected sidebar mode and defaults invalid values to projects
   assert.equal(readSidebarMode(storage), "projects");
 });
 
-test("derives recency-first inbox groups and preserves system errors", () => {
+test("derives recency-first inbox groups and reserves system errors for aggregation", () => {
   const unavailable = makeThread("broken", 30, { type: "systemError" });
   const active = makeThread("active", 20, {
     type: "active",
@@ -41,7 +41,7 @@ test("derives recency-first inbox groups and preserves system errors", () => {
       section.threads.map((thread) => thread.id),
     ]),
     [
-      ["needs", ["broken"]],
+      ["needs", []],
       ["active", ["active"]],
       ["watching", []],
       ["settled", ["newer", "older"]],

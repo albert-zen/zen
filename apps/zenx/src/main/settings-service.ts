@@ -148,6 +148,14 @@ export class ZenXSettingsService {
 
   async save(profile: ZenXHostProfile, apiKey?: string): Promise<void> {
     const validated = validateHostProfile(profile);
+    if (validated.provider.type === "openai-subscription") {
+      const status = await this.#subscription.status();
+      if (!status.authenticated) {
+        throw new Error(
+          "Sign in with OpenAI before activating the subscription provider",
+        );
+      }
+    }
     if (apiKey !== undefined && apiKey.length > 0)
       await this.#vault.writeApiKey(apiKey);
     if (
