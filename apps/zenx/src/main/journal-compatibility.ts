@@ -125,6 +125,7 @@ export class ZenXJournalCompatibilityService {
   }
 
   async inspect(): Promise<JournalCompatibilityProjection> {
+    await this.#resolveJournalRootsSafe();
     const threadIds = await this.#journal.listThreadIds();
     const candidates: JournalCandidate[] = [];
     for (const threadId of threadIds) {
@@ -272,6 +273,7 @@ export class ZenXJournalCompatibilityService {
       target: string;
     }[],
   ): Promise<void> {
+    await this.#resolveJournalRootsSafe();
     const seenTargets = new Set<string>();
     for (const { candidate, source, target } of targets) {
       if (seenTargets.has(normalizePath(target))) {
@@ -306,10 +308,8 @@ export class ZenXJournalCompatibilityService {
   }
 
   async #assertQuarantineDestinationSafe(): Promise<void> {
-    const [zenHomeRealPath, threadsRealPath] = await Promise.all([
-      realpath(this.#zenHome),
-      realpath(this.#threadsDirectory),
-    ]);
+    const { zenHomeRealPath, threadsRealPath } =
+      await this.#resolveJournalRootsSafe();
     const relative = path.relative(this.#zenHome, this.#quarantineDirectory);
     let existingAncestor = this.#zenHome;
     for (const segment of relative.split(path.sep).filter(Boolean)) {
@@ -347,6 +347,43 @@ export class ZenXJournalCompatibilityService {
         "Journal quarantine must be outside the resolved threads directory",
       );
     }
+  }
+
+  async #resolveJournalRootsSafe(): Promise<{
+    zenHomeRealPath: string;
+    threadsRealPath: string;
+  }> {
+    const zenHomeRealPath = await realpath(this.#zenHome);
+    const relative = path.relative(this.#zenHome, this.#threadsDirectory);
+    let existingAncestor = this.#zenHome;
+    for (const segment of relative.split(path.sep).filter(Boolean)) {
+      const current = path.join(existingAncestor, segment);
+      const currentStat = await lstat(current).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return undefined;
+          throw new Error(
+            `Journal threads path is unavailable: ${current}: ${describeError(error)}`,
+          );
+        },
+      );
+      if (currentStat === undefined) break;
+      if (currentStat.isSymbolicLink()) {
+        throw new Error(
+          `Journal threads path cannot use a symlink or reparse alias: ${current}`,
+        );
+      }
+      if (!currentStat.isDirectory()) {
+        throw new Error(`Journal threads path is not a directory: ${current}`);
+      }
+      existingAncestor = current;
+    }
+    const ancestorRealPath = await realpath(existingAncestor);
+    const threadsRealPath = path.resolve(
+      ancestorRealPath,
+      path.relative(existingAncestor, this.#threadsDirectory),
+    );
+    assertPathInside(zenHomeRealPath, threadsRealPath, "threads");
+    return { zenHomeRealPath, threadsRealPath };
   }
 }
 

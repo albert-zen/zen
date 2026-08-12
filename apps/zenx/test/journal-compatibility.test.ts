@@ -234,6 +234,70 @@ test("rejects a quarantine alias outside Zen before creating a child", async () 
   await assert.rejects(access(path.join(outside, "child")), /ENOENT/u);
 });
 
+test("all entrypoints reject a default threads alias outside Zen without side effects", async () => {
+  const root = await emptyFixtureRoot();
+  const outside = await externalThreadsFixture("default-alias");
+  const source = path.join(outside, "legacy.jsonl");
+  const original = `${legacyCreated("legacy")}\n`;
+  await writeFile(source, original, "utf8");
+  await directorySymlink(outside, path.join(root, "threads"));
+  const compatibility = new ZenXJournalCompatibilityService({ zenHome: root });
+
+  await assert.rejects(compatibility.inspect(), /symlink or reparse alias/u);
+  await assert.rejects(compatibility.refresh(), /symlink or reparse alias/u);
+  await assert.rejects(
+    compatibility.quarantineLegacyNoUsefulContent(),
+    /symlink or reparse alias/u,
+  );
+  assert.equal(await readFile(source, "utf8"), original);
+  await assert.rejects(
+    access(path.join(root, "legacy-journal-quarantine")),
+    /ENOENT/u,
+  );
+});
+
+test("all entrypoints reject an aliased ancestor of custom threads", async () => {
+  const root = await emptyFixtureRoot();
+  const outside = await externalThreadsFixture("custom-alias");
+  const externalThreads = path.join(outside, "threads");
+  await mkdir(externalThreads);
+  const source = path.join(externalThreads, "legacy.jsonl");
+  const original = `${legacyCreated("legacy")}\n`;
+  await writeFile(source, original, "utf8");
+  const alias = path.join(root, "storage-link");
+  await directorySymlink(outside, alias);
+  const compatibility = new ZenXJournalCompatibilityService({
+    zenHome: root,
+    threadsDirectory: path.join(alias, "threads"),
+  });
+
+  await assert.rejects(compatibility.inspect(), /symlink or reparse alias/u);
+  await assert.rejects(compatibility.refresh(), /symlink or reparse alias/u);
+  await assert.rejects(
+    compatibility.quarantineLegacyNoUsefulContent(),
+    /symlink or reparse alias/u,
+  );
+  assert.equal(await readFile(source, "utf8"), original);
+  await assert.rejects(
+    access(path.join(root, "legacy-journal-quarantine")),
+    /ENOENT/u,
+  );
+});
+
+test("inspect supports a real Zen root before the threads directory exists", async () => {
+  const root = await emptyFixtureRoot();
+  const projection = await service(root).inspect();
+  assert.deepEqual(projection.counts, {
+    current: 0,
+    knownLegacy: 0,
+    legacyNoUsefulContent: 0,
+    legacyUsefulContent: 0,
+    unknown: 0,
+    unavailable: 0,
+  });
+  await assert.rejects(access(path.join(root, "threads")), /ENOENT/u);
+});
+
 function service(root: string): ZenXJournalCompatibilityService {
   return new ZenXJournalCompatibilityService({ zenHome: root });
 }
@@ -247,10 +311,23 @@ async function directorySymlink(target: string, alias: string): Promise<void> {
 }
 
 async function fixtureRoot(): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "zen-journal-compat-"));
-  temporaryDirectories.push(root);
+  const root = await emptyFixtureRoot();
   await mkdir(path.join(root, "threads"), { recursive: true });
   return root;
+}
+
+async function emptyFixtureRoot(): Promise<string> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-journal-compat-"));
+  temporaryDirectories.push(root);
+  return root;
+}
+
+async function externalThreadsFixture(label: string): Promise<string> {
+  const outside = await mkdtemp(
+    path.join(os.tmpdir(), `zen-journal-${label}-`),
+  );
+  temporaryDirectories.push(outside);
+  return outside;
 }
 
 async function writeJournal(
