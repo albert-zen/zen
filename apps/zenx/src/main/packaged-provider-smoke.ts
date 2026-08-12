@@ -78,8 +78,8 @@ const root = await mkdtemp(
 try {
   const providers = path.join(root, "providers");
   await mkdir(providers, { recursive: true });
-  const playwrightAsset = path.join(providers, "playwright-cli.exe");
-  const winAppAsset = path.join(providers, "winapp.exe");
+  const playwrightAsset = path.join(providers, "playwright-cli.fixture");
+  const winAppAsset = path.join(providers, "winapp.fixture");
   await writeFile(playwrightAsset, providerBytes);
   await writeFile(winAppAsset, providerBytes);
   const assetSha256 = createHash("sha256").update(providerBytes).digest("hex");
@@ -87,13 +87,13 @@ try {
     schemaVersion: 1,
     providers: {
       "playwright-cli": {
-        executable: "playwright-cli.exe",
+        executable: "playwright-cli.fixture",
         version: "0.1.2",
         sha256: assetSha256,
         platforms: ["win32"],
       },
       "microsoft-winapp-cli": {
-        executable: "winapp.exe",
+        executable: "winapp.fixture",
         version: "0.3.1",
         sha256: assetSha256,
         platforms: ["win32"],
