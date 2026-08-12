@@ -86,12 +86,12 @@ test("browser vertical slice targets one session/tab through structured operatio
   ]);
 });
 
-test("browser rejects stale, forged, and secure opaque targets", () => {
+test("browser rejects stale and forged targets without classifying text sensitivity", () => {
   const editable = fingerprint({ actions: ["click", "type"] });
   const password = fingerprint({
     type: "password",
     secure: true,
-    actions: ["click"],
+    actions: ["click", "type"],
   });
   const observation: BrowserObservation = {
     id: "observation-1",
@@ -133,16 +133,15 @@ test("browser rejects stale, forged, and secure opaque targets", () => {
       ),
     /forged/u,
   );
-  assert.throws(
-    () =>
-      resolveBrowserObservedTarget(
-        observation,
-        7,
-        "observation-1",
-        "password",
-        "type",
-      ),
-    /password or secure controls/u,
+  assert.equal(
+    resolveBrowserObservedTarget(
+      observation,
+      7,
+      "observation-1",
+      "password",
+      "type",
+    ),
+    password,
   );
 });
 

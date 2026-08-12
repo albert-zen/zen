@@ -92,19 +92,20 @@ void app.whenReady().then(async () => {
     const password = inspected.targets.find(({ name }) => name === "Password");
     assert.equal(password?.secure, true);
     assert.equal(password?.value, undefined);
-    assert.equal(password?.actions.includes("type"), false);
+    assert.equal(password?.actions.includes("type"), true);
     if (password !== undefined) {
-      await assert.rejects(
-        invoke(registry, "browser_type", {
-          sessionId: "desktop-smoke",
-          tabId,
-          observationId: inspected.observationId,
-          targetId: password.targetId,
-          text: "not-a-secret",
-        }),
-        /password or secure controls/u,
-      );
+      await invoke(registry, "browser_type", {
+        sessionId: "desktop-smoke",
+        tabId,
+        observationId: inspected.observationId,
+        targetId: password.targetId,
+        text: "ordinary-argument",
+      });
     }
+    inspected = (await invoke(registry, "browser_inspect", {
+      sessionId: "desktop-smoke",
+      tabId,
+    })) as BrowserInspection;
     const input = requiredBrowserTarget(inspected, "Name", "type");
     await invoke(registry, "browser_type", {
       sessionId: "desktop-smoke",
@@ -236,7 +237,7 @@ void app.whenReady().then(async () => {
     assert.equal(foregroundAfter.bundleId, foregroundBefore.bundleId);
 
     console.log(
-      "ZenX capability desktop smoke passed: opaque browser observe/act IDs reject forged, stale, hidden, changed, and password targets; close-session resets cookie/session storage before same-ID reopen; foreground helper compiled without running input; pointer and foreground app unchanged",
+      "ZenX capability desktop smoke passed: opaque browser observe/act IDs reject forged, stale, hidden, and changed targets while password input dispatches normally; close-session resets cookie/session storage before same-ID reopen; foreground helper compiled without running input; pointer and foreground app unchanged",
     );
   } catch (error) {
     console.error("ZenX capability desktop smoke failed", error);

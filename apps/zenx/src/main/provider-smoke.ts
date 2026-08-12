@@ -30,6 +30,10 @@ void app.whenReady().then(async () => {
     const selectedBrowser = browser.diagnostics.find(
       (diagnostic) => diagnostic.status === "selected",
     );
+    assert.ok(
+      browser.backend,
+      `Browser provider is unavailable: ${JSON.stringify(browser.diagnostics)}`,
+    );
     if (process.env.ZENX_REQUIRE_PLAYWRIGHT === "1") {
       assert.equal(
         selectedBrowser?.providerId,

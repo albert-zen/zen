@@ -70,12 +70,19 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
             manifest: undefined,
             diagnostics: [],
           };
-    this.#registry.register(
-      new BrowserZenXCapabilityPackage(browser.backend, browser.manifest),
-      "bundled",
-    );
+    if (browser.backend !== undefined) {
+      this.#registry.register(
+        new BrowserZenXCapabilityPackage(browser.backend, browser.manifest),
+        "bundled",
+      );
+    }
     for (const diagnostic of browser.diagnostics) {
       this.#registry.recordProviderDiagnostic(diagnostic);
+    }
+    if (browser.backend === undefined) {
+      this.#registry.recordDiscoveryError(
+        `Browser provider: ${browser.diagnostics[0]?.reason ?? "unavailable"}`,
+      );
     }
     const computer =
       this.#computerBackend === undefined
