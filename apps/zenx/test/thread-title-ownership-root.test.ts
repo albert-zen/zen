@@ -42,6 +42,98 @@ test("root observes a throwing nested child hook before it can reject", async ()
   }
 });
 
+test("hostile retirement values are total bounded copies before domain poison", async () => {
+  await withDirectory(async (directory) => {
+    const unhandled: unknown[] = [];
+    const listener = (error: unknown) => unhandled.push(error);
+    process.on("unhandledRejection", listener);
+    try {
+      const file = path.join(directory, "titles.json");
+      const first = coordinator(new ZenXThreadTitleStore(file));
+      await first.initialize();
+      const child = first.createOwnershipTransaction({ deadlineMs: 0 });
+      const hostile = new Proxy(
+        { cause: { mustNotEscape: true } },
+        {
+          get() {
+            throw new Error("hostile getter escaped");
+          },
+          getPrototypeOf() {
+            throw new Error("hostile prototype escaped");
+          },
+        },
+      );
+      child.onRetire(() => {
+        throw hostile;
+      });
+
+      await assert.rejects(first.stop(), (error: unknown) => {
+        assertCopiedAggregate(error);
+        assert.match((error as Error).message, /unprintable|normaliz/iu);
+        return true;
+      });
+      assert.throws(() => first.snapshot(), /unprintable|normaliz/iu);
+
+      const successor = coordinator(
+        new ZenXThreadTitleStore(path.relative(process.cwd(), file)),
+      );
+      await successor.initialize();
+      assert.throws(() => successor.snapshot(), /unprintable|normaliz/iu);
+      await tick();
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+  });
+});
+
+test("owned abort notification captures throwing and rejecting listeners", async () => {
+  const uncaught: unknown[] = [];
+  const unhandled: unknown[] = [];
+  const onUncaught = (error: unknown) => uncaught.push(error);
+  const onUnhandled = (error: unknown) => unhandled.push(error);
+  process.on("uncaughtException", onUncaught);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const root = new ZenXThreadTitleOwnershipTransaction({ deadlineMs: 0 });
+    root.signal.addEventListener("abort", () => {
+      throw new Error("synchronous abort listener failed");
+    });
+    root.signal.addEventListener("abort", async () => {
+      throw new Error("asynchronous abort listener failed");
+    });
+
+    await assert.rejects(root.retire(), (error: unknown) => {
+      assertCopiedAggregate(error);
+      assert.match((error as Error).message, /abort listener failed/u);
+      return true;
+    });
+    await tick();
+    await tick();
+    assert.deepEqual(uncaught, []);
+    assert.deepEqual(unhandled, []);
+    assert.equal(root.isCurrent(), false);
+  } finally {
+    process.off("uncaughtException", onUncaught);
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("owned abort notification keeps listener identity scoped to event type", async () => {
+  const root = new ZenXThreadTitleOwnershipTransaction({ deadlineMs: 0 });
+  let calls = 0;
+  const listener = () => {
+    calls += 1;
+  };
+  root.signal.addEventListener("not-abort", listener);
+  root.signal.addEventListener("abort", listener);
+  root.signal.removeEventListener("not-abort", listener);
+
+  await root.retire();
+
+  assert.equal(calls, 1);
+});
+
 test("nested scheduler failure closes stop, successor claim, and fresh read", async () => {
   await withDirectory(async (directory) => {
     const file = path.join(directory, "titles.json");
@@ -66,8 +158,8 @@ test("nested scheduler failure closes stop, successor claim, and fresh read", as
     );
     const fresh = new ZenXThreadTitleOwnershipTransaction({ deadlineMs: 5 });
     await assert.rejects(freshAlias.claim(fresh), /retirement failed/u);
-    await successor.retire();
-    await fresh.retire();
+    await assert.rejects(successor.retire(), /retirement failed/u);
+    await assert.rejects(fresh.retire(), /retirement failed/u);
   });
 });
 
@@ -183,6 +275,14 @@ test("a nested quiescence timeout observes late rejection", async () => {
   } finally {
     process.off("unhandledRejection", listener);
   }
+});
+
+test("an asynchronous retirement hook cannot outlive the bounded deadline", async () => {
+  const root = new ZenXThreadTitleOwnershipTransaction({ deadlineMs: 5 });
+  root.onRetire(async () => await new Promise<void>(() => undefined));
+  const started = Date.now();
+  await root.retire();
+  assert.ok(Date.now() - started < 200);
 });
 
 test("late child failure after cached root retirement poisons stop and successor reads", async () => {
@@ -450,7 +550,7 @@ test("stored and exposed retirement failures are deterministic bounded copies", 
         assert.ok(entry.message.length <= 160);
         assert.equal(entry.cause, undefined);
       }
-      assert.equal(error.errors[0]?.message, "[object Object]");
+      assert.match(error.errors[0]?.message ?? "", /^object-x+…$/u);
       assert.match(error.errors[1]?.message ?? "", /^failure-1-y+…$/u);
       assert.ok(error.message.length <= 12_000);
       return true;
@@ -774,4 +874,17 @@ async function rejectedAggregate(
     return error;
   }
   assert.fail("Expected AggregateError rejection");
+}
+
+function assertCopiedAggregate(
+  error: unknown,
+): asserts error is AggregateError {
+  assert.ok(error instanceof AggregateError);
+  assert.ok(error.errors.length > 0);
+  assert.ok(error.errors.length <= 64);
+  for (const entry of error.errors) {
+    assert.ok(entry instanceof Error);
+    assert.ok(entry.message.length <= 160);
+    assert.equal(entry.cause, undefined);
+  }
 }

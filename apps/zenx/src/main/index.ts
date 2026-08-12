@@ -23,6 +23,7 @@ import { zenXProviderTransport } from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
 import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
+import { normalizeTitleOwnershipFailure } from "./thread-title-failure.js";
 import { ZenXThreadTitleStore } from "./thread-title-store.js";
 import { observeCompletedUserMessageTitle } from "./thread-title-notification.js";
 import { ZenXConfiguredTitleInference } from "./title-inference.js";
@@ -176,12 +177,24 @@ app.whenReady().then(async () => {
       await appServerManager.start();
     } else {
       selfControlPort.attach(appServerManager, hostConfig.cwd);
-      await titleCoordinator?.stop();
+      const restartErrors: Error[] = [];
+      try {
+        await titleCoordinator?.stop();
+      } catch (error) {
+        restartErrors.push(normalizeTitleOwnershipFailure(error));
+      }
       try {
         await appServerManager.restart(hostConfig);
-      } finally {
-        await titleCoordinator?.restart();
+      } catch (error) {
+        restartErrors.push(normalizeTitleOwnershipFailure(error));
       }
+      try {
+        await titleCoordinator?.restart();
+      } catch (error) {
+        restartErrors.push(normalizeTitleOwnershipFailure(error));
+      }
+      if (restartErrors.length > 0)
+        throw new AggregateError(restartErrors, "Could not fully restart ZenX");
     }
   });
   createWindow();
@@ -201,18 +214,18 @@ app.on("before-quit", (event) => {
     try {
       await titleCoordinator?.close();
     } catch (error) {
-      errors.push(error);
+      errors.push(normalizeTitleOwnershipFailure(error));
     }
     try {
       await appServerManager!.stop();
     } catch (error) {
-      errors.push(error);
+      errors.push(normalizeTitleOwnershipFailure(error));
     }
     try {
       selfControlPort.detach();
       await capabilityService?.close();
     } catch (error) {
-      errors.push(error);
+      errors.push(normalizeTitleOwnershipFailure(error));
     }
     if (errors.length > 0)
       console.error(

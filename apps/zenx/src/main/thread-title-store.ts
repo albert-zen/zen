@@ -2,6 +2,10 @@ import { realpathSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  BoundedTitleOwnershipFailures,
+  normalizeTitleOwnershipFailure,
+} from "./thread-title-failure.js";
 import { ZenXThreadTitleOwnershipTransaction } from "./thread-title-ownership-transaction.js";
 import type {
   ThreadTitleProjection,
@@ -178,7 +182,7 @@ function canonicalProjectionPath(
     try {
       canonical = resolveRealpath(cursor);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
+      const code = safeStringProperty(error, "code");
       if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
       const parent = pathApi.dirname(cursor);
       if (parent === cursor) {
@@ -202,10 +206,11 @@ class ZenXThreadTitleStoreProtocol {
   readonly #filePath: string;
   readonly #fileSystem: ZenXThreadTitleStoreFileSystem;
   readonly #failureListeners = new Set<(failure: Error) => void>();
+  readonly #failures = new BoundedTitleOwnershipFailures();
   #currentRoot: ZenXThreadTitleOwnershipTransaction | undefined;
   #tail = Promise.resolve();
-  #failure: Error | undefined;
   #temporarySequence = 0;
+  #failureSummary = "ZenX title-store ownership failed";
 
   constructor(filePath: string, fileSystem: ZenXThreadTitleStoreFileSystem) {
     this.#filePath = filePath;
@@ -213,7 +218,7 @@ class ZenXThreadTitleStoreProtocol {
   }
 
   failure(): Error | undefined {
-    return this.#failure;
+    return this.#domainFailure();
   }
 
   onFailure(listener: (failure: Error) => void): () => void {
@@ -229,8 +234,8 @@ class ZenXThreadTitleStoreProtocol {
       return () => undefined;
     }
     this.#failureListeners.add(listener);
-    if (this.#failure !== undefined)
-      this.#notifyFailureListener(listener, this.#failure);
+    const failure = this.#domainFailure();
+    if (failure !== undefined) this.#notifyFailureListener(listener, failure);
     return () => this.#failureListeners.delete(listener);
   }
 
@@ -242,7 +247,9 @@ class ZenXThreadTitleStoreProtocol {
     if (this.#currentRoot !== root) {
       const previous = this.#currentRoot;
       this.#currentRoot = root;
-      root.onRetirementFailure((error) => this.#poisonRetirement(error));
+      root.onRetirementFailure((error) => this.#poisonRetirement(error, root));
+      const existingFailure = this.#domainFailure();
+      if (existingFailure !== undefined) root.poison(existingFailure);
       if (previous !== undefined) retirement = observeRetirement(previous);
     }
     const operation = this.#serial(async () => {
@@ -255,7 +262,12 @@ class ZenXThreadTitleStoreProtocol {
       this.#assertHealthy();
       if (!this.#owns(owner))
         throw new Error("Title ownership changed before the store read");
-      const snapshot = await this.#readSnapshot();
+      let snapshot: ThreadTitleSnapshot;
+      try {
+        snapshot = await this.#readSnapshot();
+      } catch (error) {
+        throw this.#poison(error);
+      }
       this.#assertHealthy();
       if (!this.#owns(owner))
         throw new Error("Title ownership changed during the store read");
@@ -283,7 +295,7 @@ class ZenXThreadTitleStoreProtocol {
     const directory = path.dirname(this.#filePath);
     const temporary = this.#temporaryPath(owner, "stage");
     let staged = false;
-    let primaryError: unknown;
+    let primaryFailed = false;
     try {
       await this.#fileSystem.mkdir(directory, { recursive: true, mode: 0o700 });
       if (!this.#owns(owner)) return false;
@@ -302,29 +314,24 @@ class ZenXThreadTitleStoreProtocol {
       try {
         await this.#restore(previous, owner);
       } catch (error) {
-        const failure = new Error(
-          `ZenX title-store ownership compensation failed: ${describeError(error)}`,
-          { cause: error },
-        );
-        this.#failure = failure;
-        throw failure;
+        if (this.#failures.healthy) this.#poison(error);
+        throw this.#requireDomainFailure();
       }
       return false;
     } catch (error) {
-      primaryError = error;
-      throw error;
+      primaryFailed = true;
+      if (this.#failures.healthy) this.#poison(error);
+      throw this.#requireDomainFailure();
     } finally {
       if (staged) {
         try {
           await this.#fileSystem.rm(temporary, { force: true });
         } catch (cleanupError) {
-          if (primaryError === undefined) throw cleanupError;
-          this.#failure = new AggregateError(
-            [primaryError, cleanupError],
-            "ZenX title-store write and staged-file cleanup failed",
-          );
+          this.#poison(cleanupError);
+          throw this.#requireDomainFailure();
         }
       }
+      if (primaryFailed) this.#assertHealthy();
     }
   }
 
@@ -346,8 +353,24 @@ class ZenXThreadTitleStoreProtocol {
       });
       await this.#fileSystem.rename(temporary, this.#filePath);
       staged = false;
+    } catch (error) {
+      this.#poisonWithContext(
+        error,
+        "ZenX title-store ownership compensation failed",
+      );
+      throw this.#requireDomainFailure();
     } finally {
-      if (staged) await this.#fileSystem.rm(temporary, { force: true });
+      if (staged) {
+        try {
+          await this.#fileSystem.rm(temporary, { force: true });
+        } catch (cleanupError) {
+          this.#poisonWithContext(
+            cleanupError,
+            "ZenX title-store ownership compensation cleanup failed",
+          );
+          throw this.#requireDomainFailure();
+        }
+      }
     }
   }
 
@@ -375,14 +398,14 @@ class ZenXThreadTitleStoreProtocol {
     try {
       return await this.#fileSystem.readFile(this.#filePath, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      if (safeStringProperty(error, "code") === "ENOENT") return undefined;
       throw error;
     }
   }
 
   #owns(owner: ZenXThreadTitleOwnershipTransaction): boolean {
     return (
-      this.#failure === undefined &&
+      this.#failures.healthy &&
       this.#currentRoot === owner.root &&
       owner.isCurrent()
     );
@@ -399,17 +422,54 @@ class ZenXThreadTitleStoreProtocol {
   }
 
   #assertHealthy(): void {
-    if (this.#failure !== undefined) throw this.#failure;
+    const failure = this.#domainFailure();
+    if (failure !== undefined) throw failure;
   }
 
-  #poisonRetirement(error: unknown): Error {
-    this.#failure ??= new Error(
-      `ZenX title-store ownership retirement failed: ${describeError(error)}`,
-      { cause: error },
-    );
+  #poisonRetirement(
+    error: unknown,
+    failedRoot?: ZenXThreadTitleOwnershipTransaction,
+  ): Error {
+    return this.#failures.healthy
+      ? this.#poison(
+          error,
+          "ZenX title-store ownership retirement failed",
+          failedRoot !== this.#currentRoot,
+        )
+      : this.#requireDomainFailure();
+  }
+
+  #poison(
+    error: unknown,
+    summary = "ZenX title-store ownership failed",
+    fenceCurrent = true,
+  ): Error {
+    if (this.#failures.healthy) this.#failureSummary = summary;
+    this.#failures.record(error);
+    const failure = this.#requireDomainFailure();
+    if (fenceCurrent) this.#currentRoot?.poison(failure);
     for (const listener of this.#failureListeners)
-      this.#notifyFailureListener(listener, this.#failure);
-    return this.#failure;
+      this.#notifyFailureListener(listener, failure);
+    return failure;
+  }
+
+  #domainFailure(): AggregateError | undefined {
+    return this.#failures.aggregate(this.#failureSummary);
+  }
+
+  #poisonWithContext(error: unknown, context: string): Error {
+    const normalized = normalizeTitleOwnershipFailure(error);
+    return this.#poison(`${context}: ${normalized.message}`);
+  }
+
+  #requireDomainFailure(): AggregateError {
+    return (
+      this.#domainFailure() ??
+      new AggregateError(
+        [normalizeTitleOwnershipFailure("Unknown title-store failure")],
+        "ZenX title-store ownership failed",
+      )
+    );
   }
 
   #notifyFailureListener(
@@ -417,9 +477,14 @@ class ZenXThreadTitleStoreProtocol {
     failure: Error,
   ): void {
     try {
-      listener(failure);
-    } catch {
-      // The domain remains poisoned even if a transient observer is gone.
+      const result = (listener as (failure: Error) => unknown)(failure);
+      void Promise.resolve(result).then(undefined, (error: unknown) => {
+        this.#failureListeners.delete(listener);
+        this.#poison(error);
+      });
+    } catch (error) {
+      this.#failureListeners.delete(listener);
+      this.#poison(error);
     }
   }
 
@@ -481,6 +546,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function safeStringProperty(value: unknown, key: string): string | undefined {
+  if (
+    value === null ||
+    (typeof value !== "object" && typeof value !== "function")
+  )
+    return undefined;
+  try {
+    const property = Reflect.get(value, key);
+    return typeof property === "string" ? property : undefined;
+  } catch {
+    return undefined;
+  }
 }

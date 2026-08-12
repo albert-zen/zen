@@ -1,11 +1,17 @@
+import {
+  aggregateTitleOwnershipFailures,
+  MAX_TITLE_OWNERSHIP_FAILURE_EVIDENCE,
+  normalizeTitleOwnershipFailure,
+} from "./thread-title-failure.js";
+
 const DEFAULT_QUIESCENCE_DEADLINE_MS = 250;
 const MAX_NESTED_RETIREMENT_TRANSACTIONS = 128;
 const MAX_RETIREMENT_OUTCOMES = MAX_NESTED_RETIREMENT_TRANSACTIONS + 1;
-const MAX_RETIREMENT_FAILURE_EVIDENCE = 64;
+const MAX_RETIREMENT_FAILURE_EVIDENCE = MAX_TITLE_OWNERSHIP_FAILURE_EVIDENCE;
 const MAX_RETIREMENT_FAILURE_LISTENERS = 64;
 const MAX_RETIREMENT_HOOKS = 64;
+const MAX_SAFE_ABORT_LISTENERS = 64;
 const MAX_TRACKED_RETIREMENT_WORK = 128;
-const MAX_RETIREMENT_ERROR_DESCRIPTION_LENGTH = 160;
 
 export interface ZenXThreadTitleOwnershipTransactionOptions {
   deadlineMs?: number;
@@ -57,7 +63,11 @@ class RootRetirementClosure {
     if (existing !== undefined) return existing;
     const outcome = retirement.then<RetirementOutcome, RetirementOutcome>(
       () => ({ ok: true }),
-      () => ({ ok: false }),
+      (reason: unknown) => {
+        if (this.#failureRecordsFor(transactionOrder).length === 0)
+          this.record(transactionOrder, ancestry, reason);
+        return { ok: false };
+      },
     );
     if (this.#observations.size >= MAX_RETIREMENT_OUTCOMES) {
       this.record(
@@ -87,7 +97,7 @@ class RootRetirementClosure {
         transactionOrder,
         ancestry,
         occurrence,
-        error: normalizeRetirementFailure(error),
+        error: normalizeTitleOwnershipFailure(error),
       });
     } else {
       this.#failureEvidenceSaturated = true;
@@ -157,10 +167,16 @@ class RootRetirementClosure {
     const failures = this.failuresFor(this.#rootOrder);
     if (failures.length === 0) return;
     try {
-      listener(aggregateRetirementFailures(failures));
-    } catch {
-      // Failure observers are best-effort notifications. The root remains
-      // poisoned even if an observer itself is unavailable.
+      const result = (listener as (failure: AggregateError) => unknown)(
+        aggregateRetirementFailures(failures),
+      );
+      observeAuxiliaryFailure(result, (error) => {
+        this.#failureListeners.delete(listener);
+        this.record(this.#rootOrder, [this.#rootOrder], error);
+      });
+    } catch (error) {
+      this.#failureListeners.delete(listener);
+      this.record(this.#rootOrder, [this.#rootOrder], error);
     }
   }
 }
@@ -175,7 +191,7 @@ let nextTransactionOrder = 0;
 export class ZenXThreadTitleOwnershipTransaction {
   readonly #order = ++nextTransactionOrder;
   readonly id = `title-owner-${String(this.#order)}`;
-  readonly #abort = new AbortController();
+  readonly #abort: OwnedSafeAbortController;
   readonly #deadlineMs: number;
   readonly #schedule: (callback: () => void, delayMs: number) => unknown;
   readonly #cancelScheduled: (handle: unknown) => void;
@@ -199,6 +215,7 @@ export class ZenXThreadTitleOwnershipTransaction {
     this.#cancelScheduled =
       options.cancelScheduled ??
       ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+    this.#abort = new OwnedSafeAbortController((error) => this.#record(error));
     this.#parent = parent;
     if (parent === undefined) {
       this.#closure = new RootRetirementClosure(this.#order);
@@ -234,6 +251,10 @@ export class ZenXThreadTitleOwnershipTransaction {
     const failures = this.#closure.failuresFor(this.#order);
     if (failures.length === 0) return undefined;
     return aggregateRetirementFailures(failures);
+  }
+
+  poison(error: unknown): void {
+    this.#record(error);
   }
 
   onRetirementFailure(listener: (failure: AggregateError) => void): () => void {
@@ -278,7 +299,12 @@ export class ZenXThreadTitleOwnershipTransaction {
 
   onRetire(callback: () => void): () => void {
     if (!this.isCurrent()) {
-      callback();
+      try {
+        const result = (callback as () => unknown)();
+        this.#observeRetirementAuxiliary(result);
+      } catch (error) {
+        this.#record(error);
+      }
       return () => undefined;
     }
     if (this.#retirementHooks.size >= MAX_RETIREMENT_HOOKS) {
@@ -309,7 +335,13 @@ export class ZenXThreadTitleOwnershipTransaction {
 
     // Registration and a rejection observer exist before retirement work runs.
     this.#closure.observe(this.#order, this.#ancestry, retirement);
-    void this.#retireNow().then(resolveRetirement, rejectRetirement);
+    void this.#retireNow().then(resolveRetirement, (error: unknown) => {
+      if (this.#closure.failuresFor(this.#order).length === 0)
+        this.#record(error);
+      rejectRetirement(
+        this.retirementFailure() ?? normalizeTitleOwnershipFailure(error),
+      );
+    });
     return retirement;
   }
 
@@ -324,9 +356,11 @@ export class ZenXThreadTitleOwnershipTransaction {
     } catch (error) {
       this.#record(error);
     }
+    await Promise.resolve();
     for (const hook of this.#retirementHooks) {
       try {
-        hook();
+        const result = (hook as () => unknown)();
+        this.#observeRetirementAuxiliary(result);
       } catch (error) {
         this.#record(error);
       }
@@ -360,7 +394,10 @@ export class ZenXThreadTitleOwnershipTransaction {
     ]);
     if (outcome === "settled" && deadlineHandle !== undefined) {
       try {
-        this.#cancelScheduled(deadlineHandle);
+        const result = (this.#cancelScheduled as (handle: unknown) => unknown)(
+          deadlineHandle,
+        );
+        void observeAuxiliaryFailure(result, (error) => this.#record(error));
       } catch (error) {
         errors.push(error);
       }
@@ -371,6 +408,207 @@ export class ZenXThreadTitleOwnershipTransaction {
 
   #record(error: unknown): void {
     this.#closure.record(this.#order, this.#ancestry, error);
+  }
+
+  #observeRetirementAuxiliary(result: unknown): void {
+    const observation = observeAuxiliaryFailure(result, (error) =>
+      this.#record(error),
+    );
+    if (this.#tracked.size >= MAX_TRACKED_RETIREMENT_WORK) {
+      this.#record(
+        new Error(
+          `Title ownership retirement reached its bounded capacity of ${String(
+            MAX_TRACKED_RETIREMENT_WORK,
+          )} tracked operations`,
+        ),
+      );
+      return;
+    }
+    this.#tracked.add(observation);
+    void observation.finally(() => this.#tracked.delete(observation));
+  }
+}
+
+type SafeAbortListener = EventListenerOrEventListenerObject;
+
+interface SafeAbortRegistration {
+  readonly type: string;
+  readonly listener: SafeAbortListener;
+  readonly capture: boolean;
+  readonly wrapped: EventListener;
+}
+
+/** Keeps a native-branded signal for model/fetch adapters while ensuring that
+ * every listener registered through this owned signal surface is isolated. */
+class OwnedSafeAbortController {
+  readonly #controller = new AbortController();
+  readonly #registrations: SafeAbortRegistration[] = [];
+  readonly #record: (error: unknown) => void;
+  #onabort: EventHandler | null = null;
+
+  readonly signal: AbortSignal;
+
+  constructor(record: (error: unknown) => void) {
+    this.#record = record;
+    const signal = this.#controller.signal;
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    Object.defineProperties(signal, {
+      addEventListener: {
+        configurable: false,
+        value: (
+          type: string,
+          listener: SafeAbortListener | null,
+          options?: boolean | AddEventListenerOptions,
+        ) => {
+          if (listener === null) return;
+          const capture = safeEventOption(options, "capture", this.#record);
+          const once = safeEventOption(options, "once", this.#record);
+          if (
+            this.#registrations.some(
+              (entry) =>
+                entry.type === type &&
+                entry.listener === listener &&
+                entry.capture === capture,
+            )
+          )
+            return;
+          if (this.#registrations.length >= MAX_SAFE_ABORT_LISTENERS) {
+            this.#record(
+              new Error(
+                `Title ownership abort notification reached its bounded capacity of ${String(
+                  MAX_SAFE_ABORT_LISTENERS,
+                )} listeners`,
+              ),
+            );
+            return;
+          }
+          const wrapped: EventListener = (event) => {
+            if (once) this.#forget(type, listener, capture, remove);
+            this.#invoke(listener, event);
+          };
+          this.#registrations.push({ type, listener, capture, wrapped });
+          try {
+            add(type, wrapped, { capture, once: false });
+          } catch (error) {
+            this.#forget(type, listener, capture, remove);
+            this.#record(error);
+          }
+        },
+      },
+      removeEventListener: {
+        configurable: false,
+        value: (
+          type: string,
+          listener: SafeAbortListener | null,
+          options?: boolean | EventListenerOptions,
+        ) => {
+          if (listener === null) return;
+          const capture = safeEventOption(options, "capture", this.#record);
+          const registration = this.#registrations.find(
+            (entry) =>
+              entry.type === type &&
+              entry.listener === listener &&
+              entry.capture === capture,
+          );
+          if (registration === undefined) return;
+          const index = this.#registrations.indexOf(registration);
+          this.#registrations.splice(index, 1);
+          try {
+            remove(type, registration.wrapped, capture);
+          } catch (error) {
+            this.#record(error);
+          }
+        },
+      },
+      onabort: {
+        configurable: false,
+        get: () => this.#onabort,
+        set: (listener: EventHandler | null) => {
+          if (this.#onabort !== null)
+            signal.removeEventListener("abort", this.#onabort);
+          this.#onabort = listener;
+          if (listener !== null) signal.addEventListener("abort", listener);
+        },
+      },
+    });
+    this.signal = signal;
+  }
+
+  abort(): void {
+    this.#controller.abort(
+      normalizeTitleOwnershipFailure("Title ownership transaction retired"),
+    );
+  }
+
+  #invoke(listener: SafeAbortListener, event: Event): void {
+    try {
+      let result: unknown;
+      if (typeof listener === "function") {
+        result = Reflect.apply(listener, this.signal, [event]);
+      } else {
+        const handleEvent = Reflect.get(listener, "handleEvent");
+        if (typeof handleEvent !== "function") return;
+        result = Reflect.apply(handleEvent, listener, [event]);
+      }
+      void observeAuxiliaryFailure(result, this.#record);
+    } catch (error) {
+      this.#record(error);
+    }
+  }
+
+  #forget(
+    type: string,
+    listener: SafeAbortListener,
+    capture: boolean,
+    remove: AbortSignal["removeEventListener"],
+  ): void {
+    const registration = this.#registrations.find(
+      (entry) =>
+        entry.type === type &&
+        entry.listener === listener &&
+        entry.capture === capture,
+    );
+    if (registration === undefined) return;
+    this.#registrations.splice(this.#registrations.indexOf(registration), 1);
+    try {
+      remove(type, registration.wrapped, capture);
+    } catch (error) {
+      this.#record(error);
+    }
+  }
+}
+
+type EventHandler = (this: AbortSignal, event: Event) => unknown;
+
+function safeEventOption(
+  options: boolean | EventListenerOptions | AddEventListenerOptions | undefined,
+  key: "capture" | "once",
+  record: (error: unknown) => void,
+): boolean {
+  if (typeof options === "boolean") return key === "capture" && options;
+  if (options === undefined) return false;
+  try {
+    return Boolean(Reflect.get(options, key));
+  } catch (error) {
+    record(error);
+    return false;
+  }
+}
+
+async function observeAuxiliaryFailure(
+  result: unknown,
+  record: (error: unknown) => void,
+): Promise<void> {
+  try {
+    await result;
+  } catch (error) {
+    try {
+      record(error);
+    } catch {
+      // The normalizer/closure record path is designed to be total. This last
+      // guard prevents an observation boundary from creating a process escape.
+    }
   }
 }
 
@@ -383,24 +621,11 @@ function validDeadline(value: number): number {
   return value;
 }
 
-function describeError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.length <= MAX_RETIREMENT_ERROR_DESCRIPTION_LENGTH) return message;
-  return `${message.slice(0, MAX_RETIREMENT_ERROR_DESCRIPTION_LENGTH - 1)}…`;
-}
-
-function normalizeRetirementFailure(error: unknown): Error {
-  return new Error(describeError(error));
-}
-
 function aggregateRetirementFailures(
   failures: readonly Error[],
 ): AggregateError {
-  const diagnostics = failures.map(normalizeRetirementFailure);
-  return new AggregateError(
-    diagnostics,
-    `Could not fully retire title ownership transaction: ${diagnostics
-      .map(describeError)
-      .join("; ")}`,
+  return aggregateTitleOwnershipFailures(
+    failures,
+    "Could not fully retire title ownership transaction",
   );
 }

@@ -2,6 +2,7 @@ import {
   ZenXThreadTitleOwnershipTransaction,
   type ZenXThreadTitleOwnershipTransactionOptions,
 } from "./thread-title-ownership-transaction.js";
+import { normalizeTitleOwnershipFailure } from "./thread-title-failure.js";
 import type { ZenXThreadTitleOwnershipStore } from "./thread-title-store.js";
 import type {
   ThreadTitleInference,
@@ -11,6 +12,7 @@ import type {
 
 const MAX_TITLE_LENGTH = 64;
 const MAX_NATIVE_MIRROR_STATE = 64;
+const MAX_COORDINATOR_CHANGE_LISTENERS = 64;
 const nativeMirrorQueues = new WeakMap<object, NativeMirrorQueue>();
 const identifierNoise =
   /\b(?:zenx-wakeup:[^\s]+|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\b/giu;
@@ -55,7 +57,7 @@ export class ZenXThreadTitleCoordinator {
     this.#nativeMirrors = nativeMirrorQueue(options.store.ownershipDomain);
     this.#disposeDomainFailure = options.store.ownershipDomain.onFailure(
       (failure) => {
-        this.#domainFailure ??= failure;
+        this.#domainFailure = normalizeTitleOwnershipFailure(failure);
         void this.#owner.retire().catch(() => undefined);
       },
     );
@@ -74,13 +76,14 @@ export class ZenXThreadTitleCoordinator {
     this.#initializationError = undefined;
     this.#initialized = false;
     await this.#initializeAndActivateOwner(this.#owner);
+    this.#assertAvailable();
   }
 
   async stop(): Promise<void> {
     try {
       await this.#owner.retire();
     } catch (error) {
-      this.#initializationError = asError(error);
+      this.#initializationError = normalizeTitleOwnershipFailure(error);
       throw error;
     }
     const lateFailure = this.#owner.retirementFailure();
@@ -113,6 +116,16 @@ export class ZenXThreadTitleCoordinator {
   }
 
   onChange(listener: (snapshot: ThreadTitleSnapshot) => void): () => void {
+    if (this.#listeners.size >= MAX_COORDINATOR_CHANGE_LISTENERS) {
+      this.#owner.poison(
+        new Error(
+          `Title coordinator reached its bounded capacity of ${String(
+            MAX_COORDINATOR_CHANGE_LISTENERS,
+          )} change listeners`,
+        ),
+      );
+      return () => undefined;
+    }
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
@@ -272,7 +285,7 @@ export class ZenXThreadTitleCoordinator {
       this.#snapshot = restored;
       this.#initialized = true;
     } catch (error) {
-      this.#initializationError = asError(error);
+      this.#initializationError = normalizeTitleOwnershipFailure(error);
       console.error(
         `ZenX thread titles are unavailable: ${this.#initializationError.message}`,
       );
@@ -364,8 +377,20 @@ export class ZenXThreadTitleCoordinator {
     if (!(await this.#store.commit(next, owner)) || !owner.isCurrent())
       return false;
     this.#snapshot = next;
-    for (const listener of this.#listeners)
-      listener(structuredClone(this.#snapshot));
+    for (const listener of this.#listeners) {
+      try {
+        const result = (listener as (snapshot: ThreadTitleSnapshot) => unknown)(
+          structuredClone(this.#snapshot),
+        );
+        void Promise.resolve(result).then(undefined, (error: unknown) => {
+          this.#listeners.delete(listener);
+          owner.poison(error);
+        });
+      } catch (error) {
+        this.#listeners.delete(listener);
+        owner.poison(error);
+      }
+    }
     return true;
   }
 
@@ -389,7 +414,7 @@ export class ZenXThreadTitleCoordinator {
     void operation.catch((error: unknown) => {
       if (owner.isCurrent()) {
         console.error(
-          `Could not persist title generation result: ${asError(error).message}`,
+          `Could not persist title generation result: ${describeError(error)}`,
         );
       }
     });
@@ -420,14 +445,12 @@ export class ZenXThreadTitleCoordinator {
     if (this.#domainFailure !== undefined) {
       throw new Error(
         `ZenX thread titles are unavailable: ${this.#domainFailure.message}`,
-        { cause: this.#domainFailure },
       );
     }
     const retirementFailure = this.#owner.retirementFailure();
     if (retirementFailure !== undefined) {
       throw new Error(
         `ZenX thread titles are unavailable: ${retirementFailure.message}`,
-        { cause: retirementFailure },
       );
     }
     if (this.#initializationError !== undefined) {
@@ -890,9 +913,5 @@ function normalizeManualTitle(input: string): string {
 }
 
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+  return normalizeTitleOwnershipFailure(error).message;
 }
