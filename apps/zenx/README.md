@@ -10,6 +10,16 @@ Core.
 npm --workspace apps/zenx run dev
 ```
 
+Build the current platform's unpacked portable application with the same pinned
+provider assembly used by the packaged smoke:
+
+```sh
+npm --workspace apps/zenx run package:portable
+```
+
+The application is written below `apps/zenx/.packaged/artifact/`. It is an
+unpacked development artifact rather than an installer or signed release.
+
 The first window is onboarding. Choose an OpenAI subscription, an
 OpenAI-compatible API provider, or the deterministic local demo. Saving restarts
 the local host; existing Thread model settings remain authoritative in ZAS.

@@ -12,6 +12,7 @@
     "smoke:capabilities": "npm run smoke:packaged",
     "smoke:unit-capabilities": "npm run build && electron ./out/main/capability-smoke.js",
     "assemble:providers": "node ../../scripts/assemble-zenx-providers.mjs",
+    "package:portable": "npm run build && node ./scripts/package-zenx-portable.mjs --app",
     "smoke:packaged": "npm run build && node ./scripts/package-zenx-portable.mjs",
     "smoke:real": "npm run build && electron ./out/main/real-smoke.js",
     "smoke:windows-computer": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-winapp-smoke.ps1",
