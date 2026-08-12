@@ -165,8 +165,7 @@ async function assembleNpmProvider(id, platform, runtimePath) {
   const destination = path.join(providers, id);
   await cp(packageDir, destination, { recursive: true, force: true });
   if (id === "playwright-cli") {
-    await run(
-      "npm",
+    await runNpm(
       [
         "install",
         "--prefix",
@@ -282,6 +281,18 @@ async function fetchVerified(url, expected) {
 
 async function extract(archive, destination) {
   await run("tar", ["-xf", archive, "-C", destination]);
+}
+
+async function runNpm(args, options) {
+  const npmExecPath = process.env.npm_execpath;
+  if (npmExecPath !== undefined && npmExecPath.length > 0) {
+    return await run(process.execPath, [npmExecPath, ...args], options);
+  }
+  return await run(
+    process.platform === "win32" ? "npm.cmd" : "npm",
+    args,
+    options,
+  );
 }
 
 async function findFile(root, name) {
