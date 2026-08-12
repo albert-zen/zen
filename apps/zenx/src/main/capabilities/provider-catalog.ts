@@ -19,12 +19,18 @@ import {
 } from "./external-provider.js";
 import { PeekabooComputerBackend } from "./peekaboo-computer-provider.js";
 import { PlaywrightCliBrowserBackend } from "./playwright-browser-provider.js";
+import {
+  bindBundledProviderLaunch,
+  resolveBundledProvider,
+  verifyBundledProvider,
+} from "./provider-provisioning.js";
 import { connectUserBrowserCdp } from "./user-browser-provider.js";
 import type { UserBrowserConnection } from "./user-browser-provider.js";
 import {
   windowsComputerCapabilityManifest,
   WinAppCliComputerBackend,
 } from "./windows-computer-provider.js";
+import type { WinAppCliRunner } from "./windows-computer-provider.js";
 import type {
   ZenXCapabilityManifest,
   ZenXCapabilityProviderDiagnostic,
@@ -47,10 +53,16 @@ export interface ZenXCapabilityProviderCatalogOptions {
   environment?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   runner?: ExternalProviderProcessRunner;
+  winAppRunner?: WinAppCliRunner;
   userBrowserConnector?: (
     endpoint: string,
     signal?: AbortSignal,
   ) => Promise<UserBrowserConnection>;
+  /** Set by the packaged app; dev/test keeps explicit PATH discovery. */
+  bundledProvidersOnly?: boolean;
+  resourcesDirectory?: string;
+  /** Build-time trust anchor for the packaged provider manifest. */
+  bundledManifestSha256?: string;
 }
 
 // @playwright/cli has its own 0.1.x package version. It embeds Playwright
@@ -150,10 +162,47 @@ export async function selectBrowserProvider(
     };
   }
   const configured = environment.ZENX_PLAYWRIGHT_CLI;
-  const executable = await discoverExecutable(configured ?? "playwright-cli", {
-    environment,
-    platform,
-  });
+  const bundled =
+    options.bundledProvidersOnly === true &&
+    options.resourcesDirectory !== undefined
+      ? options.bundledManifestSha256 === undefined
+        ? {
+            reason:
+              "Packaged Playwright provider manifest trust anchor is missing",
+          }
+        : requireBundledRuntime(
+            await resolveBundledProvider("playwright-cli", {
+              resourcesDirectory: options.resourcesDirectory,
+              platform,
+              expectedManifestSha256: options.bundledManifestSha256,
+            }),
+          )
+      : undefined;
+  if (
+    options.bundledProvidersOnly === true &&
+    bundled?.provider === undefined
+  ) {
+    return {
+      backend: new ElectronBrowserBackend(),
+      manifest: browserCapabilityManifest,
+      diagnostics: [
+        unavailableDiagnostic(
+          "browser",
+          "playwright-cli",
+          ["isolated"],
+          ["headless", "browser_context", "aria_snapshot", "auto_wait"],
+          bundled?.reason ?? "Packaged Playwright provider is not provisioned",
+        ),
+        electronBrowserDiagnostic("fallback"),
+      ],
+    };
+  }
+  const executable =
+    bundled?.provider?.executable ??
+    (await discoverExecutable(configured ?? "playwright-cli", {
+      environment,
+      platform,
+    }));
   const fallbackDiagnostic = electronBrowserDiagnostic(
     executable === undefined ? "fallback" : "available",
   );
@@ -178,8 +227,31 @@ export async function selectBrowserProvider(
       ],
     };
   }
+  const bundledVerify =
+    bundled?.provider === undefined
+      ? undefined
+      : async () =>
+          await verifyBundledProvider(bundled.provider!, {
+            resourcesDirectory: options.resourcesDirectory!,
+            platform,
+          });
+  const bundledBind =
+    bundled?.provider === undefined
+      ? undefined
+      : async () =>
+          await bindBundledProviderLaunch(bundled.provider!, {
+            resourcesDirectory: options.resourcesDirectory!,
+            platform,
+          });
   try {
-    const version = await probePlaywrightCli(executable, runner);
+    const version = await probePlaywrightCli(
+      executable,
+      runner,
+      bundled?.provider?.version,
+      bundled?.provider?.runtime?.path,
+      bundledBind,
+      bundledVerify,
+    );
     const playwrightDirectory = path.join(
       options.userDataDirectory,
       "playwright",
@@ -190,6 +262,13 @@ export async function selectBrowserProvider(
         executable,
         runner,
         cwd: playwrightDirectory,
+        ...(bundled?.provider === undefined
+          ? {}
+          : {
+              runtimeExecutable: bundled.provider.runtime?.path,
+              bindBeforeSpawn: bundledBind,
+              verifyExecutable: bundledVerify,
+            }),
       }),
       manifest: playwrightBrowserManifest(),
       diagnostics: [
@@ -207,6 +286,9 @@ export async function selectBrowserProvider(
           ],
           executable,
           version,
+          ...(bundled?.provider === undefined
+            ? { integrity: "unverified" as const }
+            : { integrity: "verified" as const }),
           permissionSummary:
             "Isolated in-memory Playwright session; no foreground desktop input",
           sessionMode: "isolated-session",
@@ -293,7 +375,60 @@ export async function selectComputerProvider(
   const environment = options.environment ?? process.env;
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
-    const backend = new WinAppCliComputerBackend();
+    const bundled =
+      options.bundledProvidersOnly === true &&
+      options.resourcesDirectory !== undefined
+        ? options.bundledManifestSha256 === undefined
+          ? {
+              reason:
+                "Packaged WinApp provider manifest trust anchor is missing",
+            }
+          : requireBundledRuntime(
+              await resolveBundledProvider("microsoft-winapp-cli", {
+                resourcesDirectory: options.resourcesDirectory,
+                platform,
+                expectedManifestSha256: options.bundledManifestSha256,
+              }),
+            )
+        : undefined;
+    const command =
+      bundled?.provider?.executable ??
+      (options.bundledProvidersOnly === true ? undefined : "winapp");
+    if (command === undefined) {
+      return {
+        manifest: windowsComputerCapabilityManifest,
+        diagnostics: [
+          unavailableDiagnostic(
+            "computer",
+            "microsoft-winapp-cli",
+            ["background_safe"],
+            ["uia.inspect", "uia.invoke", "uia.set_value", "wgc.capture"],
+            bundled?.reason ?? "Packaged WinApp provider is not provisioned",
+          ),
+        ],
+      };
+    }
+    const backend = new WinAppCliComputerBackend({
+      command,
+      runner: options.winAppRunner,
+      platform,
+      expectedVersion: bundled?.provider?.version,
+      ...(bundled?.provider === undefined
+        ? {}
+        : {
+            runtimeExecutable: bundled.provider.runtime?.path,
+            bindBeforeSpawn: async () =>
+              await bindBundledProviderLaunch(bundled.provider!, {
+                resourcesDirectory: options.resourcesDirectory!,
+                platform,
+              }),
+            verifyExecutable: async () =>
+              await verifyBundledProvider(bundled.provider!, {
+                resourcesDirectory: options.resourcesDirectory!,
+                platform,
+              }),
+          }),
+    });
     const diagnostic = await backend.diagnose();
     if (!diagnostic.ready) {
       await backend.close();
@@ -330,6 +465,9 @@ export async function selectComputerProvider(
           ...(diagnostic.version === undefined
             ? {}
             : { version: diagnostic.version }),
+          ...(bundled?.provider === undefined
+            ? { integrity: "unverified" as const }
+            : { integrity: "verified" as const }),
           permissionSummary:
             "Exact-window UI Automation and WGC capture; no global input injection",
         },
@@ -420,10 +558,17 @@ export async function selectComputerProvider(
 export async function probePlaywrightCli(
   executable: string,
   runner: ExternalProviderProcessRunner,
+  expectedVersion?: string,
+  runtimeExecutable?: string,
+  bindBeforeSpawn?: () => Promise<() => Promise<void>>,
+  verifyBeforeSpawn?: () => Promise<void>,
 ): Promise<string> {
   const versionResult = await runner.run(executable, ["--json", "--version"], {
     timeoutMs: 5_000,
     maxOutputBytes: 32 * 1024,
+    runtimeExecutable,
+    bindBeforeSpawn,
+    verifyBeforeSpawn,
   });
   const versionEnvelope = parseExternalJson(
     "playwright-cli",
@@ -436,9 +581,17 @@ export async function probePlaywrightCli(
     MAX_PLAYWRIGHT_CLI_EXCLUSIVE,
     "playwright-cli",
   );
+  if (expectedVersion !== undefined && version !== expectedVersion) {
+    throw new Error(
+      `playwright-cli version ${version} does not match pinned version ${expectedVersion}`,
+    );
+  }
   const listResult = await runner.run(executable, ["--json", "list"], {
     timeoutMs: 5_000,
     maxOutputBytes: 64 * 1024,
+    runtimeExecutable,
+    bindBeforeSpawn,
+    verifyBeforeSpawn,
   });
   const listEnvelope = parseExternalJson("playwright-cli", listResult.stdout);
   if (
@@ -593,6 +746,7 @@ function electronBrowserDiagnostic(
     capabilities: ["dedicated_profile", "cdp", "dom.inspect", "dom.interact"],
     permissionSummary: "Bundled hidden ephemeral Electron partition",
     sessionMode: "isolated-session",
+    integrity: "verified",
   };
 }
 
@@ -716,4 +870,20 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function requireBundledRuntime<
+  T extends { provider?: { runtime?: unknown }; reason?: string },
+>(resolved: T): T {
+  if (
+    resolved.provider !== undefined &&
+    resolved.provider.runtime === undefined
+  ) {
+    return {
+      ...resolved,
+      provider: undefined,
+      reason: "Bundled provider manifest does not pin its packaged runtime",
+    } as T;
+  }
+  return resolved;
 }

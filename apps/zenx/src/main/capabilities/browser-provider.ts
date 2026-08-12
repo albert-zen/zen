@@ -1,4 +1,16 @@
 import { randomUUID } from "node:crypto";
+import {
+  chmod,
+  constants,
+  lstat,
+  mkdir,
+  open,
+  realpath,
+  rm,
+} from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { inflateSync } from "node:zlib";
 
 import type { BrowserWindow, Session } from "electron";
 
@@ -17,14 +29,25 @@ export interface BrowserInspection extends BrowserTabSummary {
   observationId: string;
   documentVersion: number;
   visibleText: string;
+  screenshot: BrowserScreenshotArtifact;
   targets: Array<{
     targetId: string;
     role: string;
     name: string;
     actions: Array<"click" | "type">;
-    secure?: true;
     value?: string;
   }>;
+}
+
+export interface BrowserScreenshotArtifact {
+  artifactPath: string;
+  observationId: string;
+  status: "captured" | "fallback";
+  reason?: string;
+  width: number;
+  height: number;
+  bytes: number;
+  expiresAt: string;
 }
 
 export interface ZenXBrowserBackend {
@@ -332,7 +355,6 @@ export interface BrowserTargetFingerprint {
   fieldName: string;
   autocomplete: string;
   href: string;
-  secure: boolean;
   actions: Array<"click" | "type">;
   value?: string;
 }
@@ -345,13 +367,332 @@ export interface BrowserObservation {
 
 export const MAX_BROWSER_TABS_PER_SESSION = 8;
 export const MAX_BROWSER_TABS_GLOBAL = 24;
+export const MAX_BROWSER_SCREENSHOT_BYTES = 4 * 1024 * 1024;
+export const BROWSER_SCREENSHOT_TTL_MS = 5 * 60_000;
+export const MAX_BROWSER_SCREENSHOT_ARTIFACTS = 16;
+export const MAX_BROWSER_SCREENSHOT_TOTAL_BYTES = 16 * 1024 * 1024;
+export const MAX_BROWSER_SCREENSHOT_SCOPES = 256;
+const MAX_BROWSER_SCREENSHOT_WIDTH = 4096;
+const MAX_BROWSER_SCREENSHOT_HEIGHT = 4096;
+const MAX_BROWSER_SCREENSHOT_PIXELS = 16 * 1024 * 1024;
+const MAX_BROWSER_SCREENSHOT_DECODE_BYTES = 64 * 1024 * 1024;
+let activeBrowserScreenshotDecodeBytes = 0;
+
+/** Temporary provider-owned PNGs; no screenshot bytes are part of the journal. */
+export class BrowserScreenshotArtifactStore {
+  readonly #rootDirectory: string;
+  readonly #directory: string;
+  readonly #ownsRootDirectory: boolean;
+  readonly #artifacts = new Map<
+    string,
+    {
+      scope: string;
+      observationId: string;
+      bytes: number;
+      createdAt: number;
+      timer: NodeJS.Timeout;
+    }
+  >();
+  #directoryCreated = false;
+  #closed = false;
+  #totalBytes = 0;
+  #operations: Promise<void> = Promise.resolve();
+  #generation = 0;
+  readonly #scopeGenerations = new Map<string, number>();
+
+  constructor(directory?: string) {
+    this.#rootDirectory =
+      directory ??
+      path.join(
+        os.tmpdir(),
+        `zenx-browser-artifacts-${String(process.pid)}-${randomUUID()}`,
+      );
+    this.#directory = path.join(this.#rootDirectory, `store-${randomUUID()}`);
+    this.#ownsRootDirectory = directory === undefined;
+  }
+
+  async write(
+    scope: string,
+    observationId: string,
+    png: Buffer,
+    options: { status?: "captured" | "fallback"; reason?: string } = {},
+  ): Promise<BrowserScreenshotArtifact> {
+    const generation = this.#generation;
+    const scopeGeneration = this.#scopeGeneration(scope);
+    return await this.#enqueue(async () => {
+      if (this.#closed || generation !== this.#generation) {
+        throw new Error("Browser screenshot artifact store is closed");
+      }
+      if (scopeGeneration !== this.#scopeGeneration(scope)) {
+        throw new Error(
+          "Browser screenshot observation scope is no longer current",
+        );
+      }
+      if (png.byteLength > MAX_BROWSER_SCREENSHOT_BYTES) {
+        throw new Error(
+          `Browser screenshot exceeded the ${String(MAX_BROWSER_SCREENSHOT_BYTES)} byte bound`,
+        );
+      }
+      const dimensions = pngDimensions(png);
+      if (!this.#directoryCreated) {
+        await this.#ensureOwnedDirectory();
+        this.#directoryCreated = true;
+      }
+      await this.#assertOwnedDirectory();
+      if (
+        png.byteLength > MAX_BROWSER_SCREENSHOT_TOTAL_BYTES ||
+        this.#artifacts.size >= MAX_BROWSER_SCREENSHOT_ARTIFACTS ||
+        this.#totalBytes + png.byteLength > MAX_BROWSER_SCREENSHOT_TOTAL_BYTES
+      ) {
+        await this.#evictFor(png.byteLength);
+      }
+      const artifactPath = path.join(this.#directory, `${randomUUID()}.png`);
+      if (
+        this.#closed ||
+        generation !== this.#generation ||
+        scopeGeneration !== this.#scopeGeneration(scope)
+      ) {
+        throw new Error(
+          "Browser screenshot artifact store was closed during capture",
+        );
+      }
+      const openFlags =
+        constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        (process.platform === "win32" ? 0 : constants.O_NOFOLLOW);
+      const handle = await open(artifactPath, openFlags, 0o600);
+      try {
+        await this.#assertOwnedDirectory();
+        await handle.writeFile(png);
+        const written = await handle.stat();
+        if (!written.isFile() || written.size !== png.byteLength) {
+          throw new Error("Browser screenshot artifact write was not complete");
+        }
+      } finally {
+        await handle.close();
+      }
+      await this.#assertOwnedDirectory();
+      if (
+        this.#closed ||
+        generation !== this.#generation ||
+        scopeGeneration !== this.#scopeGeneration(scope)
+      ) {
+        await rm(artifactPath, { force: true });
+        throw new Error("Browser screenshot artifact store is closed");
+      }
+      const expiresAt = new Date(Date.now() + BROWSER_SCREENSHOT_TTL_MS);
+      const timer = setTimeout(() => {
+        void this.removeArtifact(artifactPath, observationId);
+      }, BROWSER_SCREENSHOT_TTL_MS);
+      timer.unref();
+      this.#artifacts.set(artifactPath, {
+        scope,
+        observationId,
+        bytes: png.byteLength,
+        createdAt: Date.now(),
+        timer,
+      });
+      this.#totalBytes += png.byteLength;
+      const superseded = [...this.#artifacts.entries()]
+        .filter(
+          ([candidatePath, artifact]) =>
+            candidatePath !== artifactPath &&
+            (artifact.scope === scope ||
+              artifact.scope.startsWith(`${scope}/`)),
+        )
+        .map(([candidatePath]) => candidatePath);
+      await Promise.all(
+        superseded.map((candidatePath) => this.#removeNow(candidatePath)),
+      );
+      return {
+        artifactPath,
+        observationId,
+        status: options.status ?? "captured",
+        ...(options.reason === undefined ? {} : { reason: options.reason }),
+        width: dimensions.width,
+        height: dimensions.height,
+        bytes: png.byteLength,
+        expiresAt: expiresAt.toISOString(),
+      };
+    });
+  }
+
+  async clearScope(scope: string): Promise<void> {
+    this.#incrementScopeGeneration(scope);
+    await this.#enqueue(async () => {
+      const paths = [...this.#artifacts.entries()]
+        .filter(
+          ([, artifact]) =>
+            artifact.scope === scope || artifact.scope.startsWith(`${scope}/`),
+        )
+        .map(([artifactPath]) => artifactPath);
+      await Promise.all(
+        paths.map((artifactPath) => this.#removeNow(artifactPath)),
+      );
+    });
+  }
+
+  async close(): Promise<void> {
+    this.#closed = true;
+    this.#generation += 1;
+    await this.#enqueue(async () => {
+      for (const artifact of this.#artifacts.values())
+        clearTimeout(artifact.timer);
+      const paths = [...this.#artifacts.keys()];
+      this.#artifacts.clear();
+      this.#totalBytes = 0;
+      await Promise.all(
+        paths.map((artifactPath) => rm(artifactPath, { force: true })),
+      );
+      if (this.#directoryCreated) {
+        await rm(this.#directory, { recursive: true, force: true });
+        this.#directoryCreated = false;
+      }
+      if (this.#ownsRootDirectory) {
+        await rm(this.#rootDirectory, { recursive: true, force: true });
+      }
+    });
+  }
+
+  async removeArtifact(
+    artifactPath: string,
+    observationId: string,
+  ): Promise<void> {
+    await this.#enqueue(async () => {
+      const artifact = this.#artifacts.get(artifactPath);
+      if (artifact === undefined || artifact.observationId !== observationId)
+        return;
+      await this.#removeNow(artifactPath);
+    });
+  }
+
+  async #removeNow(artifactPath: string): Promise<void> {
+    const artifact = this.#artifacts.get(artifactPath);
+    if (artifact === undefined) return;
+    clearTimeout(artifact.timer);
+    this.#artifacts.delete(artifactPath);
+    this.#totalBytes -= artifact.bytes;
+    await rm(artifactPath, { force: true });
+  }
+
+  async #ensureOwnedDirectory(): Promise<void> {
+    let root: Awaited<ReturnType<typeof lstat>>;
+    try {
+      root = await lstat(this.#rootDirectory);
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+      await mkdir(this.#rootDirectory, { mode: 0o700 });
+      root = await lstat(this.#rootDirectory);
+    }
+    if (!root.isDirectory() || root.isSymbolicLink()) {
+      throw new Error(
+        "Browser screenshot artifact root must be a real directory",
+      );
+    }
+    await chmod(this.#rootDirectory, 0o700);
+    await mkdir(this.#directory, { recursive: false, mode: 0o700 });
+    const child = await lstat(this.#directory);
+    if (!child.isDirectory() || child.isSymbolicLink()) {
+      throw new Error(
+        "Browser screenshot artifact directory must be a real directory",
+      );
+    }
+    await chmod(this.#directory, 0o700);
+    await this.#assertOwnedDirectory();
+  }
+
+  async #assertOwnedDirectory(): Promise<void> {
+    if (!this.#directoryCreated && !this.#directory) return;
+    const root = await lstat(this.#rootDirectory);
+    const child = await lstat(this.#directory);
+    if (
+      !root.isDirectory() ||
+      root.isSymbolicLink() ||
+      !child.isDirectory() ||
+      child.isSymbolicLink()
+    ) {
+      throw new Error(
+        "Browser screenshot artifact directory ownership changed",
+      );
+    }
+    const [rootRealPath, childRealPath] = await Promise.all([
+      realpath(this.#rootDirectory),
+      realpath(this.#directory),
+    ]);
+    if (!isWithin(rootRealPath, childRealPath)) {
+      throw new Error(
+        "Browser screenshot artifact directory escaped its owner",
+      );
+    }
+  }
+
+  #scopeGeneration(scope: string): string {
+    return [...this.#scopeGenerations.entries()]
+      .filter(
+        ([candidate]) =>
+          scope === candidate || scope.startsWith(`${candidate}/`),
+      )
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([candidate, generation]) => `${candidate}:${String(generation)}`)
+      .join("|");
+  }
+
+  #incrementScopeGeneration(scope: string): void {
+    if (
+      !this.#scopeGenerations.has(scope) &&
+      this.#scopeGenerations.size >= MAX_BROWSER_SCREENSHOT_SCOPES
+    ) {
+      throw new Error("Browser screenshot scope lifecycle bound exceeded");
+    }
+    this.#scopeGenerations.set(
+      scope,
+      (this.#scopeGenerations.get(scope) ?? 0) + 1,
+    );
+  }
+
+  async #evictFor(bytes: number): Promise<void> {
+    if (bytes > MAX_BROWSER_SCREENSHOT_TOTAL_BYTES) {
+      throw new Error("Browser screenshot aggregate byte bound exceeded");
+    }
+    const candidates = [...this.#artifacts.entries()].sort(
+      (left, right) => left[1].createdAt - right[1].createdAt,
+    );
+    while (
+      this.#artifacts.size >= MAX_BROWSER_SCREENSHOT_ARTIFACTS ||
+      this.#totalBytes + bytes > MAX_BROWSER_SCREENSHOT_TOTAL_BYTES
+    ) {
+      const candidate = candidates.shift();
+      if (candidate === undefined) {
+        throw new Error("Browser screenshot artifact capacity is exhausted");
+      }
+      await this.#removeNow(candidate[0]);
+    }
+  }
+
+  async #enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#operations.then(operation, operation);
+    this.#operations = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await result;
+  }
+}
 
 export class ElectronBrowserBackend implements ZenXBrowserBackend {
   readonly #tabs = new Map<string, BrowserTab>();
   readonly #sessions = new Map<string, BrowserSessionIncarnation>();
+  readonly #artifacts: BrowserScreenshotArtifactStore;
   #pendingGlobal = 0;
   #nextSessionGeneration = 1;
   #closing = false;
+
+  constructor(options: { artifactDirectory?: string } = {}) {
+    this.#artifacts = new BrowserScreenshotArtifactStore(
+      options.artifactDirectory,
+    );
+  }
 
   async listTabs(sessionId: string): Promise<BrowserTabSummary[]> {
     assertTargetId(sessionId, "sessionId");
@@ -437,11 +778,22 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
 
   async inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
     const tab = this.#requireTab(sessionId, tabId);
+    const documentVersion = tab.documentVersion;
     const inspected = await evaluateInTab<{
       visibleText: string;
       targets: BrowserTargetFingerprint[];
     }>(tab, browserInspectScript);
     const observationId = randomUUID();
+    const screenshot = await this.#captureScreenshot(tab, observationId);
+    if (tab.documentVersion !== documentVersion) {
+      await this.#artifacts.removeArtifact(
+        screenshot.artifactPath,
+        screenshot.observationId,
+      );
+      throw new Error(
+        "Browser document changed during inspection; inspect again",
+      );
+    }
     const targets = new Map<string, BrowserTargetFingerprint>();
     const projectedTargets = inspected.targets.slice(0, 80).map((target) => {
       const targetId = randomUUID();
@@ -451,7 +803,6 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
         role: target.role,
         name: target.name,
         actions: [...target.actions],
-        ...(target.secure ? { secure: true as const } : {}),
         ...(target.value === undefined ? {} : { value: target.value }),
       };
     });
@@ -465,6 +816,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       observationId,
       documentVersion: tab.documentVersion,
       visibleText: inspected.visibleText.slice(0, 8_000),
+      screenshot,
       targets: projectedTargets,
     };
   }
@@ -525,12 +877,13 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     return summarizeTab(tab);
   }
 
-  closeTab(sessionId: string, tabId: string): void {
+  async closeTab(sessionId: string, tabId: string): Promise<void> {
     const tab = this.#requireTab(sessionId, tabId);
     tab.observation = undefined;
     this.#tabs.delete(tabId);
     if (!tab.window.isDestroyed()) tab.window.destroy();
     this.#releaseIncarnation(sessionId, tab.incarnation);
+    await this.#artifacts.clearScope(`${sessionId}/${tabId}`);
   }
 
   async closeSession(sessionId: string): Promise<number> {
@@ -544,8 +897,9 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     const electronSessions = new Set(
       tabs.map((tab) => tab.window.webContents.session),
     );
-    for (const tab of tabs) this.closeTab(sessionId, tab.tabId);
+    await Promise.all(tabs.map((tab) => this.closeTab(sessionId, tab.tabId)));
     await Promise.all([...electronSessions].map(clearElectronSession));
+    await this.#artifacts.clearScope(sessionId);
     return tabs.length;
   }
 
@@ -564,6 +918,32 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     }
     this.#tabs.clear();
     await Promise.all([...electronSessions].map(clearElectronSession));
+    await this.#artifacts.close();
+  }
+
+  async #captureScreenshot(
+    tab: BrowserTab,
+    observationId: string,
+  ): Promise<BrowserScreenshotArtifact> {
+    const image = await tab.window.webContents.capturePage();
+    let png = image.toPNG();
+    if (png.byteLength > MAX_BROWSER_SCREENSHOT_BYTES) {
+      const size = image.getSize();
+      const scale = Math.sqrt(MAX_BROWSER_SCREENSHOT_BYTES / png.byteLength);
+      if (scale < 1 && size.width > 1 && size.height > 1) {
+        png = image
+          .resize({
+            width: Math.max(1, Math.floor(size.width * scale)),
+            height: Math.max(1, Math.floor(size.height * scale)),
+          })
+          .toPNG();
+      }
+    }
+    return await this.#artifacts.write(
+      `${tab.sessionId}/${tab.tabId}`,
+      observationId,
+      png,
+    );
   }
 
   #requireTab(sessionId: string, tabId: string): BrowserTab {
@@ -688,10 +1068,6 @@ export const browserInspectScript = `(() => {
     return !element.hidden && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth;
   };
   const name = (element) => (element.getAttribute("aria-label") ?? element.getAttribute("placeholder") ?? element.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 160);
-  const secure = (element) => element instanceof HTMLInputElement && (
-    element.type.toLowerCase() === "password" ||
-    ["current-password", "new-password", "one-time-code"].includes(element.autocomplete.toLowerCase())
-  );
   const typeable = (element) => {
     if (element.hasAttribute("disabled") || element.hasAttribute("readonly")) return false;
     if (element instanceof HTMLTextAreaElement) return true;
@@ -721,7 +1097,6 @@ export const browserInspectScript = `(() => {
   return {
     visibleText: (document.body?.innerText ?? "").replace(/\\s+/g, " ").trim().slice(0, 8000),
     targets: elements.map((element) => {
-      const isSecure = secure(element);
       const actions = [];
       if (clickable(element)) actions.push("click");
       if (typeable(element)) actions.push("type");
@@ -735,7 +1110,6 @@ export const browserInspectScript = `(() => {
         fieldName: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.name : "",
         autocomplete: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.autocomplete : "",
         href: element instanceof HTMLAnchorElement ? element.getAttribute("href") ?? "" : "",
-        secure: isSecure,
         actions,
       };
     }),
@@ -757,7 +1131,6 @@ export function browserActionScript(
     fieldName: target.fieldName,
     autocomplete: target.autocomplete,
     href: target.href,
-    secure: target.secure,
   });
   return `(() => {
     const expected = ${expected};
@@ -772,10 +1145,6 @@ export function browserActionScript(
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     if (element.hidden || style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0 || rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth) return { ok: false, reason: "not-visible" };
-    const secure = element instanceof HTMLInputElement && (
-      element.type.toLowerCase() === "password" ||
-      ["current-password", "new-password", "one-time-code"].includes(element.autocomplete.toLowerCase())
-    );
     const actual = {
       tag: element.tagName.toLowerCase(),
       role: element.getAttribute("role") ?? element.tagName.toLowerCase(),
@@ -785,7 +1154,6 @@ export function browserActionScript(
       fieldName: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.name : "",
       autocomplete: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.autocomplete : "",
       href: element instanceof HTMLAnchorElement ? element.getAttribute("href") ?? "" : "",
-      secure,
     };
     if (JSON.stringify(actual) !== JSON.stringify(expected)) return { ok: false, reason: "identity-changed" };
     if (action === "click") {
@@ -848,35 +1216,344 @@ function safeBrowserUrl(raw: string): string {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("ZenX browser only opens http(s) URLs");
   }
-  if (url.username.length > 0 || url.password.length > 0) {
-    throw new Error("ZenX browser URLs must not contain credentials");
-  }
-  for (const key of url.searchParams.keys()) {
-    if (
-      /(?:auth|code|credential|key|password|secret|session|token)/iu.test(key)
-    ) {
-      throw new Error(
-        `ZenX browser URL contains sensitive query parameter ${key}`,
-      );
-    }
-  }
   return url.toString();
 }
 
 export function redactBrowserUrl(raw: string): string {
   if (raw.length === 0) return "";
-  const url = new URL(raw);
-  url.username = "";
-  url.password = "";
-  url.hash = "";
-  for (const key of [...url.searchParams.keys()]) {
+  try {
+    const url = new URL(raw);
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    url.search = "";
+    return url.toString().slice(0, 2048);
+  } catch {
+    return "[malformed-url]";
+  }
+}
+
+function pngDimensions(buffer: Buffer): { width: number; height: number } {
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (buffer.length < 33 || !buffer.subarray(0, 8).equals(signature)) {
+    throw new Error("Browser screenshot is not a valid PNG");
+  }
+
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  let interlace = 0;
+  let sawHeader = false;
+  let sawData = false;
+  let ended = false;
+  let sawPalette = false;
+  let sawImageData = false;
+  let paletteEntries = 0;
+  let sawTransparency = false;
+  let sawPostImageData = false;
+  let chunkCount = 0;
+  const idat: Buffer[] = [];
+  while (offset < buffer.length) {
+    chunkCount += 1;
+    if (chunkCount > 1024) {
+      throw new Error("Browser screenshot PNG has too many chunks");
+    }
+    if (offset + 12 > buffer.length) {
+      throw new Error("Browser screenshot PNG is truncated");
+    }
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.subarray(offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    const crcEnd = dataEnd + 4;
+    if (dataEnd < dataStart || crcEnd > buffer.length) {
+      throw new Error("Browser screenshot PNG chunk is truncated");
+    }
+    if (ended) throw new Error("Browser screenshot PNG has data after IEND");
+    const data = buffer.subarray(dataStart, dataEnd);
+    const expectedCrc = buffer.readUInt32BE(dataEnd);
+    const actualCrc = crc32(Buffer.concat([type, data]));
+    if (actualCrc !== expectedCrc) {
+      throw new Error("Browser screenshot PNG chunk CRC is invalid");
+    }
+    const name = type.toString("ascii");
+    if (!/^[A-Za-z]{4}$/u.test(name)) {
+      throw new Error("Browser screenshot PNG chunk type is invalid");
+    }
     if (
-      /(?:auth|code|credential|key|password|secret|session|token)/iu.test(key)
+      (type[0]! & 0x20) === 0 &&
+      !["IHDR", "PLTE", "IDAT", "IEND"].includes(name)
     ) {
-      url.searchParams.set(key, "[REDACTED]");
+      throw new Error(
+        `Browser screenshot PNG has an unknown critical chunk ${name}`,
+      );
+    }
+    if (!sawHeader && name !== "IHDR") {
+      throw new Error("Browser screenshot PNG must begin with IHDR");
+    }
+    if (name === "IHDR") {
+      if (sawHeader || length !== 13) {
+        throw new Error("Browser screenshot PNG IHDR is invalid");
+      }
+      sawHeader = true;
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8]!;
+      colorType = data[9]!;
+      if (
+        width === 0 ||
+        height === 0 ||
+        width > MAX_BROWSER_SCREENSHOT_WIDTH ||
+        height > MAX_BROWSER_SCREENSHOT_HEIGHT ||
+        width * height > MAX_BROWSER_SCREENSHOT_PIXELS ||
+        data[10] !== 0 ||
+        data[11] !== 0 ||
+        data[12] !== 0 ||
+        !validPngBitDepth(colorType, bitDepth)
+      ) {
+        throw new Error("Browser screenshot dimensions or IHDR are invalid");
+      }
+      interlace = data[12]!;
+    } else if (name === "IDAT") {
+      if (!sawHeader || ended || sawPostImageData)
+        throw new Error("Browser screenshot PNG IDAT is invalid");
+      sawImageData = true;
+      sawData = true;
+      idat.push(data);
+    } else if (name === "PLTE") {
+      if (
+        sawImageData ||
+        sawPalette ||
+        length === 0 ||
+        length % 3 !== 0 ||
+        length > 768
+      ) {
+        throw new Error("Browser screenshot PNG palette is invalid");
+      }
+      if (colorType === 0 || colorType === 4) {
+        throw new Error(
+          "Browser screenshot PNG palette is invalid for this color type",
+        );
+      }
+      sawPalette = true;
+      paletteEntries = length / 3;
+    } else if (name === "tRNS") {
+      if (
+        sawImageData ||
+        sawTransparency ||
+        (colorType !== 3 && colorType !== 0 && colorType !== 2)
+      ) {
+        throw new Error("Browser screenshot PNG transparency is invalid");
+      }
+      sawTransparency = true;
+      if (colorType === 3 && (!sawPalette || length > paletteEntries)) {
+        throw new Error("Browser screenshot PNG transparency is invalid");
+      }
+      if (colorType === 0 && length !== 2) {
+        throw new Error(
+          "Browser screenshot PNG grayscale transparency is invalid",
+        );
+      }
+      if (colorType === 2 && length !== 6) {
+        throw new Error("Browser screenshot PNG RGB transparency is invalid");
+      }
+    } else if (name === "IEND") {
+      if (!sawHeader || !sawData || length !== 0) {
+        throw new Error("Browser screenshot PNG IEND is invalid");
+      }
+      ended = true;
+    } else if (sawImageData) {
+      sawPostImageData = true;
+    }
+    offset = crcEnd;
+    if (ended) break;
+  }
+  if (!sawHeader || !sawData || !ended || offset !== buffer.length) {
+    throw new Error("Browser screenshot PNG is incomplete");
+  }
+  if (colorType === 3 && !sawPalette) {
+    throw new Error("Browser screenshot PNG palette is missing");
+  }
+  if (interlace !== 0) {
+    throw new Error("Interlaced browser screenshots are unsupported");
+  }
+  const channels =
+    colorType === 0
+      ? 1
+      : colorType === 2
+        ? 3
+        : colorType === 3
+          ? 1
+          : colorType === 4
+            ? 2
+            : 4;
+  if (
+    colorType === 3 &&
+    (paletteEntries === 0 || paletteEntries > 1 << bitDepth)
+  ) {
+    throw new Error("Browser screenshot PNG palette entries are invalid");
+  }
+  const rowBytes = Math.ceil((width * channels * bitDepth) / 8);
+  const decodedBytes = (rowBytes + 1) * height;
+  if (decodedBytes > MAX_BROWSER_SCREENSHOT_DECODE_BYTES) {
+    throw new Error("Browser screenshot decoded image exceeds the byte bound");
+  }
+  if (
+    activeBrowserScreenshotDecodeBytes + decodedBytes >
+    MAX_BROWSER_SCREENSHOT_DECODE_BYTES
+  ) {
+    throw new Error("Browser screenshot decode budget is exhausted");
+  }
+  activeBrowserScreenshotDecodeBytes += decodedBytes;
+  try {
+    const decoded = inflateSync(Buffer.concat(idat), {
+      maxOutputLength: decodedBytes,
+    });
+    if (decoded.byteLength !== decodedBytes) {
+      throw new Error("decoded byte count differs from image dimensions");
+    }
+    validatePngScanlines(
+      decoded,
+      width,
+      height,
+      rowBytes,
+      channels,
+      bitDepth,
+      colorType,
+      paletteEntries,
+    );
+  } catch (error) {
+    throw new Error(
+      `Browser screenshot PNG image data is not decodable: ${describeError(error)}`,
+    );
+  } finally {
+    activeBrowserScreenshotDecodeBytes -= decodedBytes;
+  }
+  return { width, height };
+}
+
+function validatePngScanlines(
+  decoded: Buffer,
+  width: number,
+  height: number,
+  rowBytes: number,
+  channels: number,
+  bitDepth: number,
+  colorType: number,
+  paletteEntries: number,
+): void {
+  const bytesPerPixel = Math.max(1, Math.ceil((channels * bitDepth) / 8));
+  const previous = Buffer.alloc(rowBytes);
+  let offset = 0;
+  for (let row = 0; row < height; row += 1) {
+    const filter = decoded[offset++];
+    if (filter === undefined || filter > 4) {
+      throw new Error("decoded scanline filter is invalid");
+    }
+    const source = decoded.subarray(offset, offset + rowBytes);
+    if (source.byteLength !== rowBytes)
+      throw new Error("decoded scanline is truncated");
+    const current = Buffer.alloc(rowBytes);
+    for (let index = 0; index < rowBytes; index += 1) {
+      const left = index >= bytesPerPixel ? current[index - bytesPerPixel]! : 0;
+      const up = previous[index] ?? 0;
+      const upperLeft =
+        index >= bytesPerPixel ? previous[index - bytesPerPixel]! : 0;
+      const value = source[index]!;
+      current[index] =
+        filter === 0
+          ? value
+          : filter === 1
+            ? (value + left) & 0xff
+            : filter === 2
+              ? (value + up) & 0xff
+              : filter === 3
+                ? (value + Math.floor((left + up) / 2)) & 0xff
+                : (value + paethPredictor(left, up, upperLeft)) & 0xff;
+    }
+    if (colorType === 3)
+      validatePaletteIndices(current, width, bitDepth, paletteEntries);
+    current.copy(previous);
+    offset += rowBytes;
+  }
+  if (offset !== decoded.byteLength)
+    throw new Error("decoded scanline data has a trailing payload");
+}
+
+function validatePaletteIndices(
+  row: Buffer,
+  width: number,
+  bitDepth: number,
+  paletteEntries: number,
+): void {
+  if (bitDepth === 8) {
+    for (let index = 0; index < width; index += 1) {
+      if ((row[index] ?? paletteEntries) >= paletteEntries) {
+        throw new Error("decoded palette index is out of range");
+      }
+    }
+    return;
+  }
+  const mask = (1 << bitDepth) - 1;
+  for (let index = 0; index < width; index += 1) {
+    const bit = index * bitDepth;
+    const value =
+      (row[Math.floor(bit / 8)]! >> (8 - bitDepth - (bit % 8))) & mask;
+    if (value >= paletteEntries)
+      throw new Error("decoded palette index is out of range");
+  }
+}
+
+function paethPredictor(left: number, up: number, upperLeft: number): number {
+  const estimate = left + up - upperLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const upDistance = Math.abs(estimate - up);
+  const upperLeftDistance = Math.abs(estimate - upperLeft);
+  if (leftDistance <= upDistance && leftDistance <= upperLeftDistance)
+    return left;
+  if (upDistance <= upperLeftDistance) return up;
+  return upperLeft;
+}
+
+function validPngBitDepth(colorType: number, bitDepth: number): boolean {
+  if (![0, 2, 3, 4, 6].includes(colorType)) return false;
+  if (colorType === 3) return [1, 2, 4, 8].includes(bitDepth);
+  if (colorType === 0) return [1, 2, 4, 8, 16].includes(bitDepth);
+  return bitDepth === 8 || bitDepth === 16;
+}
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
     }
   }
-  return url.toString().slice(0, 2048);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function requiredTargetId(

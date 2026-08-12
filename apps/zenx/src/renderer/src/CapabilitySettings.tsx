@@ -10,6 +10,12 @@ export function CapabilitySettings() {
   const [snapshot, setSnapshot] = useState<ZenXCapabilitySnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -52,6 +58,12 @@ export function CapabilitySettings() {
       </div>
     );
   }
+
+  const currentScreenshot =
+    snapshot.currentScreenshot !== undefined &&
+    Date.parse(snapshot.currentScreenshot.expiresAt) > now
+      ? snapshot.currentScreenshot
+      : undefined;
 
   return (
     <div className="settings-card capability-settings">
@@ -157,6 +169,48 @@ export function CapabilitySettings() {
           );
         })}
       </div>
+      {snapshot.recentInvocations.length === 0 &&
+      currentScreenshot === undefined ? null : (
+        <div className="capability-live" aria-live="polite">
+          <h3>Live capability operations</h3>
+          <ol>
+            {snapshot.recentInvocations.slice(0, 8).map((invocation) => (
+              <li key={invocation.id}>
+                <strong>{invocation.toolName}</strong>
+                <span>{invocation.status}</span>
+                <time>
+                  {new Date(invocation.startedAt).toLocaleTimeString()}
+                </time>
+              </li>
+            ))}
+          </ol>
+          {currentScreenshot === undefined ? null : (
+            <figure>
+              {currentScreenshot.status === "captured" ? (
+                <img
+                  alt={`Current browser observation ${currentScreenshot.observationId ?? ""}`}
+                  src={fileArtifactUrl(currentScreenshot.artifactPath)}
+                />
+              ) : (
+                <figcaption>
+                  Screenshot unavailable; this is not a live browser
+                  observation.
+                  {currentScreenshot.reason === undefined
+                    ? ""
+                    : ` ${currentScreenshot.reason}.`}
+                </figcaption>
+              )}
+              <figcaption>
+                {currentScreenshot.status === "captured"
+                  ? "Current observation"
+                  : "Capture status: fallback"}{" "}
+                {currentScreenshot.observationId ?? "unknown"} ·{" "}
+                {currentScreenshot.width}×{currentScreenshot.height}
+              </figcaption>
+            </figure>
+          )}
+        </div>
+      )}
       {snapshot.providerDiagnostics.length === 0 ? null : (
         <div className="capability-audit">
           <h3>Execution providers</h3>
@@ -181,6 +235,7 @@ export function CapabilitySettings() {
                 <span>{provider.sessionMode ?? "mode-unreported"}</span>
               ) : null}
               <span>{provider.version ?? "bundled"}</span>
+              <span>{provider.integrity ?? "integrity-unreported"}</span>
             </div>
           ))}
         </div>
@@ -220,4 +275,9 @@ export function CapabilitySettings() {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function fileArtifactUrl(artifactPath: string): string {
+  const normalized = artifactPath.replaceAll("\\", "/");
+  return `file://${normalized.startsWith("/") ? "" : "/"}${encodeURI(normalized)}`;
 }

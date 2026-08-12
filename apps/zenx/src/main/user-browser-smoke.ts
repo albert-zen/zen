@@ -10,6 +10,7 @@ import WebSocket, { type RawData } from "ws";
 import { selectBrowserProvider } from "./capabilities/provider-catalog.js";
 import {
   UserBrowserDocumentChangedBeforeDispatchError,
+  UserBrowserCdpOutcomeUnknownError,
   windowsBrowserExecutableCandidates,
 } from "./capabilities/user-browser-provider.js";
 
@@ -79,10 +80,15 @@ try {
   assert.equal(selected?.providerId, "user-browser-cdp");
   assert.equal(selection.manifest.provider.id, "user-browser-cdp");
   const tabs = await retry(async () => {
-    const current = await backend.listTabs("windows-smoke");
-    return current.some((tab) => tab.url.includes("/account"))
-      ? current
-      : undefined;
+    try {
+      const current = await backend.listTabs("windows-smoke");
+      return current.some((tab) => tab.url.includes("/account"))
+        ? current
+        : undefined;
+    } catch (error) {
+      if (error instanceof UserBrowserCdpOutcomeUnknownError) return undefined;
+      throw error;
+    }
   });
   const account = tabs.find((tab) => tab.url.includes("/account"));
   assert.ok(account, "Expected the already-running authenticated account tab");

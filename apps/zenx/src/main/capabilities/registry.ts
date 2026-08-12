@@ -16,6 +16,7 @@ import type {
   ZenXCapabilityPackage,
   ZenXCapabilityProviderDiagnostic,
   ZenXCapabilitySnapshot,
+  ZenXCapabilityScreenshotArtifact,
   ZenXCapabilityTool,
   ZenXCapabilityInteractionMode,
 } from "./types.js";
@@ -27,8 +28,6 @@ import {
 export const CAPABILITY_RESOURCE_TOOL = "zenx_capability_resource";
 const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024;
 const MAX_AUDIT_RECORDS = 100;
-const SENSITIVE_KEY =
-  /(?:authorization|cookie|credential|password|secret|sessionMaterial|storageState|token)/iu;
 
 export interface ZenXCapabilityRegistryOptions {
   allowForegroundRequired: boolean;
@@ -44,6 +43,9 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   >();
   readonly #listeners = new Set<(snapshot: ZenXCapabilitySnapshot) => void>();
   readonly #audit: ZenXCapabilityAuditRecord[] = [];
+  #currentScreenshot: ZenXCapabilityScreenshotArtifact | undefined;
+  #browserProjectionSequence = 0;
+  readonly #browserInvocationSequences = new Map<string, number>();
   readonly #providerDiagnostics: ZenXCapabilityProviderDiagnostic[] = [];
   readonly #discoveryErrors: string[] = [];
   readonly #options: ZenXCapabilityRegistryOptions;
@@ -92,6 +94,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     const registered = this.#registered.get(capabilityId);
     if (registered === undefined) return;
     this.#registered.delete(capabilityId);
+    if (capabilityId === "browser") this.#clearBrowserProjection();
     for (const tool of registered.package.manifest.tools) {
       this.#toolOwners.delete(tool.name);
     }
@@ -105,6 +108,12 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   }
 
   recordProviderDiagnostic(diagnostic: ZenXCapabilityProviderDiagnostic): void {
+    if (
+      diagnostic.capabilityId === "browser" &&
+      diagnostic.status !== "selected"
+    ) {
+      this.#clearBrowserProjection();
+    }
     const index = this.#providerDiagnostics.findIndex(
       (candidate) =>
         candidate.capabilityId === diagnostic.capabilityId &&
@@ -173,6 +182,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
       };
     }
     await this.#grantStore.save(this.#grants);
+    if (capabilityId === "browser") this.#clearBrowserProjection();
     this.#emit();
   }
 
@@ -208,6 +218,9 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         };
       }),
       recentInvocations: structuredClone(this.#audit),
+      ...(this.#currentScreenshot === undefined
+        ? {}
+        : { currentScreenshot: structuredClone(this.#currentScreenshot) }),
       providerDiagnostics: structuredClone(this.#providerDiagnostics),
       discoveryErrors: [...this.#discoveryErrors],
     };
@@ -282,12 +295,20 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
       return { output: result, exitCode: 0 };
     } catch (error) {
       const cancelled = invocation.signal.aborted || isAbortError(error);
+      const owner = this.#toolOwners.get(invocation.name);
+      if (owner?.capabilityId === "browser") {
+        this.#clearBrowserProjection(
+          this.#browserInvocationSequences.get(invocation.callId),
+        );
+      }
       this.#finishAudit(
         audit,
         cancelled ? "cancelled" : "failed",
         describeError(error),
       );
       throw error;
+    } finally {
+      this.#browserInvocationSequences.delete(invocation.callId);
     }
   }
 
@@ -300,6 +321,11 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     for (const capabilityId of [...this.#registered.keys()]) {
       await this.unregister(capabilityId);
     }
+  }
+
+  async resetTransient(): Promise<void> {
+    this.#clearBrowserProjection();
+    this.#emit();
   }
 
   async #executeProvider(invocation: ToolInvocation): Promise<{
@@ -332,7 +358,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     }
     invocation.signal.throwIfAborted();
     return {
-      value: await registered.package.invoke(invocation.name, invocation),
+      value: await this.#invokeProvider(registered.package, invocation),
       maxOutputBytes: owner.tool.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
       capabilityId: owner.capabilityId,
       provider: {
@@ -342,6 +368,39 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
       interactionMode: owner.tool.interactionMode,
       capabilities: [...owner.tool.capabilities],
     };
+  }
+
+  async #invokeProvider(
+    capabilityPackage: ZenXCapabilityPackage,
+    invocation: ToolInvocation,
+  ): Promise<unknown> {
+    const isBrowser = capabilityPackage.manifest.id === "browser";
+    const sequence = isBrowser ? ++this.#browserProjectionSequence : undefined;
+    if (isBrowser) {
+      this.#currentScreenshot = undefined;
+      this.#browserInvocationSequences.set(invocation.callId, sequence!);
+    }
+    try {
+      const value = await capabilityPackage.invoke(invocation.name, invocation);
+      if (isBrowser && sequence === this.#browserProjectionSequence) {
+        invocation.signal.throwIfAborted();
+        const screenshot = browserScreenshotFrom(value);
+        if (screenshot !== undefined) this.#currentScreenshot = screenshot;
+      }
+      return value;
+    } catch (error) {
+      if (isBrowser && sequence === this.#browserProjectionSequence) {
+        this.#currentScreenshot = undefined;
+      }
+      throw error;
+    }
+  }
+
+  #clearBrowserProjection(sequence?: number): void {
+    if (sequence !== undefined && sequence !== this.#browserProjectionSequence)
+      return;
+    this.#browserProjectionSequence += 1;
+    this.#currentScreenshot = undefined;
   }
 
   #readResource(arguments_: Record<string, unknown>): {
@@ -551,18 +610,17 @@ function boundedResult(
   interactionMode: ZenXCapabilityInteractionMode,
   capabilities: readonly string[],
 ): string {
-  const safe = redactSensitive(value);
   const envelope = {
     capabilityId,
     provider,
     tool: toolName,
     interactionMode,
     capabilities,
-    result: safe,
+    result: value,
   };
   const serialized = JSON.stringify(envelope);
   if (Buffer.byteLength(serialized, "utf8") <= maxBytes) return serialized;
-  let preview = JSON.stringify(safe);
+  let preview = JSON.stringify(value);
   const truncated = (): string =>
     JSON.stringify({
       capabilityId,
@@ -588,28 +646,6 @@ function boundedResult(
   });
 }
 
-function redactSensitive(value: unknown, key = ""): unknown {
-  if (SENSITIVE_KEY.test(key)) return "[REDACTED]";
-  if (typeof value === "string") {
-    return value
-      .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [REDACTED]")
-      .replace(
-        /\b((?:api[_-]?key|access[_-]?token|password|secret))=[^&\s]+/giu,
-        "$1=[REDACTED]",
-      );
-  }
-  if (Array.isArray(value)) return value.map((entry) => redactSensitive(entry));
-  if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([childKey, child]) => [
-        childKey,
-        redactSensitive(child, childKey),
-      ]),
-    );
-  }
-  return value;
-}
-
 function requiredString(value: Record<string, unknown>, key: string): string {
   const candidate = value[key];
   if (typeof candidate !== "string" || candidate.length === 0) {
@@ -628,4 +664,43 @@ function describeError(error: unknown): string {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function browserScreenshotFrom(
+  value: unknown,
+): ZenXCapabilityScreenshotArtifact | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const screenshot = (value as Record<string, unknown>).screenshot;
+  if (
+    typeof screenshot !== "object" ||
+    screenshot === null ||
+    Array.isArray(screenshot)
+  ) {
+    return undefined;
+  }
+  const record = screenshot as Record<string, unknown>;
+  if (
+    typeof record.artifactPath !== "string" ||
+    typeof record.width !== "number" ||
+    typeof record.height !== "number" ||
+    typeof record.bytes !== "number" ||
+    typeof record.expiresAt !== "string" ||
+    (record.status !== "captured" && record.status !== "fallback")
+  ) {
+    return undefined;
+  }
+  return {
+    artifactPath: record.artifactPath,
+    ...(typeof record.observationId === "string"
+      ? { observationId: record.observationId }
+      : {}),
+    status: record.status,
+    ...(typeof record.reason === "string" ? { reason: record.reason } : {}),
+    width: record.width,
+    height: record.height,
+    bytes: record.bytes,
+    expiresAt: record.expiresAt,
+  };
 }

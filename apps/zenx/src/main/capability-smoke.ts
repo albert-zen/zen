@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { access } from "node:fs/promises";
 
 import { app, screen } from "electron";
 
@@ -85,12 +86,13 @@ void app.whenReady().then(async () => {
       tabId,
     })) as BrowserInspection;
     assert.match(inspected.visibleText, /Mark/u);
+    await access(inspected.screenshot.artifactPath);
+    assert.equal(inspected.screenshot.observationId, inspected.observationId);
     assert.equal(
       inspected.targets.some(({ name }) => name === "Hidden"),
       false,
     );
     const password = inspected.targets.find(({ name }) => name === "Password");
-    assert.equal(password?.secure, true);
     assert.equal(password?.value, undefined);
     assert.equal(password?.actions.includes("type"), true);
     if (password !== undefined) {

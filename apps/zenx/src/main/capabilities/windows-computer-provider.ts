@@ -78,14 +78,14 @@ export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
           return {
             ...tool,
             description:
-              "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. The provider revalidates selector, semantics, geometry, secure state, and action immediately before invoking.",
+              "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
             capabilities: ["uia.invoke", "app_targeted", "no_global_input"],
           };
         case "computer_set_value":
           return {
             ...tool,
             description:
-              "Set a non-secret value on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, secure state, and action; supplied text is a canonical journaled tool argument.",
+              "Set the supplied text on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
             capabilities: ["uia.set_value", "app_targeted", "no_global_input"],
           };
         default:
@@ -105,7 +105,7 @@ export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
       description:
         "Use Microsoft WinApp CLI UI Automation through ZenX's opaque observe-before-act contract.",
       content:
-        "Target one Windows application by pid or applicationId plus an exact windowTitle. Inspect first, then use only the observationId and targetId returned by the latest computer_inspect. Re-inspect after every action. Semantic invoke and set-value use UI Automation and do not inject global input. computer_set_value is non-secret-only because tool arguments are journaled; secure-looking controls are rejected. Window capture uses WinApp CLI's default WGC/PrintWindow path and never opts into --capture-screen or --focus. If UIA semantics are insufficient, report foreground_required; this provider does not silently inject pointer or keyboard input.",
+        "Target one Windows application by pid or applicationId plus an exact windowTitle. Inspect first, then use only the observationId and targetId returned by the latest computer_inspect. Re-inspect after every action. Semantic invoke and set-value use UI Automation and do not inject global input. Supplied text follows the ordinary set-value path and host/model policy owns credential decisions. Window capture uses WinApp CLI's default WGC/PrintWindow path and never opts into --capture-screen or --focus. If UIA semantics are insufficient, report foreground_required; this provider does not silently inject pointer or keyboard input.",
     },
   ],
   settings: {
@@ -136,6 +136,9 @@ export interface WinAppCliRunOptions {
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
   redactions?: readonly string[];
+  runtimeExecutable?: string;
+  bindBeforeSpawn?: () => Promise<() => Promise<void>>;
+  verifyBeforeSpawn?: () => Promise<void>;
 }
 
 export interface WinAppCliRunResult {
@@ -218,6 +221,10 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   readonly #observations = new ComputerObservationLedger();
   readonly #platform: NodeJS.Platform;
   readonly #runner: WinAppCliRunner;
+  readonly #expectedVersion?: string;
+  readonly #runtimeExecutable?: string;
+  readonly #bindBeforeSpawn?: () => Promise<() => Promise<void>>;
+  readonly #verifyExecutable?: () => Promise<void>;
 
   constructor(
     options: {
@@ -225,6 +232,10 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       command?: string;
       platform?: NodeJS.Platform;
       runner?: WinAppCliRunner;
+      expectedVersion?: string;
+      runtimeExecutable?: string;
+      bindBeforeSpawn?: () => Promise<() => Promise<void>>;
+      verifyExecutable?: () => Promise<void>;
     } = {},
   ) {
     this.#artifactDirectory =
@@ -233,6 +244,10 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     this.#command = options.command ?? "winapp";
     this.#platform = options.platform ?? process.platform;
     this.#runner = options.runner ?? new SpawnWinAppCliRunner();
+    this.#expectedVersion = options.expectedVersion;
+    this.#runtimeExecutable = options.runtimeExecutable;
+    this.#bindBeforeSpawn = options.bindBeforeSpawn;
+    this.#verifyExecutable = options.verifyExecutable;
   }
 
   async diagnose(signal?: AbortSignal): Promise<WinAppCliDiagnostic> {
@@ -249,7 +264,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     }
     let detectedVersion: string | undefined;
     try {
-      const result = await this.#runner.run(this.#command, ["--version"], {
+      const result = await this.#run(["--version"], {
         timeoutMs: 5_000,
         signal,
         maxStdoutBytes: 4 * 1024,
@@ -279,28 +294,35 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
           message: `Microsoft WinApp CLI ${version} is incompatible; ${MINIMUM_WINAPP_CLI_VERSION} or newer is required`,
         };
       }
+      if (
+        this.#expectedVersion !== undefined &&
+        version !== this.#expectedVersion
+      ) {
+        return {
+          ready: false,
+          platform: this.#platform,
+          executable: this.#command,
+          version,
+          requiredVersion: this.#expectedVersion,
+          schemaCompatible: false,
+          installCommand: WINAPP_INSTALL_COMMAND,
+          message: `Microsoft WinApp CLI ${version} does not match pinned version ${this.#expectedVersion}`,
+        };
+      }
       detectedVersion = version;
-      const cliSchemaResult = await this.#runner.run(
-        this.#command,
-        ["--cli-schema"],
-        {
-          timeoutMs: 5_000,
-          signal,
-          maxStdoutBytes: 512 * 1024,
-          maxStderrBytes: 4 * 1024,
-        },
-      );
+      const cliSchemaResult = await this.#run(["--cli-schema"], {
+        timeoutMs: 5_000,
+        signal,
+        maxStdoutBytes: 512 * 1024,
+        maxStderrBytes: 4 * 1024,
+      });
       validateCliSchema(cliSchemaResult.stdout, version);
-      const probe = await this.#runner.run(
-        this.#command,
-        ["ui", "list-windows", "--json"],
-        {
-          timeoutMs: 5_000,
-          signal,
-          maxStdoutBytes: 256 * 1024,
-          maxStderrBytes: 4 * 1024,
-        },
-      );
+      const probe = await this.#run(["ui", "list-windows", "--json"], {
+        timeoutMs: 5_000,
+        signal,
+        maxStdoutBytes: 256 * 1024,
+        maxStderrBytes: 4 * 1024,
+      });
       validateWindowListProbe(probe.stdout);
       return {
         ready: true,
@@ -352,7 +374,6 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
         title: boundedText(control.name ?? control.automationId ?? "", 256),
         enabled: control.isEnabled !== false,
         actions: fingerprints[index]!.actions,
-        ...(fingerprints[index]!.secure ? { secure: true } : {}),
       })),
       truncated:
         flattened.length > MAX_COMPUTER_INSPECTION_CONTROLS ||
@@ -663,11 +684,6 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       );
     }
     const actual = winAppFingerprint(matches[0]!);
-    if (action === "set_value" && actual.secure) {
-      throw new Error(
-        "computer_set_value rejects password or secure controls; supplied text is a journaled non-secret-only tool argument",
-      );
-    }
     if (!sameSemanticFingerprint(expected, actual)) {
       throw new Error(
         "The WinApp control changed since the observation; inspect the target again",
@@ -682,13 +698,26 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     }
   }
 
+  async #run(
+    args: readonly string[],
+    options: WinAppCliRunOptions,
+  ): Promise<WinAppCliRunResult> {
+    await this.#verifyExecutable?.();
+    return await this.#runner.run(this.#command, args, {
+      ...options,
+      runtimeExecutable: this.#runtimeExecutable,
+      bindBeforeSpawn: this.#bindBeforeSpawn,
+      verifyBeforeSpawn: options.verifyBeforeSpawn ?? this.#verifyExecutable,
+    });
+  }
+
   async #json<T>(
     args: readonly string[],
     timeoutMs: number,
     signal?: AbortSignal,
     redactions?: readonly string[],
   ): Promise<T> {
-    const result = await this.#runner.run(this.#command, args, {
+    const result = await this.#run(args, {
       timeoutMs,
       signal,
       maxStdoutBytes: MAX_WINAPP_STDOUT_BYTES,
@@ -717,8 +746,30 @@ export async function runBoundedProcess(
   options: WinAppCliRunOptions,
 ): Promise<WinAppCliRunResult> {
   options.signal?.throwIfAborted();
+  await options.verifyBeforeSpawn?.();
+  const releaseBinding = await options.bindBeforeSpawn?.();
+  try {
+    options.signal?.throwIfAborted();
+  } catch (error) {
+    await releaseBinding?.();
+    throw error;
+  }
   return await new Promise<WinAppCliRunResult>((resolve, reject) => {
-    const child = spawn(executable, args, {
+    const invocation =
+      options.runtimeExecutable === undefined
+        ? { executable, args: [...args] }
+        : {
+            executable: options.runtimeExecutable,
+            args: [executable, ...args],
+          };
+    if (
+      options.runtimeExecutable !== undefined &&
+      !path.isAbsolute(options.runtimeExecutable)
+    ) {
+      reject(new Error("Bundled WinApp runtime must be an absolute path"));
+      return;
+    }
+    const child = spawn(invocation.executable, invocation.args, {
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -735,6 +786,7 @@ export async function runBoundedProcess(
       settled = true;
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
+      void Promise.resolve(releaseBinding?.()).catch(() => undefined);
       callback();
     };
     const failAndKill = (error: Error): void => {
@@ -813,10 +865,9 @@ function flattenElements(roots: readonly WinAppElement[]): WinAppElement[] {
 }
 
 function winAppFingerprint(element: WinAppElement): ComputerControlFingerprint {
-  const secure = isSecureElement(element);
   const actions: ComputerControlAction[] = [];
   if (element.isInvokable === true) actions.push(COMPUTER_ACTION_PRESS);
-  if (!secure && isEditableElement(element)) {
+  if (isEditableElement(element)) {
     actions.push(COMPUTER_ACTION_SET_VALUE);
   }
   return {
@@ -827,7 +878,6 @@ function winAppFingerprint(element: WinAppElement): ComputerControlFingerprint {
     frame: [element.x, element.y, element.width, element.height]
       .map((value) => (Number.isFinite(value) ? String(value) : ""))
       .join(","),
-    secure,
     actions,
   };
 }
@@ -841,8 +891,7 @@ function sameSemanticFingerprint(
     expected.role === actual.role &&
     expected.title === actual.title &&
     expected.description === actual.description &&
-    expected.frame === actual.frame &&
-    expected.secure === actual.secure
+    expected.frame === actual.frame
   );
 }
 
@@ -850,19 +899,6 @@ function isEditableElement(element: WinAppElement): boolean {
   if (element.value !== undefined && element.value !== null) return true;
   return /(?:edit|textbox|document|combobox|spinner|slider)/iu.test(
     `${winAppControlType(element) ?? ""} ${element.className ?? ""}`,
-  );
-}
-
-function isSecureElement(element: WinAppElement): boolean {
-  return /(?:password|passwd|passcode|pin|secret|secure|credential|token)/iu.test(
-    [
-      winAppControlType(element),
-      element.name,
-      element.automationId,
-      element.className,
-    ]
-      .filter((value): value is string => typeof value === "string")
-      .join(" "),
   );
 }
 
@@ -1189,13 +1225,7 @@ function redactDiagnostic(
   for (const exact of exactValues) {
     if (exact.length > 0) redacted = redacted.replaceAll(exact, "[REDACTED]");
   }
-  return redacted
-    .replace(
-      /("?(?:password|secret|token|credential|authorization)"?\s*[:=]\s*)("[^"]*"|\S+)/giu,
-      "$1[REDACTED]",
-    )
-    .trim()
-    .slice(0, 2_048);
+  return redacted.trim().slice(0, 2_048);
 }
 
 function unsupportedForeground(): Error {

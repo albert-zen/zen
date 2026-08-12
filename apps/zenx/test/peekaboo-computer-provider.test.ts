@@ -21,8 +21,7 @@ test("Peekaboo provider keeps semantic actions background-first and opaque", asy
   });
   const inspection = await backend.inspect(target);
   assert.equal(inspection.controls.length, 3);
-  assert.equal(inspection.controls[2]?.secure, true);
-  assert.deepEqual(inspection.controls[2]?.actions, ["press"]);
+  assert.deepEqual(inspection.controls[2]?.actions, ["press", "set_value"]);
   const button = inspection.controls[0];
   assert.ok(button);
   await backend.press(target, button.selector);

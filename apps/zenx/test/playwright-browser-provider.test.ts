@@ -18,6 +18,8 @@ test("Playwright provider runs an isolated JSON-only observe/action slice", asyn
   assert.equal(opened.title, "Fixture");
   const inspected = await backend.inspect("research", opened.tabId);
   assert.match(inspected.visibleText, /Run/u);
+  assert.equal(inspected.screenshot.observationId, inspected.observationId);
+  assert.ok(inspected.screenshot.bytes > 0);
   const button = inspected.targets.find(({ name }) => name === "Run");
   assert.ok(button);
   await assert.rejects(
@@ -49,6 +51,21 @@ test("Playwright provider runs an isolated JSON-only observe/action slice", asyn
   assert.ok(runner.calls.some((args) => args.includes("click")));
 });
 
+test("Playwright tab summaries redact URL credentials and values", async () => {
+  const runner = new FakePlaywrightRunner();
+  runner.url = "https://alice:secret@example.com/private?q=token#fragment";
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  const opened = await backend.open("research", runner.url);
+  assert.equal(opened.url, "https://example.com/private");
+  const listed = await backend.listTabs("research");
+  assert.equal(listed[0]?.url, "https://example.com/private");
+  await backend.close();
+});
+
 test("Playwright provider fails closed on an incompatible snapshot schema", async () => {
   const runner = new FakePlaywrightRunner();
   runner.invalidSnapshot = true;
@@ -74,7 +91,6 @@ test("Playwright provider revalidates DOM identity and dispatches password fill 
   const opened = await backend.open("research", "https://example.com/");
   const inspected = await backend.inspect("research", opened.tabId);
   const password = inspected.targets.find(({ name }) => name === "Password");
-  assert.equal(password?.secure, true);
   assert.deepEqual(password?.actions, ["click", "type"]);
   assert.ok(password);
   await backend.type(
@@ -101,7 +117,7 @@ test("Playwright provider revalidates DOM identity and dispatches password fill 
       refreshed.observationId,
       button.targetId,
     ),
-    /identity, security, visibility, or actions changed/u,
+    /identity, visibility, or actions changed/u,
   );
   assert.equal(runner.calls.filter((args) => args.includes("click")).length, 0);
 });
@@ -135,9 +151,28 @@ test("Playwright cancellation invalidates the session before immediate reuse", a
   await backend.close();
 });
 
+test("Playwright rejects unbounded or multiply-current page state before reconciliation", async () => {
+  const runner = new FakePlaywrightRunner();
+  runner.invalidPages = true;
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  await assert.rejects(
+    backend.open("research", "https://example.com/"),
+    /page state|exactly one page/u,
+  );
+  await backend.close();
+});
+
 class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   readonly calls: string[][] = [];
+  url = "https://example.com/";
+  tabKey = "__zenx_tab_fixture";
+  documentKey = "document-fixture";
   invalidSnapshot = false;
+  invalidPages = false;
   changeIdentity = false;
   abortNextSnapshot = false;
   delayedCloseFinished: Promise<void> = Promise.resolve();
@@ -166,6 +201,7 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
     const command = args[2];
     let response: Record<string, unknown> = {};
     if (command === "open") {
+      this.url = args[3] ?? this.url;
       response = { session: args[1]?.slice(3), result: {} };
     } else if (command === "close" && this.#delayClose) {
       this.#delayClose = false;
@@ -173,6 +209,11 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
         this.#releaseClose = resolve;
       });
       this.#finishDelayedClose?.();
+    } else if (command === "run-code" && args[3]?.includes("screenshot")) {
+      response = {
+        result:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      };
     } else if (command === "run-code") {
       response = args[3]?.includes("aria-ref=")
         ? {
@@ -187,16 +228,55 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
               dom("e4", { tag: "button", visible: false }),
             ]),
           }
-        : {
-            result: JSON.stringify([
-              {
-                index: 0,
-                title: "Fixture",
-                url: "https://example.com/",
-                current: true,
-              },
-            ]),
-          };
+        : args[3]?.includes("window.name")
+          ? {
+              result: JSON.stringify([
+                {
+                  index: 0,
+                  title: "Fixture",
+                  url: this.url,
+                  current: true,
+                  tabKey: this.tabKey,
+                  documentKey: this.documentKey,
+                },
+                ...(this.invalidPages
+                  ? [
+                      {
+                        index: 1,
+                        title: "Second",
+                        url: this.url,
+                        current: true,
+                        tabKey: "__zenx_tab_second",
+                        documentKey: "document-second",
+                      },
+                    ]
+                  : []),
+              ]),
+            }
+          : {
+              result: JSON.stringify([
+                {
+                  index: 0,
+                  title: "Fixture",
+                  url: this.url,
+                  current: true,
+                  tabKey: this.tabKey,
+                  documentKey: this.documentKey,
+                },
+                ...(this.invalidPages
+                  ? [
+                      {
+                        index: 1,
+                        title: "Second",
+                        url: this.url,
+                        current: true,
+                        tabKey: "__zenx_tab_second",
+                        documentKey: "document-second",
+                      },
+                    ]
+                  : []),
+              ]),
+            };
     } else if (command === "snapshot") {
       if (this.abortNextSnapshot) {
         this.abortNextSnapshot = false;

@@ -8,7 +8,9 @@ import {
   browserInspectScript,
   redactBrowserUrl,
   resolveBrowserObservedTarget,
+  BrowserScreenshotArtifactStore,
   type BrowserInspection,
+  type BrowserScreenshotArtifact,
   type BrowserObservation,
   type BrowserTabSummary,
   type BrowserTargetFingerprint,
@@ -16,6 +18,7 @@ import {
 } from "./browser-provider.js";
 
 const USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS = 2_000;
+const USER_BROWSER_SCREENSHOT_TIMEOUT_MS = 10_000;
 const USER_BROWSER_MAX_TARGET_EVIDENCE = 128;
 const USER_BROWSER_MAX_DISCOVERED_TARGETS = 512;
 const USER_BROWSER_MAX_OPERATION_EVIDENCE = 32;
@@ -24,6 +27,15 @@ const USER_BROWSER_MAX_PENDING_CDP_REQUESTS = 128;
 const USER_BROWSER_MAX_ACTIVE_SESSIONS = 32;
 const USER_BROWSER_LATE_RESPONSE_RETENTION_MS = 5_000;
 const USER_BROWSER_DOCUMENT_WORLD_NAME = "__zenx_user_browser_document__";
+const FALLBACK_SCREENSHOT_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+export class UserBrowserScreenshotMalformedError extends Error {
+  constructor(message = "Attached browser screenshot response was malformed") {
+    super(message);
+    this.name = "UserBrowserScreenshotMalformedError";
+  }
+}
 
 type UserBrowserCdpOutcome =
   "known-success" | "known-failure" | "outcome-unknown";
@@ -90,6 +102,22 @@ export interface UserBrowserCdpClient {
     signal?: AbortSignal,
     onDispatched?: () => void,
   ): Promise<{ value: unknown; documentIdentity: string }>;
+  captureScreenshot?(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    expectedDocumentIdentity: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    data: string;
+    documentIdentity: string;
+    status?: "captured" | "fallback";
+    reason?: string;
+  }>;
+  getDocumentIdentity(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    signal?: AbortSignal,
+  ): Promise<string>;
   detachTarget(
     targetId: string,
     owner: UserBrowserAttachmentOwner,
@@ -211,13 +239,20 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   readonly #detachOperations = new Map<string, Promise<void>>();
   readonly #sessionCloseOperations = new Map<string, Promise<number>>();
   readonly #closure = new ZenXUserBrowserAttachmentEpochBoundary();
+  readonly #artifacts: BrowserScreenshotArtifactStore;
   #closeOperation?: Promise<void>;
   #backendCloseQueued = false;
   #closing = false;
   #nextSessionIncarnation = 1;
 
-  constructor(client: UserBrowserCdpClient) {
+  constructor(
+    client: UserBrowserCdpClient,
+    options: { artifactDirectory?: string } = {},
+  ) {
     this.#client = client;
+    this.#artifacts = new BrowserScreenshotArtifactStore(
+      options.artifactDirectory,
+    );
   }
 
   async listTabs(
@@ -227,7 +262,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     throwIfAborted(signal);
     const session = this.#session(sessionId);
     const operation = this.#startSessionOperation(session, async () => {
-      const listed = await this.#client.listTargets();
+      const listed = await this.#client.listTargets(signal);
       const targets = listed.filter(
         (target) =>
           target.type === "page" &&
@@ -326,22 +361,23 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     const session = this.#session(sessionId);
     const operation = this.#startSessionOperation(session, async () => {
       const pendingUrl = `about:blank#zenx-pending-${randomUUID()}`;
-      const beforeTargets = await this.#client.listTargets();
+      const beforeTargets = await this.#client.listTargets(signal);
       const beforeTargetIds = new Set(
         beforeTargets.map((target) => target.targetId),
       );
       if (beforeTargets.some((target) => target.url === pendingUrl)) {
         throw new Error("User browser create marker already exists");
       }
-      let targetId: string;
+      let targetId: string | undefined;
       try {
-        targetId = await this.#client.createTarget(pendingUrl);
+        targetId = await this.#client.createTarget(pendingUrl, signal);
       } catch (error) {
         this.#recordUnresolvedCreate(session, pendingUrl, beforeTargetIds);
         const recovered = await this.#reconcileCreate(
           session,
           pendingUrl,
           beforeTargetIds,
+          signal,
         );
         if (recovered === undefined) {
           throw new Error(
@@ -372,8 +408,11 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       }
       this.#accountTarget(session, targetId, pendingUrl, false);
       const matches = await this.#client
-        .findTargetsByUrl(pendingUrl)
-        .catch(() => []);
+        .findTargetsByUrl(pendingUrl, signal)
+        .catch((error) => {
+          if (signal?.aborted === true) throw error;
+          return [];
+        });
       const createdMatches = matches.filter(
         (target) => !beforeTargetIds.has(target.targetId),
       );
@@ -396,6 +435,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         );
       }
       this.#assertSessionCurrent(session);
+      throwIfAborted(signal);
       const tab = this.#tabs.get(targetId);
       let dispatched = false;
       try {
@@ -403,13 +443,15 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           targetId,
           url,
           this.#attachmentOwner(session),
-          undefined,
+          signal,
           () => (dispatched = true),
         );
         if (tab !== undefined) tab.url = url;
         this.#assertSessionCurrent(session);
+        throwIfAborted(signal);
         const summary = await this.#summary(sessionId, targetId);
         this.#assertSessionCurrent(session);
+        throwIfAborted(signal);
         return summary;
       } catch (error) {
         if (
@@ -419,13 +461,27 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         ) {
           tab.tainted = describeError(error);
         }
+        if (signal?.aborted === true && tab !== undefined) {
+          await this.#compensateCancelledCreate(session, targetId, tab);
+        }
         throw error;
       }
     });
     return await raceAbort(operation, signal);
   }
 
-  async navigate(
+  navigate(
+    sessionId: string,
+    tabId: string,
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    const operation = this.#navigate(sessionId, tabId, url, signal);
+    observeRejection(operation);
+    return operation;
+  }
+
+  async #navigate(
     sessionId: string,
     tabId: string,
     url: string,
@@ -510,6 +566,71 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       }
       const fingerprints = raw.targets.map(requireFingerprint).slice(0, 80);
       const targets = new Map<string, BrowserTargetFingerprint>();
+      const observationId = randomUUID();
+      const screenshotCapture =
+        this.#client.captureScreenshot === undefined
+          ? {
+              data: FALLBACK_SCREENSHOT_PNG_BASE64,
+              documentIdentity: evaluation.documentIdentity,
+              status: "fallback" as const,
+              reason:
+                "Screenshot capture is not supported by the attached browser client",
+            }
+          : await this.#client.captureScreenshot(
+              tabId,
+              this.#attachmentOwner(session),
+              evaluation.documentIdentity,
+              signal,
+            );
+      if (screenshotCapture.documentIdentity !== evaluation.documentIdentity) {
+        throw new Error("User browser document changed during inspection");
+      }
+      const finalIdentity = await this.#freshDocumentIdentity(
+        tabId,
+        session,
+        evaluation.documentIdentity,
+        signal,
+      );
+      if (finalIdentity !== evaluation.documentIdentity) {
+        throw new Error(
+          "User browser document changed before screenshot publication",
+        );
+      }
+      const normalizedScreenshot =
+        typeof screenshotCapture.data === "string" &&
+        screenshotCapture.data.length > 0
+          ? screenshotCapture
+          : {
+              data: FALLBACK_SCREENSHOT_PNG_BASE64,
+              documentIdentity: screenshotCapture.documentIdentity,
+              status: "fallback" as const,
+              reason:
+                "Attached browser screenshot response was empty or malformed",
+            };
+      const screenshotBytes = decodeUserBrowserScreenshot(
+        normalizedScreenshot.data,
+      );
+      throwIfAborted(signal);
+      const screenshot: BrowserScreenshotArtifact = await this.#artifacts.write(
+        `${sessionId}/${tabId}`,
+        observationId,
+        screenshotBytes,
+        {
+          status: normalizedScreenshot.status ?? "captured",
+          ...(normalizedScreenshot.reason === undefined
+            ? {}
+            : { reason: normalizedScreenshot.reason }),
+        },
+      );
+      try {
+        throwIfAborted(signal);
+      } catch (error) {
+        await this.#artifacts.removeArtifact(
+          screenshot.artifactPath,
+          screenshot.observationId,
+        );
+        throw error;
+      }
       const projected = fingerprints.map((fingerprint) => {
         const targetId = randomUUID();
         targets.set(targetId, fingerprint);
@@ -518,15 +639,28 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           role: fingerprint.role,
           name: fingerprint.name,
           actions: [...fingerprint.actions],
-          ...(fingerprint.secure ? { secure: true as const } : {}),
           ...(fingerprint.value === undefined
             ? {}
             : { value: fingerprint.value }),
         };
       });
-      const observationId = randomUUID();
       const summary = await this.#summary(sessionId, tabId);
       this.#assertSessionCurrent(session);
+      const publishIdentity = await this.#freshDocumentIdentity(
+        tabId,
+        session,
+        evaluation.documentIdentity,
+        signal,
+      );
+      if (publishIdentity !== evaluation.documentIdentity) {
+        await this.#artifacts.removeArtifact(
+          screenshot.artifactPath,
+          screenshot.observationId,
+        );
+        throw new Error(
+          "User browser document changed before inspection publication",
+        );
+      }
       tab.documentIdentity = evaluation.documentIdentity;
       tab.observation = {
         id: observationId,
@@ -538,20 +672,34 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         observationId,
         documentVersion: tab.documentVersion,
         visibleText: raw.visibleText.slice(0, 8_000),
+        screenshot,
         targets: projected,
       };
     });
     return await raceAbort(operation, signal);
   }
 
-  async click(
+  async #freshDocumentIdentity(
+    tabId: string,
+    session: UserBrowserSession,
+    _expected: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    return await this.#client.getDocumentIdentity(
+      tabId,
+      this.#attachmentOwner(session),
+      signal,
+    );
+  }
+
+  click(
     sessionId: string,
     tabId: string,
     observationId: string,
     targetId: string,
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
-    return await this.#act(
+    const operation = this.#act(
       sessionId,
       tabId,
       observationId,
@@ -561,9 +709,11 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       false,
       signal,
     );
+    observeRejection(operation);
+    return operation;
   }
 
-  async type(
+  type(
     sessionId: string,
     tabId: string,
     observationId: string,
@@ -572,7 +722,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     submit: boolean,
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
-    return await this.#act(
+    const operation = this.#act(
       sessionId,
       tabId,
       observationId,
@@ -582,6 +732,8 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       submit,
       signal,
     );
+    observeRejection(operation);
+    return operation;
   }
 
   async closeTab(sessionId: string, tabId: string): Promise<void> {
@@ -643,6 +795,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       true,
     );
     await operation;
+    await this.#artifacts.clearScope(`${sessionId}/${tabId}`);
   }
 
   async closeSession(sessionId: string): Promise<number> {
@@ -713,6 +866,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
             this.#taintBackend(session.id, taint);
         }
         this.#sessions.delete(sessionId);
+        await this.#artifacts.clearScope(sessionId);
         this.#throwIfSessionTainted(session, "session close");
         return count;
       },
@@ -747,6 +901,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       }
       this.#sessions.clear();
       this.#tabs.clear();
+      await this.#artifacts.close();
       const operationFailure = sessionClosures.find(
         (result): result is PromiseRejectedResult =>
           result.status === "rejected",
@@ -865,6 +1020,10 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     );
     if (targetId === undefined) throw new Error("User browser tab was closed");
     const outward = promiseCapability<T>();
+    // A queued operation can be fail-closed by a later detach before its
+    // caller reaches the assertion. Keep that expected rejection observed
+    // without changing the promise delivered to the caller.
+    void outward.promise.catch(() => undefined);
     let operationStarted = false;
     const retained = this.#startSessionOperation(session, async () => {
       operationStarted = true;
@@ -1200,10 +1359,14 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     session: UserBrowserSession,
     markerUrl: string,
     beforeTargetIds: Set<string>,
+    signal?: AbortSignal,
   ): Promise<UserBrowserCdpTarget | undefined> {
     const matches = await this.#client
-      .findTargetsByUrl(markerUrl)
-      .catch(() => []);
+      .findTargetsByUrl(markerUrl, signal)
+      .catch((error) => {
+        if (signal?.aborted === true) throw error;
+        return [];
+      });
     const candidates = matches.filter(
       (target) => !beforeTargetIds.has(target.targetId),
     );
@@ -1230,6 +1393,24 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     for (const [markerUrl, beforeTargetIds] of session.unresolvedCreates) {
       await this.#reconcileCreate(session, markerUrl, beforeTargetIds);
     }
+  }
+
+  async #compensateCancelledCreate(
+    session: UserBrowserSession,
+    targetId: string,
+    tab: UserBrowserTabState,
+  ): Promise<void> {
+    tab.detaching = true;
+    try {
+      await this.#detachTarget(session, targetId);
+    } catch (error) {
+      tab.tainted = `cancelled create cleanup is unknown (${describeError(error)})`;
+      this.#taintSession(session, `target ${targetId}: ${tab.tainted}`);
+      return;
+    }
+    session.targetIds.delete(targetId);
+    this.#ignoreTarget(session, targetId);
+    if (this.#tabs.get(targetId) === tab) this.#tabs.delete(targetId);
   }
 }
 
@@ -1630,6 +1811,83 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       }
       throw error;
     }
+  }
+
+  async captureScreenshot(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    expectedDocumentIdentity: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    data: string;
+    documentIdentity: string;
+    status: "captured" | "fallback";
+    reason?: string;
+  }> {
+    const before = await this.#executionDocument(targetId, owner, signal);
+    if (before.identity !== expectedDocumentIdentity) {
+      throw new UserBrowserDocumentChangedBeforeDispatchError();
+    }
+    let response: Record<string, unknown> | undefined;
+    try {
+      response = asRecord(
+        await this.#send(
+          "Page.captureScreenshot",
+          { format: "png", fromSurface: false, captureBeyondViewport: false },
+          before.sessionId,
+          signal,
+          USER_BROWSER_SCREENSHOT_TIMEOUT_MS,
+          undefined,
+          undefined,
+          () => this.#assertDocumentFence(before, true),
+        ),
+      );
+    } catch (error) {
+      if (!(error instanceof UserBrowserCdpOutcomeUnknownError)) throw error;
+      // A read-only capture can have an unknown settlement on hidden browser
+      // surfaces. Keep this narrowly scoped fallback explicit and publish it
+      // only after rechecking the document fence.
+      const afterTimeout = await this.#executionDocument(
+        targetId,
+        owner,
+        signal,
+      );
+      if (afterTimeout.identity !== before.identity) {
+        throw new UserBrowserDocumentChangedAfterDispatchError();
+      }
+      return {
+        data: FALLBACK_SCREENSHOT_PNG_BASE64,
+        documentIdentity: afterTimeout.identity,
+        status: "fallback",
+        reason: "Attached browser screenshot capture outcome was unknown",
+      };
+    }
+    const after = await this.#executionDocument(targetId, owner, signal);
+    if (after.identity !== before.identity) {
+      throw new UserBrowserDocumentChangedAfterDispatchError();
+    }
+    if (typeof response?.data !== "string" || response.data.length === 0) {
+      return {
+        data: FALLBACK_SCREENSHOT_PNG_BASE64,
+        documentIdentity: after.identity,
+        status: "fallback",
+        reason: "Attached browser screenshot response was empty or malformed",
+      };
+    }
+    decodeUserBrowserScreenshot(response.data);
+    return {
+      data: response.data,
+      documentIdentity: after.identity,
+      status: "captured",
+    };
+  }
+
+  async getDocumentIdentity(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    return (await this.#executionDocument(targetId, owner, signal)).identity;
   }
 
   async #sendDocumentRuntimeEvaluate(
@@ -2814,6 +3072,24 @@ function describeError(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 512);
 }
 
+function decodeUserBrowserScreenshot(data: string): Buffer {
+  if (
+    data.length === 0 ||
+    data.length % 4 === 1 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
+      data,
+    )
+  ) {
+    throw new UserBrowserScreenshotMalformedError();
+  }
+  const decoded = Buffer.from(data, "base64");
+  const normalized = decoded.toString("base64").replace(/=+$/u, "");
+  if (normalized !== data.replace(/=+$/u, "")) {
+    throw new UserBrowserScreenshotMalformedError();
+  }
+  return decoded;
+}
+
 function sameAttachmentOwner(
   epoch: UserBrowserAttachmentOwner,
   owner: UserBrowserAttachmentOwner,
@@ -2871,6 +3147,10 @@ function promiseCapability<T>(): {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function observeRejection<T>(promise: Promise<T>): void {
+  void promise.catch(() => undefined);
 }
 
 async function raceAbort<T>(
@@ -2959,7 +3239,6 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
       "autocomplete",
       "href",
     ].every((key) => typeof target[key] === "string") ||
-    typeof target.secure !== "boolean" ||
     !Array.isArray(actions) ||
     !actions.every((action) => action === "click" || action === "type") ||
     (target.value !== undefined && typeof target.value !== "string")
@@ -2976,7 +3255,6 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
     fieldName: target.fieldName as string,
     autocomplete: target.autocomplete as string,
     href: target.href as string,
-    secure: target.secure,
     actions: [...actions],
     ...(target.value === undefined ? {} : { value: target.value }),
   };

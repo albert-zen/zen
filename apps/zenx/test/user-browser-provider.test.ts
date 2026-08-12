@@ -11,6 +11,7 @@ import {
   UserBrowserDocumentChangedAfterDispatchError,
   UserBrowserDocumentChangedBeforeDispatchError,
   UserBrowserMutationOutcomeUnknownError,
+  UserBrowserScreenshotMalformedError,
   type UserBrowserCdpClient,
   validateUserBrowserVersion,
   windowsBrowserExecutableCandidates,
@@ -90,6 +91,8 @@ test("user browser mode inherits visible authenticated state without exposing se
 
   const inspection = await backend.inspect("work", "target-1");
   assert.match(inspection.visibleText, /Signed in as Alice/u);
+  assert.equal(inspection.screenshot.observationId, inspection.observationId);
+  assert.ok(inspection.screenshot.bytes > 0);
   assert.equal(inspection.targets[0]?.name, "Continue");
   assert.doesNotMatch(
     JSON.stringify({ tabs, inspection }),
@@ -111,6 +114,22 @@ test("user browser mode inherits visible authenticated state without exposing se
     ),
     false,
   );
+});
+
+test("attached browser rejects malformed screenshot data explicitly", async () => {
+  const client = new FakeUserBrowserClient();
+  client.captureScreenshot = async (_targetId, _owner, documentIdentity) => ({
+    data: "not-base64",
+    documentIdentity,
+    status: "captured",
+  });
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  await assert.rejects(
+    backend.inspect("work", "target-1"),
+    UserBrowserScreenshotMalformedError,
+  );
+  await backend.close();
 });
 
 test("concurrent first listings publish one exclusive logical target owner", async () => {
@@ -596,6 +615,7 @@ test("caller abort after createTarget dispatch does not orphan an untracked targ
   await client.createSettled;
   await nextTurn();
 
+  assert.ok(client.observedSignals.includes(controller.signal));
   assert.equal(await backend.closeSession("work"), 2);
   assert.deepEqual(client.detachedTargets.sort(), ["target-1", "target-2"]);
   assert.deepEqual(client.closedTargets, []);
@@ -1002,7 +1022,6 @@ test("password and autocomplete metadata do not block ordinary text dispatch", a
     client.inspectionTarget = {
       ...client.inspectionTarget,
       ...metadata,
-      secure: true,
       actions: ["type"],
     };
     const backend = new UserBrowserCdpBackend(client);
@@ -2495,12 +2514,14 @@ test("Windows browser discovery covers machine and per-user Chrome Edge and Chro
 });
 
 class FakeUserBrowserClient implements UserBrowserCdpClient {
+  captureScreenshot?: UserBrowserCdpClient["captureScreenshot"];
   actionCount = 0;
   navigateCount = 0;
   closeCount = 0;
   readonly closedTargets: string[] = [];
   readonly detachedTargets: string[] = [];
   readonly calls: string[] = [];
+  readonly observedSignals: AbortSignal[] = [];
   currentUrl = "https://example.test/account";
   primaryTargetPresent = true;
   documentToken = "document-a";
@@ -2535,7 +2556,6 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     fieldName: "",
     autocomplete: "",
     href: "",
-    secure: false,
     actions: ["click"] as Array<"click" | "type">,
   };
   readonly #actionStarted = deferred<void>();
@@ -2632,7 +2652,8 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     this.#heldAction.reject(error);
   }
 
-  async listTargets() {
+  async listTargets(signal?: AbortSignal) {
+    if (signal !== undefined) this.observedSignals.push(signal);
     this.calls.push("Target.getTargets");
     if (this.listFailureOnce !== undefined) {
       const error = this.listFailureOnce;
@@ -2670,7 +2691,8 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     ];
   }
 
-  async createTarget(url: string) {
+  async createTarget(url: string, signal?: AbortSignal) {
+    if (signal !== undefined) this.observedSignals.push(signal);
     this.calls.push("Target.createTarget");
     this.createdUrl = url;
     const targetId = `target-${String(this.nextCreatedTarget++)}`;
@@ -2692,7 +2714,8 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     return targetId;
   }
 
-  async findTargetsByUrl(url: string) {
+  async findTargetsByUrl(url: string, signal?: AbortSignal) {
+    if (signal !== undefined) this.observedSignals.push(signal);
     if (this.failCreateRecovery) return [];
     return [...this.createdTargets]
       .filter(([, targetUrl]) => targetUrl === url)
@@ -2725,9 +2748,10 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       logicalSessionId: string;
       logicalSessionIncarnation: number;
     },
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
     onDispatched?: () => void,
   ) {
+    if (signal !== undefined) this.observedSignals.push(signal);
     onDispatched?.();
     this.calls.push("Page.navigate");
     this.navigateCount += 1;
@@ -2819,6 +2843,10 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       throw new UserBrowserDocumentChangedAfterDispatchError();
     }
     return { value: response, documentIdentity: this.documentToken };
+  }
+
+  async getDocumentIdentity() {
+    return this.documentToken;
   }
 
   async close() {
@@ -3212,7 +3240,6 @@ async function createFakeCdpServer(): Promise<{
                       fieldName: "",
                       autocomplete: "",
                       href: "",
-                      secure: false,
                       actions: ["click", "type"],
                     },
                   ],

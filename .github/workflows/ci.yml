@@ -90,6 +90,22 @@ jobs:
       - run: npm ci
       - run: npm --workspace apps/zenx run smoke:windows-computer
 
+  zenx-windows-packaged-provider-smoke:
+    name: ZenX Windows packaged bundled-provider smoke
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      WINAPP_CLI_UPDATE_CHECK: "0"
+      WINAPP_CLI_TELEMETRY_OPTOUT: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm --workspace apps/zenx run smoke:packaged
+
   zenx-windows-user-browser-smoke:
     name: ZenX Windows attached user-browser smoke
     runs-on: windows-latest

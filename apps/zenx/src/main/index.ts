@@ -34,6 +34,7 @@ import type {
   RoomMember,
 } from "./trigger-types.js";
 import { ZenXCapabilityService } from "./capability-service.js";
+import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
 import {
   MutableAppServerRequestPort,
   ZenXSelfControlCapabilityPackage,
@@ -94,7 +95,14 @@ app.whenReady().then(async () => {
     ),
   });
   try {
-    capabilityService = new ZenXCapabilityService({ userDataDirectory });
+    capabilityService = new ZenXCapabilityService({
+      userDataDirectory,
+      bundledProvidersOnly: app.isPackaged,
+      resourcesDirectory: process.resourcesPath,
+      bundledManifestSha256: app.isPackaged
+        ? PACKAGED_PROVIDER_MANIFEST_SHA256
+        : undefined,
+    });
     await capabilityService.initialize();
     capabilityService.register(
       new ZenXSelfControlCapabilityPackage({ appServer: selfControlPort }),
@@ -182,6 +190,11 @@ app.whenReady().then(async () => {
     } else {
       selfControlPort.attach(appServerManager, hostConfig.cwd);
       const restartErrors: Error[] = [];
+      try {
+        await capabilityService?.resetTransient();
+      } catch (error) {
+        restartErrors.push(normalizeTitleOwnershipFailure(error));
+      }
       try {
         await titleCoordinator?.stop();
       } catch (error) {

@@ -112,7 +112,7 @@ test("registers, grants, revokes, and unregisters package contributions", async 
   assert.deepEqual(registry.hostSnapshot().definitions, []);
 });
 
-test("bounds and redacts provider output and projects invocation audit", async () => {
+test("bounds ordinary provider output and projects invocation audit", async () => {
   const registry = new ZenXCapabilityRegistry(
     new MemoryZenXCapabilityGrantStore(),
   );
@@ -131,8 +131,7 @@ test("bounds and redacts provider output and projects invocation audit", async (
 
   const result = await registry.execute(invocation("fixture_inspect", {}));
   assert.ok(Buffer.byteLength(result.output, "utf8") <= 1024);
-  assert.doesNotMatch(result.output, /private/u);
-  assert.doesNotMatch(result.output, /visible-secret|query-secret/u);
+  assert.match(result.output, /private/u);
   assert.match(result.output, /truncated/u);
   const [audit] = registry.snapshot().recentInvocations;
   assert.equal(audit?.capabilityId, "fixture");
@@ -251,6 +250,97 @@ test("projects an invocation cancelled while its provider is finishing", async (
     /stopped/u,
   );
   assert.equal(registry.snapshot().recentInvocations[0]?.status, "cancelled");
+});
+
+test("keeps the newest browser screenshot projection when inspections finish out of order", async () => {
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+  );
+  await registry.initialize();
+  const browserManifest = structuredClone(manifest);
+  browserManifest.id = "browser";
+  browserManifest.tools = [
+    {
+      ...browserManifest.tools[0]!,
+      name: "browser_inspect",
+    },
+  ];
+  let releaseFirst: (() => void) | undefined;
+  let calls = 0;
+  const firstFinished = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  registry.register({
+    manifest: browserManifest,
+    invoke: async () => {
+      calls += 1;
+      if (calls === 1) await firstFinished;
+      return {
+        screenshot: {
+          artifactPath: `/tmp/observation-${String(calls)}.png`,
+          observationId: `observation-${String(calls)}`,
+          status: "captured",
+          width: 1,
+          height: 1,
+          bytes: 68,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      };
+    },
+  });
+  await registry.grant("browser", ["fixture.read"]);
+  const first = registry.execute(invocation("browser_inspect", {}));
+  await new Promise((resolve) => setImmediate(resolve));
+  await registry.execute(invocation("browser_inspect", {}));
+  assert.equal(
+    registry.snapshot().currentScreenshot?.observationId,
+    "observation-2",
+  );
+  releaseFirst?.();
+  await first;
+  assert.equal(
+    registry.snapshot().currentScreenshot?.observationId,
+    "observation-2",
+  );
+  await registry.unregister("browser");
+  assert.equal(registry.snapshot().currentScreenshot, undefined);
+});
+
+test("transient capability reset clears browser projection without changing grants or audit", async () => {
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+  );
+  await registry.initialize();
+  const browserManifest = structuredClone(manifest);
+  browserManifest.id = "browser";
+  browserManifest.tools = [
+    { ...browserManifest.tools[0]!, name: "browser_inspect" },
+  ];
+  registry.register({
+    manifest: browserManifest,
+    invoke: async () => ({
+      screenshot: {
+        artifactPath: "/tmp/restart.png",
+        observationId: "restart-observation",
+        status: "captured",
+        width: 1,
+        height: 1,
+        bytes: 68,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    }),
+  });
+  await registry.grant("browser", ["fixture.read"]);
+  await registry.execute(invocation("browser_inspect", {}));
+  const before = registry.snapshot();
+  await registry.resetTransient();
+  const after = registry.snapshot();
+  assert.equal(after.currentScreenshot, undefined);
+  assert.deepEqual(
+    after.capabilities[0]?.granted,
+    before.capabilities[0]?.granted,
+  );
+  assert.equal(after.recentInvocations.length, before.recentInvocations.length);
 });
 
 function packageFixture(

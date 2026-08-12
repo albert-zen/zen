@@ -33,6 +33,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #browserBackend?: ZenXBrowserBackend;
   readonly #computerBackend?: ZenXComputerBackend;
   readonly #computerManifest?: ZenXCapabilityManifest;
+  readonly #bundledProvidersOnly: boolean;
+  readonly #resourcesDirectory?: string;
+  readonly #bundledManifestSha256?: string;
   #computerRegistered = false;
 
   constructor(options: {
@@ -42,6 +45,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     browserBackend?: ZenXBrowserBackend;
     computerBackend?: ZenXComputerBackend;
     computerManifest?: ZenXCapabilityManifest;
+    bundledProvidersOnly?: boolean;
+    resourcesDirectory?: string;
+    bundledManifestSha256?: string;
   }) {
     this.#registry = new ZenXCapabilityRegistry(
       options.grantStore ??
@@ -56,6 +62,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     this.#browserBackend = options.browserBackend;
     this.#computerBackend = options.computerBackend;
     this.#computerManifest = options.computerManifest;
+    this.#bundledProvidersOnly = options.bundledProvidersOnly ?? false;
+    this.#resourcesDirectory = options.resourcesDirectory;
+    this.#bundledManifestSha256 = options.bundledManifestSha256;
   }
 
   async initialize(): Promise<void> {
@@ -64,6 +73,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       this.#browserBackend === undefined
         ? await selectBrowserProvider({
             userDataDirectory: this.#userDataDirectory,
+            bundledProvidersOnly: this.#bundledProvidersOnly,
+            resourcesDirectory: this.#resourcesDirectory,
+            bundledManifestSha256: this.#bundledManifestSha256,
           })
         : {
             backend: this.#browserBackend,
@@ -88,6 +100,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       this.#computerBackend === undefined
         ? await selectComputerProvider({
             userDataDirectory: this.#userDataDirectory,
+            bundledProvidersOnly: this.#bundledProvidersOnly,
+            resourcesDirectory: this.#resourcesDirectory,
+            bundledManifestSha256: this.#bundledManifestSha256,
           })
         : {
             backend: this.#computerBackend,
@@ -153,6 +168,55 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   async unregister(capabilityId: string): Promise<void> {
     await this.#registry.unregister(capabilityId);
+  }
+
+  async resetTransient(): Promise<void> {
+    await this.#registry.resetTransient();
+    if (
+      this.#browserBackend !== undefined ||
+      this.#computerBackend !== undefined
+    ) {
+      return;
+    }
+    await this.#registry.unregister("browser");
+    await this.#registry.unregister("computer");
+    this.#computerRegistered = false;
+    const browser = await selectBrowserProvider({
+      userDataDirectory: this.#userDataDirectory,
+      bundledProvidersOnly: this.#bundledProvidersOnly,
+      resourcesDirectory: this.#resourcesDirectory,
+      bundledManifestSha256: this.#bundledManifestSha256,
+    });
+    if (browser.backend !== undefined) {
+      this.#registry.register(
+        new BrowserZenXCapabilityPackage(browser.backend, browser.manifest),
+        "bundled",
+      );
+    }
+    for (const diagnostic of browser.diagnostics) {
+      this.#registry.recordProviderDiagnostic(diagnostic);
+    }
+    if (browser.backend === undefined) {
+      this.#registry.recordDiscoveryError(
+        `Browser provider: ${browser.diagnostics[0]?.reason ?? "unavailable"}`,
+      );
+    }
+    const computer = await selectComputerProvider({
+      userDataDirectory: this.#userDataDirectory,
+      bundledProvidersOnly: this.#bundledProvidersOnly,
+      resourcesDirectory: this.#resourcesDirectory,
+      bundledManifestSha256: this.#bundledManifestSha256,
+    });
+    if (computer.backend !== undefined) {
+      this.#registry.register(
+        new ComputerZenXCapabilityPackage(computer.backend, computer.manifest),
+        "bundled",
+      );
+      this.#computerRegistered = true;
+    }
+    for (const diagnostic of computer.diagnostics) {
+      this.#registry.recordProviderDiagnostic(diagnostic);
+    }
   }
 
   hostSnapshot(): ZenXCapabilityHostSnapshot {
