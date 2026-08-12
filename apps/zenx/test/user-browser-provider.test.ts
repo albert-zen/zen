@@ -260,6 +260,34 @@ test("outcome-unknown action survives closeSession cleanup and backend close", a
   assert.deepEqual(client.closedTargets, []);
 });
 
+test("outcome-unknown action retains the tab and session lease until late settlement", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  const inspection = await backend.inspect("work", "target-1");
+  const target = inspection.targets[0];
+  assert.ok(target);
+  const settlement = deferred<void>();
+  client.actionUnknownSettlement = settlement.promise;
+
+  await assert.rejects(
+    backend.click(
+      "work",
+      "target-1",
+      inspection.observationId,
+      target.targetId,
+    ),
+    /outcome is unknown/u,
+  );
+  const closing = backend.closeSession("work");
+  for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+  assert.deepEqual(client.detachedTargets, []);
+
+  settlement.resolve();
+  await assert.rejects(closing, /outcome is unknown|tainted/u);
+  assert.deepEqual(client.detachedTargets, ["target-1"]);
+});
+
 test("direct backend close reports action and navigation outcome-unknown taint", async () => {
   for (const mutation of ["action", "navigate"] as const) {
     const client = new FakeUserBrowserClient();
@@ -1759,6 +1787,177 @@ test("frameStartedNavigating during evaluate or confirmation makes action outcom
   }
 });
 
+test("matching execution-context invalidation after action dispatch remains outcome-unknown and tainted", async () => {
+  for (const event of [
+    {
+      method: "Runtime.executionContextDestroyed",
+      params: { executionContextId: 100 },
+    },
+    { method: "Runtime.executionContextsCleared", params: {} },
+    {
+      method: "Runtime.executionContextCreated",
+      params: {
+        context: {
+          id: 101,
+          name: "__zenx_user_browser_document__",
+          auxData: { frameId: "main", isDefault: false },
+        },
+      },
+    },
+  ]) {
+    const cdp = await createFakeCdpServer();
+    try {
+      const connection = await connectUserBrowserCdp(cdp.endpoint);
+      await connection.backend.listTabs("work");
+      const inspection = await connection.backend.inspect("work", "target-1");
+      const target = inspection.targets[0];
+      assert.ok(target);
+      const evaluationsBefore = cdp.count("Runtime.evaluate");
+      cdp.invalidateActionAt("evaluate", event);
+      await assert.rejects(
+        connection.backend.click(
+          "work",
+          "target-1",
+          inspection.observationId,
+          target.targetId,
+        ),
+        /outcome is unknown/u,
+        event.method,
+      );
+      assert.equal(cdp.count("Runtime.evaluate"), evaluationsBefore + 1);
+      await assert.rejects(
+        connection.backend.inspect("work", "target-1"),
+        /tainted/u,
+      );
+    } finally {
+      await cdp.close();
+    }
+  }
+});
+
+test("timed-out Runtime.evaluate retains detach until its late response settles", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    const inspection = await connection.backend.inspect("work", "target-1");
+    const target = inspection.targets[0];
+    assert.ok(target);
+    cdp.holdNextActionReply();
+    const action = connection.backend.click(
+      "work",
+      "target-1",
+      inspection.observationId,
+      target.targetId,
+    );
+    await cdp.heldActionStarted();
+    await assert.rejects(action, /outcome is unknown/u);
+
+    const closing = Promise.resolve(connection.backend.closeSession("work"));
+    for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+    assert.equal(cdp.count("Target.detachFromTarget"), 0);
+    cdp.releaseLateActionReply();
+    await assert.rejects(closing, /outcome is unknown|tainted/u);
+    assert.equal(cdp.actionResponseSent(), true);
+    assert.equal(cdp.count("Target.detachFromTarget"), 1);
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("timed-out post-confirmation retains detach until its late response settles", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    const inspection = await connection.backend.inspect("work", "target-1");
+    const target = inspection.targets[0];
+    assert.ok(target);
+    cdp.holdNextConfirmationReply();
+    const action = connection.backend.click(
+      "work",
+      "target-1",
+      inspection.observationId,
+      target.targetId,
+    );
+    await cdp.heldConfirmationStarted();
+    await assert.rejects(action, /outcome is unknown/u);
+
+    const closing = Promise.resolve(connection.backend.closeSession("work"));
+    for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+    assert.equal(cdp.count("Target.detachFromTarget"), 0);
+    cdp.releaseLateConfirmationReply();
+    await assert.rejects(closing, /outcome is unknown|tainted/u);
+    assert.equal(cdp.confirmationResponseSent(), true);
+    assert.equal(cdp.count("Target.detachFromTarget"), 1);
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("cancelled and invalidated dispatched action retains detach until late settlement", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    const inspection = await connection.backend.inspect("work", "target-1");
+    const target = inspection.targets[0];
+    assert.ok(target);
+    cdp.invalidateActionAt("evaluate");
+    cdp.holdNextActionReply();
+    const controller = new AbortController();
+    const action = connection.backend.click(
+      "work",
+      "target-1",
+      inspection.observationId,
+      target.targetId,
+      controller.signal,
+    );
+    await cdp.heldActionStarted();
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    await assert.rejects(action, /outcome is unknown/u);
+
+    const closing = Promise.resolve(connection.backend.closeSession("work"));
+    for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+    assert.equal(cdp.count("Target.detachFromTarget"), 0);
+    cdp.releaseLateActionReply();
+    await assert.rejects(closing, /outcome is unknown|tainted/u);
+    assert.equal(cdp.actionResponseSent(), true);
+    assert.equal(cdp.count("Target.detachFromTarget"), 1);
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("missing late Runtime.evaluate settlement expires to explicit unknown without detach", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    const inspection = await connection.backend.inspect("work", "target-1");
+    const target = inspection.targets[0];
+    assert.ok(target);
+    cdp.holdNextActionReply();
+    const action = connection.backend.click(
+      "work",
+      "target-1",
+      inspection.observationId,
+      target.targetId,
+    );
+    await cdp.heldActionStarted();
+    await assert.rejects(action, /outcome is unknown/u);
+
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /late settlement was not observed|outcome is unknown|tainted/u,
+    );
+    assert.equal(cdp.actionResponseSent(), false);
+    assert.equal(cdp.count("Target.detachFromTarget"), 0);
+  } finally {
+    await cdp.close();
+  }
+});
+
 test("document setup invalidation between frame tree and isolated world dispatches zero page code", async () => {
   for (const operation of ["inspect", "click", "type"] as const) {
     const cdp = await createFakeCdpServer();
@@ -1793,6 +1992,194 @@ test("document setup invalidation between frame tree and isolated world dispatch
               );
       await assert.rejects(pending, /document changed|invalidated/u, operation);
       assert.equal(cdp.count("Runtime.evaluate"), evaluationsBefore, operation);
+    } finally {
+      await cdp.close();
+    }
+  }
+});
+
+test("main-frame loading before frame binding rejects inspect click and type without page code", async () => {
+  for (const operation of ["inspect", "click", "type"] as const) {
+    const cdp = await createFakeCdpServer();
+    try {
+      const connection = await connectUserBrowserCdp(cdp.endpoint);
+      await connection.backend.listTabs("work");
+      const inspection =
+        operation === "inspect"
+          ? undefined
+          : await connection.backend.inspect("work", "target-1");
+      const target = inspection?.targets[0];
+      if (operation !== "inspect") assert.ok(target);
+      const evaluationsBefore = cdp.count("Runtime.evaluate");
+      cdp.invalidateSetupAt("before-frame-tree-response", {
+        method: "Page.frameStartedLoading",
+        params: { frameId: "main" },
+      });
+      const pending =
+        operation === "inspect"
+          ? connection.backend.inspect("work", "target-1")
+          : operation === "click"
+            ? connection.backend.click(
+                "work",
+                "target-1",
+                inspection!.observationId,
+                target!.targetId,
+              )
+            : connection.backend.type(
+                "work",
+                "target-1",
+                inspection!.observationId,
+                target!.targetId,
+                "updated",
+                false,
+              );
+      await assert.rejects(pending, /document changed|invalidated/u, operation);
+      assert.equal(cdp.count("Runtime.evaluate"), evaluationsBefore, operation);
+    } finally {
+      await cdp.close();
+    }
+  }
+});
+
+test("subframe loading before frame binding does not invalidate inspect click or type", async () => {
+  for (const operation of ["inspect", "click", "type"] as const) {
+    const cdp = await createFakeCdpServer();
+    try {
+      const connection = await connectUserBrowserCdp(cdp.endpoint);
+      await connection.backend.listTabs("work");
+      const inspection =
+        operation === "inspect"
+          ? undefined
+          : await connection.backend.inspect("work", "target-1");
+      const target = inspection?.targets[0];
+      if (operation !== "inspect") assert.ok(target);
+      cdp.invalidateSetupAt("before-frame-tree-response", {
+        method: "Page.frameStartedLoading",
+        params: { frameId: "child" },
+      });
+      if (operation === "inspect") {
+        const result = await connection.backend.inspect("work", "target-1");
+        assert.match(result.visibleText, /Signed in as Alice/u);
+      } else if (operation === "click") {
+        await connection.backend.click(
+          "work",
+          "target-1",
+          inspection!.observationId,
+          target!.targetId,
+        );
+      } else {
+        await connection.backend.type(
+          "work",
+          "target-1",
+          inspection!.observationId,
+          target!.targetId,
+          "updated",
+          false,
+        );
+      }
+    } finally {
+      await cdp.close();
+    }
+  }
+});
+
+test("isolated execution-context invalidation rejects inspect click and type without page code", async () => {
+  const invalidations = [
+    {
+      name: "destroyed",
+      method: "Runtime.executionContextDestroyed",
+      params: { executionContextId: 100 },
+    },
+    {
+      name: "cleared",
+      method: "Runtime.executionContextsCleared",
+      params: {},
+    },
+    {
+      name: "replacement",
+      method: "Runtime.executionContextCreated",
+      params: {
+        context: {
+          id: 101,
+          name: "__zenx_user_browser_document__",
+          auxData: { frameId: "main", isDefault: false },
+        },
+      },
+    },
+  ];
+  for (const invalidation of invalidations) {
+    for (const operation of ["inspect", "click", "type"] as const) {
+      const cdp = await createFakeCdpServer();
+      try {
+        const connection = await connectUserBrowserCdp(cdp.endpoint);
+        await connection.backend.listTabs("work");
+        const inspection =
+          operation === "inspect"
+            ? undefined
+            : await connection.backend.inspect("work", "target-1");
+        const target = inspection?.targets[0];
+        if (operation !== "inspect") assert.ok(target);
+        const evaluationsBefore = cdp.count("Runtime.evaluate");
+        cdp.invalidateSetupAt("after-isolated-world", invalidation);
+        const pending =
+          operation === "inspect"
+            ? connection.backend.inspect("work", "target-1")
+            : operation === "click"
+              ? connection.backend.click(
+                  "work",
+                  "target-1",
+                  inspection!.observationId,
+                  target!.targetId,
+                )
+              : connection.backend.type(
+                  "work",
+                  "target-1",
+                  inspection!.observationId,
+                  target!.targetId,
+                  "updated",
+                  false,
+                );
+        await assert.rejects(
+          pending,
+          /document changed|invalidated|execution context/u,
+          `${invalidation.name}:${operation}`,
+        );
+        assert.equal(
+          cdp.count("Runtime.evaluate"),
+          evaluationsBefore,
+          `${invalidation.name}:${operation}`,
+        );
+      } finally {
+        await cdp.close();
+      }
+    }
+  }
+});
+
+test("unrelated subframe execution-context events do not invalidate the main fence", async () => {
+  for (const event of [
+    {
+      method: "Runtime.executionContextDestroyed",
+      params: { executionContextId: 999 },
+    },
+    {
+      method: "Runtime.executionContextCreated",
+      params: {
+        context: {
+          id: 101,
+          name: "__zenx_user_browser_document__",
+          auxData: { frameId: "child", isDefault: false },
+        },
+      },
+    },
+  ]) {
+    const cdp = await createFakeCdpServer();
+    try {
+      const connection = await connectUserBrowserCdp(cdp.endpoint);
+      await connection.backend.listTabs("work");
+      cdp.invalidateSetupAt("after-isolated-world", event);
+      const inspection = await connection.backend.inspect("work", "target-1");
+      assert.match(inspection.visibleText, /Signed in as Alice/u);
     } finally {
       await cdp.close();
     }
@@ -2015,6 +2402,30 @@ test("repeated setup invalidations retire their fences without unbounded live st
   }
 });
 
+test("repeated isolated-context invalidations remain bounded and recover", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    for (let index = 0; index < 64; index += 1) {
+      cdp.invalidateSetupAt("after-isolated-world", {
+        method: "Runtime.executionContextDestroyed",
+        params: { executionContextId: 100 },
+      });
+      await assert.rejects(
+        connection.backend.inspect("work", "target-1"),
+        /document changed|invalidated|execution context/u,
+      );
+    }
+    assert.equal(cdp.count("Runtime.evaluate"), 0);
+    const inspection = await connection.backend.inspect("work", "target-1");
+    assert.match(inspection.visibleText, /Signed in as Alice/u);
+    assert.equal(cdp.count("Runtime.evaluate"), 2);
+  } finally {
+    await cdp.close();
+  }
+});
+
 test("Windows browser discovery covers machine and per-user Chrome Edge and Chromium", () => {
   const candidates = windowsBrowserExecutableCandidates({
     ProgramFiles: "C:\\Program Files",
@@ -2054,6 +2465,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   identityFailure?: Error;
   listFailureOnce?: Error;
   navigateFailureOnce?: Error;
+  actionUnknownSettlement?: Promise<void>;
   holdActions = false;
   holdNavigations = false;
   holdPostConfirmation = false;
@@ -2333,6 +2745,13 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     }
     onDispatched?.();
     this.actionCount += 1;
+    if (this.actionUnknownSettlement !== undefined) {
+      throw new UserBrowserMutationOutcomeUnknownError(
+        "Runtime.evaluate",
+        "response remains pending",
+        this.actionUnknownSettlement,
+      );
+    }
     if (this.identityChangePhase === "during-evaluate") {
       this.advanceDocument("during-evaluate");
     }
@@ -2412,9 +2831,15 @@ async function createFakeCdpServer(): Promise<{
   endpoint: string;
   count(method: string): number;
   requests(method: string): Record<string, unknown>[];
-  invalidateActionAt(phase: "evaluate" | "confirmation"): void;
+  invalidateActionAt(
+    phase: "evaluate" | "confirmation",
+    event?: { method: string; params: Record<string, unknown> },
+  ): void;
   invalidateSetupAt(
-    phase: "after-frame-tree" | "after-isolated-world",
+    phase:
+      | "before-frame-tree-response"
+      | "after-frame-tree"
+      | "after-isolated-world",
     event?: { method: string; params: Record<string, unknown> },
   ): void;
   loseNextCreateReply(): void;
@@ -2425,6 +2850,14 @@ async function createFakeCdpServer(): Promise<{
   releaseLateAttachReply(): void;
   holdNextAttachErrorReply(): void;
   releaseLateAttachErrorReply(): void;
+  holdNextActionReply(): void;
+  heldActionStarted(): Promise<void>;
+  releaseLateActionReply(): void;
+  actionResponseSent(): boolean;
+  holdNextConfirmationReply(): void;
+  heldConfirmationStarted(): Promise<void>;
+  releaseLateConfirmationReply(): void;
+  confirmationResponseSent(): boolean;
   dropNextEnableReply(): void;
   failNextEnableReply(): void;
   dropNextDetachReply(): void;
@@ -2454,10 +2887,18 @@ async function createFakeCdpServer(): Promise<{
   let nextContext = 100;
   let endpoint = "";
   let invalidateNextAttachment = false;
-  let invalidationPhase: "evaluate" | "confirmation" | undefined;
+  let actionInvalidation:
+    | {
+        phase: "evaluate" | "confirmation";
+        event: { method: string; params: Record<string, unknown> };
+      }
+    | undefined;
   let setupInvalidation:
     | {
-        phase: "after-frame-tree" | "after-isolated-world";
+        phase:
+          | "before-frame-tree-response"
+          | "after-frame-tree"
+          | "after-isolated-world";
         event: { method: string; params: Record<string, unknown> };
       }
     | undefined;
@@ -2467,6 +2908,12 @@ async function createFakeCdpServer(): Promise<{
   let failAttachReply = false;
   let holdAttachReply = false;
   let holdAttachErrorReply = false;
+  let holdActionReply = false;
+  let actionResponseSent = false;
+  const heldActionStarted = deferred<void>();
+  let holdConfirmationReply = false;
+  let confirmationResponseSent = false;
+  const heldConfirmationStarted = deferred<void>();
   let dropEnableReply = false;
   let failEnableReply = false;
   let dropDetachReplyCount = 0;
@@ -2478,6 +2925,10 @@ async function createFakeCdpServer(): Promise<{
           { result: { sessionId: string } } | { error: { message: string } };
       }
     | undefined;
+  let lateActionReply:
+    { socket: WebSocket; id: number; result: unknown } | undefined;
+  let lateConfirmationReply:
+    { socket: WebSocket; id: number; result: unknown } | undefined;
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
     if (request.url === "/json/list") {
@@ -2615,6 +3066,11 @@ async function createFakeCdpServer(): Promise<{
             },
           },
         };
+        if (setupInvalidation?.phase === "before-frame-tree-response") {
+          const invalidation = setupInvalidation;
+          setupInvalidation = undefined;
+          emitSetupInvalidation(socket, request.sessionId, invalidation.event);
+        }
         if (setupInvalidation?.phase === "after-frame-tree") {
           const invalidation = setupInvalidation;
           setupInvalidation = undefined;
@@ -2642,19 +3098,16 @@ async function createFakeCdpServer(): Promise<{
         const isAction = expression.includes("const expected =");
         const isConfirmation = expression === "void 0";
         if (
-          (invalidationPhase === "evaluate" && isAction) ||
-          (invalidationPhase === "confirmation" && isConfirmation)
+          (actionInvalidation?.phase === "evaluate" && isAction) ||
+          (actionInvalidation?.phase === "confirmation" && isConfirmation)
         ) {
-          invalidationPhase = undefined;
+          const invalidation = actionInvalidation;
+          actionInvalidation = undefined;
           socket.send(
             JSON.stringify({
-              method: "Page.frameStartedNavigating",
+              method: invalidation.event.method,
               sessionId: request.sessionId,
-              params: {
-                frameId: "main",
-                url: "https://example.test/next",
-                navigationType: "reload",
-              },
+              params: invalidation.event.params,
             }),
           );
         }
@@ -2682,6 +3135,18 @@ async function createFakeCdpServer(): Promise<{
                 },
           },
         };
+        if (isAction && holdActionReply) {
+          holdActionReply = false;
+          lateActionReply = { socket, id: request.id, result };
+          heldActionStarted.resolve();
+          return;
+        }
+        if (isConfirmation && holdConfirmationReply) {
+          holdConfirmationReply = false;
+          lateConfirmationReply = { socket, id: request.id, result };
+          heldConfirmationStarted.resolve();
+          return;
+        }
       } else if (request.method === "Page.navigate") {
         const targetId = sessionTargets.get(request.sessionId ?? "");
         assert.ok(targetId);
@@ -2710,8 +3175,18 @@ async function createFakeCdpServer(): Promise<{
       requests
         .filter((candidate) => candidate.method === method)
         .map((candidate) => candidate.params),
-    invalidateActionAt: (phase) => {
-      invalidationPhase = phase;
+    invalidateActionAt: (phase, event) => {
+      actionInvalidation = {
+        phase,
+        event: event ?? {
+          method: "Page.frameStartedNavigating",
+          params: {
+            frameId: "main",
+            url: "https://example.test/next",
+            navigationType: "reload",
+          },
+        },
+      };
     },
     invalidateSetupAt: (phase, event) => {
       setupInvalidation = {
@@ -2758,6 +3233,32 @@ async function createFakeCdpServer(): Promise<{
         late.socket.send(JSON.stringify({ id: late.id, ...late.response }));
       }
     },
+    holdNextActionReply: () => {
+      holdActionReply = true;
+    },
+    heldActionStarted: async () => await heldActionStarted.promise,
+    releaseLateActionReply: () => {
+      const late = lateActionReply;
+      lateActionReply = undefined;
+      actionResponseSent = true;
+      if (late !== undefined && late.socket.readyState === late.socket.OPEN) {
+        late.socket.send(JSON.stringify({ id: late.id, result: late.result }));
+      }
+    },
+    actionResponseSent: () => actionResponseSent,
+    holdNextConfirmationReply: () => {
+      holdConfirmationReply = true;
+    },
+    heldConfirmationStarted: async () => await heldConfirmationStarted.promise,
+    releaseLateConfirmationReply: () => {
+      const late = lateConfirmationReply;
+      lateConfirmationReply = undefined;
+      confirmationResponseSent = true;
+      if (late !== undefined && late.socket.readyState === late.socket.OPEN) {
+        late.socket.send(JSON.stringify({ id: late.id, result: late.result }));
+      }
+    },
+    confirmationResponseSent: () => confirmationResponseSent,
     dropNextEnableReply: () => {
       dropEnableReply = true;
     },

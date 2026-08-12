@@ -23,6 +23,7 @@ const USER_BROWSER_MAX_BACKEND_TAINT = 64;
 const USER_BROWSER_MAX_PENDING_CDP_REQUESTS = 128;
 const USER_BROWSER_MAX_ACTIVE_SESSIONS = 32;
 const USER_BROWSER_LATE_RESPONSE_RETENTION_MS = 5_000;
+const USER_BROWSER_DOCUMENT_WORLD_NAME = "__zenx_user_browser_document__";
 
 type UserBrowserCdpOutcome =
   "known-success" | "known-failure" | "outcome-unknown";
@@ -42,6 +43,7 @@ interface UserBrowserAttachmentEpoch extends UserBrowserAttachmentOwner {
   unknownEvidence: Partial<Record<"attach" | "enable" | "detach", string>>;
   lifecycleEvidence: string[];
   taint?: string;
+  unsettledMutation?: string;
 }
 
 interface ZenXUserBrowserDocumentExecutionFence extends UserBrowserAttachmentOwner {
@@ -859,11 +861,30 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       (candidate) => this.#tabs.get(candidate) === tab,
     );
     if (targetId === undefined) throw new Error("User browser tab was closed");
-    const result = this.#startSessionOperation(session, async () => {
-      this.#assertTabCurrent(session, targetId, tab);
-      return await run();
+    const outward = promiseCapability<T>();
+    let operationStarted = false;
+    const retained = this.#startSessionOperation(session, async () => {
+      operationStarted = true;
+      try {
+        this.#assertTabCurrent(session, targetId, tab);
+        const value = await run();
+        outward.resolve(value);
+        return value;
+      } catch (error) {
+        outward.reject(error);
+        if (
+          error instanceof UserBrowserMutationOutcomeUnknownError &&
+          error.settlement !== undefined
+        ) {
+          await error.settlement;
+        }
+        throw error;
+      }
     });
-    const settled = result.then(
+    void retained.catch((error: unknown) => {
+      if (!operationStarted) outward.reject(error);
+    });
+    const settled = retained.then(
       () => undefined,
       () => undefined,
     );
@@ -871,7 +892,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     void settled.then(() => {
       if (tab.operation === settled) tab.operation = undefined;
     });
-    return result;
+    return outward.promise;
   }
 
   #startSessionOperation<T>(
@@ -1323,6 +1344,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     number,
     {
       receive(message: Record<string, unknown>): Promise<void>;
+      expire(): void;
       expires: NodeJS.Timeout;
     }
   >();
@@ -1336,6 +1358,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       url: string;
       alive: boolean;
       pendingFrameInvalidations: Set<string>;
+      invalidExecutionContextIds: Set<number>;
+      pendingIsolatedContexts: Map<number, string>;
+      isolatedExecutionContextId?: number;
     }
   >();
   #nextId = 1;
@@ -1538,7 +1563,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     let mutationResponseKnown = false;
     try {
       response = asRecord(
-        await this.#send(
+        await this.#sendDocumentRuntimeEvaluate(
+          before,
           "Runtime.evaluate",
           {
             expression,
@@ -1546,12 +1572,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             returnByValue: true,
             contextId: before.executionContextId,
           },
-          before.sessionId,
           signal,
-          USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
-          undefined,
           onDispatched,
-          () => this.#assertDocumentFence(before, true),
         ),
       );
       mutationResponseKnown = true;
@@ -1559,7 +1581,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         throw new Error("User browser CDP evaluation failed");
       }
       const confirmation = asRecord(
-        await this.#send(
+        await this.#sendDocumentRuntimeEvaluate(
+          before,
           "Runtime.evaluate",
           {
             expression: "void 0",
@@ -1567,12 +1590,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             returnByValue: true,
             contextId: before.executionContextId,
           },
-          before.sessionId,
           signal,
-          USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
           undefined,
-          undefined,
-          () => this.#assertDocumentFence(before, true),
         ),
       );
       if (confirmation?.exceptionDetails !== undefined) {
@@ -1601,8 +1620,51 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         throw new UserBrowserMutationOutcomeUnknownError(
           "Runtime.evaluate",
           describeError(error),
+          error instanceof UserBrowserCdpOutcomeUnknownError
+            ? error.settlement
+            : undefined,
         );
       }
+      throw error;
+    }
+  }
+
+  async #sendDocumentRuntimeEvaluate(
+    fence: ZenXUserBrowserDocumentExecutionFence & {
+      executionContextId: number;
+    },
+    method: "Runtime.evaluate",
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+    onDispatched?: () => void,
+  ): Promise<unknown> {
+    const settlement = promiseCapability<void>();
+    try {
+      const result = await this.#send(
+        method,
+        params,
+        fence.sessionId,
+        signal,
+        USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
+        async () => settlement.resolve(),
+        onDispatched,
+        () => this.#assertDocumentFence(fence, true),
+        () => {
+          fence.attachmentEpoch.unsettledMutation ??= `${method} late settlement was not observed`;
+          settlement.resolve();
+        },
+      );
+      settlement.resolve();
+      return result;
+    } catch (error) {
+      if (error instanceof UserBrowserCdpOutcomeUnknownError) {
+        throw new UserBrowserCdpOutcomeUnknownError(
+          method,
+          describeError(error),
+          settlement.promise,
+        );
+      }
+      settlement.resolve();
       throw error;
     }
   }
@@ -1693,6 +1755,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       url: frame.url,
       alive: true,
       pendingFrameInvalidations: state.pendingFrameInvalidations,
+      invalidExecutionContextIds: state.invalidExecutionContextIds,
+      pendingIsolatedContexts: state.pendingIsolatedContexts,
+      isolatedExecutionContextId: state.isolatedExecutionContextId,
     });
     await this.#documentBarrier(fence, signal);
     this.#assertDocumentFence(fence, false);
@@ -1701,7 +1766,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         "Page.createIsolatedWorld",
         {
           frameId: frame.id,
-          worldName: "__zenx_user_browser_document__",
+          worldName: USER_BROWSER_DOCUMENT_WORLD_NAME,
           grantUniveralAccess: false,
         },
         sessionId,
@@ -1713,6 +1778,26 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       throw new Error("User browser CDP execution context is invalid");
     }
     fence.executionContextId = world.executionContextId;
+    const contextState = this.#targetDocuments.get(targetId);
+    if (contextState === undefined || contextState.alive === false) {
+      throw new UserBrowserDocumentChangedBeforeDispatchError();
+    }
+    const replacement = [...contextState.pendingIsolatedContexts].some(
+      ([contextId, frameId]) =>
+        frameId === fence.frameId && contextId !== world.executionContextId,
+    );
+    contextState.pendingIsolatedContexts.clear();
+    contextState.isolatedExecutionContextId = world.executionContextId;
+    if (
+      replacement ||
+      contextState.invalidExecutionContextIds.has(world.executionContextId)
+    ) {
+      this.#invalidateTarget(targetId, false);
+      throw new UserBrowserDocumentChangedBeforeDispatchError(
+        "isolated execution context invalidated",
+      );
+    }
+    contextState.invalidExecutionContextIds.clear();
     await this.#documentBarrier(fence, signal);
     this.#assertDocumentFence(fence, true);
     const identity = JSON.stringify({
@@ -1781,7 +1866,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       (fence.url.length > 0 &&
         state.url.length > 0 &&
         state.url !== fence.url) ||
-      (requireContext && fence.executionContextId === undefined)
+      (requireContext &&
+        (fence.executionContextId === undefined ||
+          state.isolatedExecutionContextId !== fence.executionContextId ||
+          state.invalidExecutionContextIds.has(fence.executionContextId)))
     ) {
       throw new UserBrowserDocumentChangedBeforeDispatchError();
     }
@@ -1811,6 +1899,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       throw new UserBrowserCdpOutcomeUnknownError(
         "Target.attachToTarget",
         closure.unknownEvidence.attach,
+      );
+    }
+    if (closure?.unsettledMutation !== undefined) {
+      throw new UserBrowserCdpOutcomeUnknownError(
+        "Target.detachFromTarget",
+        closure.unsettledMutation,
       );
     }
     const sessionId = this.#targetSessions.get(targetId);
@@ -1976,6 +2070,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         url: "",
         alive: true,
         pendingFrameInvalidations: new Set(),
+        invalidExecutionContextIds: new Set(),
+        pendingIsolatedContexts: new Map(),
       });
       try {
         await this.#send("Page.enable", {}, response.sessionId, signal);
@@ -2119,6 +2215,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     onLateResponse?: (message: Record<string, unknown>) => Promise<void>,
     onDispatched?: () => void,
     beforeDispatch?: () => void,
+    onLateExpiration?: () => void,
   ): Promise<unknown> {
     if (this.#closed || this.#socket.readyState !== WebSocket.OPEN) {
       throw new Error("User browser CDP connection is unavailable");
@@ -2143,7 +2240,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         this.#pending.delete(id);
         finish();
         if (dispatched && onLateResponse !== undefined) {
-          this.#retainLateResponse(id, onLateResponse);
+          this.#retainLateResponse(id, onLateResponse, onLateExpiration);
         }
         const reason =
           signal?.reason instanceof Error
@@ -2169,6 +2266,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         },
         reject: (error) => {
           finish();
+          if (
+            dispatched &&
+            error instanceof UserBrowserCdpOutcomeUnknownError
+          ) {
+            onLateExpiration?.();
+          }
           reject(error);
         },
       };
@@ -2183,7 +2286,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
           ),
         );
         if (onLateResponse !== undefined) {
-          this.#retainLateResponse(id, onLateResponse);
+          this.#retainLateResponse(id, onLateResponse, onLateExpiration);
         }
       }, outcomeTimeoutMs);
       signal?.addEventListener("abort", abort, { once: true });
@@ -2215,21 +2318,26 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   #retainLateResponse(
     id: number,
     receive: (message: Record<string, unknown>) => Promise<void>,
+    expire: () => void = () => undefined,
   ): void {
     if (this.#lateResponses.size >= USER_BROWSER_MAX_OPERATION_EVIDENCE) {
       const oldest = this.#lateResponses.keys().next().value as
         number | undefined;
       if (oldest !== undefined) {
         const evicted = this.#lateResponses.get(oldest);
-        if (evicted !== undefined) clearTimeout(evicted.expires);
+        if (evicted !== undefined) {
+          clearTimeout(evicted.expires);
+          evicted.expire();
+        }
         this.#lateResponses.delete(oldest);
       }
       this.#recordConnectionTaint("late-response cleanup exceeded its bound");
     }
     const expires = setTimeout(() => {
       this.#lateResponses.delete(id);
+      expire();
     }, USER_BROWSER_LATE_RESPONSE_RETENTION_MS);
-    this.#lateResponses.set(id, { receive, expires });
+    this.#lateResponses.set(id, { receive, expire, expires });
   }
 
   #receive(raw: string): void {
@@ -2345,10 +2453,67 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const document = this.#targetDocuments.get(targetId);
     if (
       document !== undefined &&
+      method === "Runtime.executionContextDestroyed" &&
+      typeof params.executionContextId === "number"
+    ) {
+      if (
+        document.invalidExecutionContextIds.size <
+          USER_BROWSER_MAX_OPERATION_EVIDENCE ||
+        document.invalidExecutionContextIds.has(params.executionContextId)
+      ) {
+        document.invalidExecutionContextIds.add(params.executionContextId);
+      } else {
+        this.#invalidateTarget(targetId, false);
+      }
+      return;
+    }
+    if (
+      document !== undefined &&
+      method === "Runtime.executionContextsCleared"
+    ) {
+      this.#invalidateTarget(targetId, false);
+      return;
+    }
+    if (
+      document !== undefined &&
+      method === "Runtime.executionContextCreated"
+    ) {
+      const context = asRecord(params.context);
+      const auxData = asRecord(context?.auxData);
+      if (
+        typeof context?.id === "number" &&
+        context.name === USER_BROWSER_DOCUMENT_WORLD_NAME &&
+        typeof auxData?.frameId === "string"
+      ) {
+        if (
+          document.pendingIsolatedContexts.size <
+            USER_BROWSER_MAX_OPERATION_EVIDENCE ||
+          document.pendingIsolatedContexts.has(context.id)
+        ) {
+          document.pendingIsolatedContexts.set(context.id, auxData.frameId);
+        } else {
+          this.#invalidateTarget(targetId, false);
+          return;
+        }
+        if (
+          document.frameId === auxData.frameId &&
+          document.isolatedExecutionContextId !== undefined &&
+          document.isolatedExecutionContextId !== context.id
+        ) {
+          document.invalidExecutionContextIds.add(
+            document.isolatedExecutionContextId,
+          );
+        }
+      }
+      return;
+    }
+    if (
+      document !== undefined &&
       document.frameId.length === 0 &&
       typeof params.frameId === "string" &&
       (method === "Page.navigatedWithinDocument" ||
         method === "Page.frameStartedNavigating" ||
+        method === "Page.frameStartedLoading" ||
         method === "Page.backForwardCacheNotUsed")
     ) {
       if (
@@ -2385,9 +2550,14 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       url: "",
       alive: true,
       pendingFrameInvalidations: new Set<string>(),
+      invalidExecutionContextIds: new Set<number>(),
+      pendingIsolatedContexts: new Map<number, string>(),
     };
     state.revision += 1;
     state.alive = !disappeared;
+    state.isolatedExecutionContextId = undefined;
+    state.invalidExecutionContextIds.clear();
+    state.pendingIsolatedContexts.clear();
     this.#targetDocuments.set(targetId, state);
   }
 
@@ -2495,6 +2665,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       ...unknown,
       ...closure.lifecycleEvidence,
       ...(closure.taint === undefined ? [] : [closure.taint]),
+      ...(closure.unsettledMutation === undefined
+        ? []
+        : [closure.unsettledMutation]),
     ];
     return evidence.length === 0 ? undefined : evidence.join("; ");
   }
@@ -2508,6 +2681,11 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     this.#targetSessions.clear();
     this.#sessionTargets.clear();
     this.#targetDocuments.clear();
+    for (const late of this.#lateResponses.values()) {
+      clearTimeout(late.expires);
+      late.expire();
+    }
+    this.#lateResponses.clear();
     for (const pending of this.#pending.values()) {
       pending.reject(
         pending.dispatched
@@ -2614,17 +2792,39 @@ export class UserBrowserDocumentChangedAfterDispatchError extends Error {
 }
 
 export class UserBrowserMutationOutcomeUnknownError extends Error {
-  constructor(operation: string, detail: string) {
+  constructor(
+    operation: string,
+    detail: string,
+    readonly settlement?: Promise<void>,
+  ) {
     super(`${operation} outcome is unknown (${detail})`);
   }
 }
 
 export class UserBrowserCdpOutcomeUnknownError extends Error {
-  constructor(method: string, detail: string) {
+  constructor(
+    method: string,
+    detail: string,
+    readonly settlement?: Promise<void>,
+  ) {
     super(`User browser CDP ${method} outcome is unknown (${detail})`);
   }
 }
 class ActionRejectedError extends Error {}
+
+function promiseCapability<T>(): {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(reason?: unknown): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 async function raceAbort<T>(
   operation: Promise<T>,
