@@ -154,6 +154,8 @@ test("Playwright cancellation invalidates the session before immediate reuse", a
 class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   readonly calls: string[][] = [];
   url = "https://example.com/";
+  tabKey = "__zenx_tab_fixture";
+  documentKey = "document-fixture";
   invalidSnapshot = false;
   changeIdentity = false;
   abortNextSnapshot = false;
@@ -210,16 +212,31 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
               dom("e4", { tag: "button", visible: false }),
             ]),
           }
-        : {
-            result: JSON.stringify([
-              {
-                index: 0,
-                title: "Fixture",
-                url: this.url,
-                current: true,
-              },
-            ]),
-          };
+        : args[3]?.includes("window.name")
+          ? {
+              result: JSON.stringify([
+                {
+                  index: 0,
+                  title: "Fixture",
+                  url: this.url,
+                  current: true,
+                  tabKey: this.tabKey,
+                  documentKey: this.documentKey,
+                },
+              ]),
+            }
+          : {
+              result: JSON.stringify([
+                {
+                  index: 0,
+                  title: "Fixture",
+                  url: this.url,
+                  current: true,
+                  tabKey: this.tabKey,
+                  documentKey: this.documentKey,
+                },
+              ]),
+            };
     } else if (command === "snapshot") {
       if (this.abortNextSnapshot) {
         this.abortNextSnapshot = false;

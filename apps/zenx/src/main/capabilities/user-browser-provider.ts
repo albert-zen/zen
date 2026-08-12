@@ -30,6 +30,13 @@ const USER_BROWSER_DOCUMENT_WORLD_NAME = "__zenx_user_browser_document__";
 const FALLBACK_SCREENSHOT_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
+export class UserBrowserScreenshotMalformedError extends Error {
+  constructor(message = "Attached browser screenshot response was malformed") {
+    super(message);
+    this.name = "UserBrowserScreenshotMalformedError";
+  }
+}
+
 type UserBrowserCdpOutcome =
   "known-success" | "known-failure" | "outcome-unknown";
 
@@ -106,6 +113,11 @@ export interface UserBrowserCdpClient {
     status?: "captured" | "fallback";
     reason?: string;
   }>;
+  getDocumentIdentity(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    signal?: AbortSignal,
+  ): Promise<string>;
   detachTarget(
     targetId: string,
     owner: UserBrowserAttachmentOwner,
@@ -563,6 +575,17 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       if (screenshotCapture.documentIdentity !== evaluation.documentIdentity) {
         throw new Error("User browser document changed during inspection");
       }
+      const finalIdentity = await this.#freshDocumentIdentity(
+        tabId,
+        session,
+        evaluation.documentIdentity,
+        signal,
+      );
+      if (finalIdentity !== evaluation.documentIdentity) {
+        throw new Error(
+          "User browser document changed before screenshot publication",
+        );
+      }
       const normalizedScreenshot =
         typeof screenshotCapture.data === "string" &&
         screenshotCapture.data.length > 0
@@ -574,10 +597,14 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
               reason:
                 "Attached browser screenshot response was empty or malformed",
             };
+      const screenshotBytes = decodeUserBrowserScreenshot(
+        normalizedScreenshot.data,
+      );
+      throwIfAborted(signal);
       const screenshot: BrowserScreenshotArtifact = await this.#artifacts.write(
         `${sessionId}/${tabId}`,
         observationId,
-        Buffer.from(normalizedScreenshot.data, "base64"),
+        screenshotBytes,
         {
           status: normalizedScreenshot.status ?? "captured",
           ...(normalizedScreenshot.reason === undefined
@@ -585,6 +612,15 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
             : { reason: normalizedScreenshot.reason }),
         },
       );
+      try {
+        throwIfAborted(signal);
+      } catch (error) {
+        await this.#artifacts.removeArtifact(
+          screenshot.artifactPath,
+          screenshot.observationId,
+        );
+        throw error;
+      }
       const projected = fingerprints.map((fingerprint) => {
         const targetId = randomUUID();
         targets.set(targetId, fingerprint);
@@ -600,6 +636,21 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       });
       const summary = await this.#summary(sessionId, tabId);
       this.#assertSessionCurrent(session);
+      const publishIdentity = await this.#freshDocumentIdentity(
+        tabId,
+        session,
+        evaluation.documentIdentity,
+        signal,
+      );
+      if (publishIdentity !== evaluation.documentIdentity) {
+        await this.#artifacts.removeArtifact(
+          screenshot.artifactPath,
+          screenshot.observationId,
+        );
+        throw new Error(
+          "User browser document changed before inspection publication",
+        );
+      }
       tab.documentIdentity = evaluation.documentIdentity;
       tab.observation = {
         id: observationId,
@@ -616,6 +667,19 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       };
     });
     return await raceAbort(operation, signal);
+  }
+
+  async #freshDocumentIdentity(
+    tabId: string,
+    session: UserBrowserSession,
+    _expected: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    return await this.#client.getDocumentIdentity(
+      tabId,
+      this.#attachmentOwner(session),
+      signal,
+    );
   }
 
   click(
@@ -1778,11 +1842,20 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         reason: "Attached browser screenshot response was empty or malformed",
       };
     }
+    decodeUserBrowserScreenshot(response.data);
     return {
       data: response.data,
       documentIdentity: after.identity,
       status: "captured",
     };
+  }
+
+  async getDocumentIdentity(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    return (await this.#executionDocument(targetId, owner, signal)).identity;
   }
 
   async #sendDocumentRuntimeEvaluate(
@@ -2965,6 +3038,24 @@ export function windowsBrowserExecutableCandidates(
 
 function describeError(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 512);
+}
+
+function decodeUserBrowserScreenshot(data: string): Buffer {
+  if (
+    data.length === 0 ||
+    data.length % 4 === 1 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
+      data,
+    )
+  ) {
+    throw new UserBrowserScreenshotMalformedError();
+  }
+  const decoded = Buffer.from(data, "base64");
+  const normalized = decoded.toString("base64").replace(/=+$/u, "");
+  if (normalized !== data.replace(/=+$/u, "")) {
+    throw new UserBrowserScreenshotMalformedError();
+  }
+  return decoded;
 }
 
 function sameAttachmentOwner(

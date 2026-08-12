@@ -13,6 +13,10 @@ export default defineConfig({
             __dirname,
             "src/main/capability-smoke.ts",
           ),
+          "packaged-provider-smoke": resolve(
+            __dirname,
+            "src/main/packaged-provider-smoke.ts",
+          ),
           "real-smoke": resolve(__dirname, "src/main/real-smoke.ts"),
           "provider-smoke": resolve(__dirname, "src/main/provider-smoke.ts"),
         },

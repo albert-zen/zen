@@ -60,6 +60,25 @@ test("browser screenshot cleanup serializes close and scope races", async () => 
   }
 });
 
+test("browser screenshot stores isolate ownership when sharing a root", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-browser-shared-root-"),
+  );
+  const first = new BrowserScreenshotArtifactStore(root);
+  const second = new BrowserScreenshotArtifactStore(root);
+  try {
+    const firstArtifact = await first.write("one/tab", "one", ONE_PIXEL_PNG);
+    const secondArtifact = await second.write("two/tab", "two", ONE_PIXEL_PNG);
+    await first.close();
+    await access(secondArtifact.artifactPath);
+    await assert.rejects(access(firstArtifact.artifactPath));
+  } finally {
+    await first.close();
+    await second.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("browser screenshot validation rejects truncation, bad CRC, and huge dimensions", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zenx-browser-png-"));
   const store = new BrowserScreenshotArtifactStore(root);

@@ -29,6 +29,7 @@ import {
   windowsComputerCapabilityManifest,
   WinAppCliComputerBackend,
 } from "./windows-computer-provider.js";
+import type { WinAppCliRunner } from "./windows-computer-provider.js";
 import type {
   ZenXCapabilityManifest,
   ZenXCapabilityProviderDiagnostic,
@@ -51,6 +52,7 @@ export interface ZenXCapabilityProviderCatalogOptions {
   environment?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   runner?: ExternalProviderProcessRunner;
+  winAppRunner?: WinAppCliRunner;
   userBrowserConnector?: (
     endpoint: string,
     signal?: AbortSignal,
@@ -162,11 +164,16 @@ export async function selectBrowserProvider(
   const bundled =
     options.bundledProvidersOnly === true &&
     options.resourcesDirectory !== undefined
-      ? await resolveBundledProvider("playwright-cli", {
-          resourcesDirectory: options.resourcesDirectory,
-          platform,
-          expectedManifestSha256: options.bundledManifestSha256,
-        })
+      ? options.bundledManifestSha256 === undefined
+        ? {
+            reason:
+              "Packaged Playwright provider manifest trust anchor is missing",
+          }
+        : await resolveBundledProvider("playwright-cli", {
+            resourcesDirectory: options.resourcesDirectory,
+            platform,
+            expectedManifestSha256: options.bundledManifestSha256,
+          })
       : undefined;
   if (
     options.bundledProvidersOnly === true &&
@@ -351,11 +358,16 @@ export async function selectComputerProvider(
     const bundled =
       options.bundledProvidersOnly === true &&
       options.resourcesDirectory !== undefined
-        ? await resolveBundledProvider("microsoft-winapp-cli", {
-            resourcesDirectory: options.resourcesDirectory,
-            platform,
-            expectedManifestSha256: options.bundledManifestSha256,
-          })
+        ? options.bundledManifestSha256 === undefined
+          ? {
+              reason:
+                "Packaged WinApp provider manifest trust anchor is missing",
+            }
+          : await resolveBundledProvider("microsoft-winapp-cli", {
+              resourcesDirectory: options.resourcesDirectory,
+              platform,
+              expectedManifestSha256: options.bundledManifestSha256,
+            })
         : undefined;
     const command =
       bundled?.provider?.executable ??
@@ -376,6 +388,7 @@ export async function selectComputerProvider(
     }
     const backend = new WinAppCliComputerBackend({
       command,
+      runner: options.winAppRunner,
       expectedVersion: bundled?.provider?.version,
       ...(bundled?.provider === undefined
         ? {}

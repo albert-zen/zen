@@ -45,6 +45,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   readonly #audit: ZenXCapabilityAuditRecord[] = [];
   #currentScreenshot: ZenXCapabilityScreenshotArtifact | undefined;
   #browserProjectionSequence = 0;
+  readonly #browserInvocationSequences = new Map<string, number>();
   readonly #providerDiagnostics: ZenXCapabilityProviderDiagnostic[] = [];
   readonly #discoveryErrors: string[] = [];
   readonly #options: ZenXCapabilityRegistryOptions;
@@ -107,6 +108,12 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   }
 
   recordProviderDiagnostic(diagnostic: ZenXCapabilityProviderDiagnostic): void {
+    if (
+      diagnostic.capabilityId === "browser" &&
+      diagnostic.status !== "selected"
+    ) {
+      this.#clearBrowserProjection();
+    }
     const index = this.#providerDiagnostics.findIndex(
       (candidate) =>
         candidate.capabilityId === diagnostic.capabilityId &&
@@ -288,12 +295,20 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
       return { output: result, exitCode: 0 };
     } catch (error) {
       const cancelled = invocation.signal.aborted || isAbortError(error);
+      const owner = this.#toolOwners.get(invocation.name);
+      if (owner?.capabilityId === "browser") {
+        this.#clearBrowserProjection(
+          this.#browserInvocationSequences.get(invocation.callId),
+        );
+      }
       this.#finishAudit(
         audit,
         cancelled ? "cancelled" : "failed",
         describeError(error),
       );
       throw error;
+    } finally {
+      this.#browserInvocationSequences.delete(invocation.callId);
     }
   }
 
@@ -356,10 +371,14 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   ): Promise<unknown> {
     const isBrowser = capabilityPackage.manifest.id === "browser";
     const sequence = isBrowser ? ++this.#browserProjectionSequence : undefined;
-    if (isBrowser) this.#currentScreenshot = undefined;
+    if (isBrowser) {
+      this.#currentScreenshot = undefined;
+      this.#browserInvocationSequences.set(invocation.callId, sequence!);
+    }
     try {
       const value = await capabilityPackage.invoke(invocation.name, invocation);
       if (isBrowser && sequence === this.#browserProjectionSequence) {
+        invocation.signal.throwIfAborted();
         const screenshot = browserScreenshotFrom(value);
         if (screenshot !== undefined) this.#currentScreenshot = screenshot;
       }
@@ -372,7 +391,9 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     }
   }
 
-  #clearBrowserProjection(): void {
+  #clearBrowserProjection(sequence?: number): void {
+    if (sequence !== undefined && sequence !== this.#browserProjectionSequence)
+      return;
     this.#browserProjectionSequence += 1;
     this.#currentScreenshot = undefined;
   }

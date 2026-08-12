@@ -33,6 +33,7 @@ import type {
   RoomMember,
 } from "./trigger-types.js";
 import { ZenXCapabilityService } from "./capability-service.js";
+import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
 import {
   MutableAppServerRequestPort,
   ZenXSelfControlCapabilityPackage,
@@ -97,6 +98,9 @@ app.whenReady().then(async () => {
       userDataDirectory,
       bundledProvidersOnly: app.isPackaged,
       resourcesDirectory: process.resourcesPath,
+      bundledManifestSha256: app.isPackaged
+        ? PACKAGED_PROVIDER_MANIFEST_SHA256
+        : undefined,
     });
     await capabilityService.initialize();
     capabilityService.register(

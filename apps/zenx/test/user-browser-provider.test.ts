@@ -11,6 +11,7 @@ import {
   UserBrowserDocumentChangedAfterDispatchError,
   UserBrowserDocumentChangedBeforeDispatchError,
   UserBrowserMutationOutcomeUnknownError,
+  UserBrowserScreenshotMalformedError,
   type UserBrowserCdpClient,
   validateUserBrowserVersion,
   windowsBrowserExecutableCandidates,
@@ -113,6 +114,22 @@ test("user browser mode inherits visible authenticated state without exposing se
     ),
     false,
   );
+});
+
+test("attached browser rejects malformed screenshot data explicitly", async () => {
+  const client = new FakeUserBrowserClient();
+  client.captureScreenshot = async (_targetId, _owner, documentIdentity) => ({
+    data: "not-base64",
+    documentIdentity,
+    status: "captured",
+  });
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  await assert.rejects(
+    backend.inspect("work", "target-1"),
+    UserBrowserScreenshotMalformedError,
+  );
+  await backend.close();
 });
 
 test("concurrent first listings publish one exclusive logical target owner", async () => {
@@ -2496,6 +2513,7 @@ test("Windows browser discovery covers machine and per-user Chrome Edge and Chro
 });
 
 class FakeUserBrowserClient implements UserBrowserCdpClient {
+  captureScreenshot?: UserBrowserCdpClient["captureScreenshot"];
   actionCount = 0;
   navigateCount = 0;
   closeCount = 0;
@@ -2819,6 +2837,10 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       throw new UserBrowserDocumentChangedAfterDispatchError();
     }
     return { value: response, documentIdentity: this.documentToken };
+  }
+
+  async getDocumentIdentity() {
+    return this.documentToken;
   }
 
   async close() {

@@ -136,6 +136,7 @@ export interface WinAppCliRunOptions {
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
   redactions?: readonly string[];
+  verifyBeforeSpawn?: () => Promise<void>;
 }
 
 export interface WinAppCliRunResult {
@@ -694,7 +695,10 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     options: WinAppCliRunOptions,
   ): Promise<WinAppCliRunResult> {
     await this.#verifyExecutable?.();
-    return await this.#runner.run(this.#command, args, options);
+    return await this.#runner.run(this.#command, args, {
+      ...options,
+      verifyBeforeSpawn: options.verifyBeforeSpawn ?? this.#verifyExecutable,
+    });
   }
 
   async #json<T>(
@@ -732,6 +736,7 @@ export async function runBoundedProcess(
   options: WinAppCliRunOptions,
 ): Promise<WinAppCliRunResult> {
   options.signal?.throwIfAborted();
+  await options.verifyBeforeSpawn?.();
   return await new Promise<WinAppCliRunResult>((resolve, reject) => {
     const child = spawn(executable, args, {
       shell: false,

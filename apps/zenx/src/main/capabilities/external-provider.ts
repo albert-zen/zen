@@ -16,6 +16,7 @@ export interface ExternalProviderProcessRunner {
       timeoutMs: number;
       signal?: AbortSignal;
       maxOutputBytes?: number;
+      verifyBeforeSpawn?: () => Promise<void>;
     },
   ): Promise<ExternalProviderProcessResult>;
 }
@@ -31,6 +32,7 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
       timeoutMs: number;
       signal?: AbortSignal;
       maxOutputBytes?: number;
+      verifyBeforeSpawn?: () => Promise<void>;
     },
   ): Promise<ExternalProviderProcessResult> {
     options.signal?.throwIfAborted();
@@ -40,6 +42,7 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
       executable,
       process.env,
     );
+    await options.verifyBeforeSpawn?.();
     return await new Promise((resolve, reject) => {
       const child = spawn(
         invocation.executable,

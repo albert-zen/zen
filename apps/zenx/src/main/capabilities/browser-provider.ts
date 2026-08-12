@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { inflateSync } from "node:zlib";
@@ -361,28 +361,43 @@ export const MAX_BROWSER_TABS_PER_SESSION = 8;
 export const MAX_BROWSER_TABS_GLOBAL = 24;
 export const MAX_BROWSER_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 export const BROWSER_SCREENSHOT_TTL_MS = 5 * 60_000;
+export const MAX_BROWSER_SCREENSHOT_ARTIFACTS = 16;
+export const MAX_BROWSER_SCREENSHOT_TOTAL_BYTES = 16 * 1024 * 1024;
 const MAX_BROWSER_SCREENSHOT_WIDTH = 4096;
 const MAX_BROWSER_SCREENSHOT_HEIGHT = 4096;
 const MAX_BROWSER_SCREENSHOT_PIXELS = 16 * 1024 * 1024;
+const MAX_BROWSER_SCREENSHOT_DECODE_BYTES = 64 * 1024 * 1024;
+let activeBrowserScreenshotDecodeBytes = 0;
 
 /** Temporary provider-owned PNGs; no screenshot bytes are part of the journal. */
 export class BrowserScreenshotArtifactStore {
+  readonly #rootDirectory: string;
   readonly #directory: string;
+  readonly #ownsRootDirectory: boolean;
   readonly #artifacts = new Map<
     string,
-    { scope: string; observationId: string; timer: NodeJS.Timeout }
+    {
+      scope: string;
+      observationId: string;
+      bytes: number;
+      createdAt: number;
+      timer: NodeJS.Timeout;
+    }
   >();
   #directoryCreated = false;
   #closed = false;
+  #totalBytes = 0;
   #operations: Promise<void> = Promise.resolve();
 
-  constructor(
-    directory = path.join(
-      os.tmpdir(),
-      `zenx-browser-artifacts-${String(process.pid)}-${randomUUID()}`,
-    ),
-  ) {
-    this.#directory = directory;
+  constructor(directory?: string) {
+    this.#rootDirectory =
+      directory ??
+      path.join(
+        os.tmpdir(),
+        `zenx-browser-artifacts-${String(process.pid)}-${randomUUID()}`,
+      );
+    this.#directory = path.join(this.#rootDirectory, `store-${randomUUID()}`);
+    this.#ownsRootDirectory = directory === undefined;
   }
 
   async write(
@@ -402,8 +417,15 @@ export class BrowserScreenshotArtifactStore {
       }
       const dimensions = pngDimensions(png);
       if (!this.#directoryCreated) {
-        await mkdir(this.#directory, { recursive: true, mode: 0o700 });
+        await this.#ensureOwnedDirectory();
         this.#directoryCreated = true;
+      }
+      if (
+        png.byteLength > MAX_BROWSER_SCREENSHOT_TOTAL_BYTES ||
+        this.#artifacts.size >= MAX_BROWSER_SCREENSHOT_ARTIFACTS ||
+        this.#totalBytes + png.byteLength > MAX_BROWSER_SCREENSHOT_TOTAL_BYTES
+      ) {
+        await this.#evictFor(png.byteLength);
       }
       const artifactPath = path.join(this.#directory, `${randomUUID()}.png`);
       await writeFile(artifactPath, png, { mode: 0o600 });
@@ -416,7 +438,25 @@ export class BrowserScreenshotArtifactStore {
         void this.removeArtifact(artifactPath, observationId);
       }, BROWSER_SCREENSHOT_TTL_MS);
       timer.unref();
-      this.#artifacts.set(artifactPath, { scope, observationId, timer });
+      this.#artifacts.set(artifactPath, {
+        scope,
+        observationId,
+        bytes: png.byteLength,
+        createdAt: Date.now(),
+        timer,
+      });
+      this.#totalBytes += png.byteLength;
+      const superseded = [...this.#artifacts.entries()]
+        .filter(
+          ([candidatePath, artifact]) =>
+            candidatePath !== artifactPath &&
+            (artifact.scope === scope ||
+              artifact.scope.startsWith(`${scope}/`)),
+        )
+        .map(([candidatePath]) => candidatePath);
+      await Promise.all(
+        superseded.map((candidatePath) => this.#removeNow(candidatePath)),
+      );
       return {
         artifactPath,
         observationId,
@@ -452,12 +492,16 @@ export class BrowserScreenshotArtifactStore {
         clearTimeout(artifact.timer);
       const paths = [...this.#artifacts.keys()];
       this.#artifacts.clear();
+      this.#totalBytes = 0;
       await Promise.all(
         paths.map((artifactPath) => rm(artifactPath, { force: true })),
       );
       if (this.#directoryCreated) {
         await rm(this.#directory, { recursive: true, force: true });
         this.#directoryCreated = false;
+      }
+      if (this.#ownsRootDirectory) {
+        await rm(this.#rootDirectory, { recursive: true, force: true });
       }
     });
   }
@@ -479,7 +523,52 @@ export class BrowserScreenshotArtifactStore {
     if (artifact === undefined) return;
     clearTimeout(artifact.timer);
     this.#artifacts.delete(artifactPath);
+    this.#totalBytes -= artifact.bytes;
     await rm(artifactPath, { force: true });
+  }
+
+  async #ensureOwnedDirectory(): Promise<void> {
+    let root: Awaited<ReturnType<typeof lstat>>;
+    try {
+      root = await lstat(this.#rootDirectory);
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+      await mkdir(this.#rootDirectory, { mode: 0o700 });
+      root = await lstat(this.#rootDirectory);
+    }
+    if (!root.isDirectory() || root.isSymbolicLink()) {
+      throw new Error(
+        "Browser screenshot artifact root must be a real directory",
+      );
+    }
+    await chmod(this.#rootDirectory, 0o700);
+    await mkdir(this.#directory, { recursive: false, mode: 0o700 });
+    const child = await lstat(this.#directory);
+    if (!child.isDirectory() || child.isSymbolicLink()) {
+      throw new Error(
+        "Browser screenshot artifact directory must be a real directory",
+      );
+    }
+    await chmod(this.#directory, 0o700);
+  }
+
+  async #evictFor(bytes: number): Promise<void> {
+    if (bytes > MAX_BROWSER_SCREENSHOT_TOTAL_BYTES) {
+      throw new Error("Browser screenshot aggregate byte bound exceeded");
+    }
+    const candidates = [...this.#artifacts.entries()].sort(
+      (left, right) => left[1].createdAt - right[1].createdAt,
+    );
+    while (
+      this.#artifacts.size >= MAX_BROWSER_SCREENSHOT_ARTIFACTS ||
+      this.#totalBytes + bytes > MAX_BROWSER_SCREENSHOT_TOTAL_BYTES
+    ) {
+      const candidate = candidates.shift();
+      if (candidate === undefined) {
+        throw new Error("Browser screenshot artifact capacity is exhausted");
+      }
+      await this.#removeNow(candidate[0]);
+    }
   }
 
   async #enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -1058,6 +1147,8 @@ function pngDimensions(buffer: Buffer): { width: number; height: number } {
   let ended = false;
   let sawPalette = false;
   let sawImageData = false;
+  let paletteEntries = 0;
+  let sawTransparency = false;
   const idat: Buffer[] = [];
   while (offset < buffer.length) {
     if (offset + 12 > buffer.length) {
@@ -1116,6 +1207,19 @@ function pngDimensions(buffer: Buffer): { width: number; height: number } {
         throw new Error("Browser screenshot PNG palette is invalid");
       }
       sawPalette = true;
+      paletteEntries = length / 3;
+    } else if (name === "tRNS") {
+      if (
+        sawImageData ||
+        sawTransparency ||
+        (colorType !== 3 && colorType !== 0)
+      ) {
+        throw new Error("Browser screenshot PNG transparency is invalid");
+      }
+      sawTransparency = true;
+      if (colorType === 3 && (!sawPalette || length > paletteEntries)) {
+        throw new Error("Browser screenshot PNG transparency is invalid");
+      }
     } else if (name === "IEND") {
       if (!sawHeader || !sawData || length !== 0) {
         throw new Error("Browser screenshot PNG IEND is invalid");
@@ -1144,8 +1248,24 @@ function pngDimensions(buffer: Buffer): { width: number; height: number } {
           : colorType === 4
             ? 2
             : 4;
+  if (
+    colorType === 3 &&
+    (paletteEntries === 0 || paletteEntries > 1 << bitDepth)
+  ) {
+    throw new Error("Browser screenshot PNG palette entries are invalid");
+  }
   const rowBytes = Math.ceil((width * channels * bitDepth) / 8);
   const decodedBytes = (rowBytes + 1) * height;
+  if (decodedBytes > MAX_BROWSER_SCREENSHOT_DECODE_BYTES) {
+    throw new Error("Browser screenshot decoded image exceeds the byte bound");
+  }
+  if (
+    activeBrowserScreenshotDecodeBytes + decodedBytes >
+    MAX_BROWSER_SCREENSHOT_DECODE_BYTES
+  ) {
+    throw new Error("Browser screenshot decode budget is exhausted");
+  }
+  activeBrowserScreenshotDecodeBytes += decodedBytes;
   try {
     const decoded = inflateSync(Buffer.concat(idat), {
       maxOutputLength: decodedBytes,
@@ -1153,12 +1273,107 @@ function pngDimensions(buffer: Buffer): { width: number; height: number } {
     if (decoded.byteLength !== decodedBytes) {
       throw new Error("decoded byte count differs from image dimensions");
     }
+    validatePngScanlines(
+      decoded,
+      width,
+      height,
+      rowBytes,
+      channels,
+      bitDepth,
+      colorType,
+      paletteEntries,
+    );
   } catch (error) {
     throw new Error(
       `Browser screenshot PNG image data is not decodable: ${describeError(error)}`,
     );
+  } finally {
+    activeBrowserScreenshotDecodeBytes -= decodedBytes;
   }
   return { width, height };
+}
+
+function validatePngScanlines(
+  decoded: Buffer,
+  width: number,
+  height: number,
+  rowBytes: number,
+  channels: number,
+  bitDepth: number,
+  colorType: number,
+  paletteEntries: number,
+): void {
+  const bytesPerPixel = Math.max(1, Math.ceil((channels * bitDepth) / 8));
+  const previous = Buffer.alloc(rowBytes);
+  let offset = 0;
+  for (let row = 0; row < height; row += 1) {
+    const filter = decoded[offset++];
+    if (filter === undefined || filter > 4) {
+      throw new Error("decoded scanline filter is invalid");
+    }
+    const source = decoded.subarray(offset, offset + rowBytes);
+    if (source.byteLength !== rowBytes)
+      throw new Error("decoded scanline is truncated");
+    const current = Buffer.alloc(rowBytes);
+    for (let index = 0; index < rowBytes; index += 1) {
+      const left = index >= bytesPerPixel ? current[index - bytesPerPixel]! : 0;
+      const up = previous[index] ?? 0;
+      const upperLeft =
+        index >= bytesPerPixel ? previous[index - bytesPerPixel]! : 0;
+      const value = source[index]!;
+      current[index] =
+        filter === 0
+          ? value
+          : filter === 1
+            ? (value + left) & 0xff
+            : filter === 2
+              ? (value + up) & 0xff
+              : filter === 3
+                ? (value + Math.floor((left + up) / 2)) & 0xff
+                : (value + paethPredictor(left, up, upperLeft)) & 0xff;
+    }
+    if (colorType === 3)
+      validatePaletteIndices(current, width, bitDepth, paletteEntries);
+    current.copy(previous);
+    offset += rowBytes;
+  }
+  if (offset !== decoded.byteLength)
+    throw new Error("decoded scanline data has a trailing payload");
+}
+
+function validatePaletteIndices(
+  row: Buffer,
+  width: number,
+  bitDepth: number,
+  paletteEntries: number,
+): void {
+  if (bitDepth === 8) {
+    for (let index = 0; index < width; index += 1) {
+      if ((row[index] ?? paletteEntries) >= paletteEntries) {
+        throw new Error("decoded palette index is out of range");
+      }
+    }
+    return;
+  }
+  const mask = (1 << bitDepth) - 1;
+  for (let index = 0; index < width; index += 1) {
+    const bit = index * bitDepth;
+    const value =
+      (row[Math.floor(bit / 8)]! >> (8 - bitDepth - (bit % 8))) & mask;
+    if (value >= paletteEntries)
+      throw new Error("decoded palette index is out of range");
+  }
+}
+
+function paethPredictor(left: number, up: number, upperLeft: number): number {
+  const estimate = left + up - upperLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const upDistance = Math.abs(estimate - up);
+  const upperLeftDistance = Math.abs(estimate - upperLeft);
+  if (leftDistance <= upDistance && leftDistance <= upperLeftDistance)
+    return left;
+  if (upDistance <= upperLeftDistance) return up;
+  return upperLeft;
 }
 
 function validPngBitDepth(colorType: number, bitDepth: number): boolean {
@@ -1181,6 +1396,15 @@ function crc32(buffer: Buffer): number {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 function requiredTargetId(
