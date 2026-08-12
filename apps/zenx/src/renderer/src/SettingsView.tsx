@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import type {
   PublicHostSettings,
   ZenXHostProfile,
   ZenXProviderProfile,
 } from "../../main/host-profile.js";
-import type { LegacyJournalReport } from "../../main/legacy-journal.js";
+import type { JournalCompatibilityProjection } from "../../main/journal-compatibility.js";
 import { Icon } from "./icons.js";
 import { CapabilitySettings } from "./CapabilitySettings.js";
 
@@ -26,9 +26,8 @@ export function SettingsView({
   const [applyState, setApplyState] = useState<
     "idle" | "applying" | "restarting" | "applied" | "failed"
   >("idle");
-  const [legacyReport, setLegacyReport] = useState<LegacyJournalReport | null>(
-    null,
-  );
+  const [legacyReport, setLegacyReport] =
+    useState<JournalCompatibilityProjection | null>(null);
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
 
   useEffect(() => {
@@ -117,13 +116,19 @@ export function SettingsView({
 
   const login = async () => {
     setBusy("login");
+    setApplyState("applying");
     setError(null);
     try {
       const value = await window.zenx.settings.loginSubscription();
       setSettings(value);
+      setDraft(value.profile);
+      setModels(value.profile.models.join("\n"));
+      setApiKey("");
+      setApplyState("applied");
       onSettingsChange(value);
       setManualCode(false);
     } catch (reason) {
+      setApplyState("failed");
       setError(
         `${describeError(reason)} Open Settings and retry, or paste the redirect URL when prompted.`,
       );
@@ -402,7 +407,7 @@ export function SettingsView({
               const value = await window.zenx.settings.cleanupLegacyJournals();
               setLegacyReport(value.report);
               setCleanupResult(
-                `Moved ${value.result.moved.length} empty legacy ${value.result.moved.length === 1 ? "journal" : "journals"} to ${value.result.quarantineDirectory}. ${value.result.failed.length === 0 ? "The list has been refreshed." : `${value.result.failed.length} could not be moved.`}`,
+                `Moved ${value.result.moved.length} empty legacy ${value.result.moved.length === 1 ? "journal" : "journals"} to ${value.result.quarantineDirectory}. The list has been refreshed.`,
               );
             } catch (reason) {
               setError(describeError(reason));
@@ -460,19 +465,19 @@ export function LegacyJournalCard({
   busy,
   onCleanup,
 }: {
-  report: LegacyJournalReport | null;
+  report: JournalCompatibilityProjection | null;
   result: string | null;
   busy: boolean;
   onCleanup(): Promise<void>;
 }) {
-  if (report === null || report.unavailableJsonlCount === 0) return null;
-  const removable = report.knownLegacyNoUsefulContent.length;
+  if (report === null || report.counts.unavailable === 0) return null;
+  const removable = report.counts.legacyNoUsefulContent;
   return (
     <div className="settings-card legacy-maintenance">
       <div className="legacy-card-title">
         <Icon name="warning" size={15} />
         <div>
-          <h2>{report.unavailableJsonlCount} unavailable journals</h2>
+          <h2>{report.counts.unavailable} unavailable journals</h2>
           <p>
             These were created by a legacy format or cannot be safely
             classified.
@@ -486,11 +491,11 @@ export function LegacyJournalCard({
         </div>
         <div>
           <dt>Useful legacy content</dt>
-          <dd>{report.knownLegacyUsefulContent.length}</dd>
+          <dd>{report.counts.legacyUsefulContent}</dd>
         </div>
         <div>
           <dt>Unknown or damaged</dt>
-          <dd>{report.unknown.length}</dd>
+          <dd>{report.counts.unknown}</dd>
         </div>
       </dl>
       <p className="settings-note">

@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   safeStorage,
   session,
@@ -18,7 +19,12 @@ import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
 import type { ZenXHostProfile } from "./host-profile.js";
-import { ZenXSettingsService } from "./settings-service.js";
+import { resolveZenDataDirectory } from "./host-config.js";
+import {
+  resolveSafeWorkspace,
+  ZenXSettingsService,
+} from "./settings-service.js";
+import { ZenXJournalCompatibilityService } from "./journal-compatibility.js";
 import { zenXProviderTransport } from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
@@ -83,8 +89,14 @@ app.whenReady().then(async () => {
   const userDataDirectory = app.getPath("userData");
   const entryPath = join(__dirname, "app-server-host.js");
   const tokenFile = join(userDataDirectory, "runtime", "app-server.token");
-  const zenDataDirectory = resolve(
-    process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
+  const safeWorkspace = resolveSafeWorkspace([
+    app.getPath("documents"),
+    app.getPath("home"),
+    process.cwd(),
+  ]);
+  const zenDataDirectory = resolveZenDataDirectory(
+    process.env,
+    app.getPath("home"),
   );
   settingsService = new ZenXSettingsService({
     userDataDirectory,
@@ -107,7 +119,7 @@ app.whenReady().then(async () => {
     capabilityService.register(
       new ZenXSelfControlCapabilityPackage({ appServer: selfControlPort }),
     );
-    await settingsService.initialize(process.env);
+    await settingsService.initialize(process.env, { safeWorkspace });
     let startupError: unknown;
     let hostConfig;
     try {
@@ -119,7 +131,7 @@ app.whenReady().then(async () => {
     } catch (error) {
       startupError = error;
       hostConfig = {
-        cwd: process.cwd(),
+        cwd: safeWorkspace,
         dataDirectory: zenDataDirectory,
         model: "fake",
         models: ["fake"],
@@ -214,6 +226,7 @@ app.whenReady().then(async () => {
         throw new AggregateError(restartErrors, "Could not fully restart ZenX");
     }
   });
+  installLegacyJournalIpc(zenDataDirectory);
   createWindow();
 
   app.on("activate", () => {
@@ -393,6 +406,7 @@ function installSettingsIpc(
         }
       },
     );
+    await restartHost();
     return await settings.publicSettings();
   });
   ipcMain.handle(
@@ -406,6 +420,61 @@ function installSettingsIpc(
   ipcMain.handle(ipcChannels.subscriptionLogout, async () => {
     await settings.logout();
     return await settings.publicSettings();
+  });
+  ipcMain.handle(ipcChannels.workspaceChoose, async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ["openDirectory", "createDirectory"],
+      title: "Choose a workspace on this device",
+    });
+    return result.canceled || result.filePaths[0] === undefined
+      ? null
+      : resolve(result.filePaths[0]);
+  });
+  ipcMain.handle(
+    ipcChannels.workspaceAdd,
+    async (_event, workspace: unknown) => {
+      if (typeof workspace !== "string" || workspace.trim().length === 0)
+        throw new Error("Invalid workspace");
+      await settings.addWorkspace(workspace);
+      return {
+        settings: await settings.publicSettings(),
+        requiresRestart: false,
+      };
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.workspaceRemove,
+    async (_event, workspace: unknown) => {
+      if (typeof workspace !== "string" || workspace.trim().length === 0)
+        throw new Error("Invalid workspace");
+      const requiresRestart = await settings.removeWorkspace(workspace);
+      if (requiresRestart) await restartHost();
+      return { settings: await settings.publicSettings(), requiresRestart };
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.workspaceDefault,
+    async (_event, workspace: unknown) => {
+      if (typeof workspace !== "string" || workspace.trim().length === 0)
+        throw new Error("Invalid workspace");
+      const requiresRestart = await settings.setDefaultWorkspace(workspace);
+      if (requiresRestart) await restartHost();
+      return { settings: await settings.publicSettings(), requiresRestart };
+    },
+  );
+}
+
+function installLegacyJournalIpc(zenDataDirectory: string): void {
+  const journals = new ZenXJournalCompatibilityService({
+    zenHome: zenDataDirectory,
+  });
+  ipcMain.handle(ipcChannels.legacyGet, async () => await journals.refresh());
+  ipcMain.handle(ipcChannels.legacyCleanup, async () => {
+    const result = await journals.quarantineLegacyNoUsefulContent();
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(ipcChannels.legacyChanged, result.projection);
+    }
+    return { report: result.projection, result };
   });
 }
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 
 import type { Thread } from "../../protocol-client/index.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";

@@ -5,6 +5,15 @@ import type { HostProvider } from "../../../../apps/cli/src/host.js";
 import { DEFAULT_OPENAI_SUBSCRIPTION_MODEL } from "../../../../src/model/openai-subscription.js";
 import type { ZenXHostConfig } from "./host-messages.js";
 
+export function resolveZenDataDirectory(
+  environment: NodeJS.ProcessEnv,
+  homeDirectory: string,
+): string {
+  return path.resolve(
+    environment["ZENX_DATA_DIR"] ?? path.join(homeDirectory, ".zen"),
+  );
+}
+
 export function resolveZenXHostConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): ZenXHostConfig {

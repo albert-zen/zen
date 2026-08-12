@@ -1,4 +1,4 @@
-import type { ReactNode, SVGProps } from "react";
+import React, { type ReactNode, type SVGProps } from "react";
 
 type IconName =
   | "archive"

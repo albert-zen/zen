@@ -17,7 +17,12 @@ import { ipcChannels } from "./ipc.js";
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  WorkspaceMutationResult,
 } from "../main/host-profile.js";
+import type {
+  JournalCompatibilityProjection,
+  JournalQuarantineResult,
+} from "../main/journal-compatibility.js";
 import type {
   CreateRoomInput,
   CreateTriggerInput,
@@ -109,6 +114,34 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.subscriptionManualCode, code),
     logoutSubscription: async (): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.subscriptionLogout),
+    chooseWorkspace: async (): Promise<string | null> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceChoose),
+    addWorkspace: async (workspace: string): Promise<WorkspaceMutationResult> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceAdd, workspace),
+    removeWorkspace: async (
+      workspace: string,
+    ): Promise<WorkspaceMutationResult> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceRemove, workspace),
+    setDefaultWorkspace: async (
+      workspace: string,
+    ): Promise<WorkspaceMutationResult> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceDefault, workspace),
+    getLegacyJournalReport: async (): Promise<JournalCompatibilityProjection> =>
+      await ipcRenderer.invoke(ipcChannels.legacyGet),
+    cleanupLegacyJournals: async (): Promise<{
+      report: JournalCompatibilityProjection;
+      result: JournalQuarantineResult;
+    }> => await ipcRenderer.invoke(ipcChannels.legacyCleanup),
+    onLegacyJournalChange: (
+      listener: (report: JournalCompatibilityProjection) => void,
+    ): (() => void) => {
+      const wrapped = (
+        _event: Electron.IpcRendererEvent,
+        report: JournalCompatibilityProjection,
+      ) => listener(report);
+      ipcRenderer.on(ipcChannels.legacyChanged, wrapped);
+      return () => ipcRenderer.off(ipcChannels.legacyChanged, wrapped);
+    },
     onManualCodeRequested: (listener: () => void): (() => void) => {
       const wrapped = () => listener();
       ipcRenderer.on(ipcChannels.subscriptionManualRequested, wrapped);

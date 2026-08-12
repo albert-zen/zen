@@ -14,7 +14,12 @@ import type {
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  WorkspaceMutationResult,
 } from "../../main/host-profile.js";
+import type {
+  JournalCompatibilityProjection,
+  JournalQuarantineResult,
+} from "../../main/journal-compatibility.js";
 import type {
   CreateRoomInput,
   CreateTriggerInput,
@@ -65,6 +70,20 @@ declare global {
         loginSubscription(): Promise<PublicHostSettings>;
         submitManualCode(code: string): Promise<void>;
         logoutSubscription(): Promise<PublicHostSettings>;
+        chooseWorkspace(): Promise<string | null>;
+        addWorkspace(workspace: string): Promise<WorkspaceMutationResult>;
+        removeWorkspace(workspace: string): Promise<WorkspaceMutationResult>;
+        setDefaultWorkspace(
+          workspace: string,
+        ): Promise<WorkspaceMutationResult>;
+        getLegacyJournalReport(): Promise<JournalCompatibilityProjection>;
+        cleanupLegacyJournals(): Promise<{
+          report: JournalCompatibilityProjection;
+          result: JournalQuarantineResult;
+        }>;
+        onLegacyJournalChange(
+          listener: (report: JournalCompatibilityProjection) => void,
+        ): () => void;
         onManualCodeRequested(listener: () => void): () => void;
       };
       titles: {

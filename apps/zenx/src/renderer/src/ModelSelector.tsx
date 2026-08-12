@@ -1,3 +1,5 @@
+import React from "react";
+
 import type { ModelSummary } from "../../protocol-client/index.js";
 import { modelOptions } from "./model-settings";
 
