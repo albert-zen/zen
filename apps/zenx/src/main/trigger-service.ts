@@ -28,6 +28,7 @@ import {
   MAX_PROGRAM_ENV_VALUE_BYTES,
   MAX_PROGRAM_FLAGS_BYTES,
   MAX_PROGRAM_MATCH_REGEX_BYTES,
+  MAX_PROGRAM_TIMEOUT_MS,
   MAX_REASON_BYTES,
   MAX_ROOM_COUNT,
   MAX_ROOM_MEMBERS,
@@ -533,7 +534,6 @@ export class ZenXTriggerService {
           sourceRoomId: postedRoom.id,
           sourceRoomMessageId: posted.posted.id,
           projection: projectRoomContext(postedRoom),
-          eventText: posted.posted.text,
         });
       }
     }
@@ -558,7 +558,24 @@ export class ZenXTriggerService {
         generation.activeWakeups.has(entry.clientUserMessageId),
     );
     if (running !== undefined) {
-      await this.#completeTurn(generation, running.id, event, completedItems);
+      try {
+        await this.#completeTurn(generation, running.id, event, completedItems);
+      } catch (error) {
+        if (error instanceof StaleGenerationError) return;
+        if (this.#isOperational(generation)) {
+          try {
+            await this.#failHistory(
+              generation,
+              running.id,
+              `Trigger completion could not be persisted: ${describeError(error)}`,
+            );
+          } catch (failureError) {
+            console.warn(
+              `Could not persist Trigger completion failure: ${describeError(failureError)}`,
+            );
+          }
+        }
+      }
       clearTransientTurn(generation, event.threadId, event.turn.id);
     } else {
       this.#bufferEarlyCompletion(generation, event, completedItems);
@@ -572,6 +589,7 @@ export class ZenXTriggerService {
           trigger.watch?.threadId === event.threadId,
       )
       .map((trigger) => trigger.id);
+    const eventText = completedItemText(completedItems);
     for (const triggerId of watchers) {
       await this.#fire(generation, triggerId, {
         reason: `Thread ${event.threadId} emitted turn_completed for ${event.turn.id}`,
@@ -582,10 +600,7 @@ export class ZenXTriggerService {
           ...event.turn,
           items: completedItems,
         }),
-        eventText: projectCompletedTurn(event.threadId, {
-          ...event.turn,
-          items: completedItems,
-        }),
+        ...(eventText === undefined ? {} : { eventText }),
       });
     }
   }
@@ -999,7 +1014,8 @@ export class ZenXTriggerService {
       entry.turnId = event.turn.id;
       entry.status = event.turn.status === "completed" ? "completed" : "failed";
       entry.completedAt = this.#now();
-      entry.error = event.turn.error?.message ?? null;
+      entry.error =
+        bounded(event.turn.error?.message ?? "", MAX_ERROR_BYTES) || null;
       if (
         entry.status === "completed" &&
         entry.replyRoomId != null &&
@@ -1020,7 +1036,7 @@ export class ZenXTriggerService {
             message(
               room.id,
               entry.replyAuthor,
-              bounded(answer.text, 8_000),
+              bounded(answer.text, MAX_MESSAGE_TEXT_BYTES),
               "agent",
               entry.threadId,
               event.turn.id,
@@ -1088,7 +1104,7 @@ export class ZenXTriggerService {
       if (entry === undefined || isTerminal(entry.status)) return;
       entry.status = status;
       entry.completedAt = this.#now();
-      entry.error = error;
+      entry.error = error === null ? null : bounded(error, MAX_ERROR_BYTES);
       entry.programInvocationId = null;
       entry.programOutcome = outcome;
       entry.programOutcomes = appendProgramOutcome(
@@ -1396,9 +1412,11 @@ function validateProgram(program: TriggerProgramConfig): void {
       spec.timeoutMs !== undefined &&
       (!Number.isFinite(spec.timeoutMs) ||
         spec.timeoutMs <= 0 ||
-        spec.timeoutMs > 120_000)
+        spec.timeoutMs > MAX_PROGRAM_TIMEOUT_MS)
     )
-      throw new Error(`${stage} timeoutMs must be between 1 and 120000`);
+      throw new Error(
+        `${stage} timeoutMs must be between 1 and ${String(MAX_PROGRAM_TIMEOUT_MS)}`,
+      );
     if (
       spec.maxOutputBytes !== undefined &&
       (!Number.isSafeInteger(spec.maxOutputBytes) ||
@@ -1748,13 +1766,35 @@ function mergeCompletedItems(
   return merged;
 }
 
+function completedItemText(items: readonly ThreadItem[]): string | undefined {
+  const answer = [...items]
+    .reverse()
+    .find(
+      (item): item is Extract<ThreadItem, { type: "agentMessage" }> =>
+        item.type === "agentMessage",
+    );
+  return answer?.text;
+}
+
 function bounded(value: string, limit: number): string {
   if (utf8Bytes(value) <= limit) return value;
+  if (limit <= 0) return "";
   const suffix = "\n…[truncated by ZenX]";
-  const prefix = Buffer.from(value, "utf8")
-    .subarray(0, Math.max(0, limit - utf8Bytes(suffix)))
-    .toString("utf8");
-  return `${prefix}${suffix}`;
+  const suffixBytes = utf8Bytes(suffix);
+  if (suffixBytes > limit) return prefixByBytes(suffix, limit);
+  return `${prefixByBytes(value, limit - suffixBytes)}${suffix}`;
+}
+
+function prefixByBytes(value: string, limit: number): string {
+  let bytes = 0;
+  let prefix = "";
+  for (const character of value) {
+    const characterBytes = utf8Bytes(character);
+    if (bytes + characterBytes > limit) break;
+    prefix += character;
+    bytes += characterBytes;
+  }
+  return prefix;
 }
 
 function describeError(error: unknown): string {

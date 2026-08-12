@@ -4,14 +4,17 @@ import type {
   TriggerProgramSpec,
   TriggerProgramStage,
 } from "./trigger-types.js";
+import { MAX_PROGRAM_TIMEOUT_MS } from "./trigger-limits.js";
+
+export { MAX_PROGRAM_TIMEOUT_MS } from "./trigger-limits.js";
 
 export const MAX_PROGRAM_INPUT_BYTES = 64 * 1024;
 export const DEFAULT_PROGRAM_OUTPUT_BYTES = 64 * 1024;
 export const MAX_PROGRAM_OUTPUT_BYTES = 1024 * 1024;
 export const DEFAULT_PROGRAM_TIMEOUT_MS = 30_000;
-export const MAX_PROGRAM_TIMEOUT_MS = 120_000;
 const PROGRAM_TERM_GRACE_MS = 250;
 const PROGRAM_FORCE_SETTLEMENT_MS = 1_000;
+const PROGRAM_QUIESCENCE_MS = 100;
 const MAX_PROGRAM_STDERR_BYTES = 8 * 1_024;
 
 export interface TriggerProgramRunInput {
@@ -106,11 +109,12 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
       let requested: TriggerProgramRunResult | null = null;
       let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
       let forceTimer: ReturnType<typeof setTimeout> | undefined;
-      let settlementTimer: ReturnType<typeof setTimeout> | undefined;
+      let termination: Promise<TerminationResult> | undefined;
+      let containment: Promise<TerminationResult> | undefined;
+      let forceStarted = false;
       const cleanup = (): void => {
         if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
         if (forceTimer !== undefined) clearTimeout(forceTimer);
-        if (settlementTimer !== undefined) clearTimeout(settlementTimer);
         signal.removeEventListener("abort", abort);
       };
       const stopCollection = (): void => {
@@ -129,24 +133,90 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         child.stdin.destroy();
         resolve(value);
       };
-      const terminate = (force: boolean): void => {
-        terminateProcessTree(child, force);
+      const forceAndFinish = async (): Promise<void> => {
+        if (settled || requested === null || forceStarted) return;
+        forceStarted = true;
+        if (forceTimer !== undefined) {
+          clearTimeout(forceTimer);
+          forceTimer = undefined;
+        }
+        containment ??= (
+          termination ?? Promise.resolve({ ok: true, error: "" })
+        ).then(async (softTermination) => {
+          const forced = await terminateProcessTree(child, true, capturedTree);
+          if (
+            !softTermination.ok &&
+            softTermination.error.startsWith(
+              "process-tree snapshot unavailable",
+            )
+          )
+            return forced.ok
+              ? softTermination
+              : {
+                  ok: false,
+                  error: `${softTermination.error}; ${forced.error}`,
+                };
+          return forced;
+        });
+        const terminationResult = await withDeadline(
+          containment,
+          PROGRAM_FORCE_SETTLEMENT_MS,
+          {
+            ok: false,
+            error: "bounded process-tree termination deadline expired",
+          },
+        );
+        await delay(PROGRAM_QUIESCENCE_MS);
+        if (settled || requested === null) return;
+        if (terminationResult.ok) finish(requested);
+        else
+          finish(
+            result(
+              "failed",
+              null,
+              null,
+              `Program ${requested.status} did not prove process-tree containment: ${terminationResult.error}`,
+            ),
+          );
       };
       const requestTermination = (value: TriggerProgramRunResult): void => {
         if (settled || requested !== null) return;
         requested = value;
         stopCollection();
         child.stdin.destroy();
-        terminate(false);
+        if (process.platform === "win32") {
+          termination = captureProcessTree(child.pid)
+            .then((tree) => {
+              capturedTree = tree;
+              return terminateProcessTree(child, false, tree);
+            })
+            .catch(async (error: unknown) => {
+              await terminateProcessTree(child, false);
+              return {
+                ok: false as const,
+                error: `process-tree snapshot unavailable: ${describeError(error)}`,
+              };
+            });
+        } else {
+          termination = captureProcessTree(child.pid)
+            .then((tree) => {
+              capturedTree = tree;
+              return terminateProcessTree(child, false, tree);
+            })
+            .catch(async (error: unknown) => {
+              await terminateProcessTree(child, false);
+              return {
+                ok: false as const,
+                error: `process-tree snapshot unavailable: ${describeError(error)}`,
+              };
+            });
+        }
         forceTimer = setTimeout(() => {
           forceTimer = undefined;
-          terminate(true);
-          settlementTimer = setTimeout(
-            () => finish(value),
-            PROGRAM_FORCE_SETTLEMENT_MS,
-          );
+          void forceAndFinish();
         }, PROGRAM_TERM_GRACE_MS);
       };
+      let capturedTree: ProcessTreeSnapshot | undefined;
       const abort = (): void => {
         requestTermination(
           result(
@@ -222,12 +292,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
       });
       child.once("close", (code: number | null) => {
         if (requested !== null) {
-          if (forceTimer !== undefined) {
-            clearTimeout(forceTimer);
-            forceTimer = undefined;
-            terminate(true);
-          }
-          finish(requested);
+          void forceAndFinish();
           return;
         }
         if (settled) return;
@@ -308,45 +373,263 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
   }
 }
 
+interface ProcessTreeSnapshot {
+  descendants: number[];
+}
+
+interface TerminationResult {
+  ok: boolean;
+  error: string;
+}
+
 function terminateProcessTree(
   child: ChildProcessWithoutNullStreams,
   force: boolean,
-): void {
-  if (child.pid === undefined || (child.exitCode !== null && !force)) return;
-  if (process.platform === "win32") {
-    if (!force) {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // The bounded force phase below is the containment fallback.
-      }
-      return;
-    }
+  tree?: ProcessTreeSnapshot,
+): Promise<TerminationResult> {
+  if (child.pid === undefined)
+    return Promise.resolve({
+      ok: false,
+      error: "the child process did not expose a PID",
+    });
+  if (!force && child.exitCode !== null)
+    return Promise.resolve({ ok: true, error: "" });
+  if (process.platform === "win32")
+    return terminateWindowsProcessTree(child, force, tree);
+  return terminatePosixProcessTree(child, force, tree);
+}
+
+async function terminateWindowsProcessTree(
+  child: ChildProcessWithoutNullStreams,
+  force: boolean,
+  tree?: ProcessTreeSnapshot,
+): Promise<TerminationResult> {
+  if (child.pid === undefined)
+    return { ok: false, error: "the child process did not expose a PID" };
+  if (!force) {
     try {
-      const killer = spawn(
+      child.kill("SIGTERM");
+      return { ok: true, error: "" };
+    } catch (error) {
+      return { ok: false, error: describeError(error) };
+    }
+  }
+  const errors: string[] = [];
+  const root = await runTaskkill(child.pid, true);
+  if (!root.ok && root.error !== "process was not found")
+    errors.push(root.error);
+  for (const pid of tree?.descendants ?? []) {
+    const result = await runTaskkill(pid, true);
+    if (!result.ok && result.error !== "process was not found")
+      errors.push(`PID ${String(pid)}: ${result.error}`);
+  }
+  return errors.length === 0
+    ? { ok: true, error: "" }
+    : { ok: false, error: errors.join("; ") };
+}
+
+async function terminatePosixProcessTree(
+  child: ChildProcessWithoutNullStreams,
+  force: boolean,
+  tree?: ProcessTreeSnapshot,
+): Promise<TerminationResult> {
+  if (child.pid === undefined)
+    return { ok: false, error: "the child process did not expose a PID" };
+  const signal = force ? "SIGKILL" : "SIGTERM";
+  const errors: string[] = [];
+  try {
+    process.kill(-child.pid, signal);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH") errors.push(describeError(error));
+  }
+  if (force) {
+    for (const pid of tree?.descendants ?? []) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ESRCH")
+          errors.push(`PID ${String(pid)}: ${describeError(error)}`);
+      }
+    }
+  }
+  return errors.length === 0
+    ? { ok: true, error: "" }
+    : { ok: false, error: errors.join("; ") };
+}
+
+async function runTaskkill(
+  pid: number,
+  tree: boolean,
+): Promise<{ ok: boolean; error: string }> {
+  return await new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let killer: ReturnType<typeof spawn> | undefined;
+    const finish = (value: { ok: boolean; error: string }): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolve(value);
+    };
+    try {
+      killer = spawn(
         "taskkill",
-        ["/PID", String(child.pid), "/T", "/F"],
+        tree ? ["/PID", String(pid), "/T", "/F"] : ["/PID", String(pid), "/F"],
         { windowsHide: true, stdio: "ignore" },
       );
-      killer.once("error", () => undefined);
-    } catch {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // The settlement deadline remains bounded even if the OS rejects kill.
+    } catch (error) {
+      finish({ ok: false, error: describeError(error) });
+      return;
+    }
+    timer = setTimeout(() => {
+      killer?.kill("SIGKILL");
+      finish({ ok: false, error: "taskkill timed out" });
+    }, 750);
+    killer.once("error", (error: unknown) =>
+      finish({ ok: false, error: describeError(error) }),
+    );
+    killer.once("close", (code: number | null) =>
+      finish(
+        code === 0
+          ? { ok: true, error: "" }
+          : code === 128
+            ? { ok: false, error: "process was not found" }
+            : { ok: false, error: `taskkill exited with code ${String(code)}` },
+      ),
+    );
+  });
+}
+
+function captureProcessTree(
+  pid: number | undefined,
+): Promise<ProcessTreeSnapshot> {
+  if (pid === undefined)
+    return Promise.reject(new Error("the child process did not expose a PID"));
+  if (process.platform === "win32")
+    return captureProcessTreeWithCommand(
+      "wmic.exe",
+      ["process", "get", "ProcessId,ParentProcessId", "/format:list"],
+      pid,
+    );
+  return captureProcessTreeWithCommand("ps", ["-eo", "pid=,ppid="], pid);
+}
+
+async function captureProcessTreeWithCommand(
+  command: string,
+  args: string[],
+  rootPid: number,
+): Promise<ProcessTreeSnapshot> {
+  const output = await new Promise<string>((resolve, reject) => {
+    let text = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let processHandle: ReturnType<typeof spawn> | undefined;
+    const finish = (error: Error | null): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if (error !== null) reject(error);
+      else resolve(text);
+    };
+    try {
+      processHandle = spawn(command, args, {
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      processHandle.stdout?.setEncoding("utf8");
+      processHandle.stdout?.on("data", (chunk: string) => {
+        if (text.length < 128 * 1024) text += chunk;
+      });
+      processHandle.once("error", (error: unknown) =>
+        finish(new Error(describeError(error))),
+      );
+      processHandle.once("close", (code: number | null) => {
+        if (code === 0) finish(null);
+        else finish(new Error(`${command} exited with code ${String(code)}`));
+      });
+      timer = setTimeout(() => {
+        processHandle?.kill("SIGKILL");
+        finish(new Error(`${command} process-tree snapshot timed out`));
+      }, 750);
+    } catch (error) {
+      finish(new Error(describeError(error)));
+    }
+  });
+  const relationships: Array<[number, number]> = [];
+  let processId: number | undefined;
+  let parentProcessId: number | undefined;
+  for (const line of output.split(/\r?\n/u)) {
+    const processMatch = line.trim().match(/^ProcessId=(\d+)$/u);
+    const parentMatch = line.trim().match(/^ParentProcessId=(\d+)$/u);
+    const csvMatch = line.trim().match(/^(\d+)[,\s]+(\d+)$/u);
+    if (processMatch !== null) processId = Number(processMatch[1]);
+    else if (parentMatch !== null) parentProcessId = Number(parentMatch[1]);
+    else if (csvMatch !== null)
+      relationships.push([Number(csvMatch[1]), Number(csvMatch[2])]);
+    else if (
+      line.trim() === "" &&
+      processId !== undefined &&
+      parentProcessId !== undefined
+    ) {
+      relationships.push([processId, parentProcessId]);
+      processId = undefined;
+      parentProcessId = undefined;
+    }
+  }
+  if (processId !== undefined && parentProcessId !== undefined)
+    relationships.push([processId, parentProcessId]);
+  const descendants = new Set<number>();
+  let parents = new Set<number>([rootPid]);
+  while (parents.size > 0) {
+    const next = new Set<number>();
+    for (const [childPid, parentPid] of relationships) {
+      if (
+        parents.has(parentPid) &&
+        childPid !== rootPid &&
+        !descendants.has(childPid)
+      ) {
+        descendants.add(childPid);
+        next.add(childPid);
       }
     }
-    return;
+    parents = next;
   }
-  try {
-    process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
-  } catch {
-    try {
-      child.kill(force ? "SIGKILL" : "SIGTERM");
-    } catch {
-      // The bounded settlement deadline remains the final containment fence.
-    }
-  }
+  return { descendants: [...descendants] };
+}
+
+async function withDeadline<T>(
+  promise: Promise<T>,
+  milliseconds: number,
+  fallback: T,
+): Promise<T> {
+  return await new Promise<T>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback);
+    }, milliseconds);
+    void promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function result(
@@ -388,8 +671,22 @@ function boundedError(value: string): string | null {
 }
 
 function bound(value: string | null): string | null {
-  if (value === null || value.length <= 2_048) return value;
-  return `${value.slice(0, 2_024)}…[truncated]`;
+  if (value === null || Buffer.byteLength(value, "utf8") <= 2_048) return value;
+  const suffix = "…[truncated]";
+  const available = Math.max(0, 2_048 - Buffer.byteLength(suffix, "utf8"));
+  return `${prefixByBytes(value, available)}${suffix}`;
+}
+
+function prefixByBytes(value: string, limit: number): string {
+  let bytes = 0;
+  let prefix = "";
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > limit) break;
+    prefix += character;
+    bytes += characterBytes;
+  }
+  return prefix;
 }
 
 function describeError(error: unknown): string {

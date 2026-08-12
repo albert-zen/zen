@@ -24,6 +24,7 @@ import type {
   ThreadItem,
   Turn,
 } from "../src/protocol-client/index.js";
+import type { TriggerSnapshot } from "../src/main/trigger-types.js";
 
 test("timer expiry creates one explicit App Server turn and auditable history", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-trigger-"));
@@ -497,6 +498,228 @@ test("completedItemText matching does not inspect signal or timer projections", 
       completed.history.map((entry) => entry.programOutcome?.status),
       ["non_match", "non_match"],
     );
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("completedItemText only matches the selected completed Agent Item", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-match-item-"));
+  const manager = new ControlledManager();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    const source = await triggers.createRoom({
+      name: "source",
+      members: [{ name: "Bot", threadId: "target" }],
+    });
+    await triggers.create({
+      threadId: "target",
+      kind: "roomMention",
+      label: "Room predicate",
+      prompt: "Must not match the Room source text.",
+      roomId: source.id,
+      mention: "Bot",
+      program: {
+        match: { field: "completedItemText", regex: "go" },
+      },
+    });
+    await triggers.create({
+      threadId: "target",
+      kind: "thread",
+      label: "Thread predicate",
+      prompt: "Must inspect only the final Agent Item.",
+      watchedThreadId: "source-thread",
+      program: {
+        match: { field: "completedItemText", regex: "go" },
+      },
+    });
+    await triggers.postRoomMessage(source.id, "You", "@Bot go");
+    await snapshotWhen(triggers, (snapshot) =>
+      snapshot.history.some(
+        (entry) => entry.kind === "roomMention" && entry.status === "completed",
+      ),
+    );
+    const sourceTurn = completedTurn("source-turn", "go", [
+      {
+        type: "commandExecution",
+        id: "command-go",
+        pluginId: null,
+        scriptPath: null,
+        command: "echo go",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "completed",
+        commandActions: [],
+        aggregatedOutput: "go",
+        exitCode: 0,
+        durationMs: null,
+      },
+    ]);
+    const answer = sourceTurn.items.find(
+      (item): item is Extract<ThreadItem, { type: "agentMessage" }> =>
+        item.type === "agentMessage",
+    );
+    assert(answer);
+    answer.text = "finished";
+    manager.complete("source-thread", sourceTurn);
+    const finished = await snapshotWhen(
+      triggers,
+      (snapshot) =>
+        snapshot.history.filter((entry) => entry.kind === "thread").length ===
+          1 &&
+        snapshot.history.some(
+          (entry) => entry.kind === "thread" && entry.status === "completed",
+        ),
+    );
+    assert.equal(manager.requests.length, 0);
+    assert.equal(
+      finished.history.find((entry) => entry.kind === "roomMention")
+        ?.programOutcome?.status,
+      "non_match",
+    );
+    assert.equal(
+      finished.history.find((entry) => entry.kind === "thread")?.status,
+      "completed",
+    );
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Unicode completion replies stay byte-bounded and persistence failures release the wakeup", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-unicode-complete-"),
+  );
+  const manager = new ControlledManager();
+  const store = new FailTerminalWriteStore(
+    path.join(directory, "triggers.json"),
+  );
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "target" }],
+    });
+    await triggers.create({
+      threadId: "target",
+      kind: "roomMention",
+      label: "Unicode reply",
+      prompt: "Answer once.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    await triggers.postRoomMessage(room.id, "You", "@Bot status?");
+    const running = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "running",
+    );
+    const answer = "a".repeat(7_975) + "😀" + "trailing text";
+    const completed = completedTurn(running.history[0]!.turnId!, "status?");
+    const agent = completed.items.find(
+      (item): item is Extract<ThreadItem, { type: "agentMessage" }> =>
+        item.type === "agentMessage",
+    );
+    assert(agent);
+    agent.text = answer;
+    store.failNextTerminalWrite = true;
+    manager.complete("target", completed);
+    const failed = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "failed",
+    );
+    assert.equal(failed.history[0]?.programInvocationId, null);
+    assert.match(failed.history[0]?.error ?? "", /could not be persisted/u);
+    await triggers.postRoomMessage(room.id, "You", "@Bot again");
+    const secondRunning = await snapshotWhen(
+      triggers,
+      (snapshot) =>
+        snapshot.history.filter((entry) => entry.kind === "roomMention")
+          .length === 2 && snapshot.history[0]?.status === "running",
+    );
+    const second = completedTurn(secondRunning.history[0]!.turnId!, "again");
+    const secondAgent = second.items.find(
+      (item): item is Extract<ThreadItem, { type: "agentMessage" }> =>
+        item.type === "agentMessage",
+    );
+    assert(secondAgent);
+    secondAgent.text = answer;
+    manager.complete("target", second);
+    await snapshotWhen(
+      triggers,
+      (snapshot) =>
+        snapshot.history[0]?.status === "completed" &&
+        snapshot.rooms[0]?.messages.some(
+          (message) => message.kind === "agent",
+        ) === true,
+    );
+    const roomReply = triggers
+      .snapshot()
+      .rooms[0]?.messages.find((message) => message.kind === "agent");
+    assert(roomReply);
+    assert(Buffer.byteLength(roomReply.text, "utf8") <= 8_000);
+    assert(!roomReply.text.includes("\uFFFD"));
+    assert.equal(manager.requests.length, 2);
+    const signalDetail = "x".repeat(3_990) + "😀";
+    await triggers.create({
+      threadId: "target",
+      kind: "signal",
+      label: "Unicode signal",
+      prompt: "No dispatch needed.",
+      signalName: "unicode",
+    });
+    await triggers.signal("unicode", signalDetail);
+    const signalHistory = triggers
+      .snapshot()
+      .history.find((entry) => entry.kind === "signal");
+    assert(signalHistory);
+    assert(Buffer.byteLength(signalHistory.reason, "utf8") <= 4_000);
+    assert(!signalHistory.reason.includes("\uFFFD"));
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Unicode program output and errors are bounded without replacement characters", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-unicode-program-"),
+  );
+  const manager = new ControlledManager();
+  const runner = new UnicodeProgramRunner();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+    { programs: runner },
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "target",
+      kind: "signal",
+      label: "Unicode program",
+      prompt: "Run bounded local work.",
+      signalName: "unicode-program",
+      program: { action: { command: "fixture" } },
+    });
+    await triggers.signal("unicode-program", "run");
+    const failed = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "failed",
+    );
+    const outcome = failed.history[0]?.programOutcome;
+    assert(outcome);
+    assert(Buffer.byteLength(outcome.output ?? "", "utf8") <= 8_000);
+    assert(Buffer.byteLength(outcome.error ?? "", "utf8") <= 4_000);
+    assert(!outcome.output?.includes("\uFFFD"));
+    assert(!outcome.error?.includes("\uFFFD"));
   } finally {
     await triggers.stop();
     await rm(directory, { recursive: true, force: true });
@@ -1115,6 +1338,36 @@ class MatchingProgramRunner implements TriggerProgramRunner {
       exitCode: 0,
       error: null,
     };
+  }
+}
+
+class UnicodeProgramRunner implements TriggerProgramRunner {
+  async run(
+    _spec: { command: string },
+    _input: TriggerProgramRunInput,
+    _signal: AbortSignal,
+  ): Promise<TriggerProgramRunResult> {
+    return {
+      status: "failed",
+      output: "😀".repeat(4_500),
+      exitCode: 7,
+      error: "💥".repeat(3_000),
+    };
+  }
+}
+
+class FailTerminalWriteStore extends ZenXTriggerStore {
+  failNextTerminalWrite = false;
+
+  override async write(snapshot: TriggerSnapshot): Promise<void> {
+    if (
+      this.failNextTerminalWrite &&
+      snapshot.history.some((entry) => entry.status === "completed")
+    ) {
+      this.failNextTerminalWrite = false;
+      throw new Error("fixture terminal persistence failure");
+    }
+    await super.write(snapshot);
   }
 }
 

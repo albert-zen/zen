@@ -174,6 +174,19 @@ test("Agent automation inputs enforce bounded strings, members, and program env"
     }),
     /too many entries/u,
   );
+  await assert.rejects(
+    invoke(capability, "zenx_triggers_create", {
+      threadId: "target",
+      kind: "signal",
+      label: "bounded",
+      prompt: "prompt",
+      signalName: "signal",
+      program: {
+        action: { command: "fixture", timeoutMs: 120_001 },
+      },
+    }),
+    /timeoutMs must be between/u,
+  );
 });
 
 async function invoke(

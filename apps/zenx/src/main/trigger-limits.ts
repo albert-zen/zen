@@ -25,6 +25,7 @@ export const MAX_PROGRAM_ENV_BYTES = 16 * 1_024;
 export const MAX_PROGRAM_MATCH_REGEX_BYTES = 4_096;
 export const MAX_PROGRAM_FLAGS_BYTES = 64;
 export const MAX_PROGRAM_OUTCOMES = 4;
+export const MAX_PROGRAM_TIMEOUT_MS = 120_000;
 
 export function utf8Bytes(value: string): number {
   return Buffer.byteLength(value, "utf8");

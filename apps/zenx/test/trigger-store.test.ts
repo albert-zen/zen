@@ -76,6 +76,11 @@ test("migrates fully validated version 1 history to nullable source metadata", a
       sourceTurnId: _sourceTurnId,
       sourceRoomId: _sourceRoomId,
       sourceRoomMessageId: _sourceRoomMessageId,
+      replyRoomId: _replyRoomId,
+      replyAuthor: _replyAuthor,
+      programInvocationId: _programInvocationId,
+      programOutcome: _programOutcome,
+      programOutcomes: _programOutcomes,
       ...entry
     }) => entry,
   );
@@ -91,6 +96,60 @@ test("migrates fully validated version 1 history to nullable source metadata", a
     assert.equal(migrated.history[0]?.sourceTurnId, null);
     await store.write(migrated);
     assert.equal(JSON.parse(await readFile(file, "utf8")).version, 3);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects unknown legacy and current fields before migration or safe projection", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-store-extra-"));
+  const file = path.join(directory, "triggers.json");
+  const base = validState();
+  const corruptions = [
+    {
+      ...base,
+      version: 1,
+      history: [{ ...base.history[0], secret: "x" }],
+    },
+    {
+      ...base,
+      version: 2,
+      history: [{ ...base.history[0], programOutput: "x" }],
+    },
+    {
+      ...base,
+      version: 3,
+      history: [{ ...base.history[0], diagnostic: "x" }],
+    },
+  ];
+  try {
+    for (const value of corruptions) {
+      await writeFile(file, JSON.stringify(value), "utf8");
+      await assert.rejects(
+        async () => await new ZenXTriggerStore(file).read(),
+        /unsupported version or invalid entry shape/u,
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects an oversized timeout at the legacy store boundary", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-store-timeout-"),
+  );
+  const file = path.join(directory, "triggers.json");
+  const state = validState();
+  state.triggers[0]!.program = {
+    action: { command: "fixture", timeoutMs: 120_001 },
+  };
+  try {
+    await writeFile(file, JSON.stringify({ ...state, version: 1 }), "utf8");
+    await assert.rejects(
+      async () => await new ZenXTriggerStore(file).read(),
+      /unsupported version or invalid entry shape/u,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

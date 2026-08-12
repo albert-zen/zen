@@ -24,6 +24,7 @@ import {
   MAX_PROGRAM_ENV_VALUE_BYTES,
   MAX_PROGRAM_FLAGS_BYTES,
   MAX_PROGRAM_MATCH_REGEX_BYTES,
+  MAX_PROGRAM_TIMEOUT_MS,
   MAX_ROOM_MEMBERS,
   MAX_ROOM_NAME_BYTES,
   MAX_TRIGGER_LABEL_BYTES,
@@ -66,7 +67,7 @@ const programSpecSchema = {
       maxProperties: MAX_PROGRAM_ENV_ENTRIES,
       additionalProperties: { type: "string" },
     },
-    timeoutMs: { type: "number", minimum: 1, maximum: 120000 },
+    timeoutMs: { type: "number", minimum: 1, maximum: MAX_PROGRAM_TIMEOUT_MS },
     maxOutputBytes: { type: "integer", minimum: 256, maximum: 1048576 },
   },
   required: ["command"],
@@ -479,7 +480,14 @@ function programSpec(value: unknown, label: string): TriggerProgramSpec {
     ...(env === undefined ? {} : { env }),
     ...(spec.timeoutMs === undefined
       ? {}
-      : { timeoutMs: number(spec, "timeoutMs") }),
+      : {
+          timeoutMs: boundedNumber(
+            spec,
+            "timeoutMs",
+            1,
+            MAX_PROGRAM_TIMEOUT_MS,
+          ),
+        }),
     ...(spec.maxOutputBytes === undefined
       ? {}
       : { maxOutputBytes: integer(spec, "maxOutputBytes") }),
@@ -575,6 +583,20 @@ function number(args: Record<string, unknown>, key: string): number {
   const value = args[key];
   if (typeof value !== "number" || !Number.isFinite(value))
     throw new Error(`${key} must be a finite number`);
+  return value;
+}
+
+function boundedNumber(
+  args: Record<string, unknown>,
+  key: string,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = number(args, key);
+  if (value < minimum || value > maximum)
+    throw new Error(
+      `${key} must be between ${String(minimum)} and ${String(maximum)}`,
+    );
   return value;
 }
 
