@@ -203,9 +203,8 @@ async function assembleNpmProvider(id, platform, runtimePath) {
       "node_modules",
       ".package-lock.json",
     );
-    const dependencyLock = Buffer.from(
-      (await readFile(generatedLock, "utf8")).replaceAll("\r\n", "\n"),
-      "utf8",
+    const dependencyLock = canonicalDependencyLock(
+      await readFile(generatedLock, "utf8"),
     );
     const dependencyLockSha256 = sha256(dependencyLock);
     if (
@@ -287,15 +286,16 @@ async function extract(archive, destination) {
 }
 
 async function runNpm(args, options) {
-  const npmExecPath = process.env.npm_execpath;
-  if (npmExecPath !== undefined && npmExecPath.length > 0) {
-    return await run(process.execPath, [npmExecPath, ...args], options);
-  }
-  return await run(
-    process.platform === "win32" ? "npm.cmd" : "npm",
-    args,
-    options,
-  );
+  const npmExecPath =
+    process.env.npm_execpath ??
+    path.join(
+      path.dirname(process.execPath),
+      "node_modules",
+      "npm",
+      "bin",
+      "npm-cli.js",
+    );
+  return await run(process.execPath, [npmExecPath, ...args], options);
 }
 
 async function findFile(root, name) {
@@ -331,4 +331,40 @@ async function exists(candidate) {
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function canonicalDependencyLock(source) {
+  const parsed = JSON.parse(source);
+  const packages = {};
+  for (const [name, value] of Object.entries(parsed.packages ?? {}).sort()) {
+    if (name === "node_modules/fsevents") continue;
+    const stable = {};
+    for (const field of [
+      "version",
+      "resolved",
+      "integrity",
+      "license",
+      "dependencies",
+      "optionalDependencies",
+      "bin",
+      "engines",
+    ]) {
+      if (value[field] !== undefined) stable[field] = sortJson(value[field]);
+    }
+    packages[name] = stable;
+  }
+  return Buffer.from(
+    `${JSON.stringify({ lockfileVersion: 3, requires: true, packages }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+function sortJson(value) {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, sortJson(child)]),
+  );
 }
