@@ -10,6 +10,11 @@ import {
   ZenXTriggerService,
   type ZenXTriggerAppServerPort,
 } from "../src/main/trigger-service.js";
+import type {
+  TriggerProgramRunInput,
+  TriggerProgramRunResult,
+  TriggerProgramRunner,
+} from "../src/main/trigger-program-runner.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
 import type {
   ClientRequestParams,
@@ -62,7 +67,7 @@ test("timer expiry creates one explicit App Server turn and auditable history", 
         wakeup.content[0]?.text ?? "",
         /\[ZenX trigger wakeup\].*Injected prompt/su,
       );
-    triggers.stop();
+    await triggers.stop();
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });
@@ -200,7 +205,7 @@ test("thread snapshots and two-member Room context route through target Threads"
         new RegExp(`Registered trigger: .*Room|${member}`, "u"),
       );
     }
-    triggers.stop();
+    await triggers.stop();
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });
@@ -272,7 +277,7 @@ test("explicit cyclic relay is stable, sourceful, auditable, and stops after can
     assert.equal(triggers.snapshot().history.length, 2);
     assert.equal(manager.requests.length, 2);
   } finally {
-    triggers.stop();
+    await triggers.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -301,7 +306,7 @@ test("self-watch remains an explicit supported relay", async () => {
     assert.equal(snapshot.history[0]?.sourceThreadId, "thread-a");
     assert.equal(manager.requests[0]?.threadId, "thread-a");
   } finally {
-    triggers.stop();
+    await triggers.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -351,7 +356,7 @@ test("Room membership enforces unique names and Threads and supports add/remove"
       { name: "Reviewer", threadId: "thread-b" },
     ]);
   } finally {
-    triggers.stop();
+    await triggers.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -383,7 +388,241 @@ test("failed relay is terminal and is not hidden, queued, or retried", async () 
     assert.equal(manager.requests.length, 1);
     assert.equal(triggers.snapshot().history.length, 1);
   } finally {
-    triggers.stop();
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("admits exactly 64 nonterminal wakeups, rejects the 65th, then frees one slot on terminal completion", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-admission-"));
+  const manager = new ControlledManager();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "target",
+      kind: "signal",
+      label: "Admission",
+      prompt: "Run once.",
+      signalName: "wake",
+    });
+    for (let index = 0; index < 64; index++)
+      await triggers.signal("wake", String(index));
+    await settle();
+    assert.equal(manager.requests.length, 64);
+    await triggers.signal("wake", "65");
+    const rejected = triggers
+      .snapshot()
+      .history.find((entry) => entry.reason.endsWith(": 65"));
+    assert.equal(manager.requests.length, 64);
+    assert.equal(rejected?.status, "failed");
+    assert.match(rejected?.error ?? "", /64 nonterminal/u);
+    const first = triggers
+      .snapshot()
+      .history.find((entry) => entry.status === "running");
+    assert(first?.turnId);
+    manager.complete("target", completedTurn(first.turnId, "release"));
+    await snapshotWhen(triggers, (snapshot) =>
+      snapshot.history.some(
+        (entry) => entry.id === first.id && entry.status === "completed",
+      ),
+    );
+    await triggers.signal("wake", "66");
+    await settle();
+    assert.equal(manager.requests.length, 65);
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("early completion requires exact thread and client correlation and is applied once", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-early-completion-"),
+  );
+  const manager = new EarlyCompletionManager();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "target",
+      kind: "signal",
+      label: "Early",
+      prompt: "Complete once.",
+      signalName: "wake",
+    });
+    await triggers.signal("wake", "early");
+    const completed = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "completed",
+    );
+    assert.equal(completed.history.length, 1);
+    assert.equal(manager.requests.length, 1);
+    assert.equal(manager.completions.length, 1);
+    manager.emitLate({
+      threadId: "other",
+      turn: completedTurn("same-turn", "wrong thread"),
+    });
+    manager.emitLate({
+      threadId: "target",
+      turn: completedTurn("different-turn", "late"),
+    });
+    await settle();
+    assert.equal(triggers.snapshot().history.length, 1);
+    assert.equal(triggers.snapshot().history[0]?.status, "completed");
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("zero and conflicting early completion evidence stays rejected until the owned Turn completes", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-early-evidence-"),
+  );
+  const manager = new EarlyEvidenceManager();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "target",
+      kind: "signal",
+      label: "Evidence",
+      prompt: "Complete only with owned evidence.",
+      signalName: "wake",
+    });
+    await triggers.signal("wake", "zero");
+    await triggers.signal("wake", "conflict");
+    const running = await snapshotWhen(
+      triggers,
+      (snapshot) =>
+        snapshot.history.filter((entry) => entry.status === "running")
+          .length === 2,
+    );
+    assert.equal(manager.requests.length, 2);
+    assert.equal(
+      running.history.filter((entry) => entry.status === "completed").length,
+      0,
+    );
+    for (const entry of running.history) {
+      assert(entry.turnId);
+      manager.complete("target", completedTurn(entry.turnId, "owned"));
+    }
+    const completed = await snapshotWhen(
+      triggers,
+      (snapshot) =>
+        snapshot.history.filter((entry) => entry.status === "completed")
+          .length === 2,
+    );
+    assert.equal(completed.history.length, 2);
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Room deletion is fenced by a nonterminal immutable reply route", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-delete-fence-"),
+  );
+  const manager = new ControlledManager();
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "target" }],
+    });
+    const trigger = await triggers.create({
+      threadId: "target",
+      kind: "roomMention",
+      label: "Answer",
+      prompt: "Answer the Room.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    await triggers.postRoomMessage(room.id, "You", "@Bot status?");
+    const running = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "running",
+    );
+    await assert.rejects(
+      async () => await triggers.deleteRoom(room.id),
+      /nonterminal wakeup owns/u,
+    );
+    await triggers.update({
+      id: trigger.id,
+      threadId: "target",
+      kind: "signal",
+      label: "Updated",
+      prompt: "Updated.",
+      signalName: "unused",
+    });
+    manager.complete(
+      "target",
+      completedTurn(running.history[0]!.turnId!, "answer"),
+    );
+    await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "completed",
+    );
+    assert.equal(triggers.snapshot().rooms[0]?.messages.at(-1)?.author, "Bot");
+    await triggers.deleteRoom(room.id);
+    assert.equal(triggers.snapshot().rooms.length, 0);
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("restart records uncertain local work once and never retries it", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-program-restart-"),
+  );
+  const manager = new ControlledManager();
+  const runner = new BlockingProgramRunner();
+  const store = new ZenXTriggerStore(path.join(directory, "triggers.json"));
+  const triggers = new ZenXTriggerService(manager, store, { programs: runner });
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "target",
+      kind: "signal",
+      label: "Local action",
+      prompt: "Run local action.",
+      signalName: "local",
+      program: { action: { command: "fixture-action" } },
+    });
+    const firing = triggers.signal("local", "once");
+    await runner.started.promise;
+    await triggers.stop();
+    const stopped = triggers.snapshot().history[0];
+    assert.equal(stopped?.status, "failed");
+    assert.equal(stopped?.programOutcome?.status, "uncertain");
+    runner.release();
+    await firing;
+
+    const restarted = new ZenXTriggerService(manager, store, {
+      programs: runner,
+    });
+    await restarted.start();
+    assert.equal(runner.calls, 1);
+    assert.equal(restarted.snapshot().history[0]?.status, "failed");
+    await restarted.stop();
+  } finally {
+    await triggers.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -436,7 +675,7 @@ test("long timers reschedule at the clamp boundary instead of firing early", asy
     );
     assert.equal(manager.requests.length, 1);
   } finally {
-    triggers.stop();
+    await triggers.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -512,6 +751,162 @@ class ControlledManager implements ZenXTriggerAppServerPort {
   complete(threadId: string, turn: Turn): void {
     this.#listener?.("turn/completed", { threadId, turn });
   }
+}
+
+class EarlyCompletionManager implements ZenXTriggerAppServerPort {
+  readonly requests: ClientRequestParams["turn/start"][] = [];
+  readonly completions: ServerNotificationParams["turn/completed"][] = [];
+  #listener:
+    | ((
+        method: ServerNotificationMethod,
+        params: ServerNotificationParams[ServerNotificationMethod],
+      ) => void)
+    | undefined;
+
+  async request(
+    _method: "turn/start",
+    params: ClientRequestParams["turn/start"],
+  ): Promise<ClientRequestResults["turn/start"]> {
+    this.requests.push(params);
+    const id = `early-turn-${this.requests.length}`;
+    const completed = completedTurn(id, "early", [
+      {
+        type: "userMessage",
+        id: `${id}-user`,
+        clientId: params.clientUserMessageId ?? null,
+        content: [{ type: "text", text: "early", text_elements: [] }],
+      },
+    ]);
+    const event = { threadId: params.threadId, turn: completed };
+    this.completions.push(event);
+    this.#listener?.("turn/completed", event);
+    return {
+      turn: {
+        ...completed,
+        status: "inProgress",
+        completedAt: null,
+        durationMs: null,
+      },
+    };
+  }
+
+  onNotification(
+    listener: (
+      method: ServerNotificationMethod,
+      params: ServerNotificationParams[ServerNotificationMethod],
+    ) => void,
+  ): () => void {
+    this.#listener = listener;
+    return () => {
+      if (this.#listener === listener) this.#listener = undefined;
+    };
+  }
+
+  emitLate(event: ServerNotificationParams["turn/completed"]): void {
+    this.#listener?.("turn/completed", event);
+  }
+}
+
+class EarlyEvidenceManager implements ZenXTriggerAppServerPort {
+  readonly requests: ClientRequestParams["turn/start"][] = [];
+  #listener:
+    | ((
+        method: ServerNotificationMethod,
+        params: ServerNotificationParams[ServerNotificationMethod],
+      ) => void)
+    | undefined;
+
+  async request(
+    _method: "turn/start",
+    params: ClientRequestParams["turn/start"],
+  ): Promise<ClientRequestResults["turn/start"]> {
+    this.requests.push(params);
+    const id = `evidence-turn-${this.requests.length}`;
+    const items: ThreadItem[] =
+      this.requests.length === 1
+        ? []
+        : [
+            {
+              type: "userMessage" as const,
+              id: `${id}-wrong-a`,
+              clientId: "wrong-a",
+              content: [
+                { type: "text" as const, text: "wrong-a", text_elements: [] },
+              ],
+            },
+            {
+              type: "userMessage" as const,
+              id: `${id}-wrong-b`,
+              clientId: "wrong-b",
+              content: [
+                { type: "text" as const, text: "wrong-b", text_elements: [] },
+              ],
+            },
+          ];
+    this.#listener?.("turn/completed", {
+      threadId: params.threadId,
+      turn: completedTurn(id, "early", items),
+    });
+    return {
+      turn: {
+        ...completedTurn(id, "owned"),
+        status: "inProgress",
+        completedAt: null,
+        durationMs: null,
+      },
+    };
+  }
+
+  onNotification(
+    listener: (
+      method: ServerNotificationMethod,
+      params: ServerNotificationParams[ServerNotificationMethod],
+    ) => void,
+  ): () => void {
+    this.#listener = listener;
+    return () => {
+      if (this.#listener === listener) this.#listener = undefined;
+    };
+  }
+
+  complete(threadId: string, turn: Turn): void {
+    this.#listener?.("turn/completed", { threadId, turn });
+  }
+}
+
+class BlockingProgramRunner implements TriggerProgramRunner {
+  calls = 0;
+  readonly started = deferred<void>();
+  #resolve: ((result: TriggerProgramRunResult) => void) | undefined;
+
+  run(
+    _spec: { command: string },
+    _input: TriggerProgramRunInput,
+    _signal: AbortSignal,
+  ): Promise<TriggerProgramRunResult> {
+    this.calls += 1;
+    this.started.resolve();
+    return new Promise<TriggerProgramRunResult>((resolve) => {
+      this.#resolve = resolve;
+    });
+  }
+
+  release(): void {
+    this.#resolve?.({
+      status: "completed",
+      output: '{"ok":true}',
+      exitCode: 0,
+      error: null,
+    });
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function completedTurn(

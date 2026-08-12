@@ -138,6 +138,15 @@
   domain/root 健康后才可成功，不能返回一个其 `snapshot` 已不可用的 coordinator。
 - **ZenXThreadTitleNotificationObserver** — ZenX 主进程在 App Server canonical
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
+- **ZenXTriggerLifecycleGeneration** — Trigger 服务把定时器、瞬态完成证据、唤醒 admission
+  与取消句柄绑定到一次可退休的进程内代数；迟到异步结果只能观察其创建代数，不能修改新代数或
+  重新占用已释放的唤醒名额。
+- **ZenXTriggerProgramRunner** — ZenX 外层以一次性、有界的本地子进程执行 Trigger predicate/action，
+  通过稳定 invocation id、显式 stdin/stdout JSON、cwd/env、超时和取消把结果归约为 Trigger 历史中的
+  明确 outcome；它不是 sandbox、队列、重试器或第二个 Runtime。
+- **ZenXAutomationControlCapability** — ZenX capability registry 中由独立 read/write 权限保护的 Trigger
+  与 Room 工具集合；工具只调用现有 Trigger/Room store 和 App Server port，不拥有 Agent、Thread、Turn
+  或 transcript 语义。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并

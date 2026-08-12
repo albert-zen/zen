@@ -9,6 +9,11 @@ import {
   type AppServerHostStatus,
 } from "../src/main/app-server-manager.js";
 import type { ZenXCapabilityHost } from "../src/main/capabilities/types.js";
+import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
+import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
+import { ZenXAutomationControlCapabilityPackage } from "../src/main/capabilities/automation-control-package.js";
+import { ZenXTriggerService } from "../src/main/trigger-service.js";
+import { ZenXTriggerStore } from "../src/main/trigger-store.js";
 
 function managerFor(directory: string): AppServerManager {
   return new AppServerManager({
@@ -182,6 +187,126 @@ test("bridges a granted structured capability through the real App Server host",
   }
 });
 
+test("bridges all Agent Room tools through the real child App Server", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-capability-host-"),
+  );
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+  );
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+    },
+    capabilityHost: registry,
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  const triggers = new ZenXTriggerService(
+    manager,
+    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  );
+  registry.register(new ZenXAutomationControlCapabilityPackage(triggers));
+  await registry.initialize();
+  await registry.grant("zenx-automation-control");
+  try {
+    await manager.start();
+    await triggers.start();
+    const thread = (await manager.request("thread/start", {})).thread;
+    const turns: string[] = [];
+    const dispose = manager.onNotification((method, params) => {
+      if (method === "turn/completed") {
+        turns.push((params as { turn: { id: string } }).turn.id);
+      }
+    });
+    const runTool = async (name: string, args: Record<string, unknown>) => {
+      const before = turns.length;
+      await manager.request("turn/start", {
+        threadId: thread.id,
+        input: [
+          { type: "text", text: `!tool ${name} ${JSON.stringify(args)}` },
+        ],
+      });
+      await waitFor(() => turns.length > before);
+    };
+    await runTool("zenx_rooms_create", {
+      name: "release",
+      members: [{ name: "Bot", threadId: thread.id }],
+    });
+    await runTool("zenx_rooms_list", {});
+    await runTool("zenx_rooms_rename", {
+      roomId: triggers.snapshot().rooms[0]!.id,
+      name: "ship",
+    });
+    await runTool("zenx_rooms_add_member", {
+      roomId: triggers.snapshot().rooms[0]!.id,
+      name: "Monitor",
+      threadId: "monitor-thread",
+    });
+    await runTool("zenx_rooms_remove_member", {
+      roomId: triggers.snapshot().rooms[0]!.id,
+      threadId: "monitor-thread",
+    });
+    await runTool("zenx_rooms_post_message", {
+      roomId: triggers.snapshot().rooms[0]!.id,
+      text: "agent note",
+    });
+    await runTool("zenx_rooms_delete", {
+      roomId: triggers.snapshot().rooms[0]!.id,
+    });
+    await runTool("zenx_triggers_create", {
+      threadId: thread.id,
+      kind: "signal",
+      label: "Deploy",
+      prompt: "Inspect deploy.",
+      signalName: "deploy",
+      program: {
+        match: { field: "completedItemText", regex: "deploy" },
+      },
+    });
+    const triggerId = triggers.snapshot().triggers[0]!.id;
+    await runTool("zenx_triggers_list", {});
+    await runTool("zenx_triggers_update", {
+      id: triggerId,
+      threadId: thread.id,
+      kind: "signal",
+      label: "Updated deploy",
+      prompt: "Inspect updated deploy.",
+      signalName: "deploy-updated",
+    });
+    await runTool("zenx_triggers_cancel", { triggerId });
+    await runTool("zenx_triggers_delete", { triggerId });
+    dispose();
+    assert.equal(triggers.snapshot().rooms.length, 0);
+    assert.equal(triggers.snapshot().triggers.length, 0);
+    const read = await manager.request("thread/read", {
+      threadId: thread.id,
+      includeTurns: true,
+    });
+    assert.equal(
+      read.thread.turns.filter((turn) =>
+        turn.items.some(
+          (item) =>
+            item.type === "commandExecution" &&
+            item.command.startsWith("zenx_"),
+        ),
+      ).length,
+      12,
+    );
+  } finally {
+    await triggers.stop();
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -207,5 +332,17 @@ async function within<T>(
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  milliseconds = 10_000,
+): Promise<void> {
+  const deadline = Date.now() + milliseconds;
+  while (!predicate()) {
+    if (Date.now() >= deadline)
+      throw new Error("Timed out waiting for Room tool turn");
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }

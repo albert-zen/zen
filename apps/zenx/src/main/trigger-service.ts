@@ -8,6 +8,10 @@ import type {
   ThreadItem,
   Turn,
 } from "../protocol-client/index.js";
+import {
+  ZenXTriggerProgramRunner,
+  type TriggerProgramRunner,
+} from "./trigger-program-runner.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
 import type {
   CreateRoomInput,
@@ -15,7 +19,11 @@ import type {
   RoomMember,
   RoomMessage,
   TriggerHistoryEntry,
+  TriggerProgramConfig,
+  TriggerProgramOutcome,
+  TriggerProgramSpec,
   TriggerSnapshot,
+  UpdateTriggerInput,
   ZenXRoom,
   ZenXTrigger,
 } from "./trigger-types.js";
@@ -37,19 +45,67 @@ export interface ZenXTriggerTitlePort {
   observe(threadId: string, input: string): Promise<unknown>;
 }
 
+const MAX_WAKEUPS = 64;
+const MAX_TRANSIENT_TURNS = 64;
+const MAX_ITEMS_PER_TURN = 64;
+const MAX_PROGRAM_OUTCOMES = 4;
+
+interface WakeupEvent {
+  reason: string;
+  occurrenceKey: string;
+  projection?: string;
+  eventText?: string;
+  sourceThreadId?: string;
+  sourceTurnId?: string;
+  sourceRoomId?: string;
+  sourceRoomMessageId?: string;
+  scheduledAt?: number;
+}
+
+interface ActiveWakeup {
+  historyId: string;
+  threadId: string;
+  clientUserMessageId: string;
+  trigger: ZenXTrigger;
+  generationId: string;
+}
+
+interface CompletedItemBuffer {
+  threadId: string;
+  items: ThreadItem[];
+}
+
+interface PendingCompletion {
+  event: ServerNotificationParams["turn/completed"];
+  clientUserMessageId: string | null;
+  rejected: boolean;
+  claimed: boolean;
+}
+
+interface TriggerGeneration {
+  id: string;
+  active: boolean;
+  retiring: boolean;
+  timers: Map<string, unknown>;
+  completedTurnItems: Map<string, CompletedItemBuffer>;
+  pendingCompletedTurns: Map<string, PendingCompletion>;
+  activeWakeups: Map<string, ActiveWakeup>;
+  programControllers: Map<string, AbortController>;
+  disposeNotifications: (() => void) | undefined;
+}
+
 export class ZenXTriggerService {
   readonly #manager: ZenXTriggerAppServerPort;
   readonly #store: ZenXTriggerStore;
   readonly #titles: ZenXTriggerTitlePort | undefined;
+  readonly #programs: TriggerProgramRunner;
   readonly #listeners = new Set<(snapshot: TriggerSnapshot) => void>();
-  readonly #timers = new Map<string, unknown>();
-  readonly #completedAgentMessages = new Map<string, string>();
-  readonly #completedTurnItems = new Map<string, ThreadItem[]>();
   readonly #now: () => number;
   readonly #schedule: (callback: () => void, delayMs: number) => unknown;
   readonly #cancelScheduled: (handle: unknown) => void;
   #snapshot: TriggerSnapshot = { triggers: [], history: [], rooms: [] };
   #mutation: Promise<void> = Promise.resolve();
+  #generation: TriggerGeneration | null = null;
 
   constructor(
     manager: ZenXTriggerAppServerPort,
@@ -59,11 +115,13 @@ export class ZenXTriggerService {
       schedule?: (callback: () => void, delayMs: number) => unknown;
       cancelScheduled?: (handle: unknown) => void;
       titles?: ZenXTriggerTitlePort;
+      programs?: TriggerProgramRunner;
     } = {},
   ) {
     this.#manager = manager;
     this.#store = store;
     this.#titles = options.titles;
+    this.#programs = options.programs ?? new ZenXTriggerProgramRunner();
     this.#now = options.now ?? Date.now;
     this.#schedule = options.schedule ?? setTimeout;
     this.#cancelScheduled =
@@ -72,146 +130,278 @@ export class ZenXTriggerService {
   }
 
   async start(): Promise<void> {
-    this.#snapshot = await this.#store.read();
-    for (const entry of this.#snapshot.history) {
-      if (entry.status === "starting" || entry.status === "running") {
-        entry.status = "failed";
-        entry.completedAt = this.#now();
-        entry.error =
-          "ZenX stopped before this wakeup reached a visible terminal result; it was not retried.";
-      }
-    }
-    await this.#persist();
-    this.#rescheduleTimers();
-    this.#manager.onNotification((method, params) => {
-      if (method === "item/completed") {
-        const event = params as ServerNotificationParams["item/completed"];
-        const items = this.#completedTurnItems.get(event.turnId) ?? [];
-        const next = items.filter((item) => item.id !== event.item.id);
-        next.push(event.item);
-        this.#completedTurnItems.set(event.turnId, next);
-        if (event.item.type === "agentMessage") {
-          this.#completedAgentMessages.set(event.turnId, event.item.text);
+    if (this.#generation !== null) await this.stop();
+    const generation = newGeneration();
+    this.#generation = generation;
+    try {
+      await this.#mutation;
+      const snapshot = await this.#store.read();
+      for (const entry of snapshot.history) {
+        if (entry.status === "starting" || entry.status === "running") {
+          entry.status = "failed";
+          entry.completedAt = this.#now();
+          entry.error =
+            "ZenX stopped before this wakeup reached a visible terminal result; it was not retried.";
+          if (entry.programInvocationId != null) {
+            const outcome: TriggerProgramOutcome = {
+              stage: programStageForInvocation(entry.programInvocationId),
+              invocationId: entry.programInvocationId,
+              status: "uncertain",
+              output: null,
+              exitCode: null,
+              error:
+                "The previous process ended before the local program outcome was known",
+            };
+            entry.programOutcome = outcome;
+            entry.programOutcomes = [outcome];
+          }
         }
-      } else if (method === "turn/completed") {
-        void this.#handleTurnCompleted(
-          params as ServerNotificationParams["turn/completed"],
-        );
       }
-    });
+      await this.#store.write(snapshot);
+      this.#assertMutationGeneration(generation);
+      this.#snapshot = snapshot;
+      this.#notify();
+      this.#rescheduleTimers(generation);
+      generation.disposeNotifications = this.#manager.onNotification(
+        (method, params) => {
+          if (!this.#isOperational(generation)) return;
+          if (method === "item/completed") {
+            this.#handleItemCompleted(
+              generation,
+              params as ServerNotificationParams["item/completed"],
+            );
+          } else if (method === "turn/completed") {
+            void this.#handleTurnCompleted(
+              generation,
+              params as ServerNotificationParams["turn/completed"],
+            ).catch((error: unknown) => {
+              if (this.#isOperational(generation))
+                console.warn(
+                  `Could not process Trigger completion: ${describeError(error)}`,
+                );
+            });
+          }
+        },
+      );
+    } catch (error) {
+      generation.active = false;
+      if (this.#generation === generation) this.#generation = null;
+      generation.disposeNotifications?.();
+      generation.disposeNotifications = undefined;
+      throw error;
+    }
   }
 
-  stop(): void {
-    for (const timer of this.#timers.values()) this.#cancelScheduled(timer);
-    this.#timers.clear();
+  async stop(): Promise<void> {
+    const generation = this.#generation;
+    if (generation === null) return;
+    generation.retiring = true;
+    for (const controller of generation.programControllers.values())
+      controller.abort();
+    try {
+      await this.#mutate(
+        generation,
+        async (snapshot) => {
+          for (const entry of snapshot.history) {
+            if (isTerminal(entry.status)) continue;
+            entry.status = "failed";
+            entry.completedAt = this.#now();
+            entry.error =
+              "ZenX Trigger generation retired before this wakeup reached a visible terminal result; it was not retried.";
+            if (entry.programInvocationId != null) {
+              const outcome: TriggerProgramOutcome = {
+                stage: programStageForInvocation(entry.programInvocationId),
+                invocationId: entry.programInvocationId,
+                status: "uncertain",
+                output: null,
+                exitCode: null,
+                error:
+                  "Trigger generation retired while local work was in flight",
+              };
+              entry.programOutcome = outcome;
+              entry.programOutcomes = [
+                ...(entry.programOutcomes ?? []),
+                outcome,
+              ].slice(-MAX_PROGRAM_OUTCOMES);
+            }
+          }
+          generation.activeWakeups.clear();
+          return undefined;
+        },
+        true,
+      );
+    } finally {
+      generation.active = false;
+      if (this.#generation === generation) this.#generation = null;
+      generation.disposeNotifications?.();
+      generation.disposeNotifications = undefined;
+      for (const timer of generation.timers.values())
+        this.#cancelScheduled(timer);
+      generation.timers.clear();
+      generation.completedTurnItems.clear();
+      generation.pendingCompletedTurns.clear();
+      generation.activeWakeups.clear();
+      generation.programControllers.clear();
+    }
   }
+
+  async close(): Promise<void> {
+    await this.stop();
+    this.#listeners.clear();
+  }
+
   snapshot(): TriggerSnapshot {
     return structuredClone(this.#snapshot);
   }
+
   onChange(listener: (snapshot: TriggerSnapshot) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
 
   async create(input: CreateTriggerInput): Promise<ZenXTrigger> {
-    return await this.#mutate(async () => {
-      const common = {
-        id: randomUUID(),
-        threadId: required(input.threadId, "thread"),
-        kind: input.kind,
-        label: required(input.label, "label"),
-        prompt: required(input.prompt, "prompt"),
-        createdAt: this.#now(),
-        active: true,
-      };
-      const trigger: ZenXTrigger =
-        input.kind === "timer"
-          ? {
-              ...common,
-              timer: {
-                nextRunAt: validFuture(input.runAt, this.#now()),
-                intervalMinutes:
-                  input.intervalMinutes === undefined
-                    ? null
-                    : positive(input.intervalMinutes),
-              },
-            }
-          : input.kind === "thread"
-            ? {
-                ...common,
-                watch: {
-                  threadId: required(input.watchedThreadId, "watched thread"),
-                  event: "turn_completed",
-                },
-              }
-            : input.kind === "roomMention"
-              ? {
-                  ...common,
-                  room: {
-                    roomId: required(input.roomId, "room"),
-                    mention: required(input.mention, "mention"),
-                  },
-                }
-              : {
-                  ...common,
-                  signal: { name: required(input.signalName, "signal name") },
-                };
-      this.#snapshot.triggers.push(trigger);
-      return trigger;
-    }).then((trigger) => {
-      this.#rescheduleTimers();
-      return trigger;
+    const generation = this.#runningGeneration();
+    const trigger = await this.#mutate(generation, async (snapshot) => {
+      const value = triggerFromInput(
+        input,
+        randomUUID(),
+        this.#now(),
+        true,
+        this.#now(),
+      );
+      snapshot.triggers.push(value);
+      return value;
     });
+    this.#rescheduleTimers(generation);
+    return structuredClone(trigger);
+  }
+
+  async update(input: UpdateTriggerInput): Promise<ZenXTrigger> {
+    const generation = this.#runningGeneration();
+    const trigger = await this.#mutate(generation, async (snapshot) => {
+      const index = snapshot.triggers.findIndex(
+        (candidate) => candidate.id === input.id,
+      );
+      if (index < 0) throw new Error("Trigger was not found");
+      const existing = snapshot.triggers[index]!;
+      const replacement = triggerFromInput(
+        input,
+        existing.id,
+        existing.createdAt,
+        existing.active,
+        this.#now(),
+      );
+      snapshot.triggers[index] = replacement;
+      return replacement;
+    });
+    this.#rescheduleTimers(generation);
+    return structuredClone(trigger);
   }
 
   async cancel(triggerId: string): Promise<void> {
-    await this.#mutate(async () => {
-      const trigger = this.#snapshot.triggers.find(
-        (item) => item.id === triggerId,
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const trigger = snapshot.triggers.find(
+        (item) => item.id === required(triggerId, "trigger"),
       );
       if (trigger === undefined) throw new Error("Trigger was not found");
       trigger.active = false;
-      const timer = this.#timers.get(trigger.id);
+      const timer = generation.timers.get(trigger.id);
       if (timer !== undefined) this.#cancelScheduled(timer);
-      this.#timers.delete(trigger.id);
+      generation.timers.delete(trigger.id);
+    });
+  }
+
+  async delete(triggerId: string): Promise<void> {
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const normalized = required(triggerId, "trigger");
+      const index = snapshot.triggers.findIndex(
+        (item) => item.id === normalized,
+      );
+      if (index < 0) throw new Error("Trigger was not found");
+      snapshot.triggers.splice(index, 1);
+      const timer = generation.timers.get(normalized);
+      if (timer !== undefined) this.#cancelScheduled(timer);
+      generation.timers.delete(normalized);
     });
   }
 
   async signal(name: string, detail: string): Promise<void> {
+    const generation = this.#runningGeneration();
     const signalName = required(name, "signal name");
     const signalDetail = detail.trim();
-    const matches = this.#snapshot.triggers.filter(
-      (trigger) =>
-        trigger.active &&
-        trigger.kind === "signal" &&
-        trigger.signal?.name === signalName,
-    );
-    for (const trigger of matches)
-      await this.#fire(trigger.id, {
-        reason: `External signal ${signalName}: ${signalDetail}`,
+    const matches = this.#snapshot.triggers
+      .filter(
+        (trigger) =>
+          trigger.active &&
+          trigger.kind === "signal" &&
+          trigger.signal?.name === signalName,
+      )
+      .map((trigger) => trigger.id);
+    for (const triggerId of matches) {
+      await this.#fire(generation, triggerId, {
+        reason: `External signal ${signalName}: ${bounded(signalDetail, 4_000)}`,
         occurrenceKey: `signal:${randomUUID()}`,
         projection: `Signal name: ${signalName}\nSignal detail: ${bounded(signalDetail, 4_000)}`,
       });
+    }
   }
 
   async createRoom(input: CreateRoomInput): Promise<ZenXRoom> {
-    return await this.#mutate(async () => {
-      const members = validateMembers(input.members);
-      const room: ZenXRoom = {
+    const generation = this.#runningGeneration();
+    const room = await this.#mutate(generation, async (snapshot) => {
+      const value: ZenXRoom = {
         id: randomUUID(),
         name: required(input.name, "room name"),
-        members,
+        members: validateMembers(input.members),
         messages: [],
         createdAt: this.#now(),
       };
-      this.#snapshot.rooms.push(room);
-      return room;
+      snapshot.rooms.push(value);
+      return value;
+    });
+    return structuredClone(room);
+  }
+
+  async renameRoom(roomId: string, name: string): Promise<void> {
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find(
+        (candidate) => candidate.id === required(roomId, "room"),
+      );
+      if (room === undefined) throw new Error("Room was not found");
+      room.name = required(name, "room name");
+    });
+  }
+
+  async deleteRoom(roomId: string): Promise<void> {
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const normalized = required(roomId, "room");
+      const room = snapshot.rooms.find(
+        (candidate) => candidate.id === normalized,
+      );
+      if (room === undefined) throw new Error("Room was not found");
+      const owner = snapshot.history.find(
+        (entry) =>
+          entry.replyRoomId === normalized &&
+          (entry.status === "starting" || entry.status === "running"),
+      );
+      if (owner !== undefined)
+        throw new Error(
+          "Room cannot be deleted while a nonterminal wakeup owns its reply route",
+        );
+      snapshot.rooms = snapshot.rooms.filter(
+        (candidate) => candidate.id !== normalized,
+      );
     });
   }
 
   async addRoomMember(roomId: string, member: RoomMember): Promise<void> {
-    await this.#mutate(async () => {
-      const room = this.#snapshot.rooms.find(
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find(
         (entry) => entry.id === required(roomId, "room"),
       );
       if (room === undefined) throw new Error("Room was not found");
@@ -220,18 +410,17 @@ export class ZenXTriggerService {
   }
 
   async removeRoomMember(roomId: string, threadId: string): Promise<void> {
-    await this.#mutate(async () => {
-      const room = this.#snapshot.rooms.find(
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find(
         (entry) => entry.id === required(roomId, "room"),
       );
       if (room === undefined) throw new Error("Room was not found");
-      const normalizedThreadId = required(threadId, "member thread");
-      if (
-        !room.members.some((member) => member.threadId === normalizedThreadId)
-      )
+      const normalized = required(threadId, "member thread");
+      if (!room.members.some((member) => member.threadId === normalized))
         throw new Error("Room member was not found");
       room.members = room.members.filter(
-        (member) => member.threadId !== normalizedThreadId,
+        (member) => member.threadId !== normalized,
       );
     });
   }
@@ -241,103 +430,102 @@ export class ZenXTriggerService {
     author: string,
     text: string,
   ): Promise<void> {
-    const room = this.#snapshot.rooms.find((entry) => entry.id === roomId);
-    if (room === undefined) throw new Error("Room was not found");
-    const posted = message(
-      room.id,
-      required(author, "author"),
-      required(text, "message"),
-      "human",
-      null,
-      null,
-      this.#now(),
-    );
-    await this.#mutate(async () => {
-      room.messages.push(posted);
+    await this.#postRoomMessage(roomId, author, text, "human", null, null);
+  }
+
+  async postAgentRoomMessage(roomId: string, text: string): Promise<void> {
+    await this.#postRoomMessage(roomId, "Agent", text, "agent", null, null);
+  }
+
+  async #postRoomMessage(
+    roomId: string,
+    author: string,
+    text: string,
+    kind: RoomMessage["kind"],
+    originThreadId: string | null,
+    originTurnId: string | null,
+  ): Promise<void> {
+    const generation = this.#runningGeneration();
+    const posted = await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find(
+        (entry) => entry.id === required(roomId, "room"),
+      );
+      if (room === undefined) throw new Error("Room was not found");
+      const value = message(
+        room.id,
+        required(author, "author"),
+        required(text, "message"),
+        kind,
+        originThreadId,
+        originTurnId,
+        this.#now(),
+      );
+      room.messages.push(value);
+      return { posted: value, room: structuredClone(room) };
     });
-    const mentions = room.members.filter((member) =>
-      new RegExp(
-        `(^|\\s)@${escapeRegExp(member.name)}(?=\\s|$|[,.!?])`,
-        "iu",
-      ).test(text),
+    const mentions = posted.room.members.filter((member) =>
+      mentionMatches(text, member.name),
     );
     for (const member of mentions) {
-      const matches = this.#snapshot.triggers.filter(
-        (trigger) =>
-          trigger.active &&
-          trigger.threadId === member.threadId &&
-          trigger.kind === "roomMention" &&
-          trigger.room?.roomId === roomId &&
-          trigger.room.mention.toLocaleLowerCase() ===
-            member.name.toLocaleLowerCase(),
-      );
-      for (const trigger of matches)
-        await this.#fire(trigger.id, {
-          reason: `Room #${room.name} mention from ${posted.author}: ${posted.text}`,
-          occurrenceKey: `room:${room.id}:${posted.id}`,
-          sourceRoomId: room.id,
-          sourceRoomMessageId: posted.id,
-          projection: projectRoomContext(room),
+      const triggerIds = this.#snapshot.triggers
+        .filter(
+          (trigger) =>
+            trigger.active &&
+            trigger.threadId === member.threadId &&
+            trigger.kind === "roomMention" &&
+            trigger.room?.roomId === roomId &&
+            trigger.room.mention.toLocaleLowerCase() ===
+              member.name.toLocaleLowerCase(),
+        )
+        .map((trigger) => trigger.id);
+      for (const triggerId of triggerIds) {
+        await this.#fire(generation, triggerId, {
+          reason: `Room #${posted.room.name} mention from ${posted.posted.author}: ${posted.posted.text}`,
+          occurrenceKey: `room:${posted.room.id}:${posted.posted.id}`,
+          sourceRoomId: posted.room.id,
+          sourceRoomMessageId: posted.posted.id,
+          projection: projectRoomContext(posted.room),
+          eventText: posted.posted.text,
         });
+      }
     }
   }
 
   async #handleTurnCompleted(
+    generation: TriggerGeneration,
     event: ServerNotificationParams["turn/completed"],
   ): Promise<void> {
+    if (!this.#isOperational(generation)) return;
+    const key = transientTurnKey(event.threadId, event.turn.id);
+    const buffered = generation.completedTurnItems.get(key);
     const completedItems = mergeCompletedItems(
       event.turn.items,
-      this.#completedTurnItems.get(event.turn.id) ?? [],
+      buffered?.threadId === event.threadId ? buffered.items : [],
     );
-    await this.#mutate(async () => {
-      const entry = this.#snapshot.history.find(
-        (item) => item.turnId === event.turn.id && item.status === "running",
-      );
-      if (entry !== undefined) {
-        entry.status =
-          event.turn.status === "completed" ? "completed" : "failed";
-        entry.completedAt = this.#now();
-        entry.error = event.turn.error?.message ?? null;
-        const trigger = this.#snapshot.triggers.find(
-          (item) => item.id === entry.triggerId,
-        );
-        if (trigger?.kind === "roomMention" && trigger.room !== undefined) {
-          const room = this.#snapshot.rooms.find(
-            (item) => item.id === trigger.room?.roomId,
-          );
-          const projectedAnswer = [...completedItems]
-            .reverse()
-            .find((item) => item.type === "agentMessage");
-          const answer =
-            projectedAnswer?.type === "agentMessage"
-              ? projectedAnswer.text
-              : (this.#completedAgentMessages.get(event.turn.id) ?? "");
-          if (room !== undefined && answer.length > 0) {
-            room.messages.push(
-              message(
-                room.id,
-                trigger.room.mention,
-                answer,
-                "agent",
-                entry.threadId,
-                event.turn.id,
-                this.#now(),
-              ),
-            );
-          }
-        }
-      }
-    });
-    this.#completedAgentMessages.delete(event.turn.id);
-    this.#completedTurnItems.delete(event.turn.id);
-    const watchers = this.#snapshot.triggers.filter(
-      (trigger) =>
-        trigger.active &&
-        trigger.kind === "thread" &&
-        trigger.watch?.threadId === event.threadId,
+    const running = this.#snapshot.history.find(
+      (entry) =>
+        entry.threadId === event.threadId &&
+        entry.turnId === event.turn.id &&
+        (entry.status === "starting" || entry.status === "running") &&
+        generation.activeWakeups.has(entry.clientUserMessageId),
     );
-    for (const trigger of watchers)
-      await this.#fire(trigger.id, {
+    if (running !== undefined) {
+      await this.#completeTurn(generation, running.id, event, completedItems);
+      clearTransientTurn(generation, event.threadId, event.turn.id);
+    } else {
+      this.#bufferEarlyCompletion(generation, event, completedItems);
+    }
+    if (!this.#isOperational(generation)) return;
+    const watchers = this.#snapshot.triggers
+      .filter(
+        (trigger) =>
+          trigger.active &&
+          trigger.kind === "thread" &&
+          trigger.watch?.threadId === event.threadId,
+      )
+      .map((trigger) => trigger.id);
+    for (const triggerId of watchers) {
+      await this.#fire(generation, triggerId, {
         reason: `Thread ${event.threadId} emitted turn_completed for ${event.turn.id}`,
         occurrenceKey: `thread:${event.threadId}:${event.turn.id}`,
         sourceThreadId: event.threadId,
@@ -346,165 +534,882 @@ export class ZenXTriggerService {
           ...event.turn,
           items: completedItems,
         }),
+        eventText: projectCompletedTurn(event.threadId, {
+          ...event.turn,
+          items: completedItems,
+        }),
       });
+    }
+  }
+
+  #handleItemCompleted(
+    generation: TriggerGeneration,
+    event: ServerNotificationParams["item/completed"],
+  ): void {
+    if (!this.#isOperational(generation)) return;
+    if (!this.#isPotentialTurn(generation, event.threadId, event.turnId))
+      return;
+    const key = transientTurnKey(event.threadId, event.turnId);
+    const current = generation.completedTurnItems.get(key);
+    const items = (current?.items ?? []).filter(
+      (item) => item.id !== event.item.id,
+    );
+    items.push(event.item);
+    setBounded(
+      generation.completedTurnItems,
+      key,
+      { threadId: event.threadId, items: items.slice(-MAX_ITEMS_PER_TURN) },
+      (evicted) => generation.pendingCompletedTurns.delete(evicted),
+    );
+  }
+
+  #isPotentialTurn(
+    generation: TriggerGeneration,
+    threadId: string,
+    turnId: string,
+  ): boolean {
+    const key = transientTurnKey(threadId, turnId);
+    return (
+      generation.completedTurnItems.has(key) ||
+      generation.pendingCompletedTurns.has(key) ||
+      [...generation.activeWakeups.values()].some(
+        (entry) => entry.threadId === threadId,
+      ) ||
+      this.#snapshot.triggers.some(
+        (trigger) =>
+          trigger.active &&
+          trigger.kind === "thread" &&
+          trigger.watch?.threadId === threadId,
+      )
+    );
+  }
+
+  #bufferEarlyCompletion(
+    generation: TriggerGeneration,
+    event: ServerNotificationParams["turn/completed"],
+    completedItems: readonly ThreadItem[],
+  ): void {
+    const candidates = [...generation.activeWakeups.values()].filter(
+      (entry) =>
+        entry.threadId === event.threadId &&
+        this.#snapshot.history.find((history) => history.id === entry.historyId)
+          ?.status === "starting" &&
+        this.#snapshot.history.find((history) => history.id === entry.historyId)
+          ?.turnId === null,
+    );
+    if (candidates.length === 0) return;
+    const key = transientTurnKey(event.threadId, event.turn.id);
+    const existing = generation.pendingCompletedTurns.get(key);
+    if (existing?.claimed || existing?.rejected) return;
+    const clientIds = [
+      ...new Set(
+        completedItems
+          .filter(
+            (item): item is Extract<ThreadItem, { type: "userMessage" }> =>
+              item.type === "userMessage",
+          )
+          .map((item) => item.clientId)
+          .filter((value): value is string => value !== null),
+      ),
+    ];
+    const exact =
+      clientIds.length === 1 &&
+      candidates.some((entry) => entry.clientUserMessageId === clientIds[0])
+        ? clientIds[0]!
+        : null;
+    if (existing !== undefined) {
+      if (exact !== null && existing.clientUserMessageId === exact) return;
+      existing.rejected = true;
+      existing.clientUserMessageId = null;
+      return;
+    }
+    setBounded(
+      generation.pendingCompletedTurns,
+      key,
+      {
+        event,
+        clientUserMessageId: exact,
+        rejected: exact === null,
+        claimed: false,
+      },
+      (evicted) => generation.completedTurnItems.delete(evicted),
+    );
   }
 
   async #fire(
+    generation: TriggerGeneration,
     triggerId: string,
-    wakeup: {
-      reason: string;
-      occurrenceKey: string;
-      projection?: string;
-      sourceThreadId?: string;
-      sourceTurnId?: string;
-      sourceRoomId?: string;
-      sourceRoomMessageId?: string;
-      scheduledAt?: number;
-    },
+    wakeup: WakeupEvent,
   ): Promise<void> {
-    const trigger = this.#snapshot.triggers.find(
-      (item) => item.id === triggerId && item.active,
-    );
-    if (trigger === undefined) return;
-    const clientUserMessageId = stableWakeupId(
-      trigger.id,
-      wakeup.occurrenceKey,
-    );
-    if (
-      this.#snapshot.history.some(
-        (entry) => entry.clientUserMessageId === clientUserMessageId,
-      )
-    )
-      return;
-    const history: TriggerHistoryEntry = {
-      id: randomUUID(),
-      triggerId: trigger.id,
-      threadId: trigger.threadId,
-      kind: trigger.kind,
-      reason: wakeup.reason,
-      prompt: trigger.prompt,
-      clientUserMessageId,
-      startedAt: this.#now(),
-      completedAt: null,
-      status: "starting",
-      turnId: null,
-      error: null,
-      sourceThreadId: wakeup.sourceThreadId ?? null,
-      sourceTurnId: wakeup.sourceTurnId ?? null,
-      sourceRoomId: wakeup.sourceRoomId ?? null,
-      sourceRoomMessageId: wakeup.sourceRoomMessageId ?? null,
-    };
-    await this.#mutate(async () => {
-      this.#snapshot.history.unshift(history);
-      if (trigger.timer !== undefined) {
-        if (trigger.timer.intervalMinutes === null) trigger.active = false;
-        else
-          trigger.timer.nextRunAt =
-            Math.max(this.#now(), wakeup.scheduledAt ?? this.#now()) +
-            trigger.timer.intervalMinutes * 60_000;
-      }
-    });
-    this.#rescheduleTimers();
+    if (!this.#isOperational(generation)) return;
+    let committed;
     try {
-      await this.#titles
-        ?.observe(
-          trigger.threadId,
-          meaningfulWakeupTitleInput(trigger, wakeup.projection),
-        )
-        .catch((error: unknown) =>
-          console.warn(
-            `Could not stage trigger title: ${error instanceof Error ? error.message : String(error)}`,
-          ),
+      committed = await this.#mutate(generation, async (snapshot) => {
+        const trigger = snapshot.triggers.find(
+          (item) => item.id === triggerId && item.active,
         );
+        if (trigger === undefined) return undefined;
+        if (
+          trigger.kind === "roomMention" &&
+          (trigger.room === undefined ||
+            !snapshot.rooms.some((room) => room.id === trigger.room?.roomId))
+        )
+          return undefined;
+        const clientUserMessageId = stableWakeupId(
+          trigger.id,
+          wakeup.occurrenceKey,
+        );
+        if (
+          snapshot.history.some(
+            (entry) => entry.clientUserMessageId === clientUserMessageId,
+          )
+        )
+          return undefined;
+        const nonterminal = snapshot.history.filter(
+          (entry) => entry.status === "starting" || entry.status === "running",
+        ).length;
+        const rejected = nonterminal >= MAX_WAKEUPS;
+        const history: TriggerHistoryEntry = {
+          id: randomUUID(),
+          triggerId: trigger.id,
+          threadId: trigger.threadId,
+          kind: trigger.kind,
+          reason: bounded(wakeup.reason, 4_000),
+          prompt: bounded(trigger.prompt, 4_000),
+          clientUserMessageId,
+          startedAt: this.#now(),
+          completedAt: rejected ? this.#now() : null,
+          status: rejected ? "failed" : "starting",
+          turnId: null,
+          error: rejected
+            ? `ZenX Trigger wakeup admission is full at ${String(MAX_WAKEUPS)} nonterminal wakeups; this wakeup was not dispatched.`
+            : null,
+          sourceThreadId: wakeup.sourceThreadId ?? null,
+          sourceTurnId: wakeup.sourceTurnId ?? null,
+          sourceRoomId: wakeup.sourceRoomId ?? null,
+          sourceRoomMessageId: wakeup.sourceRoomMessageId ?? null,
+          replyRoomId: trigger.room?.roomId ?? null,
+          replyAuthor: trigger.room?.mention ?? null,
+          programInvocationId: null,
+          programOutcome: null,
+          programOutcomes: [],
+        };
+        snapshot.history.unshift(history);
+        if (trigger.timer !== undefined) {
+          if (trigger.timer.intervalMinutes === null) trigger.active = false;
+          else {
+            trigger.timer.nextRunAt =
+              Math.max(this.#now(), wakeup.scheduledAt ?? this.#now()) +
+              trigger.timer.intervalMinutes * 60_000;
+          }
+        }
+        return rejected
+          ? { rejected: true as const }
+          : {
+              rejected: false as const,
+              trigger: structuredClone(trigger),
+              historyId: history.id,
+              clientUserMessageId,
+            };
+      });
+    } catch (error) {
+      if (error instanceof StaleGenerationError) return;
+      throw error;
+    }
+    if (committed === undefined || committed.rejected) {
+      this.#rescheduleTimers(generation);
+      return;
+    }
+    this.#rescheduleTimers(generation);
+    const active: ActiveWakeup = {
+      historyId: committed.historyId,
+      threadId: committed.trigger.threadId,
+      clientUserMessageId: committed.clientUserMessageId,
+      trigger: committed.trigger,
+      generationId: generation.id,
+    };
+    generation.activeWakeups.set(active.clientUserMessageId, active);
+    await this.#executeWakeup(generation, active, wakeup);
+  }
+
+  async #executeWakeup(
+    generation: TriggerGeneration,
+    active: ActiveWakeup,
+    wakeup: WakeupEvent,
+  ): Promise<void> {
+    const trigger = active.trigger;
+    const controller = new AbortController();
+    generation.programControllers.set(active.historyId, controller);
+    try {
+      await this.#observeTitle(trigger, wakeup.projection);
+      if (!this.#isOperational(generation)) return;
+      const program = trigger.program;
+      if (program?.match !== undefined) {
+        const regex = new RegExp(
+          program.match.regex,
+          program.match.flags ?? "u",
+        );
+        const matched = regex.test(wakeup.eventText ?? wakeup.projection ?? "");
+        const outcome = this.#programOutcome(
+          "predicate",
+          stableProgramInvocationId(active.clientUserMessageId, "predicate"),
+          matched ? "matched" : "non_match",
+          null,
+          null,
+          null,
+        );
+        if (!matched) {
+          await this.#finishProgram(
+            generation,
+            active,
+            outcome,
+            "completed",
+            null,
+          );
+          return;
+        }
+        await this.#recordProgramOutcome(generation, active, outcome);
+      }
+      if (program?.predicate !== undefined) {
+        const invocationId = stableProgramInvocationId(
+          active.clientUserMessageId,
+          "predicate",
+        );
+        await this.#recordProgramInvocation(generation, active, invocationId);
+        const result = await this.#programs.run(
+          program.predicate,
+          {
+            invocationId,
+            stage: "predicate",
+            event: programInput(active, wakeup),
+          },
+          controller.signal,
+        );
+        const outcome = this.#programOutcome(
+          "predicate",
+          invocationId,
+          result.status,
+          result.output,
+          result.exitCode,
+          result.error,
+        );
+        if (result.status !== "matched") {
+          await this.#finishProgram(
+            generation,
+            active,
+            outcome,
+            result.status === "non_match" ? "completed" : "failed",
+            result.status === "non_match" ? null : result.error,
+          );
+          return;
+        }
+        await this.#recordProgramOutcome(generation, active, outcome);
+      }
+      if (program?.action !== undefined) {
+        const invocationId = stableProgramInvocationId(
+          active.clientUserMessageId,
+          "action",
+        );
+        await this.#recordProgramInvocation(generation, active, invocationId);
+        const result = await this.#programs.run(
+          program.action,
+          {
+            invocationId,
+            stage: "action",
+            event: programInput(active, wakeup),
+          },
+          controller.signal,
+        );
+        const outcome = this.#programOutcome(
+          "action",
+          invocationId,
+          result.status,
+          result.output,
+          result.exitCode,
+          result.error,
+        );
+        await this.#finishProgram(
+          generation,
+          active,
+          outcome,
+          result.status === "completed" ? "completed" : "failed",
+          result.status === "completed" ? null : result.error,
+        );
+        return;
+      }
+      if (!this.#isOperational(generation)) return;
       const result = await this.#manager.request("turn/start", {
         threadId: trigger.threadId,
-        clientUserMessageId,
+        clientUserMessageId: active.clientUserMessageId,
         input: [
           {
             type: "text",
-            text: wakeupInput(trigger, history, wakeup.projection),
+            text: wakeupInput(
+              trigger,
+              this.#history(active.historyId),
+              wakeup.projection,
+            ),
           },
         ],
       });
-      await this.#mutate(async () => {
+      if (!this.#isOperational(generation)) return;
+      const wasStarted = await this.#mutate(generation, async (snapshot) => {
+        const history = snapshot.history.find(
+          (entry) => entry.id === active.historyId,
+        );
+        if (history === undefined || history.status !== "starting")
+          return false;
+        const collision = snapshot.history.find(
+          (entry) =>
+            entry.id !== history.id &&
+            entry.threadId === trigger.threadId &&
+            entry.turnId === result.turn.id &&
+            (entry.status === "starting" || entry.status === "running"),
+        );
+        if (collision !== undefined)
+          throw new Error("Turn identity was already owned by another wakeup");
         history.status = "running";
         history.turnId = result.turn.id;
+        return true;
       });
+      if (!wasStarted) return;
+      await this.#consumePendingCompletion(generation, active, result.turn.id);
+      if (
+        result.turn.status === "completed" ||
+        result.turn.status === "interrupted"
+      ) {
+        await this.#completeTurn(
+          generation,
+          active.historyId,
+          {
+            threadId: trigger.threadId,
+            turn: result.turn,
+          },
+          result.turn.items,
+        );
+      }
     } catch (error) {
-      await this.#mutate(async () => {
-        history.status = "failed";
-        history.completedAt = this.#now();
-        history.error = error instanceof Error ? error.message : String(error);
-      });
+      if (error instanceof StaleGenerationError) return;
+      if (this.#isOperational(generation))
+        await this.#failHistory(
+          generation,
+          active.historyId,
+          describeError(error),
+        );
+    } finally {
+      generation.programControllers.delete(active.historyId);
     }
   }
 
-  #rescheduleTimers(): void {
-    for (const timer of this.#timers.values()) this.#cancelScheduled(timer);
-    this.#timers.clear();
+  async #consumePendingCompletion(
+    generation: TriggerGeneration,
+    active: ActiveWakeup,
+    turnId: string,
+  ): Promise<void> {
+    const key = transientTurnKey(active.threadId, turnId);
+    const pending = generation.pendingCompletedTurns.get(key);
+    if (
+      pending === undefined ||
+      pending.claimed ||
+      pending.rejected ||
+      pending.clientUserMessageId !== active.clientUserMessageId
+    )
+      return;
+    pending.claimed = true;
+    await this.#completeTurn(
+      generation,
+      active.historyId,
+      pending.event,
+      mergeCompletedItems(
+        pending.event.turn.items,
+        generation.completedTurnItems.get(key)?.items ?? [],
+      ),
+    );
+    if (generation.pendingCompletedTurns.get(key) === pending)
+      generation.pendingCompletedTurns.delete(key);
+    generation.completedTurnItems.delete(key);
+  }
+
+  async #completeTurn(
+    generation: TriggerGeneration,
+    historyId: string,
+    event: ServerNotificationParams["turn/completed"],
+    completedItems: readonly ThreadItem[],
+  ): Promise<void> {
+    let released = false;
+    await this.#mutate(generation, async (snapshot) => {
+      const entry = snapshot.history.find(
+        (candidate) => candidate.id === historyId,
+      );
+      if (
+        entry === undefined ||
+        isTerminal(entry.status) ||
+        entry.threadId !== event.threadId ||
+        (entry.turnId !== null && entry.turnId !== event.turn.id)
+      )
+        return;
+      entry.turnId = event.turn.id;
+      entry.status = event.turn.status === "completed" ? "completed" : "failed";
+      entry.completedAt = this.#now();
+      entry.error = event.turn.error?.message ?? null;
+      if (
+        entry.status === "completed" &&
+        entry.replyRoomId != null &&
+        entry.replyAuthor != null
+      ) {
+        const room = snapshot.rooms.find(
+          (candidate) => candidate.id === entry.replyRoomId,
+        );
+        const answer = [...completedItems]
+          .reverse()
+          .find((item) => item.type === "agentMessage");
+        if (
+          room !== undefined &&
+          answer?.type === "agentMessage" &&
+          answer.text.length > 0
+        ) {
+          room.messages.push(
+            message(
+              room.id,
+              entry.replyAuthor,
+              bounded(answer.text, 8_000),
+              "agent",
+              entry.threadId,
+              event.turn.id,
+              this.#now(),
+            ),
+          );
+        }
+      }
+      released = true;
+    });
+    if (released) {
+      const active = [...generation.activeWakeups.values()].find(
+        (candidate) => candidate.historyId === historyId,
+      );
+      if (active !== undefined)
+        generation.activeWakeups.delete(active.clientUserMessageId);
+    }
+  }
+
+  async #recordProgramOutcome(
+    generation: TriggerGeneration,
+    active: ActiveWakeup,
+    outcome: TriggerProgramOutcome,
+  ): Promise<void> {
+    await this.#mutate(generation, async (snapshot) => {
+      const entry = snapshot.history.find(
+        (candidate) => candidate.id === active.historyId,
+      );
+      if (entry === undefined || isTerminal(entry.status)) return;
+      entry.programInvocationId = outcome.invocationId;
+      entry.programOutcome = outcome;
+      entry.programOutcomes = [...(entry.programOutcomes ?? []), outcome].slice(
+        -MAX_PROGRAM_OUTCOMES,
+      );
+    });
+  }
+
+  async #recordProgramInvocation(
+    generation: TriggerGeneration,
+    active: ActiveWakeup,
+    invocationId: string,
+  ): Promise<void> {
+    await this.#mutate(generation, async (snapshot) => {
+      const entry = snapshot.history.find(
+        (candidate) => candidate.id === active.historyId,
+      );
+      if (entry === undefined || isTerminal(entry.status)) return;
+      entry.programInvocationId = invocationId;
+    });
+  }
+
+  async #finishProgram(
+    generation: TriggerGeneration,
+    active: ActiveWakeup,
+    outcome: TriggerProgramOutcome,
+    status: "completed" | "failed",
+    error: string | null,
+  ): Promise<void> {
+    let released = false;
+    await this.#mutate(generation, async (snapshot) => {
+      const entry = snapshot.history.find(
+        (candidate) => candidate.id === active.historyId,
+      );
+      if (entry === undefined || isTerminal(entry.status)) return;
+      entry.status = status;
+      entry.completedAt = this.#now();
+      entry.error = error;
+      entry.programInvocationId = outcome.invocationId;
+      entry.programOutcome = outcome;
+      entry.programOutcomes = [...(entry.programOutcomes ?? []), outcome].slice(
+        -MAX_PROGRAM_OUTCOMES,
+      );
+      released = true;
+    });
+    if (released) generation.activeWakeups.delete(active.clientUserMessageId);
+  }
+
+  async #failHistory(
+    generation: TriggerGeneration,
+    historyId: string,
+    error: string,
+  ): Promise<void> {
+    let released = false;
+    await this.#mutate(generation, async (snapshot) => {
+      const entry = snapshot.history.find(
+        (candidate) => candidate.id === historyId,
+      );
+      if (entry === undefined || isTerminal(entry.status)) return;
+      entry.status = "failed";
+      entry.completedAt = this.#now();
+      entry.error = bounded(error, 4_000);
+      released = true;
+    });
+    if (released) {
+      const active = [...generation.activeWakeups.values()].find(
+        (candidate) => candidate.historyId === historyId,
+      );
+      if (active !== undefined)
+        generation.activeWakeups.delete(active.clientUserMessageId);
+    }
+  }
+
+  async #observeTitle(
+    trigger: ZenXTrigger,
+    projection?: string,
+  ): Promise<void> {
+    if (this.#titles === undefined) return;
+    try {
+      await this.#titles.observe(
+        trigger.threadId,
+        meaningfulWakeupTitleInput(trigger, projection),
+      );
+    } catch (error) {
+      console.warn(`Could not stage trigger title: ${describeError(error)}`);
+    }
+  }
+
+  #rescheduleTimers(generation: TriggerGeneration): void {
+    if (!this.#isOperational(generation)) return;
+    for (const timer of generation.timers.values())
+      this.#cancelScheduled(timer);
+    generation.timers.clear();
     for (const trigger of this.#snapshot.triggers) {
-      if (!trigger.active || trigger.timer === undefined) continue;
-      this.#scheduleTimer(trigger.id, trigger.timer.nextRunAt);
+      if (trigger.active && trigger.timer !== undefined)
+        this.#scheduleTimer(generation, trigger.id, trigger.timer.nextRunAt);
     }
   }
 
-  #scheduleTimer(triggerId: string, scheduledAt: number): void {
+  #scheduleTimer(
+    generation: TriggerGeneration,
+    triggerId: string,
+    scheduledAt: number,
+  ): void {
     const delay = Math.max(
       0,
       Math.min(2_147_000_000, scheduledAt - this.#now()),
     );
     const timer = this.#schedule(() => {
-      this.#timers.delete(triggerId);
+      if (!this.#isOperational(generation)) return;
+      generation.timers.delete(triggerId);
       if (this.#now() < scheduledAt) {
-        this.#scheduleTimer(triggerId, scheduledAt);
+        this.#scheduleTimer(generation, triggerId, scheduledAt);
         return;
       }
-      void this.#fire(triggerId, {
+      void this.#fire(generation, triggerId, {
         reason: `Timer reached ${new Date(scheduledAt).toISOString()}`,
         occurrenceKey: `timer:${scheduledAt}`,
         scheduledAt,
+      }).catch((error: unknown) => {
+        if (this.#isOperational(generation))
+          console.warn(`Could not fire Timer: ${describeError(error)}`);
       });
     }, delay);
-    this.#timers.set(triggerId, timer);
+    generation.timers.set(triggerId, timer);
   }
 
-  async #mutate<T>(operation: () => Promise<T>): Promise<T> {
+  async #mutate<T>(
+    generation: TriggerGeneration,
+    operation: (snapshot: TriggerSnapshot) => Promise<T>,
+    allowRetiring = false,
+  ): Promise<T> {
+    this.#assertMutationGeneration(generation, allowRetiring);
     const previous = this.#mutation;
     let release!: () => void;
     this.#mutation = new Promise<void>((resolve) => {
       release = resolve;
     });
     await previous;
-    const previousSnapshot = structuredClone(this.#snapshot);
     try {
-      const result = await operation();
-      await this.#persist();
+      this.#assertMutationGeneration(generation, allowRetiring);
+      const snapshot = structuredClone(this.#snapshot);
+      const result = await operation(snapshot);
+      this.#assertMutationGeneration(generation, allowRetiring);
+      await this.#store.write(snapshot);
+      this.#assertMutationGeneration(generation, allowRetiring);
+      this.#snapshot = snapshot;
+      this.#notify();
       return result;
-    } catch (error) {
-      this.#snapshot = previousSnapshot;
-      throw error;
     } finally {
       release();
     }
   }
 
-  async #persist(): Promise<void> {
-    await this.#store.write(this.#snapshot);
+  #runningGeneration(): TriggerGeneration {
+    const generation = this.#generation;
+    if (generation === null || !this.#isOperational(generation))
+      throw new Error("ZenX Trigger service is not running");
+    return generation;
+  }
+
+  #isOperational(generation: TriggerGeneration): boolean {
+    return (
+      generation.active &&
+      !generation.retiring &&
+      this.#generation === generation
+    );
+  }
+
+  #assertMutationGeneration(
+    generation: TriggerGeneration,
+    allowRetiring = false,
+  ): void {
+    if (
+      !generation.active ||
+      this.#generation !== generation ||
+      (generation.retiring && !allowRetiring)
+    )
+      throw new StaleGenerationError();
+  }
+
+  #history(historyId: string): TriggerHistoryEntry {
+    const entry = this.#snapshot.history.find(
+      (candidate) => candidate.id === historyId,
+    );
+    if (entry === undefined) throw new StaleGenerationError();
+    return entry;
+  }
+
+  #programOutcome(
+    stage: "predicate" | "action",
+    invocationId: string,
+    status: TriggerProgramOutcome["status"],
+    output: string | null,
+    exitCode: number | null,
+    error: string | null,
+  ): TriggerProgramOutcome {
+    return {
+      stage,
+      invocationId,
+      status,
+      output: bounded(output ?? "", 8_000) || null,
+      exitCode,
+      error: bounded(error ?? "", 2_048) || null,
+    };
+  }
+
+  #notify(): void {
     for (const listener of this.#listeners) listener(this.snapshot());
   }
 }
 
-function meaningfulWakeupTitleInput(
-  trigger: ZenXTrigger,
-  projection?: string,
+class StaleGenerationError extends Error {
+  constructor() {
+    super("ZenX Trigger service lifecycle changed");
+  }
+}
+
+function newGeneration(): TriggerGeneration {
+  return {
+    id: randomUUID(),
+    active: true,
+    retiring: false,
+    timers: new Map(),
+    completedTurnItems: new Map(),
+    pendingCompletedTurns: new Map(),
+    activeWakeups: new Map(),
+    programControllers: new Map(),
+    disposeNotifications: undefined,
+  };
+}
+
+function triggerFromInput(
+  input: CreateTriggerInput,
+  id: string,
+  createdAt: number,
+  active: boolean,
+  now: number,
+): ZenXTrigger {
+  const common = {
+    id,
+    threadId: required(input.threadId, "thread"),
+    kind: input.kind,
+    label: required(input.label, "label"),
+    prompt: required(input.prompt, "prompt"),
+    createdAt,
+    active,
+    ...(programFromInput(input) === undefined
+      ? {}
+      : { program: programFromInput(input) }),
+  };
+  if (input.kind === "timer") {
+    return {
+      ...common,
+      kind: "timer",
+      timer: {
+        nextRunAt: validFuture(input.runAt, now),
+        intervalMinutes:
+          input.intervalMinutes === undefined
+            ? null
+            : positive(input.intervalMinutes),
+      },
+    };
+  }
+  if (input.kind === "thread") {
+    return {
+      ...common,
+      kind: "thread",
+      watch: {
+        threadId: required(input.watchedThreadId, "watched thread"),
+        event: "turn_completed",
+      },
+    };
+  }
+  if (input.kind === "roomMention") {
+    return {
+      ...common,
+      kind: "roomMention",
+      room: {
+        roomId: required(input.roomId, "room"),
+        mention: required(input.mention, "mention"),
+      },
+    };
+  }
+  return {
+    ...common,
+    kind: "signal",
+    signal: { name: required(input.signalName, "signal name") },
+  };
+}
+
+function programFromInput(
+  input: CreateTriggerInput | UpdateTriggerInput,
+): TriggerProgramConfig | undefined {
+  const value = input as CreateTriggerInput & {
+    program?: TriggerProgramConfig;
+    predicate?: TriggerProgramSpec;
+    action?: TriggerProgramSpec;
+    match?: TriggerProgramConfig["match"];
+  };
+  const program = value.program ?? {
+    ...(value.predicate === undefined ? {} : { predicate: value.predicate }),
+    ...(value.action === undefined ? {} : { action: value.action }),
+    ...(value.match === undefined ? {} : { match: value.match }),
+  };
+  if (Object.keys(program).length === 0) return undefined;
+  validateProgram(program);
+  return structuredClone(program);
+}
+
+function validateProgram(program: TriggerProgramConfig): void {
+  if (
+    program.predicate === undefined &&
+    program.action === undefined &&
+    program.match === undefined
+  )
+    throw new Error("Trigger program must define predicate, action, or match");
+  for (const [stage, spec] of [
+    ["predicate", program.predicate],
+    ["action", program.action],
+  ] as const) {
+    if (spec === undefined) continue;
+    if (required(spec.command, `${stage} command`).length > 4_096)
+      throw new Error(`${stage} command is too long`);
+    if ((spec.args?.length ?? 0) > 64)
+      throw new Error(`${stage} has too many arguments`);
+    if (spec.args?.some((arg) => arg.length > 4_096))
+      throw new Error(`${stage} argument is too long`);
+    if (
+      spec.cwd !== undefined &&
+      required(spec.cwd, `${stage} cwd`).length > 4_096
+    )
+      throw new Error(`${stage} cwd is too long`);
+    if (
+      spec.timeoutMs !== undefined &&
+      (!Number.isFinite(spec.timeoutMs) ||
+        spec.timeoutMs <= 0 ||
+        spec.timeoutMs > 120_000)
+    )
+      throw new Error(`${stage} timeoutMs must be between 1 and 120000`);
+    if (
+      spec.maxOutputBytes !== undefined &&
+      (!Number.isSafeInteger(spec.maxOutputBytes) ||
+        spec.maxOutputBytes < 256 ||
+        spec.maxOutputBytes > 1024 * 1024)
+    )
+      throw new Error(
+        `${stage} maxOutputBytes must be between 256 and 1048576`,
+      );
+    if (
+      spec.env !== undefined &&
+      Object.entries(spec.env).some(
+        ([key, value]) =>
+          key.length === 0 || key.length > 256 || value.length > 4_096,
+      )
+    )
+      throw new Error(`${stage} env is invalid`);
+  }
+  if (program.match !== undefined) {
+    if (
+      program.match.field !== "completedItemText" ||
+      required(program.match.regex, "match regex").length > 4_096
+    )
+      throw new Error("Trigger match is invalid");
+    try {
+      new RegExp(program.match.regex, program.match.flags ?? "u");
+    } catch (error) {
+      throw new Error(
+        `Trigger match regex is invalid: ${describeError(error)}`,
+      );
+    }
+  }
+}
+
+function programInput(active: ActiveWakeup, wakeup: WakeupEvent): unknown {
+  return {
+    triggerId: active.trigger.id,
+    historyId: active.historyId,
+    generationId: active.generationId,
+    clientUserMessageId: active.clientUserMessageId,
+    occurrenceKey: wakeup.occurrenceKey,
+    reason: bounded(wakeup.reason, 4_000),
+    source: {
+      threadId: wakeup.sourceThreadId ?? null,
+      turnId: wakeup.sourceTurnId ?? null,
+      roomId: wakeup.sourceRoomId ?? null,
+      roomMessageId: wakeup.sourceRoomMessageId ?? null,
+    },
+    completedItemText: bounded(wakeup.eventText ?? "", 8_000),
+    projection: bounded(wakeup.projection ?? "", 8_000),
+  };
+}
+
+function stableProgramInvocationId(
+  clientUserMessageId: string,
+  stage: "predicate" | "action",
 ): string {
-  return [
-    `Trigger: ${trigger.label}`,
-    `Task: ${trigger.prompt}`,
-    ...(projection === undefined
-      ? []
-      : [`Source context: ${bounded(projection, 1_200)}`]),
-  ].join("\n");
+  const digest = createHash("sha256")
+    .update(`${clientUserMessageId}:${stage}`)
+    .digest("hex")
+    .slice(0, 32);
+  return `zenx-program:${stage}:${digest}`;
+}
+
+function programStageForInvocation(
+  invocationId: string,
+): "predicate" | "action" {
+  return invocationId.includes(":predicate:") ? "predicate" : "action";
 }
 
 function message(
@@ -527,23 +1432,23 @@ function message(
     originTurnId,
   };
 }
+
 function required(value: string, label: string): string {
-  if (value.trim().length === 0)
+  if (typeof value !== "string" || value.trim().length === 0)
     throw new Error(`Trigger ${label} is required`);
   return value.trim();
 }
+
 function positive(value: number): number {
   if (!Number.isFinite(value) || value <= 0)
     throw new Error("Timer interval must be positive");
   return value;
 }
+
 function validFuture(value: number, now: number): number {
   if (!Number.isFinite(value) || value <= now)
     throw new Error("Timer must be scheduled in the future");
   return value;
-}
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function validateMembers(members: readonly RoomMember[]): RoomMember[] {
@@ -566,12 +1471,69 @@ function validateMembers(members: readonly RoomMember[]): RoomMember[] {
   return normalized;
 }
 
+function mentionMatches(text: string, name: string): boolean {
+  return new RegExp(`(^|\\s)@${escapeRegExp(name)}(?=\\s|$|[,.!?])`, "iu").test(
+    text,
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
 function stableWakeupId(triggerId: string, occurrenceKey: string): string {
   const occurrence = createHash("sha256")
     .update(occurrenceKey)
     .digest("hex")
     .slice(0, 24);
   return `zenx-wakeup:${triggerId}:${occurrence}`;
+}
+
+function transientTurnKey(threadId: string, turnId: string): string {
+  return `${String(threadId.length)}:${threadId}:${turnId}`;
+}
+
+function clearTransientTurn(
+  generation: TriggerGeneration,
+  threadId: string,
+  turnId: string,
+): void {
+  const key = transientTurnKey(threadId, turnId);
+  generation.completedTurnItems.delete(key);
+  generation.pendingCompletedTurns.delete(key);
+}
+
+function setBounded<K, V>(
+  map: Map<K, V>,
+  key: K,
+  value: V,
+  onEvict: (key: K) => void,
+): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_TRANSIENT_TURNS) {
+    const oldest = map.keys().next().value as K | undefined;
+    if (oldest === undefined) return;
+    map.delete(oldest);
+    onEvict(oldest);
+  }
+}
+
+function isTerminal(status: TriggerHistoryEntry["status"]): boolean {
+  return status === "completed" || status === "failed";
+}
+
+function meaningfulWakeupTitleInput(
+  trigger: ZenXTrigger,
+  projection?: string,
+): string {
+  return [
+    `Trigger: ${trigger.label}`,
+    `Task: ${trigger.prompt}`,
+    ...(projection === undefined
+      ? []
+      : [`Source context: ${bounded(projection, 1_200)}`]),
+  ].join("\n");
 }
 
 function wakeupInput(
@@ -604,7 +1566,11 @@ function wakeupInput(
     trigger.prompt,
     ...(projection === undefined
       ? []
-      : ["", "Bounded source context (read-only projection):", projection]),
+      : [
+          "",
+          "Bounded source context (read-only projection):",
+          bounded(projection, 6_000),
+        ]),
   ].join("\n");
 }
 
@@ -623,23 +1589,27 @@ export function projectCompletedTurn(threadId: string, turn: Turn): string {
     .slice(-2)
     .map(
       (item) =>
-        `$ ${bounded(item.command, 500)}\nStatus: ${item.status}${
-          item.exitCode === null ? "" : ` (exit ${item.exitCode})`
-        }\n${bounded(item.aggregatedOutput ?? "No captured output", 1_000)}`,
+        `$ ${bounded(item.command, 500)}\nStatus: ${item.status}${item.exitCode === null ? "" : ` (exit ${item.exitCode})`}\n${bounded(item.aggregatedOutput ?? "No captured output", 1_000)}`,
     );
-  const sections = [
-    `Source Thread: ${threadId}`,
-    `Source Turn: ${turn.id}`,
-    `Status: ${turn.status}`,
-    userInputs.length === 0 ? null : `User input:\n${userInputs.join("\n\n")}`,
-    commands.length === 0
-      ? null
-      : `Command/result summary:\n${commands.join("\n\n")}`,
-    conclusion?.type === "agentMessage"
-      ? `Agent conclusion:\n${bounded(conclusion.text, 1_800)}`
-      : "Agent conclusion:\nNo final Agent message was emitted.",
-  ].filter((section): section is string => section !== null);
-  return bounded(sections.join("\n\n"), 6_000);
+  return bounded(
+    [
+      `Source Thread: ${threadId}`,
+      `Source Turn: ${turn.id}`,
+      `Status: ${turn.status}`,
+      userInputs.length === 0
+        ? null
+        : `User input:\n${userInputs.join("\n\n")}`,
+      commands.length === 0
+        ? null
+        : `Command/result summary:\n${commands.join("\n\n")}`,
+      conclusion?.type === "agentMessage"
+        ? `Agent conclusion:\n${bounded(conclusion.text, 1_800)}`
+        : "Agent conclusion:\nNo final Agent message was emitted.",
+    ]
+      .filter((section): section is string => section !== null)
+      .join("\n\n"),
+    6_000,
+  );
 }
 
 export function projectRoomContext(room: ZenXRoom): string {
@@ -665,13 +1635,16 @@ function mergeCompletedItems(
   const completed = new Map(completedItems.map((item) => [item.id, item]));
   const merged = turnItems.map((item) => completed.get(item.id) ?? item);
   const included = new Set(merged.map((item) => item.id));
-  for (const item of completedItems) {
+  for (const item of completedItems)
     if (!included.has(item.id)) merged.push(item);
-  }
   return merged;
 }
 
 function bounded(value: string, limit: number): string {
   if (value.length <= limit) return value;
   return `${value.slice(0, Math.max(0, limit - 24))}\n…[truncated by ZenX]`;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
