@@ -1257,7 +1257,7 @@ test("repeated stale and unknown detach evidence stays bounded and preserves cur
   }
 });
 
-test("late attach response is compensated without stale mapping reuse", async () => {
+test("late attach compensation preserves bounded historical unknown evidence", async () => {
   const cdp = await createFakeCdpServer();
   try {
     const connection = await connectUserBrowserCdp(cdp.endpoint);
@@ -1269,8 +1269,27 @@ test("late attach response is compensated without stale mapping reuse", async ()
     );
     cdp.releaseLateAttachReply();
     await waitUntil(() => cdp.count("Target.detachFromTarget") === 1);
-    assert.equal(await connection.backend.closeSession("work"), 1);
-    await connection.backend.close();
+    const lateSession = cdp.latestSessionId();
+    assert.deepEqual(cdp.detachedSessionIds(), [lateSession]);
+    const sessionFailure = await Promise.resolve(
+      connection.backend.closeSession("work"),
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    assert.ok(sessionFailure instanceof Error);
+    assert.match(sessionFailure.message, /outcome is unknown|tainted/u);
+    assert.ok(sessionFailure.message.length < 2_000);
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /outcome is unknown|tainted/u,
+    );
+    assert.deepEqual(cdp.detachedSessionIds(), [lateSession]);
+    await assert.rejects(
+      async () => await connection.backend.close(),
+      /outcome is unknown|tainted/u,
+    );
+    assert.deepEqual(cdp.detachedSessionIds(), [lateSession]);
   } finally {
     await cdp.close();
   }

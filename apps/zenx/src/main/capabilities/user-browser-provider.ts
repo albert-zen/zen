@@ -914,6 +914,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
 
   #requireSession(sessionId: string): UserBrowserSession {
     if (this.#closing) throw new Error("User browser backend is closing");
+    this.#closure.throwIfBackendOwnerTainted(sessionId, "close");
     const session = this.#sessions.get(sessionId);
     if (session === undefined) {
       throw new Error(`Unknown user browser session: ${sessionId}`);
@@ -1906,7 +1907,6 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       return;
     }
     epoch.attach = "known-success";
-    delete epoch.unknownEvidence.attach;
     epoch.cdpSessionId = sessionId;
     await this.#compensateAttachment(epoch, sessionId);
   }
