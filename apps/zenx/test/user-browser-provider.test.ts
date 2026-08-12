@@ -95,6 +95,36 @@ test("user browser mode inherits visible authenticated state without exposing se
   );
 });
 
+test("concurrent first listings publish one exclusive logical target owner", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  client.holdListings = true;
+
+  const listingA = backend.listTabs("A");
+  const listingB = backend.listTabs("B");
+  await waitUntil(
+    () =>
+      client.calls.filter((call) => call === "Target.getTargets").length === 2,
+  );
+  client.releaseList();
+  const [tabsA, tabsB] = await Promise.all([listingA, listingB]);
+  assert.equal(tabsA.length + tabsB.length, 1);
+
+  const winner = tabsA.length === 1 ? "A" : "B";
+  const loser = winner === "A" ? "B" : "A";
+  await backend.inspect(winner, "target-1");
+  await assert.rejects(
+    backend.inspect(loser, "target-1"),
+    /Unknown user browser tab/u,
+  );
+  assert.equal(await backend.closeSession(loser), 0);
+  assert.deepEqual(client.detachedTargets, []);
+  assert.equal(await backend.closeSession(winner), 1);
+  assert.deepEqual(client.detachedTargets, ["target-1"]);
+  await backend.close();
+  assert.deepEqual(client.closedTargets, []);
+});
+
 test("closing user browser capability only detaches and never closes user targets", async () => {
   const client = new FakeUserBrowserClient();
   const backend = new UserBrowserCdpBackend(client);
@@ -1295,6 +1325,42 @@ test("late attach compensation preserves bounded historical unknown evidence", a
   }
 });
 
+test("late attach protocol error preserves bounded historical unknown evidence", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    cdp.holdNextAttachErrorReply();
+    await assert.rejects(
+      connection.backend.inspect("work", "target-1"),
+      /attachToTarget outcome is unknown|document changed/u,
+    );
+    cdp.releaseLateAttachErrorReply();
+    await nextTurn();
+    const sessionFailure = await Promise.resolve(
+      connection.backend.closeSession("work"),
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    assert.ok(sessionFailure instanceof Error);
+    assert.match(sessionFailure.message, /outcome is unknown|tainted/u);
+    assert.ok(sessionFailure.message.length < 2_000);
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /outcome is unknown|tainted/u,
+    );
+    await assert.rejects(
+      async () => await connection.backend.close(),
+      /outcome is unknown|tainted/u,
+    );
+    assert.equal(cdp.count("Target.detachFromTarget"), 0);
+    assert.equal(cdp.count("Target.closeTarget"), 0);
+  } finally {
+    await cdp.close();
+  }
+});
+
 test("Page.enable timeout compensates detach and failed compensation taints close", async () => {
   for (const detachReply of ["reply", "drop-once"] as const) {
     const cdp = await createFakeCdpServer();
@@ -2097,6 +2163,8 @@ async function createFakeCdpServer(): Promise<{
   failNextAttachReply(): void;
   holdNextAttachReply(): void;
   releaseLateAttachReply(): void;
+  holdNextAttachErrorReply(): void;
+  releaseLateAttachErrorReply(): void;
   dropNextEnableReply(): void;
   failNextEnableReply(): void;
   dropNextDetachReply(): void;
@@ -2132,11 +2200,17 @@ async function createFakeCdpServer(): Promise<{
   let dropAttachReply = false;
   let failAttachReply = false;
   let holdAttachReply = false;
+  let holdAttachErrorReply = false;
   let dropEnableReply = false;
   let failEnableReply = false;
   let dropDetachReplyCount = 0;
   let lateAttachReply:
-    | { socket: WebSocket; id: number; result: { sessionId: string } }
+    | {
+        socket: WebSocket;
+        id: number;
+        response:
+          { result: { sessionId: string } } | { error: { message: string } };
+      }
     | undefined;
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
@@ -2203,6 +2277,15 @@ async function createFakeCdpServer(): Promise<{
         }
         result = { targetId };
       } else if (request.method === "Target.attachToTarget") {
+        if (holdAttachErrorReply) {
+          holdAttachErrorReply = false;
+          lateAttachReply = {
+            socket,
+            id: request.id,
+            response: { error: { message: "known late attach failure" } },
+          };
+          return;
+        }
         if (failAttachReply) {
           failAttachReply = false;
           socket.send(
@@ -2237,7 +2320,7 @@ async function createFakeCdpServer(): Promise<{
           lateAttachReply = {
             socket,
             id: request.id,
-            result: { sessionId: latestSession },
+            response: { result: { sessionId: latestSession } },
           };
           return;
         }
@@ -2369,7 +2452,17 @@ async function createFakeCdpServer(): Promise<{
       const late = lateAttachReply;
       lateAttachReply = undefined;
       if (late !== undefined && late.socket.readyState === late.socket.OPEN) {
-        late.socket.send(JSON.stringify({ id: late.id, result: late.result }));
+        late.socket.send(JSON.stringify({ id: late.id, ...late.response }));
+      }
+    },
+    holdNextAttachErrorReply: () => {
+      holdAttachErrorReply = true;
+    },
+    releaseLateAttachErrorReply: () => {
+      const late = lateAttachReply;
+      lateAttachReply = undefined;
+      if (late !== undefined && late.socket.readyState === late.socket.OPEN) {
+        late.socket.send(JSON.stringify({ id: late.id, ...late.response }));
       }
     },
     dropNextEnableReply: () => {

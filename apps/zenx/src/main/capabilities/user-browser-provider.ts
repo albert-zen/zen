@@ -229,6 +229,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           disappeared.push(targetId);
         }
       }
+      for (const targetId of disappeared) {
+        this.#assertTargetCleanupOwner(session, targetId);
+      }
       const detached = await Promise.allSettled(
         disappeared.map((targetId) => this.#detachTarget(session, targetId)),
       );
@@ -254,7 +257,10 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       this.#transferClientClosureProblem(session, disappeared);
       for (const targetId of disappeared) {
         session.targetIds.delete(targetId);
-        this.#tabs.delete(targetId);
+        const tab = this.#tabs.get(targetId);
+        if (tab === undefined || this.#tabBelongsToSession(tab, session)) {
+          this.#tabs.delete(targetId);
+        }
       }
       const detachFailure = detached.find(
         (result): result is PromiseRejectedResult =>
@@ -264,8 +270,8 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       this.#assertSessionIdle(session);
       this.#throwIfSessionTainted(session, "target reconciliation");
       this.#assertSessionCurrent(session);
+      const published: UserBrowserCdpTarget[] = [];
       for (const target of targets) {
-        session.targetIds.add(target.targetId);
         const tab = this.#tabs.get(target.targetId);
         if (tab === undefined) {
           this.#tabs.set(target.targetId, {
@@ -275,15 +281,19 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
             url: target.url,
             detaching: false,
           });
+        } else if (!this.#tabBelongsToSession(tab, session)) {
+          continue;
         } else if (tab.url !== target.url) {
           tab.url = target.url;
           tab.documentVersion += 1;
           tab.documentIdentity = undefined;
           tab.observation = undefined;
         }
+        session.targetIds.add(target.targetId);
+        published.push(target);
       }
       this.#assertSessionCurrent(session);
-      return targets
+      return published
         .slice(0, 24)
         .map((target) => summarizeTarget(sessionId, target));
     });
@@ -604,7 +614,12 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           }
           session.targetIds.delete(tabId);
           this.#ignoreTarget(session, tabId);
-          this.#tabs.delete(tabId);
+          if (
+            this.#tabs.get(tabId) === tab &&
+            this.#tabBelongsToSession(tab, session)
+          ) {
+            this.#tabs.delete(tabId);
+          }
         }
         this.#throwIfSessionTainted(session, "tab close");
       },
@@ -624,13 +639,19 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         session.detaching = true;
         for (const targetId of session.targetIds) {
           const tab = this.#tabs.get(targetId);
-          if (tab !== undefined) tab.detaching = true;
+          if (tab !== undefined) {
+            this.#assertTargetCleanupOwner(session, targetId);
+            tab.detaching = true;
+          }
         }
         await this.#reconcileUnresolvedCreates(session);
         const targetIds = [
           ...new Set([...session.targetIds, ...session.uncertainTargetIds]),
         ];
         const count = targetIds.length;
+        for (const targetId of targetIds) {
+          this.#assertTargetCleanupOwner(session, targetId);
+        }
         this.#transferClientClosureProblem(session, targetIds);
         const detached = await Promise.allSettled(
           targetIds.map((targetId) => this.#detachTarget(session, targetId)),
@@ -657,7 +678,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           if (tab?.tainted !== undefined) {
             this.#taintSession(session, `target ${targetId}: ${tab.tainted}`);
           }
-          this.#tabs.delete(targetId);
+          if (tab === undefined || this.#tabBelongsToSession(tab, session)) {
+            this.#tabs.delete(targetId);
+          }
         }
         if (session.detachFailures[0] !== undefined) {
           this.#taintSession(
@@ -935,6 +958,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     }
     const tab = this.#tabs.get(tabId);
     if (tab === undefined) throw new Error("User browser tab was closed");
+    this.#assertTabOwner(session, tabId, tab);
     if (tab.tainted !== undefined) {
       throw new Error(`User browser tab is tainted (${tab.tainted})`);
     }
@@ -960,6 +984,14 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     url: string,
     tainted: boolean,
   ): void {
+    const existing = this.#tabs.get(targetId);
+    if (
+      existing !== undefined &&
+      !this.#tabBelongsToSession(existing, session)
+    ) {
+      this.#taintSession(session, `target ${targetId}: ownership changed`);
+      throw new Error("User browser target belongs to another logical session");
+    }
     if (
       !session.targetIds.has(targetId) &&
       session.targetIds.size >= USER_BROWSER_MAX_TARGET_EVIDENCE
@@ -991,6 +1023,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     allowTainted = false,
   ): void {
     this.#assertSessionCurrent(session);
+    this.#assertTabOwner(session, targetId, tab);
     if (
       !session.targetIds.has(targetId) ||
       this.#tabs.get(targetId) !== tab ||
@@ -1068,6 +1101,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   }
 
   #detachTarget(session: UserBrowserSession, targetId: string): Promise<void> {
+    this.#assertTargetCleanupOwner(session, targetId);
     const existing = this.#detachOperations.get(targetId);
     if (existing !== undefined) return existing;
     const operation = Promise.resolve().then(() =>
@@ -1095,11 +1129,35 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     session: UserBrowserSession,
   ): boolean {
     const tab = this.#tabs.get(targetId);
+    return tab === undefined || this.#tabBelongsToSession(tab, session);
+  }
+
+  #tabBelongsToSession(
+    tab: UserBrowserTabState,
+    session: UserBrowserSession,
+  ): boolean {
     return (
-      tab === undefined ||
-      (tab.ownerSessionId === session.id &&
-        tab.ownerSessionIncarnation === session.incarnation)
+      tab.ownerSessionId === session.id &&
+      tab.ownerSessionIncarnation === session.incarnation
     );
+  }
+
+  #assertTabOwner(
+    session: UserBrowserSession,
+    targetId: string,
+    tab: UserBrowserTabState,
+  ): void {
+    if (this.#tabBelongsToSession(tab, session)) return;
+    this.#taintSession(session, `target ${targetId}: ownership changed`);
+    throw new Error("User browser target belongs to another logical session");
+  }
+
+  #assertTargetCleanupOwner(
+    session: UserBrowserSession,
+    targetId: string,
+  ): void {
+    const tab = this.#tabs.get(targetId);
+    if (tab !== undefined) this.#assertTabOwner(session, targetId, tab);
   }
 
   async #reconcileCreate(
@@ -1894,11 +1952,6 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const protocolError = asRecord(message.error);
     if (protocolError !== undefined) {
       epoch.attach = "known-failure";
-      delete epoch.unknownEvidence.attach;
-      epoch.taint = undefined;
-      if (this.#attachmentClosures.get(epoch.targetId) === epoch) {
-        this.#attachmentClosures.delete(epoch.targetId);
-      }
       return;
     }
     const sessionId = asRecord(message.result)?.sessionId;
