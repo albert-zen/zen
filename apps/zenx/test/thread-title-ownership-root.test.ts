@@ -185,6 +185,160 @@ test("a nested quiescence timeout observes late rejection", async () => {
   }
 });
 
+test("late child failure after cached root retirement poisons stop and successor reads", async () => {
+  await withDirectory(async (directory) => {
+    const unhandled: unknown[] = [];
+    const listener = (error: unknown) => unhandled.push(error);
+    process.on("unhandledRejection", listener);
+    try {
+      const file = path.join(directory, "titles.json");
+      const store = new ZenXThreadTitleStore(file);
+      const titles = coordinator(store, undefined, 0);
+      await titles.initialize();
+      const root = titles.createOwnershipTransaction({ deadlineMs: 0 }).root;
+      root.onRetire(() => {
+        setTimeout(() => {
+          const lateChild = new ZenXThreadTitleOwnershipTransaction(
+            {
+              deadlineMs: 0,
+              schedule: () => {
+                throw new Error("late child scheduler");
+              },
+            },
+            root,
+          );
+          void lateChild.retire();
+        }, 20);
+      });
+
+      await titles.stop();
+      await delay(60);
+      assert.match(
+        root.retirementFailure()?.message ?? "",
+        /late child scheduler/u,
+      );
+      await assert.rejects(titles.stop(), /late child scheduler/u);
+      assert.throws(() => titles.snapshot(), /late child scheduler/u);
+
+      await assert.rejects(
+        store.claim(new ZenXThreadTitleOwnershipTransaction({ deadlineMs: 0 })),
+        /late child scheduler/u,
+      );
+
+      const successor = coordinator(
+        new ZenXThreadTitleStore(path.relative(process.cwd(), file)),
+      );
+      await successor.initialize();
+      assert.throws(() => successor.snapshot(), /late child scheduler/u);
+
+      const fresh = coordinator(new ZenXThreadTitleStore(file));
+      await fresh.initialize();
+      assert.throws(() => fresh.snapshot(), /retirement failed/u);
+      await tick();
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+  });
+});
+
+test("late predecessor poison closes a successor read already in flight", async () => {
+  await withDirectory(async (directory) => {
+    const file = path.join(directory, "titles.json");
+    await writeFile(file, "{}\n", "utf8");
+    const readEntered = deferred<void>();
+    const releaseRead = deferred<void>();
+    let blockRead = false;
+    const fileSystem: ZenXThreadTitleStoreFileSystem = {
+      ...injectedFileSystem(),
+      readFile: async (candidate, encoding) => {
+        if (blockRead) {
+          readEntered.resolve();
+          await releaseRead.promise;
+        }
+        return await readFile(candidate, encoding);
+      },
+    };
+    const backendIdentity = {};
+    const store = new ZenXThreadTitleStore(file, {
+      fileSystem,
+      backendIdentity,
+    });
+    const root = new ZenXThreadTitleOwnershipTransaction({ deadlineMs: 0 });
+    await store.claim(root);
+    await root.retire();
+
+    blockRead = true;
+    const successor = new ZenXThreadTitleOwnershipTransaction({
+      deadlineMs: 0,
+    });
+    const claim = store.claim(successor);
+    await readEntered.promise;
+    const lateChild = new ZenXThreadTitleOwnershipTransaction(
+      {
+        deadlineMs: 0,
+        schedule: () => {
+          throw new Error("late failure during read");
+        },
+      },
+      root,
+    );
+    void lateChild.retire();
+    await tick();
+    releaseRead.resolve();
+
+    await assert.rejects(claim, /late failure during read/u);
+    await assert.rejects(
+      store.claim(new ZenXThreadTitleOwnershipTransaction({ deadlineMs: 0 })),
+      /retirement failed/u,
+    );
+  });
+});
+
+test("retirement registration and failure evidence stay hard-bounded", async () => {
+  const unhandled: unknown[] = [];
+  const listener = (error: unknown) => unhandled.push(error);
+  process.on("unhandledRejection", listener);
+  try {
+    const root = new ZenXThreadTitleOwnershipTransaction({ deadlineMs: 0 });
+    for (let index = 0; index < 128; index += 1) {
+      const child = root.fork({ deadlineMs: 0 });
+      child.onRetire(() => {
+        throw new Error(`failure-${String(index)}`);
+      });
+    }
+    assert.throws(
+      () => root.fork({ deadlineMs: 0 }),
+      /bounded capacity of 128 nested transactions/u,
+    );
+    for (let index = 0; index < 1_000; index += 1) {
+      assert.throws(
+        () => root.fork({ deadlineMs: 0 }),
+        /retired title ownership/u,
+      );
+    }
+
+    await assert.rejects(root.retire(), (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.errors.length, 64);
+      assert.equal(
+        (error.errors[0] as Error | undefined)?.message,
+        "failure-0",
+      );
+      assert.match(
+        (error.errors.at(-1) as Error | undefined)?.message ?? "",
+        /bounded capacity of 128 nested transactions/u,
+      );
+      assert.ok(error.message.length <= 12_000);
+      return true;
+    });
+    await tick();
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", listener);
+  }
+});
+
 test("a failed ownership domain does not poison another projection", async () => {
   await withDirectory(async (directory) => {
     const failed = new ZenXThreadTitleStore(path.join(directory, "a.json"));
@@ -472,4 +626,8 @@ async function withDirectory(
 
 async function tick(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }

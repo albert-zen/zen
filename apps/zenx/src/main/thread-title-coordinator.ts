@@ -75,6 +75,11 @@ export class ZenXThreadTitleCoordinator {
       this.#initializationError = asError(error);
       throw error;
     }
+    const lateFailure = this.#owner.retirementFailure();
+    if (lateFailure !== undefined) {
+      this.#initializationError = lateFailure;
+      throw lateFailure;
+    }
   }
 
   async close(): Promise<void> {

@@ -97,8 +97,13 @@
 - **ZenXThreadTitleOwnershipRoot** — 每个标题 ownership domain 的瞬时 root closure 在任何 nested
   transaction 可能拒绝前同步登记其 retirement outcome，并按 transaction/发生顺序有界聚合 abort、hook、
   scheduler 与 cleanup 失败；`stop`、successor claim 与 fresh read 都对 predecessor 的任一 nested retirement
-  failure fail closed，且 poison 只留在该 domain。退休的 quiescence deadline 为 250ms，timeout 只终止等待而
-  所有迟到 promise 仍已注册 rejection observer；它不引入 durable retry、scheduler 或 queue。
+  failure fail closed，且 poison 只留在该 domain。为同时容纳 64 个 mirror reservation 与有界 overflow/
+  successor probe，root 最多登记 128 个 descendant transaction、129 个含 root 的
+  retirement outcome 与 64 条 failure evidence；超限只保留一个确定性的 saturation failure 并拒绝继续登记，
+  hook/failure-listener 各自硬限 64、tracked-work 硬限 128。parent retirement 已结束后才出现的合法 child 仍立即登记到
+  同一 root failure closure；store 从第一次 claim 起订阅该 closure，cached retire 曾成功也必须重新检查 late
+  poison。退休的 quiescence deadline 为 250ms，timeout 只终止等待而所有迟到 promise 仍已注册 rejection
+  observer；它不引入 durable retry、scheduler 或 queue。
 - **ZenXThreadTitleProjectionIdentity** — 默认文件 backend 以“最近存在祖先的 native realpath + 尚不存在的规范化
   suffix”形成 process-local projection key，Windows 上再按不区分大小写的 pathname 语义折叠，因此 relative、
   absolute、symlink/canonical 与文件尚不存在时的 case aliases 共享 identity；不同 key 不共享。注入 backend

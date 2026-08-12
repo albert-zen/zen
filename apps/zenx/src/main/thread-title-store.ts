@@ -213,24 +213,24 @@ class ZenXThreadTitleStoreProtocol {
     if (this.#currentRoot !== root) {
       const previous = this.#currentRoot;
       this.#currentRoot = root;
+      root.onRetirementFailure((error) => this.#poisonRetirement(error));
       if (previous !== undefined) retirement = observeRetirement(previous);
     }
     const operation = this.#serial(async () => {
       if (retirement !== undefined) {
         const outcome = await retirement;
         if (!outcome.ok) {
-          const failure = new Error(
-            `ZenX title-store ownership retirement failed: ${describeError(outcome.error)}`,
-            { cause: outcome.error },
-          );
-          this.#failure = failure;
-          throw failure;
+          throw this.#poisonRetirement(outcome.error);
         }
       }
       this.#assertHealthy();
       if (!this.#owns(owner))
         throw new Error("Title ownership changed before the store read");
-      return await this.#readSnapshot();
+      const snapshot = await this.#readSnapshot();
+      this.#assertHealthy();
+      if (!this.#owns(owner))
+        throw new Error("Title ownership changed during the store read");
+      return snapshot;
     });
     return owner.track(operation);
   }
@@ -352,7 +352,11 @@ class ZenXThreadTitleStoreProtocol {
   }
 
   #owns(owner: ZenXThreadTitleOwnershipTransaction): boolean {
-    return this.#currentRoot === owner.root && owner.isCurrent();
+    return (
+      this.#failure === undefined &&
+      this.#currentRoot === owner.root &&
+      owner.isCurrent()
+    );
   }
 
   #temporaryPath(
@@ -367,6 +371,14 @@ class ZenXThreadTitleStoreProtocol {
 
   #assertHealthy(): void {
     if (this.#failure !== undefined) throw this.#failure;
+  }
+
+  #poisonRetirement(error: unknown): Error {
+    this.#failure ??= new Error(
+      `ZenX title-store ownership retirement failed: ${describeError(error)}`,
+      { cause: error },
+    );
+    return this.#failure;
   }
 
   #serial<T>(operation: () => Promise<T>): Promise<T> {
@@ -387,7 +399,12 @@ function observeRetirement(
 ): Promise<RetirementOutcome> {
   try {
     return owner.retire().then(
-      () => ({ ok: true }),
+      () => {
+        const lateFailure = owner.retirementFailure();
+        return lateFailure === undefined
+          ? { ok: true }
+          : { ok: false, error: lateFailure };
+      },
       (error: unknown) => ({ ok: false, error }),
     );
   } catch (error) {

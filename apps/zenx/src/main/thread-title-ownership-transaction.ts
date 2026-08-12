@@ -1,4 +1,11 @@
 const DEFAULT_QUIESCENCE_DEADLINE_MS = 250;
+const MAX_NESTED_RETIREMENT_TRANSACTIONS = 128;
+const MAX_RETIREMENT_OUTCOMES = MAX_NESTED_RETIREMENT_TRANSACTIONS + 1;
+const MAX_RETIREMENT_FAILURE_EVIDENCE = 64;
+const MAX_RETIREMENT_FAILURE_LISTENERS = 64;
+const MAX_RETIREMENT_HOOKS = 64;
+const MAX_TRACKED_RETIREMENT_WORK = 128;
+const MAX_RETIREMENT_ERROR_DESCRIPTION_LENGTH = 160;
 
 export interface ZenXThreadTitleOwnershipTransactionOptions {
   deadlineMs?: number;
@@ -17,12 +24,34 @@ type RetirementOutcome =
   { readonly ok: true } | { readonly ok: false; readonly error: unknown };
 
 class RootRetirementClosure {
+  readonly #rootOrder: number;
   readonly #failures: RetirementFailure[] = [];
   readonly #observations = new Map<number, Promise<RetirementOutcome>>();
+  readonly #failureListeners = new Set<(failure: AggregateError) => void>();
+  #nestedTransactions = 0;
+  #failureEvidenceSaturated = false;
   #nextOccurrence = 0;
+
+  constructor(rootOrder: number) {
+    this.#rootOrder = rootOrder;
+  }
+
+  registerChild(transactionOrder: number, ancestry: readonly number[]): void {
+    if (this.#nestedTransactions >= MAX_NESTED_RETIREMENT_TRANSACTIONS) {
+      const failure = new Error(
+        `Title ownership retirement reached its bounded capacity of ${String(
+          MAX_NESTED_RETIREMENT_TRANSACTIONS,
+        )} nested transactions`,
+      );
+      this.record(transactionOrder, ancestry, failure);
+      throw failure;
+    }
+    this.#nestedTransactions += 1;
+  }
 
   observe(
     transactionOrder: number,
+    ancestry: readonly number[],
     retirement: Promise<void>,
   ): Promise<RetirementOutcome> {
     const existing = this.#observations.get(transactionOrder);
@@ -31,6 +60,18 @@ class RootRetirementClosure {
       () => ({ ok: true }),
       (error: unknown) => ({ ok: false, error }),
     );
+    if (this.#observations.size >= MAX_RETIREMENT_OUTCOMES) {
+      this.record(
+        transactionOrder,
+        ancestry,
+        new Error(
+          `Title ownership retirement reached its bounded capacity of ${String(
+            MAX_RETIREMENT_OUTCOMES,
+          )} observed outcomes`,
+        ),
+      );
+      return outcome;
+    }
     this.#observations.set(transactionOrder, outcome);
     return outcome;
   }
@@ -40,27 +81,88 @@ class RootRetirementClosure {
     ancestry: readonly number[],
     error: unknown,
   ): void {
-    this.#failures.push({
-      transactionOrder,
-      ancestry,
-      occurrence: this.#nextOccurrence++,
-      error,
-    });
+    if (this.#failureEvidenceSaturated) return;
+    const occurrence = this.#nextOccurrence++;
+    if (this.#failures.length < MAX_RETIREMENT_FAILURE_EVIDENCE - 1) {
+      this.#failures.push({
+        transactionOrder,
+        ancestry,
+        occurrence,
+        error,
+      });
+    } else {
+      this.#failureEvidenceSaturated = true;
+      this.#failures.push({
+        transactionOrder,
+        ancestry,
+        occurrence,
+        error: new Error(
+          `Title ownership retirement reached its bounded capacity of ${String(
+            MAX_RETIREMENT_FAILURE_EVIDENCE,
+          )} failure evidence records; additional failures were omitted`,
+        ),
+      });
+    }
+    this.#notifyFailureListeners();
   }
 
   failuresFor(transactionOrder: number): unknown[] {
+    return this.#failureRecordsFor(transactionOrder).map(
+      (failure) => failure.error,
+    );
+  }
+
+  addFailureListener(
+    transactionOrder: number,
+    ancestry: readonly number[],
+    listener: (failure: AggregateError) => void,
+  ): () => void {
+    if (this.#failureListeners.size >= MAX_RETIREMENT_FAILURE_LISTENERS) {
+      this.record(
+        transactionOrder,
+        ancestry,
+        new Error(
+          `Title ownership retirement reached its bounded capacity of ${String(
+            MAX_RETIREMENT_FAILURE_LISTENERS,
+          )} failure listeners`,
+        ),
+      );
+      this.#notifyListener(listener);
+      return () => undefined;
+    }
+    this.#failureListeners.add(listener);
+    if (!this.healthy) this.#notifyListener(listener);
+    return () => this.#failureListeners.delete(listener);
+  }
+
+  get healthy(): boolean {
+    return this.#failures.length === 0;
+  }
+
+  #failureRecordsFor(transactionOrder: number): RetirementFailure[] {
     return this.#failures
       .filter((failure) => failure.ancestry.includes(transactionOrder))
       .sort(
         (left, right) =>
           left.transactionOrder - right.transactionOrder ||
           left.occurrence - right.occurrence,
-      )
-      .map((failure) => failure.error);
+      );
   }
 
-  get healthy(): boolean {
-    return this.#failures.length === 0;
+  #notifyFailureListeners(): void {
+    for (const listener of this.#failureListeners)
+      this.#notifyListener(listener);
+  }
+
+  #notifyListener(listener: (failure: AggregateError) => void): void {
+    const failures = this.failuresFor(this.#rootOrder);
+    if (failures.length === 0) return;
+    try {
+      listener(aggregateRetirementFailures(failures));
+    } catch {
+      // Failure observers are best-effort notifications. The root remains
+      // poisoned even if an observer itself is unavailable.
+    }
   }
 }
 
@@ -100,12 +202,15 @@ export class ZenXThreadTitleOwnershipTransaction {
       ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
     this.#parent = parent;
     if (parent === undefined) {
-      this.#closure = new RootRetirementClosure();
+      this.#closure = new RootRetirementClosure(this.#order);
       this.#ancestry = [this.#order];
     } else {
+      const parentAlreadyFenced = !parent.isCurrent();
       this.#closure = parent.#closure;
       this.#ancestry = [...parent.#ancestry, this.#order];
+      this.#closure.registerChild(this.#order, this.#ancestry);
       parent.#children.push(this);
+      if (parentAlreadyFenced) void this.retire();
     }
   }
 
@@ -132,6 +237,15 @@ export class ZenXThreadTitleOwnershipTransaction {
     return aggregateRetirementFailures(failures);
   }
 
+  onRetirementFailure(listener: (failure: AggregateError) => void): () => void {
+    const root = this.root;
+    return this.#closure.addFailureListener(
+      root.#order,
+      root.#ancestry,
+      listener,
+    );
+  }
+
   fork(
     options: ZenXThreadTitleOwnershipTransactionOptions = {},
   ): ZenXThreadTitleOwnershipTransaction {
@@ -146,8 +260,18 @@ export class ZenXThreadTitleOwnershipTransaction {
       () => undefined,
     );
     if (this.#active) {
-      this.#tracked.add(settled);
-      void settled.finally(() => this.#tracked.delete(settled));
+      if (this.#tracked.size >= MAX_TRACKED_RETIREMENT_WORK) {
+        this.#record(
+          new Error(
+            `Title ownership retirement reached its bounded capacity of ${String(
+              MAX_TRACKED_RETIREMENT_WORK,
+            )} tracked operations`,
+          ),
+        );
+      } else {
+        this.#tracked.add(settled);
+        void settled.finally(() => this.#tracked.delete(settled));
+      }
     }
     if (this.root !== this) this.root.track(operation);
     return operation;
@@ -156,6 +280,16 @@ export class ZenXThreadTitleOwnershipTransaction {
   onRetire(callback: () => void): () => void {
     if (!this.isCurrent()) {
       callback();
+      return () => undefined;
+    }
+    if (this.#retirementHooks.size >= MAX_RETIREMENT_HOOKS) {
+      this.#record(
+        new Error(
+          `Title ownership retirement reached its bounded capacity of ${String(
+            MAX_RETIREMENT_HOOKS,
+          )} hooks`,
+        ),
+      );
       return () => undefined;
     }
     this.#retirementHooks.add(callback);
@@ -175,7 +309,7 @@ export class ZenXThreadTitleOwnershipTransaction {
     this.#retirement = retirement;
 
     // Registration and a rejection observer exist before retirement work runs.
-    this.#closure.observe(this.#order, retirement);
+    this.#closure.observe(this.#order, this.#ancestry, retirement);
     void this.#retireNow().then(resolveRetirement, rejectRetirement);
     return retirement;
   }
@@ -183,7 +317,7 @@ export class ZenXThreadTitleOwnershipTransaction {
   async #retireNow(): Promise<void> {
     const childOutcomes = this.#children.map((child) => {
       const retirement = child.retire();
-      return this.#closure.observe(child.#order, retirement);
+      return this.#closure.observe(child.#order, child.#ancestry, retirement);
     });
 
     try {
@@ -251,7 +385,9 @@ function validDeadline(value: number): number {
 }
 
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.length <= MAX_RETIREMENT_ERROR_DESCRIPTION_LENGTH) return message;
+  return `${message.slice(0, MAX_RETIREMENT_ERROR_DESCRIPTION_LENGTH - 1)}…`;
 }
 
 function aggregateRetirementFailures(failures: unknown[]): AggregateError {
