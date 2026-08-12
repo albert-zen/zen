@@ -1838,6 +1838,11 @@ test("document setup invalidation after isolated world response dispatches zero 
       },
     },
     {
+      name: "main-frame-started-loading-after-bind",
+      method: "Page.frameStartedLoading",
+      params: { frameId: "main" },
+    },
+    {
       name: "main-frame-navigation",
       method: "Page.frameNavigated",
       params: {

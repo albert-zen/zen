@@ -8,7 +8,10 @@ import path from "node:path";
 import WebSocket, { type RawData } from "ws";
 
 import { selectBrowserProvider } from "./capabilities/provider-catalog.js";
-import { windowsBrowserExecutableCandidates } from "./capabilities/user-browser-provider.js";
+import {
+  UserBrowserDocumentChangedBeforeDispatchError,
+  windowsBrowserExecutableCandidates,
+} from "./capabilities/user-browser-provider.js";
 
 if (process.platform !== "win32") {
   throw new Error("The real user-browser CDP smoke is Windows-only");
@@ -83,7 +86,9 @@ try {
   });
   const account = tabs.find((tab) => tab.url.includes("/account"));
   assert.ok(account, "Expected the already-running authenticated account tab");
-  const inspection = await backend.inspect("windows-smoke", account.tabId);
+  const inspection = await retryDocumentInspection(() =>
+    backend.inspect("windows-smoke", account.tabId),
+  );
   assert.match(
     inspection.visibleText,
     /Signed in through existing browser state/u,
@@ -108,7 +113,9 @@ try {
     const snapshot = await browserTargetSnapshot(endpoint, fixtureBrowserHwnd);
     return snapshot.activeTargetId === account.tabId ? snapshot : undefined;
   });
-  const verified = await backend.inspect("windows-smoke", account.tabId);
+  const verified = await retryDocumentInspection(() =>
+    backend.inspect("windows-smoke", account.tabId),
+  );
   assert.match(verified.visibleText, /Attached action complete/u);
   const accountVisibilityBeforeOpen = visibilityState(verified.visibleText);
   const foregroundBeforeOpen = foregroundWindowHandle();
@@ -145,16 +152,17 @@ try {
     "hidden",
     "the provider-created target must be hidden at the browser target boundary",
   );
-  const accountAfterOpen = await backend.inspect(
-    "windows-smoke",
-    account.tabId,
+  const accountAfterOpen = await retryDocumentInspection(() =>
+    backend.inspect("windows-smoke", account.tabId),
   );
   assert.equal(
     visibilityState(accountAfterOpen.visibleText),
     accountVisibilityBeforeOpen,
     "background_safe browser_open must preserve existing-tab visibility",
   );
-  const openedInspection = await backend.inspect("windows-smoke", opened.tabId);
+  const openedInspection = await retryDocumentInspection(() =>
+    backend.inspect("windows-smoke", opened.tabId),
+  );
   assert.equal(
     visibilityState(openedInspection.visibleText),
     "hidden",
@@ -465,6 +473,21 @@ async function retry<T>(operation: () => Promise<T | undefined>): Promise<T> {
   throw new Error(
     "Timed out waiting for the real user browser CDP smoke fixture",
   );
+}
+
+async function retryDocumentInspection<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  return await retry(async () => {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof UserBrowserDocumentChangedBeforeDispatchError) {
+        return undefined;
+      }
+      throw error;
+    }
+  });
 }
 
 async function listen(): Promise<number> {

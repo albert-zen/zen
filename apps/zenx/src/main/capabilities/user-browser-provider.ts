@@ -1673,10 +1673,17 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const state = this.#targetDocuments.get(targetId);
     if (state === undefined || state.alive === false)
       throw new UserBrowserDocumentChangedBeforeDispatchError();
-    if (state.pendingFrameInvalidations.has(frame.id)) {
+    const pendingMainFrameInvalidations = [
+      ...state.pendingFrameInvalidations,
+    ].filter((event) => event.endsWith(`\u0000${frame.id}`));
+    if (pendingMainFrameInvalidations.length > 0) {
       state.pendingFrameInvalidations.clear();
       this.#invalidateTarget(targetId, false);
-      throw new UserBrowserDocumentChangedBeforeDispatchError();
+      throw new UserBrowserDocumentChangedBeforeDispatchError(
+        `pending lifecycle ${pendingMainFrameInvalidations
+          .map((event) => event.slice(0, event.indexOf("\u0000")))
+          .join(", ")}`,
+      );
     }
     state.pendingFrameInvalidations.clear();
     this.#targetDocuments.set(targetId, {
@@ -2342,15 +2349,18 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       typeof params.frameId === "string" &&
       (method === "Page.navigatedWithinDocument" ||
         method === "Page.frameStartedNavigating" ||
-        method === "Page.frameStartedLoading" ||
         method === "Page.backForwardCacheNotUsed")
     ) {
       if (
         document.pendingFrameInvalidations.size <
           USER_BROWSER_MAX_OPERATION_EVIDENCE ||
-        document.pendingFrameInvalidations.has(params.frameId)
+        [...document.pendingFrameInvalidations].some((event) =>
+          event.endsWith(`\u0000${params.frameId}`),
+        )
       ) {
-        document.pendingFrameInvalidations.add(params.frameId);
+        document.pendingFrameInvalidations.add(
+          `${method}\u0000${params.frameId}`,
+        );
       } else {
         document.revision += 1;
       }
@@ -2590,8 +2600,10 @@ function sameAttachmentOwner(
 }
 
 export class UserBrowserDocumentChangedBeforeDispatchError extends Error {
-  constructor() {
-    super("User browser document changed before action dispatch");
+  constructor(detail?: string) {
+    super(
+      `User browser document changed before action dispatch${detail === undefined ? "" : ` (${detail})`}`,
+    );
   }
 }
 
