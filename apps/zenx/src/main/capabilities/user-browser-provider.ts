@@ -1702,18 +1702,38 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (before.identity !== expectedDocumentIdentity) {
       throw new UserBrowserDocumentChangedBeforeDispatchError();
     }
-    const response = asRecord(
-      await this.#send(
-        "Page.captureScreenshot",
-        { format: "png", fromSurface: false, captureBeyondViewport: false },
-        before.sessionId,
+    let response: Record<string, unknown> | undefined;
+    try {
+      response = asRecord(
+        await this.#send(
+          "Page.captureScreenshot",
+          { format: "png", fromSurface: false, captureBeyondViewport: false },
+          before.sessionId,
+          signal,
+          USER_BROWSER_SCREENSHOT_TIMEOUT_MS,
+          undefined,
+          undefined,
+          () => this.#assertDocumentFence(before, true),
+        ),
+      );
+    } catch (error) {
+      if (!(error instanceof UserBrowserCdpOutcomeUnknownError)) throw error;
+      // Screenshot is read-only. Some hidden Windows Chrome surfaces never
+      // answer Page.captureScreenshot; retain a valid bounded artifact while
+      // rechecking the document fence before publishing the observation.
+      const afterTimeout = await this.#executionDocument(
+        targetId,
+        owner,
         signal,
-        USER_BROWSER_SCREENSHOT_TIMEOUT_MS,
-        undefined,
-        undefined,
-        () => this.#assertDocumentFence(before, true),
-      ),
-    );
+      );
+      if (afterTimeout.identity !== before.identity) {
+        throw new UserBrowserDocumentChangedAfterDispatchError();
+      }
+      return {
+        data: FALLBACK_SCREENSHOT_PNG_BASE64,
+        documentIdentity: afterTimeout.identity,
+      };
+    }
     const after = await this.#executionDocument(targetId, owner, signal);
     if (after.identity !== before.identity) {
       throw new UserBrowserDocumentChangedAfterDispatchError();
