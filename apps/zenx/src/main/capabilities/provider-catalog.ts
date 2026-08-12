@@ -19,6 +19,7 @@ import {
 } from "./external-provider.js";
 import { PeekabooComputerBackend } from "./peekaboo-computer-provider.js";
 import { PlaywrightCliBrowserBackend } from "./playwright-browser-provider.js";
+import { resolveBundledProvider } from "./provider-provisioning.js";
 import { connectUserBrowserCdp } from "./user-browser-provider.js";
 import type { UserBrowserConnection } from "./user-browser-provider.js";
 import {
@@ -51,6 +52,9 @@ export interface ZenXCapabilityProviderCatalogOptions {
     endpoint: string,
     signal?: AbortSignal,
   ) => Promise<UserBrowserConnection>;
+  /** Set by the packaged app; dev/test keeps explicit PATH discovery. */
+  bundledProvidersOnly?: boolean;
+  resourcesDirectory?: string;
 }
 
 // @playwright/cli has its own 0.1.x package version. It embeds Playwright
@@ -150,10 +154,39 @@ export async function selectBrowserProvider(
     };
   }
   const configured = environment.ZENX_PLAYWRIGHT_CLI;
-  const executable = await discoverExecutable(configured ?? "playwright-cli", {
-    environment,
-    platform,
-  });
+  const bundled =
+    options.bundledProvidersOnly === true &&
+    options.resourcesDirectory !== undefined
+      ? await resolveBundledProvider("playwright-cli", {
+          resourcesDirectory: options.resourcesDirectory,
+          platform,
+        })
+      : undefined;
+  if (
+    options.bundledProvidersOnly === true &&
+    bundled?.provider === undefined
+  ) {
+    return {
+      backend: new ElectronBrowserBackend(),
+      manifest: browserCapabilityManifest,
+      diagnostics: [
+        unavailableDiagnostic(
+          "browser",
+          "playwright-cli",
+          ["isolated"],
+          ["headless", "browser_context", "aria_snapshot", "auto_wait"],
+          bundled?.reason ?? "Packaged Playwright provider is not provisioned",
+        ),
+        electronBrowserDiagnostic("fallback"),
+      ],
+    };
+  }
+  const executable =
+    bundled?.provider?.executable ??
+    (await discoverExecutable(configured ?? "playwright-cli", {
+      environment,
+      platform,
+    }));
   const fallbackDiagnostic = electronBrowserDiagnostic(
     executable === undefined ? "fallback" : "available",
   );
@@ -207,6 +240,9 @@ export async function selectBrowserProvider(
           ],
           executable,
           version,
+          ...(bundled?.provider === undefined
+            ? { integrity: "unverified" as const }
+            : { integrity: "verified" as const }),
           permissionSummary:
             "Isolated in-memory Playwright session; no foreground desktop input",
           sessionMode: "isolated-session",
@@ -293,7 +329,32 @@ export async function selectComputerProvider(
   const environment = options.environment ?? process.env;
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
-    const backend = new WinAppCliComputerBackend();
+    const bundled =
+      options.bundledProvidersOnly === true &&
+      options.resourcesDirectory !== undefined
+        ? await resolveBundledProvider("microsoft-winapp-cli", {
+            resourcesDirectory: options.resourcesDirectory,
+            platform,
+          })
+        : undefined;
+    const command =
+      bundled?.provider?.executable ??
+      (options.bundledProvidersOnly === true ? undefined : "winapp");
+    if (command === undefined) {
+      return {
+        manifest: windowsComputerCapabilityManifest,
+        diagnostics: [
+          unavailableDiagnostic(
+            "computer",
+            "microsoft-winapp-cli",
+            ["background_safe"],
+            ["uia.inspect", "uia.invoke", "uia.set_value", "wgc.capture"],
+            bundled?.reason ?? "Packaged WinApp provider is not provisioned",
+          ),
+        ],
+      };
+    }
+    const backend = new WinAppCliComputerBackend({ command });
     const diagnostic = await backend.diagnose();
     if (!diagnostic.ready) {
       await backend.close();
@@ -330,6 +391,9 @@ export async function selectComputerProvider(
           ...(diagnostic.version === undefined
             ? {}
             : { version: diagnostic.version }),
+          ...(bundled?.provider === undefined
+            ? { integrity: "unverified" as const }
+            : { integrity: "verified" as const }),
           permissionSummary:
             "Exact-window UI Automation and WGC capture; no global input injection",
         },
@@ -593,6 +657,7 @@ function electronBrowserDiagnostic(
     capabilities: ["dedicated_profile", "cdp", "dom.inspect", "dom.interact"],
     permissionSummary: "Bundled hidden ephemeral Electron partition",
     sessionMode: "isolated-session",
+    integrity: "verified",
   };
 }
 

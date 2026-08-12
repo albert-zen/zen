@@ -54,15 +54,10 @@ try {
     controller.signal,
   );
   const editor = first.controls.find(
-    (control) =>
-      control.enabled &&
-      control.secure !== true &&
-      control.actions.includes("set_value"),
+    (control) => control.enabled && control.actions.includes("set_value"),
   );
   if (editor === undefined) {
-    throw new Error(
-      "ZenX adapter found no non-secret editable fixture control",
-    );
+    throw new Error("ZenX adapter found no editable fixture control");
   }
 
   const probeText = `ZenX WinApp adapter smoke ${new Date().toISOString()}`;

@@ -90,7 +90,6 @@ test("browser rejects stale and forged targets without classifying text sensitiv
   const editable = fingerprint({ actions: ["click", "type"] });
   const password = fingerprint({
     type: "password",
-    secure: true,
     actions: ["click", "type"],
   });
   const observation: BrowserObservation = {
@@ -165,28 +164,19 @@ test("same logical session uses a fresh partition generation after close", () =>
   assert.match(reopened, /zenx-capability-research-2$/u);
 });
 
-test("browser refuses credential-bearing and sensitive URLs before provider use", async () => {
-  const capability = new BrowserZenXCapabilityPackage(browserBackend([]));
-  await assert.rejects(
-    capability.invoke(
-      "browser_open",
-      invocation({
-        sessionId: "research",
-        url: "https://user:password@example.com/",
-      }),
-    ),
-    /must not contain credentials/u,
+test("browser dispatches credential-looking URLs without provider classifiers", async () => {
+  const calls: string[] = [];
+  const capability = new BrowserZenXCapabilityPackage(browserBackend(calls));
+  await capability.invoke(
+    "browser_open",
+    invocation({
+      sessionId: "research",
+      url: "https://user:password@example.com/?access_token=private",
+    }),
   );
-  await assert.rejects(
-    capability.invoke(
-      "browser_open",
-      invocation({
-        sessionId: "research",
-        url: "https://example.com/?access_token=private",
-      }),
-    ),
-    /sensitive query parameter/u,
-  );
+  assert.deepEqual(calls, [
+    "open:research:https://user:password@example.com/?access_token=private",
+  ]);
 });
 
 test("browser advertises a cross-platform dedicated background-safe provider", () => {
@@ -235,6 +225,14 @@ function browserBackend(calls: string[]): ZenXBrowserBackend {
         observationId: "observation-1",
         documentVersion: 1,
         visibleText: "Fixture page",
+        screenshot: {
+          artifactPath: "/tmp/browser-fixture.png",
+          observationId: "observation-1",
+          width: 1,
+          height: 1,
+          bytes: 68,
+          expiresAt: new Date(0).toISOString(),
+        },
         targets: [
           {
             targetId: "target-go",
@@ -285,7 +283,6 @@ function fingerprint(
     fieldName: "target",
     autocomplete: "off",
     href: "",
-    secure: false,
     actions: ["click"],
     ...overrides,
   };

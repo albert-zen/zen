@@ -90,6 +90,8 @@ test("user browser mode inherits visible authenticated state without exposing se
 
   const inspection = await backend.inspect("work", "target-1");
   assert.match(inspection.visibleText, /Signed in as Alice/u);
+  assert.equal(inspection.screenshot.observationId, inspection.observationId);
+  assert.ok(inspection.screenshot.bytes > 0);
   assert.equal(inspection.targets[0]?.name, "Continue");
   assert.doesNotMatch(
     JSON.stringify({ tabs, inspection }),
@@ -1002,7 +1004,6 @@ test("password and autocomplete metadata do not block ordinary text dispatch", a
     client.inspectionTarget = {
       ...client.inspectionTarget,
       ...metadata,
-      secure: true,
       actions: ["type"],
     };
     const backend = new UserBrowserCdpBackend(client);
@@ -2535,7 +2536,6 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     fieldName: "",
     autocomplete: "",
     href: "",
-    secure: false,
     actions: ["click"] as Array<"click" | "type">,
   };
   readonly #actionStarted = deferred<void>();
@@ -3212,7 +3212,6 @@ async function createFakeCdpServer(): Promise<{
                       fieldName: "",
                       autocomplete: "",
                       href: "",
-                      secure: false,
                       actions: ["click", "type"],
                     },
                   ],

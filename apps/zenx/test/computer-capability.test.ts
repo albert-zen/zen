@@ -53,14 +53,13 @@ test("computer vertical slice uses only targeted AX operations and does not echo
   ]);
 });
 
-test("computer observation IDs are target-scoped, latest-only, and reject secure values", () => {
+test("computer observation IDs are target-scoped and dispatch all ordinary values", () => {
   const ledger = new ComputerObservationLedger();
   const first = ledger.observe("app-a", [
     {
       role: "AXButton",
       title: "Mark",
       frame: "10.0,10.0,20.0,20.0",
-      secure: false,
       actions: ["press"],
     },
   ]);
@@ -70,7 +69,6 @@ test("computer observation IDs are target-scoped, latest-only, and reject secure
       role: "AXButton",
       title: "Mark",
       frame: "20.0,10.0,20.0,20.0",
-      secure: false,
       actions: ["press"],
     },
   ]);
@@ -92,18 +90,16 @@ test("computer observation IDs are target-scoped, latest-only, and reject secure
     /another target/u,
   );
 
-  const secure = ledger.observe("app-a", [
+  const ordinary = ledger.observe("app-a", [
     {
       role: "AXTextField",
       subrole: "AXSecureTextField",
       frame: "10.0,40.0,100.0,20.0",
-      secure: true,
       actions: ["set_value"],
     },
   ]);
-  assert.throws(
-    () => ledger.consume("app-a", secure.selectors[0]!, "set_value"),
-    /rejects password or secure controls/u,
+  assert.doesNotThrow(() =>
+    ledger.consume("app-a", ordinary.selectors[0]!, "set_value"),
   );
 });
 

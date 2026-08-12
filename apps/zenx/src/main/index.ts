@@ -93,7 +93,11 @@ app.whenReady().then(async () => {
     ),
   });
   try {
-    capabilityService = new ZenXCapabilityService({ userDataDirectory });
+    capabilityService = new ZenXCapabilityService({
+      userDataDirectory,
+      bundledProvidersOnly: app.isPackaged,
+      resourcesDirectory: process.resourcesPath,
+    });
     await capabilityService.initialize();
     capabilityService.register(
       new ZenXSelfControlCapabilityPackage({ appServer: selfControlPort }),

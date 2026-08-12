@@ -78,14 +78,14 @@ export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
           return {
             ...tool,
             description:
-              "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. The provider revalidates selector, semantics, geometry, secure state, and action immediately before invoking.",
+              "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
             capabilities: ["uia.invoke", "app_targeted", "no_global_input"],
           };
         case "computer_set_value":
           return {
             ...tool,
             description:
-              "Set a non-secret value on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, secure state, and action; supplied text is a canonical journaled tool argument.",
+              "Set the supplied text on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
             capabilities: ["uia.set_value", "app_targeted", "no_global_input"],
           };
         default:
@@ -105,7 +105,7 @@ export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
       description:
         "Use Microsoft WinApp CLI UI Automation through ZenX's opaque observe-before-act contract.",
       content:
-        "Target one Windows application by pid or applicationId plus an exact windowTitle. Inspect first, then use only the observationId and targetId returned by the latest computer_inspect. Re-inspect after every action. Semantic invoke and set-value use UI Automation and do not inject global input. computer_set_value is non-secret-only because tool arguments are journaled; secure-looking controls are rejected. Window capture uses WinApp CLI's default WGC/PrintWindow path and never opts into --capture-screen or --focus. If UIA semantics are insufficient, report foreground_required; this provider does not silently inject pointer or keyboard input.",
+        "Target one Windows application by pid or applicationId plus an exact windowTitle. Inspect first, then use only the observationId and targetId returned by the latest computer_inspect. Re-inspect after every action. Semantic invoke and set-value use UI Automation and do not inject global input. Supplied text follows the ordinary set-value path and host/model policy owns credential decisions. Window capture uses WinApp CLI's default WGC/PrintWindow path and never opts into --capture-screen or --focus. If UIA semantics are insufficient, report foreground_required; this provider does not silently inject pointer or keyboard input.",
     },
   ],
   settings: {
@@ -352,7 +352,6 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
         title: boundedText(control.name ?? control.automationId ?? "", 256),
         enabled: control.isEnabled !== false,
         actions: fingerprints[index]!.actions,
-        ...(fingerprints[index]!.secure ? { secure: true } : {}),
       })),
       truncated:
         flattened.length > MAX_COMPUTER_INSPECTION_CONTROLS ||
@@ -663,11 +662,6 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       );
     }
     const actual = winAppFingerprint(matches[0]!);
-    if (action === "set_value" && actual.secure) {
-      throw new Error(
-        "computer_set_value rejects password or secure controls; supplied text is a journaled non-secret-only tool argument",
-      );
-    }
     if (!sameSemanticFingerprint(expected, actual)) {
       throw new Error(
         "The WinApp control changed since the observation; inspect the target again",
@@ -813,10 +807,9 @@ function flattenElements(roots: readonly WinAppElement[]): WinAppElement[] {
 }
 
 function winAppFingerprint(element: WinAppElement): ComputerControlFingerprint {
-  const secure = isSecureElement(element);
   const actions: ComputerControlAction[] = [];
   if (element.isInvokable === true) actions.push(COMPUTER_ACTION_PRESS);
-  if (!secure && isEditableElement(element)) {
+  if (isEditableElement(element)) {
     actions.push(COMPUTER_ACTION_SET_VALUE);
   }
   return {
@@ -827,7 +820,6 @@ function winAppFingerprint(element: WinAppElement): ComputerControlFingerprint {
     frame: [element.x, element.y, element.width, element.height]
       .map((value) => (Number.isFinite(value) ? String(value) : ""))
       .join(","),
-    secure,
     actions,
   };
 }
@@ -841,8 +833,7 @@ function sameSemanticFingerprint(
     expected.role === actual.role &&
     expected.title === actual.title &&
     expected.description === actual.description &&
-    expected.frame === actual.frame &&
-    expected.secure === actual.secure
+    expected.frame === actual.frame
   );
 }
 
@@ -850,19 +841,6 @@ function isEditableElement(element: WinAppElement): boolean {
   if (element.value !== undefined && element.value !== null) return true;
   return /(?:edit|textbox|document|combobox|spinner|slider)/iu.test(
     `${winAppControlType(element) ?? ""} ${element.className ?? ""}`,
-  );
-}
-
-function isSecureElement(element: WinAppElement): boolean {
-  return /(?:password|passwd|passcode|pin|secret|secure|credential|token)/iu.test(
-    [
-      winAppControlType(element),
-      element.name,
-      element.automationId,
-      element.className,
-    ]
-      .filter((value): value is string => typeof value === "string")
-      .join(" "),
   );
 }
 
@@ -1189,13 +1167,7 @@ function redactDiagnostic(
   for (const exact of exactValues) {
     if (exact.length > 0) redacted = redacted.replaceAll(exact, "[REDACTED]");
   }
-  return redacted
-    .replace(
-      /("?(?:password|secret|token|credential|authorization)"?\s*[:=]\s*)("[^"]*"|\S+)/giu,
-      "$1[REDACTED]",
-    )
-    .trim()
-    .slice(0, 2_048);
+  return redacted.trim().slice(0, 2_048);
 }
 
 function unsupportedForeground(): Error {

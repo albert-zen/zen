@@ -91,6 +91,11 @@
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
 - **ZenXCapabilityProviderCatalog** — ZenX 产品层探测并诊断可选的成熟外部执行后端，按显式优先级选择
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
+- **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
+  artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
+- **ZenXCapabilityLiveProjection** — ZenX 主进程把 capability invocation 的有界顺序状态与最新 Browser screenshot
+  投影给 renderer；它是可丢弃的 live UI 状态，canonical tool call/result 仍是唯一 durable execution history。
+- **ZenXBundledProviderProvisioning** — 打包 provider 只能由应用资源中的版本与 SHA-256 固定清单解析；缺失、离线或校验失败只产生可诊断的 unavailable 状态，不改写 Core 会话语义。
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 capability registry 暴露 Project/Thread 自控工具，
   只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
   不持有第二套 Project、Thread、Turn、transcript 或调度状态。

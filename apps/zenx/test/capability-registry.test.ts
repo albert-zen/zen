@@ -112,7 +112,7 @@ test("registers, grants, revokes, and unregisters package contributions", async 
   assert.deepEqual(registry.hostSnapshot().definitions, []);
 });
 
-test("bounds and redacts provider output and projects invocation audit", async () => {
+test("bounds ordinary provider output and projects invocation audit", async () => {
   const registry = new ZenXCapabilityRegistry(
     new MemoryZenXCapabilityGrantStore(),
   );
@@ -131,8 +131,7 @@ test("bounds and redacts provider output and projects invocation audit", async (
 
   const result = await registry.execute(invocation("fixture_inspect", {}));
   assert.ok(Buffer.byteLength(result.output, "utf8") <= 1024);
-  assert.doesNotMatch(result.output, /private/u);
-  assert.doesNotMatch(result.output, /visible-secret|query-secret/u);
+  assert.match(result.output, /private/u);
   assert.match(result.output, /truncated/u);
   const [audit] = registry.snapshot().recentInvocations;
   assert.equal(audit?.capabilityId, "fixture");

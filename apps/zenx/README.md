@@ -168,7 +168,7 @@ Command Line Tools. On Windows, ZenX selects an optional thin adapter over
 Microsoft's Public Preview `winapp` CLI 0.3.1 or newer. Install it explicitly with
 `winget install Microsoft.winappcli --source winget`; ZenX probes `winapp
 --version` plus a read-only JSON schema probe at startup and does not expose the
-provider when it is missing, too old, or schema-incompatible. The adapter resolves an exact title to one HWND with `ui list-windows
+provider when it is missing, too old, or schema-incompatible. Packaged builds use only an application-bundled, version-pinned, SHA-256-verified WinApp asset; missing or offline provisioning is reported explicitly. The adapter resolves an exact title to one HWND with `ui list-windows
 --json`, maps bounded `ui inspect --json` results to ZenX opaque observation IDs,
 uses UIA `invoke` / `set-value`, and captures with the default WGC/PrintWindow
 path. It never passes `--focus` or `--capture-screen` and never silently falls
@@ -177,10 +177,9 @@ output, errors, duration, and artifacts are bounded; cancellation terminates the
 child process, and screenshots expire after five minutes. Set-value completion is
 confirmed by WinApp CLI's bounded native `wait-for --value` assertion without
 projecting the value back to the Agent. WinApp CLI 0.3.1's
-inspect JSON does not expose a stable password-state field, so ZenX conservatively
-rejects controls whose control type, name, automation ID, or class name looks
-secret-bearing; regardless of that heuristic, all `computer_set_value` calls are
-explicitly non-secret-only because their text is journaled. Linux is currently
+inspect JSON does not expose a stable password-state field; ZenX sends all supplied
+text through the same ordinary UIA set-value path and leaves credential policy to
+the model, project, or host. Linux is currently
 unsupported for computer control.
 Full arbitrary GUI automation cannot always be background-safe; an isolated
 macOS/Windows session, VM, or remote host is the intended route to arbitrary
@@ -193,7 +192,7 @@ mature external implementations while retaining a runnable bundled baseline:
 
 - macOS now discovers an optional Peekaboo 3.x CLI and pins its JSON envelope,
   permission probe, snapshot and action assumptions. It uses a fresh exact-window
-  `see` before every semantic action, revalidates identity/security/actions, and
+  `see` before every semantic action, revalidates identity/actions, and
   invokes background `click` or `set-value` with the fresh snapshot and element
   IDs. Foreground pointer/key/scroll remains explicitly labeled. Missing,
   incompatible, or malformed Peekaboo installations produce terminal provider
@@ -214,11 +213,12 @@ mature external implementations while retaining a runnable bundled baseline:
   pinned to `>=0.1.0 <0.2.0`) and validates its `--json` version/list schema
   before selection. Its default headless session is reported as `isolated`, and
   every action re-snapshots and revalidates Playwright ref plus DOM
-  role/name/type/security/visibility/action fingerprint. Missing or incompatible
+  role/name/type/visibility/action fingerprint. Missing or incompatible
   CLI installations remain explicit in provider diagnostics and use the existing
-  bundled Chromium CDP ephemeral-partition provider. Install `@playwright/cli`
-  plus its browser separately or set `ZENX_PLAYWRIGHT_CLI`; user-session attachment
-  remains a separate explicit CDP provider. See <https://playwright.dev/agent-cli/introduction>
+  bundled Chromium CDP ephemeral-partition provider. Packaged builds accept only
+  the pinned resource manifest; development may use `@playwright/cli` or set
+  `ZENX_PLAYWRIGHT_CLI`. User-session attachment remains a separate explicit CDP
+  provider. See <https://playwright.dev/agent-cli/introduction>
   and <https://playwright.dev/docs/api/class-browsercontext>.
 - A future `isolated` interaction mode/provider can place arbitrary control in a
   VM, cloud desktop, or remote host. OSWorld's provider separation across
@@ -302,7 +302,7 @@ background-safe browser operations
 leave the real pointer position and foreground application unchanged. The macOS
 AX helper and foreground helper compile in that packaged run, but arbitrary
 third-party AX window/action smoke remains permission- and target-dependent; its
-opaque latest-observation and forged/stale/secure paths are unit-covered. The
+opaque latest-observation and forged/stale paths are unit-covered. The
 compiled helper enforces semantic fingerprint/geometry revalidation and rejects
 ambiguous matches, but that path is not claimed as a live third-party-app smoke.
 On Windows, `smoke:windows-computer` launches a deterministic WinForms fixture
@@ -313,7 +313,7 @@ inspection, UIA set-value with a bounded native value assertion, a post-action
 re-inspection, and WGC-default scoped capture without `--focus`
 or `--capture-screen`. GitHub CI runs that path on `windows-latest` with Microsoft's
 official setup action. The cross-platform fixture suite validates the same WinApp
-0.3.1 JSON mapping, conservative secure-control heuristic, stale target rejection,
+0.3.1 JSON mapping, stale target rejection,
 pre-action semantic revalidation, startup version/schema diagnostics,
 timeout/cancellation, output bounds, and exact-value error redaction when a
 Windows host is not available.

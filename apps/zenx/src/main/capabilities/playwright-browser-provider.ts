@@ -2,10 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type {
   BrowserInspection,
+  BrowserScreenshotArtifact,
   BrowserTabSummary,
   BrowserTargetFingerprint,
   ZenXBrowserBackend,
 } from "./browser-provider.js";
+import { BrowserScreenshotArtifactStore } from "./browser-provider.js";
 import {
   type ExternalProviderProcessRunner,
   parseExternalJson,
@@ -15,6 +17,7 @@ const PLAYWRIGHT_PROVIDER_TIMEOUT_MS = 30_000;
 const PLAYWRIGHT_CLOSE_TIMEOUT_MS = 10_000;
 const MAX_PLAYWRIGHT_VISIBLE_TEXT = 8_000;
 const MAX_PLAYWRIGHT_TARGETS = 128;
+const MAX_PLAYWRIGHT_SCREENSHOT_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 interface PlaywrightTabState {
   tabId: string;
@@ -75,15 +78,20 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   readonly #runner: ExternalProviderProcessRunner;
   readonly #cwd: string;
   readonly #sessions = new Map<string, PlaywrightSessionState>();
+  readonly #artifacts: BrowserScreenshotArtifactStore;
 
   constructor(options: {
     executable: string;
     runner: ExternalProviderProcessRunner;
     cwd: string;
+    artifactDirectory?: string;
   }) {
     this.#executable = options.executable;
     this.#runner = options.runner;
     this.#cwd = options.cwd;
+    this.#artifacts = new BrowserScreenshotArtifactStore(
+      options.artifactDirectory,
+    );
   }
 
   async listTabs(
@@ -187,6 +195,12 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         disabled: node.disabled === true,
       });
     }
+    const screenshot = await this.#screenshot(
+      session,
+      tab,
+      observationId,
+      signal,
+    );
     tab.observation = {
       id: observationId,
       documentVersion: tab.documentVersion,
@@ -203,8 +217,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         role: target.role,
         name: target.name,
         actions: [...target.actions],
-        ...(target.secure ? { secure: true as const } : {}),
       })),
+      screenshot,
     };
   }
 
@@ -251,6 +265,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     const { session, tab } = this.#requireTab(sessionId, tabId);
     await this.#run(session, ["tab-close", String(tab.index)], signal);
     session.tabs.delete(tabId);
+    await this.#artifacts.clearScope(`${sessionId}/${tabId}`);
     for (const candidate of session.tabs.values()) {
       if (candidate.index > tab.index) candidate.index -= 1;
     }
@@ -273,6 +288,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       session.tabs.clear();
       session.opened = false;
       this.#sessions.delete(sessionId);
+      await this.#artifacts.clearScope(sessionId);
     }
     return closedTabs;
   }
@@ -281,6 +297,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     for (const sessionId of [...this.#sessions.keys()]) {
       await this.closeSession(sessionId).catch(() => undefined);
     }
+    await this.#artifacts.close();
   }
 
   async #run(
@@ -288,6 +305,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     args: readonly string[],
     signal?: AbortSignal,
     timeoutMs = PLAYWRIGHT_PROVIDER_TIMEOUT_MS,
+    maxOutputBytes = 512 * 1024,
   ): Promise<Record<string, unknown>> {
     try {
       const result = await this.#runner.run(
@@ -297,7 +315,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
           cwd: this.#cwd,
           timeoutMs,
           signal,
-          maxOutputBytes: 512 * 1024,
+          maxOutputBytes,
         },
       );
       const response = parseExternalJson("playwright-cli", result.stdout);
@@ -318,6 +336,35 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       }
       throw error;
     }
+  }
+
+  async #screenshot(
+    session: PlaywrightSessionState,
+    tab: PlaywrightTabState,
+    observationId: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserScreenshotArtifact> {
+    await this.#select(session, tab, signal);
+    const response = await this.#run(
+      session,
+      [
+        "run-code",
+        "async page => await page.screenshot({ type: 'png' }).then(buffer => buffer.toString('base64'))",
+      ],
+      signal,
+      PLAYWRIGHT_PROVIDER_TIMEOUT_MS,
+      MAX_PLAYWRIGHT_SCREENSHOT_OUTPUT_BYTES,
+    );
+    if (typeof response.result !== "string") {
+      throw new Error(
+        "Unsupported playwright-cli JSON schema: screenshot result must be base64",
+      );
+    }
+    return await this.#artifacts.write(
+      `${session.sessionId}/${tab.tabId}`,
+      observationId,
+      Buffer.from(response.result, "base64"),
+    );
   }
 
   async #bestEffortCancel(session: PlaywrightSessionState): Promise<void> {
@@ -414,7 +461,6 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       fingerprint.fieldName !== target.fieldName ||
       fingerprint.autocomplete !== target.autocomplete ||
       fingerprint.href !== target.href ||
-      fingerprint.secure !== target.secure ||
       (node.disabled === true) !== target.disabled ||
       fingerprint.actions.length !== target.actions.length ||
       !fingerprint.actions.every((candidate) =>
@@ -423,7 +469,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       !fingerprint.actions.includes(action)
     ) {
       throw new Error(
-        "Playwright target identity, security, visibility, or actions changed; inspect again",
+        "Playwright target identity, visibility, or actions changed; inspect again",
       );
     }
   }
@@ -641,7 +687,6 @@ function playwrightTargetFingerprint(
   node: PlaywrightAriaNode,
   dom: PlaywrightDomMetadata,
 ): BrowserTargetFingerprint {
-  const secure = isSecurePlaywrightNode(node, dom);
   return {
     selector: node.ref!,
     tag: dom.tag,
@@ -652,7 +697,6 @@ function playwrightTargetFingerprint(
     fieldName: dom.fieldName,
     autocomplete: dom.autocomplete,
     href: dom.href || node.url || "",
-    secure,
     actions: playwrightNodeActions(node, dom),
   };
 }
@@ -695,18 +739,6 @@ function playwrightNodeActions(
       ? (["type"] as const)
       : []),
   ];
-}
-
-function isSecurePlaywrightNode(
-  node: PlaywrightAriaNode,
-  dom: PlaywrightDomMetadata,
-): boolean {
-  const semantics = `${node.role} ${node.name ?? ""} ${node.placeholder ?? ""}`;
-  return (
-    dom.type.toLowerCase() === "password" ||
-    /(?:^|-)password$/iu.test(dom.autocomplete) ||
-    /password|secure/iu.test(semantics)
-  );
 }
 
 function isPlaywrightDomMetadata(

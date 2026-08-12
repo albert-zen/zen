@@ -37,7 +37,6 @@ interface PeekabooObservedTarget {
   rawElementId: string;
   snapshotId: string;
   actions: ComputerControlAction[];
-  secure: boolean;
   fingerprint: string;
 }
 
@@ -93,13 +92,11 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     const targets = new Map<string, PeekabooObservedTarget>();
     const controls = selected.map((element) => {
       const targetId = randomUUID();
-      const secure = isSecurePeekabooElement(element);
-      const actions = peekabooElementActions(element, secure);
+      const actions = peekabooElementActions(element);
       targets.set(targetId, {
         rawElementId: element.id,
         snapshotId,
         actions,
-        secure,
         fingerprint: peekabooElementFingerprint(element),
       });
       return {
@@ -108,7 +105,6 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
         title: element.label ?? element.title ?? element.description ?? "",
         enabled: element.is_actionable,
         actions,
-        ...(secure ? { secure: true as const } : {}),
       };
     });
     const key = computerTargetKey(target);
@@ -316,11 +312,6 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     if (!selected.actions.includes(action)) {
       throw new Error(`Computer target does not support ${action}`);
     }
-    if (action === COMPUTER_ACTION_SET_VALUE && selected.secure) {
-      throw new Error(
-        "computer_set_value rejects password or secure controls because supplied text is journaled",
-      );
-    }
     this.#observations.delete(key);
     return selected;
   }
@@ -349,11 +340,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
       .filter(
         (element) =>
           peekabooElementFingerprint(element) === observed.fingerprint &&
-          isSecurePeekabooElement(element) === observed.secure &&
-          sameActions(
-            peekabooElementActions(element, observed.secure),
-            observed.actions,
-          ),
+          sameActions(peekabooElementActions(element), observed.actions),
       );
     if (matches.length !== 1) {
       throw new Error(
@@ -495,20 +482,13 @@ function targetSummary(
   };
 }
 
-function isSecurePeekabooElement(element: PeekabooElement): boolean {
-  return /secure|password/iu.test(
-    `${element.role} ${element.title ?? ""} ${element.label ?? ""} ${element.description ?? ""}`,
-  );
-}
-
 function peekabooElementActions(
   element: PeekabooElement,
-  secure: boolean,
 ): ComputerControlAction[] {
   const editable = /text|search|combo/iu.test(element.role);
   const actions: ComputerControlAction[] = [];
   if (element.is_actionable) actions.push(COMPUTER_ACTION_PRESS);
-  if (editable && !secure) actions.push(COMPUTER_ACTION_SET_VALUE);
+  if (editable) actions.push(COMPUTER_ACTION_SET_VALUE);
   return actions;
 }
 

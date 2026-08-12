@@ -18,6 +18,8 @@ test("Playwright provider runs an isolated JSON-only observe/action slice", asyn
   assert.equal(opened.title, "Fixture");
   const inspected = await backend.inspect("research", opened.tabId);
   assert.match(inspected.visibleText, /Run/u);
+  assert.equal(inspected.screenshot.observationId, inspected.observationId);
+  assert.ok(inspected.screenshot.bytes > 0);
   const button = inspected.targets.find(({ name }) => name === "Run");
   assert.ok(button);
   await assert.rejects(
@@ -74,7 +76,6 @@ test("Playwright provider revalidates DOM identity and dispatches password fill 
   const opened = await backend.open("research", "https://example.com/");
   const inspected = await backend.inspect("research", opened.tabId);
   const password = inspected.targets.find(({ name }) => name === "Password");
-  assert.equal(password?.secure, true);
   assert.deepEqual(password?.actions, ["click", "type"]);
   assert.ok(password);
   await backend.type(
@@ -101,7 +102,7 @@ test("Playwright provider revalidates DOM identity and dispatches password fill 
       refreshed.observationId,
       button.targetId,
     ),
-    /identity, security, visibility, or actions changed/u,
+    /identity, visibility, or actions changed/u,
   );
   assert.equal(runner.calls.filter((args) => args.includes("click")).length, 0);
 });
@@ -173,6 +174,11 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
         this.#releaseClose = resolve;
       });
       this.#finishDelayedClose?.();
+    } else if (command === "run-code" && args[3]?.includes("screenshot")) {
+      response = {
+        result:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      };
     } else if (command === "run-code") {
       response = args[3]?.includes("aria-ref=")
         ? {

@@ -33,6 +33,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #browserBackend?: ZenXBrowserBackend;
   readonly #computerBackend?: ZenXComputerBackend;
   readonly #computerManifest?: ZenXCapabilityManifest;
+  readonly #bundledProvidersOnly: boolean;
+  readonly #resourcesDirectory?: string;
   #computerRegistered = false;
 
   constructor(options: {
@@ -42,6 +44,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     browserBackend?: ZenXBrowserBackend;
     computerBackend?: ZenXComputerBackend;
     computerManifest?: ZenXCapabilityManifest;
+    bundledProvidersOnly?: boolean;
+    resourcesDirectory?: string;
   }) {
     this.#registry = new ZenXCapabilityRegistry(
       options.grantStore ??
@@ -56,6 +60,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     this.#browserBackend = options.browserBackend;
     this.#computerBackend = options.computerBackend;
     this.#computerManifest = options.computerManifest;
+    this.#bundledProvidersOnly = options.bundledProvidersOnly ?? false;
+    this.#resourcesDirectory = options.resourcesDirectory;
   }
 
   async initialize(): Promise<void> {
@@ -64,6 +70,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       this.#browserBackend === undefined
         ? await selectBrowserProvider({
             userDataDirectory: this.#userDataDirectory,
+            bundledProvidersOnly: this.#bundledProvidersOnly,
+            resourcesDirectory: this.#resourcesDirectory,
           })
         : {
             backend: this.#browserBackend,
@@ -88,6 +96,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       this.#computerBackend === undefined
         ? await selectComputerProvider({
             userDataDirectory: this.#userDataDirectory,
+            bundledProvidersOnly: this.#bundledProvidersOnly,
+            resourcesDirectory: this.#resourcesDirectory,
           })
         : {
             backend: this.#computerBackend,

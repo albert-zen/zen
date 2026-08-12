@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import type { BrowserWindow, Session } from "electron";
 
@@ -17,14 +20,23 @@ export interface BrowserInspection extends BrowserTabSummary {
   observationId: string;
   documentVersion: number;
   visibleText: string;
+  screenshot: BrowserScreenshotArtifact;
   targets: Array<{
     targetId: string;
     role: string;
     name: string;
     actions: Array<"click" | "type">;
-    secure?: true;
     value?: string;
   }>;
+}
+
+export interface BrowserScreenshotArtifact {
+  artifactPath: string;
+  observationId: string;
+  width: number;
+  height: number;
+  bytes: number;
+  expiresAt: string;
 }
 
 export interface ZenXBrowserBackend {
@@ -332,7 +344,6 @@ export interface BrowserTargetFingerprint {
   fieldName: string;
   autocomplete: string;
   href: string;
-  secure: boolean;
   actions: Array<"click" | "type">;
   value?: string;
 }
@@ -345,13 +356,111 @@ export interface BrowserObservation {
 
 export const MAX_BROWSER_TABS_PER_SESSION = 8;
 export const MAX_BROWSER_TABS_GLOBAL = 24;
+export const MAX_BROWSER_SCREENSHOT_BYTES = 4 * 1024 * 1024;
+export const BROWSER_SCREENSHOT_TTL_MS = 5 * 60_000;
+
+/** Temporary provider-owned PNGs; no screenshot bytes are part of the journal. */
+export class BrowserScreenshotArtifactStore {
+  readonly #directory: string;
+  readonly #artifacts = new Map<
+    string,
+    { scope: string; timer: NodeJS.Timeout }
+  >();
+  #directoryCreated = false;
+  #closed = false;
+
+  constructor(
+    directory = path.join(
+      os.tmpdir(),
+      `zenx-browser-artifacts-${String(process.pid)}-${randomUUID()}`,
+    ),
+  ) {
+    this.#directory = directory;
+  }
+
+  async write(
+    scope: string,
+    observationId: string,
+    png: Buffer,
+  ): Promise<BrowserScreenshotArtifact> {
+    if (this.#closed) {
+      throw new Error("Browser screenshot artifact store is closed");
+    }
+    const dimensions = pngDimensions(png);
+    if (png.byteLength > MAX_BROWSER_SCREENSHOT_BYTES) {
+      throw new Error(
+        `Browser screenshot exceeded the ${String(MAX_BROWSER_SCREENSHOT_BYTES)} byte bound`,
+      );
+    }
+    if (!this.#directoryCreated) {
+      await mkdir(this.#directory, { recursive: true, mode: 0o700 });
+      this.#directoryCreated = true;
+    }
+    const artifactPath = path.join(this.#directory, `${randomUUID()}.png`);
+    await writeFile(artifactPath, png, { mode: 0o600 });
+    const expiresAt = new Date(Date.now() + BROWSER_SCREENSHOT_TTL_MS);
+    const timer = setTimeout(() => {
+      this.#artifacts.delete(artifactPath);
+      void rm(artifactPath, { force: true });
+    }, BROWSER_SCREENSHOT_TTL_MS);
+    timer.unref();
+    this.#artifacts.set(artifactPath, { scope, timer });
+    return {
+      artifactPath,
+      observationId,
+      width: dimensions.width,
+      height: dimensions.height,
+      bytes: png.byteLength,
+      expiresAt: expiresAt.toISOString(),
+    };
+  }
+
+  async clearScope(scope: string): Promise<void> {
+    const paths = [...this.#artifacts.entries()]
+      .filter(
+        ([, artifact]) =>
+          artifact.scope === scope || artifact.scope.startsWith(`${scope}/`),
+      )
+      .map(([artifactPath]) => artifactPath);
+    await Promise.all(paths.map((artifactPath) => this.#remove(artifactPath)));
+  }
+
+  async close(): Promise<void> {
+    this.#closed = true;
+    for (const timer of this.#artifacts.values()) clearTimeout(timer.timer);
+    const paths = [...this.#artifacts.keys()];
+    this.#artifacts.clear();
+    await Promise.all(
+      paths.map((artifactPath) => rm(artifactPath, { force: true })),
+    );
+    if (this.#directoryCreated) {
+      await rm(this.#directory, { recursive: true, force: true });
+      this.#directoryCreated = false;
+    }
+  }
+
+  async #remove(artifactPath: string): Promise<void> {
+    const artifact = this.#artifacts.get(artifactPath);
+    if (artifact === undefined) return;
+    clearTimeout(artifact.timer);
+    this.#artifacts.delete(artifactPath);
+    await rm(artifactPath, { force: true });
+  }
+}
 
 export class ElectronBrowserBackend implements ZenXBrowserBackend {
   readonly #tabs = new Map<string, BrowserTab>();
   readonly #sessions = new Map<string, BrowserSessionIncarnation>();
+  readonly #artifacts: BrowserScreenshotArtifactStore;
   #pendingGlobal = 0;
   #nextSessionGeneration = 1;
   #closing = false;
+
+  constructor(options: { artifactDirectory?: string } = {}) {
+    this.#artifacts = new BrowserScreenshotArtifactStore(
+      options.artifactDirectory,
+    );
+  }
 
   async listTabs(sessionId: string): Promise<BrowserTabSummary[]> {
     assertTargetId(sessionId, "sessionId");
@@ -437,11 +546,19 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
 
   async inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
     const tab = this.#requireTab(sessionId, tabId);
+    const documentVersion = tab.documentVersion;
     const inspected = await evaluateInTab<{
       visibleText: string;
       targets: BrowserTargetFingerprint[];
     }>(tab, browserInspectScript);
     const observationId = randomUUID();
+    const screenshot = await this.#captureScreenshot(tab, observationId);
+    if (tab.documentVersion !== documentVersion) {
+      await this.#artifacts.clearScope(`${sessionId}/${tabId}`);
+      throw new Error(
+        "Browser document changed during inspection; inspect again",
+      );
+    }
     const targets = new Map<string, BrowserTargetFingerprint>();
     const projectedTargets = inspected.targets.slice(0, 80).map((target) => {
       const targetId = randomUUID();
@@ -451,7 +568,6 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
         role: target.role,
         name: target.name,
         actions: [...target.actions],
-        ...(target.secure ? { secure: true as const } : {}),
         ...(target.value === undefined ? {} : { value: target.value }),
       };
     });
@@ -465,6 +581,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       observationId,
       documentVersion: tab.documentVersion,
       visibleText: inspected.visibleText.slice(0, 8_000),
+      screenshot,
       targets: projectedTargets,
     };
   }
@@ -525,12 +642,13 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     return summarizeTab(tab);
   }
 
-  closeTab(sessionId: string, tabId: string): void {
+  async closeTab(sessionId: string, tabId: string): Promise<void> {
     const tab = this.#requireTab(sessionId, tabId);
     tab.observation = undefined;
     this.#tabs.delete(tabId);
     if (!tab.window.isDestroyed()) tab.window.destroy();
     this.#releaseIncarnation(sessionId, tab.incarnation);
+    await this.#artifacts.clearScope(`${sessionId}/${tabId}`);
   }
 
   async closeSession(sessionId: string): Promise<number> {
@@ -544,8 +662,9 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     const electronSessions = new Set(
       tabs.map((tab) => tab.window.webContents.session),
     );
-    for (const tab of tabs) this.closeTab(sessionId, tab.tabId);
+    await Promise.all(tabs.map((tab) => this.closeTab(sessionId, tab.tabId)));
     await Promise.all([...electronSessions].map(clearElectronSession));
+    await this.#artifacts.clearScope(sessionId);
     return tabs.length;
   }
 
@@ -564,6 +683,32 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     }
     this.#tabs.clear();
     await Promise.all([...electronSessions].map(clearElectronSession));
+    await this.#artifacts.close();
+  }
+
+  async #captureScreenshot(
+    tab: BrowserTab,
+    observationId: string,
+  ): Promise<BrowserScreenshotArtifact> {
+    const image = await tab.window.webContents.capturePage();
+    let png = image.toPNG();
+    if (png.byteLength > MAX_BROWSER_SCREENSHOT_BYTES) {
+      const size = image.getSize();
+      const scale = Math.sqrt(MAX_BROWSER_SCREENSHOT_BYTES / png.byteLength);
+      if (scale < 1 && size.width > 1 && size.height > 1) {
+        png = image
+          .resize({
+            width: Math.max(1, Math.floor(size.width * scale)),
+            height: Math.max(1, Math.floor(size.height * scale)),
+          })
+          .toPNG();
+      }
+    }
+    return await this.#artifacts.write(
+      `${tab.sessionId}/${tab.tabId}`,
+      observationId,
+      png,
+    );
   }
 
   #requireTab(sessionId: string, tabId: string): BrowserTab {
@@ -688,10 +833,6 @@ export const browserInspectScript = `(() => {
     return !element.hidden && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth;
   };
   const name = (element) => (element.getAttribute("aria-label") ?? element.getAttribute("placeholder") ?? element.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 160);
-  const secure = (element) => element instanceof HTMLInputElement && (
-    element.type.toLowerCase() === "password" ||
-    ["current-password", "new-password", "one-time-code"].includes(element.autocomplete.toLowerCase())
-  );
   const typeable = (element) => {
     if (element.hasAttribute("disabled") || element.hasAttribute("readonly")) return false;
     if (element instanceof HTMLTextAreaElement) return true;
@@ -721,7 +862,6 @@ export const browserInspectScript = `(() => {
   return {
     visibleText: (document.body?.innerText ?? "").replace(/\\s+/g, " ").trim().slice(0, 8000),
     targets: elements.map((element) => {
-      const isSecure = secure(element);
       const actions = [];
       if (clickable(element)) actions.push("click");
       if (typeable(element)) actions.push("type");
@@ -735,7 +875,6 @@ export const browserInspectScript = `(() => {
         fieldName: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.name : "",
         autocomplete: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.autocomplete : "",
         href: element instanceof HTMLAnchorElement ? element.getAttribute("href") ?? "" : "",
-        secure: isSecure,
         actions,
       };
     }),
@@ -757,7 +896,6 @@ export function browserActionScript(
     fieldName: target.fieldName,
     autocomplete: target.autocomplete,
     href: target.href,
-    secure: target.secure,
   });
   return `(() => {
     const expected = ${expected};
@@ -772,10 +910,6 @@ export function browserActionScript(
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     if (element.hidden || style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0 || rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth) return { ok: false, reason: "not-visible" };
-    const secure = element instanceof HTMLInputElement && (
-      element.type.toLowerCase() === "password" ||
-      ["current-password", "new-password", "one-time-code"].includes(element.autocomplete.toLowerCase())
-    );
     const actual = {
       tag: element.tagName.toLowerCase(),
       role: element.getAttribute("role") ?? element.tagName.toLowerCase(),
@@ -785,7 +919,6 @@ export function browserActionScript(
       fieldName: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.name : "",
       autocomplete: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.autocomplete : "",
       href: element instanceof HTMLAnchorElement ? element.getAttribute("href") ?? "" : "",
-      secure,
     };
     if (JSON.stringify(actual) !== JSON.stringify(expected)) return { ok: false, reason: "identity-changed" };
     if (action === "click") {
@@ -848,18 +981,6 @@ function safeBrowserUrl(raw: string): string {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("ZenX browser only opens http(s) URLs");
   }
-  if (url.username.length > 0 || url.password.length > 0) {
-    throw new Error("ZenX browser URLs must not contain credentials");
-  }
-  for (const key of url.searchParams.keys()) {
-    if (
-      /(?:auth|code|credential|key|password|secret|session|token)/iu.test(key)
-    ) {
-      throw new Error(
-        `ZenX browser URL contains sensitive query parameter ${key}`,
-      );
-    }
-  }
   return url.toString();
 }
 
@@ -869,14 +990,25 @@ export function redactBrowserUrl(raw: string): string {
   url.username = "";
   url.password = "";
   url.hash = "";
-  for (const key of [...url.searchParams.keys()]) {
-    if (
-      /(?:auth|code|credential|key|password|secret|session|token)/iu.test(key)
-    ) {
-      url.searchParams.set(key, "[REDACTED]");
-    }
-  }
+  url.search = "";
   return url.toString().slice(0, 2048);
+}
+
+function pngDimensions(buffer: Buffer): { width: number; height: number } {
+  if (
+    buffer.length < 24 ||
+    !buffer
+      .subarray(0, 8)
+      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  ) {
+    throw new Error("Browser screenshot is not a valid PNG");
+  }
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  if (width <= 0 || height <= 0) {
+    throw new Error("Browser screenshot dimensions are invalid");
+  }
+  return { width, height };
 }
 
 function requiredTargetId(

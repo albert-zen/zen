@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -9,6 +12,7 @@ import {
   probePeekabooCli,
   probePlaywrightCli,
   selectBrowserProvider,
+  selectComputerProvider,
 } from "../src/main/capabilities/provider-catalog.js";
 import {
   BrowserZenXCapabilityPackage,
@@ -79,6 +83,37 @@ test("invalid browser modes are explicit instead of masquerading as isolated", a
   });
   assert.equal(selection.backend, undefined);
   assert.equal(selection.diagnostics[0]?.sessionMode, "invalid");
+});
+
+test("packaged provider selection never falls back to an unpinned PATH asset", async () => {
+  const resourcesDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-packaged-provider-test-"),
+  );
+  try {
+    const browser = await selectBrowserProvider({
+      userDataDirectory: resourcesDirectory,
+      resourcesDirectory,
+      bundledProvidersOnly: true,
+      platform: "win32",
+      environment: { PATH: "C:\\fake-provider-path" },
+    });
+    assert.ok(browser.backend);
+    assert.equal(browser.diagnostics[0]?.status, "unavailable");
+    assert.match(browser.diagnostics[0]?.reason ?? "", /manifest/u);
+    await browser.backend.close();
+
+    const computer = await selectComputerProvider({
+      userDataDirectory: resourcesDirectory,
+      resourcesDirectory,
+      bundledProvidersOnly: true,
+      platform: "win32",
+      environment: { PATH: "C:\\fake-provider-path" },
+    });
+    assert.equal(computer.backend, undefined);
+    assert.match(computer.diagnostics[0]?.reason ?? "", /manifest/u);
+  } finally {
+    await rm(resourcesDirectory, { recursive: true, force: true });
+  }
 });
 
 test("pins and validates the Playwright CLI machine-readable contract", async () => {

@@ -79,6 +79,15 @@ export interface ZenXCapabilityAuditRecord {
   summary?: string;
 }
 
+export interface ZenXCapabilityScreenshotArtifact {
+  artifactPath: string;
+  observationId?: string;
+  width: number;
+  height: number;
+  bytes: number;
+  expiresAt: string;
+}
+
 export interface ZenXCapabilityProviderDiagnostic {
   capabilityId: string;
   providerId: string;
@@ -87,6 +96,7 @@ export interface ZenXCapabilityProviderDiagnostic {
   capabilities: string[];
   executable?: string;
   version?: string;
+  integrity?: "verified" | "unverified" | "failed";
   permissionSummary?: string;
   reason?: string;
   sessionMode?: "isolated-session" | "user-session" | "invalid";
@@ -107,6 +117,8 @@ export interface ZenXCapabilitySummary {
 export interface ZenXCapabilitySnapshot {
   capabilities: ZenXCapabilitySummary[];
   recentInvocations: ZenXCapabilityAuditRecord[];
+  /** Renderer-only live projection; it is intentionally absent from canonical Items. */
+  currentScreenshot?: ZenXCapabilityScreenshotArtifact;
   providerDiagnostics: ZenXCapabilityProviderDiagnostic[];
   discoveryErrors: string[];
 }

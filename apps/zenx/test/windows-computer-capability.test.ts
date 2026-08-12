@@ -46,8 +46,7 @@ test("Windows provider maps WinApp JSON into opaque bounded UIA controls", async
   assert.equal(inspected.controls[0]?.title, "Save");
   assert.deepEqual(inspected.controls[0]?.actions, ["press"]);
   assert.deepEqual(inspected.controls[1]?.actions, ["set_value"]);
-  assert.equal(inspected.controls[2]?.secure, true);
-  assert.deepEqual(inspected.controls[2]?.actions, []);
+  assert.deepEqual(inspected.controls[2]?.actions, ["set_value"]);
   assert.doesNotMatch(JSON.stringify(inspected), /existing private value/u);
   assert.doesNotMatch(JSON.stringify(inspected), /provider-button-selector/u);
 
@@ -146,21 +145,18 @@ test("Windows provider confirms a screenshot through its real file identity", as
   }
 });
 
-test("Windows provider rejects ambiguous windows, stale selectors, and secure controls", async () => {
+test("Windows provider rejects ambiguous windows and stale selectors while dispatching ordinary values", async () => {
   const runner = new FixtureWinAppRunner();
   const backend = new WinAppCliComputerBackend({
     platform: "win32",
     runner,
   });
   const inspected = await backend.inspect(target);
-  const secure = inspected.controls.find((control) => control.secure)!;
-  await assert.rejects(
-    backend.setValue(target, secure.selector, "must-not-run"),
-    /rejects password or secure controls/u,
-  );
+  const secure = inspected.controls[2]!;
+  await backend.setValue(target, secure.selector, "must-run-normally");
   assert.equal(
-    runner.commands.some((args) => args.includes("must-not-run")),
-    false,
+    runner.commands.some((args) => args.includes("must-run-normally")),
+    true,
   );
 
   const first = inspected.controls[0]!.selector;
@@ -181,7 +177,7 @@ test("Windows provider revalidates secure state and semantic identity immediatel
   runner.secureField = true;
   await assert.rejects(
     backend.setValue(target, first.controls[1]!.selector, "must-not-run"),
-    /rejects password or secure controls/u,
+    /changed since the observation/u,
   );
   assert.equal(
     runner.commands.some(

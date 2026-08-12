@@ -40,7 +40,6 @@ export interface ComputerInspection {
     title: string;
     enabled: boolean;
     actions: ComputerControlAction[];
-    secure?: true;
   }>;
   truncated: boolean;
 }
@@ -184,7 +183,7 @@ export const computerCapabilityManifest: ZenXCapabilityManifest = {
     {
       name: "computer_set_value",
       description:
-        "Set a non-secret semantic value on one editable opaque target from the latest computer_inspect observation. Secure/password controls are rejected; supplied text is a canonical journaled tool argument.",
+        "Set the supplied text on one editable opaque target from the latest computer_inspect observation. The value follows the ordinary tool path and host/model policy decides how it is handled.",
       inputSchema: objectSchema(
         {
           target: targetSchema(),
@@ -217,7 +216,7 @@ export const computerCapabilityManifest: ZenXCapabilityManifest = {
       description:
         "Instructions for app-targeted accessibility actions without foreground takeover.",
       content:
-        "Prefer structured browser tools for web pages. For native apps, identify a pid or bundleId and optionally an exact window title, inspect that target, then act only with the observationId and opaque targetId from the latest inspect. Re-inspect after every action. computer_set_value is non-secret-only because supplied text is journaled, and secure controls are rejected. Try background-safe semantic press/value/capture first. Those tools must never fall back to pointer motion, foreground keystrokes, app activation, or workspace changes. If accessibility semantics are insufficient and foreground takeover is acceptable, choose an explicitly named computer_foreground_* tool, warn that it affects the user's live desktop, and keep the operation cancellable; otherwise report unsupported.",
+        "Prefer structured browser tools for web pages. For native apps, identify a pid or bundleId and optionally an exact window title, inspect that target, then act only with the observationId and opaque targetId from the latest inspect. Re-inspect after every action. Supplied text follows the ordinary set-value path; host/model policy owns credential decisions. Try background-safe semantic press/value/capture first. Those tools must never fall back to pointer motion, foreground keystrokes, app activation, or workspace changes. If accessibility semantics are insufficient and foreground takeover is acceptable, choose an explicitly named computer_foreground_* tool, warn that it affects the user's live desktop, and keep the operation cancellable; otherwise report unsupported.",
     },
   ],
 };
@@ -323,7 +322,6 @@ export interface ComputerControlFingerprint {
   title?: string;
   description?: string;
   frame?: string;
-  secure: boolean;
   actions: ComputerControlAction[];
 }
 
@@ -377,11 +375,6 @@ export class ComputerObservationLedger {
       );
     }
     if (action === COMPUTER_ACTION_SET_VALUE) {
-      if (fingerprint.secure) {
-        throw new Error(
-          "computer_set_value rejects password or secure controls; supplied text is a journaled non-secret-only tool argument",
-        );
-      }
       if (!fingerprint.actions.includes(COMPUTER_ACTION_SET_VALUE)) {
         throw new Error(
           "Control no longer supports background-safe semantic set value; foreground_required",
@@ -410,7 +403,6 @@ interface MacRawControl {
   title: string;
   enabled: boolean;
   actions: string[];
-  secure?: boolean;
 }
 
 interface MacInspectionResult {
@@ -424,7 +416,6 @@ function rawControlFingerprint(
 ): ComputerControlFingerprint {
   return {
     ...control.selector,
-    secure: control.secure === true,
     actions: canonicalComputerActions(control.actions),
   };
 }
@@ -443,7 +434,7 @@ function canonicalComputerActions(
 function semanticControlSelector(
   fingerprint: ComputerControlFingerprint,
 ): Record<string, string> {
-  const { secure: _secure, actions: _actions, ...selector } = fingerprint;
+  const { actions: _actions, ...selector } = fingerprint;
   return selector;
 }
 
@@ -498,7 +489,6 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
         title: control.title,
         enabled: control.enabled,
         actions: rawControlFingerprint(control).actions,
-        ...(control.secure ? { secure: true } : {}),
       })),
       truncated:
         result.truncated || result.controls.length > boundedControls.length,
@@ -822,11 +812,6 @@ func isSettable(_ element: AXUIElement, _ name: String) -> Bool {
   return AXUIElementIsAttributeSettable(element, name as CFString, &settable) == .success && settable.boolValue
 }
 
-func isSecure(_ element: AXUIElement) -> Bool {
-  let semantics = (textAttribute(element, kAXRoleAttribute) + " " + textAttribute(element, kAXSubroleAttribute)).lowercased()
-  return semantics.contains("secure") || semantics.contains("password")
-}
-
 func frameFingerprint(_ element: AXUIElement) -> String {
   guard let rawPosition = attribute(element, kAXPositionAttribute),
         let rawSize = attribute(element, kAXSizeAttribute),
@@ -971,7 +956,6 @@ case "inspect":
       "title": textAttribute(element, kAXTitleAttribute),
       "enabled": boolAttribute(element, kAXEnabledAttribute),
       "actions": supportedActions.sorted(),
-      "secure": isSecure(element)
     ]
   }
   response = ["target": resolvedTarget, "controls": controls, "truncated": truncated]
@@ -986,7 +970,6 @@ case "setValue":
   let wanted = dictionary(request["control"], "control")
   guard let value = request["value"] as? String else { fail("value must be a string") }
   let element = findControl(wanted)
-  if isSecure(element) { fail("password or secure controls reject AXValue; typing tools are non-secret-only") }
   var settable: DarwinBoolean = false
   guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue else {
     fail("control does not support background-safe AXValue; foreground_required")
