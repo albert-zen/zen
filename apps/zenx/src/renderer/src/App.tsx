@@ -108,6 +108,19 @@ export function App() {
     Record<string, ComposerState>
   >({});
 
+  const refreshThreads = async (isCurrent: () => boolean = () => true) => {
+    try {
+      const result = await window.zenx.protocol.request("thread/list", {});
+      if (!isCurrent()) return;
+      setThreads(result.data);
+      setRequestError(null);
+    } catch (error) {
+      if (!isCurrent()) return;
+      setRequestError(error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  };
+
   const resumeThread = async (threadId: string) => {
     const epoch = ++selectionEpoch.current;
     selectedThreadIdRef.current = threadId;
@@ -139,19 +152,7 @@ export function App() {
   useEffect(() => {
     let active = true;
     const loadThreads = async () => {
-      try {
-        const result = await window.zenx.protocol.request("thread/list", {});
-        if (active) {
-          setThreads(result.data);
-          setRequestError(null);
-        }
-      } catch (error) {
-        if (active) {
-          setRequestError(
-            error instanceof Error ? error.message : String(error),
-          );
-        }
-      }
+      await refreshThreads(() => active).catch(() => undefined);
     };
     const loadModels = async () => {
       try {
@@ -579,6 +580,7 @@ export function App() {
         {settingsOpen ? (
           <SettingsView
             onClose={() => setSettingsOpen(false)}
+            onLegacyJournalCleanup={refreshThreads}
             onSettingsChange={setHostSettings}
           />
         ) : scheduledOpen ? (

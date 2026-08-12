@@ -153,15 +153,15 @@ export class ZenXJournalCompatibilityService {
       target: this.#targetPath(candidate.threadId),
     }));
 
+    await this.#assertQuarantineDestinationSafe();
     await this.#validateMoveSet(targets);
     if (targets.length > 0) {
       await mkdir(this.#quarantineDirectory, { recursive: true });
-      await this.#assertDirectoryInsideZenHome(
-        this.#quarantineDirectory,
-        "quarantine",
-      );
+      await this.#assertQuarantineDestinationSafe();
     }
     for (const target of targets) {
+      await this.#assertQuarantineDestinationSafe();
+      await this.#validateMoveSet([target]);
       await rename(target.source, target.target);
     }
 
@@ -305,15 +305,48 @@ export class ZenXJournalCompatibilityService {
     assertPathInside(threadsRealPath, sourceRealPath, "journal source");
   }
 
-  async #assertDirectoryInsideZenHome(
-    directory: string,
-    label: string,
-  ): Promise<void> {
-    const [directoryRealPath, zenHomeRealPath] = await Promise.all([
-      realpath(directory),
+  async #assertQuarantineDestinationSafe(): Promise<void> {
+    const [zenHomeRealPath, threadsRealPath] = await Promise.all([
       realpath(this.#zenHome),
+      realpath(this.#threadsDirectory),
     ]);
-    assertPathInside(zenHomeRealPath, directoryRealPath, label);
+    const relative = path.relative(this.#zenHome, this.#quarantineDirectory);
+    let existingAncestor = this.#zenHome;
+    for (const segment of relative.split(path.sep).filter(Boolean)) {
+      const candidate = path.join(existingAncestor, segment);
+      const candidateStat = await lstat(candidate).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        },
+      );
+      if (candidateStat === undefined) break;
+      if (candidateStat.isSymbolicLink()) {
+        throw new Error(
+          `Journal quarantine cannot use a symlink or reparse alias: ${candidate}`,
+        );
+      }
+      if (!candidateStat.isDirectory()) {
+        throw new Error(
+          `Journal quarantine ancestor is not a directory: ${candidate}`,
+        );
+      }
+      existingAncestor = candidate;
+    }
+    const ancestorRealPath = await realpath(existingAncestor);
+    const resolvedDestination = path.resolve(
+      ancestorRealPath,
+      path.relative(existingAncestor, this.#quarantineDirectory),
+    );
+    assertPathInside(zenHomeRealPath, resolvedDestination, "quarantine");
+    if (
+      samePath(threadsRealPath, resolvedDestination) ||
+      isPathInside(threadsRealPath, resolvedDestination)
+    ) {
+      throw new Error(
+        "Journal quarantine must be outside the resolved threads directory",
+      );
+    }
   }
 }
 

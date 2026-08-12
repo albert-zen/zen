@@ -11,9 +11,11 @@ import { CapabilitySettings } from "./CapabilitySettings.js";
 
 export function SettingsView({
   onClose,
+  onLegacyJournalCleanup,
   onSettingsChange,
 }: {
   onClose(): void;
+  onLegacyJournalCleanup(): Promise<void>;
   onSettingsChange(settings: PublicHostSettings): void;
 }) {
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
@@ -409,7 +411,10 @@ export function SettingsView({
             setCleanupResult(null);
             setError(null);
             try {
-              const value = await window.zenx.settings.cleanupLegacyJournals();
+              const value = await cleanupLegacyJournalsAndRefreshThreads(
+                () => window.zenx.settings.cleanupLegacyJournals(),
+                onLegacyJournalCleanup,
+              );
               setLegacyReport(value.report);
               setCleanupResult(
                 `Moved ${value.result.moved.length} empty legacy ${value.result.moved.length === 1 ? "journal" : "journals"} to ${value.result.quarantineDirectory}. The list has been refreshed.`,
@@ -480,6 +485,15 @@ export function isProviderReady(
       ? subscriptionAuthenticated
       : hasApiKey || apiKey.trim().length > 0)
   );
+}
+
+export async function cleanupLegacyJournalsAndRefreshThreads<T>(
+  cleanup: () => Promise<T>,
+  refreshThreads: () => Promise<void>,
+): Promise<T> {
+  const result = await cleanup();
+  await refreshThreads();
+  return result;
 }
 
 export function LegacyJournalCard({

@@ -11,6 +11,7 @@ import {
 import { ModelSelector } from "../src/renderer/src/ModelSelector.js";
 import {
   applyStatusCopy,
+  cleanupLegacyJournalsAndRefreshThreads,
   isProviderReady,
   LegacyJournalCard,
 } from "../src/renderer/src/SettingsView.js";
@@ -241,6 +242,34 @@ test("apply area keeps dirty, restarting, applied, and failure states explicit",
   assert.equal(applyStatusCopy("failed", true), "Changes were not applied");
 });
 
+test("successful legacy cleanup refreshes canonical threads before reporting completion", async () => {
+  const calls: string[] = [];
+  const result = await cleanupLegacyJournalsAndRefreshThreads(
+    async () => {
+      calls.push("cleanup");
+      return { moved: 178 };
+    },
+    async () => {
+      calls.push("thread/list");
+    },
+  );
+  assert.deepEqual(result, { moved: 178 });
+  assert.deepEqual(calls, ["cleanup", "thread/list"]);
+
+  for (const mode of ["projects", "inbox"] as const) {
+    const before = renderSidebar(mode, [
+      thread("safe", { type: "systemError" }, ""),
+      thread("useful", { type: "systemError" }, ""),
+    ]);
+    const after = renderSidebar(mode, [
+      thread("useful", { type: "systemError" }, ""),
+    ]);
+    assert.match(before, /2 unavailable journals/);
+    assert.match(after, /1 unavailable journal/);
+    assert.doesNotMatch(after, /2 unavailable journals/);
+  }
+});
+
 function thread(id: string, status: Thread["status"], cwd: string): Thread {
   return {
     id,
@@ -266,6 +295,34 @@ function thread(id: string, status: Thread["status"], cwd: string): Thread {
     name: null,
     turns: [],
   };
+}
+
+function renderSidebar(
+  mode: "projects" | "inbox",
+  threads: readonly Thread[],
+): string {
+  return renderToStaticMarkup(
+    createElement(Sidebar, {
+      configuredWorkspaces: ["D:\\work"],
+      defaultWorkspace: "D:\\work",
+      mode,
+      onModeChange: noop,
+      onNewThread: noop,
+      onAddProject: noop,
+      onRemoveProject: noop,
+      onSetDefaultProject: noop,
+      onOpenSettings: noop,
+      onOpenScheduled: noop,
+      onSelectRoom: noop,
+      onSelectThread: noop,
+      pendingApprovalThreadIds: new Set(),
+      projectActionError: null,
+      selectedThreadId: null,
+      serverReady: true,
+      threads,
+      triggerSnapshot: { triggers: [], history: [], rooms: [] },
+    }),
+  );
 }
 
 function model(id: string, isDefault: boolean) {

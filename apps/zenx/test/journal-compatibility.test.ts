@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -180,8 +188,62 @@ test("rejects a quarantine directory nested inside active threads", async () => 
   await assert.rejects(readFile(nested), /ENOENT/u);
 });
 
+test("rejects a quarantine alias into active threads without moving a journal", async () => {
+  const root = await fixtureRoot();
+  const source = await writeJournal(root, "keep-source", [
+    legacyCreated("keep-source"),
+  ]);
+  const active = path.join(root, "threads", "active");
+  const alias = path.join(root, "quarantine-link");
+  await mkdir(active);
+  await directorySymlink(active, alias);
+
+  await assert.rejects(
+    new ZenXJournalCompatibilityService({
+      zenHome: root,
+      quarantineDirectory: alias,
+    }).quarantineLegacyNoUsefulContent(),
+    /symlink or reparse alias/u,
+  );
+  assert.match(await readFile(source, "utf8"), /thread\.created/u);
+  await assert.rejects(
+    access(path.join(active, "keep-source.jsonl")),
+    /ENOENT/u,
+  );
+});
+
+test("rejects a quarantine alias outside Zen before creating a child", async () => {
+  const root = await fixtureRoot();
+  const outside = await mkdtemp(path.join(os.tmpdir(), "zen-journal-outside-"));
+  temporaryDirectories.push(outside);
+  const source = await writeJournal(root, "keep-outside", [
+    legacyCreated("keep-outside"),
+  ]);
+  const alias = path.join(root, "outside-link");
+  const quarantine = path.join(alias, "child");
+  await directorySymlink(outside, alias);
+
+  await assert.rejects(
+    new ZenXJournalCompatibilityService({
+      zenHome: root,
+      quarantineDirectory: quarantine,
+    }).quarantineLegacyNoUsefulContent(),
+    /symlink or reparse alias/u,
+  );
+  assert.match(await readFile(source, "utf8"), /thread\.created/u);
+  await assert.rejects(access(path.join(outside, "child")), /ENOENT/u);
+});
+
 function service(root: string): ZenXJournalCompatibilityService {
   return new ZenXJournalCompatibilityService({ zenHome: root });
+}
+
+async function directorySymlink(target: string, alias: string): Promise<void> {
+  await symlink(
+    target,
+    alias,
+    process.platform === "win32" ? "junction" : "dir",
+  );
 }
 
 async function fixtureRoot(): Promise<string> {
