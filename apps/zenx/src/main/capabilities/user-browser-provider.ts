@@ -18,6 +18,7 @@ import {
 } from "./browser-provider.js";
 
 const USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS = 2_000;
+const USER_BROWSER_SCREENSHOT_TIMEOUT_MS = 10_000;
 const USER_BROWSER_MAX_TARGET_EVIDENCE = 128;
 const USER_BROWSER_MAX_DISCOVERED_TARGETS = 512;
 const USER_BROWSER_MAX_OPERATION_EVIDENCE = 32;
@@ -1704,10 +1705,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const response = asRecord(
       await this.#send(
         "Page.captureScreenshot",
-        { format: "png" },
+        { format: "png", fromSurface: false, captureBeyondViewport: false },
         before.sessionId,
         signal,
-        USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
+        USER_BROWSER_SCREENSHOT_TIMEOUT_MS,
         undefined,
         undefined,
         () => this.#assertDocumentFence(before, true),
