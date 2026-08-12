@@ -11,6 +11,7 @@ import type {
 
 const MAX_TITLE_LENGTH = 64;
 const MAX_NATIVE_MIRROR_STATE = 64;
+const nativeMirrorQueues = new WeakMap<object, NativeMirrorQueue>();
 const identifierNoise =
   /\b(?:zenx-wakeup:[^\s]+|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\b/giu;
 
@@ -26,6 +27,7 @@ export class ZenXThreadTitleCoordinator {
   readonly #listeners = new Set<(snapshot: ThreadTitleSnapshot) => void>();
   readonly #ownershipOptions: ZenXThreadTitleOwnershipTransactionOptions;
   readonly #nativeMirrors: NativeMirrorQueue;
+  readonly #setNativeName: (threadId: string, title: string) => Promise<void>;
   readonly #generationOwners = new Map<string, GenerationOwner>();
   #owner: ZenXThreadTitleOwnershipTransaction;
   #snapshot: ThreadTitleSnapshot = {};
@@ -44,14 +46,15 @@ export class ZenXThreadTitleCoordinator {
     this.#inference = options.inference;
     this.#titleModel = options.titleModel;
     this.#ownershipOptions = options.ownership ?? {};
+    this.#setNativeName = options.setNativeName;
     this.#owner = new ZenXThreadTitleOwnershipTransaction(
       this.#ownershipOptions,
     );
-    this.#nativeMirrors = new NativeMirrorQueue(options.setNativeName);
+    this.#nativeMirrors = nativeMirrorQueue(options.store.ownershipDomain);
   }
 
   async initialize(): Promise<void> {
-    await this.#initializeOwner(this.#owner);
+    await this.#initializeAndActivateOwner(this.#owner);
   }
 
   async restart(): Promise<void> {
@@ -62,7 +65,7 @@ export class ZenXThreadTitleCoordinator {
     this.#mutation = Promise.resolve();
     this.#initializationError = undefined;
     this.#initialized = false;
-    await this.#initializeOwner(this.#owner);
+    await this.#initializeAndActivateOwner(this.#owner);
   }
 
   async stop(): Promise<void> {
@@ -256,6 +259,22 @@ export class ZenXThreadTitleCoordinator {
     }
   }
 
+  async #initializeAndActivateOwner(
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): Promise<void> {
+    const initialization = this.#initializeOwner(owner);
+    this.#nativeMirrors.activate(
+      owner,
+      this.#setNativeName,
+      async (threadId) => {
+        await initialization;
+        if (!owner.isCurrent() || !this.#initialized) return undefined;
+        return this.#snapshot[threadId]?.title;
+      },
+    );
+    await initialization;
+  }
+
   async #generate(
     started: ThreadTitleProjection,
     owner: ZenXThreadTitleOwnershipTransaction,
@@ -413,6 +432,12 @@ interface NativeMirrorDiagnostic {
   readonly ownerId: string;
 }
 
+interface NativeMirrorAuthority {
+  readonly owner: ZenXThreadTitleOwnershipTransaction;
+  readonly setNativeName: (threadId: string, title: string) => Promise<void>;
+  readonly desiredTitle: (threadId: string) => Promise<string | undefined>;
+}
+
 class NativeMirrorReservation {
   #released = false;
 
@@ -428,27 +453,42 @@ class NativeMirrorReservation {
 class NativeMirrorJob {
   state: NativeMirrorJobState = "queued";
   disposeRetirement: (() => void) | undefined;
+  repairAfterSettlement = false;
 
   constructor(
     readonly threadId: string,
     readonly title: string,
     readonly owner: ZenXThreadTitleOwnershipTransaction,
     readonly reservation: NativeMirrorReservation,
+    readonly setNativeName: (threadId: string, title: string) => Promise<void>,
+  ) {}
+}
+
+class NativeMirrorRepair {
+  disposeRetirement: (() => void) | undefined;
+
+  constructor(
+    readonly threadId: string,
+    readonly authority: NativeMirrorAuthority,
+    readonly reservation: NativeMirrorReservation,
   ) {}
 }
 
 class NativeMirrorQueue {
-  readonly #setNativeName: (threadId: string, title: string) => Promise<void>;
   readonly #active = new Map<string, NativeMirrorJob>();
   readonly #queued = new Map<string, NativeMirrorJob>();
+  readonly #repairs = new Map<string, NativeMirrorRepair>();
   readonly #quarantined: NativeMirrorDiagnostic[] = [];
+  #authority: NativeMirrorAuthority | undefined;
   #reservations = 0;
   #capacityWarned = false;
 
-  constructor(
+  activate(
+    owner: ZenXThreadTitleOwnershipTransaction,
     setNativeName: (threadId: string, title: string) => Promise<void>,
-  ) {
-    this.#setNativeName = setNativeName;
+    desiredTitle: (threadId: string) => Promise<string | undefined>,
+  ): void {
+    this.#authority = { owner, setNativeName, desiredTitle };
   }
 
   reconcileAuthoritative(
@@ -456,6 +496,7 @@ class NativeMirrorQueue {
     title: string,
     owner: ZenXThreadTitleOwnershipTransaction,
   ): void {
+    this.#retireRepair(threadId, true);
     const queued = this.#queued.get(threadId);
     if (queued !== undefined) this.#retireJob(queued, true);
     const active = this.#active.get(threadId);
@@ -468,7 +509,9 @@ class NativeMirrorQueue {
     title: string,
     owner: ZenXThreadTitleOwnershipTransaction,
   ): void {
-    if (!owner.isCurrent()) return;
+    const authority = this.#authorityFor(owner);
+    if (authority === undefined) return;
+    this.#retireRepair(threadId, true);
     const queued = this.#queued.get(threadId);
     if (
       queued !== undefined &&
@@ -477,25 +520,45 @@ class NativeMirrorQueue {
     )
       return;
     if (queued !== undefined) this.#retireJob(queued, true);
-    this.#makeRoomFromDiagnostics();
+    const reservation = this.#reserve();
+    if (reservation === undefined) return;
+    this.#queueReserved(
+      threadId,
+      title,
+      owner,
+      authority.setNativeName,
+      reservation,
+    );
+  }
+
+  #queueReserved(
+    threadId: string,
+    title: string,
+    owner: ZenXThreadTitleOwnershipTransaction,
+    setNativeName: (threadId: string, title: string) => Promise<void>,
+    reservation: NativeMirrorReservation,
+  ): void {
+    const queued = this.#queued.get(threadId);
     if (
-      this.#reservations + this.#quarantined.length >=
-      MAX_NATIVE_MIRROR_STATE
+      queued !== undefined &&
+      queued.title === title &&
+      queued.owner === owner
     ) {
-      this.#warnCapacity();
+      reservation.release();
       return;
     }
-    this.#reservations += 1;
-    this.#capacityWarned = false;
-    const reservation = new NativeMirrorReservation(() => {
-      this.#reservations -= 1;
-      if (
-        this.#reservations + this.#quarantined.length <
-        MAX_NATIVE_MIRROR_STATE
-      )
-        this.#capacityWarned = false;
-    });
-    const job = new NativeMirrorJob(threadId, title, owner, reservation);
+    if (queued !== undefined) this.#retireJob(queued, true);
+    if (!owner.isCurrent()) {
+      reservation.release();
+      return;
+    }
+    const job = new NativeMirrorJob(
+      threadId,
+      title,
+      owner,
+      reservation,
+      setNativeName,
+    );
     job.disposeRetirement = owner.onRetire(() => this.#retireJob(job, true));
     this.#queued.set(threadId, job);
     this.#pump(threadId);
@@ -513,7 +576,7 @@ class NativeMirrorQueue {
     job.state = "active";
     this.#active.set(threadId, job);
     const operation = Promise.resolve().then(async () => {
-      await this.#setNativeName(job.threadId, job.title);
+      await job.setNativeName(job.threadId, job.title);
     });
     job.owner.track(operation);
     void operation.then(
@@ -530,13 +593,19 @@ class NativeMirrorQueue {
   }
 
   #settleJob(job: NativeMirrorJob): void {
+    if (job.state === "retired") {
+      this.#repairAfterRetiredCompletion(job);
+      return;
+    }
     if (job.state !== "active") return;
+    const repairAfterSettlement = job.repairAfterSettlement;
     job.state = "settled";
     job.disposeRetirement?.();
     job.disposeRetirement = undefined;
     if (this.#active.get(job.threadId) === job)
       this.#active.delete(job.threadId);
     job.reservation.release();
+    if (repairAfterSettlement) this.#scheduleRepair(job.threadId);
     this.#pump(job.threadId);
   }
 
@@ -555,7 +624,110 @@ class NativeMirrorQueue {
     if (wasActive || !this.#active.has(job.threadId)) this.#pump(job.threadId);
   }
 
-  #appendDiagnostic(job: NativeMirrorJob): void {
+  #repairAfterRetiredCompletion(job: NativeMirrorJob): void {
+    const authority = this.#authority;
+    if (authority === undefined || !authority.owner.isCurrent()) return;
+    const queued = this.#queued.get(job.threadId);
+    if (
+      queued !== undefined &&
+      queued.owner.root === authority.owner.root &&
+      queued.owner.isCurrent()
+    )
+      return;
+    const active = this.#active.get(job.threadId);
+    if (
+      active !== undefined &&
+      active.owner.root === authority.owner.root &&
+      active.owner.isCurrent()
+    ) {
+      active.repairAfterSettlement = true;
+      return;
+    }
+    this.#scheduleRepair(job.threadId);
+  }
+
+  #scheduleRepair(threadId: string): void {
+    const authority = this.#authority;
+    if (authority === undefined || !authority.owner.isCurrent()) return;
+    const queued = this.#queued.get(threadId);
+    if (
+      queued !== undefined &&
+      queued.owner.root === authority.owner.root &&
+      queued.owner.isCurrent()
+    )
+      return;
+    const existing = this.#repairs.get(threadId);
+    if (existing?.authority === authority) return;
+    if (existing !== undefined) this.#retireRepair(threadId, true);
+    const reservation = this.#reserve();
+    if (reservation === undefined) return;
+    const repair = new NativeMirrorRepair(threadId, authority, reservation);
+    repair.disposeRetirement = authority.owner.onRetire(() =>
+      this.#retireRepair(threadId, true, repair),
+    );
+    this.#repairs.set(threadId, repair);
+    const resolution = Promise.resolve().then(async () =>
+      authority.desiredTitle(threadId),
+    );
+    authority.owner.track(resolution);
+    void resolution.then(
+      (title) => this.#resolveRepair(repair, title),
+      (error: unknown) => {
+        if (this.#repairs.get(threadId) !== repair) return;
+        this.#retireRepair(threadId, true, repair);
+        if (authority.owner.isCurrent())
+          console.warn(
+            `Could not reconcile a late ZenX native title mirror: ${describeError(error)}`,
+          );
+      },
+    );
+  }
+
+  #resolveRepair(repair: NativeMirrorRepair, title: string | undefined): void {
+    if (this.#repairs.get(repair.threadId) !== repair) return;
+    this.#repairs.delete(repair.threadId);
+    repair.disposeRetirement?.();
+    repair.disposeRetirement = undefined;
+    if (
+      title === undefined ||
+      this.#authority !== repair.authority ||
+      !repair.authority.owner.isCurrent()
+    ) {
+      repair.reservation.release();
+      if (this.#authority !== repair.authority)
+        this.#scheduleRepair(repair.threadId);
+      return;
+    }
+    this.#queueReserved(
+      repair.threadId,
+      title,
+      repair.authority.owner,
+      repair.authority.setNativeName,
+      repair.reservation,
+    );
+  }
+
+  #retireRepair(
+    threadId: string,
+    diagnose: boolean,
+    expected?: NativeMirrorRepair,
+  ): void {
+    const repair = this.#repairs.get(threadId);
+    if (repair === undefined || (expected !== undefined && repair !== expected))
+      return;
+    this.#repairs.delete(threadId);
+    repair.disposeRetirement?.();
+    repair.disposeRetirement = undefined;
+    repair.reservation.release();
+    if (diagnose)
+      this.#appendDiagnostic({
+        threadId,
+        title: "<latest-authority-repair>",
+        ownerId: repair.authority.owner.id,
+      });
+  }
+
+  #appendDiagnostic(job: NativeMirrorJob | NativeMirrorDiagnostic): void {
     while (
       this.#reservations + this.#quarantined.length >=
       MAX_NATIVE_MIRROR_STATE
@@ -563,11 +735,15 @@ class NativeMirrorQueue {
       if (this.#quarantined.length === 0) return;
       this.#quarantined.shift();
     }
-    this.#quarantined.push({
-      threadId: job.threadId,
-      title: job.title,
-      ownerId: job.owner.id,
-    });
+    this.#quarantined.push(
+      "ownerId" in job
+        ? job
+        : {
+            threadId: job.threadId,
+            title: job.title,
+            ownerId: job.owner.id,
+          },
+    );
   }
 
   #makeRoomFromDiagnostics(): void {
@@ -586,6 +762,47 @@ class NativeMirrorQueue {
       `Could not mirror ZenX thread title: ${String(MAX_NATIVE_MIRROR_STATE)} live or queued native mirror operations already occupy the bounded transaction`,
     );
   }
+
+  #authorityFor(
+    owner: ZenXThreadTitleOwnershipTransaction,
+  ): NativeMirrorAuthority | undefined {
+    const authority = this.#authority;
+    return authority !== undefined &&
+      authority.owner.root === owner.root &&
+      authority.owner.isCurrent() &&
+      owner.isCurrent()
+      ? authority
+      : undefined;
+  }
+
+  #reserve(): NativeMirrorReservation | undefined {
+    this.#makeRoomFromDiagnostics();
+    if (
+      this.#reservations + this.#quarantined.length >=
+      MAX_NATIVE_MIRROR_STATE
+    ) {
+      this.#warnCapacity();
+      return undefined;
+    }
+    this.#reservations += 1;
+    this.#capacityWarned = false;
+    return new NativeMirrorReservation(() => {
+      this.#reservations -= 1;
+      if (
+        this.#reservations + this.#quarantined.length <
+        MAX_NATIVE_MIRROR_STATE
+      )
+        this.#capacityWarned = false;
+    });
+  }
+}
+
+function nativeMirrorQueue(ownershipDomain: object): NativeMirrorQueue {
+  const existing = nativeMirrorQueues.get(ownershipDomain);
+  if (existing !== undefined) return existing;
+  const queue = new NativeMirrorQueue();
+  nativeMirrorQueues.set(ownershipDomain, queue);
+  return queue;
 }
 
 export function meaningfulTitleSource(input: string): string | null {

@@ -96,10 +96,12 @@
   claim/read/stage/atomic replace/失败补偿、原生名称镜像及 250ms 有界退休收进同一因果边界；
   successor 先同步撤销旧 owner，再经串行 store contract 读取，未带 App Server correlation token
   的名称通知始终保留 native authority，因此 provisional 只先在 ZenX 投影可见，generated/manual
-  才镜像到原生名称，且所有 expected/quarantined/queued 镜像证据合计硬限 64。
+  才镜像到原生名称；同一 store ownership domain 共享瞬时镜像 tail，退休 dispatch 的迟到完成只触发
+  当前 successor authority 的有界合并修复而不能消费它，且所有 expected/quarantined/queued 镜像证据合计硬限 64。
 - **ZenXThreadTitleOwnershipStore** — 默认文件存储与任何 custom store 都必须在同一 durable projection
-  上实现共享的同步 owner claim、串行 read/commit 与退休后不可发布契约，不能用 coordinator 的事后补偿
-  猜测提交是否仍然有效。
+  上提供稳定的瞬时 ownership-domain identity，并实现共享的同步 owner claim、可观测且无未处理 rejection
+  的有界 predecessor retirement、串行 read/commit 与退休后不可发布契约，不能用 coordinator 的事后补偿
+  猜测提交是否仍然有效；退休失败会使 successor read fail closed。
 - **ZenXThreadTitleNotificationObserver** — ZenX 主进程在 App Server canonical
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
 

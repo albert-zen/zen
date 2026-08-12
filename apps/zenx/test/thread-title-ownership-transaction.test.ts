@@ -13,6 +13,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { ZenXThreadTitleCoordinator } from "../src/main/thread-title-coordinator.js";
+import { ZenXThreadTitleOwnershipTransaction } from "../src/main/thread-title-ownership-transaction.js";
 import {
   ZenXThreadTitleStore,
   type ZenXThreadTitleStoreFileSystem,
@@ -94,6 +95,46 @@ test("compensation failure poisons serialized reads instead of exposing stale da
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+for (const failure of ["scheduler", "retirement hook"] as const) {
+  test(`successor claim handles and propagates ${failure} rejection`, async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-title-retirement-failure-"),
+    );
+    const file = path.join(directory, "titles.json");
+    try {
+      const store = new ZenXThreadTitleStore(file);
+      const predecessor = new ZenXThreadTitleOwnershipTransaction(
+        failure === "scheduler"
+          ? {
+              deadlineMs: 10,
+              schedule: () => {
+                throw new Error("scheduler failed");
+              },
+            }
+          : { deadlineMs: 10 },
+      );
+      if (failure === "retirement hook")
+        predecessor.onRetire(() => {
+          throw new Error("retirement hook failed");
+        });
+      await store.claim(predecessor);
+
+      const successor = new ZenXThreadTitleOwnershipTransaction({
+        deadlineMs: 10,
+      });
+      await assert.rejects(store.claim(successor), new RegExp(failure, "u"));
+      await tick();
+
+      const fresh = new ZenXThreadTitleOwnershipTransaction({ deadlineMs: 10 });
+      await assert.rejects(store.claim(fresh), /retirement failed/u);
+      await successor.retire();
+      await fresh.retire();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 for (const failure of ["write", "rename"] as const) {
   test(`${failure} failure removes every staged title file`, async () => {

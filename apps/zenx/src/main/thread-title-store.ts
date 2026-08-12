@@ -26,9 +26,12 @@ export interface ZenXThreadTitleStoreFileSystem {
  * Custom title stores must implement this ownership-aware contract. `claim`
  * synchronously supersedes the prior root owner before its serialized read;
  * every instance for the same durable projection shares that serialized
- * ownership domain, and `commit` never publishes a non-current owner.
+ * ownership domain and stable `ownershipDomain` identity, predecessor
+ * retirement rejection is observed before the read, and `commit` never
+ * publishes a non-current owner.
  */
 export interface ZenXThreadTitleOwnershipStore {
+  readonly ownershipDomain: object;
   claim(
     owner: ZenXThreadTitleOwnershipTransaction,
   ): Promise<ThreadTitleSnapshot>;
@@ -50,6 +53,10 @@ const protocols = new Map<string, ZenXThreadTitleStoreProtocol>();
 
 export class ZenXThreadTitleStore implements ZenXThreadTitleOwnershipStore {
   readonly #protocol: ZenXThreadTitleStoreProtocol;
+
+  get ownershipDomain(): object {
+    return this.#protocol;
+  }
 
   constructor(
     filePath: string,
@@ -99,12 +106,24 @@ class ZenXThreadTitleStoreProtocol {
     owner: ZenXThreadTitleOwnershipTransaction,
   ): Promise<ThreadTitleSnapshot> {
     const root = owner.root;
+    let retirement: Promise<RetirementOutcome> | undefined;
     if (this.#currentRoot !== root) {
       const previous = this.#currentRoot;
       this.#currentRoot = root;
-      if (previous !== undefined) void previous.retire();
+      if (previous !== undefined) retirement = observeRetirement(previous);
     }
     const operation = this.#serial(async () => {
+      if (retirement !== undefined) {
+        const outcome = await retirement;
+        if (!outcome.ok) {
+          const failure = new Error(
+            `ZenX title-store ownership retirement failed: ${describeError(outcome.error)}`,
+            { cause: outcome.error },
+          );
+          this.#failure = failure;
+          throw failure;
+        }
+      }
       this.#assertHealthy();
       if (!this.#owns(owner))
         throw new Error("Title ownership changed before the store read");
@@ -254,6 +273,22 @@ class ZenXThreadTitleStoreProtocol {
       () => undefined,
     );
     return result;
+  }
+}
+
+type RetirementOutcome =
+  { readonly ok: true } | { readonly ok: false; readonly error: unknown };
+
+function observeRetirement(
+  owner: ZenXThreadTitleOwnershipTransaction,
+): Promise<RetirementOutcome> {
+  try {
+    return owner.retire().then(
+      () => ({ ok: true }),
+      (error: unknown) => ({ ok: false, error }),
+    );
+  } catch (error) {
+    return Promise.resolve({ ok: false, error });
   }
 }
 

@@ -121,6 +121,104 @@ test("retired same-title evidence cannot consume a successor mirror or native au
   });
 });
 
+for (const outcome of ["resolve", "reject"] as const) {
+  test(`late ${outcome} from a retired owner repairs the current successor title`, async () => {
+    await withDirectory(async (file) => {
+      const late = deferred<void>();
+      const calls: string[] = [];
+      let nativeName: string | undefined;
+      const first = coordinator(
+        file,
+        new ControlledInference(),
+        async (_threadId, title) => {
+          calls.push(`A:${title}`);
+          await late.promise;
+          nativeName = title;
+          if (outcome === "reject") throw new Error("late retired rejection");
+        },
+      );
+      await first.initialize();
+      await first.rename("thread-a", "A");
+      await until(() => calls.length === 1);
+
+      const successor = coordinator(
+        file,
+        new ControlledInference(),
+        async (_threadId, title) => {
+          calls.push(`B:${title}`);
+          nativeName = title;
+        },
+      );
+      await successor.initialize();
+      const renamed = await successor.rename("thread-a", "B");
+      await until(() => nativeName === "B");
+
+      late.resolve();
+      await until(() => calls.length === 3, 200);
+      assert.deepEqual(calls, ["A:A", "B:B", "B:B"]);
+      assert.equal(nativeName, "B");
+      assert.deepEqual(successor.snapshot()["thread-a"], renamed);
+
+      await first.close();
+      await successor.close();
+    });
+  });
+}
+
+test("more than 64 late retired completions stay bounded and preserve successor capacity", async () => {
+  await withDirectory(async (file) => {
+    const calls: string[] = [];
+    const coordinators: ZenXThreadTitleCoordinator[] = [];
+    const late: Array<ReturnType<typeof deferred<void>>> = [];
+    let nativeName: string | undefined;
+
+    for (let index = 0; index < 65; index += 1) {
+      const completion = deferred<void>();
+      late.push(completion);
+      const instance = coordinator(
+        file,
+        new ControlledInference(),
+        async (_threadId, title) => {
+          calls.push(title);
+          await completion.promise;
+          nativeName = title;
+        },
+        0,
+      );
+      coordinators.push(instance);
+      await instance.initialize();
+      await instance.rename("thread-a", `Retired ${String(index)}`);
+      await until(() => calls.length === index + 1);
+    }
+
+    const successor = coordinator(
+      file,
+      new ControlledInference(),
+      async (_threadId, title) => {
+        calls.push(title);
+        nativeName = title;
+      },
+      0,
+    );
+    coordinators.push(successor);
+    await successor.initialize();
+    await successor.rename("thread-a", "Final successor");
+    await until(() => nativeName === "Final successor");
+    assert.equal(calls.length, 66);
+
+    for (let index = 0; index < late.length; index += 1) {
+      late[index]!.resolve();
+      await until(
+        () => calls.length === 67 + index && nativeName === "Final successor",
+      );
+    }
+    assert.equal(calls.length, 131);
+    assert.equal(nativeName, "Final successor");
+
+    for (const instance of coordinators) await instance.close();
+  });
+});
+
 test("retirement releases mirror reservations exactly once and restores capacity", async () => {
   await withDirectory(async (file) => {
     const calls: Array<ReturnType<typeof deferred<void>>> = [];
@@ -356,8 +454,11 @@ function capacityWarnings(warnings: string[]): number {
     .length;
 }
 
-async function until(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5_000;
+async function until(
+  predicate: () => boolean,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() >= deadline)
       throw new Error("Timed out waiting for condition");
