@@ -13,8 +13,10 @@ export const DEFAULT_PROGRAM_OUTPUT_BYTES = 64 * 1024;
 export const MAX_PROGRAM_OUTPUT_BYTES = 1024 * 1024;
 export const DEFAULT_PROGRAM_TIMEOUT_MS = 30_000;
 const PROGRAM_TERM_GRACE_MS = 250;
-const PROGRAM_FORCE_SETTLEMENT_MS = 1_000;
-const PROGRAM_QUIESCENCE_MS = 100;
+const PROGRAM_FORCE_SETTLEMENT_MS = 1_500;
+const PROGRAM_QUIESCENCE_TIMEOUT_MS = 900;
+const PROGRAM_QUIESCENCE_PASSES = 2;
+const PROGRAM_QUIESCENCE_POLL_MS = 40;
 const MAX_PROGRAM_STDERR_BYTES = 8 * 1_024;
 
 export interface TriggerProgramRunInput {
@@ -100,6 +102,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         resolve(result("failed", null, null, describeError(error)));
         return;
       }
+      const initialTree = captureProcessTree(child.pid).catch(() => undefined);
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let stdoutBytes = 0;
@@ -122,8 +125,6 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         collecting = false;
         child.stdout.removeAllListeners("data");
         child.stderr.removeAllListeners("data");
-        child.stdout.destroy();
-        child.stderr.destroy();
       };
       const finish = (value: TriggerProgramRunResult): void => {
         if (settled) return;
@@ -131,6 +132,8 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         cleanup();
         stopCollection();
         child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
         resolve(value);
       };
       const forceAndFinish = async (): Promise<void> => {
@@ -139,6 +142,14 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         if (forceTimer !== undefined) {
           clearTimeout(forceTimer);
           forceTimer = undefined;
+        }
+        if (capturedTree === undefined && child.exitCode !== null) {
+          const exited = await verifyExitedChild(child);
+          if (settled || requested === null) return;
+          if (exited.ok) {
+            finish(requested);
+            return;
+          }
         }
         containment ??= (
           termination ?? Promise.resolve({ ok: true, error: "" })
@@ -166,7 +177,6 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
             error: "bounded process-tree termination deadline expired",
           },
         );
-        await delay(PROGRAM_QUIESCENCE_MS);
         if (settled || requested === null) return;
         if (terminationResult.ok) finish(requested);
         else
@@ -184,33 +194,23 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         requested = value;
         stopCollection();
         child.stdin.destroy();
-        if (process.platform === "win32") {
-          termination = captureProcessTree(child.pid)
-            .then((tree) => {
-              capturedTree = tree;
-              return terminateProcessTree(child, false, tree);
-            })
-            .catch(async (error: unknown) => {
-              await terminateProcessTree(child, false);
-              return {
-                ok: false as const,
-                error: `process-tree snapshot unavailable: ${describeError(error)}`,
-              };
-            });
-        } else {
-          termination = captureProcessTree(child.pid)
-            .then((tree) => {
-              capturedTree = tree;
-              return terminateProcessTree(child, false, tree);
-            })
-            .catch(async (error: unknown) => {
-              await terminateProcessTree(child, false);
-              return {
-                ok: false as const,
-                error: `process-tree snapshot unavailable: ${describeError(error)}`,
-              };
-            });
-        }
+        const treeAtTermination = captureProcessTree(child.pid).catch(
+          () => initialTree,
+        );
+        termination = treeAtTermination.then(async (tree) => {
+          if (tree !== undefined) {
+            capturedTree = tree;
+            return await terminateProcessTree(child, false, tree);
+          }
+          await terminateProcessTree(child, false);
+          const exited = await verifyExitedChild(child);
+          if (exited.ok) return exited;
+          return {
+            ok: false as const,
+            error:
+              "process-tree snapshot unavailable; containment was not proven",
+          };
+        });
         forceTimer = setTimeout(() => {
           forceTimer = undefined;
           void forceAndFinish();
@@ -373,8 +373,21 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
   }
 }
 
+interface ProcessIdentity {
+  pid: number;
+  parentPid: number;
+  processGroupId: number | null;
+  sessionId: number | null;
+  startTime: string | null;
+}
+
+interface ProcessTableSnapshot {
+  entries: ProcessIdentity[];
+}
+
 interface ProcessTreeSnapshot {
-  descendants: number[];
+  root: ProcessIdentity;
+  descendants: ProcessIdentity[];
 }
 
 interface TerminationResult {
@@ -414,18 +427,13 @@ async function terminateWindowsProcessTree(
       return { ok: false, error: describeError(error) };
     }
   }
-  const errors: string[] = [];
-  const root = await runTaskkill(child.pid, true);
-  if (!root.ok && root.error !== "process was not found")
-    errors.push(root.error);
-  for (const pid of tree?.descendants ?? []) {
-    const result = await runTaskkill(pid, true);
-    if (!result.ok && result.error !== "process was not found")
-      errors.push(`PID ${String(pid)}: ${result.error}`);
-  }
-  return errors.length === 0
-    ? { ok: true, error: "" }
-    : { ok: false, error: errors.join("; ") };
+  if (tree === undefined)
+    return {
+      ok: false,
+      error:
+        "process-tree identity was unavailable; containment was not proven",
+    };
+  return await verifyAndTerminateWindows(child.pid, tree);
 }
 
 async function terminatePosixProcessTree(
@@ -435,28 +443,225 @@ async function terminatePosixProcessTree(
 ): Promise<TerminationResult> {
   if (child.pid === undefined)
     return { ok: false, error: "the child process did not expose a PID" };
-  const signal = force ? "SIGKILL" : "SIGTERM";
-  const errors: string[] = [];
+  if (!force) return sendPosixSignal(-child.pid, "SIGTERM");
+  if (tree === undefined)
+    return {
+      ok: false,
+      error:
+        "process-tree identity was unavailable; containment was not proven",
+    };
+  return await verifyAndTerminatePosix(child.pid, tree);
+}
+
+async function verifyExitedChild(
+  child: ChildProcessWithoutNullStreams,
+): Promise<TerminationResult> {
+  if (child.pid === undefined || child.exitCode === null)
+    return {
+      ok: false,
+      error: "the child process identity was unavailable before termination",
+    };
   try {
-    process.kill(-child.pid, signal);
+    const table = await captureProcessTable();
+    const survivors = table.entries.filter(
+      (entry) =>
+        entry.parentPid === child.pid || entry.processGroupId === child.pid,
+    );
+    return survivors.length === 0
+      ? { ok: true, error: "" }
+      : {
+          ok: false,
+          error:
+            "the child exited before its process tree was captured; descendant containment was not proven",
+        };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `process-table verification failed: ${describeError(error)}`,
+    };
+  }
+}
+
+async function verifyAndTerminateWindows(
+  rootPid: number,
+  tree: ProcessTreeSnapshot,
+): Promise<TerminationResult> {
+  let stableAbsentPasses = 0;
+  const deadline = Date.now() + PROGRAM_QUIESCENCE_TIMEOUT_MS;
+  let tracked = [tree.root, ...tree.descendants];
+  while (Date.now() < deadline) {
+    const table = await captureProcessTable();
+    const beforeExpansion = validateTrackedIdentities(tracked, table.entries);
+    if (beforeExpansion !== null) return { ok: false, error: beforeExpansion };
+    tracked = addDescendants(tracked, table.entries);
+    const identityError = validateTrackedIdentities(tracked, table.entries);
+    if (identityError !== null) return { ok: false, error: identityError };
+    const live = tracked.filter((identity) =>
+      table.entries.some((candidate) => candidate.pid === identity.pid),
+    );
+    if (live.length === 0) {
+      stableAbsentPasses += 1;
+      if (stableAbsentPasses >= PROGRAM_QUIESCENCE_PASSES)
+        return { ok: true, error: "" };
+    } else {
+      stableAbsentPasses = 0;
+      const currentRoot = table.entries.find(
+        (candidate) => candidate.pid === tree.root.pid,
+      );
+      if (currentRoot !== undefined) {
+        if (!identityMatches(tree.root, currentRoot))
+          return {
+            ok: false,
+            error: `PID ${String(tree.root.pid)} identity changed; containment was not proven`,
+          };
+        const rootResult = await runTaskkill(rootPid, true);
+        if (!rootResult.ok && rootResult.error !== "process was not found")
+          return { ok: false, error: rootResult.error };
+      }
+      for (const identity of live) {
+        const current = table.entries.find(
+          (candidate) => candidate.pid === identity.pid,
+        );
+        if (!identityMatches(identity, current))
+          return {
+            ok: false,
+            error: `PID ${String(identity.pid)} identity changed; containment was not proven`,
+          };
+        const result = await runTaskkill(identity.pid, false);
+        if (!result.ok && result.error !== "process was not found")
+          return {
+            ok: false,
+            error: `PID ${String(identity.pid)}: ${result.error}`,
+          };
+      }
+    }
+    await delay(PROGRAM_QUIESCENCE_POLL_MS);
+  }
+  return {
+    ok: false,
+    error:
+      "process-tree quiescence could not be proven before the bounded deadline",
+  };
+}
+
+async function verifyAndTerminatePosix(
+  rootPid: number,
+  tree: ProcessTreeSnapshot,
+): Promise<TerminationResult> {
+  let stableAbsentPasses = 0;
+  const deadline = Date.now() + PROGRAM_QUIESCENCE_TIMEOUT_MS;
+  let tracked = [tree.root, ...tree.descendants];
+  while (Date.now() < deadline) {
+    const table = await captureProcessTable();
+    const beforeExpansion = validateTrackedIdentities(tracked, table.entries);
+    if (beforeExpansion !== null) return { ok: false, error: beforeExpansion };
+    tracked = addDescendants(tracked, table.entries);
+    const identityError = validateTrackedIdentities(tracked, table.entries);
+    if (identityError !== null) return { ok: false, error: identityError };
+    const live = tracked.filter((identity) =>
+      table.entries.some((candidate) => candidate.pid === identity.pid),
+    );
+    if (live.length === 0) {
+      stableAbsentPasses += 1;
+      if (stableAbsentPasses >= PROGRAM_QUIESCENCE_PASSES)
+        return { ok: true, error: "" };
+    } else {
+      stableAbsentPasses = 0;
+      const groupIds = new Set(
+        live
+          .map((identity) => identity.processGroupId)
+          .filter((value): value is number => value !== null),
+      );
+      for (const groupId of groupIds) {
+        const groupResult = sendPosixSignal(-groupId, "SIGKILL");
+        if (!groupResult.ok) return groupResult;
+      }
+      for (const identity of live) {
+        const current = table.entries.find(
+          (candidate) => candidate.pid === identity.pid,
+        );
+        if (!identityMatches(identity, current))
+          return {
+            ok: false,
+            error: `PID ${String(identity.pid)} identity changed; containment was not proven`,
+          };
+        const result = sendPosixSignal(identity.pid, "SIGKILL");
+        if (!result.ok)
+          return {
+            ok: false,
+            error: `PID ${String(identity.pid)}: ${result.error}`,
+          };
+      }
+    }
+    await delay(PROGRAM_QUIESCENCE_POLL_MS);
+  }
+  return {
+    ok: false,
+    error:
+      "process-tree quiescence could not be proven before the bounded deadline",
+  };
+}
+
+function sendPosixSignal(
+  pid: number,
+  signal: NodeJS.Signals,
+): TerminationResult {
+  try {
+    process.kill(pid, signal);
+    return { ok: true, error: "" };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ESRCH") errors.push(describeError(error));
+    return code === "ESRCH"
+      ? { ok: true, error: "" }
+      : { ok: false, error: describeError(error) };
   }
-  if (force) {
-    for (const pid of tree?.descendants ?? []) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "ESRCH")
-          errors.push(`PID ${String(pid)}: ${describeError(error)}`);
+}
+
+function validateTrackedIdentities(
+  tracked: readonly ProcessIdentity[],
+  entries: readonly ProcessIdentity[],
+): string | null {
+  for (const identity of tracked) {
+    if (identity.startTime === null)
+      return `PID ${String(identity.pid)} has unknown process identity; containment was not proven`;
+    const current = entries.find((candidate) => candidate.pid === identity.pid);
+    if (current !== undefined && !identityMatches(identity, current))
+      return `PID ${String(identity.pid)} identity changed; containment was not proven`;
+  }
+  return null;
+}
+
+function identityMatches(
+  expected: ProcessIdentity,
+  actual: ProcessIdentity | undefined,
+): boolean {
+  return (
+    actual !== undefined &&
+    expected.startTime !== null &&
+    actual.startTime !== null &&
+    expected.startTime === actual.startTime
+  );
+}
+
+function addDescendants(
+  tracked: readonly ProcessIdentity[],
+  entries: readonly ProcessIdentity[],
+): ProcessIdentity[] {
+  const result = [...tracked];
+  const known = new Set(result.map((identity) => identity.pid));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const entry of entries) {
+      if (known.has(entry.pid)) continue;
+      if (result.some((identity) => identity.pid === entry.parentPid)) {
+        result.push(entry);
+        known.add(entry.pid);
+        changed = true;
       }
     }
   }
-  return errors.length === 0
-    ? { ok: true, error: "" }
-    : { ok: false, error: errors.join("; ") };
+  return result;
 }
 
 async function runTaskkill(
@@ -507,20 +712,30 @@ function captureProcessTree(
 ): Promise<ProcessTreeSnapshot> {
   if (pid === undefined)
     return Promise.reject(new Error("the child process did not expose a PID"));
-  if (process.platform === "win32")
-    return captureProcessTreeWithCommand(
-      "wmic.exe",
-      ["process", "get", "ProcessId,ParentProcessId", "/format:list"],
-      pid,
+  return captureProcessTable().then((table) => {
+    const root = table.entries.find((entry) => entry.pid === pid);
+    if (root === undefined || root.startTime === null)
+      throw new Error("root process identity was unavailable");
+    const descendants = addDescendants([root], table.entries).filter(
+      (entry) => entry.pid !== root.pid,
     );
-  return captureProcessTreeWithCommand("ps", ["-eo", "pid=,ppid="], pid);
+    if (descendants.some((entry) => entry.startTime === null))
+      throw new Error("descendant process identity was unavailable");
+    return { root, descendants };
+  });
 }
 
-async function captureProcessTreeWithCommand(
-  command: string,
-  args: string[],
-  rootPid: number,
-): Promise<ProcessTreeSnapshot> {
+async function captureProcessTable(): Promise<ProcessTableSnapshot> {
+  const command = process.platform === "win32" ? "wmic.exe" : "ps";
+  const args =
+    process.platform === "win32"
+      ? [
+          "process",
+          "get",
+          "ProcessId,ParentProcessId,CreationDate",
+          "/format:list",
+        ]
+      : ["-eo", "pid=,ppid=,pgid=,sid=,lstart="];
   const output = await new Promise<string>((resolve, reject) => {
     let text = "";
     let settled = false;
@@ -557,46 +772,62 @@ async function captureProcessTreeWithCommand(
       finish(new Error(describeError(error)));
     }
   });
-  const relationships: Array<[number, number]> = [];
-  let processId: number | undefined;
-  let parentProcessId: number | undefined;
+  return process.platform === "win32"
+    ? parseWindowsProcessTable(output)
+    : parsePosixProcessTable(output);
+}
+
+function parseWindowsProcessTable(output: string): ProcessTableSnapshot {
+  const entries: ProcessIdentity[] = [];
+  let record: {
+    pid?: number;
+    parentPid?: number;
+    startTime?: string | null;
+  } = {};
+  const flush = (): void => {
+    if (record.pid !== undefined && record.parentPid !== undefined)
+      entries.push({
+        pid: record.pid,
+        parentPid: record.parentPid,
+        processGroupId: null,
+        sessionId: null,
+        startTime: record.startTime ?? null,
+      });
+    record = {};
+  };
   for (const line of output.split(/\r?\n/u)) {
-    const processMatch = line.trim().match(/^ProcessId=(\d+)$/u);
-    const parentMatch = line.trim().match(/^ParentProcessId=(\d+)$/u);
-    const csvMatch = line.trim().match(/^(\d+)[,\s]+(\d+)$/u);
-    if (processMatch !== null) processId = Number(processMatch[1]);
-    else if (parentMatch !== null) parentProcessId = Number(parentMatch[1]);
-    else if (csvMatch !== null)
-      relationships.push([Number(csvMatch[1]), Number(csvMatch[2])]);
-    else if (
-      line.trim() === "" &&
-      processId !== undefined &&
-      parentProcessId !== undefined
-    ) {
-      relationships.push([processId, parentProcessId]);
-      processId = undefined;
-      parentProcessId = undefined;
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      flush();
+      continue;
     }
+    const match = trimmed.match(
+      /^(ProcessId|ParentProcessId|CreationDate)=(.*)$/u,
+    );
+    if (match === null) continue;
+    if (match[1] === "ProcessId") record.pid = Number(match[2]!);
+    else if (match[1] === "ParentProcessId")
+      record.parentPid = Number(match[2]!);
+    else record.startTime = match[2]!.trim() || null;
   }
-  if (processId !== undefined && parentProcessId !== undefined)
-    relationships.push([processId, parentProcessId]);
-  const descendants = new Set<number>();
-  let parents = new Set<number>([rootPid]);
-  while (parents.size > 0) {
-    const next = new Set<number>();
-    for (const [childPid, parentPid] of relationships) {
-      if (
-        parents.has(parentPid) &&
-        childPid !== rootPid &&
-        !descendants.has(childPid)
-      ) {
-        descendants.add(childPid);
-        next.add(childPid);
-      }
-    }
-    parents = next;
+  flush();
+  return { entries };
+}
+
+function parsePosixProcessTable(output: string): ProcessTableSnapshot {
+  const entries: ProcessIdentity[] = [];
+  for (const line of output.split(/\r?\n/u)) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/u);
+    if (match === null) continue;
+    entries.push({
+      pid: Number(match[1]!),
+      parentPid: Number(match[2]!),
+      processGroupId: Number(match[3]!),
+      sessionId: Number(match[4]!),
+      startTime: match[5]!.trim() || null,
+    });
   }
-  return { descendants: [...descendants] };
+  return { entries };
 }
 
 async function withDeadline<T>(

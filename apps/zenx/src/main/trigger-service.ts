@@ -99,6 +99,15 @@ interface ActiveWakeup {
   generationId: string;
 }
 
+interface CommittedWakeup {
+  historyId: string;
+  clientUserMessageId: string;
+  trigger: ZenXTrigger;
+  wakeup: WakeupEvent;
+}
+
+type WakeupCommitResult = CommittedWakeup | { rejected: true } | undefined;
+
 interface CompletedItemBuffer {
   threadId: string;
   items: ThreadItem[];
@@ -115,6 +124,7 @@ interface TriggerGeneration {
   id: string;
   active: boolean;
   retiring: boolean;
+  storeUnavailable: boolean;
   timers: Map<string, unknown>;
   completedTurnItems: Map<string, CompletedItemBuffer>;
   pendingCompletedTurns: Map<string, PendingCompletion>;
@@ -491,7 +501,7 @@ export class ZenXTriggerService {
       MAX_MESSAGE_AUTHOR_BYTES,
     );
     const normalizedText = required(text, "message", MAX_MESSAGE_TEXT_BYTES);
-    const posted = await this.#mutate(generation, async (snapshot) => {
+    const committed = await this.#mutate(generation, async (snapshot) => {
       const room = snapshot.rooms.find(
         (entry) => entry.id === normalizedRoomId,
       );
@@ -506,37 +516,39 @@ export class ZenXTriggerService {
         this.#now(),
       );
       room.messages.push(value);
-      return { posted: value };
-    });
-    const postedRoom = this.#snapshot.rooms.find(
-      (room) => room.id === posted.posted.roomId,
-    );
-    if (postedRoom === undefined) throw new StaleGenerationError();
-    const mentions = postedRoom.members.filter((member) =>
-      mentionMatches(normalizedText, member.name),
-    );
-    for (const member of mentions) {
-      const triggerIds = this.#snapshot.triggers
-        .filter(
-          (trigger) =>
-            trigger.active &&
-            trigger.threadId === member.threadId &&
-            trigger.kind === "roomMention" &&
-            trigger.room?.roomId === normalizedRoomId &&
-            trigger.room.mention.toLocaleLowerCase() ===
-              member.name.toLocaleLowerCase(),
-        )
-        .map((trigger) => trigger.id);
-      for (const triggerId of triggerIds) {
-        await this.#fire(generation, triggerId, {
-          reason: `Room #${postedRoom.name} mention from ${posted.posted.author}: ${posted.posted.text}`,
-          occurrenceKey: `room:${postedRoom.id}:${posted.posted.id}`,
-          sourceRoomId: postedRoom.id,
-          sourceRoomMessageId: posted.posted.id,
-          projection: projectRoomContext(postedRoom),
-        });
+      const wakeups: CommittedWakeup[] = [];
+      const mentions = room.members.filter((member) =>
+        mentionMatches(normalizedText, member.name),
+      );
+      for (const member of mentions) {
+        const triggerIds = snapshot.triggers
+          .filter(
+            (trigger) =>
+              trigger.active &&
+              trigger.threadId === member.threadId &&
+              trigger.kind === "roomMention" &&
+              trigger.room?.roomId === normalizedRoomId &&
+              trigger.room.mention.toLocaleLowerCase() ===
+                member.name.toLocaleLowerCase(),
+          )
+          .map((trigger) => trigger.id);
+        for (const triggerId of triggerIds) {
+          const commit = this.#commitWakeup(snapshot, triggerId, {
+            reason: `Room #${room.name} mention from ${value.author}: ${value.text}`,
+            occurrenceKey: `room:${room.id}:${value.id}`,
+            sourceRoomId: room.id,
+            sourceRoomMessageId: value.id,
+            projection: projectRoomContext(room),
+          });
+          if (commit !== undefined && !("rejected" in commit))
+            wakeups.push(commit);
+        }
       }
-    }
+      return { wakeups };
+    });
+    this.#rescheduleTimers(generation);
+    for (const wakeup of committed.wakeups)
+      await this.#runCommittedWakeup(generation, wakeup);
   }
 
   async #handleTurnCompleted(
@@ -570,9 +582,7 @@ export class ZenXTriggerService {
               `Trigger completion could not be persisted: ${describeError(error)}`,
             );
           } catch (failureError) {
-            console.warn(
-              `Could not persist Trigger completion failure: ${describeError(failureError)}`,
-            );
+            this.#markStoreUnavailable(generation, running.id, failureError);
           }
         }
       }
@@ -705,85 +715,100 @@ export class ZenXTriggerService {
     wakeup: WakeupEvent,
   ): Promise<void> {
     if (!this.#isOperational(generation)) return;
-    let committed;
+    let committed: WakeupCommitResult;
     try {
-      committed = await this.#mutate(generation, async (snapshot) => {
-        const trigger = snapshot.triggers.find(
-          (item) => item.id === triggerId && item.active,
-        );
-        if (trigger === undefined) return undefined;
-        if (
-          trigger.kind === "roomMention" &&
-          (trigger.room === undefined ||
-            !snapshot.rooms.some((room) => room.id === trigger.room?.roomId))
-        )
-          return undefined;
-        const clientUserMessageId = stableWakeupId(
-          trigger.id,
-          wakeup.occurrenceKey,
-        );
-        if (
-          snapshot.history.some(
-            (entry) => entry.clientUserMessageId === clientUserMessageId,
-          )
-        )
-          return undefined;
-        const nonterminal = snapshot.history.filter(
-          (entry) => entry.status === "starting" || entry.status === "running",
-        ).length;
-        const rejected = nonterminal >= MAX_WAKEUPS;
-        const history: TriggerHistoryEntry = {
-          id: randomUUID(),
-          triggerId: trigger.id,
-          threadId: trigger.threadId,
-          kind: trigger.kind,
-          reason: bounded(wakeup.reason, MAX_REASON_BYTES),
-          prompt: bounded(trigger.prompt, MAX_TRIGGER_PROMPT_BYTES),
-          clientUserMessageId,
-          startedAt: this.#now(),
-          completedAt: rejected ? this.#now() : null,
-          status: rejected ? "failed" : "starting",
-          turnId: null,
-          error: rejected
-            ? `ZenX Trigger wakeup admission is full at ${String(MAX_WAKEUPS)} nonterminal wakeups; this wakeup was not dispatched.`
-            : null,
-          sourceThreadId: wakeup.sourceThreadId ?? null,
-          sourceTurnId: wakeup.sourceTurnId ?? null,
-          sourceRoomId: wakeup.sourceRoomId ?? null,
-          sourceRoomMessageId: wakeup.sourceRoomMessageId ?? null,
-          replyRoomId: trigger.room?.roomId ?? null,
-          replyAuthor: trigger.room?.mention ?? null,
-          programInvocationId: null,
-          programOutcome: null,
-          programOutcomes: [],
-        };
-        snapshot.history.unshift(history);
-        if (trigger.timer !== undefined) {
-          if (trigger.timer.intervalMinutes === null) trigger.active = false;
-          else {
-            trigger.timer.nextRunAt =
-              Math.max(this.#now(), wakeup.scheduledAt ?? this.#now()) +
-              trigger.timer.intervalMinutes * 60_000;
-          }
-        }
-        return rejected
-          ? { rejected: true as const }
-          : {
-              rejected: false as const,
-              trigger: structuredClone(trigger),
-              historyId: history.id,
-              clientUserMessageId,
-            };
-      });
+      committed = await this.#mutate(generation, async (snapshot) =>
+        this.#commitWakeup(snapshot, triggerId, wakeup),
+      );
     } catch (error) {
       if (error instanceof StaleGenerationError) return;
       throw error;
     }
-    if (committed === undefined || committed.rejected) {
+    if (committed === undefined || "rejected" in committed) {
       this.#rescheduleTimers(generation);
       return;
     }
     this.#rescheduleTimers(generation);
+    await this.#runCommittedWakeup(generation, committed);
+  }
+
+  #commitWakeup(
+    snapshot: TriggerSnapshot,
+    triggerId: string,
+    wakeup: WakeupEvent,
+  ): WakeupCommitResult {
+    const trigger = snapshot.triggers.find(
+      (item) => item.id === triggerId && item.active,
+    );
+    if (trigger === undefined) return undefined;
+    if (
+      trigger.kind === "roomMention" &&
+      (trigger.room === undefined ||
+        !snapshot.rooms.some((room) => room.id === trigger.room?.roomId))
+    )
+      return undefined;
+    const clientUserMessageId = stableWakeupId(
+      trigger.id,
+      wakeup.occurrenceKey,
+    );
+    if (
+      snapshot.history.some(
+        (entry) => entry.clientUserMessageId === clientUserMessageId,
+      )
+    )
+      return undefined;
+    const nonterminal = snapshot.history.filter(
+      (entry) => entry.status === "starting" || entry.status === "running",
+    ).length;
+    const rejected = nonterminal >= MAX_WAKEUPS;
+    const history: TriggerHistoryEntry = {
+      id: randomUUID(),
+      triggerId: trigger.id,
+      threadId: trigger.threadId,
+      kind: trigger.kind,
+      reason: bounded(wakeup.reason, MAX_REASON_BYTES),
+      prompt: bounded(trigger.prompt, MAX_TRIGGER_PROMPT_BYTES),
+      clientUserMessageId,
+      startedAt: this.#now(),
+      completedAt: rejected ? this.#now() : null,
+      status: rejected ? "failed" : "starting",
+      turnId: null,
+      error: rejected
+        ? `ZenX Trigger wakeup admission is full at ${String(MAX_WAKEUPS)} nonterminal wakeups; this wakeup was not dispatched.`
+        : null,
+      sourceThreadId: wakeup.sourceThreadId ?? null,
+      sourceTurnId: wakeup.sourceTurnId ?? null,
+      sourceRoomId: wakeup.sourceRoomId ?? null,
+      sourceRoomMessageId: wakeup.sourceRoomMessageId ?? null,
+      replyRoomId: trigger.room?.roomId ?? null,
+      replyAuthor: trigger.room?.mention ?? null,
+      programInvocationId: null,
+      programOutcome: null,
+      programOutcomes: [],
+    };
+    snapshot.history.unshift(history);
+    if (trigger.timer !== undefined) {
+      if (trigger.timer.intervalMinutes === null) trigger.active = false;
+      else {
+        trigger.timer.nextRunAt =
+          Math.max(this.#now(), wakeup.scheduledAt ?? this.#now()) +
+          trigger.timer.intervalMinutes * 60_000;
+      }
+    }
+    return rejected
+      ? { rejected: true }
+      : {
+          trigger: structuredClone(trigger),
+          historyId: history.id,
+          clientUserMessageId,
+          wakeup: structuredClone(wakeup),
+        };
+  }
+
+  async #runCommittedWakeup(
+    generation: TriggerGeneration,
+    committed: CommittedWakeup,
+  ): Promise<void> {
     const active: ActiveWakeup = {
       historyId: committed.historyId,
       threadId: committed.trigger.threadId,
@@ -792,7 +817,7 @@ export class ZenXTriggerService {
       generationId: generation.id,
     };
     generation.activeWakeups.set(active.clientUserMessageId, active);
-    await this.#executeWakeup(generation, active, wakeup);
+    await this.#executeWakeup(generation, active, committed.wakeup);
   }
 
   async #executeWakeup(
@@ -953,12 +978,21 @@ export class ZenXTriggerService {
       }
     } catch (error) {
       if (error instanceof StaleGenerationError) return;
-      if (this.#isOperational(generation))
-        await this.#failHistory(
-          generation,
-          active.historyId,
-          describeError(error),
-        );
+      if (this.#isOperational(generation)) {
+        try {
+          await this.#failHistory(
+            generation,
+            active.historyId,
+            describeError(error),
+          );
+        } catch (failureError) {
+          this.#markStoreUnavailable(
+            generation,
+            active.historyId,
+            failureError,
+          );
+        }
+      }
     } finally {
       generation.programControllers.delete(active.historyId);
     }
@@ -1047,13 +1081,7 @@ export class ZenXTriggerService {
       }
       released = true;
     });
-    if (released) {
-      const active = [...generation.activeWakeups.values()].find(
-        (candidate) => candidate.historyId === historyId,
-      );
-      if (active !== undefined)
-        generation.activeWakeups.delete(active.clientUserMessageId);
-    }
+    if (released) this.#releaseActiveWakeup(generation, historyId);
   }
 
   async #recordProgramOutcome(
@@ -1113,7 +1141,7 @@ export class ZenXTriggerService {
       );
       released = true;
     });
-    if (released) generation.activeWakeups.delete(active.clientUserMessageId);
+    if (released) this.#releaseActiveWakeup(generation, active.historyId);
   }
 
   async #failHistory(
@@ -1132,13 +1160,7 @@ export class ZenXTriggerService {
       entry.error = bounded(error, MAX_ERROR_BYTES);
       released = true;
     });
-    if (released) {
-      const active = [...generation.activeWakeups.values()].find(
-        (candidate) => candidate.historyId === historyId,
-      );
-      if (active !== undefined)
-        generation.activeWakeups.delete(active.clientUserMessageId);
-    }
+    if (released) this.#releaseActiveWakeup(generation, historyId);
   }
 
   async #observeTitle(
@@ -1234,6 +1256,7 @@ export class ZenXTriggerService {
     return (
       generation.active &&
       !generation.retiring &&
+      !generation.storeUnavailable &&
       this.#generation === generation
     );
   }
@@ -1277,7 +1300,40 @@ export class ZenXTriggerService {
   }
 
   #notify(): void {
-    for (const listener of this.#listeners) listener(this.snapshot());
+    for (const listener of this.#listeners) {
+      try {
+        listener(this.snapshot());
+      } catch (error) {
+        console.warn(
+          `ZenX Trigger change listener failed after the mutation committed: ${bounded(
+            describeError(error),
+            MAX_ERROR_BYTES,
+          )}`,
+        );
+      }
+    }
+  }
+
+  #releaseActiveWakeup(generation: TriggerGeneration, historyId: string): void {
+    for (const [clientUserMessageId, active] of generation.activeWakeups) {
+      if (active.historyId === historyId)
+        generation.activeWakeups.delete(clientUserMessageId);
+    }
+  }
+
+  #markStoreUnavailable(
+    generation: TriggerGeneration,
+    historyId: string,
+    error: unknown,
+  ): void {
+    generation.storeUnavailable = true;
+    this.#releaseActiveWakeup(generation, historyId);
+    console.warn(
+      `ZenX Trigger persistence is unavailable; no new wakeups will dispatch: ${bounded(
+        describeError(error),
+        MAX_ERROR_BYTES,
+      )}`,
+    );
   }
 }
 
@@ -1292,6 +1348,7 @@ function newGeneration(): TriggerGeneration {
     id: randomUUID(),
     active: true,
     retiring: false,
+    storeUnavailable: false,
     timers: new Map(),
     completedTurnItems: new Map(),
     pendingCompletedTurns: new Map(),

@@ -267,10 +267,7 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
         return { deleted: true };
       case "zenx_rooms_list":
         return {
-          rooms: this.#port.snapshot().rooms.map((room) => ({
-            ...room,
-            messages: room.messages.slice(-50),
-          })),
+          rooms: this.#port.snapshot().rooms.map(readSafeRoom),
         };
       case "zenx_rooms_create":
         return await this.#port.createRoom({
@@ -311,11 +308,48 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
 }
 
 function readSafeTrigger(trigger: ZenXTrigger): unknown {
-  return {
-    ...trigger,
+  const common = {
+    id: trigger.id,
+    threadId: trigger.threadId,
+    label: trigger.label,
+    prompt: trigger.prompt,
+    createdAt: trigger.createdAt,
+    active: trigger.active,
     ...(trigger.program === undefined
       ? {}
       : { program: readSafeProgram(trigger.program) }),
+  };
+  if (trigger.kind === "timer")
+    return {
+      ...common,
+      kind: "timer",
+      timer: {
+        nextRunAt: trigger.timer?.nextRunAt,
+        intervalMinutes: trigger.timer?.intervalMinutes,
+      },
+    };
+  if (trigger.kind === "thread")
+    return {
+      ...common,
+      kind: "thread",
+      watch: {
+        threadId: trigger.watch?.threadId,
+        event: trigger.watch?.event,
+      },
+    };
+  if (trigger.kind === "roomMention")
+    return {
+      ...common,
+      kind: "roomMention",
+      room: {
+        roomId: trigger.room?.roomId,
+        mention: trigger.room?.mention,
+      },
+    };
+  return {
+    ...common,
+    kind: "signal",
+    signal: { name: trigger.signal?.name },
   };
 }
 
@@ -327,20 +361,53 @@ function readSafeProgram(program: TriggerProgramConfig): TriggerProgramConfig {
     ...(program.action === undefined
       ? {}
       : { action: readSafeProgramSpec(program.action) }),
-    ...(program.match === undefined ? {} : { match: { ...program.match } }),
+    ...(program.match === undefined
+      ? {}
+      : {
+          match: {
+            field: program.match.field,
+            regex: program.match.regex,
+            ...(program.match.flags === undefined
+              ? {}
+              : { flags: program.match.flags }),
+          },
+        }),
   };
 }
 
 function readSafeProgramSpec(spec: TriggerProgramSpec): TriggerProgramSpec {
-  const safe = { ...spec };
-  delete safe.env;
-  return safe;
+  return {
+    command: spec.command,
+    ...(spec.args === undefined ? {} : { args: [...spec.args] }),
+    ...(spec.cwd === undefined ? {} : { cwd: spec.cwd }),
+    ...(spec.timeoutMs === undefined ? {} : { timeoutMs: spec.timeoutMs }),
+    ...(spec.maxOutputBytes === undefined
+      ? {}
+      : { maxOutputBytes: spec.maxOutputBytes }),
+  };
 }
 
 function readSafeHistory(entry: TriggerSnapshot["history"][number]): unknown {
   return {
-    ...entry,
+    id: entry.id,
+    triggerId: entry.triggerId,
+    threadId: entry.threadId,
+    kind: entry.kind,
+    reason: entry.reason,
+    prompt: entry.prompt,
+    clientUserMessageId: entry.clientUserMessageId,
+    startedAt: entry.startedAt,
+    completedAt: entry.completedAt,
+    status: entry.status,
+    turnId: entry.turnId,
+    sourceThreadId: entry.sourceThreadId,
+    sourceTurnId: entry.sourceTurnId,
+    sourceRoomId: entry.sourceRoomId,
+    sourceRoomMessageId: entry.sourceRoomMessageId,
+    replyRoomId: entry.replyRoomId,
+    replyAuthor: entry.replyAuthor,
     error: entry.programOutcome === null ? entry.error : null,
+    programInvocationId: entry.programInvocationId,
     programOutcome:
       entry.programOutcome === null
         ? null
@@ -349,10 +416,39 @@ function readSafeHistory(entry: TriggerSnapshot["history"][number]): unknown {
   };
 }
 
+function readSafeRoom(room: ZenXRoom): unknown {
+  return {
+    id: room.id,
+    name: room.name,
+    createdAt: room.createdAt,
+    members: room.members.map((member) => ({
+      name: member.name,
+      threadId: member.threadId,
+    })),
+    messages: room.messages.slice(-50).map((message) => ({
+      id: message.id,
+      roomId: message.roomId,
+      author: message.author,
+      text: message.text,
+      createdAt: message.createdAt,
+      kind: message.kind,
+      originThreadId: message.originThreadId,
+      originTurnId: message.originTurnId,
+    })),
+  };
+}
+
 function readSafeOutcome(
   outcome: NonNullable<TriggerSnapshot["history"][number]["programOutcome"]>,
 ) {
-  return { ...outcome, output: null, error: null };
+  return {
+    stage: outcome.stage,
+    invocationId: outcome.invocationId,
+    status: outcome.status,
+    output: null,
+    exitCode: outcome.exitCode,
+    error: null,
+  };
 }
 
 function tool(

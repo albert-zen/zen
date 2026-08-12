@@ -155,6 +155,77 @@ test("rejects an oversized timeout at the legacy store boundary", async () => {
   }
 });
 
+test("enforces version-specific and per-kind Trigger schemas", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-store-schema-"));
+  const file = path.join(directory, "triggers.json");
+  const state = validState();
+  const signal = {
+    id: "signal-trigger",
+    threadId: "thread-a",
+    kind: "signal" as const,
+    label: "Signal",
+    prompt: "Signal",
+    createdAt: 1,
+    active: true,
+    signal: { name: "deploy" },
+  };
+  const history = state.history.map(
+    ({
+      replyRoomId: _replyRoomId,
+      replyAuthor: _replyAuthor,
+      programInvocationId: _programInvocationId,
+      programOutcome: _programOutcome,
+      programOutcomes: _programOutcomes,
+      ...entry
+    }) => entry,
+  );
+  const invalid = [
+    {
+      version: 1,
+      triggers: [{ ...signal, program: { action: { command: "fixture" } } }],
+      history,
+      rooms: state.rooms,
+    },
+    {
+      version: 2,
+      triggers: [{ ...signal, program: { action: { command: "fixture" } } }],
+      history: state.history.map(
+        ({
+          replyRoomId: _replyRoomId,
+          replyAuthor: _replyAuthor,
+          programInvocationId: _programInvocationId,
+          programOutcome: _programOutcome,
+          programOutcomes: _programOutcomes,
+          ...entry
+        }) => entry,
+      ),
+      rooms: state.rooms,
+    },
+    {
+      version: 3,
+      triggers: [
+        {
+          ...signal,
+          watch: { threadId: "thread-b", event: "turn_completed" },
+        },
+      ],
+      history: state.history,
+      rooms: state.rooms,
+    },
+  ];
+  try {
+    for (const value of invalid) {
+      await writeFile(file, JSON.stringify(value), "utf8");
+      await assert.rejects(
+        async () => await new ZenXTriggerStore(file).read(),
+        /unsupported version or invalid entry shape/u,
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 function validState(): TriggerSnapshot & { version: 2 } {
   return {
     version: 2,

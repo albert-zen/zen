@@ -144,6 +144,9 @@
 - **ZenXTriggerProgramRunner** — ZenX 外层以一次性、有界的本地子进程执行 Trigger predicate/action，
   通过稳定 invocation id、显式 stdin/stdout JSON、cwd/env、超时、取消与平台化进程树终止把结果归约为
   Trigger 历史中的明确 outcome；它不是 sandbox、队列、重试器或第二个 Runtime。
+- **ZenXTransientProcessContainment** — ZenX 本地程序 runner 以 OS-specific process identity、
+  bounded termination 与反复 quiescence 证明约束瞬时子进程树；它不进入 durable state、scheduler 或 retry system，
+  无法证明 containment 时只产生明确失败。
 - **ZenXAutomationControlCapability** — ZenX capability registry 中由独立 read/write 权限保护的 Trigger
   与 Room 工具集合；工具只调用现有 Trigger/Room store 和 App Server port，不拥有 Agent、Thread、Turn
   或 transcript 语义。

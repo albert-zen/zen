@@ -921,6 +921,173 @@ test("Room deletion is fenced by a nonterminal immutable reply route", async () 
   }
 });
 
+test("Room routing candidates are committed with the message before later trigger mutations", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-routing-atomic-"),
+  );
+  const manager = new ControlledManager();
+  const store = new BlockingWriteStore(path.join(directory, "triggers.json"));
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "target" }],
+    });
+    await triggers.create({
+      threadId: "target",
+      kind: "roomMention",
+      label: "Original",
+      prompt: "Answer once.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    store.blockNextWrite = true;
+    const posting = triggers.postRoomMessage(room.id, "You", "@Bot now");
+    await store.started.promise;
+    const added = triggers.create({
+      threadId: "target",
+      kind: "roomMention",
+      label: "Added late",
+      prompt: "Must not receive the old message.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    store.release();
+    await posting;
+    await added;
+    assert.equal(manager.requests.length, 1);
+    assert.equal(
+      triggers
+        .snapshot()
+        .history.filter((entry) => entry.kind === "roomMention").length,
+      1,
+    );
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Room deletion queued behind mention append sees the committed reply-route fence", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-delete-race-"),
+  );
+  const manager = new ControlledManager();
+  const store = new BlockingWriteStore(path.join(directory, "triggers.json"));
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "target" }],
+    });
+    await triggers.create({
+      threadId: "target",
+      kind: "roomMention",
+      label: "Answer",
+      prompt: "Answer once.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    store.blockNextWrite = true;
+    const posting = triggers.postRoomMessage(room.id, "You", "@Bot now");
+    await store.started.promise;
+    const deleting = triggers.deleteRoom(room.id);
+    const deletion = assert.rejects(deleting, /nonterminal wakeup owns/u);
+    store.release();
+    await posting;
+    await deletion;
+    assert.equal(triggers.snapshot().rooms.length, 1);
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Room member removal queued behind mention append cannot alter its committed candidate", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-room-member-race-"),
+  );
+  const manager = new ControlledManager();
+  const store = new BlockingWriteStore(path.join(directory, "triggers.json"));
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "release",
+      members: [{ name: "Bot", threadId: "target" }],
+    });
+    await triggers.create({
+      threadId: "target",
+      kind: "roomMention",
+      label: "Answer",
+      prompt: "Answer once.",
+      roomId: room.id,
+      mention: "Bot",
+    });
+    store.blockNextWrite = true;
+    const posting = triggers.postRoomMessage(room.id, "You", "@Bot now");
+    await store.started.promise;
+    const removing = triggers.removeRoomMember(room.id, "target");
+    store.release();
+    await posting;
+    await removing;
+    assert.equal(manager.requests.length, 1);
+    assert.equal(triggers.snapshot().rooms[0]?.members.length, 0);
+    assert.equal(triggers.snapshot().history[0]?.status, "running");
+  } finally {
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("terminal persistence failure fails closed without dispatching another wakeup, and listener errors are isolated", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-terminal-boundary-"),
+  );
+  const manager = new ControlledManager();
+  const store = new AlwaysFailWriteStore(path.join(directory, "triggers.json"));
+  const triggers = new ZenXTriggerService(manager, store);
+  try {
+    await triggers.start();
+    await triggers.create({
+      threadId: "target",
+      kind: "signal",
+      label: "Boundary",
+      prompt: "Run once.",
+      signalName: "boundary",
+    });
+    const listenerDispose = triggers.onChange(() => {
+      throw new Error("fixture listener failure");
+    });
+    store.failWrites = false;
+    await triggers.signal("boundary", "first");
+    const running = await snapshotWhen(
+      triggers,
+      (snapshot) => snapshot.history[0]?.status === "running",
+    );
+    store.failWrites = true;
+    manager.complete(
+      "target",
+      completedTurn(running.history[0]!.turnId!, "first"),
+    );
+    await settle();
+    assert.equal(triggers.snapshot().history[0]?.status, "running");
+    assert.equal(manager.requests.length, 1);
+    await assert.rejects(
+      async () => await triggers.signal("boundary", "second"),
+      /service is not running/u,
+    );
+    listenerDispose();
+    store.failWrites = false;
+  } finally {
+    store.failWrites = false;
+    await triggers.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("restart records uncertain local work once and never retries it", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-program-restart-"),
@@ -1368,6 +1535,38 @@ class FailTerminalWriteStore extends ZenXTriggerStore {
       throw new Error("fixture terminal persistence failure");
     }
     await super.write(snapshot);
+  }
+}
+
+class AlwaysFailWriteStore extends ZenXTriggerStore {
+  failWrites = false;
+
+  override async write(snapshot: TriggerSnapshot): Promise<void> {
+    if (this.failWrites)
+      throw new Error("fixture persistent store unavailable");
+    await super.write(snapshot);
+  }
+}
+
+class BlockingWriteStore extends ZenXTriggerStore {
+  blockNextWrite = false;
+  readonly started = deferred<void>();
+  #releaseWrite: (() => void) | undefined;
+
+  override async write(snapshot: TriggerSnapshot): Promise<void> {
+    if (this.blockNextWrite) {
+      this.blockNextWrite = false;
+      this.started.resolve();
+      await new Promise<void>((resolve) => {
+        this.#releaseWrite = resolve;
+      });
+    }
+    await super.write(snapshot);
+  }
+
+  release(): void {
+    this.#releaseWrite?.();
+    this.#releaseWrite = undefined;
   }
 }
 
