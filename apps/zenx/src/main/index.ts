@@ -22,6 +22,7 @@ import { ZenXSettingsService } from "./settings-service.js";
 import { zenXProviderTransport } from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
+import { ZenXAutomationControlCapabilityPackage } from "./capabilities/automation-control-package.js";
 import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
 import { normalizeTitleOwnershipFailure } from "./thread-title-failure.js";
 import { ZenXThreadTitleStore } from "./thread-title-store.js";
@@ -145,6 +146,9 @@ app.whenReady().then(async () => {
       new ZenXTriggerStore(join(userDataDirectory, "trigger-registry.json")),
       { titles: titleCoordinator },
     );
+    capabilityService.register(
+      new ZenXAutomationControlCapabilityPackage(triggerService),
+    );
     await triggerService.start();
     installTriggerIpc(triggerService);
     if (startupError === undefined) await appServerManager.start();
@@ -208,9 +212,13 @@ app.on("before-quit", (event) => {
   if (quitting || appServerManager === undefined) return;
   event.preventDefault();
   quitting = true;
-  triggerService?.stop();
   void (async () => {
     const errors: unknown[] = [];
+    try {
+      await triggerService?.stop();
+    } catch (error) {
+      errors.push(normalizeTitleOwnershipFailure(error));
+    }
     try {
       await titleCoordinator?.close();
     } catch (error) {

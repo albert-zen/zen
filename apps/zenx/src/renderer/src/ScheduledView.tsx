@@ -273,8 +273,8 @@ export function ScheduledView({
           <strong>Developer signal simulator</strong>
           <p>
             This local UI invokes ZenX renderer IPC for testing. A production
-            external ingress and Agent-callable trigger tools are follow-up
-            work.
+            external signal ingress remains follow-up work; Agents can manage
+            Triggers and Rooms through the granted automation capability.
           </p>
           <div>
             <input

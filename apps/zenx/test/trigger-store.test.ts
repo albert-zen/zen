@@ -28,6 +28,29 @@ test("rejects nested trigger registry corruption instead of admitting runtime ob
         },
       ],
     },
+    {
+      ...validState(),
+      history: Array.from({ length: 257 }, (_, index) => ({
+        ...validState().history[0]!,
+        id: `history-${String(index)}`,
+      })),
+    },
+    {
+      ...validState(),
+      rooms: [
+        {
+          ...validState().rooms[0]!,
+          messages: Array.from({ length: 257 }, (_, index) => ({
+            ...validState().rooms[0]!.messages[0]!,
+            id: `message-${String(index)}`,
+          })),
+        },
+      ],
+    },
+    {
+      ...validState(),
+      triggers: [{ ...validState().triggers[0]!, prompt: "x".repeat(5_000) }],
+    },
     { ...validState(), version: 999 },
   ];
   try {
@@ -53,6 +76,11 @@ test("migrates fully validated version 1 history to nullable source metadata", a
       sourceTurnId: _sourceTurnId,
       sourceRoomId: _sourceRoomId,
       sourceRoomMessageId: _sourceRoomMessageId,
+      replyRoomId: _replyRoomId,
+      replyAuthor: _replyAuthor,
+      programInvocationId: _programInvocationId,
+      programOutcome: _programOutcome,
+      programOutcomes: _programOutcomes,
       ...entry
     }) => entry,
   );
@@ -67,7 +95,132 @@ test("migrates fully validated version 1 history to nullable source metadata", a
     assert.equal(migrated.history[0]?.sourceThreadId, null);
     assert.equal(migrated.history[0]?.sourceTurnId, null);
     await store.write(migrated);
-    assert.equal(JSON.parse(await readFile(file, "utf8")).version, 2);
+    assert.equal(JSON.parse(await readFile(file, "utf8")).version, 3);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects unknown legacy and current fields before migration or safe projection", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-store-extra-"));
+  const file = path.join(directory, "triggers.json");
+  const base = validState();
+  const corruptions = [
+    {
+      ...base,
+      version: 1,
+      history: [{ ...base.history[0], secret: "x" }],
+    },
+    {
+      ...base,
+      version: 2,
+      history: [{ ...base.history[0], programOutput: "x" }],
+    },
+    {
+      ...base,
+      version: 3,
+      history: [{ ...base.history[0], diagnostic: "x" }],
+    },
+  ];
+  try {
+    for (const value of corruptions) {
+      await writeFile(file, JSON.stringify(value), "utf8");
+      await assert.rejects(
+        async () => await new ZenXTriggerStore(file).read(),
+        /unsupported version or invalid entry shape/u,
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects an oversized timeout at the legacy store boundary", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-store-timeout-"),
+  );
+  const file = path.join(directory, "triggers.json");
+  const state = validState();
+  state.triggers[0]!.program = {
+    action: { command: "fixture", timeoutMs: 120_001 },
+  };
+  try {
+    await writeFile(file, JSON.stringify({ ...state, version: 1 }), "utf8");
+    await assert.rejects(
+      async () => await new ZenXTriggerStore(file).read(),
+      /unsupported version or invalid entry shape/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("enforces version-specific and per-kind Trigger schemas", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-store-schema-"));
+  const file = path.join(directory, "triggers.json");
+  const state = validState();
+  const signal = {
+    id: "signal-trigger",
+    threadId: "thread-a",
+    kind: "signal" as const,
+    label: "Signal",
+    prompt: "Signal",
+    createdAt: 1,
+    active: true,
+    signal: { name: "deploy" },
+  };
+  const history = state.history.map(
+    ({
+      replyRoomId: _replyRoomId,
+      replyAuthor: _replyAuthor,
+      programInvocationId: _programInvocationId,
+      programOutcome: _programOutcome,
+      programOutcomes: _programOutcomes,
+      ...entry
+    }) => entry,
+  );
+  const invalid = [
+    {
+      version: 1,
+      triggers: [{ ...signal, program: { action: { command: "fixture" } } }],
+      history,
+      rooms: state.rooms,
+    },
+    {
+      version: 2,
+      triggers: [{ ...signal, program: { action: { command: "fixture" } } }],
+      history: state.history.map(
+        ({
+          replyRoomId: _replyRoomId,
+          replyAuthor: _replyAuthor,
+          programInvocationId: _programInvocationId,
+          programOutcome: _programOutcome,
+          programOutcomes: _programOutcomes,
+          ...entry
+        }) => entry,
+      ),
+      rooms: state.rooms,
+    },
+    {
+      version: 3,
+      triggers: [
+        {
+          ...signal,
+          watch: { threadId: "thread-b", event: "turn_completed" },
+        },
+      ],
+      history: state.history,
+      rooms: state.rooms,
+    },
+  ];
+  try {
+    for (const value of invalid) {
+      await writeFile(file, JSON.stringify(value), "utf8");
+      await assert.rejects(
+        async () => await new ZenXTriggerStore(file).read(),
+        /unsupported version or invalid entry shape/u,
+      );
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -106,6 +259,11 @@ function validState(): TriggerSnapshot & { version: 2 } {
         sourceTurnId: "turn-b",
         sourceRoomId: null,
         sourceRoomMessageId: null,
+        replyRoomId: null,
+        replyAuthor: null,
+        programInvocationId: null,
+        programOutcome: null,
+        programOutcomes: [],
       },
     ],
     rooms: [

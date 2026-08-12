@@ -5,13 +5,60 @@ import type {
   RoomMember,
   RoomMessage,
   TriggerHistoryEntry,
+  TriggerProgramConfig,
+  TriggerProgramOutcome,
+  TriggerProgramSpec,
   TriggerSnapshot,
   ZenXRoom,
   ZenXTrigger,
 } from "./trigger-types.js";
+import {
+  MAX_ERROR_BYTES,
+  MAX_HISTORY_COUNT,
+  MAX_ID_BYTES,
+  MAX_MEMBER_NAME_BYTES,
+  MAX_MESSAGE_AUTHOR_BYTES,
+  MAX_MESSAGE_TEXT_BYTES,
+  MAX_PROGRAM_ARGUMENT_BYTES,
+  MAX_PROGRAM_ARGUMENTS,
+  MAX_PROGRAM_COMMAND_BYTES,
+  MAX_PROGRAM_CWD_BYTES,
+  MAX_PROGRAM_ENV_BYTES,
+  MAX_PROGRAM_ENV_ENTRIES,
+  MAX_PROGRAM_ENV_KEY_BYTES,
+  MAX_PROGRAM_ENV_VALUE_BYTES,
+  MAX_PROGRAM_FLAGS_BYTES,
+  MAX_PROGRAM_MATCH_REGEX_BYTES,
+  MAX_PROGRAM_OUTCOMES,
+  MAX_PROGRAM_TIMEOUT_MS,
+  MAX_REASON_BYTES,
+  MAX_ROOM_COUNT,
+  MAX_ROOM_MEMBERS,
+  MAX_ROOM_MESSAGES,
+  MAX_ROOM_NAME_BYTES,
+  MAX_TRIGGER_COUNT,
+  MAX_TRIGGER_LABEL_BYTES,
+  MAX_TRIGGER_PROMPT_BYTES,
+  utf8Bytes,
+  withinBytes,
+} from "./trigger-limits.js";
 
 interface StoredState extends TriggerSnapshot {
+  version: 3;
+}
+
+interface Version2StoredState extends Omit<TriggerSnapshot, "history"> {
   version: 2;
+  history: Array<
+    Omit<
+      TriggerHistoryEntry,
+      | "replyRoomId"
+      | "replyAuthor"
+      | "programInvocationId"
+      | "programOutcome"
+      | "programOutcomes"
+    >
+  >;
 }
 
 interface LegacyStoredState extends Omit<TriggerSnapshot, "history"> {
@@ -19,13 +66,97 @@ interface LegacyStoredState extends Omit<TriggerSnapshot, "history"> {
   history: Array<
     Omit<
       TriggerHistoryEntry,
-      "sourceThreadId" | "sourceTurnId" | "sourceRoomId" | "sourceRoomMessageId"
+      | "sourceThreadId"
+      | "sourceTurnId"
+      | "sourceRoomId"
+      | "sourceRoomMessageId"
+      | "replyRoomId"
+      | "replyAuthor"
+      | "programInvocationId"
+      | "programOutcome"
+      | "programOutcomes"
     >
   >;
 }
 
+const STORED_STATE_KEYS = ["version", "triggers", "history", "rooms"] as const;
+const TRIGGER_BASE_KEYS = [
+  "id",
+  "threadId",
+  "kind",
+  "label",
+  "prompt",
+  "createdAt",
+  "active",
+] as const;
+const TIMER_KEYS = ["nextRunAt", "intervalMinutes"] as const;
+const WATCH_KEYS = ["threadId", "event"] as const;
+const ROOM_TRIGGER_KEYS = ["roomId", "mention"] as const;
+const SIGNAL_KEYS = ["name"] as const;
+const PROGRAM_KEYS = ["predicate", "action", "match"] as const;
+const PROGRAM_SPEC_KEYS = [
+  "command",
+  "args",
+  "cwd",
+  "env",
+  "timeoutMs",
+  "maxOutputBytes",
+] as const;
+const MATCH_KEYS = ["field", "regex", "flags"] as const;
+const HISTORY_BASE_KEYS = [
+  "id",
+  "triggerId",
+  "threadId",
+  "kind",
+  "reason",
+  "prompt",
+  "clientUserMessageId",
+  "startedAt",
+  "completedAt",
+  "status",
+  "turnId",
+  "error",
+] as const;
+const HISTORY_SOURCE_KEYS = [
+  "sourceThreadId",
+  "sourceTurnId",
+  "sourceRoomId",
+  "sourceRoomMessageId",
+] as const;
+const HISTORY_V2_KEYS = [...HISTORY_BASE_KEYS, ...HISTORY_SOURCE_KEYS] as const;
+const HISTORY_V3_KEYS = [
+  ...HISTORY_BASE_KEYS,
+  ...HISTORY_SOURCE_KEYS,
+  "replyRoomId",
+  "replyAuthor",
+  "programInvocationId",
+  "programOutcome",
+  "programOutcomes",
+] as const;
+const OUTCOME_KEYS = [
+  "stage",
+  "invocationId",
+  "status",
+  "output",
+  "exitCode",
+  "error",
+] as const;
+const ROOM_KEYS = ["id", "name", "members", "messages", "createdAt"] as const;
+const MEMBER_KEYS = ["name", "threadId"] as const;
+const MESSAGE_KEYS = [
+  "id",
+  "roomId",
+  "author",
+  "text",
+  "createdAt",
+  "kind",
+  "originThreadId",
+  "originTurnId",
+] as const;
+
 export class ZenXTriggerStore {
   readonly #filePath: string;
+
   constructor(filePath: string) {
     this.#filePath = path.resolve(filePath);
   }
@@ -42,17 +173,44 @@ export class ZenXTriggerStore {
     try {
       const value = JSON.parse(await handle.readFile("utf8")) as unknown;
       if (isStoredState(value)) return snapshotFrom(value);
+      if (isVersion2StoredState(value)) {
+        return {
+          triggers: value.triggers.map((trigger) =>
+            canonicalTrigger(trigger, "v2"),
+          ),
+          history: value.history.map((entry) => ({
+            ...canonicalBaseHistory(entry),
+            sourceThreadId: entry.sourceThreadId,
+            sourceTurnId: entry.sourceTurnId,
+            sourceRoomId: entry.sourceRoomId,
+            sourceRoomMessageId: entry.sourceRoomMessageId,
+            replyRoomId: null,
+            replyAuthor: null,
+            programInvocationId: null,
+            programOutcome: null,
+            programOutcomes: [],
+          })),
+          rooms: value.rooms.map(canonicalRoom),
+        };
+      }
       if (isLegacyStoredState(value)) {
         return {
-          triggers: value.triggers,
+          triggers: value.triggers.map((trigger) =>
+            canonicalTrigger(trigger, "v1"),
+          ),
           history: value.history.map((entry) => ({
-            ...entry,
+            ...canonicalBaseHistory(entry),
             sourceThreadId: null,
             sourceTurnId: null,
             sourceRoomId: null,
             sourceRoomMessageId: null,
+            replyRoomId: null,
+            replyAuthor: null,
+            programInvocationId: null,
+            programOutcome: null,
+            programOutcomes: [],
           })),
-          rooms: value.rooms,
+          rooms: value.rooms.map(canonicalRoom),
         };
       }
       throw new Error(
@@ -71,7 +229,7 @@ export class ZenXTriggerStore {
     const directory = path.dirname(this.#filePath);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const temporary = `${this.#filePath}.${process.pid}.tmp`;
-    const value: StoredState = { version: 2, ...snapshot };
+    const value: StoredState = { version: 3, ...snapshot };
     if (!isStoredState(value))
       throw new Error("ZenX refused to persist an invalid trigger registry");
     await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
@@ -88,9 +246,184 @@ function emptySnapshot(): TriggerSnapshot {
 
 function snapshotFrom(value: StoredState): TriggerSnapshot {
   return {
-    triggers: value.triggers,
-    history: value.history,
-    rooms: value.rooms,
+    triggers: value.triggers.map((trigger) => canonicalTrigger(trigger, "v3")),
+    history: value.history.map(canonicalHistory),
+    rooms: value.rooms.map(canonicalRoom),
+  };
+}
+
+function canonicalTrigger(
+  trigger: ZenXTrigger,
+  version: "v1" | "v2" | "v3",
+): ZenXTrigger {
+  const common = {
+    id: trigger.id,
+    threadId: trigger.threadId,
+    kind: trigger.kind,
+    label: trigger.label,
+    prompt: trigger.prompt,
+    createdAt: trigger.createdAt,
+    active: trigger.active,
+  };
+  const program =
+    version === "v3" && trigger.program !== undefined
+      ? { program: canonicalProgramConfig(trigger.program) }
+      : {};
+  if (trigger.kind === "timer")
+    return {
+      ...common,
+      kind: "timer",
+      timer: {
+        nextRunAt: trigger.timer!.nextRunAt,
+        intervalMinutes: trigger.timer!.intervalMinutes,
+      },
+      ...program,
+    };
+  if (trigger.kind === "thread")
+    return {
+      ...common,
+      kind: "thread",
+      watch: {
+        threadId: trigger.watch!.threadId,
+        event: trigger.watch!.event,
+      },
+      ...program,
+    };
+  if (trigger.kind === "roomMention")
+    return {
+      ...common,
+      kind: "roomMention",
+      room: {
+        roomId: trigger.room!.roomId,
+        mention: trigger.room!.mention,
+      },
+      ...program,
+    };
+  return {
+    ...common,
+    kind: "signal",
+    signal: { name: trigger.signal!.name },
+    ...program,
+  };
+}
+
+function canonicalBaseHistory(
+  entry: LegacyStoredState["history"][number],
+): Omit<
+  TriggerHistoryEntry,
+  | "sourceThreadId"
+  | "sourceTurnId"
+  | "sourceRoomId"
+  | "sourceRoomMessageId"
+  | "replyRoomId"
+  | "replyAuthor"
+  | "programInvocationId"
+  | "programOutcome"
+  | "programOutcomes"
+> {
+  return {
+    id: entry.id,
+    triggerId: entry.triggerId,
+    threadId: entry.threadId,
+    kind: entry.kind,
+    reason: entry.reason,
+    prompt: entry.prompt,
+    clientUserMessageId: entry.clientUserMessageId,
+    startedAt: entry.startedAt,
+    completedAt: entry.completedAt,
+    status: entry.status,
+    turnId: entry.turnId,
+    error: entry.error,
+  };
+}
+
+function canonicalHistory(entry: TriggerHistoryEntry): TriggerHistoryEntry {
+  return {
+    ...canonicalBaseHistory(entry),
+    sourceThreadId: entry.sourceThreadId,
+    sourceTurnId: entry.sourceTurnId,
+    sourceRoomId: entry.sourceRoomId,
+    sourceRoomMessageId: entry.sourceRoomMessageId,
+    replyRoomId: entry.replyRoomId,
+    replyAuthor: entry.replyAuthor,
+    programInvocationId: entry.programInvocationId,
+    programOutcome:
+      entry.programOutcome === null
+        ? null
+        : canonicalProgramOutcome(entry.programOutcome),
+    programOutcomes: entry.programOutcomes.map(canonicalProgramOutcome),
+  };
+}
+
+function canonicalProgramConfig(
+  config: TriggerProgramConfig,
+): TriggerProgramConfig {
+  return {
+    ...(config.predicate === undefined
+      ? {}
+      : { predicate: canonicalProgramSpec(config.predicate) }),
+    ...(config.action === undefined
+      ? {}
+      : { action: canonicalProgramSpec(config.action) }),
+    ...(config.match === undefined
+      ? {}
+      : {
+          match: {
+            field: config.match.field,
+            regex: config.match.regex,
+            ...(config.match.flags === undefined
+              ? {}
+              : { flags: config.match.flags }),
+          },
+        }),
+  };
+}
+
+function canonicalProgramSpec(spec: TriggerProgramSpec): TriggerProgramSpec {
+  return {
+    command: spec.command,
+    ...(spec.args === undefined ? {} : { args: [...spec.args] }),
+    ...(spec.cwd === undefined ? {} : { cwd: spec.cwd }),
+    ...(spec.env === undefined ? {} : { env: { ...spec.env } }),
+    ...(spec.timeoutMs === undefined ? {} : { timeoutMs: spec.timeoutMs }),
+    ...(spec.maxOutputBytes === undefined
+      ? {}
+      : { maxOutputBytes: spec.maxOutputBytes }),
+  };
+}
+
+function canonicalProgramOutcome(
+  outcome: TriggerProgramOutcome,
+): TriggerProgramOutcome {
+  return {
+    stage: outcome.stage,
+    invocationId: outcome.invocationId,
+    status: outcome.status,
+    output: outcome.output,
+    exitCode: outcome.exitCode,
+    error: outcome.error,
+  };
+}
+
+function canonicalRoom(room: ZenXRoom): ZenXRoom {
+  return {
+    id: room.id,
+    name: room.name,
+    members: room.members.map((member) => ({
+      name: member.name,
+      threadId: member.threadId,
+    })),
+    messages: room.messages.map((message) => ({
+      id: message.id,
+      roomId: message.roomId,
+      author: message.author,
+      text: message.text,
+      createdAt: message.createdAt,
+      kind: message.kind,
+      originThreadId: message.originThreadId,
+      originTurnId: message.originTurnId,
+    })),
+    createdAt: room.createdAt,
   };
 }
 
@@ -98,10 +431,31 @@ function isStoredState(value: unknown): value is StoredState {
   const state = record(value);
   return (
     state !== null &&
+    exactKeys(state, STORED_STATE_KEYS) &&
+    state["version"] === 3 &&
+    arrayOf(
+      state["triggers"],
+      (entry): entry is ZenXTrigger => isTrigger(entry, "v3"),
+      MAX_TRIGGER_COUNT,
+    ) &&
+    arrayOf(state["history"], isHistory, MAX_HISTORY_COUNT) &&
+    arrayOf(state["rooms"], isRoom, MAX_ROOM_COUNT)
+  );
+}
+
+function isVersion2StoredState(value: unknown): value is Version2StoredState {
+  const state = record(value);
+  return (
+    state !== null &&
+    exactKeys(state, STORED_STATE_KEYS) &&
     state["version"] === 2 &&
-    arrayOf(state["triggers"], isTrigger) &&
-    arrayOf(state["history"], isHistory) &&
-    arrayOf(state["rooms"], isRoom)
+    arrayOf(
+      state["triggers"],
+      (entry): entry is ZenXTrigger => isTrigger(entry, "v2"),
+      MAX_TRIGGER_COUNT,
+    ) &&
+    arrayOf(state["history"], isVersion2History, MAX_HISTORY_COUNT) &&
+    arrayOf(state["rooms"], isRoom, MAX_ROOM_COUNT)
   );
 }
 
@@ -109,30 +463,58 @@ function isLegacyStoredState(value: unknown): value is LegacyStoredState {
   const state = record(value);
   return (
     state !== null &&
+    exactKeys(state, STORED_STATE_KEYS) &&
     state["version"] === 1 &&
-    arrayOf(state["triggers"], isTrigger) &&
-    arrayOf(state["history"], isLegacyHistory) &&
-    arrayOf(state["rooms"], isRoom)
+    arrayOf(
+      state["triggers"],
+      (entry): entry is ZenXTrigger => isTrigger(entry, "v1"),
+      MAX_TRIGGER_COUNT,
+    ) &&
+    arrayOf(state["history"], isLegacyHistory, MAX_HISTORY_COUNT) &&
+    arrayOf(state["rooms"], isRoom, MAX_ROOM_COUNT)
   );
 }
 
-function isTrigger(value: unknown): value is ZenXTrigger {
+function isTrigger(
+  value: unknown,
+  version: "v1" | "v2" | "v3",
+): value is ZenXTrigger {
   const trigger = record(value);
   if (
     trigger === null ||
-    !string(trigger["id"]) ||
-    !string(trigger["threadId"]) ||
+    !string(trigger["id"], MAX_ID_BYTES) ||
+    !string(trigger["threadId"], MAX_ID_BYTES) ||
     !triggerKind(trigger["kind"]) ||
-    !string(trigger["label"]) ||
-    !string(trigger["prompt"]) ||
+    !string(trigger["label"], MAX_TRIGGER_LABEL_BYTES) ||
+    !string(trigger["prompt"], MAX_TRIGGER_PROMPT_BYTES) ||
     !finiteNumber(trigger["createdAt"]) ||
     typeof trigger["active"] !== "boolean"
+  )
+    return false;
+  const variantKey =
+    trigger["kind"] === "timer"
+      ? "timer"
+      : trigger["kind"] === "thread"
+        ? "watch"
+        : trigger["kind"] === "roomMention"
+          ? "room"
+          : "signal";
+  if (
+    !exactKeys(
+      trigger,
+      version === "v3"
+        ? [...TRIGGER_BASE_KEYS, variantKey, "program"]
+        : [...TRIGGER_BASE_KEYS, variantKey],
+    ) ||
+    (version !== "v3" && trigger["program"] !== undefined) ||
+    (trigger["program"] !== undefined && !isProgramConfig(trigger["program"]))
   )
     return false;
   if (trigger["kind"] === "timer") {
     const timer = record(trigger["timer"]);
     return (
       timer !== null &&
+      exactKeys(timer, TIMER_KEYS) &&
       finiteNumber(timer["nextRunAt"]) &&
       (timer["intervalMinutes"] === null ||
         (finiteNumber(timer["intervalMinutes"]) &&
@@ -143,27 +525,57 @@ function isTrigger(value: unknown): value is ZenXTrigger {
     const watch = record(trigger["watch"]);
     return (
       watch !== null &&
-      string(watch["threadId"]) &&
+      exactKeys(watch, WATCH_KEYS) &&
+      string(watch["threadId"], MAX_ID_BYTES) &&
       watch["event"] === "turn_completed"
     );
   }
   if (trigger["kind"] === "roomMention") {
     const room = record(trigger["room"]);
-    return room !== null && string(room["roomId"]) && string(room["mention"]);
+    return (
+      room !== null &&
+      exactKeys(room, ROOM_TRIGGER_KEYS) &&
+      string(room["roomId"], MAX_ID_BYTES) &&
+      string(room["mention"], MAX_MEMBER_NAME_BYTES)
+    );
   }
   const signal = record(trigger["signal"]);
-  return signal !== null && string(signal["name"]);
+  return (
+    signal !== null &&
+    exactKeys(signal, SIGNAL_KEYS) &&
+    string(signal["name"], MAX_ID_BYTES)
+  );
 }
 
 function isHistory(value: unknown): value is TriggerHistoryEntry {
   const entry = record(value);
   return (
-    isLegacyHistory(value) &&
     entry !== null &&
-    nullableString(entry["sourceThreadId"]) &&
-    nullableString(entry["sourceTurnId"]) &&
-    nullableString(entry["sourceRoomId"]) &&
-    nullableString(entry["sourceRoomMessageId"])
+    exactKeys(entry, HISTORY_V3_KEYS) &&
+    isHistoryBase(entry) &&
+    entry !== null &&
+    nullableString(entry["replyRoomId"], MAX_ID_BYTES) &&
+    nullableString(entry["replyAuthor"], MAX_MEMBER_NAME_BYTES) &&
+    nullableString(entry["programInvocationId"], MAX_ID_BYTES) &&
+    (entry["programOutcome"] === null ||
+      isProgramOutcome(entry["programOutcome"])) &&
+    arrayOf(entry["programOutcomes"], isProgramOutcome, MAX_PROGRAM_OUTCOMES)
+  );
+}
+
+function isVersion2History(
+  value: unknown,
+): value is Version2StoredState["history"][number] {
+  const entry = record(value);
+  return (
+    entry !== null &&
+    exactKeys(entry, HISTORY_V2_KEYS) &&
+    isHistoryBase(entry) &&
+    entry !== null &&
+    nullableString(entry["sourceThreadId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceTurnId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceRoomId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceRoomMessageId"], MAX_ID_BYTES)
   );
 }
 
@@ -173,18 +585,118 @@ function isLegacyHistory(
   const entry = record(value);
   return (
     entry !== null &&
-    string(entry["id"]) &&
-    string(entry["triggerId"]) &&
-    string(entry["threadId"]) &&
+    exactKeys(entry, HISTORY_BASE_KEYS) &&
+    isHistoryBase(entry)
+  );
+}
+
+function isHistoryBase(entry: Record<string, unknown>): boolean {
+  return (
+    string(entry["id"], MAX_ID_BYTES) &&
+    string(entry["triggerId"], MAX_ID_BYTES) &&
+    string(entry["threadId"], MAX_ID_BYTES) &&
     triggerKind(entry["kind"]) &&
-    string(entry["reason"]) &&
-    string(entry["prompt"]) &&
-    string(entry["clientUserMessageId"]) &&
+    string(entry["reason"], MAX_REASON_BYTES) &&
+    string(entry["prompt"], MAX_TRIGGER_PROMPT_BYTES) &&
+    string(entry["clientUserMessageId"], MAX_ID_BYTES) &&
     finiteNumber(entry["startedAt"]) &&
     nullableNumber(entry["completedAt"]) &&
     historyStatus(entry["status"]) &&
-    nullableString(entry["turnId"]) &&
-    nullableString(entry["error"])
+    nullableString(entry["turnId"], MAX_ID_BYTES) &&
+    nullableString(entry["error"], MAX_ERROR_BYTES)
+  );
+}
+
+function isProgramConfig(value: unknown): value is TriggerProgramConfig {
+  const config = record(value);
+  return (
+    config !== null &&
+    exactKeys(config, PROGRAM_KEYS) &&
+    (config["predicate"] === undefined || isProgramSpec(config["predicate"])) &&
+    (config["action"] === undefined || isProgramSpec(config["action"])) &&
+    (config["match"] === undefined || isMatch(config["match"])) &&
+    (config["predicate"] !== undefined ||
+      config["action"] !== undefined ||
+      config["match"] !== undefined)
+  );
+}
+
+function isProgramSpec(value: unknown): value is TriggerProgramSpec {
+  const spec = record(value);
+  if (
+    spec === null ||
+    !exactKeys(spec, PROGRAM_SPEC_KEYS) ||
+    !string(spec["command"], MAX_PROGRAM_COMMAND_BYTES) ||
+    (spec["args"] !== undefined &&
+      !arrayOf(
+        spec["args"],
+        (entry): entry is string =>
+          typeof entry === "string" &&
+          withinBytes(entry, MAX_PROGRAM_ARGUMENT_BYTES),
+        MAX_PROGRAM_ARGUMENTS,
+      )) ||
+    (spec["cwd"] !== undefined &&
+      !string(spec["cwd"], MAX_PROGRAM_CWD_BYTES)) ||
+    (spec["env"] !== undefined &&
+      (record(spec["env"]) === null ||
+        Object.keys(spec["env"] as Record<string, unknown>).length >
+          MAX_PROGRAM_ENV_ENTRIES ||
+        Object.entries(spec["env"] as Record<string, unknown>).some(
+          ([key, entry]) =>
+            !withinBytes(key, MAX_PROGRAM_ENV_KEY_BYTES) ||
+            typeof entry !== "string" ||
+            !withinBytes(entry, MAX_PROGRAM_ENV_VALUE_BYTES),
+        ) ||
+        Object.entries(spec["env"] as Record<string, unknown>).reduce(
+          (total, [key, entry]) =>
+            total +
+            utf8Bytes(key) +
+            (typeof entry === "string" ? utf8Bytes(entry) : 0),
+          0,
+        ) > MAX_PROGRAM_ENV_BYTES)) ||
+    (spec["timeoutMs"] !== undefined &&
+      (!finiteNumber(spec["timeoutMs"]) ||
+        spec["timeoutMs"] <= 0 ||
+        spec["timeoutMs"] > MAX_PROGRAM_TIMEOUT_MS)) ||
+    (spec["maxOutputBytes"] !== undefined &&
+      (!Number.isSafeInteger(spec["maxOutputBytes"]) ||
+        (spec["maxOutputBytes"] as number) < 256 ||
+        (spec["maxOutputBytes"] as number) > 1024 * 1024))
+  )
+    return false;
+  return true;
+}
+
+function isMatch(value: unknown): boolean {
+  const match = record(value);
+  if (
+    match === null ||
+    !exactKeys(match, MATCH_KEYS) ||
+    match["field"] !== "completedItemText" ||
+    !string(match["regex"], MAX_PROGRAM_MATCH_REGEX_BYTES) ||
+    (match["flags"] !== undefined &&
+      !string(match["flags"], MAX_PROGRAM_FLAGS_BYTES))
+  )
+    return false;
+  try {
+    new RegExp(match["regex"] as string, (match["flags"] as string) ?? "u");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isProgramOutcome(value: unknown): value is TriggerProgramOutcome {
+  const outcome = record(value);
+  return (
+    outcome !== null &&
+    exactKeys(outcome, OUTCOME_KEYS) &&
+    (outcome["stage"] === "predicate" || outcome["stage"] === "action") &&
+    programStatus(outcome["status"]) &&
+    string(outcome["invocationId"], MAX_ID_BYTES) &&
+    nullableString(outcome["output"], 8_000) &&
+    nullableNumber(outcome["exitCode"]) &&
+    nullableString(outcome["error"], MAX_ERROR_BYTES)
   );
 }
 
@@ -192,10 +704,11 @@ function isRoom(value: unknown): value is ZenXRoom {
   const room = record(value);
   if (
     room === null ||
-    !string(room["id"]) ||
-    !string(room["name"]) ||
-    !arrayOf(room["members"], isRoomMember) ||
-    !arrayOf(room["messages"], isRoomMessage) ||
+    !exactKeys(room, ROOM_KEYS) ||
+    !string(room["id"], MAX_ID_BYTES) ||
+    !string(room["name"], MAX_ROOM_NAME_BYTES) ||
+    !arrayOf(room["members"], isRoomMember, MAX_ROOM_MEMBERS) ||
+    !arrayOf(room["messages"], isRoomMessage, MAX_ROOM_MESSAGES) ||
     !finiteNumber(room["createdAt"])
   )
     return false;
@@ -213,7 +726,10 @@ function isRoom(value: unknown): value is ZenXRoom {
 function isRoomMember(value: unknown): value is RoomMember {
   const member = record(value);
   return (
-    member !== null && string(member["name"]) && string(member["threadId"])
+    member !== null &&
+    exactKeys(member, MEMBER_KEYS) &&
+    string(member["name"], MAX_MEMBER_NAME_BYTES) &&
+    string(member["threadId"], MAX_ID_BYTES)
   );
 }
 
@@ -221,16 +737,17 @@ function isRoomMessage(value: unknown): value is RoomMessage {
   const message = record(value);
   return (
     message !== null &&
-    string(message["id"]) &&
-    string(message["roomId"]) &&
-    string(message["author"]) &&
-    string(message["text"]) &&
+    exactKeys(message, MESSAGE_KEYS) &&
+    string(message["id"], MAX_ID_BYTES) &&
+    string(message["roomId"], MAX_ID_BYTES) &&
+    string(message["author"], MAX_MESSAGE_AUTHOR_BYTES) &&
+    string(message["text"], MAX_MESSAGE_TEXT_BYTES) &&
     finiteNumber(message["createdAt"]) &&
     (message["kind"] === "human" ||
       message["kind"] === "agent" ||
       message["kind"] === "system") &&
-    nullableString(message["originThreadId"]) &&
-    nullableString(message["originTurnId"])
+    nullableString(message["originThreadId"], MAX_ID_BYTES) &&
+    nullableString(message["originTurnId"], MAX_ID_BYTES)
   );
 }
 
@@ -240,19 +757,38 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function exactKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  const keys = new Set(allowed);
+  const actual = Object.keys(value);
+  return actual.every((key) => keys.has(key));
+}
+
 function arrayOf<T>(
   value: unknown,
   predicate: (entry: unknown) => entry is T,
+  maximum?: number,
 ): value is T[] {
-  return Array.isArray(value) && value.every(predicate);
+  return (
+    Array.isArray(value) &&
+    (maximum === undefined || value.length <= maximum) &&
+    value.every(predicate)
+  );
 }
 
-function string(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+function string(value: unknown, maximum = MAX_ID_BYTES): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && withinBytes(value, maximum)
+  );
 }
 
-function nullableString(value: unknown): value is string | null {
-  return value === null || string(value);
+function nullableString(
+  value: unknown,
+  maximum = MAX_ID_BYTES,
+): value is string | null {
+  return value === null || string(value, maximum);
 }
 
 function finiteNumber(value: unknown): value is number {
@@ -278,5 +814,22 @@ function historyStatus(value: unknown): value is TriggerHistoryEntry["status"] {
     value === "running" ||
     value === "completed" ||
     value === "failed"
+  );
+}
+
+function programStatus(
+  value: unknown,
+): value is TriggerProgramOutcome["status"] {
+  return (
+    value === "matched" ||
+    value === "non_match" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled" ||
+    value === "timed_out" ||
+    value === "nonzero_exit" ||
+    value === "malformed_output" ||
+    value === "oversized_output" ||
+    value === "uncertain"
   );
 }
