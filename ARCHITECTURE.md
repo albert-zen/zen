@@ -149,6 +149,9 @@
   domain/root 健康后才可成功，不能返回一个其 `snapshot` 已不可用的 coordinator。
 - **ZenXThreadTitleNotificationObserver** — ZenX 主进程在 App Server canonical
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
+- **ZenXJournalCompatibilityService** — ZenX 主进程按当前 JSONL journal loader 的
+  内容与格式投影当前、已知 legacy 与未知候选，并只把无有用内容的已知 legacy
+  journal 移入 `~/.zen` 内的可恢复 quarantine，不改变 Thread 语义。
 - **ZenXTriggerLifecycleGeneration** — Trigger 服务把定时器、瞬态完成证据、唤醒 admission
   与取消句柄绑定到一次可退休的进程内代数；迟到异步结果只能观察其创建代数，不能修改新代数或
   重新占用已释放的唤醒名额。
