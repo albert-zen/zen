@@ -55,6 +55,24 @@ test("CDP lifecycle contract invalidates history, reload, activation, and top-fr
   );
 });
 
+test("attached document acquisition enables Runtime before reading the frame tree", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    await connection.backend.inspect("work", "target-1");
+    const methods = cdp.methods();
+    assert.ok(
+      methods.indexOf("Runtime.enable") > methods.indexOf("Page.enable"),
+    );
+    assert.ok(
+      methods.indexOf("Runtime.enable") < methods.indexOf("Page.getFrameTree"),
+    );
+  } finally {
+    await cdp.close();
+  }
+});
+
 test("user browser mode inherits visible authenticated state without exposing session material", async () => {
   const client = new FakeUserBrowserClient();
   const backend = new UserBrowserCdpBackend(client);
@@ -1183,21 +1201,22 @@ test("attach timeout remains owned and makes session and backend close honest", 
   }
 });
 
-test("known attach and Page.enable failures remain retryable without taint", async () => {
-  for (const failure of ["attach", "enable"] as const) {
+test("known attach Page.enable and Runtime.enable failures remain retryable without taint", async () => {
+  for (const failure of ["attach", "page-enable", "runtime-enable"] as const) {
     const cdp = await createFakeCdpServer();
     try {
       const connection = await connectUserBrowserCdp(cdp.endpoint);
       await connection.backend.listTabs("work");
       if (failure === "attach") cdp.failNextAttachReply();
-      else cdp.failNextEnableReply();
+      else if (failure === "page-enable") cdp.failNextEnableReply();
+      else cdp.failNextRuntimeEnableReply();
       await assert.rejects(
         connection.backend.inspect("work", "target-1"),
         /command failed/u,
       );
       assert.equal(
         cdp.count("Target.detachFromTarget"),
-        failure === "enable" ? 1 : 0,
+        failure === "attach" ? 0 : 1,
       );
       await connection.backend.inspect("work", "target-1");
       assert.equal(await connection.backend.closeSession("work"), 1);
@@ -1417,6 +1436,27 @@ test("Page.enable timeout compensates detach and failed compensation taints clos
     } finally {
       await cdp.close();
     }
+  }
+});
+
+test("Runtime.enable timeout is attachment-owned and dispatches no page code", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    cdp.dropNextRuntimeEnableReply();
+    await assert.rejects(
+      connection.backend.inspect("work", "target-1"),
+      /Runtime.enable outcome is unknown|document changed/u,
+    );
+    assert.equal(cdp.count("Runtime.evaluate"), 0);
+    assert.equal(cdp.count("Target.detachFromTarget"), 1);
+    await assert.rejects(
+      async () => await connection.backend.closeSession("work"),
+      /outcome is unknown|tainted/u,
+    );
+  } finally {
+    await cdp.close();
   }
 });
 
@@ -1656,20 +1696,21 @@ test("vanished target detach uncertainty transfers through list cleanup", async 
 });
 
 test("known attach or setup failure before navigate does not poison cleanup", async () => {
-  for (const failure of ["attach", "enable"] as const) {
+  for (const failure of ["attach", "page-enable", "runtime-enable"] as const) {
     const cdp = await createFakeCdpServer();
     try {
       const connection = await connectUserBrowserCdp(cdp.endpoint);
       await connection.backend.listTabs("work");
       if (failure === "attach") cdp.failNextAttachReply();
-      else cdp.failNextEnableReply();
+      else if (failure === "page-enable") cdp.failNextEnableReply();
+      else cdp.failNextRuntimeEnableReply();
       await assert.rejects(
         connection.backend.navigate(
           "work",
           "target-1",
           "https://example.test/known-failure",
         ),
-        /known attach failure|known enable failure|command failed/u,
+        /known attach failure|known enable failure|known Runtime.enable failure|command failed/u,
       );
       assert.equal(cdp.count("Page.navigate"), 0);
       assert.equal(await connection.backend.closeSession("work"), 1);
@@ -1681,7 +1722,7 @@ test("known attach or setup failure before navigate does not poison cleanup", as
 });
 
 test("known reattach or setup failure before action does not poison cleanup", async () => {
-  for (const failure of ["attach", "enable"] as const) {
+  for (const failure of ["attach", "page-enable", "runtime-enable"] as const) {
     const cdp = await createFakeCdpServer();
     try {
       const connection = await connectUserBrowserCdp(cdp.endpoint);
@@ -1695,7 +1736,8 @@ test("known reattach or setup failure before action does not poison cleanup", as
       // the same ordered CDP connection before exercising the reattach path.
       await connection.backend.listTabs("work");
       if (failure === "attach") cdp.failNextAttachReply();
-      else cdp.failNextEnableReply();
+      else if (failure === "page-enable") cdp.failNextEnableReply();
+      else cdp.failNextRuntimeEnableReply();
       await assert.rejects(
         connection.backend.click(
           "work",
@@ -1703,7 +1745,7 @@ test("known reattach or setup failure before action does not poison cleanup", as
           inspection.observationId,
           target.targetId,
         ),
-        /known attach failure|known enable failure|command failed/u,
+        /known attach failure|known enable failure|known Runtime.enable failure|command failed/u,
       );
       assert.equal(cdp.count("Runtime.evaluate"), evaluationsBefore);
       assert.equal(await connection.backend.closeSession("work"), 1);
@@ -2830,6 +2872,7 @@ async function close(server: ReturnType<typeof createServer>): Promise<void> {
 async function createFakeCdpServer(): Promise<{
   endpoint: string;
   count(method: string): number;
+  methods(): string[];
   requests(method: string): Record<string, unknown>[];
   invalidateActionAt(
     phase: "evaluate" | "confirmation",
@@ -2860,6 +2903,8 @@ async function createFakeCdpServer(): Promise<{
   confirmationResponseSent(): boolean;
   dropNextEnableReply(): void;
   failNextEnableReply(): void;
+  dropNextRuntimeEnableReply(): void;
+  failNextRuntimeEnableReply(): void;
   dropNextDetachReply(): void;
   dropDetachReplies(count: number): void;
   detachSession(): void;
@@ -2881,6 +2926,7 @@ async function createFakeCdpServer(): Promise<{
   const targets = new Map([["target-1", "https://example.test/account"]]);
   const sessionContexts = new Map<string, number>();
   const sessionTargets = new Map<string, string>();
+  const runtimeEnabledSessions = new Set<string>();
   const detachedSessionIds: string[] = [];
   let nextSession = 1;
   let latestSession = "";
@@ -2916,6 +2962,8 @@ async function createFakeCdpServer(): Promise<{
   const heldConfirmationStarted = deferred<void>();
   let dropEnableReply = false;
   let failEnableReply = false;
+  let dropRuntimeEnableReply = false;
+  let failRuntimeEnableReply = false;
   let dropDetachReplyCount = 0;
   let lateAttachReply:
     | {
@@ -3056,6 +3104,22 @@ async function createFakeCdpServer(): Promise<{
           dropEnableReply = false;
           return;
         }
+      } else if (request.method === "Runtime.enable") {
+        if (failRuntimeEnableReply) {
+          failRuntimeEnableReply = false;
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              error: { message: "known Runtime.enable failure" },
+            }),
+          );
+          return;
+        }
+        if (dropRuntimeEnableReply) {
+          dropRuntimeEnableReply = false;
+          return;
+        }
+        runtimeEnabledSessions.add(request.sessionId ?? "");
       } else if (request.method === "Page.getFrameTree") {
         result = {
           frameTree: {
@@ -3069,13 +3133,23 @@ async function createFakeCdpServer(): Promise<{
         if (setupInvalidation?.phase === "before-frame-tree-response") {
           const invalidation = setupInvalidation;
           setupInvalidation = undefined;
-          emitSetupInvalidation(socket, request.sessionId, invalidation.event);
+          emitSetupInvalidation(
+            socket,
+            request.sessionId,
+            invalidation.event,
+            runtimeEnabledSessions,
+          );
         }
         if (setupInvalidation?.phase === "after-frame-tree") {
           const invalidation = setupInvalidation;
           setupInvalidation = undefined;
           socket.send(JSON.stringify({ id: request.id, result }));
-          emitSetupInvalidation(socket, request.sessionId, invalidation.event);
+          emitSetupInvalidation(
+            socket,
+            request.sessionId,
+            invalidation.event,
+            runtimeEnabledSessions,
+          );
           return;
         }
       } else if (request.method === "Page.createIsolatedWorld") {
@@ -3090,7 +3164,12 @@ async function createFakeCdpServer(): Promise<{
           const invalidation = setupInvalidation;
           setupInvalidation = undefined;
           socket.send(JSON.stringify({ id: request.id, result }));
-          emitSetupInvalidation(socket, request.sessionId, invalidation.event);
+          emitSetupInvalidation(
+            socket,
+            request.sessionId,
+            invalidation.event,
+            runtimeEnabledSessions,
+          );
           return;
         }
       } else if (request.method === "Runtime.evaluate") {
@@ -3103,13 +3182,18 @@ async function createFakeCdpServer(): Promise<{
         ) {
           const invalidation = actionInvalidation;
           actionInvalidation = undefined;
-          socket.send(
-            JSON.stringify({
-              method: invalidation.event.method,
-              sessionId: request.sessionId,
-              params: invalidation.event.params,
-            }),
-          );
+          if (
+            !invalidation.event.method.startsWith("Runtime.") ||
+            runtimeEnabledSessions.has(request.sessionId ?? "")
+          ) {
+            socket.send(
+              JSON.stringify({
+                method: invalidation.event.method,
+                sessionId: request.sessionId,
+                params: invalidation.event.params,
+              }),
+            );
+          }
         }
         result = {
           result: {
@@ -3171,6 +3255,7 @@ async function createFakeCdpServer(): Promise<{
     endpoint,
     count: (method) =>
       methods.filter((candidate) => candidate === method).length,
+    methods: () => [...methods],
     requests: (method) =>
       requests
         .filter((candidate) => candidate.method === method)
@@ -3265,6 +3350,12 @@ async function createFakeCdpServer(): Promise<{
     failNextEnableReply: () => {
       failEnableReply = true;
     },
+    dropNextRuntimeEnableReply: () => {
+      dropRuntimeEnableReply = true;
+    },
+    failNextRuntimeEnableReply: () => {
+      failRuntimeEnableReply = true;
+    },
     dropNextDetachReply: () => {
       dropDetachReplyCount += 1;
     },
@@ -3346,6 +3437,7 @@ function emitSetupInvalidation(
   socket: WebSocket,
   sessionId: string | undefined,
   event: { method: string; params: Record<string, unknown> },
+  runtimeEnabledSessions: ReadonlySet<string>,
 ): void {
   if (event.method === "__disconnect") {
     socket.terminate();
@@ -3358,6 +3450,12 @@ function emitSetupInvalidation(
         params: { ...event.params, sessionId },
       }),
     );
+    return;
+  }
+  if (
+    event.method.startsWith("Runtime.") &&
+    !runtimeEnabledSessions.has(sessionId ?? "")
+  ) {
     return;
   }
   socket.send(JSON.stringify({ ...event, sessionId }));

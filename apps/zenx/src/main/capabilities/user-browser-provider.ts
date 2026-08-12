@@ -39,8 +39,11 @@ interface UserBrowserAttachmentEpoch extends UserBrowserAttachmentOwner {
   attachAttempt: number;
   attach: UserBrowserCdpOutcome;
   enable: UserBrowserCdpOutcome;
+  runtimeEnable: UserBrowserCdpOutcome;
   detach: UserBrowserCdpOutcome;
-  unknownEvidence: Partial<Record<"attach" | "enable" | "detach", string>>;
+  unknownEvidence: Partial<
+    Record<"attach" | "enable" | "runtimeEnable" | "detach", string>
+  >;
   lifecycleEvidence: string[];
   taint?: string;
   unsettledMutation?: string;
@@ -2073,28 +2076,19 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         invalidExecutionContextIds: new Set(),
         pendingIsolatedContexts: new Map(),
       });
-      try {
-        await this.#send("Page.enable", {}, response.sessionId, signal);
-        attachmentClosure.enable = "known-success";
-        return response.sessionId;
-      } catch (error) {
-        attachmentClosure.enable =
-          error instanceof UserBrowserCdpOutcomeUnknownError
-            ? "outcome-unknown"
-            : "known-failure";
-        if (attachmentClosure.enable === "outcome-unknown") {
-          attachmentClosure.unknownEvidence.enable = describeError(error);
-        }
-        try {
-          await this.#compensateAttachment(
-            attachmentClosure,
-            response.sessionId,
-          );
-        } catch (compensationError) {
-          attachmentClosure.taint = `Page.enable closure failed (${describeError(error)}; ${describeError(compensationError)})`;
-        }
-        throw error;
-      }
+      await this.#enableAttachmentDomain(
+        attachmentClosure,
+        response.sessionId,
+        "Page.enable",
+        signal,
+      );
+      await this.#enableAttachmentDomain(
+        attachmentClosure,
+        response.sessionId,
+        "Runtime.enable",
+        signal,
+      );
+      return response.sessionId;
     })();
     attachment.promise = attaching;
     this.#targetAttachments.set(targetId, attachment);
@@ -2104,6 +2098,58 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       if (this.#targetAttachments.get(targetId) === attachment) {
         this.#targetAttachments.delete(targetId);
       }
+    }
+  }
+
+  async #enableAttachmentDomain(
+    epoch: UserBrowserAttachmentEpoch,
+    sessionId: string,
+    method: "Page.enable" | "Runtime.enable",
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const outcome = method === "Page.enable" ? "enable" : "runtimeEnable";
+    try {
+      await this.#send(method, {}, sessionId, signal);
+      epoch[outcome] = "known-success";
+      this.#assertAttachmentSetupCurrent(epoch, sessionId, method);
+    } catch (error) {
+      if (epoch[outcome] !== "known-success") {
+        epoch[outcome] =
+          error instanceof UserBrowserCdpOutcomeUnknownError
+            ? "outcome-unknown"
+            : "known-failure";
+        if (epoch[outcome] === "outcome-unknown") {
+          epoch.unknownEvidence[outcome] = describeError(error);
+        }
+      }
+      try {
+        await this.#compensateAttachment(epoch, sessionId);
+      } catch (compensationError) {
+        epoch.taint = `${method} closure failed (${describeError(error)}; ${describeError(compensationError)})`;
+      }
+      throw error;
+    }
+  }
+
+  #assertAttachmentSetupCurrent(
+    epoch: UserBrowserAttachmentEpoch,
+    sessionId: string,
+    method: string,
+  ): void {
+    const attachment = this.#targetAttachments.get(epoch.targetId);
+    const document = this.#targetDocuments.get(epoch.targetId);
+    if (
+      this.#closed ||
+      this.#attachmentClosures.get(epoch.targetId) !== epoch ||
+      this.#targetSessions.get(epoch.targetId) !== sessionId ||
+      this.#sessionTargets.get(sessionId) !== epoch.targetId ||
+      this.#sessionEpochs.get(sessionId) !== epoch ||
+      attachment?.epoch !== epoch ||
+      attachment.invalidated ||
+      document === undefined ||
+      document.alive === false
+    ) {
+      throw new Error(`User browser target changed during ${method} setup`);
     }
   }
 
@@ -2126,6 +2172,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       attachAttempt: this.#nextAttachAttempt++,
       attach: "known-failure",
       enable: "known-failure",
+      runtimeEnable: "known-failure",
       detach: "known-failure",
       unknownEvidence: {},
       lifecycleEvidence: [],

@@ -170,6 +170,10 @@ try {
   );
   const detached = await backend.closeSession("windows-smoke");
   await backend.close();
+  const runtimeContextEventsObserved = await probeRuntimeContextEvents(
+    endpoint,
+    account.tabId,
+  );
   const foregroundAfterClose = foregroundWindowHandle();
   const targetsAfterClose = await browserTargetSnapshot(
     endpoint,
@@ -214,6 +218,7 @@ try {
       inheritedAuthenticatedState: true,
       agentReceivedSessionMaterial: false,
       browserAndTabsSurvivedDetach: true,
+      runtimeContextEventsObserved,
       providerOpenPreservedForegroundWindow: true,
       providerClosePreservedForegroundWindow: true,
       activeTargetBeforeOpen: targetsBeforeOpen.activeTargetId,
@@ -385,6 +390,128 @@ async function activateBrowserTarget(
   );
 }
 
+async function probeRuntimeContextEvents(
+  endpoint: string,
+  targetId: string,
+): Promise<number> {
+  const version = (await (
+    await fetch(`${endpoint}/json/version`, {
+      signal: AbortSignal.timeout(5_000),
+      redirect: "error",
+    })
+  ).json()) as { webSocketDebuggerUrl?: unknown };
+  assert.equal(
+    typeof version.webSocketDebuggerUrl,
+    "string",
+    "Expected the real browser websocket endpoint",
+  );
+  const socket = new WebSocket(version.webSocketDebuggerUrl as string, {
+    handshakeTimeout: 5_000,
+  });
+  const pending = new Map<
+    number,
+    {
+      resolve(value: Record<string, unknown>): void;
+      reject(error: Error): void;
+    }
+  >();
+  let nextId = 1;
+  let sessionId = "";
+  let contextEvents = 0;
+  const firstContextEvent = deferred<void>();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.on("message", (raw: RawData) => {
+      const message = JSON.parse(raw.toString()) as Record<string, unknown>;
+      if (
+        message.sessionId === sessionId &&
+        (message.method === "Runtime.executionContextCreated" ||
+          message.method === "Runtime.executionContextDestroyed" ||
+          message.method === "Runtime.executionContextsCleared")
+      ) {
+        contextEvents += 1;
+        firstContextEvent.resolve();
+      }
+      if (typeof message.id !== "number") return;
+      const request = pending.get(message.id);
+      if (request === undefined) return;
+      pending.delete(message.id);
+      if (message.error !== undefined) {
+        request.reject(new Error("Runtime lifecycle probe command failed"));
+      } else {
+        request.resolve(message);
+      }
+    });
+    const send = async (
+      method: string,
+      params: Record<string, unknown>,
+      attachedSessionId?: string,
+    ): Promise<Record<string, unknown>> => {
+      const id = nextId++;
+      return await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error(`${method} lifecycle probe command timed out`));
+        }, 5_000);
+        pending.set(id, {
+          resolve: (value) => {
+            clearTimeout(timeout);
+            resolve(value);
+          },
+          reject: (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          },
+        });
+        socket.send(
+          JSON.stringify({
+            id,
+            method,
+            params,
+            ...(attachedSessionId === undefined
+              ? {}
+              : { sessionId: attachedSessionId }),
+          }),
+        );
+      });
+    };
+    const attached = await send("Target.attachToTarget", {
+      targetId,
+      flatten: true,
+    });
+    const result = attached.result as { sessionId?: unknown } | undefined;
+    const attachedSessionId = result?.sessionId;
+    assert.equal(
+      typeof attachedSessionId,
+      "string",
+      "Expected a real attached CDP session",
+    );
+    sessionId = attachedSessionId as string;
+    await send("Runtime.enable", {}, sessionId);
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("Runtime context event was not observed")),
+        5_000,
+      );
+      void firstContextEvent.promise.then(() => {
+        clearTimeout(timeout);
+        resolve();
+      }, reject);
+    });
+    await send("Target.detachFromTarget", { sessionId });
+    assert.ok(
+      contextEvents > 0,
+      "Runtime.enable must expose real execution-context lifecycle events",
+    );
+    return contextEvents;
+  } finally {
+    socket.close();
+  }
+}
+
 async function sendCdpCommand(
   webSocketDebuggerUrl: string,
   method: string,
@@ -424,6 +551,17 @@ async function sendCdpCommand(
   } finally {
     socket.close();
   }
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 async function findBrowserExecutable(): Promise<string> {

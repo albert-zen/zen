@@ -83,8 +83,9 @@
   owner；它不进入 Zen Core、durable journal，也绝不取得关闭用户 target 或 profile 的权限。
 - **ZenXUserBrowserDocumentExecutionFence** — ZenX user-browser provider 把 target、精确 attachment epoch/session、逻辑
   session owner/incarnation、main-frame loader/url/revision、isolated execution context 与 provider revision 绑定为一次
-  瞬时且 fail-closed 的 acquire→dispatch fence，并在每个 awaited setup 步骤后及发送 page code 前按有序 CDP 事件流
-  原子重验；它不进入 Zen Core 或 durable journal，且 mutation 已发送后的失效继续使用 outcome-unknown/taint 与 lease 语义。
+  瞬时且 fail-closed 的 acquire→dispatch fence，先把 Page/Runtime domain enable 作为精确 attachment setup barrier，
+  再在每个 awaited setup 步骤后及发送 page code 前按有序 CDP 事件流原子重验；它不进入 Zen Core 或 durable journal，
+  且 mutation 已发送后的失效继续使用 outcome-unknown/taint 与 lease 语义。
 - **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA/WGC JSON
   投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
