@@ -389,6 +389,7 @@ export async function selectComputerProvider(
     const backend = new WinAppCliComputerBackend({
       command,
       runner: options.winAppRunner,
+      platform,
       expectedVersion: bundled?.provider?.version,
       ...(bundled?.provider === undefined
         ? {}
