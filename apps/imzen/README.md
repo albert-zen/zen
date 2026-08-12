@@ -2,8 +2,8 @@
 
 IMZen is a thin Python client of the Zen App Server. It composes the IM Agent
 SDK through its public v1 surfaces at canonical commit
-`a03f3eab218d0088192f177265b5eebfc87c2e60` (acceptance wheel SHA-256
-`1616b1079248da279068c47c4ea047dab0b4d5aefb129aa3e22017140c2831f4`); it does not implement a second
+`a72b24a2558c8b2aa48b05214588da4fc1a434db` (acceptance wheel SHA-256
+`e160c31dd5661c9b419193c9ad3ddb1deb676949fc4a730ed36c65710885572d`); it does not implement a second
 Gateway, Channel runtime, Agent backend, transcript, scheduler, or recovery
 state machine.
 
@@ -127,7 +127,7 @@ Markdown Agent output is delivered unchanged.
 ## SDK migration dependency
 
 The pin is the exact canonical SDK commit
-`a03f3eab218d0088192f177265b5eebfc87c2e60`, mechanically validated against
+`a72b24a2558c8b2aa48b05214588da4fc1a434db`, mechanically validated against
 the acceptance wheel named above. IMZen composes immutable public Gateway and
 extension groups. It configures only I1
 inbound content transformation, I2 classified failure presentation, and request

@@ -61,8 +61,8 @@ IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它
   新建 durable queue、outbox 或自我修复状态机。
 
 SDK 依赖固定在 `im-agent-sdk` canonical 提交
-`a03f3eab218d0088192f177265b5eebfc87c2e60`，并以验收 wheel
-`1616b1079248da279068c47c4ea047dab0b4d5aefb129aa3e22017140c2831f4` 机械校验。
+`a72b24a2558c8b2aa48b05214588da4fc1a434db`，并以验收 wheel
+`e160c31dd5661c9b419193c9ad3ddb1deb676949fc4a730ed36c65710885572d` 机械校验。
 IMZen 只配置它实际使用的 public v1 强类型
 I1 inbound content transformer、I2 classified failure presenter 与 request
 presenter；其他扩展位置缺席，因此保持 SDK 默认行为。
