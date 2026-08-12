@@ -306,6 +306,43 @@ test("keeps the newest browser screenshot projection when inspections finish out
   assert.equal(registry.snapshot().currentScreenshot, undefined);
 });
 
+test("transient capability reset clears browser projection without changing grants or audit", async () => {
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+  );
+  await registry.initialize();
+  const browserManifest = structuredClone(manifest);
+  browserManifest.id = "browser";
+  browserManifest.tools = [
+    { ...browserManifest.tools[0]!, name: "browser_inspect" },
+  ];
+  registry.register({
+    manifest: browserManifest,
+    invoke: async () => ({
+      screenshot: {
+        artifactPath: "/tmp/restart.png",
+        observationId: "restart-observation",
+        status: "captured",
+        width: 1,
+        height: 1,
+        bytes: 68,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    }),
+  });
+  await registry.grant("browser", ["fixture.read"]);
+  await registry.execute(invocation("browser_inspect", {}));
+  const before = registry.snapshot();
+  await registry.resetTransient();
+  const after = registry.snapshot();
+  assert.equal(after.currentScreenshot, undefined);
+  assert.deepEqual(
+    after.capabilities[0]?.granted,
+    before.capabilities[0]?.granted,
+  );
+  assert.equal(after.recentInvocations.length, before.recentInvocations.length);
+});
+
 function packageFixture(
   invoke: ZenXCapabilityPackage["invoke"],
 ): ZenXCapabilityPackage {

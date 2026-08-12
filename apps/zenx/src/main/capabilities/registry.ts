@@ -323,6 +323,11 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     }
   }
 
+  async resetTransient(): Promise<void> {
+    this.#clearBrowserProjection();
+    this.#emit();
+  }
+
   async #executeProvider(invocation: ToolInvocation): Promise<{
     value: unknown;
     maxOutputBytes: number;

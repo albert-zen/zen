@@ -187,6 +187,11 @@ app.whenReady().then(async () => {
       selfControlPort.attach(appServerManager, hostConfig.cwd);
       const restartErrors: Error[] = [];
       try {
+        await capabilityService?.resetTransient();
+      } catch (error) {
+        restartErrors.push(normalizeTitleOwnershipFailure(error));
+      }
+      try {
         await titleCoordinator?.stop();
       } catch (error) {
         restartErrors.push(normalizeTitleOwnershipFailure(error));

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -51,4 +54,21 @@ test("parses only the Node entry from a standard Windows npm command shim", () =
     parseWindowsNpmShimEntry("@ECHO off\r\nunknown %*\r\n"),
     undefined,
   );
+});
+
+test("bundled runtime execution never consults PATH", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-runtime-runner-"));
+  try {
+    const script = path.join(root, "provider.js");
+    await writeFile(script, "console.log(JSON.stringify({ bundled: true }))\n");
+    const runner = new SystemExternalProviderProcessRunner();
+    const result = await runner.run(script, [], {
+      timeoutMs: 5_000,
+      runtimeExecutable: process.execPath,
+      maxOutputBytes: 1024,
+    });
+    assert.equal(result.stdout.trim(), JSON.stringify({ bundled: true }));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

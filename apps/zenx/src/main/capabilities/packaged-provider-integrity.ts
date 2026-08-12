@@ -5,4 +5,4 @@
  * the same signed source change; an invalid anchor leaves providers offline.
  */
 export const PACKAGED_PROVIDER_MANIFEST_SHA256 =
-  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";

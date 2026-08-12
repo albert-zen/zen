@@ -170,6 +170,55 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     await this.#registry.unregister(capabilityId);
   }
 
+  async resetTransient(): Promise<void> {
+    await this.#registry.resetTransient();
+    if (
+      this.#browserBackend !== undefined ||
+      this.#computerBackend !== undefined
+    ) {
+      return;
+    }
+    await this.#registry.unregister("browser");
+    await this.#registry.unregister("computer");
+    this.#computerRegistered = false;
+    const browser = await selectBrowserProvider({
+      userDataDirectory: this.#userDataDirectory,
+      bundledProvidersOnly: this.#bundledProvidersOnly,
+      resourcesDirectory: this.#resourcesDirectory,
+      bundledManifestSha256: this.#bundledManifestSha256,
+    });
+    if (browser.backend !== undefined) {
+      this.#registry.register(
+        new BrowserZenXCapabilityPackage(browser.backend, browser.manifest),
+        "bundled",
+      );
+    }
+    for (const diagnostic of browser.diagnostics) {
+      this.#registry.recordProviderDiagnostic(diagnostic);
+    }
+    if (browser.backend === undefined) {
+      this.#registry.recordDiscoveryError(
+        `Browser provider: ${browser.diagnostics[0]?.reason ?? "unavailable"}`,
+      );
+    }
+    const computer = await selectComputerProvider({
+      userDataDirectory: this.#userDataDirectory,
+      bundledProvidersOnly: this.#bundledProvidersOnly,
+      resourcesDirectory: this.#resourcesDirectory,
+      bundledManifestSha256: this.#bundledManifestSha256,
+    });
+    if (computer.backend !== undefined) {
+      this.#registry.register(
+        new ComputerZenXCapabilityPackage(computer.backend, computer.manifest),
+        "bundled",
+      );
+      this.#computerRegistered = true;
+    }
+    for (const diagnostic of computer.diagnostics) {
+      this.#registry.recordProviderDiagnostic(diagnostic);
+    }
+  }
+
   hostSnapshot(): ZenXCapabilityHostSnapshot {
     return this.#registry.hostSnapshot();
   }

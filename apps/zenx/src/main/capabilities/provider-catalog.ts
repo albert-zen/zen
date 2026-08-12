@@ -20,6 +20,7 @@ import {
 import { PeekabooComputerBackend } from "./peekaboo-computer-provider.js";
 import { PlaywrightCliBrowserBackend } from "./playwright-browser-provider.js";
 import {
+  bindBundledProviderLaunch,
   resolveBundledProvider,
   verifyBundledProvider,
 } from "./provider-provisioning.js";
@@ -169,11 +170,13 @@ export async function selectBrowserProvider(
             reason:
               "Packaged Playwright provider manifest trust anchor is missing",
           }
-        : await resolveBundledProvider("playwright-cli", {
-            resourcesDirectory: options.resourcesDirectory,
-            platform,
-            expectedManifestSha256: options.bundledManifestSha256,
-          })
+        : requireBundledRuntime(
+            await resolveBundledProvider("playwright-cli", {
+              resourcesDirectory: options.resourcesDirectory,
+              platform,
+              expectedManifestSha256: options.bundledManifestSha256,
+            }),
+          )
       : undefined;
   if (
     options.bundledProvidersOnly === true &&
@@ -224,11 +227,30 @@ export async function selectBrowserProvider(
       ],
     };
   }
+  const bundledVerify =
+    bundled?.provider === undefined
+      ? undefined
+      : async () =>
+          await verifyBundledProvider(bundled.provider!, {
+            resourcesDirectory: options.resourcesDirectory!,
+            platform,
+          });
+  const bundledBind =
+    bundled?.provider === undefined
+      ? undefined
+      : async () =>
+          await bindBundledProviderLaunch(bundled.provider!, {
+            resourcesDirectory: options.resourcesDirectory!,
+            platform,
+          });
   try {
     const version = await probePlaywrightCli(
       executable,
       runner,
       bundled?.provider?.version,
+      bundled?.provider?.runtime?.path,
+      bundledBind,
+      bundledVerify,
     );
     const playwrightDirectory = path.join(
       options.userDataDirectory,
@@ -243,11 +265,9 @@ export async function selectBrowserProvider(
         ...(bundled?.provider === undefined
           ? {}
           : {
-              verifyExecutable: async () =>
-                await verifyBundledProvider(bundled.provider!, {
-                  resourcesDirectory: options.resourcesDirectory!,
-                  platform,
-                }),
+              runtimeExecutable: bundled.provider.runtime?.path,
+              bindBeforeSpawn: bundledBind,
+              verifyExecutable: bundledVerify,
             }),
       }),
       manifest: playwrightBrowserManifest(),
@@ -363,11 +383,13 @@ export async function selectComputerProvider(
               reason:
                 "Packaged WinApp provider manifest trust anchor is missing",
             }
-          : await resolveBundledProvider("microsoft-winapp-cli", {
-              resourcesDirectory: options.resourcesDirectory,
-              platform,
-              expectedManifestSha256: options.bundledManifestSha256,
-            })
+          : requireBundledRuntime(
+              await resolveBundledProvider("microsoft-winapp-cli", {
+                resourcesDirectory: options.resourcesDirectory,
+                platform,
+                expectedManifestSha256: options.bundledManifestSha256,
+              }),
+            )
         : undefined;
     const command =
       bundled?.provider?.executable ??
@@ -394,6 +416,12 @@ export async function selectComputerProvider(
       ...(bundled?.provider === undefined
         ? {}
         : {
+            runtimeExecutable: bundled.provider.runtime?.path,
+            bindBeforeSpawn: async () =>
+              await bindBundledProviderLaunch(bundled.provider!, {
+                resourcesDirectory: options.resourcesDirectory!,
+                platform,
+              }),
             verifyExecutable: async () =>
               await verifyBundledProvider(bundled.provider!, {
                 resourcesDirectory: options.resourcesDirectory!,
@@ -531,10 +559,16 @@ export async function probePlaywrightCli(
   executable: string,
   runner: ExternalProviderProcessRunner,
   expectedVersion?: string,
+  runtimeExecutable?: string,
+  bindBeforeSpawn?: () => Promise<() => Promise<void>>,
+  verifyBeforeSpawn?: () => Promise<void>,
 ): Promise<string> {
   const versionResult = await runner.run(executable, ["--json", "--version"], {
     timeoutMs: 5_000,
     maxOutputBytes: 32 * 1024,
+    runtimeExecutable,
+    bindBeforeSpawn,
+    verifyBeforeSpawn,
   });
   const versionEnvelope = parseExternalJson(
     "playwright-cli",
@@ -555,6 +589,9 @@ export async function probePlaywrightCli(
   const listResult = await runner.run(executable, ["--json", "list"], {
     timeoutMs: 5_000,
     maxOutputBytes: 64 * 1024,
+    runtimeExecutable,
+    bindBeforeSpawn,
+    verifyBeforeSpawn,
   });
   const listEnvelope = parseExternalJson("playwright-cli", listResult.stdout);
   if (
@@ -833,4 +870,20 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function requireBundledRuntime<
+  T extends { provider?: { runtime?: unknown }; reason?: string },
+>(resolved: T): T {
+  if (
+    resolved.provider !== undefined &&
+    resolved.provider.runtime === undefined
+  ) {
+    return {
+      ...resolved,
+      provider: undefined,
+      reason: "Bundled provider manifest does not pin its packaged runtime",
+    } as T;
+  }
+  return resolved;
 }

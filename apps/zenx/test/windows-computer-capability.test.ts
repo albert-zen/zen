@@ -349,6 +349,24 @@ test("WinApp process runner enforces cancellation, timeout, and output bounds", 
   controller.abort(new DOMException("stopped", "AbortError"));
   await assert.rejects(cancelled, /stopped/u);
 
+  let bindings = 0;
+  let releases = 0;
+  await runBoundedProcess(
+    process.execPath,
+    ["-e", "process.stdout.write('ok')"],
+    {
+      timeoutMs: 1_000,
+      bindBeforeSpawn: async () => {
+        bindings += 1;
+        return async () => {
+          releases += 1;
+        };
+      },
+    },
+  );
+  assert.equal(bindings, 1);
+  assert.equal(releases, 1);
+
   await assert.rejects(
     runBoundedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
       timeoutMs: 25,

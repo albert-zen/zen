@@ -9,7 +9,10 @@
     "build": "electron-vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false",
     "test": "tsx --test test/**/*.test.ts",
-    "smoke:capabilities": "npm run build && node ./out/main/packaged-provider-smoke.js && electron ./out/main/capability-smoke.js",
+    "smoke:capabilities": "npm run smoke:packaged",
+    "smoke:unit-capabilities": "npm run build && electron ./out/main/capability-smoke.js",
+    "assemble:providers": "node ../../scripts/assemble-zenx-providers.mjs",
+    "smoke:packaged": "npm run build && node ./scripts/package-zenx-portable.mjs",
     "smoke:real": "npm run build && electron ./out/main/real-smoke.js",
     "smoke:windows-computer": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-winapp-smoke.ps1",
     "smoke:windows-user-browser": "tsx src/main/user-browser-smoke.ts",
@@ -22,6 +25,7 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@electron/packager": "^20.3.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",

@@ -151,12 +151,28 @@ test("Playwright cancellation invalidates the session before immediate reuse", a
   await backend.close();
 });
 
+test("Playwright rejects unbounded or multiply-current page state before reconciliation", async () => {
+  const runner = new FakePlaywrightRunner();
+  runner.invalidPages = true;
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  await assert.rejects(
+    backend.open("research", "https://example.com/"),
+    /page state|exactly one page/u,
+  );
+  await backend.close();
+});
+
 class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   readonly calls: string[][] = [];
   url = "https://example.com/";
   tabKey = "__zenx_tab_fixture";
   documentKey = "document-fixture";
   invalidSnapshot = false;
+  invalidPages = false;
   changeIdentity = false;
   abortNextSnapshot = false;
   delayedCloseFinished: Promise<void> = Promise.resolve();
@@ -223,6 +239,18 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
                   tabKey: this.tabKey,
                   documentKey: this.documentKey,
                 },
+                ...(this.invalidPages
+                  ? [
+                      {
+                        index: 1,
+                        title: "Second",
+                        url: this.url,
+                        current: true,
+                        tabKey: "__zenx_tab_second",
+                        documentKey: "document-second",
+                      },
+                    ]
+                  : []),
               ]),
             }
           : {
@@ -235,6 +263,18 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
                   tabKey: this.tabKey,
                   documentKey: this.documentKey,
                 },
+                ...(this.invalidPages
+                  ? [
+                      {
+                        index: 1,
+                        title: "Second",
+                        url: this.url,
+                        current: true,
+                        tabKey: "__zenx_tab_second",
+                        documentKey: "document-second",
+                      },
+                    ]
+                  : []),
               ]),
             };
     } else if (command === "snapshot") {

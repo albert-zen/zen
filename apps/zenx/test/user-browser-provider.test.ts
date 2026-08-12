@@ -615,6 +615,7 @@ test("caller abort after createTarget dispatch does not orphan an untracked targ
   await client.createSettled;
   await nextTurn();
 
+  assert.ok(client.observedSignals.includes(controller.signal));
   assert.equal(await backend.closeSession("work"), 2);
   assert.deepEqual(client.detachedTargets.sort(), ["target-1", "target-2"]);
   assert.deepEqual(client.closedTargets, []);
@@ -2520,6 +2521,7 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
   readonly closedTargets: string[] = [];
   readonly detachedTargets: string[] = [];
   readonly calls: string[] = [];
+  readonly observedSignals: AbortSignal[] = [];
   currentUrl = "https://example.test/account";
   primaryTargetPresent = true;
   documentToken = "document-a";
@@ -2650,7 +2652,8 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     this.#heldAction.reject(error);
   }
 
-  async listTargets() {
+  async listTargets(signal?: AbortSignal) {
+    if (signal !== undefined) this.observedSignals.push(signal);
     this.calls.push("Target.getTargets");
     if (this.listFailureOnce !== undefined) {
       const error = this.listFailureOnce;
@@ -2688,7 +2691,8 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     ];
   }
 
-  async createTarget(url: string) {
+  async createTarget(url: string, signal?: AbortSignal) {
+    if (signal !== undefined) this.observedSignals.push(signal);
     this.calls.push("Target.createTarget");
     this.createdUrl = url;
     const targetId = `target-${String(this.nextCreatedTarget++)}`;
@@ -2710,7 +2714,8 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     return targetId;
   }
 
-  async findTargetsByUrl(url: string) {
+  async findTargetsByUrl(url: string, signal?: AbortSignal) {
+    if (signal !== undefined) this.observedSignals.push(signal);
     if (this.failCreateRecovery) return [];
     return [...this.createdTargets]
       .filter(([, targetUrl]) => targetUrl === url)
@@ -2743,9 +2748,10 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       logicalSessionId: string;
       logicalSessionIncarnation: number;
     },
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
     onDispatched?: () => void,
   ) {
+    if (signal !== undefined) this.observedSignals.push(signal);
     onDispatched?.();
     this.calls.push("Page.navigate");
     this.navigateCount += 1;

@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  constants,
+  lstat,
+  mkdir,
+  open,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { inflateSync } from "node:zlib";
@@ -363,6 +371,7 @@ export const MAX_BROWSER_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 export const BROWSER_SCREENSHOT_TTL_MS = 5 * 60_000;
 export const MAX_BROWSER_SCREENSHOT_ARTIFACTS = 16;
 export const MAX_BROWSER_SCREENSHOT_TOTAL_BYTES = 16 * 1024 * 1024;
+export const MAX_BROWSER_SCREENSHOT_SCOPES = 256;
 const MAX_BROWSER_SCREENSHOT_WIDTH = 4096;
 const MAX_BROWSER_SCREENSHOT_HEIGHT = 4096;
 const MAX_BROWSER_SCREENSHOT_PIXELS = 16 * 1024 * 1024;
@@ -388,6 +397,8 @@ export class BrowserScreenshotArtifactStore {
   #closed = false;
   #totalBytes = 0;
   #operations: Promise<void> = Promise.resolve();
+  #generation = 0;
+  readonly #scopeGenerations = new Map<string, number>();
 
   constructor(directory?: string) {
     this.#rootDirectory =
@@ -406,9 +417,16 @@ export class BrowserScreenshotArtifactStore {
     png: Buffer,
     options: { status?: "captured" | "fallback"; reason?: string } = {},
   ): Promise<BrowserScreenshotArtifact> {
+    const generation = this.#generation;
+    const scopeGeneration = this.#scopeGeneration(scope);
     return await this.#enqueue(async () => {
-      if (this.#closed) {
+      if (this.#closed || generation !== this.#generation) {
         throw new Error("Browser screenshot artifact store is closed");
+      }
+      if (scopeGeneration !== this.#scopeGeneration(scope)) {
+        throw new Error(
+          "Browser screenshot observation scope is no longer current",
+        );
       }
       if (png.byteLength > MAX_BROWSER_SCREENSHOT_BYTES) {
         throw new Error(
@@ -420,6 +438,7 @@ export class BrowserScreenshotArtifactStore {
         await this.#ensureOwnedDirectory();
         this.#directoryCreated = true;
       }
+      await this.#assertOwnedDirectory();
       if (
         png.byteLength > MAX_BROWSER_SCREENSHOT_TOTAL_BYTES ||
         this.#artifacts.size >= MAX_BROWSER_SCREENSHOT_ARTIFACTS ||
@@ -428,8 +447,37 @@ export class BrowserScreenshotArtifactStore {
         await this.#evictFor(png.byteLength);
       }
       const artifactPath = path.join(this.#directory, `${randomUUID()}.png`);
-      await writeFile(artifactPath, png, { mode: 0o600 });
-      if (this.#closed) {
+      if (
+        this.#closed ||
+        generation !== this.#generation ||
+        scopeGeneration !== this.#scopeGeneration(scope)
+      ) {
+        throw new Error(
+          "Browser screenshot artifact store was closed during capture",
+        );
+      }
+      const openFlags =
+        constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        (process.platform === "win32" ? 0 : constants.O_NOFOLLOW);
+      const handle = await open(artifactPath, openFlags, 0o600);
+      try {
+        await this.#assertOwnedDirectory();
+        await handle.writeFile(png);
+        const written = await handle.stat();
+        if (!written.isFile() || written.size !== png.byteLength) {
+          throw new Error("Browser screenshot artifact write was not complete");
+        }
+      } finally {
+        await handle.close();
+      }
+      await this.#assertOwnedDirectory();
+      if (
+        this.#closed ||
+        generation !== this.#generation ||
+        scopeGeneration !== this.#scopeGeneration(scope)
+      ) {
         await rm(artifactPath, { force: true });
         throw new Error("Browser screenshot artifact store is closed");
       }
@@ -471,6 +519,7 @@ export class BrowserScreenshotArtifactStore {
   }
 
   async clearScope(scope: string): Promise<void> {
+    this.#incrementScopeGeneration(scope);
     await this.#enqueue(async () => {
       const paths = [...this.#artifacts.entries()]
         .filter(
@@ -485,9 +534,9 @@ export class BrowserScreenshotArtifactStore {
   }
 
   async close(): Promise<void> {
+    this.#closed = true;
+    this.#generation += 1;
     await this.#enqueue(async () => {
-      if (this.#closed) return;
-      this.#closed = true;
       for (const artifact of this.#artifacts.values())
         clearTimeout(artifact.timer);
       const paths = [...this.#artifacts.keys()];
@@ -550,6 +599,56 @@ export class BrowserScreenshotArtifactStore {
       );
     }
     await chmod(this.#directory, 0o700);
+    await this.#assertOwnedDirectory();
+  }
+
+  async #assertOwnedDirectory(): Promise<void> {
+    if (!this.#directoryCreated && !this.#directory) return;
+    const root = await lstat(this.#rootDirectory);
+    const child = await lstat(this.#directory);
+    if (
+      !root.isDirectory() ||
+      root.isSymbolicLink() ||
+      !child.isDirectory() ||
+      child.isSymbolicLink()
+    ) {
+      throw new Error(
+        "Browser screenshot artifact directory ownership changed",
+      );
+    }
+    const [rootRealPath, childRealPath] = await Promise.all([
+      realpath(this.#rootDirectory),
+      realpath(this.#directory),
+    ]);
+    if (!isWithin(rootRealPath, childRealPath)) {
+      throw new Error(
+        "Browser screenshot artifact directory escaped its owner",
+      );
+    }
+  }
+
+  #scopeGeneration(scope: string): string {
+    return [...this.#scopeGenerations.entries()]
+      .filter(
+        ([candidate]) =>
+          scope === candidate || scope.startsWith(`${candidate}/`),
+      )
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([candidate, generation]) => `${candidate}:${String(generation)}`)
+      .join("|");
+  }
+
+  #incrementScopeGeneration(scope: string): void {
+    if (
+      !this.#scopeGenerations.has(scope) &&
+      this.#scopeGenerations.size >= MAX_BROWSER_SCREENSHOT_SCOPES
+    ) {
+      throw new Error("Browser screenshot scope lifecycle bound exceeded");
+    }
+    this.#scopeGenerations.set(
+      scope,
+      (this.#scopeGenerations.get(scope) ?? 0) + 1,
+    );
   }
 
   async #evictFor(bytes: number): Promise<void> {
@@ -1122,12 +1221,16 @@ function safeBrowserUrl(raw: string): string {
 
 export function redactBrowserUrl(raw: string): string {
   if (raw.length === 0) return "";
-  const url = new URL(raw);
-  url.username = "";
-  url.password = "";
-  url.hash = "";
-  url.search = "";
-  return url.toString().slice(0, 2048);
+  try {
+    const url = new URL(raw);
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    url.search = "";
+    return url.toString().slice(0, 2048);
+  } catch {
+    return "[malformed-url]";
+  }
 }
 
 function pngDimensions(buffer: Buffer): { width: number; height: number } {
@@ -1149,8 +1252,14 @@ function pngDimensions(buffer: Buffer): { width: number; height: number } {
   let sawImageData = false;
   let paletteEntries = 0;
   let sawTransparency = false;
+  let sawPostImageData = false;
+  let chunkCount = 0;
   const idat: Buffer[] = [];
   while (offset < buffer.length) {
+    chunkCount += 1;
+    if (chunkCount > 1024) {
+      throw new Error("Browser screenshot PNG has too many chunks");
+    }
     if (offset + 12 > buffer.length) {
       throw new Error("Browser screenshot PNG is truncated");
     }
@@ -1170,6 +1279,17 @@ function pngDimensions(buffer: Buffer): { width: number; height: number } {
       throw new Error("Browser screenshot PNG chunk CRC is invalid");
     }
     const name = type.toString("ascii");
+    if (!/^[A-Za-z]{4}$/u.test(name)) {
+      throw new Error("Browser screenshot PNG chunk type is invalid");
+    }
+    if (
+      (type[0]! & 0x20) === 0 &&
+      !["IHDR", "PLTE", "IDAT", "IEND"].includes(name)
+    ) {
+      throw new Error(
+        `Browser screenshot PNG has an unknown critical chunk ${name}`,
+      );
+    }
     if (!sawHeader && name !== "IHDR") {
       throw new Error("Browser screenshot PNG must begin with IHDR");
     }
@@ -1197,14 +1317,25 @@ function pngDimensions(buffer: Buffer): { width: number; height: number } {
       }
       interlace = data[12]!;
     } else if (name === "IDAT") {
-      if (!sawHeader || ended)
+      if (!sawHeader || ended || sawPostImageData)
         throw new Error("Browser screenshot PNG IDAT is invalid");
       sawImageData = true;
       sawData = true;
       idat.push(data);
     } else if (name === "PLTE") {
-      if (sawImageData || length === 0 || length % 3 !== 0 || length > 768) {
+      if (
+        sawImageData ||
+        sawPalette ||
+        length === 0 ||
+        length % 3 !== 0 ||
+        length > 768
+      ) {
         throw new Error("Browser screenshot PNG palette is invalid");
+      }
+      if (colorType === 0 || colorType === 4) {
+        throw new Error(
+          "Browser screenshot PNG palette is invalid for this color type",
+        );
       }
       sawPalette = true;
       paletteEntries = length / 3;
@@ -1212,7 +1343,7 @@ function pngDimensions(buffer: Buffer): { width: number; height: number } {
       if (
         sawImageData ||
         sawTransparency ||
-        (colorType !== 3 && colorType !== 0)
+        (colorType !== 3 && colorType !== 0 && colorType !== 2)
       ) {
         throw new Error("Browser screenshot PNG transparency is invalid");
       }
@@ -1220,11 +1351,21 @@ function pngDimensions(buffer: Buffer): { width: number; height: number } {
       if (colorType === 3 && (!sawPalette || length > paletteEntries)) {
         throw new Error("Browser screenshot PNG transparency is invalid");
       }
+      if (colorType === 0 && length !== 2) {
+        throw new Error(
+          "Browser screenshot PNG grayscale transparency is invalid",
+        );
+      }
+      if (colorType === 2 && length !== 6) {
+        throw new Error("Browser screenshot PNG RGB transparency is invalid");
+      }
     } else if (name === "IEND") {
       if (!sawHeader || !sawData || length !== 0) {
         throw new Error("Browser screenshot PNG IEND is invalid");
       }
       ended = true;
+    } else if (sawImageData) {
+      sawPostImageData = true;
     }
     offset = crcEnd;
     if (ended) break;
@@ -1404,6 +1545,14 @@ function isMissingPathError(error: unknown): boolean {
     error !== null &&
     "code" in error &&
     (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
   );
 }
 

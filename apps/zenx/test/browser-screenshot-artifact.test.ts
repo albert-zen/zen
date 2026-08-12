@@ -44,15 +44,30 @@ test("browser screenshot cleanup serializes close and scope races", async () => 
   try {
     const write = store.write("session/tab", "observation-race", ONE_PIXEL_PNG);
     const clear = store.clearScope("session");
-    const artifact = await write;
+    await assert.rejects(write, /scope is no longer current/u);
     await clear;
-    await assert.rejects(access(artifact.artifactPath));
 
     const close = store.close();
     await assert.rejects(
       store.write("session/tab", "after-close", ONE_PIXEL_PNG),
       /closed/u,
     );
+    await close;
+  } finally {
+    await store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("browser screenshot close fences a write already queued", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-browser-close-race-"),
+  );
+  const store = new BrowserScreenshotArtifactStore(root);
+  try {
+    const write = store.write("session/tab", "observation-race", ONE_PIXEL_PNG);
+    const close = store.close();
+    await assert.rejects(write, /closed/u);
     await close;
   } finally {
     await store.close();
@@ -99,6 +114,25 @@ test("browser screenshot validation rejects truncation, bad CRC, and huge dimens
     );
     const valid = await store.write("session/tab", "valid", ONE_PIXEL_PNG);
     assert.equal(valid.width, 1);
+    const unknownCritical = insertChunk(
+      ONE_PIXEL_PNG,
+      "ABCD",
+      Buffer.from("bad"),
+    );
+    await assert.rejects(
+      store.write("session/tab", "unknown-critical", unknownCritical),
+      /unknown critical/u,
+    );
+    const duplicatePalette = insertChunk(
+      ONE_PIXEL_PNG,
+      "PLTE",
+      Buffer.from([0, 0, 0]),
+      1,
+    );
+    await assert.rejects(
+      store.write("session/tab", "duplicate-palette", duplicatePalette),
+      /palette/u,
+    );
   } finally {
     await store.close();
     await rm(root, { recursive: true, force: true });
@@ -109,6 +143,26 @@ function oversizedPng(): Buffer {
   const png = Buffer.alloc(MAX_BROWSER_SCREENSHOT_BYTES + 1);
   ONE_PIXEL_PNG.copy(png, 0, 0, 24);
   return png;
+}
+
+function insertChunk(
+  png: Buffer,
+  name: string,
+  data: Buffer,
+  beforeChunk = 1,
+): Buffer {
+  let offset = 8;
+  for (let index = 0; index < beforeChunk; index += 1) {
+    const length = png.readUInt32BE(offset);
+    offset += 12 + length;
+  }
+  const type = Buffer.from(name, "ascii");
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  type.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(Buffer.concat([type, data])), 8 + data.length);
+  return Buffer.concat([png.subarray(0, offset), chunk, png.subarray(offset)]);
 }
 
 function crc32(buffer: Buffer): number {

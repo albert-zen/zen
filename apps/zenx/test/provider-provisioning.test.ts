@@ -6,6 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  bindBundledProviderLaunch,
   resolveBundledProvider,
   verifyBundledProvider,
 } from "../src/main/capabilities/provider-provisioning.js";
@@ -141,6 +142,108 @@ test("packaged provider provisioning reports offline or missing assets explicitl
       platform: "win32",
     });
     assert.match(result.reason ?? "", /manifest is unavailable/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("packaged provisioning pins runtime and native companion assets", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-provider-assets-"));
+  try {
+    const providers = path.join(root, "providers");
+    await mkdir(path.join(providers, "runtime"), { recursive: true });
+    const executable = path.join(providers, "provider.js");
+    const runtime = path.join(providers, "runtime", "node");
+    const companion = path.join(providers, "native.bin");
+    await writeFile(executable, "provider");
+    await writeFile(runtime, "runtime");
+    await writeFile(companion, "native");
+    const sha = (value: Buffer) =>
+      createHash("sha256").update(value).digest("hex");
+    const manifest = {
+      schemaVersion: 1,
+      providers: {
+        "playwright-cli": {
+          executable: "provider.js",
+          version: "0.1.18",
+          sha256: sha(Buffer.from("provider")),
+          platforms: ["linux"],
+          runtime: {
+            path: "runtime/node",
+            sha256: sha(Buffer.from("runtime")),
+            version: "22.23.2",
+          },
+          assets: [{ path: "native.bin", sha256: sha(Buffer.from("native")) }],
+        },
+      },
+    };
+    const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
+    await writeFile(path.join(providers, "manifest.json"), manifestBytes);
+    const manifestSha256 = sha(manifestBytes);
+    const resolved = await resolveBundledProvider("playwright-cli", {
+      resourcesDirectory: root,
+      platform: "linux",
+      expectedManifestSha256: manifestSha256,
+    });
+    assert.equal(resolved.provider?.runtime?.version, "22.23.2");
+    assert.equal(resolved.provider?.assets?.length, 1);
+    const release = await bindBundledProviderLaunch(resolved.provider!, {
+      resourcesDirectory: root,
+      platform: "linux",
+    });
+    await release();
+    await writeFile(companion, "tampered");
+    await assert.rejects(
+      bindBundledProviderLaunch(resolved.provider!, {
+        resourcesDirectory: root,
+        platform: "linux",
+      }),
+      /integrity mismatch|changed/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("packaged provisioning pins a Windows shim companion", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-provider-shim-"));
+  try {
+    const providers = path.join(root, "providers");
+    await mkdir(providers, { recursive: true });
+    const shim = Buffer.from('@echo off\r\n"%dp0%\\node.js" %*\r\n');
+    const companion = Buffer.from("console.log('bundled')\n");
+    await writeFile(path.join(providers, "provider.cmd"), shim);
+    await writeFile(path.join(providers, "node.js"), companion);
+    const sha = (value: Buffer) =>
+      createHash("sha256").update(value).digest("hex");
+    const manifest = {
+      schemaVersion: 1,
+      providers: {
+        "playwright-cli": {
+          executable: "provider.cmd",
+          version: "0.1.18",
+          sha256: sha(shim),
+          platforms: ["win32"],
+          companion: { path: "node.js", sha256: sha(companion) },
+        },
+      },
+    };
+    const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
+    await writeFile(path.join(providers, "manifest.json"), manifestBytes);
+    const resolved = await resolveBundledProvider("playwright-cli", {
+      resourcesDirectory: root,
+      platform: "win32",
+      expectedManifestSha256: sha(manifestBytes),
+    });
+    assert.equal(resolved.provider?.companion?.sha256, sha(companion));
+    await writeFile(path.join(providers, "node.js"), "tampered");
+    await assert.rejects(
+      verifyBundledProvider(resolved.provider!, {
+        resourcesDirectory: root,
+        platform: "win32",
+      }),
+      /integrity mismatch|changed/u,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

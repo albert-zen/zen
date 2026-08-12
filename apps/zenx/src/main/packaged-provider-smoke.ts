@@ -1,132 +1,161 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
+
+import { app } from "electron";
 
 import {
   selectBrowserProvider,
   selectComputerProvider,
 } from "./capabilities/provider-catalog.js";
-import type { ExternalProviderProcessRunner } from "./capabilities/external-provider.js";
-import type {
-  WinAppCliRunOptions,
-  WinAppCliRunner,
-} from "./capabilities/windows-computer-provider.js";
+import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
 
-const providerBytes = Buffer.from(
-  "ZenX packaged provider smoke asset\n",
-  "utf8",
-);
+const portServer = createServer((_request, response) => {
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  response.end(
+    "<!doctype html><title>ZenX packaged provider</title><button aria-label='Packaged target'>Packaged target</button>",
+  );
+});
 
-class SmokeExternalRunner implements ExternalProviderProcessRunner {
-  async run(
-    _executable: string,
-    args: readonly string[],
-    _options: {
-      timeoutMs: number;
-      signal?: AbortSignal;
-      maxOutputBytes?: number;
-      verifyBeforeSpawn?: () => Promise<void>;
-    },
-  ): Promise<{ stdout: string; stderr: string }> {
-    if (args.includes("--version")) {
-      return { stdout: JSON.stringify({ version: "0.1.2" }), stderr: "" };
+void app.whenReady().then(async () => {
+  try {
+    assert.equal(
+      app.isPackaged,
+      true,
+      "packaged smoke must run from a packaged application",
+    );
+    assert.ok(
+      process.resourcesPath.length > 0,
+      "packaged smoke must use process.resourcesPath",
+    );
+    process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(
+      process.resourcesPath,
+      "providers",
+      "playwright-browsers",
+    );
+    const manifestPath = path.join(
+      process.resourcesPath,
+      "providers",
+      "manifest.json",
+    );
+    const manifestBytes = await readFile(manifestPath);
+    assert.equal(
+      await sha256(manifestBytes),
+      PACKAGED_PROVIDER_MANIFEST_SHA256,
+      "packaged manifest must match the immutable build-time digest",
+    );
+    const browser = await selectBrowserProvider({
+      userDataDirectory: path.join(process.resourcesPath, "smoke-user-data"),
+      resourcesDirectory: process.resourcesPath,
+      bundledProvidersOnly: true,
+      bundledManifestSha256: PACKAGED_PROVIDER_MANIFEST_SHA256,
+      platform: process.platform,
+    });
+    const browserDiagnostic = browser.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.providerId === "playwright-cli" &&
+        diagnostic.status === "selected",
+    );
+    assert.ok(
+      browser.backend,
+      `bundled Browser provider unavailable: ${JSON.stringify(browser.diagnostics)}`,
+    );
+    assert.equal(browserDiagnostic?.version, "0.1.18");
+    assert.equal(browserDiagnostic?.integrity, "verified");
+    assert.equal(
+      browserDiagnostic?.executable?.startsWith(process.resourcesPath),
+      true,
+    );
+    const port = await listen();
+    const opened = await browser.backend.open(
+      "packaged-smoke",
+      `http://127.0.0.1:${String(port)}/`,
+    );
+    const inspected = await browser.backend.inspect(
+      "packaged-smoke",
+      opened.tabId,
+    );
+    assert.equal(
+      inspected.targets.some((target) => target.name === "Packaged target"),
+      true,
+    );
+    await browser.backend.close();
+
+    const computer = await selectComputerProvider({
+      userDataDirectory: path.join(process.resourcesPath, "smoke-user-data"),
+      resourcesDirectory: process.resourcesPath,
+      bundledProvidersOnly: true,
+      bundledManifestSha256: PACKAGED_PROVIDER_MANIFEST_SHA256,
+      platform: process.platform,
+    });
+    if (process.platform === "win32") {
+      const computerDiagnostic = computer.diagnostics.find(
+        (diagnostic) =>
+          diagnostic.providerId === "microsoft-winapp-cli" &&
+          diagnostic.status === "selected",
+      );
+      assert.ok(
+        computer.backend,
+        `bundled Computer provider unavailable: ${JSON.stringify(computer.diagnostics)}`,
+      );
+      assert.equal(computerDiagnostic?.version, "0.3.1");
+      assert.equal(computerDiagnostic?.integrity, "verified");
+      assert.equal(
+        computerDiagnostic?.executable?.startsWith(process.resourcesPath),
+        true,
+      );
+      await computer.backend.close();
     }
-    if (args.includes("list")) {
-      return { stdout: JSON.stringify({ browsers: [] }), stderr: "" };
-    }
-    return { stdout: JSON.stringify({}), stderr: "" };
+    console.log(
+      JSON.stringify(
+        {
+          passed: true,
+          packaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          browser: browserDiagnostic,
+          computer: computer.diagnostics,
+          bundledOnly: true,
+          syntheticFixtures: false,
+        },
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    console.error("ZenX packaged provider smoke failed", error);
+    process.exitCode = 1;
+  } finally {
+    await closeServer();
+    app.quit();
   }
+});
+
+async function listen(): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    portServer.once("error", reject);
+    portServer.listen(0, "127.0.0.1", () => {
+      portServer.removeListener("error", reject);
+      const address = portServer.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("packaged provider smoke server did not bind"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
 }
 
-class SmokeWinAppRunner implements WinAppCliRunner {
-  async run(
-    _executable: string,
-    args: readonly string[],
-    _options: WinAppCliRunOptions,
-  ): Promise<{ stdout: string; stderr: string }> {
-    if (args.includes("--version")) return { stdout: "0.3.1\n", stderr: "" };
-    if (args.includes("--cli-schema")) {
-      return {
-        stdout: JSON.stringify({
-          schemaVersion: "1.0",
-          version: "0.3.1",
-          subcommands: {
-            ui: {
-              subcommands: {
-                inspect: {},
-                invoke: {},
-                "list-windows": {},
-                screenshot: {},
-                "set-value": {},
-                "wait-for": {},
-              },
-            },
-          },
-        }),
-        stderr: "",
-      };
-    }
-    return { stdout: "[]", stderr: "" };
-  }
+async function closeServer(): Promise<void> {
+  if (!portServer.listening) return;
+  await new Promise<void>((resolve, reject) =>
+    portServer.close((error) =>
+      error === undefined ? resolve() : reject(error),
+    ),
+  );
 }
 
-const root = await mkdtemp(
-  path.join(os.tmpdir(), "zenx-packaged-provider-smoke-"),
-);
-try {
-  const providers = path.join(root, "providers");
-  await mkdir(providers, { recursive: true });
-  const playwrightAsset = path.join(providers, "playwright-cli.fixture");
-  const winAppAsset = path.join(providers, "winapp.fixture");
-  await writeFile(playwrightAsset, providerBytes);
-  await writeFile(winAppAsset, providerBytes);
-  const assetSha256 = createHash("sha256").update(providerBytes).digest("hex");
-  const manifest = JSON.stringify({
-    schemaVersion: 1,
-    providers: {
-      "playwright-cli": {
-        executable: "playwright-cli.fixture",
-        version: "0.1.2",
-        sha256: assetSha256,
-        platforms: ["win32"],
-      },
-      "microsoft-winapp-cli": {
-        executable: "winapp.fixture",
-        version: "0.3.1",
-        sha256: assetSha256,
-        platforms: ["win32"],
-      },
-    },
-  });
-  await writeFile(path.join(providers, "manifest.json"), manifest);
-  const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
-  const browser = await selectBrowserProvider({
-    userDataDirectory: root,
-    resourcesDirectory: root,
-    bundledProvidersOnly: true,
-    bundledManifestSha256: manifestSha256,
-    platform: "win32",
-    runner: new SmokeExternalRunner(),
-  });
-  assert.equal(browser.diagnostics[0]?.status, "selected");
-  assert.equal(browser.diagnostics[0]?.version, "0.1.2");
-  assert.equal(browser.diagnostics[0]?.integrity, "verified");
-  await browser.backend?.close();
-
-  const computer = await selectComputerProvider({
-    userDataDirectory: root,
-    resourcesDirectory: root,
-    bundledProvidersOnly: true,
-    bundledManifestSha256: manifestSha256,
-    platform: "win32",
-    winAppRunner: new SmokeWinAppRunner(),
-  });
-  assert.equal(computer.diagnostics[0]?.status, "selected");
-  assert.equal(computer.diagnostics[0]?.version, "0.3.1");
-  assert.equal(computer.diagnostics[0]?.integrity, "verified");
-  await computer.backend?.close();
-} finally {
-  await rm(root, { recursive: true, force: true });
+async function sha256(bytes: Buffer): Promise<string> {
+  const { createHash } = await import("node:crypto");
+  return createHash("sha256").update(bytes).digest("hex");
 }

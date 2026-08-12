@@ -32,7 +32,7 @@ test("browser URL projection uniformly removes credentials, query, and hash", ()
     redactBrowserUrl(`https://example.com/${"x".repeat(4_096)}`).length <=
       2_048,
   );
-  assert.throws(() => redactBrowserUrl("not a URL"), TypeError);
+  assert.equal(redactBrowserUrl("not a URL"), "[malformed-url]");
 });
 
 test("browser vertical slice targets one session/tab through structured operations", async () => {

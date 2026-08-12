@@ -262,7 +262,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     throwIfAborted(signal);
     const session = this.#session(sessionId);
     const operation = this.#startSessionOperation(session, async () => {
-      const listed = await this.#client.listTargets();
+      const listed = await this.#client.listTargets(signal);
       const targets = listed.filter(
         (target) =>
           target.type === "page" &&
@@ -361,22 +361,23 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     const session = this.#session(sessionId);
     const operation = this.#startSessionOperation(session, async () => {
       const pendingUrl = `about:blank#zenx-pending-${randomUUID()}`;
-      const beforeTargets = await this.#client.listTargets();
+      const beforeTargets = await this.#client.listTargets(signal);
       const beforeTargetIds = new Set(
         beforeTargets.map((target) => target.targetId),
       );
       if (beforeTargets.some((target) => target.url === pendingUrl)) {
         throw new Error("User browser create marker already exists");
       }
-      let targetId: string;
+      let targetId: string | undefined;
       try {
-        targetId = await this.#client.createTarget(pendingUrl);
+        targetId = await this.#client.createTarget(pendingUrl, signal);
       } catch (error) {
         this.#recordUnresolvedCreate(session, pendingUrl, beforeTargetIds);
         const recovered = await this.#reconcileCreate(
           session,
           pendingUrl,
           beforeTargetIds,
+          signal,
         );
         if (recovered === undefined) {
           throw new Error(
@@ -407,8 +408,11 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       }
       this.#accountTarget(session, targetId, pendingUrl, false);
       const matches = await this.#client
-        .findTargetsByUrl(pendingUrl)
-        .catch(() => []);
+        .findTargetsByUrl(pendingUrl, signal)
+        .catch((error) => {
+          if (signal?.aborted === true) throw error;
+          return [];
+        });
       const createdMatches = matches.filter(
         (target) => !beforeTargetIds.has(target.targetId),
       );
@@ -431,6 +435,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         );
       }
       this.#assertSessionCurrent(session);
+      throwIfAborted(signal);
       const tab = this.#tabs.get(targetId);
       let dispatched = false;
       try {
@@ -438,13 +443,15 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           targetId,
           url,
           this.#attachmentOwner(session),
-          undefined,
+          signal,
           () => (dispatched = true),
         );
         if (tab !== undefined) tab.url = url;
         this.#assertSessionCurrent(session);
+        throwIfAborted(signal);
         const summary = await this.#summary(sessionId, targetId);
         this.#assertSessionCurrent(session);
+        throwIfAborted(signal);
         return summary;
       } catch (error) {
         if (
@@ -453,6 +460,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
             error instanceof UserBrowserDocumentChangedAfterDispatchError)
         ) {
           tab.tainted = describeError(error);
+        }
+        if (signal?.aborted === true && tab !== undefined) {
+          await this.#compensateCancelledCreate(session, targetId, tab);
         }
         throw error;
       }
@@ -1349,10 +1359,14 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     session: UserBrowserSession,
     markerUrl: string,
     beforeTargetIds: Set<string>,
+    signal?: AbortSignal,
   ): Promise<UserBrowserCdpTarget | undefined> {
     const matches = await this.#client
-      .findTargetsByUrl(markerUrl)
-      .catch(() => []);
+      .findTargetsByUrl(markerUrl, signal)
+      .catch((error) => {
+        if (signal?.aborted === true) throw error;
+        return [];
+      });
     const candidates = matches.filter(
       (target) => !beforeTargetIds.has(target.targetId),
     );
@@ -1379,6 +1393,24 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     for (const [markerUrl, beforeTargetIds] of session.unresolvedCreates) {
       await this.#reconcileCreate(session, markerUrl, beforeTargetIds);
     }
+  }
+
+  async #compensateCancelledCreate(
+    session: UserBrowserSession,
+    targetId: string,
+    tab: UserBrowserTabState,
+  ): Promise<void> {
+    tab.detaching = true;
+    try {
+      await this.#detachTarget(session, targetId);
+    } catch (error) {
+      tab.tainted = `cancelled create cleanup is unknown (${describeError(error)})`;
+      this.#taintSession(session, `target ${targetId}: ${tab.tainted}`);
+      return;
+    }
+    session.targetIds.delete(targetId);
+    this.#ignoreTarget(session, targetId);
+    if (this.#tabs.get(targetId) === tab) this.#tabs.delete(targetId);
   }
 }
 

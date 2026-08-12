@@ -9,6 +9,9 @@ import type {
 } from "./browser-provider.js";
 import {
   BrowserScreenshotArtifactStore,
+  assertBrowserTabCapacity,
+  MAX_BROWSER_TABS_GLOBAL,
+  MAX_BROWSER_TABS_PER_SESSION,
   redactBrowserUrl,
 } from "./browser-provider.js";
 import {
@@ -21,6 +24,10 @@ const PLAYWRIGHT_CLOSE_TIMEOUT_MS = 10_000;
 const MAX_PLAYWRIGHT_VISIBLE_TEXT = 8_000;
 const MAX_PLAYWRIGHT_TARGETS = 128;
 const MAX_PLAYWRIGHT_SCREENSHOT_OUTPUT_BYTES = 8 * 1024 * 1024;
+const MAX_PLAYWRIGHT_PAGES = MAX_BROWSER_TABS_GLOBAL;
+const MAX_PLAYWRIGHT_PAGE_KEY_LENGTH = 128;
+const MAX_PLAYWRIGHT_PAGE_URL_LENGTH = 8_192;
+const MAX_PLAYWRIGHT_PAGE_TITLE_LENGTH = 256;
 
 interface PlaywrightTabState {
   tabId: string;
@@ -88,8 +95,11 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   readonly #runner: ExternalProviderProcessRunner;
   readonly #cwd: string;
   readonly #verifyExecutable?: () => Promise<void>;
+  readonly #runtimeExecutable?: string;
+  readonly #bindBeforeSpawn?: () => Promise<() => Promise<void>>;
   readonly #sessions = new Map<string, PlaywrightSessionState>();
   readonly #artifacts: BrowserScreenshotArtifactStore;
+  #reservedOpenTabs = 0;
 
   constructor(options: {
     executable: string;
@@ -97,11 +107,15 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     cwd: string;
     artifactDirectory?: string;
     verifyExecutable?: () => Promise<void>;
+    runtimeExecutable?: string;
+    bindBeforeSpawn?: () => Promise<() => Promise<void>>;
   }) {
     this.#executable = options.executable;
     this.#runner = options.runner;
     this.#cwd = options.cwd;
     this.#verifyExecutable = options.verifyExecutable;
+    this.#runtimeExecutable = options.runtimeExecutable;
+    this.#bindBeforeSpawn = options.bindBeforeSpawn;
     this.#artifacts = new BrowserScreenshotArtifactStore(
       options.artifactDirectory,
     );
@@ -132,23 +146,37 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   ): Promise<BrowserTabSummary> {
     const session = this.#session(sessionId);
     return await this.#enqueue(session, signal, async (revision) => {
-      if (!session.opened) {
-        const response = await this.#run(session, ["open", url], signal);
-        requirePlaywrightOpenEnvelope(response, session.cliSessionName);
-        session.opened = true;
-      } else {
-        await this.#run(session, ["tab-new", url], signal);
+      if (session.opened) {
+        const existingPages = await this.#pageStates(session, signal);
+        this.#assertSession(session, revision, signal);
+        this.#reconcileTabs(session, existingPages);
       }
-      const pages = await this.#pageStates(session, signal);
-      this.#assertSession(session, revision, signal);
-      this.#reconcileTabs(session, pages);
-      const current = pages.find((page) => page.current) ?? pages.at(-1);
-      if (current === undefined)
-        throw new Error("Playwright opened no browser tab");
-      const state = session.tabs.get(current.tabKey);
-      if (state === undefined)
-        throw new Error("Playwright tab mapping is missing");
-      return pageSummary(sessionId, state.tabId, current);
+      assertBrowserTabCapacity(
+        this.#tabCount() + this.#reservedOpenTabs + 1,
+        session.tabs.size + 1,
+      );
+      this.#reservedOpenTabs += 1;
+      try {
+        if (!session.opened) {
+          const response = await this.#run(session, ["open", url], signal);
+          requirePlaywrightOpenEnvelope(response, session.cliSessionName);
+          session.opened = true;
+        } else {
+          await this.#run(session, ["tab-new", url], signal);
+        }
+        const pages = await this.#pageStates(session, signal);
+        this.#assertSession(session, revision, signal);
+        this.#reconcileTabs(session, pages);
+        const current = pages.find((page) => page.current) ?? pages.at(-1);
+        if (current === undefined)
+          throw new Error("Playwright opened no browser tab");
+        const state = session.tabs.get(current.tabKey);
+        if (state === undefined)
+          throw new Error("Playwright tab mapping is missing");
+        return pageSummary(sessionId, state.tabId, current);
+      } finally {
+        this.#reservedOpenTabs -= 1;
+      }
     });
   }
 
@@ -395,6 +423,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
           timeoutMs,
           signal,
           maxOutputBytes,
+          runtimeExecutable: this.#runtimeExecutable,
+          bindBeforeSpawn: this.#bindBeforeSpawn,
           verifyBeforeSpawn: this.#verifyExecutable,
         },
       );
@@ -466,7 +496,13 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       .run(
         this.#executable,
         ["--json", `-s=${session.cliSessionName}`, "close"],
-        { cwd: this.#cwd, timeoutMs: PLAYWRIGHT_CLOSE_TIMEOUT_MS },
+        {
+          cwd: this.#cwd,
+          timeoutMs: PLAYWRIGHT_CLOSE_TIMEOUT_MS,
+          runtimeExecutable: this.#runtimeExecutable,
+          bindBeforeSpawn: this.#bindBeforeSpawn,
+          verifyBeforeSpawn: this.#verifyExecutable,
+        },
       )
       .catch(() => undefined);
   }
@@ -497,9 +533,38 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         "Unsupported playwright-cli JSON schema: run-code result is not JSON",
       );
     }
-    if (!Array.isArray(parsed) || !parsed.every(isPlaywrightPageState)) {
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length > MAX_PLAYWRIGHT_PAGES ||
+      parsed.length > MAX_BROWSER_TABS_PER_SESSION ||
+      !parsed.every(isPlaywrightPageState)
+    ) {
       throw new Error(
         "Unsupported playwright-cli JSON schema: invalid page state result",
+      );
+    }
+    const keys = new Set<string>();
+    const documentKeys = new Set<string>();
+    const indexes = new Set<number>();
+    let currentCount = 0;
+    for (const page of parsed) {
+      if (
+        keys.has(page.tabKey) ||
+        documentKeys.has(page.documentKey) ||
+        indexes.has(page.index)
+      ) {
+        throw new Error(
+          "Unsupported playwright-cli JSON schema: duplicate page identity",
+        );
+      }
+      keys.add(page.tabKey);
+      documentKeys.add(page.documentKey);
+      indexes.add(page.index);
+      if (page.current) currentCount += 1;
+    }
+    if (parsed.length > 0 && currentCount !== 1) {
+      throw new Error(
+        "Unsupported playwright-cli JSON schema: exactly one page must be current",
       );
     }
     return parsed;
@@ -775,6 +840,12 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     }
   }
 
+  #tabCount(): number {
+    let count = 0;
+    for (const session of this.#sessions.values()) count += session.tabs.size;
+    return count;
+  }
+
   #invalidate(tab: PlaywrightTabState): void {
     tab.documentVersion += 1;
     tab.observation = undefined;
@@ -975,12 +1046,18 @@ function isPlaywrightPageState(value: unknown): value is PlaywrightPageState {
   const page = value as Record<string, unknown>;
   return (
     Number.isSafeInteger(page.index) &&
+    (page.index as number) >= 0 &&
+    (page.index as number) < MAX_PLAYWRIGHT_PAGES &&
     typeof page.tabKey === "string" &&
     page.tabKey.length > 0 &&
+    page.tabKey.length <= MAX_PLAYWRIGHT_PAGE_KEY_LENGTH &&
     typeof page.documentKey === "string" &&
     page.documentKey.length > 0 &&
+    page.documentKey.length <= MAX_PLAYWRIGHT_PAGE_KEY_LENGTH &&
     typeof page.title === "string" &&
+    page.title.length <= MAX_PLAYWRIGHT_PAGE_TITLE_LENGTH &&
     typeof page.url === "string" &&
+    page.url.length <= MAX_PLAYWRIGHT_PAGE_URL_LENGTH &&
     typeof page.current === "boolean"
   );
 }
@@ -1002,6 +1079,10 @@ function pageSummary(
 function pageIdentity(page: PlaywrightPageState): string {
   return `${page.tabKey}\u0000${page.documentKey}`;
 }
+
+// Capacity is checked before dispatch and includes opens from other sessions
+// that have reserved a slot but have not yet returned their page list.
+// This keeps the provider's one-session operations from bypassing the global cap.
 
 function tabIdentity(tab: PlaywrightTabState): string {
   return `${tab.tabKey}\u0000${tab.documentKey}`;

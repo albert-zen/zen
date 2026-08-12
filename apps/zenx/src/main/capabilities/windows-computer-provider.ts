@@ -136,6 +136,8 @@ export interface WinAppCliRunOptions {
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
   redactions?: readonly string[];
+  runtimeExecutable?: string;
+  bindBeforeSpawn?: () => Promise<() => Promise<void>>;
   verifyBeforeSpawn?: () => Promise<void>;
 }
 
@@ -220,6 +222,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   readonly #platform: NodeJS.Platform;
   readonly #runner: WinAppCliRunner;
   readonly #expectedVersion?: string;
+  readonly #runtimeExecutable?: string;
+  readonly #bindBeforeSpawn?: () => Promise<() => Promise<void>>;
   readonly #verifyExecutable?: () => Promise<void>;
 
   constructor(
@@ -229,6 +233,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       platform?: NodeJS.Platform;
       runner?: WinAppCliRunner;
       expectedVersion?: string;
+      runtimeExecutable?: string;
+      bindBeforeSpawn?: () => Promise<() => Promise<void>>;
       verifyExecutable?: () => Promise<void>;
     } = {},
   ) {
@@ -239,6 +245,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     this.#platform = options.platform ?? process.platform;
     this.#runner = options.runner ?? new SpawnWinAppCliRunner();
     this.#expectedVersion = options.expectedVersion;
+    this.#runtimeExecutable = options.runtimeExecutable;
+    this.#bindBeforeSpawn = options.bindBeforeSpawn;
     this.#verifyExecutable = options.verifyExecutable;
   }
 
@@ -697,6 +705,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     await this.#verifyExecutable?.();
     return await this.#runner.run(this.#command, args, {
       ...options,
+      runtimeExecutable: this.#runtimeExecutable,
+      bindBeforeSpawn: this.#bindBeforeSpawn,
       verifyBeforeSpawn: options.verifyBeforeSpawn ?? this.#verifyExecutable,
     });
   }
@@ -737,8 +747,29 @@ export async function runBoundedProcess(
 ): Promise<WinAppCliRunResult> {
   options.signal?.throwIfAborted();
   await options.verifyBeforeSpawn?.();
+  const releaseBinding = await options.bindBeforeSpawn?.();
+  try {
+    options.signal?.throwIfAborted();
+  } catch (error) {
+    await releaseBinding?.();
+    throw error;
+  }
   return await new Promise<WinAppCliRunResult>((resolve, reject) => {
-    const child = spawn(executable, args, {
+    const invocation =
+      options.runtimeExecutable === undefined
+        ? { executable, args: [...args] }
+        : {
+            executable: options.runtimeExecutable,
+            args: [executable, ...args],
+          };
+    if (
+      options.runtimeExecutable !== undefined &&
+      !path.isAbsolute(options.runtimeExecutable)
+    ) {
+      reject(new Error("Bundled WinApp runtime must be an absolute path"));
+      return;
+    }
+    const child = spawn(invocation.executable, invocation.args, {
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -755,6 +786,7 @@ export async function runBoundedProcess(
       settled = true;
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
+      void Promise.resolve(releaseBinding?.()).catch(() => undefined);
       callback();
     };
     const failAndKill = (error: Error): void => {

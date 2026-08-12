@@ -7,6 +7,8 @@ export interface ExternalProviderProcessResult {
   stderr: string;
 }
 
+export type ProviderLaunchBinding = () => Promise<void>;
+
 export interface ExternalProviderProcessRunner {
   run(
     executable: string,
@@ -16,6 +18,8 @@ export interface ExternalProviderProcessRunner {
       timeoutMs: number;
       signal?: AbortSignal;
       maxOutputBytes?: number;
+      runtimeExecutable?: string;
+      bindBeforeSpawn?: () => Promise<ProviderLaunchBinding>;
       verifyBeforeSpawn?: () => Promise<void>;
     },
   ): Promise<ExternalProviderProcessResult>;
@@ -32,6 +36,8 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
       timeoutMs: number;
       signal?: AbortSignal;
       maxOutputBytes?: number;
+      runtimeExecutable?: string;
+      bindBeforeSpawn?: () => Promise<ProviderLaunchBinding>;
       verifyBeforeSpawn?: () => Promise<void>;
     },
   ): Promise<ExternalProviderProcessResult> {
@@ -41,8 +47,10 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
     const invocation = await resolveExternalProviderInvocation(
       executable,
       process.env,
+      options.runtimeExecutable,
     );
     await options.verifyBeforeSpawn?.();
+    const releaseBinding = await options.bindBeforeSpawn?.();
     return await new Promise((resolve, reject) => {
       const child = spawn(
         invocation.executable,
@@ -64,6 +72,7 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
         settled = true;
         clearTimeout(timer);
         options.signal?.removeEventListener("abort", abort);
+        void Promise.resolve(releaseBinding?.()).catch(() => undefined);
         callback();
       };
       const fail = (error: unknown): void => {
@@ -128,7 +137,20 @@ interface ExternalProviderInvocation {
 async function resolveExternalProviderInvocation(
   executable: string,
   environment: NodeJS.ProcessEnv,
+  runtimeExecutable?: string,
 ): Promise<ExternalProviderInvocation> {
+  if (runtimeExecutable !== undefined) {
+    if (!path.isAbsolute(runtimeExecutable)) {
+      throw new Error("Bundled provider runtime must be an absolute path");
+    }
+    if (!(await isExecutable(runtimeExecutable))) {
+      throw new Error("Bundled provider runtime is not executable");
+    }
+    if (!path.isAbsolute(executable)) {
+      throw new Error("Bundled provider executable must be an absolute path");
+    }
+    return { executable: runtimeExecutable, argumentPrefix: [executable] };
+  }
   if (
     process.platform !== "win32" ||
     path.extname(executable).toLowerCase() !== ".cmd"
@@ -161,12 +183,14 @@ async function resolveExternalProviderInvocation(
   }
   await access(script);
   const siblingNode = path.join(path.dirname(executable), "node.exe");
-  const nodeExecutable = (await isExecutable(siblingNode))
-    ? siblingNode
-    : await discoverExecutable("node", {
-        environment,
-        platform: "win32",
-      });
+  const nodeExecutable =
+    runtimeExecutable ??
+    ((await isExecutable(siblingNode))
+      ? siblingNode
+      : await discoverExecutable("node", {
+          environment,
+          platform: "win32",
+        }));
   if (nodeExecutable === undefined) {
     throw new Error(
       `Cannot execute ${path.basename(executable)} without node.exe`,
@@ -237,6 +261,7 @@ function providerProcessEnvironment(
     "WINDIR",
     "LOCALAPPDATA",
     "USERPROFILE",
+    "PLAYWRIGHT_BROWSERS_PATH",
   ];
   return Object.fromEntries(
     keys.flatMap((key) =>

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { chmod, lstat, open, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import { parseWindowsNpmShimEntry } from "./external-provider.js";
@@ -14,6 +14,8 @@ export interface BundledProvider {
   manifestPath: string;
   manifestSha256: string;
   companion?: { path: string; sha256: string };
+  runtime?: { path: string; sha256: string; version?: string };
+  assets?: Array<{ path: string; sha256: string }>;
 }
 
 export interface BundledProviderResolution {
@@ -26,6 +28,9 @@ interface ProviderManifestEntry {
   version: string;
   sha256: string;
   platforms: string[];
+  companion?: { path: string; sha256: string };
+  runtime?: { path: string; sha256: string; version?: string };
+  assets?: Array<{ path: string; sha256: string }>;
 }
 
 interface ProviderManifest {
@@ -50,6 +55,7 @@ export async function resolveBundledProvider(
   let providerRoot: string;
   let manifestPath: string;
   try {
+    const resourceRoot = await realpath(options.resourcesDirectory);
     const lexicalProviderRoot = path.join(
       options.resourcesDirectory,
       "providers",
@@ -59,6 +65,9 @@ export async function resolveBundledProvider(
       throw new Error("provider root must be a regular, non-symlink directory");
     }
     providerRoot = await realpath(lexicalProviderRoot);
+    if (!isWithin(resourceRoot, providerRoot)) {
+      throw new Error("provider root resolves outside the resource directory");
+    }
     manifestPath = path.join(providerRoot, "manifest.json");
     const manifestStat = await lstat(manifestPath);
     if (manifestStat.isSymbolicLink() || !manifestStat.isFile()) {
@@ -127,6 +136,7 @@ export async function resolveBundledProvider(
   let executableRealPath: string;
   let bytes: Buffer;
   let companion: { path: string; sha256: string } | undefined;
+  let assets: Array<{ path: string; sha256: string }> | undefined;
   try {
     const executableStat = await lstat(executable);
     if (executableStat.isSymbolicLink() || !executableStat.isFile()) {
@@ -136,6 +146,8 @@ export async function resolveBundledProvider(
     if (!isWithin(providerRoot, executableRealPath)) {
       throw new Error("executable resolves outside its resource directory");
     }
+    if (executableStat.size > 64 * 1024 * 1024)
+      throw new Error("executable exceeds its size bound");
     bytes = await readFile(executableRealPath);
     if (path.extname(executableRealPath).toLowerCase() === ".cmd") {
       const entry = parseWindowsNpmShimEntry(bytes.toString("utf8"));
@@ -168,11 +180,29 @@ export async function resolveBundledProvider(
           "executable shim companion resolves outside its resource directory",
         );
       }
+      if (companionStat.size > 64 * 1024 * 1024)
+        throw new Error("executable shim companion exceeds its size bound");
+      const companionSha256 = createHash("sha256")
+        .update(await readFile(companionRealPath))
+        .digest("hex");
+      if (manifest.companion === undefined) {
+        throw new Error("executable shim companion is not pinned");
+      }
+      const manifestCompanionPath = path.resolve(
+        providerRoot,
+        manifest.companion.path,
+      );
+      if (
+        path.isAbsolute(manifest.companion.path) ||
+        !isWithin(providerRoot, manifestCompanionPath) ||
+        (await realpath(manifestCompanionPath)) !== companionRealPath ||
+        manifest.companion.sha256 !== companionSha256
+      ) {
+        throw new Error("executable shim companion integrity mismatch");
+      }
       companion = {
         path: companionRealPath,
-        sha256: createHash("sha256")
-          .update(await readFile(companionRealPath))
-          .digest("hex"),
+        sha256: companionSha256,
       };
     }
   } catch (error) {
@@ -186,6 +216,77 @@ export async function resolveBundledProvider(
       reason: `Bundled ${providerId} integrity mismatch: expected ${manifest.sha256}, got ${actualSha256}`,
     };
   }
+  if (manifest.assets !== undefined) {
+    try {
+      if (manifest.assets.length > 64)
+        throw new Error("asset list exceeds its bound");
+      assets = [];
+      for (const asset of manifest.assets) {
+        const assetPath = path.resolve(providerRoot, asset.path);
+        if (path.isAbsolute(asset.path) || !isWithin(providerRoot, assetPath)) {
+          throw new Error("asset escapes its resource directory");
+        }
+        const assetStat = await lstat(assetPath);
+        if (assetStat.isSymbolicLink() || !assetStat.isFile()) {
+          throw new Error("asset must be a regular, non-symlink file");
+        }
+        if (assetStat.size > 128 * 1024 * 1024)
+          throw new Error("asset exceeds its size bound");
+        const assetRealPath = await realpath(assetPath);
+        if (!isWithin(providerRoot, assetRealPath))
+          throw new Error("asset resolves outside its resource directory");
+        const assetSha256 = createHash("sha256")
+          .update(await readFile(assetRealPath))
+          .digest("hex");
+        if (assetSha256 !== asset.sha256)
+          throw new Error(`asset integrity mismatch: ${asset.path}`);
+        assets.push({ path: assetRealPath, sha256: assetSha256 });
+      }
+    } catch (error) {
+      return {
+        reason: `Bundled ${providerId} companion assets are unavailable: ${describeError(error)}`,
+      };
+    }
+  }
+  let runtime: BundledProvider["runtime"];
+  if (manifest.runtime !== undefined) {
+    const runtimePath = path.resolve(providerRoot, manifest.runtime.path);
+    if (
+      path.isAbsolute(manifest.runtime.path) ||
+      !isWithin(providerRoot, runtimePath)
+    ) {
+      return {
+        reason: `Bundled ${providerId} runtime escapes its resource directory`,
+      };
+    }
+    try {
+      const runtimeStat = await lstat(runtimePath);
+      if (runtimeStat.isSymbolicLink() || !runtimeStat.isFile())
+        throw new Error("runtime must be a regular, non-symlink file");
+      if (runtimeStat.size > 128 * 1024 * 1024)
+        throw new Error("runtime exceeds its size bound");
+      const runtimeRealPath = await realpath(runtimePath);
+      if (!isWithin(providerRoot, runtimeRealPath))
+        throw new Error("runtime resolves outside its resource directory");
+      const runtimeBytes = await readFile(runtimeRealPath);
+      const runtimeSha256 = createHash("sha256")
+        .update(runtimeBytes)
+        .digest("hex");
+      if (runtimeSha256 !== manifest.runtime.sha256)
+        throw new Error("runtime integrity mismatch");
+      runtime = {
+        path: runtimeRealPath,
+        sha256: runtimeSha256,
+        ...(manifest.runtime.version === undefined
+          ? {}
+          : { version: manifest.runtime.version }),
+      };
+    } catch (error) {
+      return {
+        reason: `Bundled ${providerId} runtime is unavailable: ${describeError(error)}`,
+      };
+    }
+  }
   return {
     provider: {
       providerId,
@@ -195,6 +296,8 @@ export async function resolveBundledProvider(
       manifestPath,
       manifestSha256,
       ...(companion === undefined ? {} : { companion }),
+      ...(runtime === undefined ? {} : { runtime }),
+      ...(assets === undefined ? {} : { assets }),
     },
   };
 }
@@ -215,13 +318,35 @@ export async function verifyBundledProvider(
   if (resolved.provider === undefined) {
     throw new Error(resolved.reason ?? "Bundled provider verification failed");
   }
+  const verified = resolved.provider;
   if (
-    resolved.provider.executable !== selected.executable ||
-    resolved.provider.sha256 !== selected.sha256 ||
-    resolved.provider.version !== selected.version
+    verified.executable !== selected.executable ||
+    verified.sha256 !== selected.sha256 ||
+    verified.version !== selected.version
   ) {
     throw new Error(
       "Bundled provider changed after selection; refusing to launch",
+    );
+  }
+  if (
+    selected.assets?.length !== verified.assets?.length ||
+    selected.assets?.some(
+      (asset, index) =>
+        asset.path !== verified.assets?.[index]?.path ||
+        asset.sha256 !== verified.assets?.[index]?.sha256,
+    )
+  ) {
+    throw new Error(
+      "Bundled provider companion assets changed after selection; refusing to launch",
+    );
+  }
+  if (
+    selected.runtime?.path !== verified.runtime?.path ||
+    selected.runtime?.sha256 !== verified.runtime?.sha256 ||
+    selected.runtime?.version !== verified.runtime?.version
+  ) {
+    throw new Error(
+      "Bundled provider runtime changed after selection; refusing to launch",
     );
   }
   if (selected.companion !== undefined) {
@@ -234,6 +359,57 @@ export async function verifyBundledProvider(
       );
     }
   }
+}
+
+/**
+ * Bind the verified assets for the short launch interval. The files are held
+ * open and the selected resource tree is made read-only before spawn; this is
+ * the Windows-compatible equivalent available to a Node child-process runner
+ * that cannot pass an executable handle to CreateProcess.
+ */
+export async function bindBundledProviderLaunch(
+  selected: BundledProvider,
+  options: { resourcesDirectory: string; platform: NodeJS.Platform },
+): Promise<() => Promise<void>> {
+  await verifyBundledProvider(selected, options);
+  const handles = [] as Awaited<ReturnType<typeof open>>[];
+  try {
+    for (const candidate of [
+      selected.executable,
+      selected.companion?.path,
+      selected.runtime?.path,
+      ...(selected.assets?.map((asset) => asset.path) ?? []),
+    ].filter((value): value is string => value !== undefined)) {
+      handles.push(await open(candidate, "r"));
+    }
+  } catch (error) {
+    await Promise.all(handles.map((handle) => handle.close()));
+    throw error;
+  }
+  if (options.platform === "win32") {
+    try {
+      await chmod(path.dirname(selected.manifestPath), 0o555);
+      await Promise.all(
+        [
+          selected.manifestPath,
+          selected.executable,
+          selected.companion?.path,
+          selected.runtime?.path,
+          ...(selected.assets?.map((asset) => asset.path) ?? []),
+        ]
+          .filter((candidate): candidate is string => candidate !== undefined)
+          .map((candidate) => chmod(candidate, 0o444)),
+      );
+    } catch (error) {
+      await Promise.all(handles.map((handle) => handle.close()));
+      throw new Error(
+        `Bundled provider resource tree could not be made immutable before spawn: ${describeError(error)}`,
+      );
+    }
+  }
+  return async () => {
+    await Promise.all(handles.map((handle) => handle.close()));
+  };
 }
 
 function parseManifest(
@@ -264,7 +440,34 @@ function parseManifest(
     entry.platforms.length > 8 ||
     !entry.platforms.every(
       (platform): platform is string => typeof platform === "string",
-    )
+    ) ||
+    (entry.runtime !== undefined &&
+      (typeof entry.runtime.path !== "string" ||
+        entry.runtime.path.length === 0 ||
+        entry.runtime.path.length > 256 ||
+        typeof entry.runtime.sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(entry.runtime.sha256) ||
+        (entry.runtime.version !== undefined &&
+          (typeof entry.runtime.version !== "string" ||
+            entry.runtime.version.length > 64)))) ||
+    (entry.companion !== undefined &&
+      (typeof entry.companion.path !== "string" ||
+        entry.companion.path.length === 0 ||
+        entry.companion.path.length > 256 ||
+        typeof entry.companion.sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(entry.companion.sha256))) ||
+    (entry.assets !== undefined &&
+      (entry.assets.length > 64 ||
+        !entry.assets.every(
+          (asset) =>
+            typeof asset === "object" &&
+            asset !== null &&
+            typeof asset.path === "string" &&
+            asset.path.length > 0 &&
+            asset.path.length <= 256 &&
+            typeof asset.sha256 === "string" &&
+            /^[a-f0-9]{64}$/u.test(asset.sha256),
+        )))
   ) {
     return undefined;
   }
