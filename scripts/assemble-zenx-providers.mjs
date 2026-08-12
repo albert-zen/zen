@@ -203,7 +203,10 @@ async function assembleNpmProvider(id, platform, runtimePath) {
       "node_modules",
       ".package-lock.json",
     );
-    const dependencyLock = await readFile(generatedLock);
+    const dependencyLock = Buffer.from(
+      (await readFile(generatedLock, "utf8")).replaceAll("\r\n", "\n"),
+      "utf8",
+    );
     const dependencyLockSha256 = sha256(dependencyLock);
     if (
       pin.dependencyLockSha256 !== undefined &&
