@@ -7,7 +7,10 @@ import type {
   BrowserTargetFingerprint,
   ZenXBrowserBackend,
 } from "./browser-provider.js";
-import { BrowserScreenshotArtifactStore } from "./browser-provider.js";
+import {
+  BrowserScreenshotArtifactStore,
+  redactBrowserUrl,
+} from "./browser-provider.js";
 import {
   type ExternalProviderProcessRunner,
   parseExternalJson,
@@ -77,6 +80,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   readonly #executable: string;
   readonly #runner: ExternalProviderProcessRunner;
   readonly #cwd: string;
+  readonly #verifyExecutable?: () => Promise<void>;
   readonly #sessions = new Map<string, PlaywrightSessionState>();
   readonly #artifacts: BrowserScreenshotArtifactStore;
 
@@ -85,10 +89,12 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     runner: ExternalProviderProcessRunner;
     cwd: string;
     artifactDirectory?: string;
+    verifyExecutable?: () => Promise<void>;
   }) {
     this.#executable = options.executable;
     this.#runner = options.runner;
     this.#cwd = options.cwd;
+    this.#verifyExecutable = options.verifyExecutable;
     this.#artifacts = new BrowserScreenshotArtifactStore(
       options.artifactDirectory,
     );
@@ -163,6 +169,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   ): Promise<BrowserInspection> {
     const { session, tab } = this.#requireTab(sessionId, tabId);
     await this.#select(session, tab, signal);
+    const beforeSnapshot = await this.#currentPage(session, tab, signal);
     const snapshot = await this.#snapshot(session, signal);
     const observationId = randomUUID();
     const targets = new Map<
@@ -195,12 +202,30 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         disabled: node.disabled === true,
       });
     }
+    const beforeScreenshot = await this.#currentPage(session, tab, signal);
+    if (pageIdentity(beforeSnapshot) !== pageIdentity(beforeScreenshot)) {
+      this.#invalidate(tab);
+      throw new Error(
+        "Playwright page changed during inspection; inspect again",
+      );
+    }
     const screenshot = await this.#screenshot(
       session,
       tab,
       observationId,
       signal,
     );
+    const afterScreenshot = await this.#currentPage(session, tab, signal);
+    if (pageIdentity(beforeScreenshot) !== pageIdentity(afterScreenshot)) {
+      await this.#artifacts.removeArtifact(
+        screenshot.artifactPath,
+        screenshot.observationId,
+      );
+      this.#invalidate(tab);
+      throw new Error(
+        "Playwright page changed during screenshot; inspect again",
+      );
+    }
     tab.observation = {
       id: observationId,
       documentVersion: tab.documentVersion,
@@ -308,6 +333,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     maxOutputBytes = 512 * 1024,
   ): Promise<Record<string, unknown>> {
     try {
+      await this.#verifyExecutable?.();
       const result = await this.#runner.run(
         this.#executable,
         ["--json", `-s=${session.cliSessionName}`, ...args],
@@ -368,6 +394,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   }
 
   async #bestEffortCancel(session: PlaywrightSessionState): Promise<void> {
+    await this.#verifyExecutable?.().catch(() => undefined);
     await this.#runner
       .run(
         this.#executable,
@@ -565,6 +592,18 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     if (page === undefined)
       throw new Error("Playwright browser tab was closed");
     return pageSummary(sessionId, tab.tabId, page);
+  }
+
+  async #currentPage(
+    session: PlaywrightSessionState,
+    tab: PlaywrightTabState,
+    signal?: AbortSignal,
+  ): Promise<PlaywrightPageState> {
+    const pages = await this.#pageStates(session, signal);
+    const page = pages.find((candidate) => candidate.index === tab.index);
+    if (page === undefined)
+      throw new Error("Playwright browser tab was closed");
+    return page;
   }
 
   #session(sessionId: string): PlaywrightSessionState {
@@ -815,9 +854,13 @@ function pageSummary(
     sessionId,
     tabId,
     title: page.title,
-    url: page.url,
+    url: redactBrowserUrl(page.url),
     loading: false,
   };
+}
+
+function pageIdentity(page: PlaywrightPageState): string {
+  return `${page.index}\u0000${page.url}\u0000${page.title}`;
 }
 
 export function playwrightSessionName(sessionId: string): string {

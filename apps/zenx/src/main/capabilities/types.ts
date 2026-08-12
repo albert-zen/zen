@@ -82,6 +82,8 @@ export interface ZenXCapabilityAuditRecord {
 export interface ZenXCapabilityScreenshotArtifact {
   artifactPath: string;
   observationId?: string;
+  status: "captured" | "fallback";
+  reason?: string;
   width: number;
   height: number;
   bytes: number;

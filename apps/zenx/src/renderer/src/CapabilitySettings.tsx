@@ -186,12 +186,24 @@ export function CapabilitySettings() {
           </ol>
           {currentScreenshot === undefined ? null : (
             <figure>
-              <img
-                alt={`Current browser observation ${currentScreenshot.observationId ?? ""}`}
-                src={fileArtifactUrl(currentScreenshot.artifactPath)}
-              />
+              {currentScreenshot.status === "captured" ? (
+                <img
+                  alt={`Current browser observation ${currentScreenshot.observationId ?? ""}`}
+                  src={fileArtifactUrl(currentScreenshot.artifactPath)}
+                />
+              ) : (
+                <figcaption>
+                  Screenshot unavailable; this is not a live browser
+                  observation.
+                  {currentScreenshot.reason === undefined
+                    ? ""
+                    : ` ${currentScreenshot.reason}.`}
+                </figcaption>
+              )}
               <figcaption>
-                Current observation{" "}
+                {currentScreenshot.status === "captured"
+                  ? "Current observation"
+                  : "Capture status: fallback"}{" "}
                 {currentScreenshot.observationId ?? "unknown"} ·{" "}
                 {currentScreenshot.width}×{currentScreenshot.height}
               </figcaption>

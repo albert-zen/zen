@@ -183,6 +183,19 @@ test("rejects incompatible Playwright versions and JSON schema", async () => {
     ),
     /list\.browsers is invalid/u,
   );
+  await assert.rejects(
+    probePlaywrightCli(
+      "/opt/playwright-cli",
+      new ScriptedRunner([
+        {
+          args: ["--json", "--version"],
+          stdout: JSON.stringify({ version: "0.1.18" }),
+        },
+      ]),
+      "0.1.19",
+    ),
+    /does not match pinned version/u,
+  );
 });
 
 test("pins Peekaboo 3.x and reports explicit permission diagnostics", async () => {

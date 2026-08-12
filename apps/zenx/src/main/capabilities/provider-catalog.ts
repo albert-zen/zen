@@ -19,7 +19,10 @@ import {
 } from "./external-provider.js";
 import { PeekabooComputerBackend } from "./peekaboo-computer-provider.js";
 import { PlaywrightCliBrowserBackend } from "./playwright-browser-provider.js";
-import { resolveBundledProvider } from "./provider-provisioning.js";
+import {
+  resolveBundledProvider,
+  verifyBundledProvider,
+} from "./provider-provisioning.js";
 import { connectUserBrowserCdp } from "./user-browser-provider.js";
 import type { UserBrowserConnection } from "./user-browser-provider.js";
 import {
@@ -55,6 +58,8 @@ export interface ZenXCapabilityProviderCatalogOptions {
   /** Set by the packaged app; dev/test keeps explicit PATH discovery. */
   bundledProvidersOnly?: boolean;
   resourcesDirectory?: string;
+  /** Build-time trust anchor for the packaged provider manifest. */
+  bundledManifestSha256?: string;
 }
 
 // @playwright/cli has its own 0.1.x package version. It embeds Playwright
@@ -160,6 +165,7 @@ export async function selectBrowserProvider(
       ? await resolveBundledProvider("playwright-cli", {
           resourcesDirectory: options.resourcesDirectory,
           platform,
+          expectedManifestSha256: options.bundledManifestSha256,
         })
       : undefined;
   if (
@@ -212,7 +218,11 @@ export async function selectBrowserProvider(
     };
   }
   try {
-    const version = await probePlaywrightCli(executable, runner);
+    const version = await probePlaywrightCli(
+      executable,
+      runner,
+      bundled?.provider?.version,
+    );
     const playwrightDirectory = path.join(
       options.userDataDirectory,
       "playwright",
@@ -223,6 +233,15 @@ export async function selectBrowserProvider(
         executable,
         runner,
         cwd: playwrightDirectory,
+        ...(bundled?.provider === undefined
+          ? {}
+          : {
+              verifyExecutable: async () =>
+                await verifyBundledProvider(bundled.provider!, {
+                  resourcesDirectory: options.resourcesDirectory!,
+                  platform,
+                }),
+            }),
       }),
       manifest: playwrightBrowserManifest(),
       diagnostics: [
@@ -335,6 +354,7 @@ export async function selectComputerProvider(
         ? await resolveBundledProvider("microsoft-winapp-cli", {
             resourcesDirectory: options.resourcesDirectory,
             platform,
+            expectedManifestSha256: options.bundledManifestSha256,
           })
         : undefined;
     const command =
@@ -354,7 +374,19 @@ export async function selectComputerProvider(
         ],
       };
     }
-    const backend = new WinAppCliComputerBackend({ command });
+    const backend = new WinAppCliComputerBackend({
+      command,
+      expectedVersion: bundled?.provider?.version,
+      ...(bundled?.provider === undefined
+        ? {}
+        : {
+            verifyExecutable: async () =>
+              await verifyBundledProvider(bundled.provider!, {
+                resourcesDirectory: options.resourcesDirectory!,
+                platform,
+              }),
+          }),
+    });
     const diagnostic = await backend.diagnose();
     if (!diagnostic.ready) {
       await backend.close();
@@ -484,6 +516,7 @@ export async function selectComputerProvider(
 export async function probePlaywrightCli(
   executable: string,
   runner: ExternalProviderProcessRunner,
+  expectedVersion?: string,
 ): Promise<string> {
   const versionResult = await runner.run(executable, ["--json", "--version"], {
     timeoutMs: 5_000,
@@ -500,6 +533,11 @@ export async function probePlaywrightCli(
     MAX_PLAYWRIGHT_CLI_EXCLUSIVE,
     "playwright-cli",
   );
+  if (expectedVersion !== undefined && version !== expectedVersion) {
+    throw new Error(
+      `playwright-cli version ${version} does not match pinned version ${expectedVersion}`,
+    );
+  }
   const listResult = await runner.run(executable, ["--json", "list"], {
     timeoutMs: 5_000,
     maxOutputBytes: 64 * 1024,

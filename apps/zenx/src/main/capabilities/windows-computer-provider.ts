@@ -218,6 +218,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   readonly #observations = new ComputerObservationLedger();
   readonly #platform: NodeJS.Platform;
   readonly #runner: WinAppCliRunner;
+  readonly #expectedVersion?: string;
+  readonly #verifyExecutable?: () => Promise<void>;
 
   constructor(
     options: {
@@ -225,6 +227,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       command?: string;
       platform?: NodeJS.Platform;
       runner?: WinAppCliRunner;
+      expectedVersion?: string;
+      verifyExecutable?: () => Promise<void>;
     } = {},
   ) {
     this.#artifactDirectory =
@@ -233,6 +237,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     this.#command = options.command ?? "winapp";
     this.#platform = options.platform ?? process.platform;
     this.#runner = options.runner ?? new SpawnWinAppCliRunner();
+    this.#expectedVersion = options.expectedVersion;
+    this.#verifyExecutable = options.verifyExecutable;
   }
 
   async diagnose(signal?: AbortSignal): Promise<WinAppCliDiagnostic> {
@@ -249,7 +255,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     }
     let detectedVersion: string | undefined;
     try {
-      const result = await this.#runner.run(this.#command, ["--version"], {
+      const result = await this.#run(["--version"], {
         timeoutMs: 5_000,
         signal,
         maxStdoutBytes: 4 * 1024,
@@ -279,28 +285,35 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
           message: `Microsoft WinApp CLI ${version} is incompatible; ${MINIMUM_WINAPP_CLI_VERSION} or newer is required`,
         };
       }
+      if (
+        this.#expectedVersion !== undefined &&
+        version !== this.#expectedVersion
+      ) {
+        return {
+          ready: false,
+          platform: this.#platform,
+          executable: this.#command,
+          version,
+          requiredVersion: this.#expectedVersion,
+          schemaCompatible: false,
+          installCommand: WINAPP_INSTALL_COMMAND,
+          message: `Microsoft WinApp CLI ${version} does not match pinned version ${this.#expectedVersion}`,
+        };
+      }
       detectedVersion = version;
-      const cliSchemaResult = await this.#runner.run(
-        this.#command,
-        ["--cli-schema"],
-        {
-          timeoutMs: 5_000,
-          signal,
-          maxStdoutBytes: 512 * 1024,
-          maxStderrBytes: 4 * 1024,
-        },
-      );
+      const cliSchemaResult = await this.#run(["--cli-schema"], {
+        timeoutMs: 5_000,
+        signal,
+        maxStdoutBytes: 512 * 1024,
+        maxStderrBytes: 4 * 1024,
+      });
       validateCliSchema(cliSchemaResult.stdout, version);
-      const probe = await this.#runner.run(
-        this.#command,
-        ["ui", "list-windows", "--json"],
-        {
-          timeoutMs: 5_000,
-          signal,
-          maxStdoutBytes: 256 * 1024,
-          maxStderrBytes: 4 * 1024,
-        },
-      );
+      const probe = await this.#run(["ui", "list-windows", "--json"], {
+        timeoutMs: 5_000,
+        signal,
+        maxStdoutBytes: 256 * 1024,
+        maxStderrBytes: 4 * 1024,
+      });
       validateWindowListProbe(probe.stdout);
       return {
         ready: true,
@@ -676,13 +689,21 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     }
   }
 
+  async #run(
+    args: readonly string[],
+    options: WinAppCliRunOptions,
+  ): Promise<WinAppCliRunResult> {
+    await this.#verifyExecutable?.();
+    return await this.#runner.run(this.#command, args, options);
+  }
+
   async #json<T>(
     args: readonly string[],
     timeoutMs: number,
     signal?: AbortSignal,
     redactions?: readonly string[],
   ): Promise<T> {
-    const result = await this.#runner.run(this.#command, args, {
+    const result = await this.#run(args, {
       timeoutMs,
       signal,
       maxStdoutBytes: MAX_WINAPP_STDOUT_BYTES,

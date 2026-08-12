@@ -44,6 +44,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   readonly #listeners = new Set<(snapshot: ZenXCapabilitySnapshot) => void>();
   readonly #audit: ZenXCapabilityAuditRecord[] = [];
   #currentScreenshot: ZenXCapabilityScreenshotArtifact | undefined;
+  #browserProjectionSequence = 0;
   readonly #providerDiagnostics: ZenXCapabilityProviderDiagnostic[] = [];
   readonly #discoveryErrors: string[] = [];
   readonly #options: ZenXCapabilityRegistryOptions;
@@ -92,6 +93,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     const registered = this.#registered.get(capabilityId);
     if (registered === undefined) return;
     this.#registered.delete(capabilityId);
+    if (capabilityId === "browser") this.#clearBrowserProjection();
     for (const tool of registered.package.manifest.tools) {
       this.#toolOwners.delete(tool.name);
     }
@@ -173,6 +175,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
       };
     }
     await this.#grantStore.save(this.#grants);
+    if (capabilityId === "browser") this.#clearBrowserProjection();
     this.#emit();
   }
 
@@ -351,17 +354,27 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     capabilityPackage: ZenXCapabilityPackage,
     invocation: ToolInvocation,
   ): Promise<unknown> {
-    if (capabilityPackage.manifest.id === "browser") {
-      // Any non-published Browser result makes the previous observation stale;
-      // only this invocation's inspect may publish a new screenshot.
-      this.#currentScreenshot = undefined;
+    const isBrowser = capabilityPackage.manifest.id === "browser";
+    const sequence = isBrowser ? ++this.#browserProjectionSequence : undefined;
+    if (isBrowser) this.#currentScreenshot = undefined;
+    try {
+      const value = await capabilityPackage.invoke(invocation.name, invocation);
+      if (isBrowser && sequence === this.#browserProjectionSequence) {
+        const screenshot = browserScreenshotFrom(value);
+        if (screenshot !== undefined) this.#currentScreenshot = screenshot;
+      }
+      return value;
+    } catch (error) {
+      if (isBrowser && sequence === this.#browserProjectionSequence) {
+        this.#currentScreenshot = undefined;
+      }
+      throw error;
     }
-    const value = await capabilityPackage.invoke(invocation.name, invocation);
-    if (capabilityPackage.manifest.id === "browser") {
-      const screenshot = browserScreenshotFrom(value);
-      if (screenshot !== undefined) this.#currentScreenshot = screenshot;
-    }
-    return value;
+  }
+
+  #clearBrowserProjection(): void {
+    this.#browserProjectionSequence += 1;
+    this.#currentScreenshot = undefined;
   }
 
   #readResource(arguments_: Record<string, unknown>): {
@@ -647,7 +660,8 @@ function browserScreenshotFrom(
     typeof record.width !== "number" ||
     typeof record.height !== "number" ||
     typeof record.bytes !== "number" ||
-    typeof record.expiresAt !== "string"
+    typeof record.expiresAt !== "string" ||
+    (record.status !== "captured" && record.status !== "fallback")
   ) {
     return undefined;
   }
@@ -656,6 +670,8 @@ function browserScreenshotFrom(
     ...(typeof record.observationId === "string"
       ? { observationId: record.observationId }
       : {}),
+    status: record.status,
+    ...(typeof record.reason === "string" ? { reason: record.reason } : {}),
     width: record.width,
     height: record.height,
     bytes: record.bytes,

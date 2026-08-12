@@ -38,8 +38,67 @@ test("browser screenshot artifacts are bounded, scoped, and cleaned", async () =
   }
 });
 
+test("browser screenshot cleanup serializes close and scope races", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-browser-race-"));
+  const store = new BrowserScreenshotArtifactStore(root);
+  try {
+    const write = store.write("session/tab", "observation-race", ONE_PIXEL_PNG);
+    const clear = store.clearScope("session");
+    const artifact = await write;
+    await clear;
+    await assert.rejects(access(artifact.artifactPath));
+
+    const close = store.close();
+    await assert.rejects(
+      store.write("session/tab", "after-close", ONE_PIXEL_PNG),
+      /closed/u,
+    );
+    await close;
+  } finally {
+    await store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("browser screenshot validation rejects truncation, bad CRC, and huge dimensions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-browser-png-"));
+  const store = new BrowserScreenshotArtifactStore(root);
+  try {
+    await assert.rejects(
+      store.write("session/tab", "truncated", ONE_PIXEL_PNG.subarray(0, -1)),
+      /PNG/u,
+    );
+    const badCrc = Buffer.from(ONE_PIXEL_PNG);
+    badCrc[badCrc.length - 1]! ^= 1;
+    await assert.rejects(store.write("session/tab", "crc", badCrc), /CRC/u);
+    const huge = Buffer.from(ONE_PIXEL_PNG);
+    huge.writeUInt32BE(5_000, 16);
+    huge.writeUInt32BE(crc32(huge.subarray(12, 29)), 29);
+    await assert.rejects(
+      store.write("session/tab", "huge", huge),
+      /dimensions/u,
+    );
+    const valid = await store.write("session/tab", "valid", ONE_PIXEL_PNG);
+    assert.equal(valid.width, 1);
+  } finally {
+    await store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function oversizedPng(): Buffer {
   const png = Buffer.alloc(MAX_BROWSER_SCREENSHOT_BYTES + 1);
   ONE_PIXEL_PNG.copy(png, 0, 0, 24);
   return png;
+}
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }

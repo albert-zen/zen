@@ -245,6 +245,17 @@ test("WinApp diagnostic is actionable without installing on non-Windows test hos
   assert.equal(ready.requiredVersion, "0.3.1");
   assert.equal(ready.schemaCompatible, true);
 
+  const pinnedMismatch = await new WinAppCliComputerBackend({
+    platform: "win32",
+    runner: new FixtureWinAppRunner(),
+    expectedVersion: "1.2.4",
+  }).diagnose();
+  assert.equal(pinnedMismatch.ready, false);
+  assert.match(
+    pinnedMismatch.message,
+    /does not match pinned version 1\.2\.4/u,
+  );
+
   const oldRunner = new FixtureWinAppRunner();
   oldRunner.versionOutput = "winapp 0.3.0\n";
   const old = await new WinAppCliComputerBackend({

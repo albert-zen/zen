@@ -8,6 +8,7 @@ import {
   browserPartitionName,
   MAX_BROWSER_TABS_GLOBAL,
   MAX_BROWSER_TABS_PER_SESSION,
+  redactBrowserUrl,
   resolveBrowserObservedTarget,
   type BrowserInspection,
   type BrowserObservation,
@@ -15,6 +16,24 @@ import {
   type BrowserTargetFingerprint,
   type ZenXBrowserBackend,
 } from "../src/main/capabilities/browser-provider.js";
+
+test("browser URL projection uniformly removes credentials, query, and hash", () => {
+  assert.equal(
+    redactBrowserUrl(
+      "https://alice:secret@example.com/path?q=ordinary#fragment",
+    ),
+    "https://example.com/path",
+  );
+  assert.equal(
+    redactBrowserUrl("https://example.com/"),
+    "https://example.com/",
+  );
+  assert.ok(
+    redactBrowserUrl(`https://example.com/${"x".repeat(4_096)}`).length <=
+      2_048,
+  );
+  assert.throws(() => redactBrowserUrl("not a URL"), TypeError);
+});
 
 test("browser vertical slice targets one session/tab through structured operations", async () => {
   const calls: string[] = [];
@@ -228,6 +247,7 @@ function browserBackend(calls: string[]): ZenXBrowserBackend {
         screenshot: {
           artifactPath: "/tmp/browser-fixture.png",
           observationId: "observation-1",
+          status: "captured",
           width: 1,
           height: 1,
           bytes: 68,

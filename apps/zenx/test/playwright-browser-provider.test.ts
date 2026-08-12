@@ -51,6 +51,21 @@ test("Playwright provider runs an isolated JSON-only observe/action slice", asyn
   assert.ok(runner.calls.some((args) => args.includes("click")));
 });
 
+test("Playwright tab summaries redact URL credentials and values", async () => {
+  const runner = new FakePlaywrightRunner();
+  runner.url = "https://alice:secret@example.com/private?q=token#fragment";
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  const opened = await backend.open("research", runner.url);
+  assert.equal(opened.url, "https://example.com/private");
+  const listed = await backend.listTabs("research");
+  assert.equal(listed[0]?.url, "https://example.com/private");
+  await backend.close();
+});
+
 test("Playwright provider fails closed on an incompatible snapshot schema", async () => {
   const runner = new FakePlaywrightRunner();
   runner.invalidSnapshot = true;
@@ -138,6 +153,7 @@ test("Playwright cancellation invalidates the session before immediate reuse", a
 
 class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   readonly calls: string[][] = [];
+  url = "https://example.com/";
   invalidSnapshot = false;
   changeIdentity = false;
   abortNextSnapshot = false;
@@ -167,6 +183,7 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
     const command = args[2];
     let response: Record<string, unknown> = {};
     if (command === "open") {
+      this.url = args[3] ?? this.url;
       response = { session: args[1]?.slice(3), result: {} };
     } else if (command === "close" && this.#delayClose) {
       this.#delayClose = false;
@@ -198,7 +215,7 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
               {
                 index: 0,
                 title: "Fixture",
-                url: "https://example.com/",
+                url: this.url,
                 current: true,
               },
             ]),

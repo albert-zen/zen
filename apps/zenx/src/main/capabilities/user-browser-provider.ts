@@ -100,7 +100,12 @@ export interface UserBrowserCdpClient {
     owner: UserBrowserAttachmentOwner,
     expectedDocumentIdentity: string,
     signal?: AbortSignal,
-  ): Promise<{ data: string; documentIdentity: string }>;
+  ): Promise<{
+    data: string;
+    documentIdentity: string;
+    status?: "captured" | "fallback";
+    reason?: string;
+  }>;
   detachTarget(
     targetId: string,
     owner: UserBrowserAttachmentOwner,
@@ -545,6 +550,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           ? {
               data: FALLBACK_SCREENSHOT_PNG_BASE64,
               documentIdentity: evaluation.documentIdentity,
+              status: "fallback" as const,
+              reason:
+                "Screenshot capture is not supported by the attached browser client",
             }
           : await this.#client.captureScreenshot(
               tabId,
@@ -555,10 +563,27 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       if (screenshotCapture.documentIdentity !== evaluation.documentIdentity) {
         throw new Error("User browser document changed during inspection");
       }
+      const normalizedScreenshot =
+        typeof screenshotCapture.data === "string" &&
+        screenshotCapture.data.length > 0
+          ? screenshotCapture
+          : {
+              data: FALLBACK_SCREENSHOT_PNG_BASE64,
+              documentIdentity: screenshotCapture.documentIdentity,
+              status: "fallback" as const,
+              reason:
+                "Attached browser screenshot response was empty or malformed",
+            };
       const screenshot: BrowserScreenshotArtifact = await this.#artifacts.write(
         `${sessionId}/${tabId}`,
         observationId,
-        Buffer.from(screenshotCapture.data, "base64"),
+        Buffer.from(normalizedScreenshot.data, "base64"),
+        {
+          status: normalizedScreenshot.status ?? "captured",
+          ...(normalizedScreenshot.reason === undefined
+            ? {}
+            : { reason: normalizedScreenshot.reason }),
+        },
       );
       const projected = fingerprints.map((fingerprint) => {
         const targetId = randomUUID();
@@ -1697,7 +1722,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     owner: UserBrowserAttachmentOwner,
     expectedDocumentIdentity: string,
     signal?: AbortSignal,
-  ): Promise<{ data: string; documentIdentity: string }> {
+  ): Promise<{
+    data: string;
+    documentIdentity: string;
+    status: "captured" | "fallback";
+    reason?: string;
+  }> {
     const before = await this.#executionDocument(targetId, owner, signal);
     if (before.identity !== expectedDocumentIdentity) {
       throw new UserBrowserDocumentChangedBeforeDispatchError();
@@ -1718,9 +1748,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       );
     } catch (error) {
       if (!(error instanceof UserBrowserCdpOutcomeUnknownError)) throw error;
-      // Screenshot is read-only. Some hidden Windows Chrome surfaces never
-      // answer Page.captureScreenshot; retain a valid bounded artifact while
-      // rechecking the document fence before publishing the observation.
+      // A read-only capture can have an unknown settlement on hidden browser
+      // surfaces. Keep this narrowly scoped fallback explicit and publish it
+      // only after rechecking the document fence.
       const afterTimeout = await this.#executionDocument(
         targetId,
         owner,
@@ -1732,18 +1762,26 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       return {
         data: FALLBACK_SCREENSHOT_PNG_BASE64,
         documentIdentity: afterTimeout.identity,
+        status: "fallback",
+        reason: "Attached browser screenshot capture outcome was unknown",
       };
     }
     const after = await this.#executionDocument(targetId, owner, signal);
     if (after.identity !== before.identity) {
       throw new UserBrowserDocumentChangedAfterDispatchError();
     }
+    if (typeof response?.data !== "string" || response.data.length === 0) {
+      return {
+        data: FALLBACK_SCREENSHOT_PNG_BASE64,
+        documentIdentity: after.identity,
+        status: "fallback",
+        reason: "Attached browser screenshot response was empty or malformed",
+      };
+    }
     return {
-      data:
-        typeof response?.data === "string" && response.data.length > 0
-          ? response.data
-          : FALLBACK_SCREENSHOT_PNG_BASE64,
+      data: response.data,
       documentIdentity: after.identity,
+      status: "captured",
     };
   }
 

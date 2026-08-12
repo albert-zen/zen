@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { inflateSync } from "node:zlib";
 
 import type { BrowserWindow, Session } from "electron";
 
@@ -33,6 +34,8 @@ export interface BrowserInspection extends BrowserTabSummary {
 export interface BrowserScreenshotArtifact {
   artifactPath: string;
   observationId: string;
+  status: "captured" | "fallback";
+  reason?: string;
   width: number;
   height: number;
   bytes: number;
@@ -358,16 +361,20 @@ export const MAX_BROWSER_TABS_PER_SESSION = 8;
 export const MAX_BROWSER_TABS_GLOBAL = 24;
 export const MAX_BROWSER_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 export const BROWSER_SCREENSHOT_TTL_MS = 5 * 60_000;
+const MAX_BROWSER_SCREENSHOT_WIDTH = 4096;
+const MAX_BROWSER_SCREENSHOT_HEIGHT = 4096;
+const MAX_BROWSER_SCREENSHOT_PIXELS = 16 * 1024 * 1024;
 
 /** Temporary provider-owned PNGs; no screenshot bytes are part of the journal. */
 export class BrowserScreenshotArtifactStore {
   readonly #directory: string;
   readonly #artifacts = new Map<
     string,
-    { scope: string; timer: NodeJS.Timeout }
+    { scope: string; observationId: string; timer: NodeJS.Timeout }
   >();
   #directoryCreated = false;
   #closed = false;
+  #operations: Promise<void> = Promise.resolve();
 
   constructor(
     directory = path.join(
@@ -382,69 +389,106 @@ export class BrowserScreenshotArtifactStore {
     scope: string,
     observationId: string,
     png: Buffer,
+    options: { status?: "captured" | "fallback"; reason?: string } = {},
   ): Promise<BrowserScreenshotArtifact> {
-    if (this.#closed) {
-      throw new Error("Browser screenshot artifact store is closed");
-    }
-    const dimensions = pngDimensions(png);
-    if (png.byteLength > MAX_BROWSER_SCREENSHOT_BYTES) {
-      throw new Error(
-        `Browser screenshot exceeded the ${String(MAX_BROWSER_SCREENSHOT_BYTES)} byte bound`,
-      );
-    }
-    if (!this.#directoryCreated) {
-      await mkdir(this.#directory, { recursive: true, mode: 0o700 });
-      this.#directoryCreated = true;
-    }
-    const artifactPath = path.join(this.#directory, `${randomUUID()}.png`);
-    await writeFile(artifactPath, png, { mode: 0o600 });
-    const expiresAt = new Date(Date.now() + BROWSER_SCREENSHOT_TTL_MS);
-    const timer = setTimeout(() => {
-      this.#artifacts.delete(artifactPath);
-      void rm(artifactPath, { force: true });
-    }, BROWSER_SCREENSHOT_TTL_MS);
-    timer.unref();
-    this.#artifacts.set(artifactPath, { scope, timer });
-    return {
-      artifactPath,
-      observationId,
-      width: dimensions.width,
-      height: dimensions.height,
-      bytes: png.byteLength,
-      expiresAt: expiresAt.toISOString(),
-    };
+    return await this.#enqueue(async () => {
+      if (this.#closed) {
+        throw new Error("Browser screenshot artifact store is closed");
+      }
+      if (png.byteLength > MAX_BROWSER_SCREENSHOT_BYTES) {
+        throw new Error(
+          `Browser screenshot exceeded the ${String(MAX_BROWSER_SCREENSHOT_BYTES)} byte bound`,
+        );
+      }
+      const dimensions = pngDimensions(png);
+      if (!this.#directoryCreated) {
+        await mkdir(this.#directory, { recursive: true, mode: 0o700 });
+        this.#directoryCreated = true;
+      }
+      const artifactPath = path.join(this.#directory, `${randomUUID()}.png`);
+      await writeFile(artifactPath, png, { mode: 0o600 });
+      if (this.#closed) {
+        await rm(artifactPath, { force: true });
+        throw new Error("Browser screenshot artifact store is closed");
+      }
+      const expiresAt = new Date(Date.now() + BROWSER_SCREENSHOT_TTL_MS);
+      const timer = setTimeout(() => {
+        void this.removeArtifact(artifactPath, observationId);
+      }, BROWSER_SCREENSHOT_TTL_MS);
+      timer.unref();
+      this.#artifacts.set(artifactPath, { scope, observationId, timer });
+      return {
+        artifactPath,
+        observationId,
+        status: options.status ?? "captured",
+        ...(options.reason === undefined ? {} : { reason: options.reason }),
+        width: dimensions.width,
+        height: dimensions.height,
+        bytes: png.byteLength,
+        expiresAt: expiresAt.toISOString(),
+      };
+    });
   }
 
   async clearScope(scope: string): Promise<void> {
-    const paths = [...this.#artifacts.entries()]
-      .filter(
-        ([, artifact]) =>
-          artifact.scope === scope || artifact.scope.startsWith(`${scope}/`),
-      )
-      .map(([artifactPath]) => artifactPath);
-    await Promise.all(paths.map((artifactPath) => this.#remove(artifactPath)));
+    await this.#enqueue(async () => {
+      const paths = [...this.#artifacts.entries()]
+        .filter(
+          ([, artifact]) =>
+            artifact.scope === scope || artifact.scope.startsWith(`${scope}/`),
+        )
+        .map(([artifactPath]) => artifactPath);
+      await Promise.all(
+        paths.map((artifactPath) => this.#removeNow(artifactPath)),
+      );
+    });
   }
 
   async close(): Promise<void> {
-    this.#closed = true;
-    for (const timer of this.#artifacts.values()) clearTimeout(timer.timer);
-    const paths = [...this.#artifacts.keys()];
-    this.#artifacts.clear();
-    await Promise.all(
-      paths.map((artifactPath) => rm(artifactPath, { force: true })),
-    );
-    if (this.#directoryCreated) {
-      await rm(this.#directory, { recursive: true, force: true });
-      this.#directoryCreated = false;
-    }
+    await this.#enqueue(async () => {
+      if (this.#closed) return;
+      this.#closed = true;
+      for (const artifact of this.#artifacts.values())
+        clearTimeout(artifact.timer);
+      const paths = [...this.#artifacts.keys()];
+      this.#artifacts.clear();
+      await Promise.all(
+        paths.map((artifactPath) => rm(artifactPath, { force: true })),
+      );
+      if (this.#directoryCreated) {
+        await rm(this.#directory, { recursive: true, force: true });
+        this.#directoryCreated = false;
+      }
+    });
   }
 
-  async #remove(artifactPath: string): Promise<void> {
+  async removeArtifact(
+    artifactPath: string,
+    observationId: string,
+  ): Promise<void> {
+    await this.#enqueue(async () => {
+      const artifact = this.#artifacts.get(artifactPath);
+      if (artifact === undefined || artifact.observationId !== observationId)
+        return;
+      await this.#removeNow(artifactPath);
+    });
+  }
+
+  async #removeNow(artifactPath: string): Promise<void> {
     const artifact = this.#artifacts.get(artifactPath);
     if (artifact === undefined) return;
     clearTimeout(artifact.timer);
     this.#artifacts.delete(artifactPath);
     await rm(artifactPath, { force: true });
+  }
+
+  async #enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#operations.then(operation, operation);
+    this.#operations = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await result;
   }
 }
 
@@ -554,7 +598,10 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     const observationId = randomUUID();
     const screenshot = await this.#captureScreenshot(tab, observationId);
     if (tab.documentVersion !== documentVersion) {
-      await this.#artifacts.clearScope(`${sessionId}/${tabId}`);
+      await this.#artifacts.removeArtifact(
+        screenshot.artifactPath,
+        screenshot.observationId,
+      );
       throw new Error(
         "Browser document changed during inspection; inspect again",
       );
@@ -995,20 +1042,145 @@ export function redactBrowserUrl(raw: string): string {
 }
 
 function pngDimensions(buffer: Buffer): { width: number; height: number } {
-  if (
-    buffer.length < 24 ||
-    !buffer
-      .subarray(0, 8)
-      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-  ) {
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (buffer.length < 33 || !buffer.subarray(0, 8).equals(signature)) {
     throw new Error("Browser screenshot is not a valid PNG");
   }
-  const width = buffer.readUInt32BE(16);
-  const height = buffer.readUInt32BE(20);
-  if (width <= 0 || height <= 0) {
-    throw new Error("Browser screenshot dimensions are invalid");
+
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  let interlace = 0;
+  let sawHeader = false;
+  let sawData = false;
+  let ended = false;
+  let sawPalette = false;
+  let sawImageData = false;
+  const idat: Buffer[] = [];
+  while (offset < buffer.length) {
+    if (offset + 12 > buffer.length) {
+      throw new Error("Browser screenshot PNG is truncated");
+    }
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.subarray(offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    const crcEnd = dataEnd + 4;
+    if (dataEnd < dataStart || crcEnd > buffer.length) {
+      throw new Error("Browser screenshot PNG chunk is truncated");
+    }
+    if (ended) throw new Error("Browser screenshot PNG has data after IEND");
+    const data = buffer.subarray(dataStart, dataEnd);
+    const expectedCrc = buffer.readUInt32BE(dataEnd);
+    const actualCrc = crc32(Buffer.concat([type, data]));
+    if (actualCrc !== expectedCrc) {
+      throw new Error("Browser screenshot PNG chunk CRC is invalid");
+    }
+    const name = type.toString("ascii");
+    if (!sawHeader && name !== "IHDR") {
+      throw new Error("Browser screenshot PNG must begin with IHDR");
+    }
+    if (name === "IHDR") {
+      if (sawHeader || length !== 13) {
+        throw new Error("Browser screenshot PNG IHDR is invalid");
+      }
+      sawHeader = true;
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8]!;
+      colorType = data[9]!;
+      if (
+        width === 0 ||
+        height === 0 ||
+        width > MAX_BROWSER_SCREENSHOT_WIDTH ||
+        height > MAX_BROWSER_SCREENSHOT_HEIGHT ||
+        width * height > MAX_BROWSER_SCREENSHOT_PIXELS ||
+        data[10] !== 0 ||
+        data[11] !== 0 ||
+        data[12] !== 0 ||
+        !validPngBitDepth(colorType, bitDepth)
+      ) {
+        throw new Error("Browser screenshot dimensions or IHDR are invalid");
+      }
+      interlace = data[12]!;
+    } else if (name === "IDAT") {
+      if (!sawHeader || ended)
+        throw new Error("Browser screenshot PNG IDAT is invalid");
+      sawImageData = true;
+      sawData = true;
+      idat.push(data);
+    } else if (name === "PLTE") {
+      if (sawImageData || length === 0 || length % 3 !== 0 || length > 768) {
+        throw new Error("Browser screenshot PNG palette is invalid");
+      }
+      sawPalette = true;
+    } else if (name === "IEND") {
+      if (!sawHeader || !sawData || length !== 0) {
+        throw new Error("Browser screenshot PNG IEND is invalid");
+      }
+      ended = true;
+    }
+    offset = crcEnd;
+    if (ended) break;
+  }
+  if (!sawHeader || !sawData || !ended || offset !== buffer.length) {
+    throw new Error("Browser screenshot PNG is incomplete");
+  }
+  if (colorType === 3 && !sawPalette) {
+    throw new Error("Browser screenshot PNG palette is missing");
+  }
+  if (interlace !== 0) {
+    throw new Error("Interlaced browser screenshots are unsupported");
+  }
+  const channels =
+    colorType === 0
+      ? 1
+      : colorType === 2
+        ? 3
+        : colorType === 3
+          ? 1
+          : colorType === 4
+            ? 2
+            : 4;
+  const rowBytes = Math.ceil((width * channels * bitDepth) / 8);
+  const decodedBytes = (rowBytes + 1) * height;
+  try {
+    const decoded = inflateSync(Buffer.concat(idat), {
+      maxOutputLength: decodedBytes,
+    });
+    if (decoded.byteLength !== decodedBytes) {
+      throw new Error("decoded byte count differs from image dimensions");
+    }
+  } catch (error) {
+    throw new Error(
+      `Browser screenshot PNG image data is not decodable: ${describeError(error)}`,
+    );
   }
   return { width, height };
+}
+
+function validPngBitDepth(colorType: number, bitDepth: number): boolean {
+  if (![0, 2, 3, 4, 6].includes(colorType)) return false;
+  if (colorType === 3) return [1, 2, 4, 8].includes(bitDepth);
+  if (colorType === 0) return [1, 2, 4, 8, 16].includes(bitDepth);
+  return bitDepth === 8 || bitDepth === 16;
+}
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function requiredTargetId(

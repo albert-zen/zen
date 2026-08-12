@@ -35,6 +35,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #computerManifest?: ZenXCapabilityManifest;
   readonly #bundledProvidersOnly: boolean;
   readonly #resourcesDirectory?: string;
+  readonly #bundledManifestSha256?: string;
   #computerRegistered = false;
 
   constructor(options: {
@@ -46,6 +47,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     computerManifest?: ZenXCapabilityManifest;
     bundledProvidersOnly?: boolean;
     resourcesDirectory?: string;
+    bundledManifestSha256?: string;
   }) {
     this.#registry = new ZenXCapabilityRegistry(
       options.grantStore ??
@@ -62,6 +64,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     this.#computerManifest = options.computerManifest;
     this.#bundledProvidersOnly = options.bundledProvidersOnly ?? false;
     this.#resourcesDirectory = options.resourcesDirectory;
+    this.#bundledManifestSha256 = options.bundledManifestSha256;
   }
 
   async initialize(): Promise<void> {
@@ -72,6 +75,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
             userDataDirectory: this.#userDataDirectory,
             bundledProvidersOnly: this.#bundledProvidersOnly,
             resourcesDirectory: this.#resourcesDirectory,
+            bundledManifestSha256: this.#bundledManifestSha256,
           })
         : {
             backend: this.#browserBackend,
@@ -98,6 +102,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
             userDataDirectory: this.#userDataDirectory,
             bundledProvidersOnly: this.#bundledProvidersOnly,
             resourcesDirectory: this.#resourcesDirectory,
+            bundledManifestSha256: this.#bundledManifestSha256,
           })
         : {
             backend: this.#computerBackend,

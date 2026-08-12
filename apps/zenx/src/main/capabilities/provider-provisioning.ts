@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 export type PinnedProviderId = "playwright-cli" | "microsoft-winapp-cli";
@@ -9,6 +9,8 @@ export interface BundledProvider {
   executable: string;
   version: string;
   sha256: string;
+  manifestPath: string;
+  manifestSha256: string;
 }
 
 export interface BundledProviderResolution {
@@ -35,19 +37,54 @@ interface ProviderManifest {
  */
 export async function resolveBundledProvider(
   providerId: PinnedProviderId,
-  options: { resourcesDirectory: string; platform: NodeJS.Platform },
+  options: {
+    resourcesDirectory: string;
+    platform: NodeJS.Platform;
+    expectedVersion?: string;
+    expectedManifestSha256?: string;
+  },
 ): Promise<BundledProviderResolution> {
-  const manifestPath = path.join(
-    options.resourcesDirectory,
-    "providers",
-    "manifest.json",
-  );
-  let parsed: unknown;
+  let providerRoot: string;
+  let manifestPath: string;
   try {
-    parsed = JSON.parse(await readFile(manifestPath, "utf8"));
+    const lexicalProviderRoot = path.join(
+      options.resourcesDirectory,
+      "providers",
+    );
+    const rootStat = await lstat(lexicalProviderRoot);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+      throw new Error("provider root must be a regular, non-symlink directory");
+    }
+    providerRoot = await realpath(lexicalProviderRoot);
+    manifestPath = path.join(providerRoot, "manifest.json");
+    const manifestStat = await lstat(manifestPath);
+    if (manifestStat.isSymbolicLink() || !manifestStat.isFile()) {
+      throw new Error("manifest must be a regular, non-symlink file");
+    }
+  } catch (error) {
+    return {
+      reason: `Bundled ${providerId} manifest is unavailable: ${describeError(error)}`,
+    };
+  }
+  let parsed: unknown;
+  let manifestBytes: Buffer;
+  try {
+    manifestBytes = await readFile(manifestPath);
+    parsed = JSON.parse(manifestBytes.toString("utf8"));
   } catch (error) {
     return {
       reason: `Bundled ${providerId} manifest is unavailable at ${manifestPath}: ${describeError(error)}`,
+    };
+  }
+  const manifestSha256 = createHash("sha256")
+    .update(manifestBytes)
+    .digest("hex");
+  if (
+    options.expectedManifestSha256 !== undefined &&
+    manifestSha256 !== options.expectedManifestSha256
+  ) {
+    return {
+      reason: `Bundled ${providerId} manifest integrity mismatch: expected ${options.expectedManifestSha256}, got ${manifestSha256}`,
     };
   }
   const manifest = parseManifest(parsed, providerId);
@@ -61,12 +98,15 @@ export async function resolveBundledProvider(
       reason: `Bundled ${providerId} does not provide an asset for ${options.platform}`,
     };
   }
-  const executable = path.resolve(
-    options.resourcesDirectory,
-    "providers",
-    manifest.executable,
-  );
-  const providerRoot = path.resolve(options.resourcesDirectory, "providers");
+  if (
+    options.expectedVersion !== undefined &&
+    manifest.version !== options.expectedVersion
+  ) {
+    return {
+      reason: `Bundled ${providerId} version mismatch: expected ${options.expectedVersion}, got ${manifest.version}`,
+    };
+  }
+  const executable = path.resolve(providerRoot, manifest.executable);
   if (
     executable !== providerRoot &&
     !executable.startsWith(`${providerRoot}${path.sep}`)
@@ -75,9 +115,21 @@ export async function resolveBundledProvider(
       reason: `Bundled ${providerId} executable escapes its resource directory`,
     };
   }
+  let executableRealPath: string;
   let bytes: Buffer;
   try {
-    bytes = await readFile(executable);
+    const executableStat = await lstat(executable);
+    if (executableStat.isSymbolicLink() || !executableStat.isFile()) {
+      throw new Error("executable must be a regular, non-symlink file");
+    }
+    executableRealPath = await realpath(executable);
+    if (
+      executableRealPath !== providerRoot &&
+      !executableRealPath.startsWith(`${providerRoot}${path.sep}`)
+    ) {
+      throw new Error("executable resolves outside its resource directory");
+    }
+    bytes = await readFile(executableRealPath);
   } catch (error) {
     return {
       reason: `Bundled ${providerId} executable is unavailable at ${executable}: ${describeError(error)}`,
@@ -92,11 +144,40 @@ export async function resolveBundledProvider(
   return {
     provider: {
       providerId,
-      executable,
+      executable: executableRealPath,
       version: manifest.version,
       sha256: actualSha256,
+      manifestPath,
+      manifestSha256,
     },
   };
+}
+
+/** Re-read and re-hash a selected asset immediately before provider use. */
+export async function verifyBundledProvider(
+  selected: BundledProvider,
+  options: {
+    resourcesDirectory: string;
+    platform: NodeJS.Platform;
+  },
+): Promise<void> {
+  const resolved = await resolveBundledProvider(selected.providerId, {
+    ...options,
+    expectedVersion: selected.version,
+    expectedManifestSha256: selected.manifestSha256,
+  });
+  if (resolved.provider === undefined) {
+    throw new Error(resolved.reason ?? "Bundled provider verification failed");
+  }
+  if (
+    resolved.provider.executable !== selected.executable ||
+    resolved.provider.sha256 !== selected.sha256 ||
+    resolved.provider.version !== selected.version
+  ) {
+    throw new Error(
+      "Bundled provider changed after selection; refusing to launch",
+    );
+  }
 }
 
 function parseManifest(
