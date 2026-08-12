@@ -32,7 +32,23 @@
       "tarball": "https://registry.npmjs.org/@playwright/cli/-/cli-0.1.18.tgz",
       "integrity": "sha512-ggNfYYH+GsZTGUiBEL8f6N5j0seYEUE52v+fIWqK/A36QG36cL0EJ79qWTXYO2uZMUU7vm+jk3x0fKCPL6UuIw==",
       "sha256": "d847190000e3a3328a17ab71a52ccac8062fb2525c0f0c78b789aff1cc9ab37c",
-      "dependencyLockSha256": "654de4ecdbc802b7c3ffe0f3c87af12c00f7c529d7a47638fd96d3e781874fe0",
+      "dependencyLockSha256": "a189f28b427091e7d4fed311c1bc4d22f1c87e3aeca49872974c86d9331a3d1c",
+      "transitive": [
+        {
+          "name": "playwright",
+          "version": "1.63.0-alpha-2026-08-05",
+          "tarball": "https://registry.npmjs.org/playwright/-/playwright-1.63.0-alpha-2026-08-05.tgz",
+          "integrity": "sha512-zbGZUK+JYkoDV3cUgfvh2czTBJL34Gmz5gHVI25xiIpvYSR17Q1M7TS8hnwECUe+IkKaeXbKrSyJTyogm2DVWw==",
+          "sha256": "9773b64c75611e334b7fee196f6559468e1fd8252a18f8966f97d74e4c4b1d96"
+        },
+        {
+          "name": "playwright-core",
+          "version": "1.63.0-alpha-2026-08-05",
+          "tarball": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.63.0-alpha-2026-08-05.tgz",
+          "integrity": "sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg==",
+          "sha256": "774c5addbf5772c42ebeabebe3b380d3f47fc4e3e9f6b94508317147a947122b"
+        }
+      ],
       "license": "Apache-2.0"
     },
     "microsoft-winapp-cli": {

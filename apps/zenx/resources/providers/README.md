@@ -11,3 +11,9 @@ versions, runtime version, platform, archive hashes, and the final manifest
 digest. Missing network, archive, runtime, browser payload, or integrity
 verification is an explicit build failure; there is no PATH fallback in bundled
 mode.
+
+The Playwright provider also records every shipped transitive package in
+`provider-lock.json` with its exact tarball URL, npm SRI, and SHA-256. Assembly
+validates npm's resolved entries against those pins and writes the deterministic
+`DEPENDENCY-LOCK.json`; npm's platform-specific generated lockfile is not the
+release trust anchor.

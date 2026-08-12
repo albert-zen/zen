@@ -25,9 +25,11 @@ const lockPath = path.join(
   "provider-lock.json",
 );
 const lock = JSON.parse(await readFile(lockPath, "utf8"));
+const outputArgumentIndex = process.argv.indexOf("--output");
+const outputArgument =
+  outputArgumentIndex >= 0 ? process.argv[outputArgumentIndex + 1] : undefined;
 const output = path.resolve(
-  process.argv[process.argv.indexOf("--output") + 1] ??
-    path.join(zenx, ".packaged", "resources"),
+  outputArgument ?? path.join(zenx, ".packaged", "resources"),
 );
 const providers = path.join(output, "providers");
 const work = await mkdtemp(path.join(os.tmpdir(), "zenx-provider-assembly-"));
@@ -203,9 +205,21 @@ async function assembleNpmProvider(id, platform, runtimePath) {
       "node_modules",
       ".package-lock.json",
     );
-    const dependencyLock = canonicalDependencyLock(
-      await readFile(generatedLock, "utf8"),
-    );
+    const generated = JSON.parse(await readFile(generatedLock, "utf8"));
+    for (const dependency of pin.transitive ?? []) {
+      const entry = generated.packages?.[`node_modules/${dependency.name}`];
+      if (
+        entry?.version !== dependency.version ||
+        entry.resolved !== dependency.tarball ||
+        entry.integrity !== dependency.integrity
+      ) {
+        throw new Error(
+          `playwright-cli transitive package mismatch for ${dependency.name}`,
+        );
+      }
+      await fetchVerified(dependency.tarball, dependency.sha256);
+    }
+    const dependencyLock = canonicalDependencyLock(pin.transitive ?? []);
     const dependencyLockSha256 = sha256(dependencyLock);
     if (
       pin.dependencyLockSha256 !== undefined &&
@@ -333,13 +347,18 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function canonicalDependencyLock(source) {
-  const parsed = JSON.parse(source);
-  const packages = Object.entries(parsed.packages ?? {})
-    .filter(([name]) => !name.endsWith("/fsevents"))
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .map(([name, value]) =>
-      [name, value.version, value.resolved, value.integrity].join("\u001f"),
-    );
-  return Buffer.from(`${packages.join("\n")}\n`, "utf8");
+function canonicalDependencyLock(dependencies) {
+  const packages = [...dependencies]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map(({ name, version, tarball, integrity, sha256 }) => ({
+      name,
+      version,
+      tarball,
+      integrity,
+      sha256,
+    }));
+  return Buffer.from(
+    `${JSON.stringify({ schemaVersion: 1, packages }, null, 2)}\n`,
+    "utf8",
+  );
 }
