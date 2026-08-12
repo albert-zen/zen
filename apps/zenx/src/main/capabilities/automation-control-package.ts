@@ -10,6 +10,27 @@ import type {
   ZenXRoom,
   ZenXTrigger,
 } from "../trigger-types.js";
+import {
+  MAX_ID_BYTES,
+  MAX_MEMBER_NAME_BYTES,
+  MAX_MESSAGE_TEXT_BYTES,
+  MAX_PROGRAM_ARGUMENT_BYTES,
+  MAX_PROGRAM_ARGUMENTS,
+  MAX_PROGRAM_COMMAND_BYTES,
+  MAX_PROGRAM_CWD_BYTES,
+  MAX_PROGRAM_ENV_BYTES,
+  MAX_PROGRAM_ENV_ENTRIES,
+  MAX_PROGRAM_ENV_KEY_BYTES,
+  MAX_PROGRAM_ENV_VALUE_BYTES,
+  MAX_PROGRAM_FLAGS_BYTES,
+  MAX_PROGRAM_MATCH_REGEX_BYTES,
+  MAX_ROOM_MEMBERS,
+  MAX_ROOM_NAME_BYTES,
+  MAX_TRIGGER_LABEL_BYTES,
+  MAX_TRIGGER_PROMPT_BYTES,
+  utf8Bytes,
+  withinBytes,
+} from "../trigger-limits.js";
 import type { ZenXCapabilityManifest, ZenXCapabilityPackage } from "./types.js";
 
 export const ZENX_AUTOMATION_CONTROL_CAPABILITY_ID = "zenx-automation-control";
@@ -33,10 +54,18 @@ export interface ZenXAutomationControlPort {
 const programSpecSchema = {
   type: "object",
   properties: {
-    command: { type: "string" },
-    args: { type: "array", items: { type: "string" }, maxItems: 64 },
-    cwd: { type: "string" },
-    env: { type: "object", additionalProperties: { type: "string" } },
+    command: { type: "string", maxLength: MAX_PROGRAM_COMMAND_BYTES },
+    args: {
+      type: "array",
+      items: { type: "string", maxLength: MAX_PROGRAM_ARGUMENT_BYTES },
+      maxItems: MAX_PROGRAM_ARGUMENTS,
+    },
+    cwd: { type: "string", maxLength: MAX_PROGRAM_CWD_BYTES },
+    env: {
+      type: "object",
+      maxProperties: MAX_PROGRAM_ENV_ENTRIES,
+      additionalProperties: { type: "string" },
+    },
     timeoutMs: { type: "number", minimum: 1, maximum: 120000 },
     maxOutputBytes: { type: "integer", minimum: 256, maximum: 1048576 },
   },
@@ -53,8 +82,8 @@ const programSchema = {
       type: "object",
       properties: {
         field: { type: "string", enum: ["completedItemText"] },
-        regex: { type: "string" },
-        flags: { type: "string" },
+        regex: { type: "string", maxLength: MAX_PROGRAM_MATCH_REGEX_BYTES },
+        flags: { type: "string", maxLength: MAX_PROGRAM_FLAGS_BYTES },
       },
       required: ["field", "regex"],
       additionalProperties: false,
@@ -64,16 +93,16 @@ const programSchema = {
 };
 
 const triggerProperties = {
-  threadId: { type: "string" },
+  threadId: { type: "string", maxLength: MAX_ID_BYTES },
   kind: { type: "string", enum: ["timer", "thread", "roomMention", "signal"] },
-  label: { type: "string" },
-  prompt: { type: "string" },
+  label: { type: "string", maxLength: MAX_TRIGGER_LABEL_BYTES },
+  prompt: { type: "string", maxLength: MAX_TRIGGER_PROMPT_BYTES },
   runAt: { type: "number" },
   intervalMinutes: { type: "number" },
-  watchedThreadId: { type: "string" },
-  roomId: { type: "string" },
-  mention: { type: "string" },
-  signalName: { type: "string" },
+  watchedThreadId: { type: "string", maxLength: MAX_ID_BYTES },
+  roomId: { type: "string", maxLength: MAX_ID_BYTES },
+  mention: { type: "string", maxLength: MAX_MEMBER_NAME_BYTES },
+  signalName: { type: "string", maxLength: MAX_ID_BYTES },
   program: programSchema,
 };
 
@@ -123,7 +152,7 @@ const manifest: ZenXCapabilityManifest = {
     tool(
       "zenx_triggers_update",
       "Replace an existing Trigger definition while preserving its identity and active state.",
-      { id: { type: "string" }, ...triggerProperties },
+      { id: { type: "string", maxLength: MAX_ID_BYTES }, ...triggerProperties },
       ["id", "threadId", "kind", "label", "prompt"],
     ),
     tool(
@@ -148,41 +177,53 @@ const manifest: ZenXCapabilityManifest = {
     tool(
       "zenx_rooms_create",
       "Create a Room with named Thread members.",
-      { name: { type: "string" }, members: membersSchema() },
+      {
+        name: { type: "string", maxLength: MAX_ROOM_NAME_BYTES },
+        members: membersSchema(),
+      },
       ["name", "members"],
     ),
     tool(
       "zenx_rooms_rename",
       "Rename an existing Room.",
-      { roomId: { type: "string" }, name: { type: "string" } },
+      {
+        roomId: { type: "string", maxLength: MAX_ID_BYTES },
+        name: { type: "string", maxLength: MAX_ROOM_NAME_BYTES },
+      },
       ["roomId", "name"],
     ),
     tool(
       "zenx_rooms_delete",
       "Delete a Room when no nonterminal wakeup owns its reply route.",
-      { roomId: { type: "string" } },
+      { roomId: { type: "string", maxLength: MAX_ID_BYTES } },
       ["roomId"],
     ),
     tool(
       "zenx_rooms_add_member",
       "Add a named Thread member to a Room.",
       {
-        roomId: { type: "string" },
-        name: { type: "string" },
-        threadId: { type: "string" },
+        roomId: { type: "string", maxLength: MAX_ID_BYTES },
+        name: { type: "string", maxLength: MAX_MEMBER_NAME_BYTES },
+        threadId: { type: "string", maxLength: MAX_ID_BYTES },
       },
       ["roomId", "name", "threadId"],
     ),
     tool(
       "zenx_rooms_remove_member",
       "Remove a Thread member from a Room.",
-      { roomId: { type: "string" }, threadId: { type: "string" } },
+      {
+        roomId: { type: "string", maxLength: MAX_ID_BYTES },
+        threadId: { type: "string", maxLength: MAX_ID_BYTES },
+      },
       ["roomId", "threadId"],
     ),
     tool(
       "zenx_rooms_post_message",
       "Post an Agent-attributed Room message; explicit mentions may wake registered members.",
-      { roomId: { type: "string" }, text: { type: "string" } },
+      {
+        roomId: { type: "string", maxLength: MAX_ID_BYTES },
+        text: { type: "string", maxLength: MAX_MESSAGE_TEXT_BYTES },
+      },
       ["roomId", "text"],
     ),
   ],
@@ -206,22 +247,22 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
       case "zenx_triggers_list": {
         const snapshot = this.#port.snapshot();
         return {
-          triggers: snapshot.triggers,
-          history: snapshot.history.slice(0, 50),
+          triggers: snapshot.triggers.map(readSafeTrigger),
+          history: snapshot.history.slice(0, 50).map(readSafeHistory),
         };
       }
       case "zenx_triggers_create":
         return await this.#port.create(triggerInput(args));
       case "zenx_triggers_update":
         return await this.#port.update({
-          id: string(args, "id"),
+          id: string(args, "id", MAX_ID_BYTES),
           ...triggerInput(args),
         });
       case "zenx_triggers_cancel":
-        await this.#port.cancel(string(args, "triggerId"));
+        await this.#port.cancel(string(args, "triggerId", MAX_ID_BYTES));
         return { cancelled: true };
       case "zenx_triggers_delete":
-        await this.#port.delete(string(args, "triggerId"));
+        await this.#port.delete(string(args, "triggerId", MAX_ID_BYTES));
         return { deleted: true };
       case "zenx_rooms_list":
         return {
@@ -232,40 +273,85 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
         };
       case "zenx_rooms_create":
         return await this.#port.createRoom({
-          name: string(args, "name"),
+          name: string(args, "name", MAX_ROOM_NAME_BYTES),
           members: members(args.members),
         });
       case "zenx_rooms_rename":
         await this.#port.renameRoom(
-          string(args, "roomId"),
-          string(args, "name"),
+          string(args, "roomId", MAX_ID_BYTES),
+          string(args, "name", MAX_ROOM_NAME_BYTES),
         );
         return { renamed: true };
       case "zenx_rooms_delete":
-        await this.#port.deleteRoom(string(args, "roomId"));
+        await this.#port.deleteRoom(string(args, "roomId", MAX_ID_BYTES));
         return { deleted: true };
       case "zenx_rooms_add_member":
-        await this.#port.addRoomMember(string(args, "roomId"), {
-          name: string(args, "name"),
-          threadId: string(args, "threadId"),
+        await this.#port.addRoomMember(string(args, "roomId", MAX_ID_BYTES), {
+          name: string(args, "name", MAX_MEMBER_NAME_BYTES),
+          threadId: string(args, "threadId", MAX_ID_BYTES),
         });
         return { added: true };
       case "zenx_rooms_remove_member":
         await this.#port.removeRoomMember(
-          string(args, "roomId"),
-          string(args, "threadId"),
+          string(args, "roomId", MAX_ID_BYTES),
+          string(args, "threadId", MAX_ID_BYTES),
         );
         return { removed: true };
       case "zenx_rooms_post_message":
         await this.#port.postAgentRoomMessage(
-          string(args, "roomId"),
-          string(args, "text"),
+          string(args, "roomId", MAX_ID_BYTES),
+          string(args, "text", MAX_MESSAGE_TEXT_BYTES),
         );
         return { posted: true };
       default:
         throw new Error(`Unsupported ZenX automation tool: ${name}`);
     }
   }
+}
+
+function readSafeTrigger(trigger: ZenXTrigger): unknown {
+  return {
+    ...trigger,
+    ...(trigger.program === undefined
+      ? {}
+      : { program: readSafeProgram(trigger.program) }),
+  };
+}
+
+function readSafeProgram(program: TriggerProgramConfig): TriggerProgramConfig {
+  return {
+    ...(program.predicate === undefined
+      ? {}
+      : { predicate: readSafeProgramSpec(program.predicate) }),
+    ...(program.action === undefined
+      ? {}
+      : { action: readSafeProgramSpec(program.action) }),
+    ...(program.match === undefined ? {} : { match: { ...program.match } }),
+  };
+}
+
+function readSafeProgramSpec(spec: TriggerProgramSpec): TriggerProgramSpec {
+  const safe = { ...spec };
+  delete safe.env;
+  return safe;
+}
+
+function readSafeHistory(entry: TriggerSnapshot["history"][number]): unknown {
+  return {
+    ...entry,
+    error: entry.programOutcome === null ? entry.error : null,
+    programOutcome:
+      entry.programOutcome === null
+        ? null
+        : readSafeOutcome(entry.programOutcome),
+    programOutcomes: entry.programOutcomes.map(readSafeOutcome),
+  };
+}
+
+function readSafeOutcome(
+  outcome: NonNullable<TriggerSnapshot["history"][number]["programOutcome"]>,
+) {
+  return { ...outcome, output: null, error: null };
 }
 
 function tool(
@@ -299,12 +385,12 @@ function tool(
 
 function triggerInput(args: Record<string, unknown>): CreateTriggerInput {
   const common = {
-    threadId: string(args, "threadId"),
-    label: string(args, "label"),
-    prompt: string(args, "prompt"),
+    threadId: string(args, "threadId", MAX_ID_BYTES),
+    label: string(args, "label", MAX_TRIGGER_LABEL_BYTES),
+    prompt: string(args, "prompt", MAX_TRIGGER_PROMPT_BYTES),
     ...programInput(args),
   };
-  const kind = string(args, "kind");
+  const kind = string(args, "kind", MAX_ID_BYTES);
   if (kind === "timer")
     return {
       ...common,
@@ -318,17 +404,21 @@ function triggerInput(args: Record<string, unknown>): CreateTriggerInput {
     return {
       ...common,
       kind,
-      watchedThreadId: string(args, "watchedThreadId"),
+      watchedThreadId: string(args, "watchedThreadId", MAX_ID_BYTES),
     };
   if (kind === "roomMention")
     return {
       ...common,
       kind,
-      roomId: string(args, "roomId"),
-      mention: string(args, "mention"),
+      roomId: string(args, "roomId", MAX_ID_BYTES),
+      mention: string(args, "mention", MAX_MEMBER_NAME_BYTES),
     };
   if (kind === "signal")
-    return { ...common, kind, signalName: string(args, "signalName") };
+    return {
+      ...common,
+      kind,
+      signalName: string(args, "signalName", MAX_ID_BYTES),
+    };
   throw new Error("kind must be timer, thread, roomMention, or signal");
 }
 
@@ -356,13 +446,15 @@ function programInput(args: Record<string, unknown>): {
     )
       throw new Error("match must be an object");
     const match = value.match as Record<string, unknown>;
-    const field = string(match, "field");
+    const field = string(match, "field", MAX_ID_BYTES);
     if (field !== "completedItemText")
       throw new Error("match field must be completedItemText");
     program.match = {
       field,
-      regex: string(match, "regex"),
-      ...(match.flags === undefined ? {} : { flags: string(match, "flags") }),
+      regex: string(match, "regex", MAX_PROGRAM_MATCH_REGEX_BYTES),
+      ...(match.flags === undefined
+        ? {}
+        : { flags: string(match, "flags", MAX_PROGRAM_FLAGS_BYTES) }),
     };
   }
   return { program };
@@ -379,9 +471,11 @@ function programSpec(value: unknown, label: string): TriggerProgramSpec {
   const env =
     spec.env === undefined ? undefined : environment(spec.env, `${label}.env`);
   return {
-    command: string(spec, "command"),
+    command: string(spec, "command", MAX_PROGRAM_COMMAND_BYTES),
     ...(args === undefined ? {} : { args }),
-    ...(spec.cwd === undefined ? {} : { cwd: string(spec, "cwd") }),
+    ...(spec.cwd === undefined
+      ? {}
+      : { cwd: string(spec, "cwd", MAX_PROGRAM_CWD_BYTES) }),
     ...(env === undefined ? {} : { env }),
     ...(spec.timeoutMs === undefined
       ? {}
@@ -394,13 +488,17 @@ function programSpec(value: unknown, label: string): TriggerProgramSpec {
 
 function members(value: unknown): RoomMember[] {
   if (!Array.isArray(value)) throw new Error("members must be an array");
+  if (value.length === 0 || value.length > MAX_ROOM_MEMBERS)
+    throw new Error(
+      `members must contain 1-${String(MAX_ROOM_MEMBERS)} entries`,
+    );
   return value.map((entry) => {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry))
       throw new Error("member must be an object");
     const member = entry as Record<string, unknown>;
     return {
-      name: string(member, "name"),
-      threadId: string(member, "threadId"),
+      name: string(member, "name", MAX_MEMBER_NAME_BYTES),
+      threadId: string(member, "threadId", MAX_ID_BYTES),
     };
   });
 }
@@ -408,9 +506,14 @@ function members(value: unknown): RoomMember[] {
 function membersSchema() {
   return {
     type: "array",
+    minItems: 1,
+    maxItems: MAX_ROOM_MEMBERS,
     items: {
       type: "object",
-      properties: { name: { type: "string" }, threadId: { type: "string" } },
+      properties: {
+        name: { type: "string", maxLength: MAX_MEMBER_NAME_BYTES },
+        threadId: { type: "string", maxLength: MAX_ID_BYTES },
+      },
       required: ["name", "threadId"],
       additionalProperties: false,
     },
@@ -421,23 +524,49 @@ function environment(value: unknown, label: string): Record<string, string> {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new Error(`${label} must be an object`);
   const result: Record<string, string> = {};
+  if (Object.keys(value as object).length > MAX_PROGRAM_ENV_ENTRIES)
+    throw new Error(`${label} has too many entries`);
+  let bytes = 0;
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "string")
+    if (
+      !withinBytes(key, MAX_PROGRAM_ENV_KEY_BYTES) ||
+      typeof entry !== "string" ||
+      !withinBytes(entry, MAX_PROGRAM_ENV_VALUE_BYTES)
+    )
       throw new Error(`${label}.${key} must be a string`);
+    bytes += utf8Bytes(key) + utf8Bytes(entry);
+    if (bytes > MAX_PROGRAM_ENV_BYTES)
+      throw new Error(`${label} exceeds its byte bound`);
     result[key] = entry;
   }
   return result;
 }
 
 function arrayOfStrings(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))
+  if (
+    !Array.isArray(value) ||
+    value.length > MAX_PROGRAM_ARGUMENTS ||
+    value.some(
+      (entry) =>
+        typeof entry !== "string" ||
+        !withinBytes(entry, MAX_PROGRAM_ARGUMENT_BYTES),
+    )
+  )
     throw new Error(`${label} must be an array of strings`);
   return value;
 }
 
-function string(args: Record<string, unknown>, key: string): string {
+function string(
+  args: Record<string, unknown>,
+  key: string,
+  maximum = MAX_ID_BYTES,
+): string {
   const value = args[key];
-  if (typeof value !== "string" || value.trim().length === 0)
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    !withinBytes(value.trim(), maximum)
+  )
     throw new Error(`${key} must be a non-empty string`);
   return value.trim();
 }

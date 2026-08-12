@@ -12,6 +12,34 @@ import {
   ZenXTriggerProgramRunner,
   type TriggerProgramRunner,
 } from "./trigger-program-runner.js";
+import {
+  MAX_ERROR_BYTES,
+  MAX_ID_BYTES,
+  MAX_MEMBER_NAME_BYTES,
+  MAX_MESSAGE_AUTHOR_BYTES,
+  MAX_MESSAGE_TEXT_BYTES,
+  MAX_PROGRAM_ARGUMENT_BYTES,
+  MAX_PROGRAM_ARGUMENTS,
+  MAX_PROGRAM_COMMAND_BYTES,
+  MAX_PROGRAM_CWD_BYTES,
+  MAX_PROGRAM_ENV_BYTES,
+  MAX_PROGRAM_ENV_ENTRIES,
+  MAX_PROGRAM_ENV_KEY_BYTES,
+  MAX_PROGRAM_ENV_VALUE_BYTES,
+  MAX_PROGRAM_FLAGS_BYTES,
+  MAX_PROGRAM_MATCH_REGEX_BYTES,
+  MAX_REASON_BYTES,
+  MAX_ROOM_COUNT,
+  MAX_ROOM_MEMBERS,
+  MAX_ROOM_MESSAGES,
+  MAX_ROOM_NAME_BYTES,
+  MAX_TRIGGER_COUNT,
+  MAX_TRIGGER_LABEL_BYTES,
+  MAX_TRIGGER_PROMPT_BYTES,
+  retainHistory,
+  utf8Bytes,
+  withinBytes,
+} from "./trigger-limits.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
 import type {
   CreateRoomInput,
@@ -153,7 +181,11 @@ export class ZenXTriggerService {
                 "The previous process ended before the local program outcome was known",
             };
             entry.programOutcome = outcome;
-            entry.programOutcomes = [outcome];
+            entry.programOutcomes = appendProgramOutcome(
+              entry.programOutcomes,
+              outcome,
+            );
+            entry.programInvocationId = null;
           }
         }
       }
@@ -219,10 +251,11 @@ export class ZenXTriggerService {
                   "Trigger generation retired while local work was in flight",
               };
               entry.programOutcome = outcome;
-              entry.programOutcomes = [
-                ...(entry.programOutcomes ?? []),
+              entry.programOutcomes = appendProgramOutcome(
+                entry.programOutcomes,
                 outcome,
-              ].slice(-MAX_PROGRAM_OUTCOMES);
+              );
+              entry.programInvocationId = null;
             }
           }
           generation.activeWakeups.clear();
@@ -262,6 +295,8 @@ export class ZenXTriggerService {
   async create(input: CreateTriggerInput): Promise<ZenXTrigger> {
     const generation = this.#runningGeneration();
     const trigger = await this.#mutate(generation, async (snapshot) => {
+      if (snapshot.triggers.length >= MAX_TRIGGER_COUNT)
+        throw new Error(`ZenX Trigger limit is ${String(MAX_TRIGGER_COUNT)}`);
       const value = triggerFromInput(
         input,
         randomUUID(),
@@ -329,8 +364,8 @@ export class ZenXTriggerService {
 
   async signal(name: string, detail: string): Promise<void> {
     const generation = this.#runningGeneration();
-    const signalName = required(name, "signal name");
-    const signalDetail = detail.trim();
+    const signalName = required(name, "signal name", MAX_ID_BYTES);
+    const signalDetail = bounded(detail.trim(), MAX_REASON_BYTES);
     const matches = this.#snapshot.triggers
       .filter(
         (trigger) =>
@@ -341,9 +376,9 @@ export class ZenXTriggerService {
       .map((trigger) => trigger.id);
     for (const triggerId of matches) {
       await this.#fire(generation, triggerId, {
-        reason: `External signal ${signalName}: ${bounded(signalDetail, 4_000)}`,
+        reason: `External signal ${signalName}: ${signalDetail}`,
         occurrenceKey: `signal:${randomUUID()}`,
-        projection: `Signal name: ${signalName}\nSignal detail: ${bounded(signalDetail, 4_000)}`,
+        projection: `Signal name: ${signalName}\nSignal detail: ${signalDetail}`,
       });
     }
   }
@@ -351,9 +386,11 @@ export class ZenXTriggerService {
   async createRoom(input: CreateRoomInput): Promise<ZenXRoom> {
     const generation = this.#runningGeneration();
     const room = await this.#mutate(generation, async (snapshot) => {
+      if (snapshot.rooms.length >= MAX_ROOM_COUNT)
+        throw new Error(`ZenX Room limit is ${String(MAX_ROOM_COUNT)}`);
       const value: ZenXRoom = {
         id: randomUUID(),
-        name: required(input.name, "room name"),
+        name: required(input.name, "room name", MAX_ROOM_NAME_BYTES),
         members: validateMembers(input.members),
         messages: [],
         createdAt: this.#now(),
@@ -368,17 +405,17 @@ export class ZenXTriggerService {
     const generation = this.#runningGeneration();
     await this.#mutate(generation, async (snapshot) => {
       const room = snapshot.rooms.find(
-        (candidate) => candidate.id === required(roomId, "room"),
+        (candidate) => candidate.id === required(roomId, "room", MAX_ID_BYTES),
       );
       if (room === undefined) throw new Error("Room was not found");
-      room.name = required(name, "room name");
+      room.name = required(name, "room name", MAX_ROOM_NAME_BYTES);
     });
   }
 
   async deleteRoom(roomId: string): Promise<void> {
     const generation = this.#runningGeneration();
     await this.#mutate(generation, async (snapshot) => {
-      const normalized = required(roomId, "room");
+      const normalized = required(roomId, "room", MAX_ID_BYTES);
       const room = snapshot.rooms.find(
         (candidate) => candidate.id === normalized,
       );
@@ -402,7 +439,7 @@ export class ZenXTriggerService {
     const generation = this.#runningGeneration();
     await this.#mutate(generation, async (snapshot) => {
       const room = snapshot.rooms.find(
-        (entry) => entry.id === required(roomId, "room"),
+        (entry) => entry.id === required(roomId, "room", MAX_ID_BYTES),
       );
       if (room === undefined) throw new Error("Room was not found");
       room.members = validateMembers([...room.members, member]);
@@ -413,10 +450,10 @@ export class ZenXTriggerService {
     const generation = this.#runningGeneration();
     await this.#mutate(generation, async (snapshot) => {
       const room = snapshot.rooms.find(
-        (entry) => entry.id === required(roomId, "room"),
+        (entry) => entry.id === required(roomId, "room", MAX_ID_BYTES),
       );
       if (room === undefined) throw new Error("Room was not found");
-      const normalized = required(threadId, "member thread");
+      const normalized = required(threadId, "member thread", MAX_ID_BYTES);
       if (!room.members.some((member) => member.threadId === normalized))
         throw new Error("Room member was not found");
       room.members = room.members.filter(
@@ -446,25 +483,36 @@ export class ZenXTriggerService {
     originTurnId: string | null,
   ): Promise<void> {
     const generation = this.#runningGeneration();
+    const normalizedRoomId = required(roomId, "room", MAX_ID_BYTES);
+    const normalizedAuthor = required(
+      author,
+      "author",
+      MAX_MESSAGE_AUTHOR_BYTES,
+    );
+    const normalizedText = required(text, "message", MAX_MESSAGE_TEXT_BYTES);
     const posted = await this.#mutate(generation, async (snapshot) => {
       const room = snapshot.rooms.find(
-        (entry) => entry.id === required(roomId, "room"),
+        (entry) => entry.id === normalizedRoomId,
       );
       if (room === undefined) throw new Error("Room was not found");
       const value = message(
         room.id,
-        required(author, "author"),
-        required(text, "message"),
+        normalizedAuthor,
+        normalizedText,
         kind,
         originThreadId,
         originTurnId,
         this.#now(),
       );
       room.messages.push(value);
-      return { posted: value, room: structuredClone(room) };
+      return { posted: value };
     });
-    const mentions = posted.room.members.filter((member) =>
-      mentionMatches(text, member.name),
+    const postedRoom = this.#snapshot.rooms.find(
+      (room) => room.id === posted.posted.roomId,
+    );
+    if (postedRoom === undefined) throw new StaleGenerationError();
+    const mentions = postedRoom.members.filter((member) =>
+      mentionMatches(normalizedText, member.name),
     );
     for (const member of mentions) {
       const triggerIds = this.#snapshot.triggers
@@ -473,18 +521,18 @@ export class ZenXTriggerService {
             trigger.active &&
             trigger.threadId === member.threadId &&
             trigger.kind === "roomMention" &&
-            trigger.room?.roomId === roomId &&
+            trigger.room?.roomId === normalizedRoomId &&
             trigger.room.mention.toLocaleLowerCase() ===
               member.name.toLocaleLowerCase(),
         )
         .map((trigger) => trigger.id);
       for (const triggerId of triggerIds) {
         await this.#fire(generation, triggerId, {
-          reason: `Room #${posted.room.name} mention from ${posted.posted.author}: ${posted.posted.text}`,
-          occurrenceKey: `room:${posted.room.id}:${posted.posted.id}`,
-          sourceRoomId: posted.room.id,
+          reason: `Room #${postedRoom.name} mention from ${posted.posted.author}: ${posted.posted.text}`,
+          occurrenceKey: `room:${postedRoom.id}:${posted.posted.id}`,
+          sourceRoomId: postedRoom.id,
           sourceRoomMessageId: posted.posted.id,
-          projection: projectRoomContext(posted.room),
+          projection: projectRoomContext(postedRoom),
           eventText: posted.posted.text,
         });
       }
@@ -674,8 +722,8 @@ export class ZenXTriggerService {
           triggerId: trigger.id,
           threadId: trigger.threadId,
           kind: trigger.kind,
-          reason: bounded(wakeup.reason, 4_000),
-          prompt: bounded(trigger.prompt, 4_000),
+          reason: bounded(wakeup.reason, MAX_REASON_BYTES),
+          prompt: bounded(trigger.prompt, MAX_TRIGGER_PROMPT_BYTES),
           clientUserMessageId,
           startedAt: this.#now(),
           completedAt: rejected ? this.#now() : null,
@@ -749,7 +797,7 @@ export class ZenXTriggerService {
           program.match.regex,
           program.match.flags ?? "u",
         );
-        const matched = regex.test(wakeup.eventText ?? wakeup.projection ?? "");
+        const matched = regex.test(wakeup.eventText ?? "");
         const outcome = this.#programOutcome(
           "predicate",
           stableProgramInvocationId(active.clientUserMessageId, "predicate"),
@@ -1002,10 +1050,11 @@ export class ZenXTriggerService {
         (candidate) => candidate.id === active.historyId,
       );
       if (entry === undefined || isTerminal(entry.status)) return;
-      entry.programInvocationId = outcome.invocationId;
+      entry.programInvocationId = null;
       entry.programOutcome = outcome;
-      entry.programOutcomes = [...(entry.programOutcomes ?? []), outcome].slice(
-        -MAX_PROGRAM_OUTCOMES,
+      entry.programOutcomes = appendProgramOutcome(
+        entry.programOutcomes,
+        outcome,
       );
     });
   }
@@ -1040,10 +1089,11 @@ export class ZenXTriggerService {
       entry.status = status;
       entry.completedAt = this.#now();
       entry.error = error;
-      entry.programInvocationId = outcome.invocationId;
+      entry.programInvocationId = null;
       entry.programOutcome = outcome;
-      entry.programOutcomes = [...(entry.programOutcomes ?? []), outcome].slice(
-        -MAX_PROGRAM_OUTCOMES,
+      entry.programOutcomes = appendProgramOutcome(
+        entry.programOutcomes,
+        outcome,
       );
       released = true;
     });
@@ -1063,7 +1113,7 @@ export class ZenXTriggerService {
       if (entry === undefined || isTerminal(entry.status)) return;
       entry.status = "failed";
       entry.completedAt = this.#now();
-      entry.error = bounded(error, 4_000);
+      entry.error = bounded(error, MAX_ERROR_BYTES);
       released = true;
     });
     if (released) {
@@ -1146,6 +1196,7 @@ export class ZenXTriggerService {
       const snapshot = structuredClone(this.#snapshot);
       const result = await operation(snapshot);
       this.#assertMutationGeneration(generation, allowRetiring);
+      retainSnapshot(snapshot);
       await this.#store.write(snapshot);
       this.#assertMutationGeneration(generation, allowRetiring);
       this.#snapshot = snapshot;
@@ -1205,7 +1256,7 @@ export class ZenXTriggerService {
       status,
       output: bounded(output ?? "", 8_000) || null,
       exitCode,
-      error: bounded(error ?? "", 2_048) || null,
+      error: bounded(error ?? "", MAX_ERROR_BYTES) || null,
     };
   }
 
@@ -1243,10 +1294,10 @@ function triggerFromInput(
 ): ZenXTrigger {
   const common = {
     id,
-    threadId: required(input.threadId, "thread"),
+    threadId: required(input.threadId, "thread", MAX_ID_BYTES),
     kind: input.kind,
-    label: required(input.label, "label"),
-    prompt: required(input.prompt, "prompt"),
+    label: required(input.label, "label", MAX_TRIGGER_LABEL_BYTES),
+    prompt: required(input.prompt, "prompt", MAX_TRIGGER_PROMPT_BYTES),
     createdAt,
     active,
     ...(programFromInput(input) === undefined
@@ -1271,7 +1322,11 @@ function triggerFromInput(
       ...common,
       kind: "thread",
       watch: {
-        threadId: required(input.watchedThreadId, "watched thread"),
+        threadId: required(
+          input.watchedThreadId,
+          "watched thread",
+          MAX_ID_BYTES,
+        ),
         event: "turn_completed",
       },
     };
@@ -1281,15 +1336,15 @@ function triggerFromInput(
       ...common,
       kind: "roomMention",
       room: {
-        roomId: required(input.roomId, "room"),
-        mention: required(input.mention, "mention"),
+        roomId: required(input.roomId, "room", MAX_ID_BYTES),
+        mention: required(input.mention, "mention", MAX_MEMBER_NAME_BYTES),
       },
     };
   }
   return {
     ...common,
     kind: "signal",
-    signal: { name: required(input.signalName, "signal name") },
+    signal: { name: required(input.signalName, "signal name", MAX_ID_BYTES) },
   };
 }
 
@@ -1324,15 +1379,17 @@ function validateProgram(program: TriggerProgramConfig): void {
     ["action", program.action],
   ] as const) {
     if (spec === undefined) continue;
-    if (required(spec.command, `${stage} command`).length > 4_096)
-      throw new Error(`${stage} command is too long`);
-    if ((spec.args?.length ?? 0) > 64)
+    required(spec.command, `${stage} command`, MAX_PROGRAM_COMMAND_BYTES);
+    if ((spec.args?.length ?? 0) > MAX_PROGRAM_ARGUMENTS)
       throw new Error(`${stage} has too many arguments`);
-    if (spec.args?.some((arg) => arg.length > 4_096))
+    if (spec.args?.some((arg) => !withinBytes(arg, MAX_PROGRAM_ARGUMENT_BYTES)))
       throw new Error(`${stage} argument is too long`);
     if (
       spec.cwd !== undefined &&
-      required(spec.cwd, `${stage} cwd`).length > 4_096
+      !withinBytes(
+        required(spec.cwd, `${stage} cwd`, MAX_PROGRAM_CWD_BYTES),
+        MAX_PROGRAM_CWD_BYTES,
+      )
     )
       throw new Error(`${stage} cwd is too long`);
     if (
@@ -1353,17 +1410,33 @@ function validateProgram(program: TriggerProgramConfig): void {
       );
     if (
       spec.env !== undefined &&
-      Object.entries(spec.env).some(
-        ([key, value]) =>
-          key.length === 0 || key.length > 256 || value.length > 4_096,
-      )
+      (Object.keys(spec.env).length > MAX_PROGRAM_ENV_ENTRIES ||
+        Object.entries(spec.env).some(
+          ([key, value]) =>
+            key.length === 0 ||
+            !withinBytes(key, MAX_PROGRAM_ENV_KEY_BYTES) ||
+            !withinBytes(value, MAX_PROGRAM_ENV_VALUE_BYTES),
+        ) ||
+        Object.entries(spec.env).reduce(
+          (total, [key, value]) => total + utf8Bytes(key) + utf8Bytes(value),
+          0,
+        ) > MAX_PROGRAM_ENV_BYTES)
     )
       throw new Error(`${stage} env is invalid`);
   }
   if (program.match !== undefined) {
     if (
       program.match.field !== "completedItemText" ||
-      required(program.match.regex, "match regex").length > 4_096
+      !withinBytes(
+        required(
+          program.match.regex,
+          "match regex",
+          MAX_PROGRAM_MATCH_REGEX_BYTES,
+        ),
+        MAX_PROGRAM_MATCH_REGEX_BYTES,
+      ) ||
+      (program.match.flags !== undefined &&
+        !withinBytes(program.match.flags, MAX_PROGRAM_FLAGS_BYTES))
     )
       throw new Error("Trigger match is invalid");
     try {
@@ -1433,10 +1506,19 @@ function message(
   };
 }
 
-function required(value: string, label: string): string {
+function required(
+  value: string,
+  label: string,
+  maximum = MAX_ID_BYTES,
+): string {
   if (typeof value !== "string" || value.trim().length === 0)
     throw new Error(`Trigger ${label} is required`);
-  return value.trim();
+  const normalized = value.trim();
+  if (!withinBytes(normalized, maximum))
+    throw new Error(
+      `Trigger ${label} exceeds its ${String(maximum)} byte bound`,
+    );
+  return normalized;
 }
 
 function positive(value: number): number {
@@ -1453,9 +1535,13 @@ function validFuture(value: number, now: number): number {
 
 function validateMembers(members: readonly RoomMember[]): RoomMember[] {
   if (members.length === 0) throw new Error("Room needs at least one member");
+  if (members.length > MAX_ROOM_MEMBERS)
+    throw new Error(
+      `Room cannot have more than ${String(MAX_ROOM_MEMBERS)} members`,
+    );
   const normalized = members.map((member) => ({
-    name: required(member.name, "member name"),
-    threadId: required(member.threadId, "member thread"),
+    name: required(member.name, "member name", MAX_MEMBER_NAME_BYTES),
+    threadId: required(member.threadId, "member thread", MAX_ID_BYTES),
   }));
   const names = new Set<string>();
   const threads = new Set<string>();
@@ -1517,6 +1603,28 @@ function setBounded<K, V>(
     map.delete(oldest);
     onEvict(oldest);
   }
+}
+
+function retainSnapshot(snapshot: TriggerSnapshot): void {
+  if (snapshot.triggers.length > MAX_TRIGGER_COUNT)
+    throw new Error(`ZenX Trigger limit is ${String(MAX_TRIGGER_COUNT)}`);
+  if (snapshot.rooms.length > MAX_ROOM_COUNT)
+    throw new Error(`ZenX Room limit is ${String(MAX_ROOM_COUNT)}`);
+  snapshot.history = retainHistory(snapshot.history);
+  for (const room of snapshot.rooms) {
+    if (room.members.length > MAX_ROOM_MEMBERS)
+      throw new Error(
+        `Room cannot have more than ${String(MAX_ROOM_MEMBERS)} members`,
+      );
+    room.messages = room.messages.slice(-MAX_ROOM_MESSAGES);
+  }
+}
+
+function appendProgramOutcome(
+  outcomes: TriggerProgramOutcome[] | undefined,
+  outcome: TriggerProgramOutcome,
+): TriggerProgramOutcome[] {
+  return [...(outcomes ?? []), outcome].slice(-MAX_PROGRAM_OUTCOMES);
 }
 
 function isTerminal(status: TriggerHistoryEntry["status"]): boolean {
@@ -1641,8 +1749,12 @@ function mergeCompletedItems(
 }
 
 function bounded(value: string, limit: number): string {
-  if (value.length <= limit) return value;
-  return `${value.slice(0, Math.max(0, limit - 24))}\n…[truncated by ZenX]`;
+  if (utf8Bytes(value) <= limit) return value;
+  const suffix = "\n…[truncated by ZenX]";
+  const prefix = Buffer.from(value, "utf8")
+    .subarray(0, Math.max(0, limit - utf8Bytes(suffix)))
+    .toString("utf8");
+  return `${prefix}${suffix}`;
 }
 
 function describeError(error: unknown): string {

@@ -28,6 +28,29 @@ test("rejects nested trigger registry corruption instead of admitting runtime ob
         },
       ],
     },
+    {
+      ...validState(),
+      history: Array.from({ length: 257 }, (_, index) => ({
+        ...validState().history[0]!,
+        id: `history-${String(index)}`,
+      })),
+    },
+    {
+      ...validState(),
+      rooms: [
+        {
+          ...validState().rooms[0]!,
+          messages: Array.from({ length: 257 }, (_, index) => ({
+            ...validState().rooms[0]!.messages[0]!,
+            id: `message-${String(index)}`,
+          })),
+        },
+      ],
+    },
+    {
+      ...validState(),
+      triggers: [{ ...validState().triggers[0]!, prompt: "x".repeat(5_000) }],
+    },
     { ...validState(), version: 999 },
   ];
   try {

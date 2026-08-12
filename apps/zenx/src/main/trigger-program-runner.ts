@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import type {
   TriggerProgramSpec,
@@ -10,6 +10,9 @@ export const DEFAULT_PROGRAM_OUTPUT_BYTES = 64 * 1024;
 export const MAX_PROGRAM_OUTPUT_BYTES = 1024 * 1024;
 export const DEFAULT_PROGRAM_TIMEOUT_MS = 30_000;
 export const MAX_PROGRAM_TIMEOUT_MS = 120_000;
+const PROGRAM_TERM_GRACE_MS = 250;
+const PROGRAM_FORCE_SETTLEMENT_MS = 1_000;
+const MAX_PROGRAM_STDERR_BYTES = 8 * 1_024;
 
 export interface TriggerProgramRunInput {
   invocationId: string;
@@ -81,12 +84,13 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
       ...(spec.env ?? {}),
     };
     return await new Promise<TriggerProgramRunResult>((resolve) => {
-      let child;
+      let child: ChildProcessWithoutNullStreams;
       try {
         child = spawn(spec.command, spec.args ?? [], {
           cwd: spec.cwd ?? process.cwd(),
           env: environment,
           shell: false,
+          detached: process.platform !== "win32",
           stdio: ["pipe", "pipe", "pipe"],
         });
       } catch (error) {
@@ -96,25 +100,55 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let stdoutBytes = 0;
+      let stderrBytes = 0;
       let settled = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let collecting = true;
+      let requested: TriggerProgramRunResult | null = null;
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+      let forceTimer: ReturnType<typeof setTimeout> | undefined;
+      let settlementTimer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = (): void => {
-        if (timer !== undefined) clearTimeout(timer);
+        if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+        if (forceTimer !== undefined) clearTimeout(forceTimer);
+        if (settlementTimer !== undefined) clearTimeout(settlementTimer);
         signal.removeEventListener("abort", abort);
+      };
+      const stopCollection = (): void => {
+        if (!collecting) return;
+        collecting = false;
+        child.stdout.removeAllListeners("data");
+        child.stderr.removeAllListeners("data");
+        child.stdout.destroy();
+        child.stderr.destroy();
       };
       const finish = (value: TriggerProgramRunResult): void => {
         if (settled) return;
         settled = true;
         cleanup();
+        stopCollection();
+        child.stdin.destroy();
         resolve(value);
       };
-      const terminate = (signalName: NodeJS.Signals): void => {
-        if (child.exitCode === null && child.signalCode === null)
-          child.kill(signalName);
+      const terminate = (force: boolean): void => {
+        terminateProcessTree(child, force);
+      };
+      const requestTermination = (value: TriggerProgramRunResult): void => {
+        if (settled || requested !== null) return;
+        requested = value;
+        stopCollection();
+        child.stdin.destroy();
+        terminate(false);
+        forceTimer = setTimeout(() => {
+          forceTimer = undefined;
+          terminate(true);
+          settlementTimer = setTimeout(
+            () => finish(value),
+            PROGRAM_FORCE_SETTLEMENT_MS,
+          );
+        }, PROGRAM_TERM_GRACE_MS);
       };
       const abort = (): void => {
-        terminate("SIGTERM");
-        finish(
+        requestTermination(
           result(
             "cancelled",
             null,
@@ -125,9 +159,8 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
           ),
         );
       };
-      timer = setTimeout(() => {
-        terminate("SIGTERM");
-        finish(
+      timeoutTimer = setTimeout(() => {
+        requestTermination(
           result(
             "timed_out",
             null,
@@ -138,11 +171,11 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
       }, timeoutMs);
       signal.addEventListener("abort", abort, { once: true });
       child.stdout.on("data", (chunk: Buffer | string) => {
+        if (!collecting || settled || requested !== null) return;
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         stdoutBytes += buffer.length;
         if (stdoutBytes > maxOutputBytes) {
-          terminate("SIGTERM");
-          finish(
+          requestTermination(
             result(
               "oversized_output",
               null,
@@ -155,13 +188,48 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         stdout.push(buffer);
       });
       child.stderr.on("data", (chunk: Buffer | string) => {
+        if (!collecting || settled || requested !== null) return;
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        if (Buffer.concat(stderr).length < 8 * 1024) stderr.push(buffer);
+        const remaining = MAX_PROGRAM_STDERR_BYTES - stderrBytes;
+        if (remaining <= 0) return;
+        const bounded = buffer.subarray(0, remaining);
+        stderrBytes += bounded.length;
+        stderr.push(bounded);
+      });
+      child.stdin.once("error", (error: unknown) => {
+        if (requested === null && !settled)
+          requestTermination(
+            result("failed", null, null, describeError(error)),
+          );
+      });
+      child.stdout.once("error", (error: unknown) => {
+        if (requested === null && !settled)
+          requestTermination(
+            result("failed", null, null, describeError(error)),
+          );
+      });
+      child.stderr.once("error", (error: unknown) => {
+        if (requested === null && !settled)
+          requestTermination(
+            result("failed", null, null, describeError(error)),
+          );
       });
       child.once("error", (error: unknown) => {
-        finish(result("failed", null, null, describeError(error)));
+        if (requested === null)
+          requestTermination(
+            result("failed", null, null, describeError(error)),
+          );
       });
       child.once("close", (code: number | null) => {
+        if (requested !== null) {
+          if (forceTimer !== undefined) {
+            clearTimeout(forceTimer);
+            forceTimer = undefined;
+            terminate(true);
+          }
+          finish(requested);
+          return;
+        }
         if (settled) return;
         const text = Buffer.concat(stdout).toString("utf8").trim();
         if (code !== 0) {
@@ -237,6 +305,47 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
       });
       child.stdin.end(`${serializedInput}\n`);
     });
+  }
+}
+
+function terminateProcessTree(
+  child: ChildProcessWithoutNullStreams,
+  force: boolean,
+): void {
+  if (child.pid === undefined || (child.exitCode !== null && !force)) return;
+  if (process.platform === "win32") {
+    if (!force) {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // The bounded force phase below is the containment fallback.
+      }
+      return;
+    }
+    try {
+      const killer = spawn(
+        "taskkill",
+        ["/PID", String(child.pid), "/T", "/F"],
+        { windowsHide: true, stdio: "ignore" },
+      );
+      killer.once("error", () => undefined);
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The settlement deadline remains bounded even if the OS rejects kill.
+      }
+    }
+    return;
+  }
+  try {
+    process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
+  } catch {
+    try {
+      child.kill(force ? "SIGKILL" : "SIGTERM");
+    } catch {
+      // The bounded settlement deadline remains the final containment fence.
+    }
   }
 }
 

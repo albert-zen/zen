@@ -111,6 +111,71 @@ test("automation tools route Trigger CRUD and every Room operation", async () =>
   );
 });
 
+test("read-only Trigger listing removes program environment and diagnostics", async () => {
+  const capability = new ZenXAutomationControlCapabilityPackage(
+    new SensitivePort(),
+  );
+  const listed = (await invoke(capability, "zenx_triggers_list", {})) as {
+    triggers: Array<{
+      program?: { action?: { env?: Record<string, string> } };
+    }>;
+    history: Array<{
+      programOutcome: { output: string | null; error: string | null } | null;
+      programOutcomes: Array<{ output: string | null; error: string | null }>;
+    }>;
+  };
+  assert.equal(listed.triggers[0]?.program?.action?.env, undefined);
+  assert.equal(listed.history[0]?.programOutcome?.output, null);
+  assert.equal(listed.history[0]?.programOutcome?.error, null);
+  assert.equal(listed.history[0]?.programOutcomes[0]?.output, null);
+  assert.doesNotMatch(JSON.stringify(listed), /do-not-leak/u);
+});
+
+test("Agent automation inputs enforce bounded strings, members, and program env", async () => {
+  const capability = new ZenXAutomationControlCapabilityPackage(new FakePort());
+  await assert.rejects(
+    invoke(capability, "zenx_triggers_create", {
+      threadId: "target",
+      kind: "signal",
+      label: "bounded",
+      prompt: "x".repeat(5_000),
+      signalName: "signal",
+    }),
+    /non-empty string/u,
+  );
+  await assert.rejects(
+    invoke(capability, "zenx_rooms_create", {
+      name: "too-many",
+      members: Array.from({ length: 65 }, (_, index) => ({
+        name: `member-${String(index)}`,
+        threadId: `thread-${String(index)}`,
+      })),
+    }),
+    /1-64/u,
+  );
+  await assert.rejects(
+    invoke(capability, "zenx_triggers_create", {
+      threadId: "target",
+      kind: "signal",
+      label: "bounded",
+      prompt: "prompt",
+      signalName: "signal",
+      program: {
+        action: {
+          command: "fixture",
+          env: Object.fromEntries(
+            Array.from({ length: 65 }, (_, index) => [
+              `KEY_${String(index)}`,
+              "value",
+            ]),
+          ),
+        },
+      },
+    }),
+    /too many entries/u,
+  );
+});
+
 async function invoke(
   capability: ZenXAutomationControlCapabilityPackage,
   name: string,
@@ -164,5 +229,72 @@ class FakePort implements ZenXAutomationControlPort {
   }
   async postAgentRoomMessage(id: string, text: string): Promise<void> {
     this.calls.push(["postAgentRoomMessage", { id, text }]);
+  }
+}
+
+class SensitivePort extends FakePort {
+  override snapshot(): TriggerSnapshot {
+    return {
+      triggers: [
+        {
+          id: "trigger-sensitive",
+          threadId: "target",
+          kind: "signal",
+          label: "Sensitive",
+          prompt: "Inspect",
+          signal: { name: "sensitive" },
+          createdAt: 1,
+          active: true,
+          program: {
+            action: {
+              command: "fixture",
+              env: { OPENAI_API_KEY: "do-not-leak" },
+            },
+          },
+        },
+      ],
+      history: [
+        {
+          id: "history-sensitive",
+          triggerId: "trigger-sensitive",
+          threadId: "target",
+          kind: "signal",
+          reason: "reason",
+          prompt: "Inspect",
+          clientUserMessageId: "wakeup",
+          startedAt: 1,
+          completedAt: 2,
+          status: "failed",
+          turnId: null,
+          error: "error",
+          sourceThreadId: null,
+          sourceTurnId: null,
+          sourceRoomId: null,
+          sourceRoomMessageId: null,
+          replyRoomId: null,
+          replyAuthor: null,
+          programInvocationId: null,
+          programOutcome: {
+            stage: "action",
+            invocationId: "invocation",
+            status: "failed",
+            output: "do-not-leak",
+            exitCode: 1,
+            error: "do-not-leak",
+          },
+          programOutcomes: [
+            {
+              stage: "action",
+              invocationId: "invocation",
+              status: "failed",
+              output: "do-not-leak",
+              exitCode: 1,
+              error: "do-not-leak",
+            },
+          ],
+        },
+      ],
+      rooms: [],
+    };
   }
 }

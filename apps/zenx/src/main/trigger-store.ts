@@ -12,6 +12,35 @@ import type {
   ZenXRoom,
   ZenXTrigger,
 } from "./trigger-types.js";
+import {
+  MAX_ERROR_BYTES,
+  MAX_HISTORY_COUNT,
+  MAX_ID_BYTES,
+  MAX_MEMBER_NAME_BYTES,
+  MAX_MESSAGE_AUTHOR_BYTES,
+  MAX_MESSAGE_TEXT_BYTES,
+  MAX_PROGRAM_ARGUMENT_BYTES,
+  MAX_PROGRAM_ARGUMENTS,
+  MAX_PROGRAM_COMMAND_BYTES,
+  MAX_PROGRAM_CWD_BYTES,
+  MAX_PROGRAM_ENV_BYTES,
+  MAX_PROGRAM_ENV_ENTRIES,
+  MAX_PROGRAM_ENV_KEY_BYTES,
+  MAX_PROGRAM_ENV_VALUE_BYTES,
+  MAX_PROGRAM_FLAGS_BYTES,
+  MAX_PROGRAM_MATCH_REGEX_BYTES,
+  MAX_PROGRAM_OUTCOMES,
+  MAX_REASON_BYTES,
+  MAX_ROOM_COUNT,
+  MAX_ROOM_MEMBERS,
+  MAX_ROOM_MESSAGES,
+  MAX_ROOM_NAME_BYTES,
+  MAX_TRIGGER_COUNT,
+  MAX_TRIGGER_LABEL_BYTES,
+  MAX_TRIGGER_PROMPT_BYTES,
+  utf8Bytes,
+  withinBytes,
+} from "./trigger-limits.js";
 
 interface StoredState extends TriggerSnapshot {
   version: 3;
@@ -143,9 +172,9 @@ function isStoredState(value: unknown): value is StoredState {
   return (
     state !== null &&
     state["version"] === 3 &&
-    arrayOf(state["triggers"], isTrigger) &&
-    arrayOf(state["history"], isHistory) &&
-    arrayOf(state["rooms"], isRoom)
+    arrayOf(state["triggers"], isTrigger, MAX_TRIGGER_COUNT) &&
+    arrayOf(state["history"], isHistory, MAX_HISTORY_COUNT) &&
+    arrayOf(state["rooms"], isRoom, MAX_ROOM_COUNT)
   );
 }
 
@@ -154,9 +183,9 @@ function isVersion2StoredState(value: unknown): value is Version2StoredState {
   return (
     state !== null &&
     state["version"] === 2 &&
-    arrayOf(state["triggers"], isTrigger) &&
-    arrayOf(state["history"], isVersion2History) &&
-    arrayOf(state["rooms"], isRoom)
+    arrayOf(state["triggers"], isTrigger, MAX_TRIGGER_COUNT) &&
+    arrayOf(state["history"], isVersion2History, MAX_HISTORY_COUNT) &&
+    arrayOf(state["rooms"], isRoom, MAX_ROOM_COUNT)
   );
 }
 
@@ -165,9 +194,9 @@ function isLegacyStoredState(value: unknown): value is LegacyStoredState {
   return (
     state !== null &&
     state["version"] === 1 &&
-    arrayOf(state["triggers"], isTrigger) &&
-    arrayOf(state["history"], isLegacyHistory) &&
-    arrayOf(state["rooms"], isRoom)
+    arrayOf(state["triggers"], isTrigger, MAX_TRIGGER_COUNT) &&
+    arrayOf(state["history"], isLegacyHistory, MAX_HISTORY_COUNT) &&
+    arrayOf(state["rooms"], isRoom, MAX_ROOM_COUNT)
   );
 }
 
@@ -175,11 +204,11 @@ function isTrigger(value: unknown): value is ZenXTrigger {
   const trigger = record(value);
   if (
     trigger === null ||
-    !string(trigger["id"]) ||
-    !string(trigger["threadId"]) ||
+    !string(trigger["id"], MAX_ID_BYTES) ||
+    !string(trigger["threadId"], MAX_ID_BYTES) ||
     !triggerKind(trigger["kind"]) ||
-    !string(trigger["label"]) ||
-    !string(trigger["prompt"]) ||
+    !string(trigger["label"], MAX_TRIGGER_LABEL_BYTES) ||
+    !string(trigger["prompt"], MAX_TRIGGER_PROMPT_BYTES) ||
     !finiteNumber(trigger["createdAt"]) ||
     typeof trigger["active"] !== "boolean" ||
     (trigger["program"] !== undefined && !isProgramConfig(trigger["program"]))
@@ -199,16 +228,20 @@ function isTrigger(value: unknown): value is ZenXTrigger {
     const watch = record(trigger["watch"]);
     return (
       watch !== null &&
-      string(watch["threadId"]) &&
+      string(watch["threadId"], MAX_ID_BYTES) &&
       watch["event"] === "turn_completed"
     );
   }
   if (trigger["kind"] === "roomMention") {
     const room = record(trigger["room"]);
-    return room !== null && string(room["roomId"]) && string(room["mention"]);
+    return (
+      room !== null &&
+      string(room["roomId"], MAX_ID_BYTES) &&
+      string(room["mention"], MAX_MEMBER_NAME_BYTES)
+    );
   }
   const signal = record(trigger["signal"]);
-  return signal !== null && string(signal["name"]);
+  return signal !== null && string(signal["name"], MAX_ID_BYTES);
 }
 
 function isHistory(value: unknown): value is TriggerHistoryEntry {
@@ -216,12 +249,12 @@ function isHistory(value: unknown): value is TriggerHistoryEntry {
   return (
     isVersion2History(value) &&
     entry !== null &&
-    nullableString(entry["replyRoomId"]) &&
-    nullableString(entry["replyAuthor"]) &&
-    nullableString(entry["programInvocationId"]) &&
+    nullableString(entry["replyRoomId"], MAX_ID_BYTES) &&
+    nullableString(entry["replyAuthor"], MAX_MEMBER_NAME_BYTES) &&
+    nullableString(entry["programInvocationId"], MAX_ID_BYTES) &&
     (entry["programOutcome"] === null ||
       isProgramOutcome(entry["programOutcome"])) &&
-    arrayOf(entry["programOutcomes"], isProgramOutcome)
+    arrayOf(entry["programOutcomes"], isProgramOutcome, MAX_PROGRAM_OUTCOMES)
   );
 }
 
@@ -232,10 +265,10 @@ function isVersion2History(
   return (
     isLegacyHistory(value) &&
     entry !== null &&
-    nullableString(entry["sourceThreadId"]) &&
-    nullableString(entry["sourceTurnId"]) &&
-    nullableString(entry["sourceRoomId"]) &&
-    nullableString(entry["sourceRoomMessageId"])
+    nullableString(entry["sourceThreadId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceTurnId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceRoomId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceRoomMessageId"], MAX_ID_BYTES)
   );
 }
 
@@ -245,18 +278,18 @@ function isLegacyHistory(
   const entry = record(value);
   return (
     entry !== null &&
-    string(entry["id"]) &&
-    string(entry["triggerId"]) &&
-    string(entry["threadId"]) &&
+    string(entry["id"], MAX_ID_BYTES) &&
+    string(entry["triggerId"], MAX_ID_BYTES) &&
+    string(entry["threadId"], MAX_ID_BYTES) &&
     triggerKind(entry["kind"]) &&
-    string(entry["reason"]) &&
-    string(entry["prompt"]) &&
-    string(entry["clientUserMessageId"]) &&
+    string(entry["reason"], MAX_REASON_BYTES) &&
+    string(entry["prompt"], MAX_TRIGGER_PROMPT_BYTES) &&
+    string(entry["clientUserMessageId"], MAX_ID_BYTES) &&
     finiteNumber(entry["startedAt"]) &&
     nullableNumber(entry["completedAt"]) &&
     historyStatus(entry["status"]) &&
-    nullableString(entry["turnId"]) &&
-    nullableString(entry["error"])
+    nullableString(entry["turnId"], MAX_ID_BYTES) &&
+    nullableString(entry["error"], MAX_ERROR_BYTES)
   );
 }
 
@@ -277,18 +310,34 @@ function isProgramSpec(value: unknown): value is TriggerProgramSpec {
   const spec = record(value);
   if (
     spec === null ||
-    !string(spec["command"]) ||
+    !string(spec["command"], MAX_PROGRAM_COMMAND_BYTES) ||
     (spec["args"] !== undefined &&
       !arrayOf(
         spec["args"],
-        (entry): entry is string => typeof entry === "string",
+        (entry): entry is string =>
+          typeof entry === "string" &&
+          withinBytes(entry, MAX_PROGRAM_ARGUMENT_BYTES),
+        MAX_PROGRAM_ARGUMENTS,
       )) ||
-    (spec["cwd"] !== undefined && !string(spec["cwd"])) ||
+    (spec["cwd"] !== undefined &&
+      !string(spec["cwd"], MAX_PROGRAM_CWD_BYTES)) ||
     (spec["env"] !== undefined &&
       (record(spec["env"]) === null ||
-        Object.values(spec["env"] as Record<string, unknown>).some(
-          (entry) => typeof entry !== "string",
-        ))) ||
+        Object.keys(spec["env"] as Record<string, unknown>).length >
+          MAX_PROGRAM_ENV_ENTRIES ||
+        Object.entries(spec["env"] as Record<string, unknown>).some(
+          ([key, entry]) =>
+            !withinBytes(key, MAX_PROGRAM_ENV_KEY_BYTES) ||
+            typeof entry !== "string" ||
+            !withinBytes(entry, MAX_PROGRAM_ENV_VALUE_BYTES),
+        ) ||
+        Object.entries(spec["env"] as Record<string, unknown>).reduce(
+          (total, [key, entry]) =>
+            total +
+            utf8Bytes(key) +
+            (typeof entry === "string" ? utf8Bytes(entry) : 0),
+          0,
+        ) > MAX_PROGRAM_ENV_BYTES)) ||
     (spec["timeoutMs"] !== undefined &&
       (!finiteNumber(spec["timeoutMs"]) || spec["timeoutMs"] <= 0)) ||
     (spec["maxOutputBytes"] !== undefined &&
@@ -305,8 +354,9 @@ function isMatch(value: unknown): boolean {
   if (
     match === null ||
     match["field"] !== "completedItemText" ||
-    !string(match["regex"]) ||
-    (match["flags"] !== undefined && !string(match["flags"]))
+    !string(match["regex"], MAX_PROGRAM_MATCH_REGEX_BYTES) ||
+    (match["flags"] !== undefined &&
+      !string(match["flags"], MAX_PROGRAM_FLAGS_BYTES))
   )
     return false;
   try {
@@ -323,10 +373,10 @@ function isProgramOutcome(value: unknown): value is TriggerProgramOutcome {
     outcome !== null &&
     (outcome["stage"] === "predicate" || outcome["stage"] === "action") &&
     programStatus(outcome["status"]) &&
-    string(outcome["invocationId"]) &&
-    nullableString(outcome["output"]) &&
+    string(outcome["invocationId"], MAX_ID_BYTES) &&
+    nullableString(outcome["output"], 8_000) &&
     nullableNumber(outcome["exitCode"]) &&
-    nullableString(outcome["error"])
+    nullableString(outcome["error"], MAX_ERROR_BYTES)
   );
 }
 
@@ -334,10 +384,10 @@ function isRoom(value: unknown): value is ZenXRoom {
   const room = record(value);
   if (
     room === null ||
-    !string(room["id"]) ||
-    !string(room["name"]) ||
-    !arrayOf(room["members"], isRoomMember) ||
-    !arrayOf(room["messages"], isRoomMessage) ||
+    !string(room["id"], MAX_ID_BYTES) ||
+    !string(room["name"], MAX_ROOM_NAME_BYTES) ||
+    !arrayOf(room["members"], isRoomMember, MAX_ROOM_MEMBERS) ||
+    !arrayOf(room["messages"], isRoomMessage, MAX_ROOM_MESSAGES) ||
     !finiteNumber(room["createdAt"])
   )
     return false;
@@ -355,7 +405,9 @@ function isRoom(value: unknown): value is ZenXRoom {
 function isRoomMember(value: unknown): value is RoomMember {
   const member = record(value);
   return (
-    member !== null && string(member["name"]) && string(member["threadId"])
+    member !== null &&
+    string(member["name"], MAX_MEMBER_NAME_BYTES) &&
+    string(member["threadId"], MAX_ID_BYTES)
   );
 }
 
@@ -363,16 +415,16 @@ function isRoomMessage(value: unknown): value is RoomMessage {
   const message = record(value);
   return (
     message !== null &&
-    string(message["id"]) &&
-    string(message["roomId"]) &&
-    string(message["author"]) &&
-    string(message["text"]) &&
+    string(message["id"], MAX_ID_BYTES) &&
+    string(message["roomId"], MAX_ID_BYTES) &&
+    string(message["author"], MAX_MESSAGE_AUTHOR_BYTES) &&
+    string(message["text"], MAX_MESSAGE_TEXT_BYTES) &&
     finiteNumber(message["createdAt"]) &&
     (message["kind"] === "human" ||
       message["kind"] === "agent" ||
       message["kind"] === "system") &&
-    nullableString(message["originThreadId"]) &&
-    nullableString(message["originTurnId"])
+    nullableString(message["originThreadId"], MAX_ID_BYTES) &&
+    nullableString(message["originTurnId"], MAX_ID_BYTES)
   );
 }
 
@@ -385,16 +437,26 @@ function record(value: unknown): Record<string, unknown> | null {
 function arrayOf<T>(
   value: unknown,
   predicate: (entry: unknown) => entry is T,
+  maximum?: number,
 ): value is T[] {
-  return Array.isArray(value) && value.every(predicate);
+  return (
+    Array.isArray(value) &&
+    (maximum === undefined || value.length <= maximum) &&
+    value.every(predicate)
+  );
 }
 
-function string(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+function string(value: unknown, maximum = MAX_ID_BYTES): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && withinBytes(value, maximum)
+  );
 }
 
-function nullableString(value: unknown): value is string | null {
-  return value === null || string(value);
+function nullableString(
+  value: unknown,
+  maximum = MAX_ID_BYTES,
+): value is string | null {
+  return value === null || string(value, maximum);
 }
 
 function finiteNumber(value: unknown): value is number {

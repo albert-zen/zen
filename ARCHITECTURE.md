@@ -142,11 +142,14 @@
   与取消句柄绑定到一次可退休的进程内代数；迟到异步结果只能观察其创建代数，不能修改新代数或
   重新占用已释放的唤醒名额。
 - **ZenXTriggerProgramRunner** — ZenX 外层以一次性、有界的本地子进程执行 Trigger predicate/action，
-  通过稳定 invocation id、显式 stdin/stdout JSON、cwd/env、超时和取消把结果归约为 Trigger 历史中的
-  明确 outcome；它不是 sandbox、队列、重试器或第二个 Runtime。
+  通过稳定 invocation id、显式 stdin/stdout JSON、cwd/env、超时、取消与平台化进程树终止把结果归约为
+  Trigger 历史中的明确 outcome；它不是 sandbox、队列、重试器或第二个 Runtime。
 - **ZenXAutomationControlCapability** — ZenX capability registry 中由独立 read/write 权限保护的 Trigger
   与 Room 工具集合；工具只调用现有 Trigger/Room store 和 App Server port，不拥有 Agent、Thread、Turn
   或 transcript 语义。
+- **ZenXTriggerRoomRetention** — Trigger/Room canonical registry 在单次 mutation 中执行显式数量、字段与
+  UTF-8 字节上限；保留全部非 terminal wakeup，并只保留 bounded terminal audit 与 Room 消息，同时保留
+  admission-failure audit，确保 65th admission-failure 事实不会被同一 mutation 淘汰。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
 （cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -108,3 +108,59 @@ test("program runner records malformed, nonzero, oversized, timeout, and cancell
   controller.abort(new Error("fixture cancellation"));
   assert.equal((await cancelled).status, "cancelled");
 });
+
+test("program runner contains a TERM-ignoring descendant after cancellation", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-program-kill-"));
+  const marker = path.join(directory, "late-marker");
+  const descendant = `const fs=require('node:fs');setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),400);`;
+  const parent = `const {spawn}=require('node:child_process');process.on('SIGTERM',()=>{});spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});setInterval(()=>process.stdout.write(JSON.stringify({ok:true})+'\\n'),50);`;
+  const controller = new AbortController();
+  try {
+    const running = runner.run(
+      {
+        command: process.execPath,
+        args: ["-e", parent],
+        maxOutputBytes: 64 * 1024,
+      },
+      { invocationId: "contained-cancel", stage: "action", event: {} },
+      controller.signal,
+    );
+    await delay(40);
+    controller.abort(new Error("cancel fixture"));
+    const result = await running;
+    assert.equal(result.status, "cancelled");
+    assert.equal(result.output, null);
+    await delay(600);
+    await assert.rejects(stat(marker), { code: "ENOENT" });
+  } finally {
+    await assert.rejects(stat(marker), { code: "ENOENT" });
+  }
+});
+
+test("program runner forces the tree when the direct child exits on TERM", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-program-tree-close-"),
+  );
+  const marker = path.join(directory, "late-marker");
+  const descendant = `const fs=require('node:fs');setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),400);`;
+  const parent = `const {spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000);`;
+  const controller = new AbortController();
+  try {
+    const running = runner.run(
+      { command: process.execPath, args: ["-e", parent] },
+      { invocationId: "tree-close", stage: "action", event: {} },
+      controller.signal,
+    );
+    await delay(40);
+    controller.abort(new Error("tree close fixture"));
+    assert.equal((await running).status, "cancelled");
+    await delay(600);
+    await assert.rejects(stat(marker), { code: "ENOENT" });
+  } finally {
+    await assert.rejects(stat(marker), { code: "ENOENT" });
+  }
+});
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
