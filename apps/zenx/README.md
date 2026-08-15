@@ -10,6 +10,22 @@ Core.
 npm --workspace apps/zenx run dev
 ```
 
+ZenX owns its read-only project directory picker so folder selection stays
+consistent and testable across platforms. Windows and Linux remove Electron's
+default application menu entirely. macOS retains a deliberately minimal native
+application menu (About, standard editing, window management, and Quit) to
+respect platform conventions; production menus never expose developer tools.
+
+Build the current platform's unpacked portable application with the same pinned
+provider assembly used by the packaged smoke:
+
+```sh
+npm --workspace apps/zenx run package:portable
+```
+
+The application is written below `apps/zenx/.packaged/artifact/`. It is an
+unpacked development artifact rather than an installer or signed release.
+
 The first window is onboarding. Choose an OpenAI subscription, an
 OpenAI-compatible API provider, or the deterministic local demo. Saving restarts
 the local host; existing Thread model settings remain authoritative in ZAS.

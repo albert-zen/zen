@@ -10,6 +10,8 @@
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — 驱动一个 Thread 的循环：从 ItemList 编译上下文 → 调用模型 → 执行工具，把发生的一切追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
+- **ZenXDirectoryBrowser** — ZenX host 在本地 IPC 边界提供的只读 canonical
+  directory 投影，只服务于 workspace 配置选择，不进入 Core、Thread 或 wire protocol。
 - **SoftSteerDeliveryAnchor** — 当前执行在每次模型采样前设置的临时 response id；
   steer 的 canonical `user_message.deliveryAfter` 持久化这个排序锚点，使下一次
   采样能从 ItemList 重建正确上下文，而不形成第二份 mailbox 或会话状态。
@@ -47,7 +49,8 @@
 - **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
   幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
-- **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、workspace 与
+- **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、默认 workspace、
+  用户显式添加的 workspace 列表与
   审批默认值；它只用于组合本机 App Server host，不包含 credential，也不覆盖已存
   Thread 的生效设置。
 - **ZenXCredentialVault** — ZenX 通过操作系统安全存储保护的 Provider credential
@@ -149,6 +152,9 @@
   domain/root 健康后才可成功，不能返回一个其 `snapshot` 已不可用的 coordinator。
 - **ZenXThreadTitleNotificationObserver** — ZenX 主进程在 App Server canonical
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
+- **ZenXJournalCompatibilityService** — ZenX 主进程按当前 JSONL journal loader 的
+  内容与格式投影当前、已知 legacy 与未知候选，并只把无有用内容的已知 legacy
+  journal 移入 `~/.zen` 内的可恢复 quarantine，不改变 Thread 语义。
 - **ZenXTriggerLifecycleGeneration** — Trigger 服务把定时器、瞬态完成证据、唤醒 admission
   与取消句柄绑定到一次可退休的进程内代数；迟到异步结果只能观察其创建代数，不能修改新代数或
   重新占用已释放的唤醒名额。

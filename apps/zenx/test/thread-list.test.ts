@@ -6,6 +6,7 @@ import {
   applyThreadNotification,
   deriveInboxSections,
   deriveProjectGroups,
+  isPackagedArtifactPath,
   readSidebarMode,
   threadPreview,
   threadTitle,
@@ -25,7 +26,7 @@ test("persists the selected sidebar mode and defaults invalid values to projects
   assert.equal(readSidebarMode(storage), "projects");
 });
 
-test("derives recency-first inbox groups and preserves system errors", () => {
+test("derives recency-first inbox groups and reserves system errors for aggregation", () => {
   const unavailable = makeThread("broken", 30, { type: "systemError" });
   const active = makeThread("active", 20, {
     type: "active",
@@ -40,7 +41,7 @@ test("derives recency-first inbox groups and preserves system errors", () => {
       section.threads.map((thread) => thread.id),
     ]),
     [
-      ["needs", ["broken"]],
+      ["needs", []],
       ["active", ["active"]],
       ["watching", []],
       ["settled", ["newer", "older"]],
@@ -115,6 +116,32 @@ test("derives project groups only from cwd and isolates unavailable journals", (
       ["zen", ["nested"]],
       ["Unavailable journals", ["broken"]],
     ],
+  );
+});
+
+test("keeps configured empty workspaces and never labels packaged artifacts as projects", () => {
+  const artifact = makeThread(
+    "artifact",
+    30,
+    { type: "idle" },
+    "D:\\desktop\\zen\\apps\\zenx\\.packaged\\artifact\\ZenX-win32-x64",
+  );
+  const groups = deriveProjectGroups(
+    [artifact],
+    ["D:\\work\\empty"],
+    "D:\\work\\empty",
+  );
+  assert.equal(isPackagedArtifactPath(artifact.cwd), true);
+  assert.deepEqual(
+    groups.map((group) => [group.label, group.threads.length, group.isDefault]),
+    [
+      ["empty", 0, true],
+      ["Unassigned threads", 1, false],
+    ],
+  );
+  assert.equal(
+    groups.some((group) => group.label === "ZenX-win32-x64"),
+    false,
   );
 });
 

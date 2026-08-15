@@ -3,7 +3,10 @@ import path from "node:path";
 import { OpenAiSubscriptionAuthProfile } from "../../../../apps/cli/src/subscription-auth.js";
 import type { ModelAdapter } from "../../../../src/model.js";
 import { OpenAiCompatibleModel } from "../../../../src/model/openai-compatible.js";
-import { OpenAiSubscriptionModel } from "../../../../src/model/openai-subscription.js";
+import {
+  DEFAULT_OPENAI_SUBSCRIPTION_MODEL,
+  OpenAiSubscriptionModel,
+} from "../../../../src/model/openai-subscription.js";
 import type { ZenXHostConfig } from "./host-messages.js";
 import {
   hostConfigFromProfile,
@@ -11,6 +14,7 @@ import {
   type ZenXHostProfile,
   ZenXHostProfileStore,
   validateHostProfile,
+  workspaceKey,
 } from "./host-profile.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
 import { resolveZenXHostConfig } from "./host-config.js";
@@ -59,13 +63,25 @@ export class ZenXSettingsService {
     this.#vault = options.vault;
   }
 
-  async initialize(environment: NodeJS.ProcessEnv): Promise<void> {
+  async initialize(
+    environment: NodeJS.ProcessEnv,
+    options: { safeWorkspace?: string } = {},
+  ): Promise<void> {
     const existing = await this.#profileStore.readOptional();
     if (existing !== undefined) {
-      this.#profile = existing;
+      const repaired = repairUnsafeWorkspace(existing, options.safeWorkspace);
+      if (repaired !== existing) await this.#profileStore.write(repaired);
+      this.#profile = repaired;
       return;
     }
-    const legacy = resolveZenXHostConfig(environment);
+    const migrationEnvironment =
+      environment.ZENX_CWD === undefined && options.safeWorkspace !== undefined
+        ? { ...environment, ZENX_CWD: options.safeWorkspace }
+        : environment;
+    const legacy = resolveZenXHostConfig(migrationEnvironment);
+    for (const variable of legacy.secretEnvironmentVariables ?? []) {
+      delete environment[variable];
+    }
     const fallback = profileFromLegacy(legacy);
     if (legacy.provider.type === "openai-compatible") {
       await this.#vault.writeApiKey(legacy.provider.apiKey);
@@ -132,6 +148,14 @@ export class ZenXSettingsService {
 
   async save(profile: ZenXHostProfile, apiKey?: string): Promise<void> {
     const validated = validateHostProfile(profile);
+    if (validated.provider.type === "openai-subscription") {
+      const status = await this.#subscription.status();
+      if (!status.authenticated) {
+        throw new Error(
+          "Sign in with OpenAI before activating the subscription provider",
+        );
+      }
+    }
     if (apiKey !== undefined && apiKey.length > 0)
       await this.#vault.writeApiKey(apiKey);
     if (
@@ -142,6 +166,63 @@ export class ZenXSettingsService {
     }
     await this.#profileStore.write(validated);
     this.#profile = validated;
+  }
+
+  async addWorkspace(workspace: string): Promise<void> {
+    const current = this.#requireProfile();
+    const candidate = workspace.trim();
+    if (candidate.length === 0) throw new Error("Workspace is required");
+    const resolved = path.resolve(candidate);
+    if (
+      current.workspaces.some(
+        (entry) => workspaceKey(entry) === workspaceKey(resolved),
+      )
+    )
+      return;
+    const next = validateHostProfile({
+      ...current,
+      workspaces: [...current.workspaces, resolved],
+    });
+    await this.#profileStore.write(next);
+    this.#profile = next;
+  }
+
+  async removeWorkspace(workspace: string): Promise<boolean> {
+    const current = this.#requireProfile();
+    const key = workspaceKey(workspace);
+    const nextWorkspaces = current.workspaces.filter(
+      (entry) => workspaceKey(entry) !== key,
+    );
+    if (nextWorkspaces.length === current.workspaces.length) return false;
+    if (nextWorkspaces.length === 0)
+      throw new Error("Keep at least one workspace on this device");
+    const nextDefault =
+      workspaceKey(current.workspace) === key
+        ? nextWorkspaces[0]!
+        : current.workspace;
+    const next = validateHostProfile({
+      ...current,
+      workspace: nextDefault,
+      workspaces: nextWorkspaces,
+    });
+    await this.#profileStore.write(next);
+    this.#profile = next;
+    return workspaceKey(nextDefault) !== workspaceKey(current.workspace);
+  }
+
+  async setDefaultWorkspace(workspace: string): Promise<boolean> {
+    const current = this.#requireProfile();
+    const key = workspaceKey(workspace);
+    const selected = current.workspaces.find(
+      (entry) => workspaceKey(entry) === key,
+    );
+    if (selected === undefined) throw new Error("Workspace is not configured");
+    if (workspaceKey(selected) === workspaceKey(current.workspace))
+      return false;
+    const next = validateHostProfile({ ...current, workspace: selected });
+    await this.#profileStore.write(next);
+    this.#profile = next;
+    return true;
   }
 
   async login(
@@ -171,6 +252,7 @@ export class ZenXSettingsService {
             manualCodeRequested();
           }),
       });
+      await this.#activateSubscription();
     } finally {
       const waiter = this.#manualCode;
       this.#manualCode = undefined;
@@ -180,6 +262,29 @@ export class ZenXSettingsService {
         waiter.reject(new Error("OpenAI login ended before a code was used"));
       }
     }
+  }
+
+  async #activateSubscription(): Promise<void> {
+    const status = await this.#subscription.status();
+    if (!status.authenticated) {
+      throw new Error(
+        "OpenAI login completed without an authenticated account",
+      );
+    }
+    const current = this.#requireProfile();
+    const next = validateHostProfile({
+      ...current,
+      onboardingComplete: true,
+      provider: {
+        type: "openai-subscription",
+        displayName: "OpenAI subscription",
+      },
+      defaultModel: DEFAULT_OPENAI_SUBSCRIPTION_MODEL,
+      titleModel: DEFAULT_OPENAI_SUBSCRIPTION_MODEL,
+      models: [DEFAULT_OPENAI_SUBSCRIPTION_MODEL, "gpt-5.6-sol"],
+    });
+    await this.#profileStore.write(next);
+    this.#profile = next;
   }
 
   submitManualCode(value: string): void {
@@ -225,6 +330,35 @@ function profileFromLegacy(config: ZenXHostConfig): ZenXHostProfile {
     titleModel: "gpt-5.6-luna",
     models: [...(config.models ?? [config.model])],
     workspace: config.cwd,
+    workspaces: [config.cwd],
     approvalPolicy: config.approvalPolicy,
   };
+}
+
+function repairUnsafeWorkspace(
+  profile: ZenXHostProfile,
+  safeWorkspace: string | undefined,
+): ZenXHostProfile {
+  if (safeWorkspace === undefined) return profile;
+  const safe = path.resolve(safeWorkspace);
+  const workspaces = profile.workspaces.filter(
+    (workspace) => !isPackagedArtifactPath(workspace),
+  );
+  const workspace = isPackagedArtifactPath(profile.workspace)
+    ? (workspaces[0] ?? safe)
+    : profile.workspace;
+  const next = validateHostProfile({ ...profile, workspace, workspaces });
+  return JSON.stringify(next) === JSON.stringify(profile) ? profile : next;
+}
+
+export function resolveSafeWorkspace(candidates: readonly string[]): string {
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    if (!isPackagedArtifactPath(resolved)) return resolved;
+  }
+  throw new Error("No safe workspace is available on this device");
+}
+
+export function isPackagedArtifactPath(value: string): boolean {
+  return /[\\/]\.packaged[\\/]artifact[\\/]/iu.test(value);
 }

@@ -14,7 +14,12 @@ import type {
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  WorkspaceMutationResult,
 } from "../../main/host-profile.js";
+import type {
+  JournalCompatibilityProjection,
+  JournalQuarantineResult,
+} from "../../main/journal-compatibility.js";
 import type {
   CreateRoomInput,
   CreateTriggerInput,
@@ -26,6 +31,10 @@ import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
 } from "../../main/thread-title-types.js";
+import type {
+  DirectoryBrowserSnapshot,
+  DirectoryListing,
+} from "../../main/directory-browser.js";
 
 declare global {
   interface Window {
@@ -65,6 +74,21 @@ declare global {
         loginSubscription(): Promise<PublicHostSettings>;
         submitManualCode(code: string): Promise<void>;
         logoutSubscription(): Promise<PublicHostSettings>;
+        getDirectoryBrowser(): Promise<DirectoryBrowserSnapshot>;
+        listDirectory(directory: string): Promise<DirectoryListing>;
+        addWorkspace(workspace: string): Promise<WorkspaceMutationResult>;
+        removeWorkspace(workspace: string): Promise<WorkspaceMutationResult>;
+        setDefaultWorkspace(
+          workspace: string,
+        ): Promise<WorkspaceMutationResult>;
+        getLegacyJournalReport(): Promise<JournalCompatibilityProjection>;
+        cleanupLegacyJournals(): Promise<{
+          report: JournalCompatibilityProjection;
+          result: JournalQuarantineResult;
+        }>;
+        onLegacyJournalChange(
+          listener: (report: JournalCompatibilityProjection) => void,
+        ): () => void;
         onManualCodeRequested(listener: () => void): () => void;
       };
       titles: {
