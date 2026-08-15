@@ -21,6 +21,7 @@ export interface ZenXHostProfile {
   titleModel: string;
   models: string[];
   workspace: string;
+  workspaces: string[];
   approvalPolicy: "always" | "never";
 }
 
@@ -33,6 +34,11 @@ export interface PublicHostSettings {
     accountId?: string;
     expiresAt?: number;
   };
+}
+
+export interface WorkspaceMutationResult {
+  settings: PublicHostSettings;
+  requiresRestart: boolean;
 }
 
 export class ZenXHostProfileStore {
@@ -103,6 +109,8 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
   if (value.approvalPolicy !== "always" && value.approvalPolicy !== "never") {
     throw new Error("ZenX approval policy is invalid");
   }
+  const workspace = path.resolve(nonEmpty(value.workspace, "workspace"));
+  const workspaces = normalizeWorkspaces(value.workspaces, workspace);
   return {
     version: 1,
     onboardingComplete: value.onboardingComplete === true,
@@ -110,9 +118,29 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     defaultModel,
     titleModel,
     models,
-    workspace: path.resolve(nonEmpty(value.workspace, "workspace")),
+    workspace,
+    workspaces,
     approvalPolicy: value.approvalPolicy,
   };
+}
+
+function normalizeWorkspaces(value: unknown, workspace: string): string[] {
+  if (value !== undefined && !Array.isArray(value)) {
+    throw new Error("ZenX workspace list is invalid");
+  }
+  const candidates = [
+    workspace,
+    ...((value ?? []) as unknown[]).map((entry) =>
+      path.resolve(nonEmpty(entry, "workspace")),
+    ),
+  ];
+  const unique = new Map<string, string>();
+  for (const candidate of candidates) {
+    const key =
+      process.platform === "win32" ? candidate.toLowerCase() : candidate;
+    if (!unique.has(key)) unique.set(key, candidate);
+  }
+  return [...unique.values()];
 }
 
 export function hostConfigFromProfile(
@@ -154,6 +182,11 @@ export function hostConfigFromProfile(
     },
     secretEnvironmentVariables: [],
   };
+}
+
+export function workspaceKey(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function validateProvider(value: Record<string, unknown>): ZenXProviderProfile {

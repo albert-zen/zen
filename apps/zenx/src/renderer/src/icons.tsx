@@ -1,6 +1,7 @@
-import type { ReactNode, SVGProps } from "react";
+import React, { type ReactNode, type SVGProps } from "react";
 
 type IconName =
+  | "archive"
   | "check"
   | "chevron-down"
   | "chevron-right"
@@ -8,6 +9,7 @@ type IconName =
   | "folder"
   | "inbox"
   | "moon"
+  | "plus"
   | "panel-right"
   | "reasoning"
   | "settings"
@@ -16,6 +18,7 @@ type IconName =
   | "trigger"
   | "tree"
   | "stop"
+  | "trash"
   | "warning";
 
 type IconProps = SVGProps<SVGSVGElement> & {
@@ -24,6 +27,12 @@ type IconProps = SVGProps<SVGSVGElement> & {
 };
 
 const paths: Record<IconName, ReactNode> = {
+  archive: (
+    <>
+      <path d="M2.2 5.2h11.6v7.2c0 .8-.6 1.4-1.4 1.4H3.6c-.8 0-1.4-.6-1.4-1.4V5.2Z" />
+      <path d="M1.6 2.2h12.8v3H1.6zM6 8h4" />
+    </>
+  ),
   check: <path d="m2.4 8.4 3.4 3.4 7.8-7.8" />,
   "chevron-down": <path d="m3.6 6 4.4 4.4L12.4 6" />,
   "chevron-right": <path d="m6 3.6 4.4 4.4L6 12.4" />,
@@ -43,6 +52,7 @@ const paths: Record<IconName, ReactNode> = {
     </>
   ),
   moon: <path d="M13.4 9.4A5.8 5.8 0 0 1 6.6 2.6a5.8 5.8 0 1 0 6.8 6.8Z" />,
+  plus: <path d="M8 2.5v11M2.5 8h11" />,
   "panel-right": (
     <>
       <rect x="1.8" y="2.2" width="12.4" height="11.6" rx="1.5" />
@@ -76,6 +86,12 @@ const paths: Record<IconName, ReactNode> = {
   ),
   trigger: <path d="M8.8 1.6 3.4 9h3.4l-.9 5.4L11.3 7H7.9l.9-5.4Z" />,
   stop: <rect x="3.2" y="3.2" width="9.6" height="9.6" rx="1.5" />,
+  trash: (
+    <>
+      <path d="M3.2 4.5h9.6M6 4.5V2.7h4v1.8M4.3 4.5l.6 9h6.2l.6-9" />
+      <path d="M6.7 7v3.8M9.3 7v3.8" />
+    </>
+  ),
   tree: (
     <>
       <path d="M2.5 3.5h11M5.5 8h8M5.5 12.5h8" />

@@ -1,7 +1,26 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
-import { resolveZenXHostConfig } from "../src/main/host-config.js";
+import {
+  resolveZenDataDirectory,
+  resolveZenXHostConfig,
+} from "../src/main/host-config.js";
+
+test("keeps shared ~/.zen authoritative and ignores CODEX_HOME", () => {
+  const home = path.resolve("/tmp/zen-home");
+  assert.equal(
+    resolveZenDataDirectory(
+      { CODEX_HOME: path.resolve("/tmp/codex-home") },
+      home,
+    ),
+    path.join(home, ".zen"),
+  );
+  assert.equal(
+    resolveZenDataDirectory({ ZENX_DATA_DIR: "/tmp/explicit-zen" }, home),
+    path.resolve("/tmp/explicit-zen"),
+  );
+});
 
 test("resolves fake and subscription hosts from external ZenX config", () => {
   const fake = resolveZenXHostConfig({
@@ -20,7 +39,10 @@ test("resolves fake and subscription hosts from external ZenX config", () => {
   if (subscription.provider.type === "openai-subscription") {
     assert.equal(
       subscription.provider.profilePath,
-      "/tmp/zenx-subscription/openai-subscription-auth.json",
+      path.join(
+        path.resolve("/tmp/zenx-subscription"),
+        "openai-subscription-auth.json",
+      ),
     );
   }
 });

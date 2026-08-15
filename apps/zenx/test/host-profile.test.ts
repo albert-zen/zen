@@ -23,6 +23,7 @@ const profile = {
   titleModel: "gpt-5.6-luna",
   models: ["qwen3", "deepseek-r1"],
   workspace: "/tmp/workspace",
+  workspaces: ["/tmp/workspace"],
   approvalPolicy: "always" as const,
 };
 
@@ -34,7 +35,13 @@ test("round-trips credential-free host settings and builds the ModelCatalog conf
     );
     await store.write(profile);
     const read = await store.read({ ...profile, defaultModel: "unused" });
-    assert.deepEqual(read, profile);
+    assert.deepEqual(read, {
+      ...profile,
+      workspace: path.resolve(profile.workspace),
+      workspaces: profile.workspaces.map((workspace) =>
+        path.resolve(workspace),
+      ),
+    });
     assert.deepEqual(
       hostConfigFromProfile(read, {
         dataDirectory: "/tmp/data",

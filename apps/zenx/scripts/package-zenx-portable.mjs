@@ -10,6 +10,7 @@ const zenx = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const root = path.resolve(zenx, "..", "..");
 const out = path.join(zenx, "out");
 const resources = path.join(zenx, ".packaged", "resources");
+const target = process.argv.includes("--app") ? "app" : "smoke";
 const staging = await mkdtemp(path.join(os.tmpdir(), "zenx-packaged-smoke-"));
 const appDir = path.join(staging, "app");
 
@@ -37,17 +38,38 @@ try {
       );
     }
   }
-  await cp(mainOut, path.join(appDir, "main"), { recursive: true });
+  if (target === "app") {
+    await cp(out, path.join(appDir, "out"), { recursive: true });
+    await cp(
+      path.join(root, "node_modules", "ws"),
+      path.join(appDir, "node_modules", "ws"),
+      { recursive: true },
+    );
+  } else {
+    await cp(mainOut, path.join(appDir, "main"), { recursive: true });
+  }
+  const zenxPackage = JSON.parse(
+    await readFile(path.join(zenx, "package.json"), "utf8"),
+  );
   await writeFile(
     path.join(appDir, "package.json"),
     `${JSON.stringify(
-      {
-        name: "zenx-packaged-provider-smoke",
-        version: "0.1.0",
-        private: true,
-        type: "module",
-        main: "main/packaged-provider-smoke.js",
-      },
+      target === "app"
+        ? {
+            name: "zenx",
+            version: zenxPackage.version,
+            private: true,
+            type: "module",
+            main: "out/main/index.js",
+            dependencies: { ws: zenxPackage.dependencies.ws },
+          }
+        : {
+            name: "zenx-packaged-provider-smoke",
+            version: zenxPackage.version,
+            private: true,
+            type: "module",
+            main: "main/packaged-provider-smoke.js",
+          },
       null,
     )}\n`,
   );
@@ -58,17 +80,19 @@ try {
     overwrite: true,
     platform: process.platform,
     arch: process.arch,
-    name: "ZenXProviderSmoke",
+    name: target === "app" ? "ZenX" : "ZenXProviderSmoke",
     electronVersion: "43.2.0",
     extraResource: [path.join(resources, "providers")],
     asar: false,
   });
-  const executable = executablePath(packaged[0]);
+  const executable = executablePath(packaged[0], target);
   console.log(
     JSON.stringify(
       {
         packagedArtifact: packaged[0],
         executable,
+        target,
+        version: zenxPackage.version,
         manifestDigest: assembly.manifestSha256,
         releaseSizeBytes: assembly.releaseSizeBytes,
       },
@@ -76,7 +100,7 @@ try {
       2,
     ),
   );
-  await runExecutable(executable);
+  if (target === "smoke") await runExecutable(executable);
 } finally {
   await rm(staging, { recursive: true, force: true });
 }
@@ -92,19 +116,20 @@ async function walk(rootDir) {
   return result;
 }
 
-function executablePath(appPath) {
+function executablePath(appPath, packageTarget) {
+  const executableName = packageTarget === "app" ? "ZenX" : "ZenXProviderSmoke";
   if (process.platform === "win32")
-    return path.join(appPath, "ZenXProviderSmoke.exe");
+    return path.join(appPath, `${executableName}.exe`);
   if (process.platform === "darwin") {
     return path.join(
       appPath,
-      "ZenXProviderSmoke.app",
+      `${executableName}.app`,
       "Contents",
       "MacOS",
-      "ZenXProviderSmoke",
+      executableName,
     );
   }
-  return path.join(appPath, "ZenXProviderSmoke");
+  return path.join(appPath, executableName);
 }
 
 async function runExecutable(executable) {
