@@ -147,6 +147,25 @@ test("real ZenX host control tools make active semantics explicit", async () => 
           project.threadIds.includes(threadId),
       ),
     );
+    const emptyWorkspace = path.join(directory, "empty-workspace");
+    requestPort.updateConfiguredWorkspaces([directory, emptyWorkspace]);
+    const refreshedProjects = await invoke(tools, "zenx_projects_list", {
+      limit: 10,
+    });
+    assert(
+      (
+        refreshedProjects.projects as Array<{
+          cwd: string;
+          configured: boolean;
+          threadIds: string[];
+        }>
+      ).some(
+        (project) =>
+          project.cwd === path.resolve(emptyWorkspace) &&
+          project.configured &&
+          project.threadIds.length === 0,
+      ),
+    );
     const listed = await invoke(tools, "zenx_threads_list", {
       workspace: directory,
       query: threadId.slice(0, 8),
@@ -366,6 +385,7 @@ test("bounded reads omit command output and truncate message text", async () => 
   const secretOutput = "secret-like-output".repeat(500);
   const port: AppServerRequestPort = {
     configuredWorkspace: "/tmp/work",
+    configuredWorkspaces: ["/tmp/work"],
     async request<M extends ClientRequestMethod>(
       method: M,
       _params: ClientRequestParams[M],

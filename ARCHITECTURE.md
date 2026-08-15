@@ -47,7 +47,8 @@
 - **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
   幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
-- **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、workspace 与
+- **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、默认 workspace、
+  用户显式添加的 workspace 列表与
   审批默认值；它只用于组合本机 App Server host，不包含 credential，也不覆盖已存
   Thread 的生效设置。
 - **ZenXCredentialVault** — ZenX 通过操作系统安全存储保护的 Provider credential
@@ -149,6 +150,9 @@
   domain/root 健康后才可成功，不能返回一个其 `snapshot` 已不可用的 coordinator。
 - **ZenXThreadTitleNotificationObserver** — ZenX 主进程在 App Server canonical
   `userMessage` 完成通知处幂等补观察跨客户端首条输入，失败只记录 warning 且不影响 Turn。
+- **ZenXProjectProjection** — ZenX 产品层从完整 HostProfile workspace 配置与 App Server
+  Thread 投影无状态派生同一 Project 视图供 UI 与 self-control capability 消费；路径 identity
+  遵循本机平台语义，且 Project 不成为 runtime 或 durable 对象。
 - **ZenXTriggerLifecycleGeneration** — Trigger 服务把定时器、瞬态完成证据、唤醒 admission
   与取消句柄绑定到一次可退休的进程内代数；迟到异步结果只能观察其创建代数，不能修改新代数或
   重新占用已释放的唤醒名额。

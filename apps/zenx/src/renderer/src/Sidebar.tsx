@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 
 import type { Thread } from "../../protocol-client/index.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
@@ -6,20 +6,27 @@ import { Icon } from "./icons";
 import {
   deriveInboxSections,
   deriveProjectGroups,
+  projectNewThreadCwd,
   threadPreview,
   threadTitle,
   type SidebarMode,
 } from "./thread-list";
 
 interface SidebarProps {
+  configuredWorkspaces: readonly string[];
+  defaultWorkspace: string | null;
   mode: SidebarMode;
   onModeChange(mode: SidebarMode): void;
-  onNewThread(): void;
+  onNewThread(cwd?: string): void;
+  onAddProject(): void;
+  onRemoveProject(workspace: string): void;
+  onSetDefaultProject(workspace: string): void;
   onOpenSettings(): void;
   onOpenScheduled(): void;
   onSelectRoom(roomId: string): void;
   onSelectThread(threadId: string): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
+  projectActionError: string | null;
   selectedThreadId: string | null;
   serverReady: boolean;
   threads: readonly Thread[];
@@ -27,14 +34,20 @@ interface SidebarProps {
 }
 
 export function Sidebar({
+  configuredWorkspaces,
+  defaultWorkspace,
   mode,
   onModeChange,
   onNewThread,
+  onAddProject,
+  onRemoveProject,
+  onSetDefaultProject,
   onOpenSettings,
   onOpenScheduled,
   onSelectRoom,
   onSelectThread,
   pendingApprovalThreadIds,
+  projectActionError,
   selectedThreadId,
   serverReady,
   threads,
@@ -73,7 +86,11 @@ export function Sidebar({
       </header>
 
       <nav className="sidebar-nav" aria-label="Primary">
-        <button className="nav-item" type="button" onClick={onNewThread}>
+        <button
+          className="nav-item"
+          type="button"
+          onClick={() => onNewThread()}
+        >
           <Icon name="compose" />
           New conversation
         </button>
@@ -95,10 +112,26 @@ export function Sidebar({
 
       <div className="sidebar-mode-label" aria-live="polite">
         <span>{mode === "inbox" ? "Inbox" : "Projects"}</span>
-        <span>{threads.length}</span>
+        {mode === "projects" ? (
+          <button
+            className="add-project-button"
+            type="button"
+            onClick={onAddProject}
+          >
+            <Icon name="plus" size={12} />
+            Add project
+          </button>
+        ) : (
+          <span>{threads.length}</span>
+        )}
       </div>
 
       <div className="thread-list">
+        {projectActionError === null ? null : (
+          <p className="sidebar-action-error" role="alert">
+            {projectActionError}
+          </p>
+        )}
         {triggerSnapshot.rooms.length > 0 ? (
           <section className="thread-section compact-section room-list">
             <h2>Rooms</h2>
@@ -117,10 +150,12 @@ export function Sidebar({
         ) : null}
         {!serverReady ? (
           <p className="sidebar-empty">Waiting for the local App Server.</p>
-        ) : threads.length === 0 ? (
+        ) : threads.length === 0 &&
+          (mode === "inbox" || configuredWorkspaces.length === 0) ? (
           <p className="sidebar-empty">Your conversations will appear here.</p>
         ) : mode === "inbox" ? (
           <InboxView
+            onOpenSettings={onOpenSettings}
             onSelectThread={onSelectThread}
             pendingApprovalThreadIds={pendingApprovalThreadIds}
             selectedThreadId={selectedThreadId}
@@ -129,6 +164,12 @@ export function Sidebar({
           />
         ) : (
           <ProjectsView
+            configuredWorkspaces={configuredWorkspaces}
+            defaultWorkspace={defaultWorkspace}
+            onNewThread={onNewThread}
+            onOpenSettings={onOpenSettings}
+            onRemoveProject={onRemoveProject}
+            onSetDefaultProject={onSetDefaultProject}
             onSelectThread={onSelectThread}
             pendingApprovalThreadIds={pendingApprovalThreadIds}
             selectedThreadId={selectedThreadId}
@@ -145,19 +186,33 @@ function InboxView({
   threads,
   selectedThreadId,
   onSelectThread,
+  onOpenSettings,
   pendingApprovalThreadIds,
   watchingThreadIds,
 }: Pick<
   SidebarProps,
-  "threads" | "selectedThreadId" | "onSelectThread" | "pendingApprovalThreadIds"
+  | "threads"
+  | "selectedThreadId"
+  | "onSelectThread"
+  | "pendingApprovalThreadIds"
+  | "onOpenSettings"
 > & { watchingThreadIds: ReadonlySet<string> }) {
   const sections = deriveInboxSections(
     threads,
     pendingApprovalThreadIds,
     watchingThreadIds,
   );
+  const unavailableCount = threads.filter(
+    (thread) => thread.status.type === "systemError",
+  ).length;
   return (
     <>
+      {unavailableCount === 0 ? null : (
+        <UnavailableJournalSummary
+          count={unavailableCount}
+          onOpenSettings={onOpenSettings}
+        />
+      )}
       {sections.map((section) =>
         section.threads.length === 0 ? null : (
           <section className="thread-section" key={section.key}>
@@ -185,6 +240,12 @@ function InboxView({
 }
 
 function ProjectsView({
+  configuredWorkspaces,
+  defaultWorkspace,
+  onNewThread,
+  onOpenSettings,
+  onRemoveProject,
+  onSetDefaultProject,
   threads,
   selectedThreadId,
   onSelectThread,
@@ -192,9 +253,22 @@ function ProjectsView({
   watchingThreadIds,
 }: Pick<
   SidebarProps,
-  "threads" | "selectedThreadId" | "onSelectThread" | "pendingApprovalThreadIds"
+  | "threads"
+  | "selectedThreadId"
+  | "onSelectThread"
+  | "pendingApprovalThreadIds"
+  | "configuredWorkspaces"
+  | "defaultWorkspace"
+  | "onNewThread"
+  | "onOpenSettings"
+  | "onRemoveProject"
+  | "onSetDefaultProject"
 > & { watchingThreadIds: ReadonlySet<string> }) {
-  const groups = deriveProjectGroups(threads);
+  const groups = deriveProjectGroups(
+    threads,
+    configuredWorkspaces,
+    defaultWorkspace,
+  );
   const pinned = threads.filter((thread) => thread.isPinned);
   return (
     <>
@@ -216,12 +290,15 @@ function ProjectsView({
           ))}
         </section>
       ) : null}
-      <section className="thread-section compact-section">
-        <h2>Projects</h2>
+      <section className="thread-section compact-section projects-section">
         {groups.map((group) => (
           <ProjectRows
             group={group}
             key={group.key}
+            onNewThread={onNewThread}
+            onOpenSettings={onOpenSettings}
+            onRemoveProject={onRemoveProject}
+            onSetDefaultProject={onSetDefaultProject}
             onSelectThread={onSelectThread}
             pendingApprovalThreadIds={pendingApprovalThreadIds}
             selectedThreadId={selectedThreadId}
@@ -237,12 +314,20 @@ function ProjectRows({
   group,
   selectedThreadId,
   onSelectThread,
+  onNewThread,
+  onOpenSettings,
+  onRemoveProject,
+  onSetDefaultProject,
   pendingApprovalThreadIds,
   watchingThreadIds,
 }: {
   group: ReturnType<typeof deriveProjectGroups>[number];
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
+  onNewThread(cwd?: string): void;
+  onOpenSettings(): void;
+  onRemoveProject(workspace: string): void;
+  onSetDefaultProject(workspace: string): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   watchingThreadIds: ReadonlySet<string>;
 }) {
@@ -252,25 +337,69 @@ function ProjectRows({
       group.threads.filter((thread) => thread.status.type === "active").length,
     [group.threads],
   );
+  if (group.key === "__unavailable__") {
+    return (
+      <UnavailableJournalSummary
+        count={group.threads.length}
+        onOpenSettings={onOpenSettings}
+      />
+    );
+  }
+  const workspace = group.configured ? group.workspace : null;
   return (
     <div className="project-group">
-      <button
-        className="project-header"
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <Icon
-          className={open ? "rotated" : undefined}
-          name="chevron-right"
-          size={11}
-        />
-        <Icon name="folder" size={14} />
-        <span>{group.label}</span>
-        <small>
-          {activeCount > 0 ? `${activeCount} active` : group.threads.length}
-        </small>
-      </button>
+      <div className="project-heading-row">
+        <button
+          className="project-header"
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <Icon
+            className={open ? "rotated" : undefined}
+            name="chevron-right"
+            size={11}
+          />
+          <Icon name="folder" size={14} />
+          <span title={workspace ?? group.label}>{group.label}</span>
+          {group.isDefault ? <em>Default</em> : null}
+          <small>
+            {activeCount > 0 ? `${activeCount} active` : group.threads.length}
+          </small>
+        </button>
+        <div
+          className="project-actions"
+          aria-label={`${group.label} project actions`}
+        >
+          <ProjectCreateThreadButton group={group} onNewThread={onNewThread} />
+          {workspace !== null && !group.isDefault ? (
+            <button
+              type="button"
+              title={`Make ${group.label} the default project on this device`}
+              aria-label={`Make ${group.label} default`}
+              onClick={() => onSetDefaultProject(workspace)}
+            >
+              Default
+            </button>
+          ) : null}
+          {workspace !== null ? (
+            <button
+              className="remove-project"
+              type="button"
+              title="Remove this project entry only; files stay untouched"
+              aria-label={`Remove ${group.label} project entry; files stay untouched`}
+              onClick={() => onRemoveProject(workspace)}
+            >
+              <Icon name="trash" size={13} />
+            </button>
+          ) : null}
+        </div>
+      </div>
+      {group.configured && group.threads.length === 0 && open ? (
+        <p className="project-empty">
+          No threads yet. Files stay local to this folder.
+        </p>
+      ) : null}
       {open
         ? group.threads.map((thread) => (
             <CompactThreadRow
@@ -286,6 +415,45 @@ function ProjectRows({
             />
           ))
         : null}
+    </div>
+  );
+}
+
+export function ProjectCreateThreadButton({
+  group,
+  onNewThread,
+}: {
+  group: ReturnType<typeof deriveProjectGroups>[number];
+  onNewThread(cwd?: string): void;
+}) {
+  return (
+    <button
+      type="button"
+      title={`New thread in ${group.label}`}
+      aria-label={`New thread in ${group.label}`}
+      onClick={() => onNewThread(projectNewThreadCwd(group))}
+    >
+      <Icon name="plus" size={13} />
+    </button>
+  );
+}
+
+function UnavailableJournalSummary({
+  count,
+  onOpenSettings,
+}: {
+  count: number;
+  onOpenSettings(): void;
+}) {
+  return (
+    <div className="unavailable-summary" role="status">
+      <div className="unavailable-summary-heading">
+        <Icon name="warning" size={14} />
+        <strong>
+          {count} unavailable {count === 1 ? "thread" : "threads"}
+        </strong>
+      </div>
+      <p>ZenX could not load these threads. Their failures remain explicit.</p>
     </div>
   );
 }

@@ -9,6 +9,7 @@ import type {
   ThreadItem,
 } from "../../protocol-client/index.js";
 import type { ZenXCapabilityManifest, ZenXCapabilityPackage } from "./types.js";
+import { projectZenXProjects } from "../project-projection.js";
 
 export const ZENX_SELF_CONTROL_CAPABILITY_ID = "zenx-self-control";
 export const ZENX_SELF_CONTROL_WORKSPACE_PERMISSION =
@@ -31,6 +32,7 @@ type SelfControlRequestMethod = Extract<
 
 export interface AppServerRequestPort {
   readonly configuredWorkspace: string;
+  readonly configuredWorkspaces: readonly string[];
   request<M extends SelfControlRequestMethod>(
     method: M,
     params: ClientRequestParams[M],
@@ -47,6 +49,7 @@ interface AppServerRequestTarget {
 export class MutableAppServerRequestPort implements AppServerRequestPort {
   #target: AppServerRequestTarget | undefined;
   #configuredWorkspace: string | undefined;
+  #configuredWorkspaces: readonly string[] | undefined;
 
   get configuredWorkspace(): string {
     if (this.#configuredWorkspace === undefined) {
@@ -55,15 +58,37 @@ export class MutableAppServerRequestPort implements AppServerRequestPort {
     return this.#configuredWorkspace;
   }
 
-  attach(target: AppServerRequestTarget, configuredWorkspace: string): void {
+  get configuredWorkspaces(): readonly string[] {
+    if (this.#configuredWorkspaces === undefined)
+      throw new Error("ZenX self-control App Server port is not attached");
+    return this.#configuredWorkspaces;
+  }
+
+  attach(
+    target: AppServerRequestTarget,
+    configuredWorkspace: string,
+    configuredWorkspaces: readonly string[] = [configuredWorkspace],
+  ): void {
     this.#target = target;
     this.#configuredWorkspace = path.resolve(configuredWorkspace);
+    this.#configuredWorkspaces = configuredWorkspaces.map((workspace) =>
+      path.resolve(workspace),
+    );
+  }
+
+  updateConfiguredWorkspaces(configuredWorkspaces: readonly string[]): void {
+    if (this.#target === undefined)
+      throw new Error("ZenX self-control App Server port is not attached");
+    this.#configuredWorkspaces = configuredWorkspaces.map((workspace) =>
+      path.resolve(workspace),
+    );
   }
 
   detach(target?: AppServerRequestTarget): void {
     if (target !== undefined && target !== this.#target) return;
     this.#target = undefined;
     this.#configuredWorkspace = undefined;
+    this.#configuredWorkspaces = undefined;
   }
 
   async request<M extends SelfControlRequestMethod>(
@@ -344,40 +369,23 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       MAX_LIST_LIMIT,
     );
     const threads = (await this.#appServer.request("thread/list", {})).data;
-    const projects = new Map<
-      string,
-      { cwd: string; configured: boolean; threadIds: string[] }
-    >();
     const configuredWorkspace = this.#appServer.configuredWorkspace;
-    projects.set(configuredWorkspace, {
-      cwd: configuredWorkspace,
-      configured: true,
-      threadIds: [],
-    });
-    for (const thread of threads) {
-      if (thread.cwd.length === 0) continue;
-      const cwd = path.resolve(thread.cwd);
-      const project = projects.get(cwd) ?? {
-        cwd,
-        configured: cwd === configuredWorkspace,
-        threadIds: [],
-      };
-      project.threadIds.push(thread.id);
-      projects.set(cwd, project);
-    }
-    const all = [...projects.values()]
-      .sort((left, right) => left.cwd.localeCompare(right.cwd))
-      .map((project) => ({
-        workspace: project.cwd,
-        cwd: project.cwd,
-        configured: project.configured,
-        threadCount: project.threadIds.length,
-        threadIds: project.threadIds.slice(0, MAX_LIST_LIMIT),
-        threadIdsTruncated: project.threadIds.length > MAX_LIST_LIMIT,
-      }));
+    const all = projectZenXProjects(
+      this.#appServer.configuredWorkspaces,
+      configuredWorkspace,
+      threads,
+    ).map((project) => ({
+      workspace: project.workspace,
+      cwd: project.workspace,
+      configured: project.configured,
+      isDefault: project.isDefault,
+      threadCount: project.threads.length,
+      threadIds: project.threads.map(({ id }) => id).slice(0, MAX_LIST_LIMIT),
+      threadIdsTruncated: project.threads.length > MAX_LIST_LIMIT,
+    }));
     return {
       source: SOURCE,
-      derivation: "configured workspace plus App Server Thread cwd",
+      derivation: "complete workspace configuration plus App Server Thread cwd",
       projects: all.slice(0, limit),
       truncated: all.length > limit,
     };

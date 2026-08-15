@@ -25,7 +25,7 @@ test("persists the selected sidebar mode and defaults invalid values to projects
   assert.equal(readSidebarMode(storage), "projects");
 });
 
-test("derives recency-first inbox groups and preserves system errors", () => {
+test("derives recency-first inbox groups and reserves system errors for aggregation", () => {
   const unavailable = makeThread("broken", 30, { type: "systemError" });
   const active = makeThread("active", 20, {
     type: "active",
@@ -40,7 +40,7 @@ test("derives recency-first inbox groups and preserves system errors", () => {
       section.threads.map((thread) => thread.id),
     ]),
     [
-      ["needs", ["broken"]],
+      ["needs", []],
       ["active", ["active"]],
       ["watching", []],
       ["settled", ["newer", "older"]],
@@ -111,9 +111,34 @@ test("derives project groups only from cwd and isolates unavailable journals", (
     ]),
     [
       ["imzen", ["imzen"]],
-      ["zen", ["zen"]],
       ["zen", ["nested"]],
-      ["Unavailable journals", ["broken"]],
+      ["zen", ["zen"]],
+      ["Unavailable threads", ["broken"]],
+    ],
+  );
+});
+
+test("keeps configured empty workspaces and includes secondary thread projects", () => {
+  const secondary = makeThread(
+    "secondary",
+    30,
+    { type: "idle" },
+    "/work/secondary",
+  );
+  const groups = deriveProjectGroups(
+    [secondary],
+    ["/work/empty"],
+    "/work/empty",
+  );
+  assert.deepEqual(
+    groups.map((group) => [
+      group.label,
+      group.threads.length,
+      group.configured,
+    ]),
+    [
+      ["empty", 0, true],
+      ["secondary", 1, false],
     ],
   );
 });

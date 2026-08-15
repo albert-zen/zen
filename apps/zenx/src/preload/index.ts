@@ -17,6 +17,7 @@ import { ipcChannels } from "./ipc.js";
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  WorkspaceMutationResult,
 } from "../main/host-profile.js";
 import type {
   CreateRoomInput,
@@ -109,6 +110,18 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.subscriptionManualCode, code),
     logoutSubscription: async (): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.subscriptionLogout),
+    chooseWorkspace: async (): Promise<string | null> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceChoose),
+    addWorkspace: async (workspace: string): Promise<WorkspaceMutationResult> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceAdd, workspace),
+    removeWorkspace: async (
+      workspace: string,
+    ): Promise<WorkspaceMutationResult> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceRemove, workspace),
+    setDefaultWorkspace: async (
+      workspace: string,
+    ): Promise<WorkspaceMutationResult> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceDefault, workspace),
     onManualCodeRequested: (listener: () => void): (() => void) => {
       const wrapped = () => listener();
       ipcRenderer.on(ipcChannels.subscriptionManualRequested, wrapped);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type {
   AppServerHostStatus,
   ApprovalDecision,
@@ -21,6 +21,7 @@ import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
 } from "../../main/thread-title-types.js";
+import type { PublicHostSettings } from "../../main/host-profile.js";
 import {
   addApprovalRequest,
   markApprovalResponding,
@@ -93,9 +94,31 @@ export function App() {
     }
   });
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [projectActionError, setProjectActionError] = useState<string | null>(
+    null,
+  );
+  const [hostSettings, setHostSettings] = useState<PublicHostSettings | null>(
+    null,
+  );
+  const [threadActionError, setThreadActionError] = useState<string | null>(
+    null,
+  );
   const [composerStates, setComposerStates] = useState<
     Record<string, ComposerState>
   >({});
+
+  const refreshThreads = async (isCurrent: () => boolean = () => true) => {
+    try {
+      const result = await window.zenx.protocol.request("thread/list", {});
+      if (!isCurrent()) return;
+      setThreads(result.data);
+      setRequestError(null);
+    } catch (error) {
+      if (!isCurrent()) return;
+      setRequestError(error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  };
 
   const resumeThread = async (threadId: string) => {
     const epoch = ++selectionEpoch.current;
@@ -128,19 +151,7 @@ export function App() {
   useEffect(() => {
     let active = true;
     const loadThreads = async () => {
-      try {
-        const result = await window.zenx.protocol.request("thread/list", {});
-        if (active) {
-          setThreads(result.data);
-          setRequestError(null);
-        }
-      } catch (error) {
-        if (active) {
-          setRequestError(
-            error instanceof Error ? error.message : String(error),
-          );
-        }
-      }
+      await refreshThreads(() => active).catch(() => undefined);
     };
     const loadModels = async () => {
       try {
@@ -254,6 +265,7 @@ export function App() {
     void window.zenx.settings
       .get()
       .then((value) => {
+        setHostSettings(value);
         if (!value.profile.onboardingComplete) setSettingsOpen(true);
       })
       .catch(() => undefined);
@@ -283,13 +295,16 @@ export function App() {
 
   const selectThread = resumeThread;
 
-  const newThread = async () => {
+  const newThread = async (cwd?: string) => {
     const epoch = ++selectionEpoch.current;
     setThreadLoading(true);
     setThreadError(null);
     setModelUpdateError(null);
     try {
-      const result = await window.zenx.protocol.request("thread/start", {});
+      const result = await window.zenx.protocol.request(
+        "thread/start",
+        cwd === undefined ? {} : { cwd },
+      );
       if (selectionEpoch.current !== epoch) return;
       selectedThreadIdRef.current = result.thread.id;
       setSettingsOpen(false);
@@ -479,13 +494,63 @@ export function App() {
       [selectedThread.id]: projection,
     }));
   };
+  const addProject = async () => {
+    setProjectActionError(null);
+    try {
+      const workspace = await window.zenx.settings.chooseWorkspace();
+      if (workspace === null) return;
+      const result = await window.zenx.settings.addWorkspace(workspace);
+      setHostSettings(result.settings);
+      if (result.requiresRestart) setSettingsOpen(true);
+    } catch (error) {
+      setProjectActionError(describeError(error));
+    }
+  };
+  const updateProject = async (
+    action: "remove" | "default",
+    workspace: string,
+  ) => {
+    setProjectActionError(null);
+    try {
+      const result =
+        action === "remove"
+          ? await window.zenx.settings.removeWorkspace(workspace)
+          : await window.zenx.settings.setDefaultWorkspace(workspace);
+      setHostSettings(result.settings);
+      if (result.requiresRestart) setSettingsOpen(true);
+    } catch (error) {
+      setProjectActionError(describeError(error));
+    }
+  };
+  const archiveThread = async () => {
+    if (selectedThread === null) return;
+    setThreadActionError(null);
+    try {
+      await window.zenx.protocol.request("thread/archive", {
+        threadId: selectedThread.id,
+      });
+      selectedThreadIdRef.current = null;
+      setSelectedThreadId(null);
+      setThreadDetail(null);
+      setSelectedSettings(null);
+    } catch (error) {
+      setThreadActionError(describeError(error));
+    }
+  };
 
   return (
     <div className="app-shell">
       <Sidebar
+        configuredWorkspaces={hostSettings?.profile.workspaces ?? []}
+        defaultWorkspace={hostSettings?.profile.workspace ?? null}
         mode={sidebarMode}
         onModeChange={changeSidebarMode}
-        onNewThread={() => void newThread()}
+        onNewThread={(cwd) => void newThread(cwd)}
+        onAddProject={() => void addProject()}
+        onRemoveProject={(workspace) => void updateProject("remove", workspace)}
+        onSetDefaultProject={(workspace) =>
+          void updateProject("default", workspace)
+        }
         onOpenSettings={() => {
           setSettingsOpen(true);
           setScheduledOpen(false);
@@ -503,6 +568,7 @@ export function App() {
         }}
         onSelectThread={(threadId) => void selectThread(threadId)}
         pendingApprovalThreadIds={pendingThreadIds}
+        projectActionError={projectActionError}
         selectedThreadId={selectedThreadId}
         serverReady={serverStatus.type === "ready"}
         threads={projectedThreads}
@@ -511,7 +577,10 @@ export function App() {
 
       <main className="workspace">
         {settingsOpen ? (
-          <SettingsView onClose={() => setSettingsOpen(false)} />
+          <SettingsView
+            onClose={() => setSettingsOpen(false)}
+            onSettingsChange={setHostSettings}
+          />
         ) : scheduledOpen ? (
           <ScheduledView
             snapshot={triggerSnapshot}
@@ -537,6 +606,8 @@ export function App() {
                   <h1>Start a conversation</h1>
                 ) : (
                   <ThreadTitleEditor
+                    actionError={threadActionError}
+                    onArchive={archiveThread}
                     onRename={renameThread}
                     onRetry={retryThreadTitle}
                     projection={titleSnapshot[selectedThread.id]}
@@ -557,6 +628,11 @@ export function App() {
                   error={modelUpdateError ?? modelCatalogError}
                   models={models}
                   onChange={(model) => void changeModel(model)}
+                  repairModel={
+                    hostSettings?.profile.defaultModel ??
+                    models.find((model) => model.isDefault)?.id ??
+                    null
+                  }
                   selectedModel={selectedSettings.model}
                   switching={switchingModel}
                 />
@@ -715,16 +791,20 @@ function projectOptionalThreadTitle(
   return thread === null ? null : projectThreadTitle(thread, snapshot);
 }
 
-function ThreadTitleEditor({
+export function ThreadTitleEditor({
+  actionError,
   title,
   projection,
   onRename,
   onRetry,
+  onArchive,
 }: {
+  actionError: string | null;
   title: string;
   projection: ThreadTitleProjection | undefined;
   onRename(title: string): Promise<void>;
   onRetry(): Promise<void>;
+  onArchive(): Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
@@ -777,6 +857,15 @@ function ThreadTitleEditor({
           >
             Rename
           </button>
+          <button
+            className="archive-thread-button"
+            type="button"
+            title="Archive this thread. Its journal and files stay untouched."
+            onClick={() => void onArchive()}
+          >
+            <Icon name="archive" size={13} />
+            Archive
+          </button>
           {projection?.status === "generating" ? (
             <small>Generating title…</small>
           ) : null}
@@ -795,6 +884,11 @@ function ThreadTitleEditor({
         <span className="title-error">{projection.error}</span>
       ) : null}
       {error === null ? null : <span className="title-error">{error}</span>}
+      {actionError === null ? null : (
+        <span className="title-error" role="alert">
+          {actionError}
+        </span>
+      )}
     </div>
   );
 }

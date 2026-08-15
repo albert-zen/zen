@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   safeStorage,
   session,
@@ -18,7 +19,11 @@ import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
 import type { ZenXHostProfile } from "./host-profile.js";
-import { ZenXSettingsService } from "./settings-service.js";
+import { resolveZenDataDirectory } from "./host-config.js";
+import {
+  resolveSafeWorkspace,
+  ZenXSettingsService,
+} from "./settings-service.js";
 import { zenXProviderTransport } from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
@@ -83,8 +88,13 @@ app.whenReady().then(async () => {
   const userDataDirectory = app.getPath("userData");
   const entryPath = join(__dirname, "app-server-host.js");
   const tokenFile = join(userDataDirectory, "runtime", "app-server.token");
-  const zenDataDirectory = resolve(
-    process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
+  const safeWorkspace = resolveSafeWorkspace([
+    app.getPath("documents"),
+    app.getPath("home"),
+  ]);
+  const zenDataDirectory = resolveZenDataDirectory(
+    process.env,
+    app.getPath("home"),
   );
   settingsService = new ZenXSettingsService({
     userDataDirectory,
@@ -107,7 +117,7 @@ app.whenReady().then(async () => {
     capabilityService.register(
       new ZenXSelfControlCapabilityPackage({ appServer: selfControlPort }),
     );
-    await settingsService.initialize(process.env);
+    await settingsService.initialize(process.env, { safeWorkspace });
     let startupError: unknown;
     let hostConfig;
     try {
@@ -119,7 +129,7 @@ app.whenReady().then(async () => {
     } catch (error) {
       startupError = error;
       hostConfig = {
-        cwd: process.cwd(),
+        cwd: safeWorkspace,
         dataDirectory: zenDataDirectory,
         model: "fake",
         models: ["fake"],
@@ -134,7 +144,11 @@ app.whenReady().then(async () => {
       execPath: process.execPath,
       capabilityHost: capabilityService,
     });
-    selfControlPort.attach(appServerManager, hostConfig.cwd);
+    selfControlPort.attach(
+      appServerManager,
+      hostConfig.cwd,
+      (await settingsService.publicSettings()).profile.workspaces,
+    );
     titleCoordinator = new ZenXThreadTitleCoordinator({
       store: new ZenXThreadTitleStore(
         join(userDataDirectory, "thread-title-projections.json"),
@@ -171,49 +185,68 @@ app.whenReady().then(async () => {
       appServerManager.reportStartupError(error);
     }
   }
-  installSettingsIpc(settingsService, async () => {
-    const hostConfig = await settingsService!.hostConfig();
-    hostConfig.transport = await zenXProviderTransport(
-      hostConfig,
-      async (url) => await session.defaultSession.resolveProxy(url),
-    );
-    if (appServerManager === undefined) {
-      appServerManager = new AppServerManager({
-        entryPath,
-        tokenFile,
+  installSettingsIpc(
+    settingsService,
+    async () => {
+      const hostConfig = await settingsService!.hostConfig();
+      hostConfig.transport = await zenXProviderTransport(
         hostConfig,
-        execPath: process.execPath,
-        capabilityHost: capabilityService,
-      });
-      selfControlPort.attach(appServerManager, hostConfig.cwd);
-      await appServerManager.start();
-    } else {
-      selfControlPort.attach(appServerManager, hostConfig.cwd);
-      const restartErrors: Error[] = [];
-      try {
-        await capabilityService?.resetTransient();
-      } catch (error) {
-        restartErrors.push(normalizeTitleOwnershipFailure(error));
+        async (url) => await session.defaultSession.resolveProxy(url),
+      );
+      if (appServerManager === undefined) {
+        appServerManager = new AppServerManager({
+          entryPath,
+          tokenFile,
+          hostConfig,
+          execPath: process.execPath,
+          capabilityHost: capabilityService,
+        });
+        selfControlPort.attach(
+          appServerManager,
+          hostConfig.cwd,
+          (await settingsService!.publicSettings()).profile.workspaces,
+        );
+        await appServerManager.start();
+      } else {
+        selfControlPort.attach(
+          appServerManager,
+          hostConfig.cwd,
+          (await settingsService!.publicSettings()).profile.workspaces,
+        );
+        const restartErrors: Error[] = [];
+        try {
+          await capabilityService?.resetTransient();
+        } catch (error) {
+          restartErrors.push(normalizeTitleOwnershipFailure(error));
+        }
+        try {
+          await titleCoordinator?.stop();
+        } catch (error) {
+          restartErrors.push(normalizeTitleOwnershipFailure(error));
+        }
+        try {
+          await appServerManager.restart(hostConfig);
+        } catch (error) {
+          restartErrors.push(normalizeTitleOwnershipFailure(error));
+        }
+        try {
+          await titleCoordinator?.restart();
+        } catch (error) {
+          restartErrors.push(normalizeTitleOwnershipFailure(error));
+        }
+        if (restartErrors.length > 0)
+          throw new AggregateError(
+            restartErrors,
+            "Could not fully restart ZenX",
+          );
       }
-      try {
-        await titleCoordinator?.stop();
-      } catch (error) {
-        restartErrors.push(normalizeTitleOwnershipFailure(error));
-      }
-      try {
-        await appServerManager.restart(hostConfig);
-      } catch (error) {
-        restartErrors.push(normalizeTitleOwnershipFailure(error));
-      }
-      try {
-        await titleCoordinator?.restart();
-      } catch (error) {
-        restartErrors.push(normalizeTitleOwnershipFailure(error));
-      }
-      if (restartErrors.length > 0)
-        throw new AggregateError(restartErrors, "Could not fully restart ZenX");
-    }
-  });
+    },
+    async () => {
+      selfControlPort.updateConfiguredWorkspaces(
+        (await settingsService!.publicSettings()).profile.workspaces,
+      );
+    },
+  );
   createWindow();
 
   app.on("activate", () => {
@@ -364,6 +397,7 @@ function installFailedProtocolIpc(message: string): void {
 function installSettingsIpc(
   settings: ZenXSettingsService,
   restartHost: () => Promise<void>,
+  refreshWorkspaces: () => Promise<void>,
 ): void {
   ipcMain.handle(
     ipcChannels.settingsGet,
@@ -393,6 +427,7 @@ function installSettingsIpc(
         }
       },
     );
+    await restartHost();
     return await settings.publicSettings();
   });
   ipcMain.handle(
@@ -407,6 +442,49 @@ function installSettingsIpc(
     await settings.logout();
     return await settings.publicSettings();
   });
+  ipcMain.handle(ipcChannels.workspaceChoose, async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ["openDirectory", "createDirectory"],
+      title: "Choose a workspace on this device",
+    });
+    return result.canceled || result.filePaths[0] === undefined
+      ? null
+      : resolve(result.filePaths[0]);
+  });
+  ipcMain.handle(
+    ipcChannels.workspaceAdd,
+    async (_event, workspace: unknown) => {
+      if (typeof workspace !== "string" || workspace.trim().length === 0)
+        throw new Error("Invalid workspace");
+      await settings.addWorkspace(workspace);
+      await refreshWorkspaces();
+      return {
+        settings: await settings.publicSettings(),
+        requiresRestart: false,
+      };
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.workspaceRemove,
+    async (_event, workspace: unknown) => {
+      if (typeof workspace !== "string" || workspace.trim().length === 0)
+        throw new Error("Invalid workspace");
+      const requiresRestart = await settings.removeWorkspace(workspace);
+      if (requiresRestart) await restartHost();
+      else await refreshWorkspaces();
+      return { settings: await settings.publicSettings(), requiresRestart };
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.workspaceDefault,
+    async (_event, workspace: unknown) => {
+      if (typeof workspace !== "string" || workspace.trim().length === 0)
+        throw new Error("Invalid workspace");
+      const requiresRestart = await settings.setDefaultWorkspace(workspace);
+      if (requiresRestart) await restartHost();
+      return { settings: await settings.publicSettings(), requiresRestart };
+    },
+  );
 }
 
 function installTriggerIpc(triggers: ZenXTriggerService): void {

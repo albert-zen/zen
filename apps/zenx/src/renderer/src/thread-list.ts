@@ -3,6 +3,7 @@ import type {
   ServerNotificationParams,
   Thread,
 } from "../../protocol-client/index.js";
+import { projectZenXProjects } from "../../main/project-projection.js";
 
 export type SidebarMode = "inbox" | "projects";
 
@@ -21,6 +22,9 @@ export interface ProjectGroup {
   key: string;
   label: string;
   threads: Thread[];
+  configured: boolean;
+  isDefault: boolean;
+  workspace: string | null;
 }
 
 export function readSidebarMode(
@@ -50,7 +54,7 @@ export function deriveInboxSections(
       label: "Needs you",
       threads: sorted.filter(
         (thread) =>
-          thread.status.type === "systemError" ||
+          thread.status.type !== "systemError" &&
           pendingApprovalThreadIds.has(thread.id),
       ),
     },
@@ -88,29 +92,47 @@ export function deriveInboxSections(
 
 export function deriveProjectGroups(
   threads: readonly Thread[],
+  configuredWorkspaces: readonly string[] = [],
+  defaultWorkspace: string | null = null,
 ): ProjectGroup[] {
-  const groups = new Map<string, Thread[]>();
-  for (const thread of sortByRecency(threads)) {
-    const key =
-      thread.status.type === "systemError" || thread.cwd.length === 0
-        ? "__unavailable__"
-        : thread.cwd;
-    const list = groups.get(key) ?? [];
-    list.push(thread);
-    groups.set(key, list);
-  }
-  return [...groups.entries()]
-    .map(([key, groupedThreads]) => ({
-      key,
-      label:
-        key === "__unavailable__" ? "Unavailable journals" : projectLabel(key),
-      threads: groupedThreads,
-    }))
-    .sort((left, right) => {
-      if (left.key === "__unavailable__") return 1;
-      if (right.key === "__unavailable__") return -1;
-      return left.label.localeCompare(right.label);
-    });
+  const projected = projectZenXProjects(
+    configuredWorkspaces,
+    defaultWorkspace ?? configuredWorkspaces[0] ?? ".",
+    threads,
+  ).map((project) => ({
+    key: project.key,
+    label: projectLabel(project.workspace),
+    threads: project.threads,
+    configured: project.configured,
+    isDefault: project.isDefault,
+    workspace: project.workspace,
+  }));
+  const unavailable = sortByRecency(threads).filter(
+    (thread) => thread.status.type === "systemError" || thread.cwd.length === 0,
+  );
+  return [
+    ...projected,
+    ...(unavailable.length === 0
+      ? []
+      : [
+          {
+            key: "__unavailable__",
+            label: "Unavailable threads",
+            threads: unavailable,
+            configured: false,
+            isDefault: false,
+            workspace: null,
+          },
+        ]),
+  ].sort((left, right) => {
+    if (left.key === "__unavailable__") return 1;
+    if (right.key === "__unavailable__") return -1;
+    return left.label.localeCompare(right.label);
+  });
+}
+
+export function projectNewThreadCwd(group: ProjectGroup): string | undefined {
+  return group.workspace ?? undefined;
 }
 
 export function applyThreadNotification(

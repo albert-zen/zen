@@ -14,6 +14,7 @@ import type {
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  WorkspaceMutationResult,
 } from "../../main/host-profile.js";
 import type {
   CreateRoomInput,
@@ -65,6 +66,12 @@ declare global {
         loginSubscription(): Promise<PublicHostSettings>;
         submitManualCode(code: string): Promise<void>;
         logoutSubscription(): Promise<PublicHostSettings>;
+        chooseWorkspace(): Promise<string | null>;
+        addWorkspace(workspace: string): Promise<WorkspaceMutationResult>;
+        removeWorkspace(workspace: string): Promise<WorkspaceMutationResult>;
+        setDefaultWorkspace(
+          workspace: string,
+        ): Promise<WorkspaceMutationResult>;
         onManualCodeRequested(listener: () => void): () => void;
       };
       titles: {
