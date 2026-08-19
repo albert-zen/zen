@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
@@ -418,6 +418,9 @@ function ThreadRow({
   inbox?: boolean;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const initialMenuFocusRef = useRef<"first" | "last">("first");
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(threadTitle(thread));
@@ -425,17 +428,36 @@ function ThreadRow({
     "rename" | "archive" | "unarchive" | null
   >(null);
   const [menuError, setMenuError] = useState<string | null>(null);
+  const restoreMenuTriggerFocus = () => {
+    queueMicrotask(() => menuTriggerRef.current?.focus());
+  };
+  const closeMenu = (restoreFocus = true) => {
+    setMenuOpen(false);
+    setRenaming(false);
+    if (restoreFocus) restoreMenuTriggerFocus();
+  };
+  const focusThreadScope = () => {
+    document
+      .getElementById(`thread-scope-${thread.archived ? "archived" : "active"}`)
+      ?.focus();
+  };
   useEffect(() => {
     if (!menuOpen) return;
     const closeOutside = (event: PointerEvent) => {
       if (!rowRef.current?.contains(event.target as Node)) {
-        setMenuOpen(false);
-        setRenaming(false);
+        closeMenu();
       }
     };
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [menuOpen]);
+  useEffect(() => {
+    if (!menuOpen || renaming) return;
+    const items = enabledMenuItems(menuRef.current);
+    const item =
+      initialMenuFocusRef.current === "last" ? items.at(-1) : items.at(0);
+    item?.focus();
+  }, [menuOpen, renaming]);
   const identity = threadModelIdentity(thread);
   const contents = (
     <>
@@ -469,11 +491,21 @@ function ThreadRow({
     setBusyAction(action);
     setMenuError(null);
     try {
+      if (action !== "rename") focusThreadScope();
       await operation();
-      setMenuOpen(false);
-      setRenaming(false);
+      if (action !== "rename") focusThreadScope();
+      closeMenu(action === "rename");
     } catch (error) {
       setMenuError(error instanceof Error ? error.message : String(error));
+      if (action !== "rename") {
+        queueMicrotask(() =>
+          menuRef.current
+            ?.querySelector<HTMLButtonElement>(
+              `[data-thread-action="${action}"]:not(:disabled)`,
+            )
+            ?.focus(),
+        );
+      }
     } finally {
       setBusyAction(null);
     }
@@ -484,8 +516,8 @@ function ThreadRow({
       className="thread-row-shell"
       onKeyDown={(event) => {
         if (event.key === "Escape") {
-          setMenuOpen(false);
-          setRenaming(false);
+          event.preventDefault();
+          closeMenu();
         }
       }}
     >
@@ -504,16 +536,34 @@ function ThreadRow({
         </button>
       )}
       <button
+        ref={menuTriggerRef}
         className="thread-menu-trigger"
         type="button"
+        id={`thread-menu-trigger-${thread.threadId}`}
         aria-label={`Manage ${threadTitle(thread)}`}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
+        aria-controls={menuOpen ? `thread-menu-${thread.threadId}` : undefined}
         onClick={() => {
+          if (menuOpen) {
+            closeMenu();
+            return;
+          }
+          initialMenuFocusRef.current = "first";
           setMenuError(null);
           setRenaming(false);
           setRenameDraft(threadTitle(thread));
-          setMenuOpen((value) => !value);
+          setMenuOpen(true);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          initialMenuFocusRef.current =
+            event.key === "ArrowUp" ? "last" : "first";
+          setMenuError(null);
+          setRenaming(false);
+          setRenameDraft(threadTitle(thread));
+          setMenuOpen(true);
         }}
       >
         <Icon name="more" />
@@ -523,6 +573,9 @@ function ThreadRow({
         busyAction={busyAction}
         error={menuError}
         hasActiveTurn={hasActiveTurn}
+        labelledBy={`thread-menu-trigger-${thread.threadId}`}
+        menuId={`thread-menu-${thread.threadId}`}
+        menuRef={menuRef}
         open={menuOpen}
         renaming={renaming}
         renameDraft={renameDraft}
@@ -531,6 +584,7 @@ function ThreadRow({
         }
         onBeginRename={() => setRenaming(true)}
         onCancelRename={() => setRenaming(false)}
+        onRequestClose={() => closeMenu()}
         onDraftChange={setRenameDraft}
         onRename={() =>
           void runAction("rename", () =>
@@ -550,12 +604,16 @@ export function ThreadItemMenu({
   busyAction,
   error,
   hasActiveTurn,
+  labelledBy,
+  menuId,
+  menuRef,
   open,
   renaming,
   renameDraft,
   onArchive,
   onBeginRename,
   onCancelRename,
+  onRequestClose,
   onDraftChange,
   onRename,
   onUnarchive,
@@ -564,12 +622,16 @@ export function ThreadItemMenu({
   busyAction: "rename" | "archive" | "unarchive" | null;
   error: string | null;
   hasActiveTurn: boolean;
+  labelledBy?: string;
+  menuId?: string;
+  menuRef?: RefObject<HTMLDivElement | null>;
   open: boolean;
   renaming: boolean;
   renameDraft: string;
   onArchive(): void;
   onBeginRename(): void;
   onCancelRename(): void;
+  onRequestClose?(): void;
   onDraftChange(value: string): void;
   onRename(): void;
   onUnarchive(): void;
@@ -577,7 +639,43 @@ export function ThreadItemMenu({
   if (!open) return null;
   const busy = busyAction !== null;
   return (
-    <div className="thread-item-menu" role="menu">
+    <div
+      ref={menuRef}
+      className="thread-item-menu"
+      id={menuId}
+      role="menu"
+      aria-labelledby={labelledBy}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          onRequestClose?.();
+          return;
+        }
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+          return;
+        }
+        const items = enabledMenuItems(event.currentTarget);
+        if (items.length === 0) return;
+        event.preventDefault();
+        const currentIndex = items.indexOf(
+          document.activeElement as HTMLButtonElement,
+        );
+        const nextIndex =
+          event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? items.length - 1
+              : currentIndex === -1
+                ? event.key === "ArrowUp"
+                  ? items.length - 1
+                  : 0
+                : event.key === "ArrowUp"
+                  ? (currentIndex - 1 + items.length) % items.length
+                  : (currentIndex + 1) % items.length;
+        items[nextIndex]?.focus();
+      }}
+    >
       {renaming ? (
         <form
           className="thread-menu-rename"
@@ -607,6 +705,8 @@ export function ThreadItemMenu({
         <button
           type="button"
           role="menuitem"
+          tabIndex={-1}
+          data-thread-action="unarchive"
           disabled={busy}
           onClick={onUnarchive}
         >
@@ -618,6 +718,8 @@ export function ThreadItemMenu({
           <button
             type="button"
             role="menuitem"
+            tabIndex={-1}
+            data-thread-action="rename"
             disabled={busy}
             onClick={onBeginRename}
           >
@@ -627,6 +729,8 @@ export function ThreadItemMenu({
           <button
             type="button"
             role="menuitem"
+            tabIndex={-1}
+            data-thread-action="archive"
             disabled={busy || hasActiveTurn}
             title={
               hasActiveTurn
@@ -647,6 +751,15 @@ export function ThreadItemMenu({
       )}
       {error === null ? null : <p role="alert">{error}</p>}
     </div>
+  );
+}
+
+function enabledMenuItems(container: HTMLElement | null): HTMLButtonElement[] {
+  if (container === null) return [];
+  return Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      'button[role="menuitem"]:not(:disabled)',
+    ),
   );
 }
 

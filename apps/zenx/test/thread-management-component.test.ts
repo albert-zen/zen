@@ -93,7 +93,7 @@ test("active Thread menu offers Rename and a safely disabled Archive", () => {
   assert.match(html, />Rename</u);
   assert.match(
     html,
-    /role="menuitem" disabled=""[^>]*>[\s\S]*?Archive<\/button>/u,
+    /role="menuitem"[^>]*disabled=""[^>]*>[\s\S]*?Archive<\/button>/u,
   );
   assert.match(html, /Wait for the active Turn to finish before archiving/u);
 });
