@@ -47,6 +47,10 @@ test("Windows containment never reuses stale identity evidence for a second tree
               ...root,
               startTime: "root-reused-after-first-tree-kill",
             },
+            {
+              ...descendant,
+              startTime: "descendant-reused-after-first-tree-kill",
+            },
           ],
         };
         return { ok: true, error: "" };
