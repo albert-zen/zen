@@ -23,13 +23,15 @@ $userData = Join-Path $smokeRoot "user-data"
 $zenData = Join-Path $smokeRoot "zen-data"
 $profilePath = Join-Path $userData "host-profile.json"
 $process = $null
+$cdpPort = 0
 $previousZenData = $env:ZENX_DATA_DIR
 
 function Start-ZenX {
-  param([string] $Executable, [string] $UserData)
+  param([string] $Executable, [string] $UserData, [int] $CdpPort)
   $started = Start-Process -FilePath $Executable -ArgumentList @(
     "--user-data-dir=$UserData",
-    "--force-renderer-accessibility"
+    "--remote-debugging-address=127.0.0.1",
+    "--remote-debugging-port=$CdpPort"
   ) -PassThru
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   do {
@@ -53,10 +55,11 @@ function Stop-ZenX {
 }
 
 function Invoke-ProjectDriver {
-  param($Process, [string] $Fixture, [string] $ProjectA, [string] $ProjectB, [string] $Mode)
+  param($Process, [int] $CdpPort, [string] $Fixture, [string] $ProjectA, [string] $ProjectB, [string] $Mode)
   & npx --no-install tsx ./src/main/project-workspace-smoke.ts `
     --pid $Process.Id `
     --title "ZenX" `
+    --cdp-port $CdpPort `
     --fixture $Fixture `
     --project-a $ProjectA `
     --project-b $ProjectB `
@@ -67,6 +70,10 @@ function Invoke-ProjectDriver {
 }
 
 try {
+  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  $cdpPort = ([System.Net.IPEndPoint] $listener.LocalEndpoint).Port
+  $listener.Stop()
   New-Item -ItemType Directory -Path $fixtureRoot, $projectA, $projectB, $userData, $zenData -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $projectA "keep-me.txt") -Value "project-a-marker" -Encoding UTF8
   Set-Content -LiteralPath (Join-Path $projectB "keep-me.txt") -Value "project-b-marker" -Encoding UTF8
@@ -101,8 +108,8 @@ try {
   }
 
   $env:ZENX_DATA_DIR = $zenData
-  $process = Start-ZenX -Executable $package.executable -UserData $userData
-  Invoke-ProjectDriver -Process $process -Fixture $fixtureName -ProjectA $projectAName -ProjectB $projectBName -Mode "mutate"
+  $process = Start-ZenX -Executable $package.executable -UserData $userData -CdpPort $cdpPort
+  Invoke-ProjectDriver -Process $process -CdpPort $cdpPort -Fixture $fixtureName -ProjectA $projectAName -ProjectB $projectBName -Mode "mutate"
 
   $profile = Get-Content -Raw -LiteralPath $profilePath | ConvertFrom-Json
   if ($profile.workspace -ne (Resolve-Path -LiteralPath $projectB).Path) {
@@ -120,8 +127,8 @@ try {
 
   Stop-ZenX -Process $process
   $process = $null
-  $process = Start-ZenX -Executable $package.executable -UserData $userData
-  Invoke-ProjectDriver -Process $process -Fixture $fixtureName -ProjectA $projectAName -ProjectB $projectBName -Mode "restart"
+  $process = Start-ZenX -Executable $package.executable -UserData $userData -CdpPort $cdpPort
+  Invoke-ProjectDriver -Process $process -CdpPort $cdpPort -Fixture $fixtureName -ProjectA $projectAName -ProjectB $projectBName -Mode "restart"
   Write-Host "ZenX packaged Project acceptance passed: add -> default -> remove -> restart, marker preservation, and no Windows application menu."
 } finally {
   if ($null -ne $process) { Stop-ZenX -Process $process }

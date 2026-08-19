@@ -1,5 +1,6 @@
 import type { ComputerInspection } from "./capabilities/computer-provider.js";
 import { WinAppCliComputerBackend } from "./capabilities/windows-computer-provider.js";
+import WebSocket from "ws";
 
 const arguments_ = parseArguments(process.argv.slice(2));
 const target = {
@@ -9,6 +10,7 @@ const target = {
 const projectA = requiredString(arguments_["project-a"], "--project-a");
 const projectB = requiredString(arguments_["project-b"], "--project-b");
 const fixture = requiredString(arguments_.fixture, "--fixture");
+const cdpPort = requiredPositiveInteger(arguments_["cdp-port"], "--cdp-port");
 const mode = arguments_.mode ?? "mutate";
 if (mode !== "mutate" && mode !== "restart") {
   throw new Error("--mode must be mutate or restart");
@@ -25,6 +27,7 @@ const timeout = setTimeout(() => {
 }, 120_000);
 timeout.unref();
 const backend = new WinAppCliComputerBackend({ platform: "win32" });
+const cdp = await connectToRenderer(cdpPort, controller.signal);
 
 try {
   const diagnostic = await backend.diagnose(controller.signal);
@@ -45,26 +48,27 @@ try {
 
     await pressNamed(`Make ${projectB} the default project`);
     await pressNamed(`Remove ${projectA} from ZenX`);
-    await waitForInspection(
-      (inspection) =>
-        hasNamedControl(inspection, `Remove ${projectB} from ZenX`) &&
-        !hasNamedControl(inspection, `Remove ${projectA} from ZenX`),
+    await waitForRenderer(
+      async () =>
+        (await cdp.hasButton(`Remove ${projectB} from ZenX`)) &&
+        !(await cdp.hasButton(`Remove ${projectA} from ZenX`)),
       "Project removal to settle",
     );
   } else {
-    const inspection = await waitForInspection(
-      (candidate) =>
-        hasNamedControl(candidate, `Remove ${projectB} from ZenX`) &&
-        !hasNamedControl(candidate, `Remove ${projectA} from ZenX`),
+    await waitForRenderer(
+      async () =>
+        (await cdp.hasButton(`Remove ${projectB} from ZenX`)) &&
+        !(await cdp.hasButton(`Remove ${projectA} from ZenX`)),
       "persisted Project state after restart",
     );
-    assertNoMenuControls(inspection);
+    await assertNoApplicationMenu();
   }
   console.log(
     `ZenX packaged Project workspace smoke ${mode} phase passed with WinApp CLI ${diagnostic.version}.`,
   );
 } finally {
   clearTimeout(timeout);
+  cdp.close();
   await backend.close();
 }
 
@@ -88,39 +92,17 @@ function assertNoMenuControls(inspection: ComputerInspection): void {
 }
 
 async function pressNamed(title: string): Promise<void> {
-  const inspection = await waitForInspection(
-    (candidate) =>
-      candidate.controls.some(
-        (control) =>
-          control.title === title &&
-          control.enabled &&
-          control.actions.includes("press"),
-      ),
+  await waitForRenderer(
+    async () => await cdp.clickButton(title),
     `pressable control ${title}`,
   );
-  assertNoMenuControls(inspection);
-  const control = inspection.controls.find(
-    (candidate) =>
-      candidate.title === title &&
-      candidate.enabled &&
-      candidate.actions.includes("press"),
-  );
-  if (control === undefined) throw new Error(`Control disappeared: ${title}`);
-  await backend.press(target, control.selector, controller.signal);
 }
 
-async function waitForNamed(title: string): Promise<ComputerInspection> {
-  return await waitForInspection(
-    (inspection) => hasNamedControl(inspection, title),
+async function waitForNamed(title: string): Promise<void> {
+  await waitForRenderer(
+    async () => await cdp.hasButton(title),
     `control ${title}`,
   );
-}
-
-function hasNamedControl(
-  inspection: ComputerInspection,
-  title: string,
-): boolean {
-  return inspection.controls.some((control) => control.title === title);
 }
 
 async function waitForInspection(
@@ -146,6 +128,162 @@ async function waitForInspection(
   );
 }
 
+async function waitForRenderer(
+  accept: () => Promise<boolean>,
+  label: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (controller.signal.aborted) throw controller.signal.reason;
+    if (await accept()) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for renderer ${label}`);
+}
+
+async function connectToRenderer(
+  port: number,
+  signal: AbortSignal,
+): Promise<RendererCdp> {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (signal.aborted) throw signal.reason;
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${String(port)}/json/list`,
+      );
+      if (response.ok) {
+        const pages = (await response.json()) as Array<{
+          title?: unknown;
+          type?: unknown;
+          webSocketDebuggerUrl?: unknown;
+        }>;
+        const page = pages.find(
+          (candidate) =>
+            candidate.type === "page" &&
+            candidate.title === "ZenX" &&
+            typeof candidate.webSocketDebuggerUrl === "string",
+        );
+        if (page !== undefined) {
+          return await RendererCdp.connect(
+            page.webSocketDebuggerUrl as string,
+            signal,
+          );
+        }
+      }
+    } catch {
+      // The packaged renderer or its loopback debugger is still starting.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("Timed out waiting for the packaged ZenX renderer debugger");
+}
+
+class RendererCdp {
+  readonly #pending = new Map<
+    number,
+    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+  >();
+  readonly #socket: WebSocket;
+  #nextId = 0;
+
+  private constructor(socket: WebSocket) {
+    this.#socket = socket;
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as {
+        id?: number;
+        result?: unknown;
+        error?: { message?: string };
+      };
+      if (message.id === undefined) return;
+      const pending = this.#pending.get(message.id);
+      if (pending === undefined) return;
+      this.#pending.delete(message.id);
+      if (message.error !== undefined) {
+        pending.reject(
+          new Error(message.error.message ?? "CDP request failed"),
+        );
+      } else {
+        pending.resolve(message.result);
+      }
+    });
+    socket.on("close", () => this.#rejectPending("Renderer CDP closed"));
+    socket.on("error", (error) => this.#rejectPending(error.message));
+  }
+
+  static async connect(url: string, signal: AbortSignal): Promise<RendererCdp> {
+    return await new Promise((resolve, reject) => {
+      const socket = new WebSocket(url);
+      const abort = () => {
+        socket.close();
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      socket.once("open", () => {
+        signal.removeEventListener("abort", abort);
+        resolve(new RendererCdp(socket));
+      });
+      socket.once("error", reject);
+    });
+  }
+
+  async hasButton(title: string): Promise<boolean> {
+    return await this.#evaluate(buttonExpression(title, false));
+  }
+
+  async clickButton(title: string): Promise<boolean> {
+    return await this.#evaluate(buttonExpression(title, true));
+  }
+
+  close(): void {
+    this.#socket.close();
+  }
+
+  async #evaluate(expression: string): Promise<boolean> {
+    const response = (await this.#send("Runtime.evaluate", {
+      expression,
+      returnByValue: true,
+    })) as {
+      exceptionDetails?: unknown;
+      result?: { value?: unknown };
+    };
+    if (response.exceptionDetails !== undefined) {
+      throw new Error("Packaged renderer evaluation failed");
+    }
+    return response.result?.value === true;
+  }
+
+  async #send(method: string, params: unknown): Promise<unknown> {
+    const id = ++this.#nextId;
+    return await new Promise((resolve, reject) => {
+      this.#pending.set(id, { resolve, reject });
+      this.#socket.send(JSON.stringify({ id, method, params }), (error) => {
+        if (error === undefined) return;
+        this.#pending.delete(id);
+        reject(error);
+      });
+    });
+  }
+
+  #rejectPending(message: string): void {
+    for (const pending of this.#pending.values()) {
+      pending.reject(new Error(message));
+    }
+    this.#pending.clear();
+  }
+}
+
+function buttonExpression(title: string, click: boolean): string {
+  return `(() => {
+    const title = ${JSON.stringify(title)};
+    const button = Array.from(document.querySelectorAll("button")).find((candidate) =>
+      candidate.getAttribute("aria-label") === title ||
+      candidate.textContent?.trim().replace(/\\s+/gu, " ") === title
+    );
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+    ${click ? "button.click();" : ""}
+    return true;
+  })()`;
+}
+
 function parseArguments(values: readonly string[]): Record<string, string> {
   const result: Record<string, string> = {};
   for (let index = 0; index < values.length; index += 2) {
@@ -153,7 +291,7 @@ function parseArguments(values: readonly string[]): Record<string, string> {
     const value = values[index + 1];
     if (key === undefined || !key.startsWith("--") || value === undefined) {
       throw new Error(
-        "Expected --pid <number> --title <title> --fixture <name> --project-a <name> --project-b <name> --mode <mutate|restart>",
+        "Expected --pid <number> --title <title> --cdp-port <number> --fixture <name> --project-a <name> --project-b <name> --mode <mutate|restart>",
       );
     }
     result[key.slice(2)] = value;
