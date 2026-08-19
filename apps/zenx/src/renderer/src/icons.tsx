@@ -2,6 +2,7 @@ import type { ReactNode, SVGProps } from "react";
 
 type IconName =
   | "arrow-down"
+  | "archive"
   | "check"
   | "chevron-down"
   | "chevron-right"
@@ -12,9 +13,11 @@ type IconName =
   | "layers"
   | "lock"
   | "moon"
+  | "more"
   | "paperclip"
   | "panel-right"
   | "reasoning"
+  | "restore"
   | "settings"
   | "search"
   | "thread"
@@ -34,6 +37,12 @@ type IconProps = SVGProps<SVGSVGElement> & {
 
 const paths: Record<IconName, ReactNode> = {
   "arrow-down": <path d="M8 2.2v11.2m-4-4 4 4 4-4" />,
+  archive: (
+    <>
+      <path d="M2.2 4.8h11.6v8.5H2.2zM1.6 2.3h12.8v2.5H1.6z" />
+      <path d="M6 8h4" />
+    </>
+  ),
   check: <path d="m2.4 8.4 3.4 3.4 7.8-7.8" />,
   "chevron-down": <path d="m3.6 6 4.4 4.4L12.4 6" />,
   "chevron-right": <path d="m6 3.6 4.4 4.4L6 12.4" />,
@@ -59,6 +68,7 @@ const paths: Record<IconName, ReactNode> = {
     </>
   ),
   moon: <path d="M13.4 9.4A5.8 5.8 0 0 1 6.6 2.6a5.8 5.8 0 1 0 6.8 6.8Z" />,
+  more: <path d="M3 8h.01M8 8h.01M13 8h.01" />,
   layers: (
     <>
       <path d="m8 2 6 3.2-6 3.2-6-3.2Z" />
@@ -84,6 +94,12 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="M8 2.1a4.4 4.4 0 0 0-2.7 7.9c.5.4.8.9.8 1.5h3.8c0-.6.3-1.1.8-1.5A4.4 4.4 0 0 0 8 2.1Z" />
       <path d="M6.5 13.8h3M6.2 11.5h3.6" />
+    </>
+  ),
+  restore: (
+    <>
+      <path d="M3.1 5.6A5.4 5.4 0 1 1 2.8 10" />
+      <path d="M2.8 2.5v3.7h3.7" />
     </>
   ),
   settings: (

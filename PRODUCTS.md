@@ -21,6 +21,9 @@ Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / 
 以及可显式授权的 bundled/local capability registry 已形成可运行 vertical slice。
 ZenX 的产品读取模型来自 ZAS 原生 `ThreadSummary` 查询，并经 Electron main/preload
 typed IPC 暴露；Codex Thread DTO 只属于兼容协议 adapter，不定义 ZenX 产品模型。
+高保真 renderer 提供 Active / Archived Thread 视图：活动 Thread 可重命名和归档，
+归档 Thread 可查看并取消归档；全部通过既有 App Server 操作，Archive 作为可逆的
+安全删除替代，不提供永久删除，也不在活动 Turn 期间暗改 Thread 设置。
 Capability package 同时是首期插件安装单元：main/preload 提供 typed plugin snapshot，Host 只从
 manifest 投影已启用 package 的受控 Sidebar/page contribution。Triggers 与 Rooms 已拆成两个
 独立 bundled plugins；任一关闭后，其 contribution 与 host tools 同时撤销，并通过既有 Capability

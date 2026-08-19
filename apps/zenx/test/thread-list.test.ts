@@ -5,10 +5,12 @@ import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import {
   deriveInboxSections,
   deriveProjectGroups,
+  readThreadScope,
   readSidebarMode,
   threadModelIdentity,
   threadPreview,
   threadTitle,
+  writeThreadScope,
   writeSidebarMode,
 } from "../src/renderer/src/thread-list.js";
 
@@ -23,6 +25,19 @@ test("persists the selected sidebar mode and defaults invalid values to projects
   assert.equal(readSidebarMode(storage), "inbox");
   values.set("zenx-sidebar-mode", "unexpected");
   assert.equal(readSidebarMode(storage), "projects");
+});
+
+test("persists Active or Archived without accepting unknown Thread scopes", () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+  };
+  assert.equal(readThreadScope(storage), "active");
+  writeThreadScope(storage, "archived");
+  assert.equal(readThreadScope(storage), "archived");
+  values.set("zenx-thread-scope", "deleted");
+  assert.equal(readThreadScope(storage), "active");
 });
 
 test("derives inbox groups from native summary status", () => {

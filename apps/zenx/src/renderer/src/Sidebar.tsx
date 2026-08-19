@@ -1,32 +1,43 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
+import type { Thread } from "../../protocol-client/index.js";
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import {
   deriveInboxSections,
   deriveProjectGroups,
   threadModelIdentity,
+  threadHasActiveTurn,
   threadProject,
   threadTitle,
   type SidebarMode,
+  type ThreadScope,
 } from "./thread-list.js";
 
 interface SidebarProps {
   mode: SidebarMode;
   open: boolean;
   onClose(): void;
+  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onModeChange(mode: SidebarMode): void;
   onNewThread(): void;
   onOpenContribution(page: "triggers" | "rooms"): void;
   onOpenSettings(): void;
+  onRetryThreads(): void;
+  onRenameThread(threadId: string, title: string): Promise<void>;
   onSelectThread(threadId: string): void;
+  onThreadScopeChange(scope: ThreadScope): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   pluginContributions: readonly LoadedPluginContribution[];
   selectedPage: "agent" | "triggers" | "rooms" | "settings";
   selectedThreadId: string | null;
   serverReady: boolean;
+  liveThread: Thread | null;
+  threadError: string | null;
+  threadLoading: boolean;
+  threadScope: ThreadScope;
   threads: readonly NativeThreadSummary[];
   triggerSnapshot: TriggerSnapshot;
 }
@@ -35,16 +46,24 @@ export function Sidebar({
   mode,
   open,
   onClose,
+  onChangeThreadLifecycle,
   onModeChange,
   onNewThread,
   onOpenContribution,
   onOpenSettings,
+  onRetryThreads,
+  onRenameThread,
   onSelectThread,
+  onThreadScopeChange,
   pendingApprovalThreadIds,
   pluginContributions,
   selectedPage,
   selectedThreadId,
   serverReady,
+  liveThread,
+  threadError,
+  threadLoading,
+  threadScope,
   threads,
   triggerSnapshot,
 }: SidebarProps) {
@@ -70,22 +89,24 @@ export function Sidebar({
               <span>ZENX</span>
             </div>
             <div className="brand-actions">
-              <button
-                className="icon-button inbox-button"
-                type="button"
-                aria-label={
-                  mode === "inbox" ? "Return to projects" : "Open inbox"
-                }
-                aria-pressed={mode === "inbox"}
-                onClick={() =>
-                  onModeChange(mode === "inbox" ? "projects" : "inbox")
-                }
-              >
-                <Icon name="inbox" />
-                {pendingApprovalThreadIds.size > 0 ? (
-                  <span className="inbox-dot" aria-hidden="true" />
-                ) : null}
-              </button>
+              {threadScope === "active" ? (
+                <button
+                  className="icon-button inbox-button"
+                  type="button"
+                  aria-label={
+                    mode === "inbox" ? "Return to projects" : "Open inbox"
+                  }
+                  aria-pressed={mode === "inbox"}
+                  onClick={() =>
+                    onModeChange(mode === "inbox" ? "projects" : "inbox")
+                  }
+                >
+                  <Icon name="inbox" />
+                  {pendingApprovalThreadIds.size > 0 ? (
+                    <span className="inbox-dot" aria-hidden="true" />
+                  ) : null}
+                </button>
+              ) : null}
               <button
                 className="icon-button"
                 type="button"
@@ -129,33 +150,84 @@ export function Sidebar({
             </section>
           )}
 
+          <div
+            className="thread-scope-tabs"
+            role="tablist"
+            aria-label="Thread views"
+          >
+            {(["active", "archived"] as const).map((scope) => (
+              <button
+                aria-controls="thread-scope-panel"
+                id={`thread-scope-${scope}`}
+                key={scope}
+                type="button"
+                role="tab"
+                aria-selected={threadScope === scope}
+                onClick={() => onThreadScopeChange(scope)}
+              >
+                {scope === "active" ? "Active" : "Archived"}
+              </button>
+            ))}
+          </div>
+
           <div className="sidebar-view-head">
-            <strong>{mode === "inbox" ? "Inbox" : "Projects"}</strong>
+            <strong>
+              {threadScope === "archived"
+                ? "Archived"
+                : mode === "inbox"
+                  ? "Inbox"
+                  : "Projects"}
+            </strong>
             <span>{threads.length}</span>
           </div>
         </header>
 
-        <div className="sidebar-scroll">
+        <div
+          className="sidebar-scroll"
+          id="thread-scope-panel"
+          role="tabpanel"
+          aria-labelledby={`thread-scope-${threadScope}`}
+        >
           {!serverReady ? (
             <p className="sidebar-empty">Waiting for the local App Server.</p>
+          ) : threadLoading ? (
+            <p className="sidebar-empty" role="status">
+              Loading {threadScope === "active" ? "active" : "archived"}{" "}
+              Threads…
+            </p>
+          ) : threadError !== null ? (
+            <div className="sidebar-empty sidebar-error" role="alert">
+              <p>{threadError}</p>
+              <button type="button" onClick={onRetryThreads}>
+                Try again
+              </button>
+            </div>
           ) : threads.length === 0 ? (
             <p className="sidebar-empty">
-              Your conversations will appear here.
+              {threadScope === "archived"
+                ? "No archived Threads yet. Archived conversations stay safe here until you restore them."
+                : "Your conversations will appear here."}
             </p>
-          ) : mode === "inbox" ? (
+          ) : threadScope === "active" && mode === "inbox" ? (
             <InboxView
               onSelectThread={onSelectThread}
+              onChangeThreadLifecycle={onChangeThreadLifecycle}
+              onRenameThread={onRenameThread}
               pendingApprovalThreadIds={pendingApprovalThreadIds}
               selectedThreadId={selectedThreadId}
               threads={threads}
+              liveThread={liveThread}
               watchingThreadIds={watchingThreadIds}
             />
           ) : (
             <ProjectsView
               onSelectThread={onSelectThread}
+              onChangeThreadLifecycle={onChangeThreadLifecycle}
+              onRenameThread={onRenameThread}
               pendingApprovalThreadIds={pendingApprovalThreadIds}
               selectedThreadId={selectedThreadId}
               threads={threads}
+              liveThread={liveThread}
               watchingThreadIds={watchingThreadIds}
             />
           )}
@@ -191,13 +263,19 @@ function InboxView({
   threads,
   selectedThreadId,
   onSelectThread,
+  onChangeThreadLifecycle,
+  onRenameThread,
   pendingApprovalThreadIds,
+  liveThread,
   watchingThreadIds,
 }: {
   threads: readonly NativeThreadSummary[];
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
+  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onRenameThread(threadId: string, title: string): Promise<void>;
   pendingApprovalThreadIds: ReadonlySet<string>;
+  liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
 }) {
   return deriveInboxSections(
@@ -212,6 +290,9 @@ function InboxView({
           <ThreadRow
             inbox
             key={thread.threadId}
+            hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
+            onChangeThreadLifecycle={onChangeThreadLifecycle}
+            onRenameThread={onRenameThread}
             onSelectThread={onSelectThread}
             pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
             selected={thread.threadId === selectedThreadId}
@@ -228,19 +309,28 @@ function ProjectsView({
   threads,
   selectedThreadId,
   onSelectThread,
+  onChangeThreadLifecycle,
+  onRenameThread,
   pendingApprovalThreadIds,
+  liveThread,
   watchingThreadIds,
 }: {
   threads: readonly NativeThreadSummary[];
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
+  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onRenameThread(threadId: string, title: string): Promise<void>;
   pendingApprovalThreadIds: ReadonlySet<string>;
+  liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
 }) {
   return deriveProjectGroups(threads).map((group) => (
     <ProjectRows
       group={group}
       key={group.key}
+      liveThread={liveThread}
+      onChangeThreadLifecycle={onChangeThreadLifecycle}
+      onRenameThread={onRenameThread}
       onSelectThread={onSelectThread}
       pendingApprovalThreadIds={pendingApprovalThreadIds}
       selectedThreadId={selectedThreadId}
@@ -253,13 +343,19 @@ function ProjectRows({
   group,
   selectedThreadId,
   onSelectThread,
+  onChangeThreadLifecycle,
+  onRenameThread,
   pendingApprovalThreadIds,
+  liveThread,
   watchingThreadIds,
 }: {
   group: ReturnType<typeof deriveProjectGroups>[number];
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
+  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onRenameThread(threadId: string, title: string): Promise<void>;
   pendingApprovalThreadIds: ReadonlySet<string>;
+  liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
 }) {
   const [open, setOpen] = useState(true);
@@ -284,7 +380,10 @@ function ProjectRows({
       {open
         ? group.threads.map((thread) => (
             <ThreadRow
+              hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
               key={thread.threadId}
+              onChangeThreadLifecycle={onChangeThreadLifecycle}
+              onRenameThread={onRenameThread}
               onSelectThread={onSelectThread}
               pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
               selected={thread.threadId === selectedThreadId}
@@ -300,6 +399,9 @@ function ProjectRows({
 function ThreadRow({
   thread,
   selected,
+  hasActiveTurn,
+  onChangeThreadLifecycle,
+  onRenameThread,
   onSelectThread,
   pendingApproval,
   watching,
@@ -307,11 +409,55 @@ function ThreadRow({
 }: {
   thread: NativeThreadSummary;
   selected: boolean;
+  hasActiveTurn: boolean;
+  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onRenameThread(threadId: string, title: string): Promise<void>;
   onSelectThread(threadId: string): void;
   pendingApproval: boolean;
   watching: boolean;
   inbox?: boolean;
 }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const initialMenuFocusRef = useRef<"first" | "last">("first");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState(threadTitle(thread));
+  const [busyAction, setBusyAction] = useState<
+    "rename" | "archive" | "unarchive" | null
+  >(null);
+  const [menuError, setMenuError] = useState<string | null>(null);
+  const restoreMenuTriggerFocus = () => {
+    queueMicrotask(() => menuTriggerRef.current?.focus());
+  };
+  const closeMenu = (restoreFocus = true) => {
+    setMenuOpen(false);
+    setRenaming(false);
+    if (restoreFocus) restoreMenuTriggerFocus();
+  };
+  const focusThreadScope = () => {
+    document
+      .getElementById(`thread-scope-${thread.archived ? "archived" : "active"}`)
+      ?.focus();
+  };
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!rowRef.current?.contains(event.target as Node)) {
+        closeMenu();
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [menuOpen]);
+  useEffect(() => {
+    if (!menuOpen || renaming) return;
+    const items = enabledMenuItems(menuRef.current);
+    const item =
+      initialMenuFocusRef.current === "last" ? items.at(-1) : items.at(0);
+    item?.focus();
+  }, [menuOpen, renaming]);
   const identity = threadModelIdentity(thread);
   const contents = (
     <>
@@ -338,22 +484,282 @@ function ThreadRow({
       )}
     </>
   );
-  if (thread.status === "systemError") {
-    return (
-      <div className={`thread-row system-error${inbox ? " inbox" : ""}`}>
-        {contents}
-      </div>
-    );
-  }
+  const runAction = async (
+    action: "rename" | "archive" | "unarchive",
+    operation: () => Promise<void>,
+  ) => {
+    setBusyAction(action);
+    setMenuError(null);
+    try {
+      if (action !== "rename") focusThreadScope();
+      await operation();
+      if (action !== "rename") focusThreadScope();
+      closeMenu(action === "rename");
+    } catch (error) {
+      setMenuError(error instanceof Error ? error.message : String(error));
+      if (action !== "rename") {
+        queueMicrotask(() =>
+          menuRef.current
+            ?.querySelector<HTMLButtonElement>(
+              `[data-thread-action="${action}"]:not(:disabled)`,
+            )
+            ?.focus(),
+        );
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
   return (
-    <button
-      className={`thread-row${selected ? " selected" : ""}${inbox ? " inbox" : ""}`}
-      type="button"
-      aria-current={selected ? "page" : undefined}
-      onClick={() => onSelectThread(thread.threadId)}
+    <div
+      ref={rowRef}
+      className="thread-row-shell"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeMenu();
+        }
+      }}
     >
-      {contents}
-    </button>
+      {thread.status === "systemError" ? (
+        <div className={`thread-row system-error${inbox ? " inbox" : ""}`}>
+          {contents}
+        </div>
+      ) : (
+        <button
+          className={`thread-row${selected ? " selected" : ""}${inbox ? " inbox" : ""}`}
+          type="button"
+          aria-current={selected ? "page" : undefined}
+          onClick={() => onSelectThread(thread.threadId)}
+        >
+          {contents}
+        </button>
+      )}
+      <button
+        ref={menuTriggerRef}
+        className="thread-menu-trigger"
+        type="button"
+        id={`thread-menu-trigger-${thread.threadId}`}
+        aria-label={`Manage ${threadTitle(thread)}`}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        aria-controls={menuOpen ? `thread-menu-${thread.threadId}` : undefined}
+        onClick={() => {
+          if (menuOpen) {
+            closeMenu();
+            return;
+          }
+          initialMenuFocusRef.current = "first";
+          setMenuError(null);
+          setRenaming(false);
+          setRenameDraft(threadTitle(thread));
+          setMenuOpen(true);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          initialMenuFocusRef.current =
+            event.key === "ArrowUp" ? "last" : "first";
+          setMenuError(null);
+          setRenaming(false);
+          setRenameDraft(threadTitle(thread));
+          setMenuOpen(true);
+        }}
+      >
+        <Icon name="more" />
+      </button>
+      <ThreadItemMenu
+        archived={thread.archived}
+        busyAction={busyAction}
+        error={menuError}
+        hasActiveTurn={hasActiveTurn}
+        labelledBy={`thread-menu-trigger-${thread.threadId}`}
+        menuId={`thread-menu-${thread.threadId}`}
+        menuRef={menuRef}
+        open={menuOpen}
+        renaming={renaming}
+        renameDraft={renameDraft}
+        onArchive={() =>
+          void runAction("archive", () => onChangeThreadLifecycle(thread))
+        }
+        onBeginRename={() => setRenaming(true)}
+        onCancelRename={() => setRenaming(false)}
+        onRequestClose={() => closeMenu()}
+        onDraftChange={setRenameDraft}
+        onRename={() =>
+          void runAction("rename", () =>
+            onRenameThread(thread.threadId, renameDraft),
+          )
+        }
+        onUnarchive={() =>
+          void runAction("unarchive", () => onChangeThreadLifecycle(thread))
+        }
+      />
+    </div>
+  );
+}
+
+export function ThreadItemMenu({
+  archived,
+  busyAction,
+  error,
+  hasActiveTurn,
+  labelledBy,
+  menuId,
+  menuRef,
+  open,
+  renaming,
+  renameDraft,
+  onArchive,
+  onBeginRename,
+  onCancelRename,
+  onRequestClose,
+  onDraftChange,
+  onRename,
+  onUnarchive,
+}: {
+  archived: boolean;
+  busyAction: "rename" | "archive" | "unarchive" | null;
+  error: string | null;
+  hasActiveTurn: boolean;
+  labelledBy?: string;
+  menuId?: string;
+  menuRef?: RefObject<HTMLDivElement | null>;
+  open: boolean;
+  renaming: boolean;
+  renameDraft: string;
+  onArchive(): void;
+  onBeginRename(): void;
+  onCancelRename(): void;
+  onRequestClose?(): void;
+  onDraftChange(value: string): void;
+  onRename(): void;
+  onUnarchive(): void;
+}) {
+  if (!open) return null;
+  const busy = busyAction !== null;
+  return (
+    <div
+      ref={menuRef}
+      className="thread-item-menu"
+      id={menuId}
+      role="menu"
+      aria-labelledby={labelledBy}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          onRequestClose?.();
+          return;
+        }
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+          return;
+        }
+        const items = enabledMenuItems(event.currentTarget);
+        if (items.length === 0) return;
+        event.preventDefault();
+        const currentIndex = items.indexOf(
+          document.activeElement as HTMLButtonElement,
+        );
+        const nextIndex =
+          event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? items.length - 1
+              : currentIndex === -1
+                ? event.key === "ArrowUp"
+                  ? items.length - 1
+                  : 0
+                : event.key === "ArrowUp"
+                  ? (currentIndex - 1 + items.length) % items.length
+                  : (currentIndex + 1) % items.length;
+        items[nextIndex]?.focus();
+      }}
+    >
+      {renaming ? (
+        <form
+          className="thread-menu-rename"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onRename();
+          }}
+        >
+          <label>
+            <span>Thread name</span>
+            <input
+              autoFocus
+              value={renameDraft}
+              onChange={(event) => onDraftChange(event.target.value)}
+            />
+          </label>
+          <div>
+            <button type="submit" disabled={busy || !renameDraft.trim()}>
+              {busyAction === "rename" ? "Saving…" : "Save"}
+            </button>
+            <button type="button" disabled={busy} onClick={onCancelRename}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : archived ? (
+        <button
+          type="button"
+          role="menuitem"
+          tabIndex={-1}
+          data-thread-action="unarchive"
+          disabled={busy}
+          onClick={onUnarchive}
+        >
+          <Icon name="restore" />
+          {busyAction === "unarchive" ? "Unarchiving…" : "Unarchive"}
+        </button>
+      ) : (
+        <>
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
+            data-thread-action="rename"
+            disabled={busy}
+            onClick={onBeginRename}
+          >
+            <Icon name="compose" />
+            Rename
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
+            data-thread-action="archive"
+            disabled={busy || hasActiveTurn}
+            title={
+              hasActiveTurn
+                ? "Wait for the active Turn to finish before archiving."
+                : undefined
+            }
+            onClick={onArchive}
+          >
+            <Icon name="archive" />
+            {busyAction === "archive" ? "Archiving…" : "Archive"}
+          </button>
+          {hasActiveTurn ? (
+            <p className="thread-menu-help">
+              Wait for the active Turn to finish before archiving.
+            </p>
+          ) : null}
+        </>
+      )}
+      {error === null ? null : <p role="alert">{error}</p>}
+    </div>
+  );
+}
+
+function enabledMenuItems(container: HTMLElement | null): HTMLButtonElement[] {
+  if (container === null) return [];
+  return Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      'button[role="menuitem"]:not(:disabled)',
+    ),
   );
 }
 

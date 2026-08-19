@@ -51,11 +51,16 @@ import { SettingsView } from "./SettingsView.js";
 import { Sidebar } from "./Sidebar.js";
 import {
   readSidebarMode,
+  readThreadScope,
+  threadHasActiveTurn,
   threadTitle,
   writeSidebarMode,
+  writeThreadScope,
   type SidebarMode,
+  type ThreadScope,
 } from "./thread-list.js";
 import { applyThreadViewNotification } from "./thread-view-state.js";
+import { ThreadLifecycleAction } from "./ThreadLifecycleAction.js";
 import { ThreadView } from "./ThreadView.js";
 
 type ProductPage = "agent" | "settings" | "triggers" | "rooms";
@@ -84,6 +89,17 @@ export function App() {
   const [threadSummaries, setThreadSummaries] = useState<NativeThreadSummary[]>(
     [],
   );
+  const [archivedThreadSummaries, setArchivedThreadSummaries] = useState<
+    NativeThreadSummary[]
+  >([]);
+  const [threadListLoaded, setThreadListLoaded] = useState({
+    active: false,
+    archived: false,
+  });
+  const [threadListErrors, setThreadListErrors] = useState<{
+    active: string | null;
+    archived: string | null;
+  }>({ active: null, archived: null });
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
@@ -104,19 +120,47 @@ export function App() {
       return "projects";
     }
   });
+  const [threadScope, setThreadScope] = useState<ThreadScope>(() => {
+    try {
+      return readThreadScope(window.localStorage);
+    } catch {
+      return "active";
+    }
+  });
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [threadLifecycleBusy, setThreadLifecycleBusy] = useState(false);
+  const [threadLifecycleError, setThreadLifecycleError] = useState<
+    string | null
+  >(null);
   const [composerStates, setComposerStates] = useState<
     Record<string, ComposerState>
   >({});
 
-  const loadThreadSummaries = async () => {
-    try {
-      const summaries = await window.zenx.threads.list();
-      setThreadSummaries(summaries);
-      setRequestError(null);
-    } catch (error) {
-      setRequestError(describeError(error));
+  const loadThreadSummaries = async (showLoading = false) => {
+    if (showLoading) setThreadListLoaded({ active: false, archived: false });
+    const [active, archived] = await Promise.allSettled([
+      window.zenx.threads.list({ archived: false }),
+      window.zenx.threads.list({ archived: true }),
+    ]);
+    if (active.status === "fulfilled") {
+      setThreadSummaries(active.value);
+      setThreadListErrors((current) => ({ ...current, active: null }));
+    } else {
+      setThreadListErrors((current) => ({
+        ...current,
+        active: describeError(active.reason),
+      }));
     }
+    if (archived.status === "fulfilled") {
+      setArchivedThreadSummaries(archived.value);
+      setThreadListErrors((current) => ({ ...current, archived: null }));
+    } else {
+      setThreadListErrors((current) => ({
+        ...current,
+        archived: describeError(archived.reason),
+      }));
+    }
+    setThreadListLoaded({ active: true, archived: true });
   };
 
   const resumeThread = async (threadId: string) => {
@@ -129,6 +173,7 @@ export function App() {
     setThreadDetail(null);
     setSelectedSettings(null);
     setModelUpdateError(null);
+    setThreadLifecycleError(null);
     setThreadLoading(true);
     setThreadError(null);
     try {
@@ -296,13 +341,22 @@ export function App() {
     return () => window.removeEventListener("keydown", close);
   }, [sidebarOpen, workspaceOpen]);
 
-  const summaries = threadSummaries.map((summary) =>
+  const activeSummaries = threadSummaries.map((summary) =>
     titleSnapshot[summary.threadId]?.title === undefined
       ? summary
       : { ...summary, name: titleSnapshot[summary.threadId]!.title },
   );
+  const archivedSummaries = archivedThreadSummaries.map((summary) =>
+    titleSnapshot[summary.threadId]?.title === undefined
+      ? summary
+      : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+  );
+  const visibleSummaries =
+    threadScope === "active" ? activeSummaries : archivedSummaries;
   const selectedSummary =
-    summaries.find((summary) => summary.threadId === selectedThreadId) ?? null;
+    [...activeSummaries, ...archivedSummaries].find(
+      (summary) => summary.threadId === selectedThreadId,
+    ) ?? null;
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
   const pluginContributions = loadedPluginContributions(pluginSnapshot);
 
@@ -315,6 +369,12 @@ export function App() {
       const result = await window.zenx.protocol.request("thread/start", {});
       if (selectionEpoch.current !== epoch) return;
       selectedThreadIdRef.current = result.thread.id;
+      setThreadScope("active");
+      try {
+        writeThreadScope(window.localStorage, "active");
+      } catch {
+        // The view remains active for this window.
+      }
       setPage("agent");
       setSidebarOpen(false);
       setSelectedThreadId(result.thread.id);
@@ -461,12 +521,55 @@ export function App() {
       setSelectedRoomId(triggerSnapshot.rooms[0]?.id ?? null);
   };
 
+  const renameThread = async (threadId: string, title: string) => {
+    const projection = await window.zenx.titles.rename(threadId, title);
+    setTitleSnapshot((current) => ({
+      ...current,
+      [threadId]: projection,
+    }));
+  };
+
+  const performThreadLifecycle = async (summary: NativeThreadSummary) => {
+    if (!summary.archived && threadHasActiveTurn(summary, threadDetail)) {
+      throw new Error("Wait for the active Turn to finish before archiving.");
+    }
+    await window.zenx.protocol.request(
+      summary.archived ? "thread/unarchive" : "thread/archive",
+      { threadId: summary.threadId },
+    );
+    await loadThreadSummaries();
+  };
+
+  const changeThreadLifecycle = async () => {
+    if (selectedSummary === null) return;
+    const nextScope: ThreadScope = selectedSummary.archived
+      ? "active"
+      : "archived";
+    setThreadLifecycleBusy(true);
+    setThreadLifecycleError(null);
+    try {
+      await performThreadLifecycle(selectedSummary);
+      setThreadScope(nextScope);
+      try {
+        writeThreadScope(window.localStorage, nextScope);
+      } catch {
+        // The view remains valid for this window.
+      }
+    } catch (error) {
+      setThreadLifecycleError(describeError(error));
+    } finally {
+      setThreadLifecycleBusy(false);
+    }
+  };
+
   return (
     <div className="app-shell">
       <Sidebar
+        liveThread={threadDetail}
         mode={sidebarMode}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onChangeThreadLifecycle={performThreadLifecycle}
         onModeChange={(mode) => {
           setSidebarMode(mode);
           try {
@@ -478,13 +581,26 @@ export function App() {
         onNewThread={() => void newThread()}
         onOpenContribution={(target) => openPage(target)}
         onOpenSettings={() => openPage("settings")}
+        onRetryThreads={() => void loadThreadSummaries(true)}
+        onRenameThread={renameThread}
         onSelectThread={(threadId) => void resumeThread(threadId)}
+        onThreadScopeChange={(scope) => {
+          setThreadScope(scope);
+          try {
+            writeThreadScope(window.localStorage, scope);
+          } catch {
+            // The preference remains valid for this window.
+          }
+        }}
         pendingApprovalThreadIds={pendingThreadIds}
         pluginContributions={pluginContributions}
         selectedPage={page}
         selectedThreadId={selectedThreadId}
         serverReady={serverStatus.type === "ready"}
-        threads={summaries}
+        threadError={threadListErrors[threadScope]}
+        threadLoading={!threadListLoaded[threadScope]}
+        threadScope={threadScope}
+        threads={visibleSummaries}
         triggerSnapshot={triggerSnapshot}
       />
 
@@ -500,7 +616,7 @@ export function App() {
               (contribution) => contribution.page === "rooms",
             )}
             snapshot={triggerSnapshot}
-            threads={summaries}
+            threads={activeSummaries}
             onOpenThread={(id) => void resumeThread(id)}
             onOpenRoom={(id) => {
               setSelectedRoomId(id);
@@ -512,7 +628,7 @@ export function App() {
           <RoomView
             roomId={selectedRoomId}
             snapshot={triggerSnapshot}
-            threads={summaries}
+            threads={activeSummaries}
             onOpenThread={(id) => void resumeThread(id)}
             onOpenSidebar={() => setSidebarOpen(true)}
             onSelectRoom={setSelectedRoomId}
@@ -536,19 +652,13 @@ export function App() {
               });
             }}
             onModelChange={(model) => void changeModel(model)}
+            onChangeThreadLifecycle={changeThreadLifecycle}
             onNewThread={() => void newThread()}
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
             onRename={async (title) => {
               if (selectedSummary === null) return;
-              const projection = await window.zenx.titles.rename(
-                selectedSummary.threadId,
-                title,
-              );
-              setTitleSnapshot((current) => ({
-                ...current,
-                [selectedSummary.threadId]: projection,
-              }));
+              await renameThread(selectedSummary.threadId, title);
             }}
             onRespondToApproval={respondToApproval}
             onRetryTitle={async () => {
@@ -567,6 +677,8 @@ export function App() {
             selectedSummary={selectedSummary}
             serverStatus={serverStatus}
             switchingModel={switchingModel}
+            threadLifecycleBusy={threadLifecycleBusy}
+            threadLifecycleError={threadLifecycleError}
             threadDetail={threadDetail}
             threadError={threadError}
             threadLoading={threadLoading}
@@ -598,6 +710,7 @@ function AgentSurface({
   models,
   modelCatalogError,
   modelUpdateError,
+  onChangeThreadLifecycle,
   onDraftChange,
   onInterrupt,
   onModelChange,
@@ -613,6 +726,8 @@ function AgentSurface({
   selectedSummary,
   serverStatus,
   switchingModel,
+  threadLifecycleBusy,
+  threadLifecycleError,
   threadDetail,
   threadError,
   threadLoading,
@@ -624,6 +739,7 @@ function AgentSurface({
   models: ModelSummary[];
   modelCatalogError: string | null;
   modelUpdateError: string | null;
+  onChangeThreadLifecycle(): Promise<void>;
   onDraftChange(threadId: string, draft: string): void;
   onInterrupt(turnId: string): Promise<void>;
   onModelChange(model: string): void;
@@ -645,6 +761,8 @@ function AgentSurface({
   selectedSummary: NativeThreadSummary | null;
   serverStatus: AppServerHostStatus;
   switchingModel: boolean;
+  threadLifecycleBusy: boolean;
+  threadLifecycleError: string | null;
   threadDetail: Thread | null;
   threadError: string | null;
   threadLoading: boolean;
@@ -654,34 +772,47 @@ function AgentSurface({
   return (
     <section className="agent-surface">
       <header className="workspace-header">
-        <button
-          className="icon-button mobile-menu"
-          type="button"
-          aria-label="Open sidebar"
-          onClick={onOpenSidebar}
-        >
-          <Icon name="tree" />
-        </button>
-        <div className="thread-heading">
-          {selectedSummary === null ? (
-            <strong>Start a conversation</strong>
-          ) : (
-            <ThreadTitleEditor
-              onRename={onRename}
-              onRetry={onRetryTitle}
-              projection={titleProjection}
-              title={threadTitle(selectedSummary)}
-            />
-          )}
-          <span>
-            {selectedSummary === null
-              ? "Select a Thread or create a new one"
-              : selectedSummary.status === "systemError"
-                ? "Unavailable journal"
-                : selectedSummary.currentMetadata.cwd}
-          </span>
+        <div className="workspace-heading-row">
+          <button
+            className="icon-button mobile-menu"
+            type="button"
+            aria-label="Open sidebar"
+            onClick={onOpenSidebar}
+          >
+            <Icon name="tree" />
+          </button>
+          <div className="thread-heading">
+            {selectedSummary === null ? (
+              <strong>Start a conversation</strong>
+            ) : (
+              <ThreadTitleEditor
+                editable={!selectedSummary.archived}
+                onRename={onRename}
+                onRetry={onRetryTitle}
+                projection={titleProjection}
+                title={threadTitle(selectedSummary)}
+              />
+            )}
+            <span>
+              {selectedSummary === null
+                ? "Select a Thread or create a new one"
+                : selectedSummary.status === "systemError"
+                  ? "Unavailable journal"
+                  : selectedSummary.currentMetadata.cwd}
+            </span>
+          </div>
         </div>
         <div className="top-actions">
+          {selectedSummary === null ||
+          selectedSummary.status === "systemError" ? null : (
+            <ThreadLifecycleAction
+              archived={selectedSummary.archived}
+              busy={threadLifecycleBusy}
+              error={threadLifecycleError}
+              hasActiveTurn={threadHasActiveTurn(selectedSummary, threadDetail)}
+              onChange={onChangeThreadLifecycle}
+            />
+          )}
           <button
             className="icon-button search-thread"
             type="button"
@@ -959,11 +1090,13 @@ function EmptyState({
 }
 
 function ThreadTitleEditor({
+  editable,
   title,
   projection,
   onRename,
   onRetry,
 }: {
+  editable: boolean;
   title: string;
   projection: ThreadTitleProjection | undefined;
   onRename(title: string): Promise<void>;
@@ -1009,17 +1142,19 @@ function ThreadTitleEditor({
   return (
     <div className="thread-title-line">
       <strong>{title}</strong>
-      <button
-        type="button"
-        aria-label="Rename Thread"
-        onClick={() => setEditing(true)}
-      >
-        Rename
-      </button>
-      {projection?.status === "generating" ? (
+      {editable ? (
+        <button
+          type="button"
+          aria-label="Rename Thread"
+          onClick={() => setEditing(true)}
+        >
+          Rename
+        </button>
+      ) : null}
+      {editable && projection?.status === "generating" ? (
         <small>Generating title…</small>
       ) : null}
-      {projection?.status === "failed" ? (
+      {editable && projection?.status === "failed" ? (
         <button type="button" onClick={() => void onRetry()}>
           Retry title
         </button>

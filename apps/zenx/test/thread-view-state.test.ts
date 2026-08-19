@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Thread, ThreadItem, Turn } from "../src/protocol-client/index.js";
+import type { NativeThreadSummary } from "../../../src/thread-summary.js";
+import { threadHasActiveTurn } from "../src/renderer/src/thread-list.js";
 import {
   activeTurn,
   applyThreadViewNotification,
@@ -113,6 +115,32 @@ test("projects hard steer as an interrupted turn followed by one successor", () 
     ],
   );
   assert.equal(activeTurn(current)?.id, "turn-new");
+});
+
+test("blocks Thread lifecycle changes from live turn state before summary refresh", () => {
+  const staleSummary: NativeThreadSummary = {
+    threadId: "thread-1",
+    currentMetadata: {
+      model: "fake",
+      provider: "fake",
+      cwd: "/workspace",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+    archived: false,
+    createdAt: new Date(1_000).toISOString(),
+    updatedAt: new Date(2_000).toISOString(),
+    preview: "",
+    status: "idle",
+  };
+  const live = applyThreadViewNotification(thread(), "turn/started", {
+    threadId: "thread-1",
+    turn: turn("turn-live", "inProgress"),
+  });
+
+  assert.equal(staleSummary.status, "idle");
+  assert.equal(threadHasActiveTurn(staleSummary, live), true);
+  assert.equal(threadHasActiveTurn(staleSummary, thread()), false);
 });
 
 function thread(turns: Turn[] = []): Thread {
