@@ -43,6 +43,24 @@ test("validates exclusive native Thread summary success and error results", () =
   assert.equal(
     isHostEvent({
       type: "thread-summary/result",
+      requestId: "undefined-error-key",
+      summaries: [validSummary],
+      error: undefined,
+    }),
+    false,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-summary/result",
+      requestId: "undefined-summaries-key",
+      summaries: undefined,
+      error: "fixture error",
+    }),
+    false,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-summary/result",
       requestId: "unavailable-summary",
       summaries: [
         {
@@ -148,6 +166,32 @@ test("manager accepts an exclusive error summary response", async () => {
       within(fixture.manager.listThreadSummaries()),
       /fixture summary error/u,
     );
+  } finally {
+    await fixture.manager.stop();
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("manager rejects only the active request targeted by an unknown discriminant", async () => {
+  const fixture = await createFixtureManager("matching-unknown-discriminant");
+  try {
+    await fixture.manager.start();
+    const [targeted, unrelated] = await Promise.allSettled([
+      within(fixture.manager.listThreadSummaries()),
+      within(fixture.manager.listThreadSummaries({ archived: true })),
+    ]);
+    assert.equal(targeted.status, "rejected");
+    if (targeted.status === "rejected") {
+      assert.match(
+        String(targeted.reason),
+        /Malformed native Thread summary response/u,
+      );
+    }
+    assert.equal(unrelated.status, "fulfilled");
+    if (unrelated.status === "fulfilled") {
+      assert.equal(unrelated.value[0]?.threadId, "fixture-thread");
+      assert.equal(unrelated.value[0]?.archived, true);
+    }
   } finally {
     await fixture.manager.stop();
     await rm(fixture.directory, { recursive: true, force: true });

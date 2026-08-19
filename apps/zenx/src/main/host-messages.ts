@@ -108,15 +108,18 @@ export function isHostEvent(value: unknown): value is HostEvent {
     summaries?: unknown;
     error?: unknown;
   };
+  const hasSummaries = Object.prototype.hasOwnProperty.call(event, "summaries");
+  const hasError = Object.prototype.hasOwnProperty.call(event, "error");
   return (
     (event.type === "ready" && typeof event.url === "string") ||
     (event.type === "error" && typeof event.message === "string") ||
     (event.type === "thread-summary/result" &&
       typeof event.requestId === "string" &&
-      ((Array.isArray(event.summaries) &&
-        event.summaries.every(isNativeThreadSummary) &&
-        event.error === undefined) ||
-        (event.summaries === undefined && typeof event.error === "string"))) ||
+      ((hasSummaries &&
+        !hasError &&
+        Array.isArray(event.summaries) &&
+        event.summaries.every(isNativeThreadSummary)) ||
+        (!hasSummaries && hasError && typeof event.error === "string"))) ||
     ((event.type === "capability/invoke" ||
       event.type === "capability/cancel") &&
       typeof event.invocationId === "string")

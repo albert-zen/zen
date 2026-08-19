@@ -13,6 +13,7 @@ import {
 
 let appServer: HostedZenAppServer | undefined;
 let server: CodexWebSocketServer | undefined;
+let summaryRequestCount = 0;
 
 process.on("message", (message: unknown) => {
   if (!isHostCommand(message)) return;
@@ -45,6 +46,14 @@ async function handle(command: HostCommand): Promise<void> {
   if (command.type !== "thread-summary/list") return;
 
   const mode = process.env["ZENX_SUMMARY_FIXTURE_MODE"];
+  summaryRequestCount += 1;
+  if (mode === "matching-unknown-discriminant" && summaryRequestCount === 1) {
+    process.send?.({
+      type: "thread-summary/unknown",
+      requestId: command.requestId,
+    });
+    return;
+  }
   if (mode === "matching-malformed") {
     process.send?.({
       type: "thread-summary/result",

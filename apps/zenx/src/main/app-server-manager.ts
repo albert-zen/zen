@@ -398,21 +398,27 @@ export class AppServerManager {
   #installCapabilityBridge(child: ChildProcess): void {
     child.on("message", (message: unknown) => {
       if (this.#child !== child) return;
-      const threadSummaryRequestId = readThreadSummaryResultRequestId(message);
+      const threadSummaryRequestId = readHostMessageRequestId(message);
       if (threadSummaryRequestId !== undefined) {
         const pending = this.#pendingThreadSummaryRequests.get(
           threadSummaryRequestId,
         );
-        if (pending === undefined) return;
-        this.#pendingThreadSummaryRequests.delete(threadSummaryRequestId);
-        if (!isHostEvent(message) || message.type !== "thread-summary/result") {
-          pending.reject(new Error("Malformed native Thread summary response"));
+        if (pending !== undefined) {
+          this.#pendingThreadSummaryRequests.delete(threadSummaryRequestId);
+          if (
+            !isHostEvent(message) ||
+            message.type !== "thread-summary/result"
+          ) {
+            pending.reject(
+              new Error("Malformed native Thread summary response"),
+            );
+            return;
+          }
+          if (message.error !== undefined)
+            pending.reject(new Error(message.error));
+          else pending.resolve(message.summaries);
           return;
         }
-        if (message.error !== undefined)
-          pending.reject(new Error(message.error));
-        else pending.resolve(message.summaries);
-        return;
       }
       if (!isHostEvent(message)) return;
       if (message.type === "capability/cancel") {
@@ -576,12 +582,10 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function readThreadSummaryResultRequestId(value: unknown): string | undefined {
+function readHostMessageRequestId(value: unknown): string | undefined {
   if (
     typeof value !== "object" ||
     value === null ||
-    !("type" in value) ||
-    value.type !== "thread-summary/result" ||
     !("requestId" in value) ||
     typeof value.requestId !== "string"
   ) {
