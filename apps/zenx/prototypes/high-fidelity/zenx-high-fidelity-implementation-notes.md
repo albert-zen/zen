@@ -35,12 +35,12 @@ Thread
 
 ## 3. Turn 状态投影
 
-| Turn 状态 | 默认展示 | Turn 级交互 | Agent Message |
-| --- | --- | --- | --- |
-| Running / incomplete | 完整展开历史 | 不允许整体收起 | 正常显示全部中间消息 |
-| Completed，默认 | 只显示 Final Message | 可主动展开 | 隐藏中间消息，只保留 Final |
-| Completed，用户已展开 | 历史 Items + Final Message | 可再次收起 | 中间消息恢复显示，Final 仍只出现一次 |
-| Interrupted / failed | 建议按完成态投影 | 可展开历史 | 保留明确的终止或错误结果 |
+| Turn 状态             | 默认展示                   | Turn 级交互    | Agent Message                        |
+| --------------------- | -------------------------- | -------------- | ------------------------------------ |
+| Running / incomplete  | 完整展开历史               | 不允许整体收起 | 正常显示全部中间消息                 |
+| Completed，默认       | 只显示 Final Message       | 可主动展开     | 隐藏中间消息，只保留 Final           |
+| Completed，用户已展开 | 历史 Items + Final Message | 可再次收起     | 中间消息恢复显示，Final 仍只出现一次 |
+| Interrupted / failed  | 建议按完成态投影           | 可展开历史     | 保留明确的终止或错误结果             |
 
 实现注意点：
 
@@ -63,13 +63,13 @@ Thread
 ```ts
 for (const item of turn.items) {
   if (item.kind === "thinking" || item.kind === "tool_call") {
-    appendToCurrentTraceGroup(item)
+    appendToCurrentTraceGroup(item);
   } else {
-    flushCurrentTraceGroup()
-    appendStandaloneItem(item)
+    flushCurrentTraceGroup();
+    appendStandaloneItem(item);
   }
 }
-flushCurrentTraceGroup()
+flushCurrentTraceGroup();
 ```
 
 Trace Group 摘要应由可读的行为概括和数量组成，例如“检查协议 Item 与投影约束 · 6 items”，而不是暴露内部事件名或原始 payload。
@@ -104,12 +104,12 @@ Trace Group 摘要应由可读的行为概括和数量组成，例如“检查�
 
 Composer 几何尺寸在运行和空闲状态之间保持稳定，只改变主要动作的语义。
 
-| Run 状态 | Draft | 主动作 |
-| --- | --- | --- |
-| Running | Empty | Stop |
-| Running | Non-empty | Interrupt & Send |
-| Idle | Non-empty | Send |
-| Idle | Empty | Send disabled |
+| Run 状态 | Draft     | 主动作           |
+| -------- | --------- | ---------------- |
+| Running  | Empty     | Stop             |
+| Running  | Non-empty | Interrupt & Send |
+| Idle     | Non-empty | Send             |
+| Idle     | Empty     | Send disabled    |
 
 实现注意点：
 
@@ -215,13 +215,13 @@ ThreadView
 
 当前产品原型包含以下一级或独立工作空间：
 
-| 产品面 | 现有应用依据 | 高保真原型中的投影 |
-| --- | --- | --- |
-| Agent / Thread | `ThreadView`、Composer、审批、模型切换 | 默认主页面，Projects/Inbox + Chat 两栏 |
-| Settings | `SettingsView` | Account、Models & Provider、Plugins、General 四个分区；插件统一在这里启停 |
-| Triggers plugin | `ScheduledView`、`TriggerRail` | 插件启用后贡献 Sidebar 入口；页面展示 Trigger、唤醒历史和开发信号模拟器 |
-| Rooms plugin | `RoomView` | 插件启用后贡献 Sidebar 入口；页面包含成员、消息、Source Thread 跳转和 Room Composer |
-| Plugin marketplace | Capability Registry、local package discovery | 代码保留但不进入当前评审主路径；当前只验证已安装插件的管理与贡献机制 |
+| 产品面             | 现有应用依据                                 | 高保真原型中的投影                                                                  |
+| ------------------ | -------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Agent / Thread     | `ThreadView`、Composer、审批、模型切换       | 默认主页面，Projects/Inbox + Chat 两栏                                              |
+| Settings           | `SettingsView`                               | Account、Models & Provider、Plugins、General 四个分区；插件统一在这里启停           |
+| Triggers plugin    | `ScheduledView`、`TriggerRail`               | 插件启用后贡献 Sidebar 入口；页面展示 Trigger、唤醒历史和开发信号模拟器             |
+| Rooms plugin       | `RoomView`                                   | 插件启用后贡献 Sidebar 入口；页面包含成员、消息、Source Thread 跳转和 Room Composer |
+| Plugin marketplace | Capability Registry、local package discovery | 代码保留但不进入当前评审主路径；当前只验证已安装插件的管理与贡献机制                |
 
 导航规则：
 
@@ -274,17 +274,17 @@ ThreadView
 
 ```ts
 type PluginManifest = {
-  id: string
+  id: string;
   contributions?: {
     sidebar?: Array<{
-      id: string
-      label: string
-      icon: string
-      route: string
-      order?: number
-    }>
-  }
-}
+      id: string;
+      label: string;
+      icon: string;
+      route: string;
+      order?: number;
+    }>;
+  };
+};
 ```
 
 ### Triggers plugin
