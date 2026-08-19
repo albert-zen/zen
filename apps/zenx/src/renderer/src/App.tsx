@@ -55,8 +55,8 @@ import {
   readSidebarMode,
   readThreadScope,
   threadHasActiveTurn,
-  projectThreadStartParams,
   lastUsedProjectWorkspace,
+  startProjectThread,
   threadTitle,
   writeSidebarMode,
   writeThreadScope,
@@ -393,11 +393,16 @@ export function App() {
     setThreadError(null);
     setModelUpdateError(null);
     try {
-      await window.zenx.settings.markWorkspaceUsed(workspace);
-      await loadProjects();
-      const result = await window.zenx.protocol.request(
-        "thread/start",
-        projectThreadStartParams(workspace),
+      const result = await startProjectThread(
+        workspace,
+        async (params) =>
+          await window.zenx.protocol.request("thread/start", params),
+        (startedWorkspace) => {
+          void window.zenx.settings
+            .markWorkspaceUsed(startedWorkspace)
+            .then(loadProjects)
+            .catch((error: unknown) => setRequestError(describeError(error)));
+        },
       );
       if (selectionEpoch.current !== epoch) return;
       selectedThreadIdRef.current = result.thread.id;

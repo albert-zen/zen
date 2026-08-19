@@ -68,9 +68,6 @@ export class ZenXSettingsService {
     }
     const configureWorkspace = environment.ZENX_CWD !== undefined;
     const legacy = resolveZenXHostConfig(environment);
-    for (const variable of legacy.secretEnvironmentVariables ?? []) {
-      delete environment[variable];
-    }
     const fallback = profileFromLegacy(legacy, configureWorkspace);
     if (legacy.provider.type === "openai-compatible") {
       await this.#vault.writeApiKey(legacy.provider.apiKey);

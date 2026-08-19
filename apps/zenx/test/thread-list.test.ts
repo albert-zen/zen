@@ -8,6 +8,7 @@ import {
   readThreadScope,
   projectThreadStartParams,
   readSidebarMode,
+  startProjectThread,
   lastUsedProjectWorkspace,
   threadModelIdentity,
   threadPreview,
@@ -172,6 +173,32 @@ test("blocks no-project Thread creation and binds creation after Add project", (
     }),
     "/work/selected",
   );
+});
+
+test("records last-used only after Project Thread creation succeeds", async () => {
+  const remembered: string[] = [];
+  await assert.rejects(
+    startProjectThread(
+      "/work/failing",
+      async () => {
+        throw new Error("start failed");
+      },
+      (workspace) => remembered.push(workspace),
+    ),
+    /start failed/u,
+  );
+  assert.equal(remembered.length, 0);
+
+  const result = await startProjectThread(
+    "/work/created",
+    async (params) => ({ id: "thread-created", ...params }),
+    (workspace) => remembered.push(workspace),
+  );
+  assert.deepEqual(result, {
+    id: "thread-created",
+    cwd: "/work/created",
+  });
+  assert.deepEqual(remembered, ["/work/created"]);
 });
 
 test("presents trigger wakeups without leaking raw system prompts", () => {

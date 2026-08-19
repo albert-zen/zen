@@ -51,6 +51,16 @@ export function projectThreadStartParams(workspace: string | null): {
   return { cwd: workspace };
 }
 
+export async function startProjectThread<T>(
+  workspace: string,
+  start: (params: { cwd: string }) => Promise<T>,
+  onStarted: (workspace: string) => void,
+): Promise<T> {
+  const result = await start(projectThreadStartParams(workspace));
+  onStarted(workspace);
+  return result;
+}
+
 export function readSidebarMode(
   storage: Pick<SidebarStorage, "getItem">,
 ): SidebarMode {

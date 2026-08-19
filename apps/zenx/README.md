@@ -65,6 +65,12 @@ Packaging does not migrate, delete, or redirect either profile. Pass
 `--user-data-dir=<new-path>` when you deliberately need an isolated profile for
 testing; never point that option at an existing browser or ZenX profile.
 
+The Windows packaged Project acceptance (`smoke:windows-projects`) launches
+the real packaged ZenX shell and drives Add Project, default selection,
+removal, and restart through a loopback-scoped renderer debugger while WinApp
+CLI verifies that no native application menu is exposed. It also verifies that
+removing a Project preserves marker files in its directory.
+
 ## Design reference
 
 The reviewed [high-fidelity prototype](prototypes/high-fidelity/README.md) is a
