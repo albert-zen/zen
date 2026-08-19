@@ -152,6 +152,19 @@ jobs:
             throw "Reusable apps/zenx/out no longer contains the provider manifest placeholder"
           }
 
+  zenx-windows-project-workspace-smoke:
+    name: ZenX Windows packaged Project workspace smoke
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm --workspace apps/zenx run smoke:windows-projects
+
   zenx-windows-user-browser-smoke:
     name: ZenX Windows attached user-browser smoke
     runs-on: windows-latest

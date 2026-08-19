@@ -33,6 +33,11 @@ import type {
   NativeThreadSummary,
   ThreadSummaryListOptions,
 } from "../../../../../src/thread-summary.js";
+import type {
+  DirectoryBrowserSnapshot,
+  DirectoryListing,
+} from "../../main/directory-browser.js";
+import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 
 declare global {
   interface Window {
@@ -68,12 +73,23 @@ declare global {
           options?: ThreadSummaryListOptions,
         ): Promise<NativeThreadSummary[]>;
       };
+      projects: {
+        get(
+          options?: ThreadSummaryListOptions,
+        ): Promise<ZenXProjectProjectionSnapshot>;
+      };
       settings: {
         get(): Promise<PublicHostSettings>;
         save(
           profile: ZenXHostProfile,
           apiKey?: string,
         ): Promise<PublicHostSettings>;
+        addWorkspace(workspace: string): Promise<PublicHostSettings>;
+        removeWorkspace(workspace: string): Promise<PublicHostSettings>;
+        setDefaultWorkspace(workspace: string): Promise<PublicHostSettings>;
+        markWorkspaceUsed(workspace: string): Promise<PublicHostSettings>;
+        getDirectoryBrowser(): Promise<DirectoryBrowserSnapshot>;
+        listDirectory(directory: string): Promise<DirectoryListing>;
         loginSubscription(): Promise<PublicHostSettings>;
         submitManualCode(code: string): Promise<void>;
         logoutSubscription(): Promise<PublicHostSettings>;

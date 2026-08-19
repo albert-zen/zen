@@ -1,5 +1,6 @@
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { Thread } from "../../protocol-client/index.js";
+import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 
 export type SidebarMode = "inbox" | "projects";
 export type ThreadScope = "active" | "archived";
@@ -19,11 +20,45 @@ export interface ProjectGroup {
   key: string;
   label: string;
   threads: NativeThreadSummary[];
+  workspace: string | null;
+  configured: boolean;
+  isDefault: boolean;
 }
 
 export interface ThreadModelIdentity {
   label: string;
   providerKind: "openai" | "anthropic" | "google" | "local" | "generic";
+}
+
+export function lastUsedProjectWorkspace(
+  projection: ZenXProjectProjectionSnapshot,
+): string | null {
+  if (projection.lastUsedWorkspace === null) return null;
+  return (
+    projection.projects.find(
+      (project) =>
+        project.configured &&
+        project.workspace === projection.lastUsedWorkspace,
+    )?.workspace ?? null
+  );
+}
+
+export function projectThreadStartParams(workspace: string | null): {
+  cwd: string;
+} {
+  if (workspace === null)
+    throw new Error("Add a Project before creating a Thread");
+  return { cwd: workspace };
+}
+
+export async function startProjectThread<T>(
+  workspace: string,
+  start: (params: { cwd: string }) => Promise<T>,
+  onStarted: (workspace: string) => void,
+): Promise<T> {
+  const result = await start(projectThreadStartParams(workspace));
+  onStarted(workspace);
+  return result;
 }
 
 export function readSidebarMode(
@@ -118,28 +153,41 @@ export function deriveInboxSections(
 
 export function deriveProjectGroups(
   threads: readonly NativeThreadSummary[],
+  projection: ZenXProjectProjectionSnapshot,
 ): ProjectGroup[] {
-  const groups = new Map<string, NativeThreadSummary[]>();
-  for (const thread of sortByRecency(threads)) {
-    const cwd =
-      thread.status === "systemError" ? "" : thread.currentMetadata.cwd;
-    const key = cwd.length === 0 ? "__unavailable__" : cwd;
-    const list = groups.get(key) ?? [];
-    list.push(thread);
-    groups.set(key, list);
-  }
-  return [...groups.entries()]
-    .map(([key, groupedThreads]) => ({
-      key,
-      label:
-        key === "__unavailable__" ? "Unavailable journals" : projectLabel(key),
-      threads: groupedThreads,
-    }))
-    .sort((left, right) => {
-      if (left.key === "__unavailable__") return 1;
-      if (right.key === "__unavailable__") return -1;
-      return left.label.localeCompare(right.label);
+  const byId = new Map(threads.map((thread) => [thread.threadId, thread]));
+  const groups: ProjectGroup[] = projection.projects.map((project) => ({
+    key: project.key,
+    label: projectLabel(project.workspace),
+    workspace: project.workspace,
+    configured: project.configured,
+    isDefault: project.isDefault,
+    threads: sortByRecency(
+      project.threadIds.flatMap((threadId) => {
+        const thread = byId.get(threadId);
+        return thread === undefined ? [] : [thread];
+      }),
+    ),
+  }));
+  groups.sort(
+    (left, right) =>
+      left.label.localeCompare(right.label) ||
+      left.key.localeCompare(right.key),
+  );
+  const unavailable = projection.unavailableThreadIds.flatMap((threadId) => {
+    const thread = byId.get(threadId);
+    return thread === undefined ? [] : [thread];
+  });
+  if (unavailable.length > 0)
+    groups.push({
+      key: "__unavailable__",
+      label: "Unavailable journals",
+      workspace: null,
+      configured: false,
+      isDefault: false,
+      threads: unavailable,
     });
+  return groups;
 }
 
 export function threadTitle(thread: NativeThreadSummary): string {

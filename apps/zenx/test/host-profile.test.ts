@@ -23,6 +23,8 @@ const profile = {
   titleModel: "gpt-5.6-luna",
   models: ["qwen3", "deepseek-r1"],
   workspace: path.join(os.tmpdir(), "workspace"),
+  workspaces: [path.join(os.tmpdir(), "workspace")],
+  lastUsedWorkspace: null,
   approvalPolicy: "always" as const,
 };
 
@@ -34,11 +36,16 @@ test("round-trips credential-free host settings and builds the ModelCatalog conf
     );
     await store.write(profile);
     const read = await store.read({ ...profile, defaultModel: "unused" });
-    assert.deepEqual(read, profile);
+    assert.deepEqual(read, {
+      ...profile,
+      workspace: path.resolve(profile.workspace),
+      workspaces: [path.resolve(profile.workspace)],
+    });
     assert.deepEqual(
       hostConfigFromProfile(read, {
         dataDirectory: path.join(os.tmpdir(), "data"),
         subscriptionProfilePath: path.join(os.tmpdir(), "auth"),
+        fallbackWorkspace: path.join(os.tmpdir(), "fallback"),
         apiKey: "secret",
       }).models,
       ["qwen3", "deepseek-r1"],
@@ -68,8 +75,16 @@ test("rejects embedded URL credentials and missing default models", () => {
 });
 
 test("defaults legacy profiles to the independent Luna title model", () => {
-  const { titleModel: _titleModel, ...legacy } = profile;
-  assert.equal(validateHostProfile(legacy).titleModel, "gpt-5.6-luna");
+  const {
+    titleModel: _titleModel,
+    workspaces: _workspaces,
+    lastUsedWorkspace: _lastUsedWorkspace,
+    ...legacy
+  } = profile;
+  const validated = validateHostProfile(legacy);
+  assert.equal(validated.titleModel, "gpt-5.6-luna");
+  assert.deepEqual(validated.workspaces, [path.resolve(profile.workspace)]);
+  assert.equal(validated.lastUsedWorkspace, null);
 });
 
 test("reports a corrupt persisted host profile instead of silently replacing it", async () => {

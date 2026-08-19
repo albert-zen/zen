@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
 import type { Thread } from "../../protocol-client/index.js";
+import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import {
@@ -22,7 +23,10 @@ interface SidebarProps {
   onClose(): void;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
   onModeChange(mode: SidebarMode): void;
-  onNewThread(): void;
+  onNewThread(workspace?: string): void;
+  onAddProject(): void;
+  onRemoveProject(workspace: string): void;
+  onSetDefaultProject(workspace: string): void;
   onOpenContribution(page: "triggers" | "rooms"): void;
   onOpenSettings(): void;
   onRetryThreads(): void;
@@ -38,6 +42,7 @@ interface SidebarProps {
   threadError: string | null;
   threadLoading: boolean;
   threadScope: ThreadScope;
+  projects: ZenXProjectProjectionSnapshot;
   threads: readonly NativeThreadSummary[];
   triggerSnapshot: TriggerSnapshot;
 }
@@ -49,6 +54,9 @@ export function Sidebar({
   onChangeThreadLifecycle,
   onModeChange,
   onNewThread,
+  onAddProject,
+  onRemoveProject,
+  onSetDefaultProject,
   onOpenContribution,
   onOpenSettings,
   onRetryThreads,
@@ -64,9 +72,23 @@ export function Sidebar({
   threadError,
   threadLoading,
   threadScope,
+  projects,
   threads,
   triggerSnapshot,
 }: SidebarProps) {
+  const [projectsOpen, setProjectsOpen] = useState(true);
+  const [projectChooserOpen, setProjectChooserOpen] = useState(false);
+  const lastUsedProject =
+    projects.lastUsedWorkspace === null
+      ? undefined
+      : projects.projects.find(
+          (project) =>
+            project.configured &&
+            project.workspace === projects.lastUsedWorkspace,
+        );
+  const configuredProjects = projects.projects.filter(
+    (project) => project.configured,
+  );
   const watchingThreadIds = useMemo(
     () =>
       new Set(
@@ -107,14 +129,6 @@ export function Sidebar({
                   ) : null}
                 </button>
               ) : null}
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="New thread"
-                onClick={onNewThread}
-              >
-                <Icon name="compose" />
-              </button>
             </div>
           </div>
 
@@ -170,15 +184,90 @@ export function Sidebar({
             ))}
           </div>
 
+          <div className="new-thread-control">
+            <button
+              className="new-thread-action"
+              type="button"
+              aria-expanded={
+                configuredProjects.length > 0 && lastUsedProject === undefined
+                  ? projectChooserOpen
+                  : undefined
+              }
+              onClick={() => {
+                if (configuredProjects.length === 0) {
+                  onAddProject();
+                  return;
+                }
+                if (lastUsedProject !== undefined) {
+                  onNewThread(lastUsedProject.workspace);
+                  return;
+                }
+                setProjectChooserOpen((value) => !value);
+              }}
+            >
+              <Icon name="compose" size={14} />
+              <span>New thread</span>
+              <small title={lastUsedProject?.workspace}>
+                {lastUsedProject === undefined
+                  ? configuredProjects.length === 0
+                    ? "Add project first"
+                    : "Choose project"
+                  : projectLabelForSidebar(lastUsedProject.workspace)}
+              </small>
+            </button>
+            {configuredProjects.length > 0 &&
+            lastUsedProject === undefined &&
+            projectChooserOpen ? (
+              <div className="new-thread-project-chooser">
+                {configuredProjects.map((project) => (
+                  <button
+                    key={project.key}
+                    type="button"
+                    title={project.workspace}
+                    onClick={() => {
+                      setProjectChooserOpen(false);
+                      onNewThread(project.workspace);
+                    }}
+                  >
+                    <Icon name="folder" size={13} />
+                    <span>{projectLabelForSidebar(project.workspace)}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
           <div className="sidebar-view-head">
-            <strong>
-              {threadScope === "archived"
-                ? "Archived"
-                : mode === "inbox"
-                  ? "Inbox"
-                  : "Projects"}
-            </strong>
-            <span>{threads.length}</span>
+            {threadScope === "archived" ? (
+              <strong>Archived</strong>
+            ) : mode === "projects" ? (
+              <button
+                className="projects-section-toggle"
+                type="button"
+                aria-expanded={projectsOpen}
+                onClick={() => setProjectsOpen((value) => !value)}
+              >
+                <Icon
+                  className={projectsOpen ? "expanded" : undefined}
+                  name="chevron-down"
+                  size={13}
+                />
+                <strong>Projects</strong>
+              </button>
+            ) : (
+              <strong>Inbox</strong>
+            )}
+            {mode === "projects" ? (
+              <button
+                className="sidebar-inline-action"
+                type="button"
+                onClick={onAddProject}
+              >
+                Add project
+              </button>
+            ) : (
+              <span>{threads.length}</span>
+            )}
           </div>
         </header>
 
@@ -202,11 +291,16 @@ export function Sidebar({
                 Try again
               </button>
             </div>
-          ) : threads.length === 0 ? (
+          ) : threadScope === "archived" && threads.length === 0 ? (
             <p className="sidebar-empty">
-              {threadScope === "archived"
-                ? "No archived Threads yet. Archived conversations stay safe here until you restore them."
-                : "Your conversations will appear here."}
+              No archived Threads yet. Archived conversations stay safe here
+              until you restore them.
+            </p>
+          ) : threadScope === "active" &&
+            mode === "inbox" &&
+            threads.length === 0 ? (
+            <p className="sidebar-empty">
+              Your conversations will appear here.
             </p>
           ) : threadScope === "active" && mode === "inbox" ? (
             <InboxView
@@ -219,8 +313,12 @@ export function Sidebar({
               liveThread={liveThread}
               watchingThreadIds={watchingThreadIds}
             />
-          ) : (
+          ) : !projectsOpen ? null : (
             <ProjectsView
+              projects={projects}
+              onNewThread={onNewThread}
+              onRemoveProject={onRemoveProject}
+              onSetDefaultProject={onSetDefaultProject}
               onSelectThread={onSelectThread}
               onChangeThreadLifecycle={onChangeThreadLifecycle}
               onRenameThread={onRenameThread}
@@ -306,6 +404,10 @@ function InboxView({
 }
 
 function ProjectsView({
+  projects,
+  onNewThread,
+  onRemoveProject,
+  onSetDefaultProject,
   threads,
   selectedThreadId,
   onSelectThread,
@@ -315,6 +417,10 @@ function ProjectsView({
   liveThread,
   watchingThreadIds,
 }: {
+  projects: ZenXProjectProjectionSnapshot;
+  onNewThread(workspace?: string): void;
+  onRemoveProject(workspace: string): void;
+  onSetDefaultProject(workspace: string): void;
   threads: readonly NativeThreadSummary[];
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
@@ -324,13 +430,28 @@ function ProjectsView({
   liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
 }) {
-  return deriveProjectGroups(threads).map((group) => (
+  if (
+    projects.projects.length === 0 &&
+    projects.unavailableThreadIds.length === 0
+  ) {
+    return (
+      <div className="projects-zero-state">
+        <Icon name="folder" size={18} />
+        <strong>No projects yet</strong>
+        <p>Add a folder before starting a Thread.</p>
+      </div>
+    );
+  }
+  return deriveProjectGroups(threads, projects).map((group) => (
     <ProjectRows
       group={group}
       key={group.key}
       liveThread={liveThread}
       onChangeThreadLifecycle={onChangeThreadLifecycle}
       onRenameThread={onRenameThread}
+      onNewThread={onNewThread}
+      onRemoveProject={onRemoveProject}
+      onSetDefaultProject={onSetDefaultProject}
       onSelectThread={onSelectThread}
       pendingApprovalThreadIds={pendingApprovalThreadIds}
       selectedThreadId={selectedThreadId}
@@ -339,8 +460,16 @@ function ProjectsView({
   ));
 }
 
+function projectLabelForSidebar(workspace: string): string {
+  const normalized = workspace.replace(/[\\/]+$/u, "");
+  return normalized.split(/[\\/]/u).filter(Boolean).at(-1) ?? workspace;
+}
+
 function ProjectRows({
   group,
+  onNewThread,
+  onRemoveProject,
+  onSetDefaultProject,
   selectedThreadId,
   onSelectThread,
   onChangeThreadLifecycle,
@@ -350,6 +479,9 @@ function ProjectRows({
   watchingThreadIds,
 }: {
   group: ReturnType<typeof deriveProjectGroups>[number];
+  onNewThread(workspace?: string): void;
+  onRemoveProject(workspace: string): void;
+  onSetDefaultProject(workspace: string): void;
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
@@ -361,37 +493,71 @@ function ProjectRows({
   const [open, setOpen] = useState(true);
   return (
     <section className="project-group">
-      <button
-        className="project-header"
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span>
+      <div className="project-header">
+        <button
+          className="project-toggle"
+          type="button"
+          aria-expanded={open}
+          title={group.workspace ?? undefined}
+          onClick={() => setOpen((value) => !value)}
+        >
           <Icon name="folder" size={14} />
           <span>{group.label}</span>
-        </span>
-        <Icon
-          className={open ? "expanded" : undefined}
-          name="chevron-down"
-          size={14}
-        />
-      </button>
-      {open
-        ? group.threads.map((thread) => (
-            <ThreadRow
-              hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
-              key={thread.threadId}
-              onChangeThreadLifecycle={onChangeThreadLifecycle}
-              onRenameThread={onRenameThread}
-              onSelectThread={onSelectThread}
-              pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
-              selected={thread.threadId === selectedThreadId}
-              thread={thread}
-              watching={watchingThreadIds.has(thread.threadId)}
-            />
-          ))
-        : null}
+          {group.isDefault ? <small>Default</small> : null}
+          <Icon
+            className={open ? "expanded" : undefined}
+            name="chevron-down"
+            size={14}
+          />
+        </button>
+        {group.workspace === null || !group.configured ? null : (
+          <div className="project-actions">
+            <button
+              type="button"
+              aria-label={`New thread in ${group.label}`}
+              title="New thread here"
+              onClick={() => onNewThread(group.workspace!)}
+            >
+              <Icon name="compose" size={13} />
+            </button>
+            {!group.isDefault ? (
+              <button
+                type="button"
+                aria-label={`Make ${group.label} the default project`}
+                title="Set as default"
+                onClick={() => onSetDefaultProject(group.workspace!)}
+              >
+                <Icon name="check" size={13} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              aria-label={`Remove ${group.label} from ZenX`}
+              title="Remove from ZenX (files stay on disk)"
+              onClick={() => onRemoveProject(group.workspace!)}
+            >
+              <Icon name="x" size={13} />
+            </button>
+          </div>
+        )}
+      </div>
+      {open && group.threads.length === 0 ? (
+        <p className="project-empty">No threads yet.</p>
+      ) : open ? (
+        group.threads.map((thread) => (
+          <ThreadRow
+            hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
+            key={thread.threadId}
+            onChangeThreadLifecycle={onChangeThreadLifecycle}
+            onRenameThread={onRenameThread}
+            onSelectThread={onSelectThread}
+            pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
+            selected={thread.threadId === selectedThreadId}
+            thread={thread}
+            watching={watchingThreadIds.has(thread.threadId)}
+          />
+        ))
+      ) : null}
     </section>
   );
 }

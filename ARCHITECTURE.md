@@ -17,6 +17,14 @@
   原生 summary 映射为兼容的 Codex Thread DTO，不反向定义 Zen 产品模型。
 - **ZenXThreadSummaryAdapter** — ZenX Electron main 通过既有 host-local 进程边界查询
   ZAS 原生 summary，并以 typed IPC 暴露给产品层，不拥有 Thread 语义或新增 wire method。
+- **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS
+  原生 Thread cwd 投影为 UI 和 Agent self-control 共用的 Project 读模型；Windows 路径折叠大小写，
+  POSIX 路径保留大小写，最近使用项由同一 host profile 持有且失效时不隐式回退，
+  它不拥有 Project、Thread 或 journal 状态。
+- **ZenXDirectoryBrowser** — ZenX main 把 home、documents、Windows drive / POSIX root 与
+  canonical 只读目录枚举投影给内部 picker；symlink/junction 只解析为目录目标，不修改文件系统。
+- **ZenXApplicationMenuPolicy** — ZenX 在 Windows/Linux 移除 Electron 默认菜单，在 macOS
+  只保留系统合规的应用、编辑与窗口命令，不由菜单引入第二套产品导航。
 - **SoftSteerDeliveryAnchor** — 当前执行在每次模型采样前设置的临时 response id；
   steer 的 canonical `user_message.deliveryAfter` 持久化这个排序锚点，使下一次
   采样能从 ItemList 重建正确上下文，而不形成第二份 mailbox 或会话状态。

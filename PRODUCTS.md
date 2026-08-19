@@ -48,6 +48,12 @@ workspace 与 Thread 实际 cwd 派生；Thread 的创建、读取、状态、�
 进入各自权威 ItemList，不另建委派记录、消息队列或 transcript；互相监听
 `turn_completed` 后继续发起普通 Turn 是允许的。
 
+Project/Workspace 由 main 中同一个 ZenX 投影实例同时服务 renderer 与 Agent 自控工具；
+Add Project 使用只读的内部目录 picker。Windows/Linux 不安装 Electron 默认菜单，macOS
+只保留系统合规的最小 native menu；这些都属于桌面产品外层，不改变 Core 或 wire protocol。
+顶部 New thread 只使用 host profile 中仍有效的最近使用 workspace；没有记录时由用户明确
+选择 Project，不把 Documents、进程 cwd 或默认 Project 当作隐式替代。
+
 固定版本 T3 Code 仍是机会型兼容目标：它可以通过协议直接把 Zen 当 provider
 驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。
 

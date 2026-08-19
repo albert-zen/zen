@@ -5,6 +5,7 @@ type IconName =
   | "archive"
   | "check"
   | "chevron-down"
+  | "chevron-left"
   | "chevron-right"
   | "compose"
   | "folder"
@@ -45,6 +46,7 @@ const paths: Record<IconName, ReactNode> = {
   ),
   check: <path d="m2.4 8.4 3.4 3.4 7.8-7.8" />,
   "chevron-down": <path d="m3.6 6 4.4 4.4L12.4 6" />,
+  "chevron-left": <path d="m10 3.6-4.4 4.4 4.4 4.4" />,
   "chevron-right": <path d="m6 3.6 4.4 4.4L6 12.4" />,
   compose: (
     <>
@@ -104,8 +106,8 @@ const paths: Record<IconName, ReactNode> = {
   ),
   settings: (
     <>
-      <circle cx="8" cy="8" r="2.2" />
-      <path d="M8 1.8v1.3M8 12.9v1.3M1.8 8h1.3M12.9 8h1.3M3.6 3.6l.9.9M11.5 11.5l.9.9M12.4 3.6l-.9.9M4.5 11.5l-.9.9" />
+      <circle cx="8" cy="8" r="2.25" />
+      <path d="m6.9 1.8.35 1.35a5.1 5.1 0 0 1 1.5 0l.35-1.35 1.55.65-.7 1.2c.42.3.78.66 1.08 1.08l1.2-.7.65 1.55-1.35.35a5.1 5.1 0 0 1 0 1.5l1.35.35-.65 1.55-1.2-.7c-.3.42-.66.78-1.08 1.08l.7 1.2-1.55.65-.35-1.35a5.1 5.1 0 0 1-1.5 0l-.35 1.35-1.55-.65.7-1.2A5.3 5.3 0 0 1 4.97 8.7l-1.2.7-.65-1.55 1.35-.35a5.1 5.1 0 0 1 0-1.5l-1.35-.35.65-1.55 1.2.7c.3-.42.66-.78 1.08-1.08l-.7-1.2Z" />
     </>
   ),
   search: (

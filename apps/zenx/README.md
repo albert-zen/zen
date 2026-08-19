@@ -1,5 +1,21 @@
 # ZenX
 
+## Desktop shell policy
+
+Projects are ZenX host-profile workspace entries grouped with ZAS native Thread
+`cwd`; they are not Core runtime objects. Add Project uses ZenX's read-only
+directory picker. Removing an entry only changes the host profile and never
+deletes the directory, its files, or Thread journals.
+New Thread always carries an explicit configured Project `cwd`. The top-level
+action reuses the last Project used for a Thread; if that record is missing or
+the Project was removed, ZenX asks the user to choose and never falls back to
+Documents or the process working directory.
+
+Packaged Windows and Linux builds install no application menu, removing
+Electron's default File/Edit/View/Window strip. macOS keeps a minimal native
+application, edit, and window menu so standard system roles and text editing
+shortcuts remain available; ZenX product navigation stays in the renderer.
+
 ZenX is Zen's in-development Electron client. It hosts the same App Server used
 by the CLI and keeps desktop-only configuration and orchestration outside Zen
 Core.
@@ -8,7 +24,8 @@ Thread list product data is defined by ZAS's native `ThreadSummary` /
 `CurrentMetadata` read model. Electron main queries it through the existing
 host-local process boundary and preload exposes a typed IPC method. Codex Thread
 DTOs remain compatibility-only protocol types; they do not define ZenX's product
-model.
+model. The renderer and Agent self-control consume the same main-process Project
+projection instance.
 
 The renderer offers explicit Active and Archived Thread views. Active Threads
 can be renamed or archived, and archived Threads can be opened and unarchived.
@@ -47,6 +64,15 @@ AppUserModelID; the macOS packager default bundle ID is `com.electron.zenx`.
 Packaging does not migrate, delete, or redirect either profile. Pass
 `--user-data-dir=<new-path>` when you deliberately need an isolated profile for
 testing; never point that option at an existing browser or ZenX profile.
+
+The Windows packaged Project acceptance (`smoke:windows-projects`) launches
+the real packaged ZenX shell and drives Add Project, default selection,
+removal, and restart through a main-process acceptance hook that executes only
+when its explicit isolated config environment parameter is present. The main
+process consumes and removes that parameter before starting any child host. The
+hook uses the real renderer and IPC without opening a debug port, verifies the
+native application menu is absent, and confirms that removal preserves Project
+marker files.
 
 ## Design reference
 

@@ -10,6 +10,7 @@ import type {
   ZenXPluginSnapshot,
 } from "../../main/capabilities/types.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
+import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
@@ -37,6 +38,7 @@ import {
   type ComposerState,
 } from "./composer-state.js";
 import { Icon } from "./icons.js";
+import { DirectoryPicker } from "./DirectoryPicker.js";
 import {
   applySettingsMirror,
   canChangeThreadModel,
@@ -53,6 +55,8 @@ import {
   readSidebarMode,
   readThreadScope,
   threadHasActiveTurn,
+  lastUsedProjectWorkspace,
+  startProjectThread,
   threadTitle,
   writeSidebarMode,
   writeThreadScope,
@@ -67,11 +71,13 @@ type ProductPage = "agent" | "settings" | "triggers" | "rooms";
 
 export function App() {
   const selectionEpoch = useRef(0);
+  const projectLoadEpoch = useRef(0);
   const selectedThreadIdRef = useRef<string | null>(null);
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [triggerSnapshot, setTriggerSnapshot] = useState<TriggerSnapshot>({
     triggers: [],
@@ -100,6 +106,11 @@ export function App() {
     active: string | null;
     archived: string | null;
   }>({ active: null, archived: null });
+  const [projects, setProjects] = useState<ZenXProjectProjectionSnapshot>({
+    projects: [],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  });
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
@@ -127,6 +138,7 @@ export function App() {
       return "active";
     }
   });
+  const threadScopeRef = useRef(threadScope);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [threadLifecycleBusy, setThreadLifecycleBusy] = useState(false);
   const [threadLifecycleError, setThreadLifecycleError] = useState<
@@ -163,6 +175,19 @@ export function App() {
     setThreadListLoaded({ active: true, archived: true });
   };
 
+  const loadProjects = async (scope = threadScopeRef.current) => {
+    const epoch = ++projectLoadEpoch.current;
+    try {
+      const snapshot = await window.zenx.projects.get({
+        archived: scope === "archived",
+      });
+      if (projectLoadEpoch.current === epoch) setProjects(snapshot);
+    } catch (error) {
+      if (projectLoadEpoch.current === epoch)
+        setRequestError(describeError(error));
+    }
+  };
+
   const resumeThread = async (threadId: string) => {
     const epoch = ++selectionEpoch.current;
     selectedThreadIdRef.current = threadId;
@@ -183,6 +208,10 @@ export function App() {
       if (selectionEpoch.current !== epoch) return;
       setThreadDetail(result.thread);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
+      void window.zenx.settings
+        .markWorkspaceUsed(result.thread.cwd)
+        .then(() => loadProjects())
+        .catch(() => undefined);
     } catch (error) {
       if (selectionEpoch.current === epoch)
         setThreadError(describeError(error));
@@ -210,6 +239,7 @@ export function App() {
       setServerStatus(status);
       if (status.type === "ready") {
         void loadThreadSummaries();
+        void loadProjects();
         void loadModels();
         if (status.reconnected && selectedThreadIdRef.current !== null) {
           void resumeThread(selectedThreadIdRef.current);
@@ -225,6 +255,7 @@ export function App() {
           method === "item/completed"
         ) {
           void loadThreadSummaries();
+          void loadProjects();
         }
         setThreadDetail((current) =>
           current === null
@@ -263,6 +294,7 @@ export function App() {
         setServerStatus(status);
         if (status.type === "ready") {
           void loadThreadSummaries();
+          void loadProjects();
           void loadModels();
         }
       })
@@ -334,12 +366,13 @@ export function App() {
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (workspaceOpen) setWorkspaceOpen(false);
+      if (projectPickerOpen) setProjectPickerOpen(false);
+      else if (workspaceOpen) setWorkspaceOpen(false);
       else if (sidebarOpen) setSidebarOpen(false);
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [sidebarOpen, workspaceOpen]);
+  }, [projectPickerOpen, sidebarOpen, workspaceOpen]);
 
   const activeSummaries = threadSummaries.map((summary) =>
     titleSnapshot[summary.threadId]?.title === undefined
@@ -359,16 +392,28 @@ export function App() {
     ) ?? null;
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
   const pluginContributions = loadedPluginContributions(pluginSnapshot);
+  const lastUsedWorkspace = lastUsedProjectWorkspace(projects);
 
-  const newThread = async () => {
+  const newThread = async (workspace: string) => {
     const epoch = ++selectionEpoch.current;
     setThreadLoading(true);
     setThreadError(null);
     setModelUpdateError(null);
     try {
-      const result = await window.zenx.protocol.request("thread/start", {});
+      const result = await startProjectThread(
+        workspace,
+        async (params) =>
+          await window.zenx.protocol.request("thread/start", params),
+        (startedWorkspace) => {
+          void window.zenx.settings
+            .markWorkspaceUsed(startedWorkspace)
+            .then(() => loadProjects("active"))
+            .catch((error: unknown) => setRequestError(describeError(error)));
+        },
+      );
       if (selectionEpoch.current !== epoch) return;
       selectedThreadIdRef.current = result.thread.id;
+      threadScopeRef.current = "active";
       setThreadScope("active");
       try {
         writeThreadScope(window.localStorage, "active");
@@ -538,6 +583,7 @@ export function App() {
       { threadId: summary.threadId },
     );
     await loadThreadSummaries();
+    await loadProjects();
   };
 
   const changeThreadLifecycle = async () => {
@@ -549,7 +595,9 @@ export function App() {
     setThreadLifecycleError(null);
     try {
       await performThreadLifecycle(selectedSummary);
+      threadScopeRef.current = nextScope;
       setThreadScope(nextScope);
+      await loadProjects(nextScope);
       try {
         writeThreadScope(window.localStorage, nextScope);
       } catch {
@@ -578,14 +626,31 @@ export function App() {
             // The preference remains valid for this window.
           }
         }}
-        onNewThread={() => void newThread()}
+        onNewThread={(workspace) => {
+          if (workspace !== undefined) void newThread(workspace);
+        }}
+        onAddProject={() => setProjectPickerOpen(true)}
+        onRemoveProject={(workspace) => {
+          void window.zenx.settings
+            .removeWorkspace(workspace)
+            .then(async () => await loadProjects())
+            .catch((error: unknown) => setRequestError(describeError(error)));
+        }}
+        onSetDefaultProject={(workspace) => {
+          void window.zenx.settings
+            .setDefaultWorkspace(workspace)
+            .then(async () => await loadProjects())
+            .catch((error: unknown) => setRequestError(describeError(error)));
+        }}
         onOpenContribution={(target) => openPage(target)}
         onOpenSettings={() => openPage("settings")}
         onRetryThreads={() => void loadThreadSummaries(true)}
         onRenameThread={renameThread}
         onSelectThread={(threadId) => void resumeThread(threadId)}
         onThreadScopeChange={(scope) => {
+          threadScopeRef.current = scope;
           setThreadScope(scope);
+          void loadProjects(scope);
           try {
             writeThreadScope(window.localStorage, scope);
           } catch {
@@ -597,6 +662,7 @@ export function App() {
         selectedPage={page}
         selectedThreadId={selectedThreadId}
         serverReady={serverStatus.type === "ready"}
+        projects={projects}
         threadError={threadListErrors[threadScope]}
         threadLoading={!threadListLoaded[threadScope]}
         threadScope={threadScope}
@@ -653,7 +719,15 @@ export function App() {
             }}
             onModelChange={(model) => void changeModel(model)}
             onChangeThreadLifecycle={changeThreadLifecycle}
-            onNewThread={() => void newThread()}
+            hasProjects={projects.projects.some(
+              (project) => project.configured,
+            )}
+            hasLastUsedProject={lastUsedWorkspace !== null}
+            onAddProject={() => setProjectPickerOpen(true)}
+            onNewThread={() => {
+              if (lastUsedWorkspace !== null) void newThread(lastUsedWorkspace);
+              else setSidebarOpen(true);
+            }}
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
             onRename={async (title) => {
@@ -700,6 +774,20 @@ export function App() {
           thread={threadDetail}
         />
       ) : null}
+      {projectPickerOpen ? (
+        <DirectoryPicker
+          onCancel={() => setProjectPickerOpen(false)}
+          onSelect={(workspace) => {
+            void window.zenx.settings
+              .addWorkspace(workspace)
+              .then(async () => {
+                await loadProjects();
+                setProjectPickerOpen(false);
+              })
+              .catch((error: unknown) => setRequestError(describeError(error)));
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -712,6 +800,9 @@ function AgentSurface({
   modelUpdateError,
   onChangeThreadLifecycle,
   onDraftChange,
+  hasProjects,
+  hasLastUsedProject,
+  onAddProject,
   onInterrupt,
   onModelChange,
   onNewThread,
@@ -741,6 +832,9 @@ function AgentSurface({
   modelUpdateError: string | null;
   onChangeThreadLifecycle(): Promise<void>;
   onDraftChange(threadId: string, draft: string): void;
+  hasProjects: boolean;
+  hasLastUsedProject: boolean;
+  onAddProject(): void;
   onInterrupt(turnId: string): Promise<void>;
   onModelChange(model: string): void;
   onNewThread(): void;
@@ -871,9 +965,21 @@ function AgentSurface({
         />
       ) : selectedSummary === null || threadDetail === null ? (
         <EmptyState
-          title="No thread selected"
-          detail="Create a conversation to start working with ZenX."
-          action={onNewThread}
+          title={hasProjects ? "No thread selected" : "Add your first project"}
+          detail={
+            hasProjects
+              ? "Choose New thread to start working in the selected Project."
+              : "Choose a folder before ZenX creates a Thread. Your files stay where they are."
+          }
+          action={hasProjects ? onNewThread : onAddProject}
+          actionLabel={
+            hasProjects
+              ? hasLastUsedProject
+                ? "New thread"
+                : "Choose project"
+              : "Add project"
+          }
+          actionIcon={hasProjects ? "compose" : "folder"}
         />
       ) : (
         <ThreadView
@@ -1058,12 +1164,16 @@ function EmptyState({
   action,
   loading = false,
   error = false,
+  actionLabel = "New thread",
+  actionIcon = "compose",
 }: {
   title: string;
   detail: string;
   action?: () => void;
   loading?: boolean;
   error?: boolean;
+  actionLabel?: string;
+  actionIcon?: "compose" | "folder";
 }) {
   return (
     <section
@@ -1081,8 +1191,8 @@ function EmptyState({
       <p>{detail}</p>
       {action === undefined ? null : (
         <button className="primary-button" type="button" onClick={action}>
-          <Icon name="compose" />
-          New thread
+          <Icon name={actionIcon} />
+          {actionLabel}
         </button>
       )}
     </section>

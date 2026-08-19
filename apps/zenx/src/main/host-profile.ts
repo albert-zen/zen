@@ -20,7 +20,9 @@ export interface ZenXHostProfile {
   defaultModel: string;
   titleModel: string;
   models: string[];
-  workspace: string;
+  workspace: string | null;
+  workspaces: string[];
+  lastUsedWorkspace: string | null;
   approvalPolicy: "always" | "never";
 }
 
@@ -103,6 +105,15 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
   if (value.approvalPolicy !== "always" && value.approvalPolicy !== "never") {
     throw new Error("ZenX approval policy is invalid");
   }
+  const workspace =
+    value.workspace === null
+      ? null
+      : path.resolve(nonEmpty(value.workspace, "workspace"));
+  const workspaces = normalizeWorkspaces(value.workspaces, workspace);
+  const lastUsedWorkspace = normalizeLastUsedWorkspace(
+    value.lastUsedWorkspace,
+    workspaces,
+  );
   return {
     version: 1,
     onboardingComplete: value.onboardingComplete === true,
@@ -110,9 +121,46 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     defaultModel,
     titleModel,
     models,
-    workspace: path.resolve(nonEmpty(value.workspace, "workspace")),
+    workspace,
+    workspaces,
+    lastUsedWorkspace,
     approvalPolicy: value.approvalPolicy,
   };
+}
+
+function normalizeLastUsedWorkspace(
+  value: unknown,
+  workspaces: readonly string[],
+): string | null {
+  if (value === undefined || value === null) return null;
+  const key = workspaceKey(nonEmpty(value, "last used workspace"));
+  return (
+    workspaces.find((workspace) => workspaceKey(workspace) === key) ?? null
+  );
+}
+
+function normalizeWorkspaces(
+  value: unknown,
+  workspace: string | null,
+): string[] {
+  if (value !== undefined && !Array.isArray(value)) {
+    throw new Error("ZenX workspace list is invalid");
+  }
+  const candidates = ((value ?? []) as unknown[]).map((entry) =>
+    path.resolve(nonEmpty(entry, "workspace")),
+  );
+  if (workspace !== null) candidates.unshift(workspace);
+  const unique = new Map<string, string>();
+  for (const candidate of candidates) {
+    const key = workspaceKey(candidate);
+    if (!unique.has(key)) unique.set(key, candidate);
+  }
+  return [...unique.values()];
+}
+
+export function workspaceKey(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 export function hostConfigFromProfile(
@@ -120,11 +168,12 @@ export function hostConfigFromProfile(
   options: {
     dataDirectory: string;
     subscriptionProfilePath: string;
+    fallbackWorkspace: string;
     apiKey?: string;
   },
 ): ZenXHostConfig {
   const common = {
-    cwd: profile.workspace,
+    cwd: profile.workspace ?? path.resolve(options.fallbackWorkspace),
     dataDirectory: options.dataDirectory,
     model: profile.defaultModel,
     models: profile.models,
