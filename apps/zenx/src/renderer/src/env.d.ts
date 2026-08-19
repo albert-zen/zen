@@ -74,7 +74,9 @@ declare global {
         ): Promise<NativeThreadSummary[]>;
       };
       projects: {
-        get(): Promise<ZenXProjectProjectionSnapshot>;
+        get(
+          options?: ThreadSummaryListOptions,
+        ): Promise<ZenXProjectProjectionSnapshot>;
       };
       settings: {
         get(): Promise<PublicHostSettings>;

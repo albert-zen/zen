@@ -71,6 +71,7 @@ type ProductPage = "agent" | "settings" | "triggers" | "rooms";
 
 export function App() {
   const selectionEpoch = useRef(0);
+  const projectLoadEpoch = useRef(0);
   const selectedThreadIdRef = useRef<string | null>(null);
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
   const [page, setPage] = useState<ProductPage>("agent");
@@ -137,6 +138,7 @@ export function App() {
       return "active";
     }
   });
+  const threadScopeRef = useRef(threadScope);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [threadLifecycleBusy, setThreadLifecycleBusy] = useState(false);
   const [threadLifecycleError, setThreadLifecycleError] = useState<
@@ -173,11 +175,16 @@ export function App() {
     setThreadListLoaded({ active: true, archived: true });
   };
 
-  const loadProjects = async () => {
+  const loadProjects = async (scope = threadScopeRef.current) => {
+    const epoch = ++projectLoadEpoch.current;
     try {
-      setProjects(await window.zenx.projects.get());
+      const snapshot = await window.zenx.projects.get({
+        archived: scope === "archived",
+      });
+      if (projectLoadEpoch.current === epoch) setProjects(snapshot);
     } catch (error) {
-      setRequestError(describeError(error));
+      if (projectLoadEpoch.current === epoch)
+        setRequestError(describeError(error));
     }
   };
 
@@ -203,7 +210,7 @@ export function App() {
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
       void window.zenx.settings
         .markWorkspaceUsed(result.thread.cwd)
-        .then(loadProjects)
+        .then(() => loadProjects())
         .catch(() => undefined);
     } catch (error) {
       if (selectionEpoch.current === epoch)
@@ -400,12 +407,13 @@ export function App() {
         (startedWorkspace) => {
           void window.zenx.settings
             .markWorkspaceUsed(startedWorkspace)
-            .then(loadProjects)
+            .then(() => loadProjects("active"))
             .catch((error: unknown) => setRequestError(describeError(error)));
         },
       );
       if (selectionEpoch.current !== epoch) return;
       selectedThreadIdRef.current = result.thread.id;
+      threadScopeRef.current = "active";
       setThreadScope("active");
       try {
         writeThreadScope(window.localStorage, "active");
@@ -575,6 +583,7 @@ export function App() {
       { threadId: summary.threadId },
     );
     await loadThreadSummaries();
+    await loadProjects();
   };
 
   const changeThreadLifecycle = async () => {
@@ -586,7 +595,9 @@ export function App() {
     setThreadLifecycleError(null);
     try {
       await performThreadLifecycle(selectedSummary);
+      threadScopeRef.current = nextScope;
       setThreadScope(nextScope);
+      await loadProjects(nextScope);
       try {
         writeThreadScope(window.localStorage, nextScope);
       } catch {
@@ -637,7 +648,9 @@ export function App() {
         onRenameThread={renameThread}
         onSelectThread={(threadId) => void resumeThread(threadId)}
         onThreadScopeChange={(scope) => {
+          threadScopeRef.current = scope;
           setThreadScope(scope);
+          void loadProjects(scope);
           try {
             writeThreadScope(window.localStorage, scope);
           } catch {

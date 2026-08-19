@@ -310,8 +310,10 @@ function installProtocolIpc(
     async (_event, options: unknown) =>
       await manager.listThreadSummaries(readThreadSummaryListOptions(options)),
   );
-  ipcMain.handle(ipcChannels.projectsGet, async () => {
-    const threads = await manager.listThreadSummaries({});
+  ipcMain.handle(ipcChannels.projectsGet, async (_event, options: unknown) => {
+    const threads = await manager.listThreadSummaries(
+      readThreadSummaryListOptions(options),
+    );
     return projects.project(
       threads.map((thread) => ({
         id: thread.threadId,
