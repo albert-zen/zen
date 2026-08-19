@@ -41,6 +41,7 @@ import {
   type ClientRequestResults,
   type ServerNotificationParams,
 } from "../src/protocol-client/index.js";
+import { ZenXProjectProjection } from "../src/main/project-projection.js";
 
 const SELF_CONTROL_TOOL_NAMES = [
   "zenx_projects_list",
@@ -365,7 +366,7 @@ test("bounded reads omit command output and truncate message text", async () => 
   const hugeMessage = "long-message".repeat(500);
   const secretOutput = "secret-like-output".repeat(500);
   const port: AppServerRequestPort = {
-    configuredWorkspace: "/tmp/work",
+    projectProjection: new ZenXProjectProjection(),
     async request<M extends ClientRequestMethod>(
       method: M,
       _params: ClientRequestParams[M],

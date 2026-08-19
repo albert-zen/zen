@@ -36,6 +36,11 @@ import type {
   NativeThreadSummary,
   ThreadSummaryListOptions,
 } from "../../../../src/thread-summary.js";
+import type {
+  DirectoryBrowserSnapshot,
+  DirectoryListing,
+} from "../main/directory-browser.js";
+import type { ZenXProjectProjectionSnapshot } from "../main/project-projection.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -108,6 +113,10 @@ contextBridge.exposeInMainWorld("zenx", {
     ): Promise<NativeThreadSummary[]> =>
       await ipcRenderer.invoke(ipcChannels.threadSummariesList, options),
   },
+  projects: {
+    get: async (): Promise<ZenXProjectProjectionSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.projectsGet),
+  },
   settings: {
     get: async (): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.settingsGet),
@@ -116,6 +125,20 @@ contextBridge.exposeInMainWorld("zenx", {
       apiKey?: string,
     ): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.settingsSave, profile, apiKey),
+    addWorkspace: async (workspace: string): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceAdd, workspace),
+    removeWorkspace: async (workspace: string): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceRemove, workspace),
+    setDefaultWorkspace: async (
+      workspace: string,
+    ): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceDefault, workspace),
+    markWorkspaceUsed: async (workspace: string): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(ipcChannels.workspaceUse, workspace),
+    getDirectoryBrowser: async (): Promise<DirectoryBrowserSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.directorySnapshot),
+    listDirectory: async (directory: string): Promise<DirectoryListing> =>
+      await ipcRenderer.invoke(ipcChannels.directoryList, directory),
     loginSubscription: async (): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.subscriptionLogin),
     submitManualCode: async (code: string): Promise<void> =>

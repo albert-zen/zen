@@ -11,6 +11,7 @@ import {
   type ZenXHostProfile,
   ZenXHostProfileStore,
   validateHostProfile,
+  workspaceKey,
 } from "./host-profile.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
 import { resolveZenXHostConfig } from "./host-config.js";
@@ -65,8 +66,12 @@ export class ZenXSettingsService {
       this.#profile = existing;
       return;
     }
+    const configureWorkspace = environment.ZENX_CWD !== undefined;
     const legacy = resolveZenXHostConfig(environment);
-    const fallback = profileFromLegacy(legacy);
+    for (const variable of legacy.secretEnvironmentVariables ?? []) {
+      delete environment[variable];
+    }
+    const fallback = profileFromLegacy(legacy, configureWorkspace);
     if (legacy.provider.type === "openai-compatible") {
       await this.#vault.writeApiKey(legacy.provider.apiKey);
     }
@@ -88,6 +93,7 @@ export class ZenXSettingsService {
     return hostConfigFromProfile(profile, {
       dataDirectory: this.#dataDirectory,
       subscriptionProfilePath: this.#profilePath,
+      fallbackWorkspace: this.#dataDirectory,
       apiKey: await this.#vault.readApiKey(),
     });
   }
@@ -142,6 +148,87 @@ export class ZenXSettingsService {
     }
     await this.#profileStore.write(validated);
     this.#profile = validated;
+  }
+
+  async addWorkspace(workspace: string): Promise<boolean> {
+    const current = this.#requireProfile();
+    const candidate = workspace.trim();
+    if (candidate.length === 0) throw new Error("Workspace is required");
+    const resolved = path.resolve(candidate);
+    if (
+      current.workspaces.some(
+        (entry) => workspaceKey(entry) === workspaceKey(resolved),
+      )
+    )
+      return false;
+    const isFirst = current.workspace === null;
+    const next = validateHostProfile({
+      ...current,
+      workspace: isFirst ? resolved : current.workspace,
+      workspaces: [...current.workspaces, resolved],
+    });
+    await this.#profileStore.write(next);
+    this.#profile = next;
+    return isFirst;
+  }
+
+  async removeWorkspace(workspace: string): Promise<boolean> {
+    const current = this.#requireProfile();
+    const key = workspaceKey(workspace);
+    const nextWorkspaces = current.workspaces.filter(
+      (entry) => workspaceKey(entry) !== key,
+    );
+    if (nextWorkspaces.length === current.workspaces.length) return false;
+    const defaultRemoved =
+      current.workspace !== null && workspaceKey(current.workspace) === key;
+    const next = validateHostProfile({
+      ...current,
+      workspace: defaultRemoved
+        ? (nextWorkspaces[0] ?? null)
+        : current.workspace,
+      workspaces: nextWorkspaces,
+    });
+    await this.#profileStore.write(next);
+    this.#profile = next;
+    return defaultRemoved;
+  }
+
+  async setDefaultWorkspace(workspace: string): Promise<boolean> {
+    const current = this.#requireProfile();
+    const key = workspaceKey(workspace);
+    const selected = current.workspaces.find(
+      (entry) => workspaceKey(entry) === key,
+    );
+    if (selected === undefined) throw new Error("Workspace is not configured");
+    if (
+      current.workspace !== null &&
+      workspaceKey(selected) === workspaceKey(current.workspace)
+    )
+      return false;
+    const next = validateHostProfile({ ...current, workspace: selected });
+    await this.#profileStore.write(next);
+    this.#profile = next;
+    return true;
+  }
+
+  async markWorkspaceUsed(workspace: string): Promise<void> {
+    const current = this.#requireProfile();
+    const key = workspaceKey(workspace);
+    const selected = current.workspaces.find(
+      (entry) => workspaceKey(entry) === key,
+    );
+    if (selected === undefined) throw new Error("Workspace is not configured");
+    if (
+      current.lastUsedWorkspace !== null &&
+      workspaceKey(current.lastUsedWorkspace) === key
+    )
+      return;
+    const next = validateHostProfile({
+      ...current,
+      lastUsedWorkspace: selected,
+    });
+    await this.#profileStore.write(next);
+    this.#profile = next;
   }
 
   async login(
@@ -202,7 +289,10 @@ export class ZenXSettingsService {
   }
 }
 
-function profileFromLegacy(config: ZenXHostConfig): ZenXHostProfile {
+function profileFromLegacy(
+  config: ZenXHostConfig,
+  configureWorkspace: boolean,
+): ZenXHostProfile {
   const provider =
     config.provider.type === "fake"
       ? { type: "fake" as const, displayName: "Local demo" }
@@ -224,7 +314,9 @@ function profileFromLegacy(config: ZenXHostConfig): ZenXHostProfile {
     defaultModel: config.model,
     titleModel: "gpt-5.6-luna",
     models: [...(config.models ?? [config.model])],
-    workspace: config.cwd,
+    workspace: configureWorkspace ? config.cwd : null,
+    workspaces: configureWorkspace ? [config.cwd] : [],
+    lastUsedWorkspace: null,
     approvalPolicy: config.approvalPolicy,
   };
 }

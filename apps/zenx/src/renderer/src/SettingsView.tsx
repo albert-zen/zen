@@ -527,12 +527,15 @@ function GeneralPanel({
       </header>
       <div className="page-card settings-card">
         <div className="form-grid">
-          <Field
-            wide
-            label="Default workspace"
-            value={draft.workspace}
-            onChange={(value) => setDraft({ ...draft, workspace: value })}
-          />
+          <div className="field wide">
+            <span>Default project</span>
+            <div
+              className="readonly-field"
+              title={draft.workspace ?? undefined}
+            >
+              {draft.workspace ?? "No project configured"}
+            </div>
+          </div>
           <label className="field">
             <span>Approval policy</span>
             <select
@@ -549,6 +552,10 @@ function GeneralPanel({
             </select>
           </label>
         </div>
+        <p className="settings-note">
+          Add, remove, and select Projects from the Projects sidebar. Folder
+          selection always uses the ZenX directory picker.
+        </p>
         <div className="settings-row">
           <div>
             <strong>Zen App Server</strong>

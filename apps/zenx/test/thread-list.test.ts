@@ -6,7 +6,9 @@ import {
   deriveInboxSections,
   deriveProjectGroups,
   readThreadScope,
+  projectThreadStartParams,
   readSidebarMode,
+  lastUsedProjectWorkspace,
   threadModelIdentity,
   threadPreview,
   threadTitle,
@@ -65,12 +67,41 @@ test("derives inbox groups from native summary status", () => {
 });
 
 test("groups native summaries only by current cwd", () => {
-  const groups = deriveProjectGroups([
-    summary("zen-a", "idle", 20, "/work/zen"),
-    summary("zen-b", "idle", 10, "/tmp/zen"),
-    summary("imzen", "idle", 30, "/work/imzen"),
-    broken("broken"),
-  ]);
+  const groups = deriveProjectGroups(
+    [
+      summary("zen-a", "idle", 20, "/work/zen"),
+      summary("zen-b", "idle", 10, "/tmp/zen"),
+      summary("imzen", "idle", 30, "/work/imzen"),
+      broken("broken"),
+    ],
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["zen-a"],
+        },
+        {
+          key: "/tmp/zen",
+          workspace: "/tmp/zen",
+          configured: false,
+          isDefault: false,
+          threadIds: ["zen-b"],
+        },
+        {
+          key: "/work/imzen",
+          workspace: "/work/imzen",
+          configured: true,
+          isDefault: false,
+          threadIds: ["imzen"],
+        },
+      ],
+      unavailableThreadIds: ["broken"],
+      lastUsedWorkspace: "/work/zen",
+    },
+  );
   assert.deepEqual(
     groups.map((group) => [
       group.label,
@@ -78,10 +109,68 @@ test("groups native summaries only by current cwd", () => {
     ]),
     [
       ["imzen", ["imzen"]],
-      ["zen", ["zen-a"]],
       ["zen", ["zen-b"]],
+      ["zen", ["zen-a"]],
       ["Unavailable journals", ["broken"]],
     ],
+  );
+});
+
+test("keeps a configured project visible when it has no threads", () => {
+  const groups = deriveProjectGroups([], {
+    projects: [
+      {
+        key: "/work/empty",
+        workspace: "/work/empty",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  });
+  assert.deepEqual(
+    groups.map(({ label, threads }) => [label, threads]),
+    [["empty", []]],
+  );
+});
+
+test("blocks no-project Thread creation and binds creation after Add project", () => {
+  const empty = {
+    projects: [],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  };
+  assert.equal(lastUsedProjectWorkspace(empty), null);
+  assert.throws(
+    () => projectThreadStartParams(lastUsedProjectWorkspace(empty)),
+    /Add a Project/u,
+  );
+  const configured = {
+    projects: [
+      {
+        key: "/work/selected",
+        workspace: "/work/selected",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  };
+  assert.deepEqual(
+    projectThreadStartParams(configured.projects[0]!.workspace),
+    { cwd: "/work/selected" },
+  );
+  assert.equal(lastUsedProjectWorkspace(configured), null);
+  assert.equal(
+    lastUsedProjectWorkspace({
+      ...configured,
+      lastUsedWorkspace: "/work/selected",
+    }),
+    "/work/selected",
   );
 });
 

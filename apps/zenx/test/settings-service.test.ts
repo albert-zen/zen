@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -57,6 +57,78 @@ test("migrates legacy environment config once without persisting or inheriting i
       (await second.publicSettings()).profile.defaultModel,
       "model-a",
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("adds, defaults, and removes workspace entries without touching their contents", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-workspaces-"));
+  const firstWorkspace = path.join(directory, "first");
+  const secondWorkspace = path.join(directory, "second");
+  const marker = path.join(secondWorkspace, "keep-me.txt");
+  await import("node:fs/promises").then(({ mkdir }) =>
+    Promise.all([
+      mkdir(firstWorkspace, { recursive: true }),
+      mkdir(secondWorkspace, { recursive: true }),
+    ]),
+  );
+  await writeFile(marker, "keep");
+  try {
+    const service = settingsFor(directory, {
+      login: async () => undefined,
+      logout: async () => undefined,
+      status: async () => ({ authenticated: false, expired: false }),
+    });
+    await service.initialize({ ZENX_CWD: firstWorkspace });
+    await service.addWorkspace(secondWorkspace);
+    await service.markWorkspaceUsed(secondWorkspace);
+    assert.equal(
+      (await service.publicSettings()).profile.lastUsedWorkspace,
+      path.resolve(secondWorkspace),
+    );
+    assert.equal(await service.setDefaultWorkspace(secondWorkspace), true);
+    assert.equal(
+      (await service.publicSettings()).profile.workspace,
+      path.resolve(secondWorkspace),
+    );
+    assert.equal(await service.removeWorkspace(secondWorkspace), true);
+    assert.equal(
+      (await service.publicSettings()).profile.lastUsedWorkspace,
+      null,
+    );
+    assert.equal(await readFile(marker, "utf8"), "keep");
+    assert.deepEqual((await service.publicSettings()).profile.workspaces, [
+      path.resolve(firstWorkspace),
+    ]);
+    assert.equal(await service.removeWorkspace(firstWorkspace), true);
+    assert.equal((await service.publicSettings()).profile.workspace, null);
+    assert.deepEqual((await service.publicSettings()).profile.workspaces, []);
+    assert.equal(await readFile(marker, "utf8"), "keep");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("starts with no implicit Project and activates the first added workspace", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-no-project-"));
+  const workspace = path.join(directory, "chosen");
+  try {
+    const service = settingsFor(directory, {
+      login: async () => undefined,
+      logout: async () => undefined,
+      status: async () => ({ authenticated: false, expired: false }),
+    });
+    await service.initialize({});
+    const initial = await service.publicSettings();
+    assert.equal(initial.profile.workspace, null);
+    assert.deepEqual(initial.profile.workspaces, []);
+    assert.equal(initial.profile.lastUsedWorkspace, null);
+    assert.equal((await service.hostConfig()).cwd, path.join(directory, "zen"));
+    assert.equal(await service.addWorkspace(workspace), true);
+    const added = await service.publicSettings();
+    assert.equal(added.profile.workspace, path.resolve(workspace));
+    assert.deepEqual(added.profile.workspaces, [path.resolve(workspace)]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
