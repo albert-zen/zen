@@ -397,18 +397,24 @@ export class AppServerManager {
 
   #installCapabilityBridge(child: ChildProcess): void {
     child.on("message", (message: unknown) => {
-      if (!isHostEvent(message) || this.#child !== child) return;
-      if (message.type === "thread-summary/result") {
+      if (this.#child !== child) return;
+      const threadSummaryRequestId = readThreadSummaryResultRequestId(message);
+      if (threadSummaryRequestId !== undefined) {
         const pending = this.#pendingThreadSummaryRequests.get(
-          message.requestId,
+          threadSummaryRequestId,
         );
         if (pending === undefined) return;
-        this.#pendingThreadSummaryRequests.delete(message.requestId);
+        this.#pendingThreadSummaryRequests.delete(threadSummaryRequestId);
+        if (!isHostEvent(message) || message.type !== "thread-summary/result") {
+          pending.reject(new Error("Malformed native Thread summary response"));
+          return;
+        }
         if (message.error !== undefined)
           pending.reject(new Error(message.error));
-        else pending.resolve(message.summaries ?? []);
+        else pending.resolve(message.summaries);
         return;
       }
+      if (!isHostEvent(message)) return;
       if (message.type === "capability/cancel") {
         this.#activeCapabilityInvocations
           .get(message.invocationId)
@@ -568,4 +574,18 @@ async function waitForExit(
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function readThreadSummaryResultRequestId(value: unknown): string | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("type" in value) ||
+    value.type !== "thread-summary/result" ||
+    !("requestId" in value) ||
+    typeof value.requestId !== "string"
+  ) {
+    return undefined;
+  }
+  return value.requestId;
 }

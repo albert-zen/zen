@@ -3,6 +3,7 @@ import type {
   NativeThreadSummary,
   ThreadSummaryListOptions,
 } from "../../../../src/thread-summary.js";
+import { isNativeThreadSummary } from "../../../../src/thread-summary.js";
 import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
 
 export type ZenXHostConfig = Omit<
@@ -39,8 +40,14 @@ export type HostEvent =
   | {
       type: "thread-summary/result";
       requestId: string;
-      summaries?: NativeThreadSummary[];
-      error?: string;
+      summaries: NativeThreadSummary[];
+      error?: never;
+    }
+  | {
+      type: "thread-summary/result";
+      requestId: string;
+      summaries?: never;
+      error: string;
     }
   | {
       type: "capability/invoke";
@@ -106,8 +113,10 @@ export function isHostEvent(value: unknown): value is HostEvent {
     (event.type === "error" && typeof event.message === "string") ||
     (event.type === "thread-summary/result" &&
       typeof event.requestId === "string" &&
-      (event.summaries === undefined || Array.isArray(event.summaries)) &&
-      (event.error === undefined || typeof event.error === "string")) ||
+      ((Array.isArray(event.summaries) &&
+        event.summaries.every(isNativeThreadSummary) &&
+        event.error === undefined) ||
+        (event.summaries === undefined && typeof event.error === "string"))) ||
     ((event.type === "capability/invoke" ||
       event.type === "capability/cancel") &&
       typeof event.invocationId === "string")

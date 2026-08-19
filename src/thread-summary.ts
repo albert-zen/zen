@@ -118,7 +118,9 @@ function isProjectionFile(value: unknown): value is ProjectionFile {
   );
 }
 
-function isNativeThreadSummary(value: unknown): value is NativeThreadSummary {
+export function isNativeThreadSummary(
+  value: unknown,
+): value is NativeThreadSummary {
   if (
     !isRecord(value) ||
     typeof value.threadId !== "string" ||
@@ -133,13 +135,15 @@ function isNativeThreadSummary(value: unknown): value is NativeThreadSummary {
     return (
       value.createdAt === null &&
       value.updatedAt === null &&
-      typeof value.error === "string"
+      typeof value.error === "string" &&
+      value.currentMetadata === undefined
     );
   }
   return (
     (value.status === "idle" || value.status === "active") &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
+    value.error === undefined &&
     isCurrentMetadata(value.currentMetadata)
   );
 }
