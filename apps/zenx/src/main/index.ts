@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  Menu,
   safeStorage,
   session,
   shell,
@@ -45,6 +46,10 @@ import {
 import { installApplicationMenu } from "./application-menu.js";
 import { ZenXDirectoryBrowser } from "./directory-browser.js";
 import { ZenXProjectProjection } from "./project-projection.js";
+import {
+  projectWorkspaceAcceptanceConfigPath,
+  runProjectWorkspaceAcceptance,
+} from "./project-workspace-smoke.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -54,8 +59,9 @@ const projectProjection = new ZenXProjectProjection();
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
 let quitting = false;
-
-configureProjectWorkspaceSmokeDebugger(process.argv);
+const projectWorkspaceAcceptancePath = projectWorkspaceAcceptanceConfigPath(
+  process.argv,
+);
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -251,24 +257,25 @@ app.whenReady().then(async () => {
     },
     async () => await syncProjectProjection(settingsService!),
   );
-  createWindow();
+  const mainWindow = createWindow();
+  if (projectWorkspaceAcceptancePath !== null) {
+    void runProjectWorkspaceAcceptance({
+      window: mainWindow,
+      configPath: projectWorkspaceAcceptancePath,
+      applicationMenuAbsent: Menu.getApplicationMenu() === null,
+    })
+      .then(() => app.quit())
+      .catch((error: unknown) => {
+        console.error("Packaged Project workspace acceptance failed", error);
+        process.exitCode = 1;
+        app.quit();
+      });
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
-
-function configureProjectWorkspaceSmokeDebugger(arguments_: readonly string[]) {
-  const prefix = "--zenx-project-smoke-cdp-port=";
-  const value = arguments_
-    .find((argument) => argument.startsWith(prefix))
-    ?.slice(prefix.length);
-  if (value === undefined || !/^\d{1,5}$/u.test(value)) return;
-  const port = Number(value);
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) return;
-  app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
-  app.commandLine.appendSwitch("remote-debugging-port", String(port));
-}
 
 app.on("before-quit", (event) => {
   if (quitting || appServerManager === undefined) return;

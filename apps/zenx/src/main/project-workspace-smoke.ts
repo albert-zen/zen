@@ -1,318 +1,203 @@
-import type { ComputerInspection } from "./capabilities/computer-provider.js";
-import { WinAppCliComputerBackend } from "./capabilities/windows-computer-provider.js";
-import WebSocket from "ws";
+import type { BrowserWindow } from "electron";
+import { readFile, writeFile } from "node:fs/promises";
 
-const arguments_ = parseArguments(process.argv.slice(2));
-const target = {
-  pid: requiredPositiveInteger(arguments_.pid, "--pid"),
-  windowTitle: requiredString(arguments_.title, "--title"),
-};
-const projectA = requiredString(arguments_["project-a"], "--project-a");
-const projectB = requiredString(arguments_["project-b"], "--project-b");
-const fixture = requiredString(arguments_.fixture, "--fixture");
-const cdpPort = requiredPositiveInteger(arguments_["cdp-port"], "--cdp-port");
-const mode = arguments_.mode ?? "mutate";
-if (mode !== "mutate" && mode !== "restart") {
-  throw new Error("--mode must be mutate or restart");
+const ACCEPTANCE_PREFIX = "--zenx-project-acceptance=";
+
+interface ProjectWorkspaceAcceptanceConfig {
+  fixture: string;
+  mode: "mutate" | "restart";
+  projectA: string;
+  projectB: string;
+  resultPath: string;
 }
 
-const controller = new AbortController();
-const timeout = setTimeout(() => {
-  controller.abort(
-    new DOMException(
-      "Project workspace packaged smoke timed out",
-      "AbortError",
-    ),
-  );
-}, 120_000);
-timeout.unref();
-const backend = new WinAppCliComputerBackend({ platform: "win32" });
-const cdp = await connectToRenderer(cdpPort, controller.signal);
-
-try {
-  const diagnostic = await backend.diagnose(controller.signal);
-  if (!diagnostic.ready) throw new Error(diagnostic.message);
-  if (mode === "mutate") {
-    await assertNoApplicationMenu();
-    await pressNamed("Add project");
-    await pressNamed(fixture);
-    await pressNamed(projectA);
-    await pressNamed("Add folder");
-    await waitForNamed(`Remove ${projectA} from ZenX`);
-
-    await pressNamed("Add project");
-    await pressNamed(fixture);
-    await pressNamed(projectB);
-    await pressNamed("Add folder");
-    await waitForNamed(`Remove ${projectB} from ZenX`);
-
-    await pressNamed(`Make ${projectB} the default project`);
-    await pressNamed(`Remove ${projectA} from ZenX`);
-    await waitForRenderer(
-      async () =>
-        (await cdp.hasButton(`Remove ${projectB} from ZenX`)) &&
-        !(await cdp.hasButton(`Remove ${projectA} from ZenX`)),
-      "Project removal to settle",
-    );
-  } else {
-    await waitForRenderer(
-      async () =>
-        (await cdp.hasButton(`Remove ${projectB} from ZenX`)) &&
-        !(await cdp.hasButton(`Remove ${projectA} from ZenX`)),
-      "persisted Project state after restart",
-    );
-    await assertNoApplicationMenu();
-  }
-  console.log(
-    `ZenX packaged Project workspace smoke ${mode} phase passed with WinApp CLI ${diagnostic.version}.`,
-  );
-} finally {
-  clearTimeout(timeout);
-  cdp.close();
-  await backend.close();
+interface AcceptanceOptions {
+  applicationMenuAbsent: boolean;
+  configPath: string;
+  window: BrowserWindow;
 }
 
-async function assertNoApplicationMenu(): Promise<void> {
-  const inspection = await waitForInspection(
-    (candidate) => candidate.controls.length > 0,
-    "ZenX renderer controls",
-  );
-  assertNoMenuControls(inspection);
+export function projectWorkspaceAcceptanceConfigPath(
+  arguments_: readonly string[],
+): string | null {
+  const values = arguments_
+    .filter((argument) => argument.startsWith(ACCEPTANCE_PREFIX))
+    .map((argument) => argument.slice(ACCEPTANCE_PREFIX.length));
+  return values.length === 1 && values[0]!.length > 0 ? values[0]! : null;
 }
 
-function assertNoMenuControls(inspection: ComputerInspection): void {
-  const menu = inspection.controls.find((control) =>
-    /menu(?:bar|item)?/iu.test(control.role),
+export async function runProjectWorkspaceAcceptance(
+  options: AcceptanceOptions,
+): Promise<void> {
+  const config = readConfig(
+    JSON.parse(await readFile(options.configPath, "utf8")) as unknown,
   );
-  if (menu !== undefined) {
-    throw new Error(
-      `Packaged ZenX exposed an unexpected native menu control: ${menu.role} ${menu.title}`,
-    );
+  try {
+    if (!options.applicationMenuAbsent) {
+      throw new Error("Packaged ZenX exposed an unexpected application menu");
+    }
+    await waitForLoad(options.window);
+    if (config.mode === "mutate") {
+      await clickButton(options.window, "Add project");
+      await clickButton(options.window, config.fixture);
+      await clickButton(options.window, config.projectA);
+      await clickButton(options.window, "Add folder");
+      await waitForButton(
+        options.window,
+        `Remove ${config.projectA} from ZenX`,
+      );
+
+      await clickButton(options.window, "Add project");
+      await clickButton(options.window, config.fixture);
+      await clickButton(options.window, config.projectB);
+      await clickButton(options.window, "Add folder");
+      await waitForButton(
+        options.window,
+        `Remove ${config.projectB} from ZenX`,
+      );
+
+      await clickButton(
+        options.window,
+        `Make ${config.projectB} the default project`,
+      );
+      await clickButton(options.window, `Remove ${config.projectA} from ZenX`);
+      await waitForProjectState(options.window, config, false);
+    } else {
+      await waitForProjectState(options.window, config, true);
+    }
+    await writeResult(config.resultPath, {
+      ok: true,
+      mode: config.mode,
+      applicationMenuAbsent: true,
+    });
+  } catch (error) {
+    await writeResult(config.resultPath, {
+      ok: false,
+      mode: config.mode,
+      applicationMenuAbsent: options.applicationMenuAbsent,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
 }
 
-async function pressNamed(title: string): Promise<void> {
+async function waitForLoad(window: BrowserWindow): Promise<void> {
+  if (!window.webContents.isLoading()) return;
+  await new Promise<void>((resolve, reject) => {
+    window.webContents.once("did-finish-load", () => resolve());
+    window.webContents.once("did-fail-load", (_event, code, description) =>
+      reject(
+        new Error(`Renderer failed to load (${String(code)}): ${description}`),
+      ),
+    );
+  });
+}
+
+async function clickButton(
+  window: BrowserWindow,
+  title: string,
+): Promise<void> {
   await waitForRenderer(
-    async () => await cdp.clickButton(title),
+    window,
+    buttonExpression(title, true),
     `pressable control ${title}`,
   );
 }
 
-async function waitForNamed(title: string): Promise<void> {
+async function waitForButton(
+  window: BrowserWindow,
+  title: string,
+): Promise<void> {
   await waitForRenderer(
-    async () => await cdp.hasButton(title),
+    window,
+    buttonExpression(title, false),
     `control ${title}`,
   );
 }
 
-async function waitForInspection(
-  accept: (inspection: ComputerInspection) => boolean,
-  label: string,
-): Promise<ComputerInspection> {
-  let lastTitles: string[] = [];
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (controller.signal.aborted) throw controller.signal.reason;
-    try {
-      const inspection = await backend.inspect(target, controller.signal);
-      lastTitles = inspection.controls.map(
-        (control) => `${control.role}:${control.title}`,
-      );
-      if (accept(inspection)) return inspection;
-    } catch (error) {
-      if (controller.signal.aborted) throw error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(
-    `Timed out waiting for ${label}; last controls: ${lastTitles.join(", ")}`,
+async function waitForProjectState(
+  window: BrowserWindow,
+  config: ProjectWorkspaceAcceptanceConfig,
+  restarted: boolean,
+): Promise<void> {
+  const present = `Remove ${config.projectB} from ZenX`;
+  const absent = `Remove ${config.projectA} from ZenX`;
+  await waitForRenderer(
+    window,
+    `(() => ${buttonLookup(present)} !== undefined && ${buttonLookup(absent)} === undefined)()`,
+    restarted
+      ? "persisted Project state after restart"
+      : "Project removal to settle",
   );
 }
 
 async function waitForRenderer(
-  accept: () => Promise<boolean>,
+  window: BrowserWindow,
+  expression: string,
   label: string,
 ): Promise<void> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    if (controller.signal.aborted) throw controller.signal.reason;
-    if (await accept()) return;
+    if (window.isDestroyed()) throw new Error("Packaged ZenX window closed");
+    if (
+      (await window.webContents.executeJavaScript(expression, true)) === true
+    ) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`Timed out waiting for renderer ${label}`);
 }
 
-async function connectToRenderer(
-  port: number,
-  signal: AbortSignal,
-): Promise<RendererCdp> {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    if (signal.aborted) throw signal.reason;
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:${String(port)}/json/list`,
-      );
-      if (response.ok) {
-        const pages = (await response.json()) as Array<{
-          title?: unknown;
-          type?: unknown;
-          webSocketDebuggerUrl?: unknown;
-        }>;
-        const page = pages.find(
-          (candidate) =>
-            candidate.type === "page" &&
-            candidate.title === "ZenX" &&
-            typeof candidate.webSocketDebuggerUrl === "string",
-        );
-        if (page !== undefined) {
-          return await RendererCdp.connect(
-            page.webSocketDebuggerUrl as string,
-            signal,
-          );
-        }
-      }
-    } catch {
-      // The packaged renderer or its loopback debugger is still starting.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error("Timed out waiting for the packaged ZenX renderer debugger");
-}
-
-class RendererCdp {
-  readonly #pending = new Map<
-    number,
-    { resolve: (value: unknown) => void; reject: (error: Error) => void }
-  >();
-  readonly #socket: WebSocket;
-  #nextId = 0;
-
-  private constructor(socket: WebSocket) {
-    this.#socket = socket;
-    socket.on("message", (data) => {
-      const message = JSON.parse(data.toString()) as {
-        id?: number;
-        result?: unknown;
-        error?: { message?: string };
-      };
-      if (message.id === undefined) return;
-      const pending = this.#pending.get(message.id);
-      if (pending === undefined) return;
-      this.#pending.delete(message.id);
-      if (message.error !== undefined) {
-        pending.reject(
-          new Error(message.error.message ?? "CDP request failed"),
-        );
-      } else {
-        pending.resolve(message.result);
-      }
-    });
-    socket.on("close", () => this.#rejectPending("Renderer CDP closed"));
-    socket.on("error", (error) => this.#rejectPending(error.message));
-  }
-
-  static async connect(url: string, signal: AbortSignal): Promise<RendererCdp> {
-    return await new Promise((resolve, reject) => {
-      const socket = new WebSocket(url);
-      const abort = () => {
-        socket.close();
-        reject(signal.reason);
-      };
-      signal.addEventListener("abort", abort, { once: true });
-      socket.once("open", () => {
-        signal.removeEventListener("abort", abort);
-        resolve(new RendererCdp(socket));
-      });
-      socket.once("error", reject);
-    });
-  }
-
-  async hasButton(title: string): Promise<boolean> {
-    return await this.#evaluate(buttonExpression(title, false));
-  }
-
-  async clickButton(title: string): Promise<boolean> {
-    return await this.#evaluate(buttonExpression(title, true));
-  }
-
-  close(): void {
-    this.#socket.close();
-  }
-
-  async #evaluate(expression: string): Promise<boolean> {
-    const response = (await this.#send("Runtime.evaluate", {
-      expression,
-      returnByValue: true,
-    })) as {
-      exceptionDetails?: unknown;
-      result?: { value?: unknown };
-    };
-    if (response.exceptionDetails !== undefined) {
-      throw new Error("Packaged renderer evaluation failed");
-    }
-    return response.result?.value === true;
-  }
-
-  async #send(method: string, params: unknown): Promise<unknown> {
-    const id = ++this.#nextId;
-    return await new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
-      this.#socket.send(JSON.stringify({ id, method, params }), (error) => {
-        if (error === undefined) return;
-        this.#pending.delete(id);
-        reject(error);
-      });
-    });
-  }
-
-  #rejectPending(message: string): void {
-    for (const pending of this.#pending.values()) {
-      pending.reject(new Error(message));
-    }
-    this.#pending.clear();
-  }
-}
-
 function buttonExpression(title: string, click: boolean): string {
   return `(() => {
-    const title = ${JSON.stringify(title)};
-    const button = Array.from(document.querySelectorAll("button")).find((candidate) =>
-      candidate.getAttribute("aria-label") === title ||
-      candidate.textContent?.trim().replace(/\\s+/gu, " ") === title
-    );
+    const button = ${buttonLookup(title)};
     if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
     ${click ? "button.click();" : ""}
     return true;
   })()`;
 }
 
-function parseArguments(values: readonly string[]): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (let index = 0; index < values.length; index += 2) {
-    const key = values[index];
-    const value = values[index + 1];
-    if (key === undefined || !key.startsWith("--") || value === undefined) {
-      throw new Error(
-        "Expected --pid <number> --title <title> --cdp-port <number> --fixture <name> --project-a <name> --project-b <name> --mode <mutate|restart>",
-      );
+function buttonLookup(title: string): string {
+  return `Array.from(document.querySelectorAll("button")).find((candidate) =>
+    candidate.getAttribute("aria-label") === ${JSON.stringify(title)} ||
+    candidate.textContent?.trim().replace(/\\s+/gu, " ") === ${JSON.stringify(title)}
+  )`;
+}
+
+function readConfig(value: unknown): ProjectWorkspaceAcceptanceConfig {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Invalid packaged Project acceptance config");
+  }
+  const config = value as Record<string, unknown>;
+  const allowed = new Set([
+    "fixture",
+    "mode",
+    "projectA",
+    "projectB",
+    "resultPath",
+  ]);
+  if (Object.keys(config).some((key) => !allowed.has(key))) {
+    throw new Error("Unknown packaged Project acceptance config field");
+  }
+  for (const key of [
+    "fixture",
+    "projectA",
+    "projectB",
+    "resultPath",
+  ] as const) {
+    if (typeof config[key] !== "string" || config[key].length === 0) {
+      throw new Error(`Invalid packaged Project acceptance ${key}`);
     }
-    result[key.slice(2)] = value;
   }
-  return result;
+  if (config.mode !== "mutate" && config.mode !== "restart") {
+    throw new Error("Invalid packaged Project acceptance mode");
+  }
+  return config as unknown as ProjectWorkspaceAcceptanceConfig;
 }
 
-function requiredString(value: string | undefined, flag: string): string {
-  if (value === undefined || value.trim().length === 0) {
-    throw new Error(`${flag} is required`);
-  }
-  return value;
-}
-
-function requiredPositiveInteger(
-  value: string | undefined,
-  flag: string,
-): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${flag} must be a positive integer`);
-  }
-  return parsed;
+async function writeResult(
+  resultPath: string,
+  result: Record<string, unknown>,
+): Promise<void> {
+  await writeFile(resultPath, `${JSON.stringify(result)}\n`, "utf8");
 }

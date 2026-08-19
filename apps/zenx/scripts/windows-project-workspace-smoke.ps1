@@ -3,9 +3,6 @@ $ErrorActionPreference = "Stop"
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
   throw "This smoke test must run on Windows."
 }
-if (-not (Get-Command winapp -ErrorAction SilentlyContinue)) {
-  throw "WinApp CLI is missing. Install it with: winget install Microsoft.winappcli --source winget"
-}
 
 $identifier = [guid]::NewGuid().ToString("N")
 $documents = [Environment]::GetFolderPath("MyDocuments")
@@ -22,28 +19,41 @@ $smokeRoot = Join-Path $env:TEMP ("zenx-project-workspace-smoke-" + $identifier)
 $userData = Join-Path $smokeRoot "user-data"
 $zenData = Join-Path $smokeRoot "zen-data"
 $profilePath = Join-Path $userData "host-profile.json"
+$acceptancePath = Join-Path $smokeRoot "acceptance.json"
+$resultPath = Join-Path $smokeRoot "result.json"
 $process = $null
-$cdpPort = 0
 $previousZenData = $env:ZENX_DATA_DIR
 
-function Start-ZenX {
-  param([string] $Executable, [string] $UserData, [int] $CdpPort)
-  $started = Start-Process -FilePath $Executable -ArgumentList @(
-    "--user-data-dir=$UserData",
-    "--zenx-project-smoke-cdp-port=$CdpPort"
+function Start-ZenXAcceptance {
+  param([string] $Executable, [string] $UserData, [string] $Mode)
+  Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+  @{
+    fixture = $fixtureName
+    mode = $Mode
+    projectA = $projectAName
+    projectB = $projectBName
+    resultPath = $resultPath
+  } | ConvertTo-Json | Set-Content -LiteralPath $acceptancePath -Encoding UTF8
+  return Start-Process -FilePath $Executable -ArgumentList @(
+    ('--user-data-dir="' + $UserData + '"'),
+    ('--zenx-project-acceptance="' + $acceptancePath + '"')
   ) -PassThru
-  $deadline = [DateTime]::UtcNow.AddSeconds(30)
-  do {
+}
+
+function Wait-ZenXAcceptance {
+  param($Process, [string] $Mode)
+  $deadline = [DateTime]::UtcNow.AddSeconds(120)
+  while (-not (Test-Path -LiteralPath $resultPath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 250
-    $started.Refresh()
-    $candidate = Get-Process -Name "ZenX" -ErrorAction SilentlyContinue |
-      Where-Object { $_.MainWindowTitle -eq "ZenX" } |
-      Select-Object -First 1
-  } while ($null -eq $candidate -and -not $started.HasExited -and [DateTime]::UtcNow -lt $deadline)
-  if ($null -eq $candidate) {
-    throw "Packaged ZenX did not expose its main window before timeout."
   }
-  return $candidate
+  if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+    throw "Packaged ZenX did not report the $Mode acceptance result before timeout."
+  }
+  $result = Get-Content -Raw -LiteralPath $resultPath | ConvertFrom-Json
+  if ($result.ok -ne $true -or $result.applicationMenuAbsent -ne $true -or $result.mode -ne $Mode) {
+    throw "Packaged ZenX $Mode acceptance failed: $($result.error)"
+  }
+  Wait-Process -Id $Process.Id -Timeout 30 -ErrorAction SilentlyContinue
 }
 
 function Stop-ZenX {
@@ -53,26 +63,7 @@ function Stop-ZenX {
   Wait-Process -Id $Process.Id -Timeout 10 -ErrorAction SilentlyContinue
 }
 
-function Invoke-ProjectDriver {
-  param($Process, [int] $CdpPort, [string] $Fixture, [string] $ProjectA, [string] $ProjectB, [string] $Mode)
-  & npx --no-install tsx ./src/main/project-workspace-smoke.ts `
-    --pid $Process.Id `
-    --title "ZenX" `
-    --cdp-port $CdpPort `
-    --fixture $Fixture `
-    --project-a $ProjectA `
-    --project-b $ProjectB `
-    --mode $Mode
-  if ($LASTEXITCODE -ne 0) {
-    throw "ZenX packaged Project driver failed in $Mode phase with exit code $LASTEXITCODE."
-  }
-}
-
 try {
-  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-  $listener.Start()
-  $cdpPort = ([System.Net.IPEndPoint] $listener.LocalEndpoint).Port
-  $listener.Stop()
   New-Item -ItemType Directory -Path $fixtureRoot, $projectA, $projectB, $userData, $zenData -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $projectA "keep-me.txt") -Value "project-a-marker" -Encoding UTF8
   Set-Content -LiteralPath (Join-Path $projectB "keep-me.txt") -Value "project-b-marker" -Encoding UTF8
@@ -107,8 +98,8 @@ try {
   }
 
   $env:ZENX_DATA_DIR = $zenData
-  $process = Start-ZenX -Executable $package.executable -UserData $userData -CdpPort $cdpPort
-  Invoke-ProjectDriver -Process $process -CdpPort $cdpPort -Fixture $fixtureName -ProjectA $projectAName -ProjectB $projectBName -Mode "mutate"
+  $process = Start-ZenXAcceptance -Executable $package.executable -UserData $userData -Mode "mutate"
+  Wait-ZenXAcceptance -Process $process -Mode "mutate"
 
   $profile = Get-Content -Raw -LiteralPath $profilePath | ConvertFrom-Json
   if ($profile.workspace -ne (Resolve-Path -LiteralPath $projectB).Path) {
@@ -126,8 +117,8 @@ try {
 
   Stop-ZenX -Process $process
   $process = $null
-  $process = Start-ZenX -Executable $package.executable -UserData $userData -CdpPort $cdpPort
-  Invoke-ProjectDriver -Process $process -CdpPort $cdpPort -Fixture $fixtureName -ProjectA $projectAName -ProjectB $projectBName -Mode "restart"
+  $process = Start-ZenXAcceptance -Executable $package.executable -UserData $userData -Mode "restart"
+  Wait-ZenXAcceptance -Process $process -Mode "restart"
   Write-Host "ZenX packaged Project acceptance passed: add -> default -> remove -> restart, marker preservation, and no Windows application menu."
 } finally {
   if ($null -ne $process) { Stop-ZenX -Process $process }

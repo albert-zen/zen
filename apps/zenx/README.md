@@ -67,9 +67,10 @@ testing; never point that option at an existing browser or ZenX profile.
 
 The Windows packaged Project acceptance (`smoke:windows-projects`) launches
 the real packaged ZenX shell and drives Add Project, default selection,
-removal, and restart through a loopback-scoped renderer debugger while WinApp
-CLI verifies that no native application menu is exposed. It also verifies that
-removing a Project preserves marker files in its directory.
+removal, and restart through a main-process acceptance hook that executes only
+when its explicit isolated config argument is present. The hook uses the real
+renderer and IPC without opening a debug port, verifies the native application
+menu is absent, and confirms that removal preserves Project marker files.
 
 ## Design reference
 
