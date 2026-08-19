@@ -27,7 +27,10 @@ $previousZenData = $env:ZENX_DATA_DIR
 
 function Start-ZenX {
   param([string] $Executable, [string] $UserData)
-  $started = Start-Process -FilePath $Executable -ArgumentList @("--user-data-dir=$UserData") -PassThru
+  $started = Start-Process -FilePath $Executable -ArgumentList @(
+    "--user-data-dir=$UserData",
+    "--force-renderer-accessibility"
+  ) -PassThru
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   do {
     Start-Sleep -Milliseconds 250
