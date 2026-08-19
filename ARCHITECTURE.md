@@ -84,7 +84,9 @@
   typed main/preload snapshot 消费，package 不取得 DOM、router 或核心导航的修改权。
 - **ZenXCapabilityConfiguration** — ZenX 主进程在同一原子配置文档中分别持久化 package
   enablement 与 permission grants；enablement 决定 package 的 host/UI 投影，grant 只决定工具和
-  resource 权限，二者都不进入 Core、Thread 或 canonical ItemList。
+  resource 权限，二者的 mutation 按调用顺序线性化且都不进入 Core、Thread 或 canonical ItemList；
+  disable 持久化成功后 registry 先关闭新调用接纳与 host/UI projection，再 abort 并等待该 package
+  已接纳 invocation 归约，App Server capability restart 同样串行执行。
 - **ZenXCapabilityInteractionMode** — ZenX 把工具声明为不改变全局输入/焦点的 `background_safe`
   、必须接管前台的 `foreground_required` 或在独立桌面执行的 `isolated`，让产品提示、调度和 host policy
   协商实际影响且禁止静默降级。

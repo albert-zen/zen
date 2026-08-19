@@ -81,8 +81,10 @@ projects enabled contributions through the typed `window.zenx.plugins` preload
 API and never gives a package DOM or router access. Enablement is persisted next
 to grants in the same atomic capability configuration document, but remains a
 separate field and meaning: disabling removes UI contributions and host tools,
-then the existing App Server capability restart closes admission and settles
-accepted executions. Permission grants are retained and do not imply enablement.
+then aborts and settles already accepted package executions before the serialized
+App Server capability restart completes. Grant, revoke, and enablement mutations
+share one ordered configuration boundary, so concurrent UI requests cannot lose
+the last operation. Permission grants are retained and do not imply enablement.
 Tool-only packages are valid and simply contribute no UI.
 
 Triggers (`zenx-triggers`) and Rooms (`zenx-rooms`) are separate bundled

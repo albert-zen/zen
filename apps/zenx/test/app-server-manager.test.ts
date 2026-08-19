@@ -86,6 +86,29 @@ test("hosts a real App Server and removes its private token on shutdown", async 
   }
 });
 
+test("serializes concurrent capability restarts", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-capability-restart-"),
+  );
+  const manager = managerFor(directory);
+  try {
+    await manager.start();
+    await Promise.all([
+      manager.restartCapabilities(),
+      manager.restartCapabilities(),
+    ]);
+    assert.deepEqual(manager.status, { type: "ready", reconnected: false });
+    assert.deepEqual(await manager.request("thread/list", {}), {
+      data: [],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("reports a killed App Server as a terminal error without restarting", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-crash-"));
   const manager = managerFor(directory);

@@ -35,6 +35,13 @@ export interface ZenXCapabilityRegistryOptions {
   platform: string;
 }
 
+interface ActiveCapabilityInvocation {
+  capabilityId: string;
+  controller: AbortController;
+  settled: Promise<void>;
+  resolveSettled(): void;
+}
+
 export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   readonly #configurationStore: ZenXCapabilityConfigurationStore;
   readonly #registered = new Map<string, RegisteredZenXCapability>();
@@ -52,6 +59,8 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   readonly #options: ZenXCapabilityRegistryOptions;
   #grants: Record<string, ZenXCapabilityGrant[]> = {};
   #disabled = new Set<string>();
+  #configurationMutationTail: Promise<void> = Promise.resolve();
+  readonly #activeInvocations = new Set<ActiveCapabilityInvocation>();
 
   constructor(
     configurationStore: ZenXCapabilityConfigurationStore,
@@ -147,70 +156,74 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     capabilityId: string,
     permissionIds?: readonly string[],
   ): Promise<void> {
-    const manifest = this.#requireCapability(capabilityId).package.manifest;
-    const selected =
-      permissionIds === undefined
-        ? manifest.permissions
-        : permissionIds.map((permissionId) => {
-            const permission = manifest.permissions.find(
-              (candidate) => candidate.id === permissionId,
-            );
-            if (permission === undefined) {
-              throw new Error(
-                `Capability ${capabilityId} does not request ${permissionId}`,
+    await this.#serializeConfigurationMutation(async () => {
+      const manifest = this.#requireCapability(capabilityId).package.manifest;
+      const selected =
+        permissionIds === undefined
+          ? manifest.permissions
+          : permissionIds.map((permissionId) => {
+              const permission = manifest.permissions.find(
+                (candidate) => candidate.id === permissionId,
               );
-            }
-            return permission;
-          });
-    const existing = new Map(
-      (this.#grants[capabilityId] ?? []).map((grant) => [
-        grant.permissionId,
-        grant,
-      ]),
-    );
-    for (const permission of selected) {
-      existing.set(permission.id, {
-        permissionId: permission.id,
-        scope: permission.scope,
+              if (permission === undefined) {
+                throw new Error(
+                  `Capability ${capabilityId} does not request ${permissionId}`,
+                );
+              }
+              return permission;
+            });
+      const existing = new Map(
+        (this.#grants[capabilityId] ?? []).map((grant) => [
+          grant.permissionId,
+          grant,
+        ]),
+      );
+      for (const permission of selected) {
+        existing.set(permission.id, {
+          permissionId: permission.id,
+          scope: permission.scope,
+        });
+      }
+      const nextGrants = {
+        ...this.#grants,
+        [capabilityId]: [...existing.values()],
+      };
+      await this.#configurationStore.save({
+        grants: structuredClone(nextGrants),
+        disabled: [...this.#disabled],
       });
-    }
-    const nextGrants = {
-      ...this.#grants,
-      [capabilityId]: [...existing.values()],
-    };
-    await this.#configurationStore.save({
-      grants: structuredClone(nextGrants),
-      disabled: [...this.#disabled],
+      this.#grants = nextGrants;
+      this.#emit();
     });
-    this.#grants = nextGrants;
-    this.#emit();
   }
 
   async revoke(
     capabilityId: string,
     permissionIds?: readonly string[],
   ): Promise<void> {
-    this.#requireCapability(capabilityId);
-    let nextGrants: Record<string, ZenXCapabilityGrant[]>;
-    if (permissionIds === undefined) {
-      const { [capabilityId]: _removed, ...remaining } = this.#grants;
-      nextGrants = remaining;
-    } else {
-      const revoked = new Set(permissionIds);
-      nextGrants = {
-        ...this.#grants,
-        [capabilityId]: (this.#grants[capabilityId] ?? []).filter(
-          (grant) => !revoked.has(grant.permissionId),
-        ),
-      };
-    }
-    await this.#configurationStore.save({
-      grants: structuredClone(nextGrants),
-      disabled: [...this.#disabled],
+    await this.#serializeConfigurationMutation(async () => {
+      this.#requireCapability(capabilityId);
+      let nextGrants: Record<string, ZenXCapabilityGrant[]>;
+      if (permissionIds === undefined) {
+        const { [capabilityId]: _removed, ...remaining } = this.#grants;
+        nextGrants = remaining;
+      } else {
+        const revoked = new Set(permissionIds);
+        nextGrants = {
+          ...this.#grants,
+          [capabilityId]: (this.#grants[capabilityId] ?? []).filter(
+            (grant) => !revoked.has(grant.permissionId),
+          ),
+        };
+      }
+      await this.#configurationStore.save({
+        grants: structuredClone(nextGrants),
+        disabled: [...this.#disabled],
+      });
+      this.#grants = nextGrants;
+      if (capabilityId === "browser") this.#clearBrowserProjection();
+      this.#emit();
     });
-    this.#grants = nextGrants;
-    if (capabilityId === "browser") this.#clearBrowserProjection();
-    this.#emit();
   }
 
   snapshot(): ZenXCapabilitySnapshot {
@@ -303,18 +316,23 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   }
 
   async setEnabled(capabilityId: string, enabled: boolean): Promise<void> {
-    this.#requireCapability(capabilityId);
-    if (enabled === !this.#disabled.has(capabilityId)) return;
-    const nextDisabled = new Set(this.#disabled);
-    if (enabled) nextDisabled.delete(capabilityId);
-    else nextDisabled.add(capabilityId);
-    await this.#configurationStore.save({
-      grants: structuredClone(this.#grants),
-      disabled: [...nextDisabled],
+    await this.#serializeConfigurationMutation(async () => {
+      this.#requireCapability(capabilityId);
+      if (enabled === !this.#disabled.has(capabilityId)) return;
+      const nextDisabled = new Set(this.#disabled);
+      if (enabled) nextDisabled.delete(capabilityId);
+      else nextDisabled.add(capabilityId);
+      await this.#configurationStore.save({
+        grants: structuredClone(this.#grants),
+        disabled: [...nextDisabled],
+      });
+      this.#disabled = nextDisabled;
+      if (!enabled && capabilityId === "browser") {
+        this.#clearBrowserProjection();
+      }
+      this.#emit();
+      if (!enabled) await this.#cancelAndSettle(capabilityId);
     });
-    this.#disabled = nextDisabled;
-    if (!enabled && capabilityId === "browser") this.#clearBrowserProjection();
-    this.#emit();
   }
 
   hostSnapshot(): ZenXCapabilityHostSnapshot {
@@ -367,6 +385,8 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   }
 
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
+    const configurationReady = this.#configurationMutationTail;
+    await configurationReady;
     const audit = this.#startAudit(invocation);
     try {
       const output =
@@ -452,17 +472,71 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
       );
     }
     invocation.signal.throwIfAborted();
-    return {
-      value: await this.#invokeProvider(registered.package, invocation),
-      maxOutputBytes: owner.tool.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
-      capabilityId: owner.capabilityId,
-      provider: {
-        id: registered.package.manifest.provider.id,
-        platforms: [...registered.package.manifest.provider.platforms],
-      },
-      interactionMode: owner.tool.interactionMode,
-      capabilities: [...owner.tool.capabilities],
+    const active = activeInvocation(owner.capabilityId);
+    const forwardAbort = (): void => {
+      active.controller.abort(invocation.signal.reason);
     };
+    if (invocation.signal.aborted) forwardAbort();
+    else
+      invocation.signal.addEventListener("abort", forwardAbort, { once: true });
+    this.#activeInvocations.add(active);
+    try {
+      const effectiveInvocation = {
+        ...invocation,
+        signal: active.controller.signal,
+      };
+      const value = await this.#invokeProvider(
+        registered.package,
+        effectiveInvocation,
+      );
+      effectiveInvocation.signal.throwIfAborted();
+      return {
+        value,
+        maxOutputBytes: owner.tool.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
+        capabilityId: owner.capabilityId,
+        provider: {
+          id: registered.package.manifest.provider.id,
+          platforms: [...registered.package.manifest.provider.platforms],
+        },
+        interactionMode: owner.tool.interactionMode,
+        capabilities: [...owner.tool.capabilities],
+      };
+    } catch (error) {
+      active.controller.signal.throwIfAborted();
+      throw error;
+    } finally {
+      invocation.signal.removeEventListener("abort", forwardAbort);
+      this.#activeInvocations.delete(active);
+      active.resolveSettled();
+    }
+  }
+
+  async #serializeConfigurationMutation<T>(
+    mutation: () => Promise<T>,
+  ): Promise<T> {
+    const result = this.#configurationMutationTail.then(mutation);
+    this.#configurationMutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await result;
+  }
+
+  async #cancelAndSettle(capabilityId: string): Promise<void> {
+    const active = [...this.#activeInvocations].filter(
+      (invocation) => invocation.capabilityId === capabilityId,
+    );
+    for (const invocation of active) {
+      invocation.controller.abort(
+        new DOMException(
+          `Capability ${capabilityId} is disabled`,
+          "AbortError",
+        ),
+      );
+    }
+    await Promise.all(
+      active.map(async (invocation) => await invocation.settled),
+    );
   }
 
   async #invokeProvider(
@@ -763,6 +837,19 @@ function validateManifest(
 
 function isContributionId(value: string): boolean {
   return /^[a-z][a-z0-9-]{0,62}$/u.test(value);
+}
+
+function activeInvocation(capabilityId: string): ActiveCapabilityInvocation {
+  let resolveSettled!: () => void;
+  const settled = new Promise<void>((resolve) => {
+    resolveSettled = resolve;
+  });
+  return {
+    capabilityId,
+    controller: new AbortController(),
+    settled,
+    resolveSettled,
+  };
 }
 
 function boundedResult(

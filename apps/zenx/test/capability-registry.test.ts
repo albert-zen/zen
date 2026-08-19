@@ -151,6 +151,132 @@ test("failed enablement persistence leaves memory, tools, and contributions unch
   assert.deepEqual(registry.pluginSnapshot(), beforePlugins);
 });
 
+test("concurrent enablement mutations are serialized with the last request authoritative", async () => {
+  const saves: Array<{
+    disabled: string[];
+    release(): void;
+  }> = [];
+  const registry = new ZenXCapabilityRegistry({
+    load: async () => ({ grants: {}, disabled: [] }),
+    save: async (configuration) =>
+      await new Promise<void>((resolve) => {
+        saves.push({ disabled: [...configuration.disabled], release: resolve });
+      }),
+  });
+  await registry.initialize();
+  registry.register(pluginPackageFixture(async () => ({ ok: true })));
+
+  const disable = registry.setEnabled("fixture", false);
+  const enable = registry.setEnabled("fixture", true);
+  await waitUntil(() => saves.length === 1);
+  assert.deepEqual(
+    saves.map((save) => save.disabled),
+    [["fixture"]],
+  );
+  saves[0]!.release();
+  await waitUntil(() => saves.length === 2);
+  assert.deepEqual(
+    saves.map((save) => save.disabled),
+    [["fixture"], []],
+  );
+  saves[1]!.release();
+  await Promise.all([disable, enable]);
+
+  assert.equal(registry.snapshot().capabilities[0]?.enabled, true);
+  assert.equal(registry.pluginSnapshot().sidebar.length, 1);
+});
+
+test("disable closes admission, aborts accepted execution, and waits for settlement", async () => {
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+  );
+  await registry.initialize();
+  let started!: () => void;
+  const invocationStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let release!: () => void;
+  const providerReleased = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  registry.register(
+    pluginPackageFixture(async () => {
+      started();
+      await providerReleased;
+      return { late: true };
+    }),
+  );
+  await registry.grant("fixture", ["fixture.read"]);
+
+  const acceptedInvocation = invocation("fixture_inspect", {});
+  const call = registry.execute(acceptedInvocation);
+  await invocationStarted;
+  let disableSettled = false;
+  const disable = registry.setEnabled("fixture", false).then(() => {
+    disableSettled = true;
+  });
+  await waitUntil(() => registry.snapshot().capabilities[0]?.enabled === false);
+  assert.equal(disableSettled, false);
+  assert.deepEqual(registry.hostSnapshot().definitions, []);
+  assert.deepEqual(registry.pluginSnapshot().sidebar, []);
+  const rejected = registry.execute(invocation("fixture_inspect", {}));
+  release();
+
+  await assert.rejects(call, /disabled/u);
+  await assert.rejects(rejected, /disabled/u);
+  await disable;
+  assert.equal(disableSettled, true);
+  assert.equal(
+    registry
+      .snapshot()
+      .recentInvocations.find(
+        (record) => record.callId === acceptedInvocation.callId,
+      )?.status,
+    "cancelled",
+  );
+});
+
+test("failed disable persistence leaves accepted execution admitted", async () => {
+  const registry = new ZenXCapabilityRegistry({
+    load: async () => ({
+      grants: {
+        fixture: [{ permissionId: "fixture.read", scope: "workspace" }],
+      },
+      disabled: [],
+    }),
+    save: async () => {
+      throw new Error("capability config unavailable");
+    },
+  });
+  await registry.initialize();
+  let started!: () => void;
+  const invocationStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let release!: () => void;
+  const providerReleased = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  registry.register(
+    pluginPackageFixture(async () => {
+      started();
+      await providerReleased;
+      return { completed: true };
+    }),
+  );
+
+  const call = registry.execute(invocation("fixture_inspect", {}));
+  await invocationStarted;
+  await assert.rejects(
+    registry.setEnabled("fixture", false),
+    /capability config unavailable/u,
+  );
+  assert.equal(registry.snapshot().capabilities[0]?.enabled, true);
+  release();
+  assert.match((await call).output, /"completed":true/u);
+  assert.equal(registry.snapshot().recentInvocations[0]?.status, "completed");
+});
+
 test("persisted disablement is authoritative when a package registers later", async () => {
   const registry = new ZenXCapabilityRegistry({
     load: async () => ({ grants: {}, disabled: ["fixture"] }),
@@ -538,12 +664,23 @@ function pluginPackageFixture(
   return { manifest: structuredClone(pluginManifest), invoke };
 }
 
+let invocationSequence = 0;
+
 function invocation(name: string, arguments_: Record<string, unknown>) {
+  invocationSequence += 1;
   return {
-    callId: "call-1",
+    callId: `call-${name}-${String(invocationSequence)}`,
     name,
     arguments: arguments_,
     cwd: "/workspace",
     signal: new AbortController().signal,
   };
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error("Timed out waiting for registry state");
 }

@@ -91,6 +91,7 @@ export class AppServerManager {
   #client: ZenXProtocolClient | undefined;
   #stopping = false;
   #nextThreadSummaryRequest = 1;
+  #capabilityRestartTail: Promise<void> = Promise.resolve();
 
   constructor(options: AppServerManagerOptions) {
     this.#options = options;
@@ -174,7 +175,14 @@ export class AppServerManager {
   }
 
   async restartCapabilities(): Promise<void> {
-    await this.restart(this.#options.hostConfig);
+    const restart = this.#capabilityRestartTail.then(
+      async () => await this.restart(this.#options.hostConfig),
+    );
+    this.#capabilityRestartTail = restart.then(
+      () => undefined,
+      () => undefined,
+    );
+    await restart;
   }
 
   async request<M extends ClientRequestMethod>(
