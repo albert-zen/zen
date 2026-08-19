@@ -241,6 +241,112 @@ test("bridges a granted structured capability through the real App Server host",
   }
 });
 
+test("stop closes capability admission before aborting and settling accepted execution", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-capability-stop-"),
+  );
+  const started = deferred<void>();
+  const aborted = deferred<void>();
+  const release = deferred<void>();
+  const lateStarted = deferred<void>();
+  const lateRelease = deferred<void>();
+  const events: string[] = [];
+  const capabilityHost: ZenXCapabilityHost = {
+    hostSnapshot: () => ({
+      definitions: [
+        {
+          name: "demo_wait",
+          description: "Wait until the host aborts this invocation",
+          inputSchema: { type: "object", additionalProperties: false },
+        },
+      ],
+    }),
+    execute: async (invocation) => {
+      if (events.length > 0) {
+        events.push("late-started");
+        lateStarted.resolve();
+        await lateRelease.promise;
+        return { output: '{"late":true}', exitCode: 0 };
+      }
+      events.push("started");
+      started.resolve();
+      await new Promise<void>((resolve) => {
+        invocation.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
+      });
+      events.push("aborted");
+      aborted.resolve();
+      await release.promise;
+      events.push("settled");
+      throw invocation.signal.reason;
+    },
+  };
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+    },
+    capabilityHost,
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    const thread = (await manager.request("thread/start", {})).thread;
+    const lateThread = (await manager.request("thread/start", {})).thread;
+    const lateCompleted = deferred<void>();
+    manager.onNotification((method, params) => {
+      if (
+        method === "turn/completed" &&
+        (params as { threadId?: string }).threadId === lateThread.id
+      ) {
+        lateCompleted.resolve();
+      }
+    });
+    await manager.request("turn/start", {
+      threadId: thread.id,
+      input: [{ type: "text", text: "!tool demo_wait {}" }],
+    });
+    await within(started.promise);
+
+    let stopReturned = false;
+    const stop = manager.stop().then(() => {
+      stopReturned = true;
+    });
+    await within(aborted.promise);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(stopReturned, false);
+
+    await manager.request("turn/start", {
+      threadId: lateThread.id,
+      input: [{ type: "text", text: "!tool demo_wait {}" }],
+    });
+    const lateOutcome = await within(
+      Promise.race([
+        lateStarted.promise.then(() => "admitted" as const),
+        lateCompleted.promise.then(() => "rejected" as const),
+      ]),
+    );
+    assert.equal(lateOutcome, "rejected");
+
+    release.resolve();
+    await within(stop);
+    assert.deepEqual(events, ["started", "aborted", "settled"]);
+  } finally {
+    release.resolve();
+    lateRelease.resolve();
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("bridges all Agent Room tools through the real child App Server", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-room-capability-host-"),

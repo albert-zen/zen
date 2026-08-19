@@ -78,7 +78,10 @@ export class AppServerManager {
     (event: ApprovalResolvedEvent) => void
   >();
   readonly #pendingApprovals = new Map<string, PendingApproval>();
-  readonly #activeCapabilityInvocations = new Map<string, AbortController>();
+  readonly #activeCapabilityInvocations = new Map<
+    string,
+    { controller: AbortController; execution: Promise<void> }
+  >();
   readonly #pendingThreadSummaryRequests = new Map<
     string,
     {
@@ -89,7 +92,9 @@ export class AppServerManager {
   #status: AppServerHostStatus = { type: "stopped" };
   #child: ChildProcess | undefined;
   #client: ZenXProtocolClient | undefined;
+  #acceptingCapabilityInvocations = false;
   #stopping = false;
+  #stopPromise: Promise<void> | undefined;
   #nextThreadSummaryRequest = 1;
   #capabilityRestartTail: Promise<void> = Promise.resolve();
 
@@ -116,6 +121,7 @@ export class AppServerManager {
     if (this.#child !== undefined) {
       throw new Error("ZenX App Server host is already running");
     }
+    this.#acceptingCapabilityInvocations = false;
     this.#stopping = false;
     this.#setStatus({ type: "starting" });
     const bearerToken = await createPrivateTokenFile(this.#options.tokenFile);
@@ -159,8 +165,10 @@ export class AppServerManager {
         bearerTokenFile: this.#options.tokenFile,
       });
       this.#forwardNotifications(this.#client);
+      this.#acceptingCapabilityInvocations = true;
       this.#setStatus({ type: "ready", reconnected: false });
     } catch (error) {
+      this.#acceptingCapabilityInvocations = false;
       const message = asError(error).message;
       this.#setStatus({ type: "error", message });
       child.kill("SIGTERM");
@@ -268,13 +276,27 @@ export class AppServerManager {
   }
 
   async stop(): Promise<void> {
-    if (this.#stopping) return;
+    if (this.#stopPromise !== undefined) {
+      await this.#stopPromise;
+      return;
+    }
     this.#stopping = true;
+    this.#acceptingCapabilityInvocations = false;
+    const stopping = this.#performStop();
+    this.#stopPromise = stopping;
+    try {
+      await stopping;
+    } finally {
+      if (this.#stopPromise === stopping) this.#stopPromise = undefined;
+    }
+  }
+
+  async #performStop(): Promise<void> {
     this.#cancelPendingApprovals();
-    this.#cancelCapabilityInvocations();
     this.#rejectPendingThreadSummaryRequests(
       new Error("Zen App Server host stopped"),
     );
+    await this.#cancelAndSettleCapabilityInvocations();
     this.#client?.close();
     this.#client = undefined;
     const child = this.#child;
@@ -374,8 +396,9 @@ export class AppServerManager {
   ): void {
     if (this.#child !== child) return;
     this.#child = undefined;
+    this.#acceptingCapabilityInvocations = false;
     this.#cancelPendingApprovals();
-    this.#cancelCapabilityInvocations();
+    this.#abortCapabilityInvocations();
     this.#rejectPendingThreadSummaryRequests(
       new Error("Zen App Server stopped before returning Thread summaries"),
     );
@@ -437,12 +460,20 @@ export class AppServerManager {
       if (hostEvent.type === "capability/cancel") {
         this.#activeCapabilityInvocations
           .get(hostEvent.invocationId)
-          ?.abort(
+          ?.controller.abort(
             new DOMException("Capability invocation cancelled", "AbortError"),
           );
         return;
       }
       if (hostEvent.type !== "capability/invoke") return;
+      if (!this.#acceptingCapabilityInvocations) {
+        child.send({
+          type: "capability/result",
+          invocationId: hostEvent.invocationId,
+          error: "ZenX capability host is stopping",
+        } satisfies HostCommand);
+        return;
+      }
       const host = this.#options.capabilityHost;
       if (host === undefined) {
         child.send({
@@ -461,9 +492,14 @@ export class AppServerManager {
         return;
       }
       const controller = new AbortController();
-      this.#activeCapabilityInvocations.set(hostEvent.invocationId, controller);
-      void host
-        .execute({ ...hostEvent.invocation, signal: controller.signal })
+      const execution = Promise.resolve()
+        .then(
+          async () =>
+            await host.execute({
+              ...hostEvent.invocation,
+              signal: controller.signal,
+            }),
+        )
         .then((result) => {
           if (this.#child === child && child.connected) {
             child.send({
@@ -484,18 +520,33 @@ export class AppServerManager {
           }
         })
         .finally(() => {
-          this.#activeCapabilityInvocations.delete(hostEvent.invocationId);
+          if (
+            this.#activeCapabilityInvocations.get(hostEvent.invocationId)
+              ?.execution === execution
+          ) {
+            this.#activeCapabilityInvocations.delete(hostEvent.invocationId);
+          }
         });
+      this.#activeCapabilityInvocations.set(hostEvent.invocationId, {
+        controller,
+        execution,
+      });
     });
   }
 
-  #cancelCapabilityInvocations(): void {
-    for (const controller of this.#activeCapabilityInvocations.values()) {
-      controller.abort(
+  #abortCapabilityInvocations(): Promise<void>[] {
+    const executions: Promise<void>[] = [];
+    for (const active of this.#activeCapabilityInvocations.values()) {
+      active.controller.abort(
         new DOMException("ZenX App Server host stopped", "AbortError"),
       );
+      executions.push(active.execution);
     }
-    this.#activeCapabilityInvocations.clear();
+    return executions;
+  }
+
+  async #cancelAndSettleCapabilityInvocations(): Promise<void> {
+    await Promise.allSettled(this.#abortCapabilityInvocations());
   }
 
   #rejectPendingThreadSummaryRequests(error: Error): void {

@@ -8,6 +8,7 @@ import type {
 import type {
   RegisteredZenXCapability,
   ZenXCapabilityAuditRecord,
+  ZenXCapabilityDisposer,
   ZenXCapabilityGrant,
   ZenXCapabilityConfigurationStore,
   ZenXCapabilityHost,
@@ -83,7 +84,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   register(
     capabilityPackage: ZenXCapabilityPackage,
     source: "bundled" | "local" = "bundled",
-  ): void {
+  ): ZenXCapabilityDisposer {
     const manifest = validateManifest(capabilityPackage.manifest);
     if (this.#registered.has(manifest.id)) {
       throw new Error(`Capability ${manifest.id} is already registered`);
@@ -115,11 +116,24 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
       this.#toolOwners.set(tool.name, { capabilityId: manifest.id, tool });
     }
     this.#emit();
+    let disposing: Promise<void> | undefined;
+    return () => {
+      disposing ??= this.#unregisterRegistration(manifest.id, registration);
+      return disposing;
+    };
   }
 
   async unregister(capabilityId: string): Promise<void> {
     const registered = this.#registered.get(capabilityId);
     if (registered === undefined) return;
+    await this.#unregisterRegistration(capabilityId, registered);
+  }
+
+  async #unregisterRegistration(
+    capabilityId: string,
+    registered: RegisteredZenXCapability,
+  ): Promise<void> {
+    if (this.#registered.get(capabilityId) !== registered) return;
     this.#registered.delete(capabilityId);
     if (capabilityId === "browser") this.#clearBrowserProjection();
     for (const tool of registered.package.manifest.tools) {

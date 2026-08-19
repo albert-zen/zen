@@ -80,6 +80,8 @@ export interface ZenXCapabilityPackage {
   close?(): Promise<void> | void;
 }
 
+export type ZenXCapabilityDisposer = () => Promise<void>;
+
 export interface ZenXCapabilityGrant {
   permissionId: string;
   scope: ZenXCapabilityPermissionScope;

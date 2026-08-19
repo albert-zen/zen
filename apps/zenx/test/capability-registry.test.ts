@@ -290,13 +290,13 @@ test("persisted disablement is authoritative when a package registers later", as
   assert.deepEqual(registry.pluginSnapshot().sidebar, []);
 });
 
-test("unregister unloads package tools and contributions", async () => {
+test("registration disposal unloads package tools and contributions once", async () => {
   const registry = new ZenXCapabilityRegistry(
     new MemoryZenXCapabilityGrantStore(),
   );
   await registry.initialize();
   let closes = 0;
-  registry.register({
+  const dispose = registry.register({
     ...pluginPackageFixture(async () => ({ ok: true })),
     close: () => {
       closes += 1;
@@ -305,8 +305,8 @@ test("unregister unloads package tools and contributions", async () => {
   await registry.grant("fixture", ["fixture.read"]);
   assert.equal(registry.pluginSnapshot().sidebar.length, 1);
 
-  await registry.unregister("fixture");
-  await registry.unregister("fixture");
+  await dispose();
+  await dispose();
   assert.equal(closes, 1);
   assert.deepEqual(registry.pluginSnapshot().plugins, []);
   assert.deepEqual(registry.hostSnapshot().definitions, []);
@@ -374,6 +374,32 @@ test("registers, grants, revokes, and unregisters package contributions", async 
   await registry.unregister("fixture");
   assert.deepEqual(registry.snapshot().capabilities, []);
   assert.deepEqual(registry.hostSnapshot().definitions, []);
+});
+
+test("registration disposer is idempotent and cannot remove a later registration", async () => {
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+  );
+  await registry.initialize();
+  let firstCloseCount = 0;
+  const disposeFirst = registry.register({
+    ...packageFixture(async () => ({ generation: 1 })),
+    close: () => {
+      firstCloseCount += 1;
+    },
+  });
+
+  await disposeFirst();
+  await disposeFirst();
+  assert.equal(firstCloseCount, 1);
+
+  const disposeSecond = registry.register(
+    packageFixture(async () => ({ generation: 2 })),
+  );
+  await disposeFirst();
+  assert.equal(registry.snapshot().capabilities.length, 1);
+  await disposeSecond();
+  assert.equal(registry.snapshot().capabilities.length, 0);
 });
 
 test("failed grant persistence leaves snapshot and host projection unchanged", async () => {

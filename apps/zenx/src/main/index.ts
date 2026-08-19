@@ -194,8 +194,10 @@ app.whenReady().then(async () => {
     } else {
       selfControlPort.attach(appServerManager, hostConfig.cwd);
       const restartErrors: Error[] = [];
+      let hostStopped = false;
       try {
-        await capabilityService?.resetTransient();
+        await appServerManager.stop();
+        hostStopped = true;
       } catch (error) {
         restartErrors.push(normalizeTitleOwnershipFailure(error));
       }
@@ -204,10 +206,21 @@ app.whenReady().then(async () => {
       } catch (error) {
         restartErrors.push(normalizeTitleOwnershipFailure(error));
       }
-      try {
-        await appServerManager.restart(hostConfig);
-      } catch (error) {
-        restartErrors.push(normalizeTitleOwnershipFailure(error));
+      let capabilitiesReset = false;
+      if (hostStopped) {
+        try {
+          await capabilityService?.resetTransient();
+          capabilitiesReset = true;
+        } catch (error) {
+          restartErrors.push(normalizeTitleOwnershipFailure(error));
+        }
+      }
+      if (hostStopped && capabilitiesReset) {
+        try {
+          await appServerManager.restart(hostConfig);
+        } catch (error) {
+          restartErrors.push(normalizeTitleOwnershipFailure(error));
+        }
       }
       try {
         await titleCoordinator?.restart();

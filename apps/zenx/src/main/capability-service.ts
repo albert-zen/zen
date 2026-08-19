@@ -18,6 +18,7 @@ import {
 } from "./capabilities/provider-catalog.js";
 import { WinAppCliComputerBackend } from "./capabilities/windows-computer-provider.js";
 import type {
+  ZenXCapabilityDisposer,
   ZenXCapabilityGrantStore,
   ZenXCapabilityHost,
   ZenXCapabilityHostSnapshot,
@@ -37,6 +38,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #bundledProvidersOnly: boolean;
   readonly #resourcesDirectory?: string;
   readonly #bundledManifestSha256?: string;
+  #browserRegistration: ZenXCapabilityDisposer | undefined;
   #computerRegistered = false;
 
   constructor(options: {
@@ -70,6 +72,27 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   async initialize(): Promise<void> {
     await this.#registry.initialize();
+    await this.#mountBrowser();
+    await this.#mountComputer();
+    const discovered = await discoverLocalCapabilityPackages(
+      this.#localDirectory,
+    );
+    for (const capabilityPackage of discovered.packages) {
+      try {
+        this.#registry.register(capabilityPackage, "local");
+      } catch (error) {
+        this.#registry.recordDiscoveryError(describeError(error));
+      }
+    }
+    for (const error of discovered.errors) {
+      this.#registry.recordDiscoveryError(error);
+    }
+  }
+
+  async #mountBrowser(): Promise<void> {
+    if (this.#browserRegistration !== undefined) {
+      throw new Error("Browser capability is already mounted");
+    }
     const browser =
       this.#browserBackend === undefined
         ? await selectBrowserProvider({
@@ -84,7 +107,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
             diagnostics: [],
           };
     if (browser.backend !== undefined) {
-      this.#registry.register(
+      this.#browserRegistration = this.#registry.register(
         new BrowserZenXCapabilityPackage(browser.backend, browser.manifest),
         "bundled",
       );
@@ -97,6 +120,21 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         `Browser provider: ${browser.diagnostics[0]?.reason ?? "unavailable"}`,
       );
     }
+  }
+
+  async #unmountBrowser(): Promise<void> {
+    const dispose = this.#browserRegistration;
+    this.#browserRegistration = undefined;
+    await dispose?.();
+  }
+
+  async #resetBrowser(): Promise<void> {
+    if (this.#browserBackend !== undefined) return;
+    await this.#unmountBrowser();
+    await this.#mountBrowser();
+  }
+
+  async #mountComputer(): Promise<void> {
     const computer =
       this.#computerBackend === undefined
         ? await selectComputerProvider({
@@ -141,19 +179,6 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         );
       }
     }
-    const discovered = await discoverLocalCapabilityPackages(
-      this.#localDirectory,
-    );
-    for (const capabilityPackage of discovered.packages) {
-      try {
-        this.#registry.register(capabilityPackage, "local");
-      } catch (error) {
-        this.#registry.recordDiscoveryError(describeError(error));
-      }
-    }
-    for (const error of discovered.errors) {
-      this.#registry.recordDiscoveryError(error);
-    }
   }
 
   snapshot(): ZenXCapabilitySnapshot {
@@ -167,8 +192,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   register(
     capabilityPackage: ZenXCapabilityPackage,
     source: "bundled" | "local" = "bundled",
-  ): void {
-    this.#registry.register(capabilityPackage, source);
+  ): ZenXCapabilityDisposer {
+    return this.#registry.register(capabilityPackage, source);
   }
 
   async unregister(capabilityId: string): Promise<void> {
@@ -177,51 +202,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   async resetTransient(): Promise<void> {
     await this.#registry.resetTransient();
-    if (
-      this.#browserBackend !== undefined ||
-      this.#computerBackend !== undefined
-    ) {
-      return;
-    }
-    await this.#registry.unregister("browser");
+    await this.#resetBrowser();
+    if (this.#computerBackend !== undefined) return;
     await this.#registry.unregister("computer");
     this.#computerRegistered = false;
-    const browser = await selectBrowserProvider({
-      userDataDirectory: this.#userDataDirectory,
-      bundledProvidersOnly: this.#bundledProvidersOnly,
-      resourcesDirectory: this.#resourcesDirectory,
-      bundledManifestSha256: this.#bundledManifestSha256,
-    });
-    if (browser.backend !== undefined) {
-      this.#registry.register(
-        new BrowserZenXCapabilityPackage(browser.backend, browser.manifest),
-        "bundled",
-      );
-    }
-    for (const diagnostic of browser.diagnostics) {
-      this.#registry.recordProviderDiagnostic(diagnostic);
-    }
-    if (browser.backend === undefined) {
-      this.#registry.recordDiscoveryError(
-        `Browser provider: ${browser.diagnostics[0]?.reason ?? "unavailable"}`,
-      );
-    }
-    const computer = await selectComputerProvider({
-      userDataDirectory: this.#userDataDirectory,
-      bundledProvidersOnly: this.#bundledProvidersOnly,
-      resourcesDirectory: this.#resourcesDirectory,
-      bundledManifestSha256: this.#bundledManifestSha256,
-    });
-    if (computer.backend !== undefined) {
-      this.#registry.register(
-        new ComputerZenXCapabilityPackage(computer.backend, computer.manifest),
-        "bundled",
-      );
-      this.#computerRegistered = true;
-    }
-    for (const diagnostic of computer.diagnostics) {
-      this.#registry.recordProviderDiagnostic(diagnostic);
-    }
+    await this.#mountComputer();
   }
 
   hostSnapshot(): ZenXCapabilityHostSnapshot {
@@ -261,6 +246,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   async close(): Promise<void> {
+    await this.#unmountBrowser();
     await this.#registry.close();
     if (!this.#computerRegistered) await this.#computerBackend?.close();
   }
