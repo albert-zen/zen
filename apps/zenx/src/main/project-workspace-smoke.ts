@@ -34,10 +34,10 @@ export async function runProjectWorkspaceAcceptance(
   console.info(
     `Packaged Project workspace acceptance activated: ${options.configPath}`,
   );
-  const config = await readProjectWorkspaceAcceptanceConfig(
-    options.configPath,
+  const config = await readProjectWorkspaceAcceptanceConfig(options.configPath);
+  console.info(
+    `Packaged Project workspace acceptance config read: ${config.mode}`,
   );
-  console.info(`Packaged Project workspace acceptance config read: ${config.mode}`);
   try {
     if (!options.applicationMenuAbsent) {
       throw new Error("Packaged ZenX exposed an unexpected application menu");
