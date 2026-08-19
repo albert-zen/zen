@@ -7,9 +7,57 @@ import test from "node:test";
 import {
   ZenXTriggerProgramRunner,
   type TriggerProgramRunInput,
+  verifyAndTerminateWindowsProcessTree,
+  type WindowsProcessIdentity,
+  type WindowsProcessTableSnapshot,
 } from "../src/main/trigger-program-runner.js";
 
 const runner = new ZenXTriggerProgramRunner();
+
+test("Windows containment never reuses stale identity evidence for a second tree kill", async () => {
+  const root: WindowsProcessIdentity = {
+    pid: 101,
+    parentPid: 1,
+    processGroupId: null,
+    sessionId: null,
+    startTime: "root-original",
+  };
+  const descendant: WindowsProcessIdentity = {
+    pid: 202,
+    parentPid: root.pid,
+    processGroupId: null,
+    sessionId: null,
+    startTime: "descendant-original",
+  };
+  let table: WindowsProcessTableSnapshot = {
+    entries: [root, descendant],
+  };
+  const taskkills: Array<[number, boolean]> = [];
+
+  const result = await verifyAndTerminateWindowsProcessTree(
+    root.pid,
+    { root, descendants: [descendant] },
+    {
+      captureProcessTable: async () => structuredClone(table),
+      runTaskkill: async (pid, tree) => {
+        taskkills.push([pid, tree]);
+        table = {
+          entries: [
+            {
+              ...root,
+              startTime: "root-reused-after-first-tree-kill",
+            },
+          ],
+        };
+        return { ok: true, error: "" };
+      },
+      processIsAlive: (pid) => table.entries.some((entry) => entry.pid === pid),
+    },
+  );
+
+  assert.deepEqual(result, { ok: true, error: "" });
+  assert.deepEqual(taskkills, [[root.pid, true]]);
+});
 
 test("program runner passes bounded JSON input, cwd, and env", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-program-"));

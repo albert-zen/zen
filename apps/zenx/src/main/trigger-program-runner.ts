@@ -375,7 +375,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
   }
 }
 
-interface ProcessIdentity {
+export interface WindowsProcessIdentity {
   pid: number;
   parentPid: number;
   processGroupId: number | null;
@@ -383,14 +383,27 @@ interface ProcessIdentity {
   startTime: string | null;
 }
 
-interface ProcessTableSnapshot {
-  entries: ProcessIdentity[];
+export interface WindowsProcessTableSnapshot {
+  entries: WindowsProcessIdentity[];
 }
 
-interface ProcessTreeSnapshot {
-  root: ProcessIdentity;
-  descendants: ProcessIdentity[];
+export interface WindowsProcessTreeSnapshot {
+  root: WindowsProcessIdentity;
+  descendants: WindowsProcessIdentity[];
 }
+
+export interface WindowsProcessOperations {
+  captureProcessTable(): Promise<WindowsProcessTableSnapshot>;
+  runTaskkill(
+    pid: number,
+    tree: boolean,
+  ): Promise<{ ok: boolean; error: string }>;
+  processIsAlive(pid: number): boolean;
+}
+
+type ProcessIdentity = WindowsProcessIdentity;
+type ProcessTableSnapshot = WindowsProcessTableSnapshot;
+type ProcessTreeSnapshot = WindowsProcessTreeSnapshot;
 
 interface TerminationResult {
   ok: boolean;
@@ -435,7 +448,7 @@ async function terminateWindowsProcessTree(
       error:
         "process-tree identity was unavailable; containment was not proven",
     };
-  return await verifyAndTerminateWindows(child.pid, tree);
+  return await verifyAndTerminateWindowsProcessTree(child.pid, tree);
 }
 
 async function terminatePosixProcessTree(
@@ -484,11 +497,12 @@ async function verifyExitedChild(
   }
 }
 
-async function verifyAndTerminateWindows(
+export async function verifyAndTerminateWindowsProcessTree(
   rootPid: number,
   tree: ProcessTreeSnapshot,
+  operations: WindowsProcessOperations = realWindowsProcessOperations,
 ): Promise<TerminationResult> {
-  const table = await captureProcessTable();
+  const table = await operations.captureProcessTable();
   let tracked = [tree.root, ...tree.descendants];
   const beforeExpansion = validateTrackedIdentities(tracked, table.entries);
   if (beforeExpansion !== null) return { ok: false, error: beforeExpansion };
@@ -507,20 +521,18 @@ async function verifyAndTerminateWindows(
         ok: false,
         error: `PID ${String(tree.root.pid)} identity changed; containment was not proven`,
       };
-    const rootResult = await runTaskkill(rootPid, true);
+    const rootResult = await operations.runTaskkill(rootPid, true);
     if (!rootResult.ok && rootResult.error !== "process was not found")
       return { ok: false, error: rootResult.error };
   }
   for (const identity of live) {
-    const current = table.entries.find(
+    if (identity.pid === rootPid) continue;
+    const freshTable = await operations.captureProcessTable();
+    const current = freshTable.entries.find(
       (candidate) => candidate.pid === identity.pid,
     );
-    if (!identityMatches(identity, current))
-      return {
-        ok: false,
-        error: `PID ${String(identity.pid)} identity changed; containment was not proven`,
-      };
-    const result = await runTaskkill(identity.pid, true);
+    if (!identityMatches(identity, current)) continue;
+    const result = await operations.runTaskkill(identity.pid, true);
     if (!result.ok && result.error !== "process was not found")
       return {
         ok: false,
@@ -531,7 +543,14 @@ async function verifyAndTerminateWindows(
   let stableAbsentPasses = 0;
   const deadline = Date.now() + PROGRAM_QUIESCENCE_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (tracked.every((identity) => !processIsAlive(identity.pid))) {
+    const maybeAlive = tracked.filter((identity) =>
+      operations.processIsAlive(identity.pid),
+    );
+    const originalStillAlive =
+      maybeAlive.length === 0
+        ? false
+        : await anyIdentityStillAlive(maybeAlive, operations);
+    if (!originalStillAlive) {
       stableAbsentPasses += 1;
       if (stableAbsentPasses >= PROGRAM_QUIESCENCE_PASSES)
         return { ok: true, error: "" };
@@ -547,6 +566,19 @@ async function verifyAndTerminateWindows(
   };
 }
 
+async function anyIdentityStillAlive(
+  identities: readonly ProcessIdentity[],
+  operations: WindowsProcessOperations,
+): Promise<boolean> {
+  const table = await operations.captureProcessTable();
+  return identities.some((identity) =>
+    identityMatches(
+      identity,
+      table.entries.find((candidate) => candidate.pid === identity.pid),
+    ),
+  );
+}
+
 function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -555,6 +587,12 @@ function processIsAlive(pid: number): boolean {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
 }
+
+const realWindowsProcessOperations: WindowsProcessOperations = {
+  captureProcessTable,
+  runTaskkill,
+  processIsAlive,
+};
 
 async function verifyAndTerminatePosix(
   rootPid: number,
