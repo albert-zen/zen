@@ -25,17 +25,24 @@ $stdoutPath = Join-Path $smokeRoot "zenx.stdout.log"
 $stderrPath = Join-Path $smokeRoot "zenx.stderr.log"
 $process = $null
 $previousZenData = $env:ZENX_DATA_DIR
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+function Write-Utf8Json {
+  param([string] $Path, [object] $Value, [int] $Depth = 2)
+  $json = $Value | ConvertTo-Json -Depth $Depth
+  [System.IO.File]::WriteAllText($Path, $json, $utf8NoBom)
+}
 
 function Start-ZenXAcceptance {
   param([string] $Executable, [string] $UserData, [string] $Mode)
   Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
-  @{
+  Write-Utf8Json -Path $acceptancePath -Value @{
     fixture = $fixtureName
     mode = $Mode
     projectA = $projectAName
     projectB = $projectBName
     resultPath = $resultPath
-  } | ConvertTo-Json | Set-Content -LiteralPath $acceptancePath -Encoding UTF8
+  }
   $previousAcceptance = $env:ZENX_PROJECT_ACCEPTANCE_CONFIG
   try {
     $env:ZENX_PROJECT_ACCEPTANCE_CONFIG = $acceptancePath
@@ -98,7 +105,7 @@ try {
   New-Item -ItemType Directory -Path $fixtureRoot, $projectA, $projectB, $userData, $zenData -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $projectA "keep-me.txt") -Value "project-a-marker" -Encoding UTF8
   Set-Content -LiteralPath (Join-Path $projectB "keep-me.txt") -Value "project-b-marker" -Encoding UTF8
-  @{
+  Write-Utf8Json -Path $profilePath -Depth 5 -Value @{
     version = 1
     onboardingComplete = $true
     provider = @{ type = "fake"; displayName = "Local demo" }
@@ -109,7 +116,7 @@ try {
     workspaces = @()
     lastUsedWorkspace = $null
     approvalPolicy = "never"
-  } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $profilePath -Encoding UTF8
+  }
 
   & npm run build
   if ($LASTEXITCODE -ne 0) { throw "ZenX build failed." }
