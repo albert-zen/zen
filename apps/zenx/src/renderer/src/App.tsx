@@ -727,7 +727,8 @@ function AgentSurface({
           modelError={modelUpdateError ?? modelCatalogError}
           models={models}
           permissionLabel={
-            selectedSettings?.approvalPolicy === "never"
+            selectedSummary.status !== "systemError" &&
+            selectedSummary.currentMetadata.approvalPolicy === "never"
               ? "Full access"
               : "Approval required"
           }

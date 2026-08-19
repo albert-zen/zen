@@ -41,7 +41,7 @@ test("derives inbox groups from native summary status", () => {
       section.threads.map((thread) => thread.threadId),
     ]),
     [
-      ["needs", ["broken", "active"]],
+      ["needs", ["active", "broken"]],
       ["active", []],
       ["watching", ["watching"]],
       ["settled", ["settled"]],

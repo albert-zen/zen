@@ -110,7 +110,7 @@ export function Sidebar({
                   aria-current={
                     selectedPage === contribution.page ? "page" : undefined
                   }
-                  key={`${contribution.capabilityId}:${contribution.id}`}
+                  key={contribution.key}
                   onClick={() => onOpenContribution(contribution.page)}
                 >
                   <Icon

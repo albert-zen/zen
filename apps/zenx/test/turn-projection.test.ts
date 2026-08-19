@@ -100,6 +100,6 @@ function command(id: string, value: string): ThreadItem {
     commandActions: [],
     aggregatedOutput: "ok",
     exitCode: 0,
-    durationMs: 10,
+    durationMs: null,
   };
 }
