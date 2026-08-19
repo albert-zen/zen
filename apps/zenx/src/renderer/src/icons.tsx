@@ -13,6 +13,7 @@ type IconName =
   | "layers"
   | "lock"
   | "moon"
+  | "more"
   | "paperclip"
   | "panel-right"
   | "reasoning"
@@ -67,6 +68,7 @@ const paths: Record<IconName, ReactNode> = {
     </>
   ),
   moon: <path d="M13.4 9.4A5.8 5.8 0 0 1 6.6 2.6a5.8 5.8 0 1 0 6.8 6.8Z" />,
+  more: <path d="M3 8h.01M8 8h.01M13 8h.01" />,
   layers: (
     <>
       <path d="m8 2 6 3.2-6 3.2-6-3.2Z" />

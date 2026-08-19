@@ -5,7 +5,7 @@ import test from "node:test";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import { ThreadLifecycleAction } from "../src/renderer/src/ThreadLifecycleAction.js";
-import { Sidebar } from "../src/renderer/src/Sidebar.js";
+import { Sidebar, ThreadItemMenu } from "../src/renderer/src/Sidebar.js";
 
 const noop = () => undefined;
 
@@ -15,6 +15,7 @@ test("sidebar exposes distinct Active and Archived Thread views", () => {
   assert.match(active, />Active</u);
   assert.match(active, />Archived</u);
   assert.match(active, /aria-selected="true"[^>]*>Active/u);
+  assert.match(active, /aria-haspopup="menu"/u);
 
   const archived = renderSidebar("archived", []);
   assert.match(archived, /aria-selected="true"[^>]*>Archived/u);
@@ -70,6 +71,56 @@ test("Thread lifecycle action is reversible and honest about active Turns", () =
   assert.doesNotMatch(archived, />Delete</u);
 });
 
+test("active Thread menu offers Rename and a safely disabled Archive", () => {
+  const html = renderToStaticMarkup(
+    createElement(ThreadItemMenu, {
+      archived: false,
+      busyAction: null,
+      error: null,
+      hasActiveTurn: true,
+      open: true,
+      renaming: false,
+      renameDraft: "Active Thread",
+      onArchive: noop,
+      onBeginRename: noop,
+      onCancelRename: noop,
+      onDraftChange: noop,
+      onRename: noop,
+      onUnarchive: noop,
+    }),
+  );
+  assert.match(html, /role="menu"/u);
+  assert.match(html, />Rename</u);
+  assert.match(
+    html,
+    /role="menuitem" disabled=""[^>]*>[\s\S]*?Archive<\/button>/u,
+  );
+  assert.match(html, /Wait for the active Turn to finish before archiving/u);
+});
+
+test("archived Thread menu offers Unarchive without inventing Delete", () => {
+  const html = renderToStaticMarkup(
+    createElement(ThreadItemMenu, {
+      archived: true,
+      busyAction: "unarchive",
+      error: null,
+      hasActiveTurn: false,
+      open: true,
+      renaming: false,
+      renameDraft: "Archived Thread",
+      onArchive: noop,
+      onBeginRename: noop,
+      onCancelRename: noop,
+      onDraftChange: noop,
+      onRename: noop,
+      onUnarchive: noop,
+    }),
+  );
+  assert.match(html, />Unarchiving…</u);
+  assert.doesNotMatch(html, />Delete</u);
+  assert.doesNotMatch(html, />Rename</u);
+});
+
 function renderSidebar(
   scope: "active" | "archived",
   threads: NativeThreadSummary[],
@@ -78,12 +129,15 @@ function renderSidebar(
   return renderToStaticMarkup(
     createElement(Sidebar, {
       mode: "projects",
+      liveThread: null,
       open: true,
       onClose: noop,
       onModeChange: noop,
       onNewThread: noop,
       onOpenContribution: noop,
       onOpenSettings: noop,
+      onChangeThreadLifecycle: async () => undefined,
+      onRenameThread: async () => undefined,
       onRetryThreads: noop,
       onSelectThread: noop,
       onThreadScopeChange: noop,

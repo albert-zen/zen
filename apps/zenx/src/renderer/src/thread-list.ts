@@ -1,4 +1,5 @@
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
+import type { Thread } from "../../protocol-client/index.js";
 
 export type SidebarMode = "inbox" | "projects";
 export type ThreadScope = "active" | "archived";
@@ -53,6 +54,18 @@ export function writeThreadScope(
   scope: ThreadScope,
 ): void {
   storage.setItem("zenx-thread-scope", scope);
+}
+
+export function threadHasActiveTurn(
+  thread: NativeThreadSummary,
+  liveThread: Thread | null,
+): boolean {
+  if (thread.status === "active") return true;
+  if (liveThread?.id !== thread.threadId) return false;
+  return (
+    liveThread.status.type === "active" ||
+    liveThread.turns.some((turn) => turn.status === "inProgress")
+  );
 }
 
 export function deriveInboxSections(

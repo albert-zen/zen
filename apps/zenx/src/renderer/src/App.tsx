@@ -52,6 +52,7 @@ import { Sidebar } from "./Sidebar.js";
 import {
   readSidebarMode,
   readThreadScope,
+  threadHasActiveTurn,
   threadTitle,
   writeSidebarMode,
   writeThreadScope,
@@ -520,26 +521,34 @@ export function App() {
       setSelectedRoomId(triggerSnapshot.rooms[0]?.id ?? null);
   };
 
-  const changeThreadLifecycle = async () => {
-    if (selectedSummary === null || selectedSummary.status === "systemError")
-      return;
-    if (!selectedSummary.archived && selectedSummary.status === "active") {
-      setThreadLifecycleError(
-        "Wait for the active Turn to finish before archiving.",
-      );
-      return;
+  const renameThread = async (threadId: string, title: string) => {
+    const projection = await window.zenx.titles.rename(threadId, title);
+    setTitleSnapshot((current) => ({
+      ...current,
+      [threadId]: projection,
+    }));
+  };
+
+  const performThreadLifecycle = async (summary: NativeThreadSummary) => {
+    if (!summary.archived && threadHasActiveTurn(summary, threadDetail)) {
+      throw new Error("Wait for the active Turn to finish before archiving.");
     }
+    await window.zenx.protocol.request(
+      summary.archived ? "thread/unarchive" : "thread/archive",
+      { threadId: summary.threadId },
+    );
+    await loadThreadSummaries();
+  };
+
+  const changeThreadLifecycle = async () => {
+    if (selectedSummary === null) return;
     const nextScope: ThreadScope = selectedSummary.archived
       ? "active"
       : "archived";
     setThreadLifecycleBusy(true);
     setThreadLifecycleError(null);
     try {
-      await window.zenx.protocol.request(
-        selectedSummary.archived ? "thread/unarchive" : "thread/archive",
-        { threadId: selectedSummary.threadId },
-      );
-      await loadThreadSummaries();
+      await performThreadLifecycle(selectedSummary);
       setThreadScope(nextScope);
       try {
         writeThreadScope(window.localStorage, nextScope);
@@ -556,9 +565,11 @@ export function App() {
   return (
     <div className="app-shell">
       <Sidebar
+        liveThread={threadDetail}
         mode={sidebarMode}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onChangeThreadLifecycle={performThreadLifecycle}
         onModeChange={(mode) => {
           setSidebarMode(mode);
           try {
@@ -571,6 +582,7 @@ export function App() {
         onOpenContribution={(target) => openPage(target)}
         onOpenSettings={() => openPage("settings")}
         onRetryThreads={() => void loadThreadSummaries(true)}
+        onRenameThread={renameThread}
         onSelectThread={(threadId) => void resumeThread(threadId)}
         onThreadScopeChange={(scope) => {
           setThreadScope(scope);
@@ -646,14 +658,7 @@ export function App() {
             onOpenWorkspace={() => setWorkspaceOpen(true)}
             onRename={async (title) => {
               if (selectedSummary === null) return;
-              const projection = await window.zenx.titles.rename(
-                selectedSummary.threadId,
-                title,
-              );
-              setTitleSnapshot((current) => ({
-                ...current,
-                [selectedSummary.threadId]: projection,
-              }));
+              await renameThread(selectedSummary.threadId, title);
             }}
             onRespondToApproval={respondToApproval}
             onRetryTitle={async () => {
@@ -767,33 +772,35 @@ function AgentSurface({
   return (
     <section className="agent-surface">
       <header className="workspace-header">
-        <button
-          className="icon-button mobile-menu"
-          type="button"
-          aria-label="Open sidebar"
-          onClick={onOpenSidebar}
-        >
-          <Icon name="tree" />
-        </button>
-        <div className="thread-heading">
-          {selectedSummary === null ? (
-            <strong>Start a conversation</strong>
-          ) : (
-            <ThreadTitleEditor
-              editable={!selectedSummary.archived}
-              onRename={onRename}
-              onRetry={onRetryTitle}
-              projection={titleProjection}
-              title={threadTitle(selectedSummary)}
-            />
-          )}
-          <span>
-            {selectedSummary === null
-              ? "Select a Thread or create a new one"
-              : selectedSummary.status === "systemError"
-                ? "Unavailable journal"
-                : selectedSummary.currentMetadata.cwd}
-          </span>
+        <div className="workspace-heading-row">
+          <button
+            className="icon-button mobile-menu"
+            type="button"
+            aria-label="Open sidebar"
+            onClick={onOpenSidebar}
+          >
+            <Icon name="tree" />
+          </button>
+          <div className="thread-heading">
+            {selectedSummary === null ? (
+              <strong>Start a conversation</strong>
+            ) : (
+              <ThreadTitleEditor
+                editable={!selectedSummary.archived}
+                onRename={onRename}
+                onRetry={onRetryTitle}
+                projection={titleProjection}
+                title={threadTitle(selectedSummary)}
+              />
+            )}
+            <span>
+              {selectedSummary === null
+                ? "Select a Thread or create a new one"
+                : selectedSummary.status === "systemError"
+                  ? "Unavailable journal"
+                  : selectedSummary.currentMetadata.cwd}
+            </span>
+          </div>
         </div>
         <div className="top-actions">
           {selectedSummary === null ||
@@ -802,7 +809,7 @@ function AgentSurface({
               archived={selectedSummary.archived}
               busy={threadLifecycleBusy}
               error={threadLifecycleError}
-              hasActiveTurn={selectedSummary.status === "active"}
+              hasActiveTurn={threadHasActiveTurn(selectedSummary, threadDetail)}
               onChange={onChangeThreadLifecycle}
             />
           )}
