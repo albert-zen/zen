@@ -24,6 +24,30 @@ failures in place, and leaves the running Turn and its settings unchanged.
 npm --workspace apps/zenx run dev
 ```
 
+Build the real ZenX application for the current platform with the same pinned,
+integrity-checked provider assembly used by `smoke:packaged`:
+
+```sh
+npm --workspace apps/zenx run package:portable
+```
+
+The result is an **unsigned, unpacked portable directory**, not an installer or
+a single-file executable. It is written below
+`apps/zenx/.packaged/artifact/ZenX-<platform>-<arch>/`; keep that directory
+together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
+Linux.
+
+The development package identity remains `@zen/zenx`, while the portable
+runtime identity is `zenx` and its packager product/display name is `ZenX`.
+Consequently, Electron keeps their default profiles separate: on Windows they
+are `%APPDATA%\\@zen\\zenx` for development and `%APPDATA%\\zenx` for the
+portable app (with the equivalent `Application Support` / XDG config roots on
+macOS and Linux). The Windows build does not currently set an explicit
+AppUserModelID; the macOS packager default bundle ID is `com.electron.zenx`.
+Packaging does not migrate, delete, or redirect either profile. Pass
+`--user-data-dir=<new-path>` when you deliberately need an isolated profile for
+testing; never point that option at an existing browser or ZenX profile.
+
 ## Design reference
 
 The reviewed [high-fidelity prototype](prototypes/high-fidelity/README.md) is a
