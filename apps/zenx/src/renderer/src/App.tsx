@@ -1,26 +1,21 @@
 import { useEffect, useRef, useState } from "react";
+
+import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type {
   AppServerHostStatus,
   ApprovalDecision,
 } from "../../main/app-server-manager.js";
-import type {
-  ModelSummary,
-  ServerNotificationParams,
-  Thread,
-} from "../../protocol-client/index.js";
-import { Icon } from "./icons";
-import { Sidebar } from "./Sidebar";
-import { ThreadView } from "./ThreadView";
-import { ModelSelector } from "./ModelSelector";
-import { SettingsView } from "./SettingsView";
-import { TriggerRail } from "./TriggerRail";
-import { ScheduledView } from "./ScheduledView";
-import { RoomView } from "./RoomView";
+import type { ZenXCapabilitySnapshot } from "../../main/capabilities/types.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
 import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
 } from "../../main/thread-title-types.js";
+import type {
+  ModelSummary,
+  ServerNotificationParams,
+  Thread,
+} from "../../protocol-client/index.js";
 import {
   addApprovalRequest,
   markApprovalResponding,
@@ -28,22 +23,7 @@ import {
   resolveApproval,
   restoreApprovalPending,
   type ApprovalCardState,
-} from "./approval-state";
-import {
-  applySettingsMirror,
-  canChangeThreadModel,
-  settingsFromSnapshot,
-  validateModelCatalog,
-  type SelectedThreadSettings,
-} from "./model-settings";
-import {
-  applyThreadNotification,
-  readSidebarMode,
-  threadTitle,
-  writeSidebarMode,
-  type SidebarMode,
-} from "./thread-list";
-import { applyThreadViewNotification } from "./thread-view-state";
+} from "./approval-state.js";
 import {
   acceptComposerSubmission,
   beginComposerSubmission,
@@ -52,35 +32,60 @@ import {
   failComposerSubmission,
   type ComposerIntent,
   type ComposerState,
-} from "./composer-state";
+} from "./composer-state.js";
+import { Icon } from "./icons.js";
+import {
+  applySettingsMirror,
+  canChangeThreadModel,
+  settingsFromSnapshot,
+  validateModelCatalog,
+  type SelectedThreadSettings,
+} from "./model-settings.js";
+import { loadedPluginContributions } from "./plugin-contributions.js";
+import { RoomView } from "./RoomView.js";
+import { ScheduledView } from "./ScheduledView.js";
+import { SettingsView } from "./SettingsView.js";
+import { Sidebar } from "./Sidebar.js";
+import {
+  readSidebarMode,
+  threadTitle,
+  writeSidebarMode,
+  type SidebarMode,
+} from "./thread-list.js";
+import { applyThreadViewNotification } from "./thread-view-state.js";
+import { ThreadView } from "./ThreadView.js";
+
+type ProductPage = "agent" | "settings" | "triggers" | "rooms";
 
 export function App() {
   const selectionEpoch = useRef(0);
   const selectedThreadIdRef = useRef<string | null>(null);
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
-  const [railOpen, setRailOpen] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [scheduledOpen, setScheduledOpen] = useState(false);
+  const [page, setPage] = useState<ProductPage>("agent");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [triggerSnapshot, setTriggerSnapshot] = useState<TriggerSnapshot>({
     triggers: [],
     history: [],
     rooms: [],
   });
+  const [capabilitySnapshot, setCapabilitySnapshot] =
+    useState<ZenXCapabilitySnapshot | null>(null);
   const [titleSnapshot, setTitleSnapshot] = useState<ThreadTitleSnapshot>({});
   const [serverStatus, setServerStatus] = useState<AppServerHostStatus>({
     type: "starting",
   });
-  const [threads, setThreads] = useState<Thread[]>([]);
+  const [threadSummaries, setThreadSummaries] = useState<
+    NativeThreadSummary[]
+  >([]);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<ApprovalCardState[]>([]);
   const [models, setModels] = useState<ModelSummary[]>([]);
-  const [modelCatalogError, setModelCatalogError] = useState<string | null>(
-    null,
-  );
+  const [modelCatalogError, setModelCatalogError] = useState<string | null>(null);
   const [selectedSettings, setSelectedSettings] =
     useState<SelectedThreadSettings | null>(null);
   const [switchingModel, setSwitchingModel] = useState(false);
@@ -97,12 +102,22 @@ export function App() {
     Record<string, ComposerState>
   >({});
 
+  const loadThreadSummaries = async () => {
+    try {
+      const summaries = await window.zenx.threads.list();
+      setThreadSummaries(summaries);
+      setRequestError(null);
+    } catch (error) {
+      setRequestError(describeError(error));
+    }
+  };
+
   const resumeThread = async (threadId: string) => {
     const epoch = ++selectionEpoch.current;
     selectedThreadIdRef.current = threadId;
-    setSettingsOpen(false);
-    setScheduledOpen(false);
-    setSelectedRoomId(null);
+    setPage("agent");
+    setSidebarOpen(false);
+    setWorkspaceOpen(false);
     setSelectedThreadId(threadId);
     setThreadDetail(null);
     setSelectedSettings(null);
@@ -117,9 +132,7 @@ export function App() {
       setThreadDetail(result.thread);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
     } catch (error) {
-      if (selectionEpoch.current === epoch) {
-        setThreadError(describeError(error));
-      }
+      if (selectionEpoch.current === epoch) setThreadError(describeError(error));
     } finally {
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
@@ -127,21 +140,6 @@ export function App() {
 
   useEffect(() => {
     let active = true;
-    const loadThreads = async () => {
-      try {
-        const result = await window.zenx.protocol.request("thread/list", {});
-        if (active) {
-          setThreads(result.data);
-          setRequestError(null);
-        }
-      } catch (error) {
-        if (active) {
-          setRequestError(
-            error instanceof Error ? error.message : String(error),
-          );
-        }
-      }
-    };
     const loadModels = async () => {
       try {
         const result = await window.zenx.protocol.request("model/list", {});
@@ -154,11 +152,11 @@ export function App() {
         if (active) setModelCatalogError(describeError(error));
       }
     };
-    const dispose = window.zenx.protocol.onStatus((status) => {
+    const disposeStatus = window.zenx.protocol.onStatus((status) => {
       if (!active) return;
       setServerStatus(status);
       if (status.type === "ready") {
-        void loadThreads();
+        void loadThreadSummaries();
         void loadModels();
         if (status.reconnected && selectedThreadIdRef.current !== null) {
           void resumeThread(selectedThreadIdRef.current);
@@ -167,48 +165,40 @@ export function App() {
     });
     const disposeNotifications = window.zenx.protocol.onNotification(
       (method, params) => {
-        if (active) {
-          if (method === "thread/archived" || method === "thread/unarchived") {
-            void loadThreads();
-          }
-          setThreads((current) =>
-            applyThreadNotification(current, method, params),
+        if (!active) return;
+        if (
+          method.startsWith("thread/") ||
+          method.startsWith("turn/") ||
+          method === "item/completed"
+        ) {
+          void loadThreadSummaries();
+        }
+        setThreadDetail((current) =>
+          current === null
+            ? null
+            : applyThreadViewNotification(current, method, params),
+        );
+        if (method === "thread/settings/updated") {
+          const event =
+            params as ServerNotificationParams["thread/settings/updated"];
+          setSelectedSettings((current) =>
+            applySettingsMirror(current, event.threadId, event.threadSettings),
           );
-          setThreadDetail((current) =>
-            current === null
-              ? null
-              : applyThreadViewNotification(current, method, params),
-          );
-          if (method === "thread/settings/updated") {
-            const event =
-              params as ServerNotificationParams["thread/settings/updated"];
-            setSelectedSettings((current) =>
-              applySettingsMirror(
-                current,
-                event.threadId,
-                event.threadSettings,
-              ),
-            );
-            setModelUpdateError(null);
-          }
+          setModelUpdateError(null);
         }
       },
     );
     const disposeApprovals = window.zenx.protocol.onApprovalRequest((event) => {
-      if (active) {
-        setApprovals((current) => addApprovalRequest(current, event));
-      }
+      if (active) setApprovals((current) => addApprovalRequest(current, event));
     });
     const disposeResolved = window.zenx.protocol.onApprovalResolved((event) => {
-      if (active) {
-        setApprovals((current) => resolveApproval(current, event));
-      }
+      if (active) setApprovals((current) => resolveApproval(current, event));
     });
     void window.zenx.protocol
       .getPendingApprovals()
       .then((pending) => {
-        if (!active) return;
-        setApprovals((current) => pending.reduce(addApprovalRequest, current));
+        if (active)
+          setApprovals((current) => pending.reduce(addApprovalRequest, current));
       })
       .catch(() => undefined);
     void window.zenx.protocol
@@ -217,20 +207,14 @@ export function App() {
         if (!active) return;
         setServerStatus(status);
         if (status.type === "ready") {
-          void loadThreads();
+          void loadThreadSummaries();
           void loadModels();
         }
       })
-      .catch((error: unknown) => {
-        if (active) {
-          setRequestError(
-            error instanceof Error ? error.message : String(error),
-          );
-        }
-      });
+      .catch((error: unknown) => active && setRequestError(describeError(error)));
     return () => {
       active = false;
-      dispose();
+      disposeStatus();
       disposeNotifications();
       disposeApprovals();
       disposeResolved();
@@ -242,11 +226,20 @@ export function App() {
     void window.zenx.triggers
       .get()
       .then(setTriggerSnapshot)
-      .catch((error: unknown) => {
-        setRequestError(
-          `ZenX orchestration state failed: ${describeError(error)}`,
-        );
-      });
+      .catch((error: unknown) =>
+        setRequestError(`ZenX automation data failed: ${describeError(error)}`),
+      );
+    return dispose;
+  }, []);
+
+  useEffect(() => {
+    const dispose = window.zenx.capabilities.onChange(setCapabilitySnapshot);
+    void window.zenx.capabilities
+      .get()
+      .then(setCapabilitySnapshot)
+      .catch((error: unknown) =>
+        setRequestError(`ZenX plugin catalog failed: ${describeError(error)}`),
+      );
     return dispose;
   }, []);
 
@@ -254,7 +247,7 @@ export function App() {
     void window.zenx.settings
       .get()
       .then((value) => {
-        if (!value.profile.onboardingComplete) setSettingsOpen(true);
+        if (!value.profile.onboardingComplete) setPage("settings");
       })
       .catch(() => undefined);
   }, []);
@@ -264,24 +257,31 @@ export function App() {
     void window.zenx.titles
       .get()
       .then(setTitleSnapshot)
-      .catch((error: unknown) => {
-        setRequestError(`ZenX title metadata failed: ${describeError(error)}`);
-      });
+      .catch((error: unknown) =>
+        setRequestError(`ZenX title metadata failed: ${describeError(error)}`),
+      );
     return dispose;
   }, []);
 
-  const projectedThreads = threads.map((thread) =>
-    projectThreadTitle(thread, titleSnapshot),
-  );
-  const selectedThread = projectOptionalThreadTitle(
-    threadDetail ??
-      threads.find((thread) => thread.id === selectedThreadId) ??
-      null,
-    titleSnapshot,
-  );
-  const pendingThreadIds = pendingApprovalThreadIds(approvals);
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (workspaceOpen) setWorkspaceOpen(false);
+      else if (sidebarOpen) setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [sidebarOpen, workspaceOpen]);
 
-  const selectThread = resumeThread;
+  const summaries = threadSummaries.map((summary) =>
+    titleSnapshot[summary.threadId]?.title === undefined
+      ? summary
+      : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+  );
+  const selectedSummary =
+    summaries.find((summary) => summary.threadId === selectedThreadId) ?? null;
+  const pendingThreadIds = pendingApprovalThreadIds(approvals);
+  const pluginContributions = loadedPluginContributions(capabilitySnapshot);
 
   const newThread = async () => {
     const epoch = ++selectionEpoch.current;
@@ -292,21 +292,14 @@ export function App() {
       const result = await window.zenx.protocol.request("thread/start", {});
       if (selectionEpoch.current !== epoch) return;
       selectedThreadIdRef.current = result.thread.id;
-      setSettingsOpen(false);
-      setScheduledOpen(false);
-      setSelectedRoomId(null);
+      setPage("agent");
+      setSidebarOpen(false);
       setSelectedThreadId(result.thread.id);
       setThreadDetail(result.thread);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
-      setThreads((current) =>
-        applyThreadNotification(current, "thread/started", {
-          thread: result.thread,
-        }),
-      );
+      await loadThreadSummaries();
     } catch (error) {
-      if (selectionEpoch.current === epoch) {
-        setThreadError(describeError(error));
-      }
+      if (selectionEpoch.current === epoch) setThreadError(describeError(error));
     } finally {
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
@@ -328,19 +321,12 @@ export function App() {
     return next;
   };
 
-  const changeDraft = (threadId: string, draft: string) => {
-    updateComposer(threadId, (state) => editComposer(state, draft));
-  };
-
   const submitComposer = async (
     intent: ComposerIntent,
     expectedTurnId: string | null,
   ) => {
     if (threadDetail === null) return;
     const threadId = threadDetail.id;
-    if (composerStatesRef.current[threadId]?.submission?.status === "pending") {
-      return;
-    }
     const started = updateComposer(threadId, (state) =>
       beginComposerSubmission(state, intent, expectedTurnId, () =>
         crypto.randomUUID(),
@@ -359,9 +345,7 @@ export function App() {
             }));
         })
         .catch((error: unknown) =>
-          setRequestError(
-            `Thread title could not be staged: ${describeError(error)}`,
-          ),
+          setRequestError(`Thread title could not be staged: ${describeError(error)}`),
         );
       const input = [{ type: "text" as const, text: submission.text }];
       if (submission.intent === "start") {
@@ -371,9 +355,8 @@ export function App() {
           clientUserMessageId: submission.clientUserMessageId,
         });
       } else if (submission.intent === "steer") {
-        if (submission.expectedTurnId === null) {
+        if (submission.expectedTurnId === null)
           throw new Error("The active turn changed before steering");
-        }
         await window.zenx.protocol.request("turn/steer", {
           threadId,
           expectedTurnId: submission.expectedTurnId,
@@ -381,9 +364,8 @@ export function App() {
           clientUserMessageId: submission.clientUserMessageId,
         });
       } else {
-        if (submission.expectedTurnId === null) {
+        if (submission.expectedTurnId === null)
           throw new Error("The active turn changed before replacement");
-        }
         await window.zenx.protocol.request("turn/replace", {
           threadId,
           expectedTurnId: submission.expectedTurnId,
@@ -405,14 +387,6 @@ export function App() {
     }
   };
 
-  const interruptTurn = async (turnId: string) => {
-    if (threadDetail === null) throw new Error("No thread is selected");
-    await window.zenx.protocol.request("turn/interrupt", {
-      threadId: threadDetail.id,
-      turnId,
-    });
-  };
-
   const respondToApproval = async (
     requestId: string,
     decision: ApprovalDecision,
@@ -427,14 +401,14 @@ export function App() {
       throw error;
     }
   };
+
   const changeModel = async (model: string) => {
     if (
       threadDetail === null ||
       selectedSettings === null ||
       model === selectedSettings.model
-    ) {
+    )
       return;
-    }
     if (!canChangeThreadModel(threadDetail)) {
       setModelUpdateError("Wait for the current turn to finish.");
       return;
@@ -452,267 +426,416 @@ export function App() {
       setSwitchingModel(false);
     }
   };
-  const changeSidebarMode = (mode: SidebarMode) => {
-    setSidebarMode(mode);
-    try {
-      writeSidebarMode(window.localStorage, mode);
-    } catch {
-      // A disabled localStorage keeps the in-memory preference for this window.
-    }
-  };
-  const renameThread = async (title: string) => {
-    if (selectedThread === null) return;
-    const projection = await window.zenx.titles.rename(
-      selectedThread.id,
-      title,
-    );
-    setTitleSnapshot((current) => ({
-      ...current,
-      [selectedThread.id]: projection,
-    }));
-  };
-  const retryThreadTitle = async () => {
-    if (selectedThread === null) return;
-    const projection = await window.zenx.titles.retry(selectedThread.id);
-    setTitleSnapshot((current) => ({
-      ...current,
-      [selectedThread.id]: projection,
-    }));
+
+  const openPage = (next: ProductPage) => {
+    setPage(next);
+    setSidebarOpen(false);
+    setWorkspaceOpen(false);
+    if (next === "rooms" && selectedRoomId === null)
+      setSelectedRoomId(triggerSnapshot.rooms[0]?.id ?? null);
   };
 
   return (
     <div className="app-shell">
       <Sidebar
         mode={sidebarMode}
-        onModeChange={changeSidebarMode}
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        onModeChange={(mode) => {
+          setSidebarMode(mode);
+          try {
+            writeSidebarMode(window.localStorage, mode);
+          } catch {
+            // The preference remains valid for this window.
+          }
+        }}
         onNewThread={() => void newThread()}
-        onOpenSettings={() => {
-          setSettingsOpen(true);
-          setScheduledOpen(false);
-          setSelectedRoomId(null);
-        }}
-        onOpenScheduled={() => {
-          setSettingsOpen(false);
-          setScheduledOpen(true);
-          setSelectedRoomId(null);
-        }}
-        onSelectRoom={(roomId) => {
-          setSettingsOpen(false);
-          setScheduledOpen(false);
-          setSelectedRoomId(roomId);
-        }}
-        onSelectThread={(threadId) => void selectThread(threadId)}
+        onOpenContribution={(target) => openPage(target)}
+        onOpenSettings={() => openPage("settings")}
+        onSelectThread={(threadId) => void resumeThread(threadId)}
         pendingApprovalThreadIds={pendingThreadIds}
+        pluginContributions={pluginContributions}
+        selectedPage={page}
         selectedThreadId={selectedThreadId}
         serverReady={serverStatus.type === "ready"}
-        threads={projectedThreads}
+        threads={summaries}
         triggerSnapshot={triggerSnapshot}
       />
 
       <main className="workspace">
-        {settingsOpen ? (
-          <SettingsView onClose={() => setSettingsOpen(false)} />
-        ) : scheduledOpen ? (
+        {page === "settings" ? (
+          <SettingsView
+            onClose={() => openPage("agent")}
+            onOpenSidebar={() => setSidebarOpen(true)}
+          />
+        ) : page === "triggers" ? (
           <ScheduledView
+            roomsAvailable={pluginContributions.some(
+              (contribution) => contribution.page === "rooms",
+            )}
             snapshot={triggerSnapshot}
-            threads={threads}
+            threads={summaries}
             onOpenThread={(id) => void resumeThread(id)}
             onOpenRoom={(id) => {
-              setScheduledOpen(false);
               setSelectedRoomId(id);
+              openPage("rooms");
             }}
+            onOpenSidebar={() => setSidebarOpen(true)}
           />
-        ) : selectedRoomId !== null ? (
+        ) : page === "rooms" ? (
           <RoomView
             roomId={selectedRoomId}
             snapshot={triggerSnapshot}
-            threads={threads}
+            threads={summaries}
             onOpenThread={(id) => void resumeThread(id)}
+            onOpenSidebar={() => setSidebarOpen(true)}
+            onSelectRoom={setSelectedRoomId}
           />
         ) : (
-          <>
-            <header className="workspace-header">
-              <div>
-                {selectedThread === null ? (
-                  <h1>Start a conversation</h1>
-                ) : (
-                  <ThreadTitleEditor
-                    onRename={renameThread}
-                    onRetry={retryThreadTitle}
-                    projection={titleSnapshot[selectedThread.id]}
-                    title={threadTitle(selectedThread)}
-                  />
-                )}
-                <p>
-                  {selectedThread === null
-                    ? "Select a thread or create a new one."
-                    : `${selectedThread.cwd} · ${selectedSettings?.model ?? selectedThread.modelProvider}`}
-                </p>
-              </div>
-              {selectedSettings === null ? null : (
-                <ModelSelector
-                  disabled={
-                    threadDetail === null || !canChangeThreadModel(threadDetail)
-                  }
-                  error={modelUpdateError ?? modelCatalogError}
-                  models={models}
-                  onChange={(model) => void changeModel(model)}
-                  selectedModel={selectedSettings.model}
-                  switching={switchingModel}
-                />
-              )}
-              <button
-                className={`toolbar-button${railOpen ? " active" : ""}`}
-                type="button"
-                aria-expanded={railOpen}
-                aria-label={
-                  railOpen ? "Hide triggers panel" : "Show triggers panel"
-                }
-                onClick={() => setRailOpen((open) => !open)}
-              >
-                <Icon name="panel-right" size={15} />
-                Triggers
-              </button>
-            </header>
-
-            {serverStatus.type === "error" || requestError !== null ? (
-              <section className="empty-canvas server-error" role="alert">
-                <div className="empty-glyph" aria-hidden="true">
-                  <Icon name="thread" size={22} />
-                </div>
-                <h2>Zen App Server stopped</h2>
-                <p>
-                  {serverStatus.type === "error"
-                    ? serverStatus.message
-                    : requestError}
-                </p>
-                <span>Restart ZenX after checking the host configuration.</span>
-              </section>
-            ) : serverStatus.type !== "ready" ? (
-              <section
-                className="empty-canvas"
-                aria-live="polite"
-                role={serverStatus.type === "stopped" ? "alert" : undefined}
-              >
-                {serverStatus.type === "starting" ? (
-                  <div className="loading-ring" aria-hidden="true" />
-                ) : (
-                  <div className="empty-glyph" aria-hidden="true">
-                    <Icon name="warning" size={22} />
-                  </div>
-                )}
-                <h2>
-                  {serverStatus.type === "starting"
-                    ? "Starting Zen App Server"
-                    : serverStatus.type === "reconnecting"
-                      ? "Reconnecting to Zen App Server"
-                      : "Zen App Server disconnected"}
-                </h2>
-                <p>
-                  {serverStatus.type === "starting"
-                    ? "Connecting to the local agent runtime…"
-                    : serverStatus.type === "reconnecting"
-                      ? `Attempt ${serverStatus.attempt}. Your draft is preserved; the current thread will be rebuilt from App Server history after reconnecting.`
-                      : "Your draft is preserved. Restart ZenX to reconnect and rebuild the thread from App Server history."}
-                </p>
-              </section>
-            ) : threadLoading ? (
-              <section className="empty-canvas" aria-live="polite">
-                <div className="loading-ring" aria-hidden="true" />
-                <h2>Loading conversation</h2>
-                <p>Reconstructing this thread from its journal…</p>
-              </section>
-            ) : threadError !== null ? (
-              <section className="empty-canvas thread-load-error" role="alert">
-                <div className="empty-glyph" aria-hidden="true">
-                  <Icon name="warning" size={22} />
-                </div>
-                <h2>Could not open conversation</h2>
-                <p>{threadError}</p>
-              </section>
-            ) : selectedThread === null ? (
-              <section className="empty-canvas" aria-label="Empty conversation">
-                <div className="empty-glyph" aria-hidden="true">
-                  <Icon name="thread" size={22} />
-                </div>
-                <h2>No thread selected</h2>
-                <p>Create a conversation to start working with Zen.</p>
-                <button
-                  className="primary-button"
-                  type="button"
-                  onClick={() => void newThread()}
-                >
-                  <Icon name="compose" size={15} />
-                  New conversation
-                </button>
-              </section>
-            ) : threadDetail !== null ? (
-              <ThreadView
-                approvals={approvals.filter(
-                  (approval) => approval.params.threadId === threadDetail.id,
-                )}
-                composer={
-                  composerStates[threadDetail.id] ?? emptyComposerState()
-                }
-                onDraftChange={(draft) => changeDraft(threadDetail.id, draft)}
-                onInterrupt={interruptTurn}
-                onRespondToApproval={respondToApproval}
-                onSubmit={submitComposer}
-                thread={threadDetail}
-                wakeups={triggerSnapshot.history.filter(
-                  (entry) => entry.threadId === threadDetail.id,
-                )}
-                watching={triggerSnapshot.triggers.some(
-                  (trigger) =>
-                    trigger.active && trigger.threadId === threadDetail.id,
-                )}
-              />
-            ) : (
-              <section className="empty-canvas" aria-live="polite">
-                <div className="loading-ring" aria-hidden="true" />
-              </section>
-            )}
-          </>
+          <AgentSurface
+            approvals={approvals}
+            composerStates={composerStates}
+            models={models}
+            modelCatalogError={modelCatalogError}
+            modelUpdateError={modelUpdateError}
+            onDraftChange={(threadId, draft) =>
+              updateComposer(threadId, (state) => editComposer(state, draft))
+            }
+            onInterrupt={async (turnId) => {
+              if (threadDetail === null) throw new Error("No thread is selected");
+              await window.zenx.protocol.request("turn/interrupt", {
+                threadId: threadDetail.id,
+                turnId,
+              });
+            }}
+            onModelChange={(model) => void changeModel(model)}
+            onNewThread={() => void newThread()}
+            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenWorkspace={() => setWorkspaceOpen(true)}
+            onRename={async (title) => {
+              if (selectedSummary === null) return;
+              const projection = await window.zenx.titles.rename(
+                selectedSummary.threadId,
+                title,
+              );
+              setTitleSnapshot((current) => ({
+                ...current,
+                [selectedSummary.threadId]: projection,
+              }));
+            }}
+            onRespondToApproval={respondToApproval}
+            onRetryTitle={async () => {
+              if (selectedSummary === null) return;
+              const projection = await window.zenx.titles.retry(
+                selectedSummary.threadId,
+              );
+              setTitleSnapshot((current) => ({
+                ...current,
+                [selectedSummary.threadId]: projection,
+              }));
+            }}
+            onSubmit={submitComposer}
+            requestError={requestError}
+            selectedSettings={selectedSettings}
+            selectedSummary={selectedSummary}
+            serverStatus={serverStatus}
+            switchingModel={switchingModel}
+            threadDetail={threadDetail}
+            threadError={threadError}
+            threadLoading={threadLoading}
+            titleProjection={
+              selectedSummary === null
+                ? undefined
+                : titleSnapshot[selectedSummary.threadId]
+            }
+            triggerSnapshot={triggerSnapshot}
+          />
         )}
       </main>
 
-      <aside
-        className={`detail-rail${railOpen && !settingsOpen && !scheduledOpen && selectedRoomId === null ? " open" : ""}`}
-        aria-label="Thread triggers"
-        aria-hidden={
-          !railOpen || settingsOpen || scheduledOpen || selectedRoomId !== null
-        }
-      >
-        {selectedThread === null ? (
-          <div className="rail-content">
-            <h2>Triggers</h2>
-            <p>Select a conversation to manage wakeup conditions.</p>
+      {workspaceOpen && threadDetail !== null ? (
+        <WorkspaceDrawer
+          capabilitySnapshot={capabilitySnapshot}
+          onClose={() => setWorkspaceOpen(false)}
+          settings={selectedSettings}
+          thread={threadDetail}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AgentSurface({
+  approvals,
+  composerStates,
+  models,
+  modelCatalogError,
+  modelUpdateError,
+  onDraftChange,
+  onInterrupt,
+  onModelChange,
+  onNewThread,
+  onOpenSidebar,
+  onOpenWorkspace,
+  onRename,
+  onRespondToApproval,
+  onRetryTitle,
+  onSubmit,
+  requestError,
+  selectedSettings,
+  selectedSummary,
+  serverStatus,
+  switchingModel,
+  threadDetail,
+  threadError,
+  threadLoading,
+  titleProjection,
+  triggerSnapshot,
+}: {
+  approvals: ApprovalCardState[];
+  composerStates: Record<string, ComposerState>;
+  models: ModelSummary[];
+  modelCatalogError: string | null;
+  modelUpdateError: string | null;
+  onDraftChange(threadId: string, draft: string): void;
+  onInterrupt(turnId: string): Promise<void>;
+  onModelChange(model: string): void;
+  onNewThread(): void;
+  onOpenSidebar(): void;
+  onOpenWorkspace(): void;
+  onRename(title: string): Promise<void>;
+  onRespondToApproval(
+    requestId: string,
+    decision: ApprovalDecision,
+  ): Promise<void>;
+  onRetryTitle(): Promise<void>;
+  onSubmit(intent: ComposerIntent, expectedTurnId: string | null): Promise<void>;
+  requestError: string | null;
+  selectedSettings: SelectedThreadSettings | null;
+  selectedSummary: NativeThreadSummary | null;
+  serverStatus: AppServerHostStatus;
+  switchingModel: boolean;
+  threadDetail: Thread | null;
+  threadError: string | null;
+  threadLoading: boolean;
+  titleProjection: ThreadTitleProjection | undefined;
+  triggerSnapshot: TriggerSnapshot;
+}) {
+  return (
+    <section className="agent-surface">
+      <header className="workspace-header">
+        <button
+          className="icon-button mobile-menu"
+          type="button"
+          aria-label="Open sidebar"
+          onClick={onOpenSidebar}
+        >
+          <Icon name="tree" />
+        </button>
+        <div className="thread-heading">
+          {selectedSummary === null ? (
+            <strong>Start a conversation</strong>
+          ) : (
+            <ThreadTitleEditor
+              onRename={onRename}
+              onRetry={onRetryTitle}
+              projection={titleProjection}
+              title={threadTitle(selectedSummary)}
+            />
+          )}
+          <span>
+            {selectedSummary === null
+              ? "Select a Thread or create a new one"
+              : selectedSummary.status === "systemError"
+                ? "Unavailable journal"
+                : selectedSummary.currentMetadata.cwd}
+          </span>
+        </div>
+        <div className="top-actions">
+          <button
+            className="icon-button search-thread"
+            type="button"
+            aria-label="Thread search is not available in this build"
+            disabled
+          >
+            <Icon name="search" />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Open workspace panel"
+            aria-haspopup="dialog"
+            disabled={threadDetail === null}
+            onClick={onOpenWorkspace}
+          >
+            <Icon name="panel-right" />
+          </button>
+        </div>
+      </header>
+
+      {serverStatus.type === "error" || requestError !== null ? (
+        <EmptyState
+          error
+          title="Zen App Server stopped"
+          detail={serverStatus.type === "error" ? serverStatus.message : requestError!}
+        />
+      ) : serverStatus.type !== "ready" ? (
+        <EmptyState
+          loading={serverStatus.type === "starting" || serverStatus.type === "reconnecting"}
+          title={
+            serverStatus.type === "starting"
+              ? "Starting Zen App Server"
+              : serverStatus.type === "reconnecting"
+                ? "Reconnecting to Zen App Server"
+                : "Zen App Server disconnected"
+          }
+          detail="Your draft is preserved while ZenX reconnects to the local runtime."
+        />
+      ) : threadLoading ? (
+        <EmptyState loading title="Loading conversation" detail="Reconstructing this Thread from App Server history…" />
+      ) : threadError !== null ? (
+        <EmptyState error title="Could not open conversation" detail={threadError} />
+      ) : selectedSummary === null || threadDetail === null ? (
+        <EmptyState
+          title="No thread selected"
+          detail="Create a conversation to start working with ZenX."
+          action={onNewThread}
+        />
+      ) : (
+        <ThreadView
+          approvals={approvals.filter(
+            (approval) => approval.params.threadId === threadDetail.id,
+          )}
+          composer={composerStates[threadDetail.id] ?? emptyComposerState()}
+          modelDisabled={!canChangeThreadModel(threadDetail)}
+          modelError={modelUpdateError ?? modelCatalogError}
+          models={models}
+          permissionLabel={
+            selectedSettings?.approvalPolicy === "never"
+              ? "Full access"
+              : "Approval required"
+          }
+          selectedModel={selectedSettings?.model}
+          switchingModel={switchingModel}
+          thread={threadDetail}
+          wakeups={triggerSnapshot.history.filter(
+            (entry) => entry.threadId === threadDetail.id,
+          )}
+          watching={triggerSnapshot.triggers.some(
+            (trigger) => trigger.active && trigger.threadId === threadDetail.id,
+          )}
+          onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}
+          onInterrupt={onInterrupt}
+          onModelChange={onModelChange}
+          onRespondToApproval={onRespondToApproval}
+          onSubmit={onSubmit}
+        />
+      )}
+    </section>
+  );
+}
+
+function WorkspaceDrawer({
+  capabilitySnapshot,
+  onClose,
+  settings,
+  thread,
+}: {
+  capabilitySnapshot: ZenXCapabilitySnapshot | null;
+  onClose(): void;
+  settings: SelectedThreadSettings | null;
+  thread: Thread;
+}) {
+  const [tab, setTab] = useState<"files" | "artifacts" | "context">("files");
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    previousFocus.current = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    return () => previousFocus.current?.focus();
+  }, []);
+  const commands = thread.turns.flatMap((turn) =>
+    turn.items.filter(
+      (item): item is Extract<(typeof turn.items)[number], { type: "commandExecution" }> =>
+        item.type === "commandExecution",
+    ),
+  );
+  return (
+    <div
+      className="drawer-layer"
+      role="presentation"
+      onPointerDown={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <aside className="workspace-drawer" role="dialog" aria-modal="true" aria-labelledby="workspace-drawer-title">
+        <header>
+          <div>
+            <strong id="workspace-drawer-title">Workspace</strong>
+            <span>Linked context for this Thread</span>
           </div>
-        ) : (
-          <TriggerRail
-            thread={selectedThread}
-            snapshot={triggerSnapshot}
-            threads={threads}
-          />
-        )}
+          <button ref={closeRef} className="icon-button" type="button" aria-label="Close workspace" onClick={onClose}>
+            <Icon name="x" />
+          </button>
+        </header>
+        <div className="drawer-tabs" role="tablist" aria-label="Workspace views">
+          {(["files", "artifacts", "context"] as const).map((name) => (
+            <button key={name} type="button" role="tab" aria-selected={tab === name} onClick={() => setTab(name)}>
+              {name[0]!.toUpperCase() + name.slice(1)}
+            </button>
+          ))}
+        </div>
+        <div className="drawer-content">
+          {tab === "files" ? (
+            <>
+              <p>Files explicitly represented by this Thread’s current product projection.</p>
+              <div className="drawer-row">
+                <Icon name="folder" />
+                <div><strong>{thread.cwd}</strong><span>Thread workspace</span></div>
+              </div>
+              <p className="drawer-empty">No file-reference Items are available for this Thread.</p>
+            </>
+          ) : tab === "artifacts" ? (
+            capabilitySnapshot?.currentScreenshot === undefined ? (
+              <p className="drawer-empty">No live artifacts are available.</p>
+            ) : (
+              <div className="drawer-row">
+                <Icon name="file" />
+                <div><strong>Browser observation</strong><span>{capabilitySnapshot.currentScreenshot.width} × {capabilitySnapshot.currentScreenshot.height}</span></div>
+              </div>
+            )
+          ) : (
+            <>
+              <div className="drawer-row"><Icon name="folder" /><div><strong>{thread.cwd}</strong><span>Current workspace</span></div></div>
+              <div className="drawer-row"><Icon name="layers" /><div><strong>{settings?.model ?? thread.modelProvider}</strong><span>Effective Thread model</span></div></div>
+              <div className="drawer-row"><Icon name="terminal" /><div><strong>{commands.length} tool {commands.length === 1 ? "call" : "calls"}</strong><span>From canonical Thread Items</span></div></div>
+            </>
+          )}
+        </div>
       </aside>
     </div>
   );
 }
 
-function projectThreadTitle(
-  thread: Thread,
-  snapshot: ThreadTitleSnapshot,
-): Thread {
-  const title = snapshot[thread.id]?.title;
-  return title === undefined ? thread : { ...thread, name: title };
-}
-
-function projectOptionalThreadTitle(
-  thread: Thread | null,
-  snapshot: ThreadTitleSnapshot,
-): Thread | null {
-  return thread === null ? null : projectThreadTitle(thread, snapshot);
+function EmptyState({
+  title,
+  detail,
+  action,
+  loading = false,
+  error = false,
+}: {
+  title: string;
+  detail: string;
+  action?: () => void;
+  loading?: boolean;
+  error?: boolean;
+}) {
+  return (
+    <section className={`empty-canvas${error ? " error" : ""}`} role={error ? "alert" : undefined}>
+      {loading ? <div className="loading-ring" /> : <div className="empty-glyph"><Icon name={error ? "warning" : "compose"} size={20} /></div>}
+      <h2>{title}</h2>
+      <p>{detail}</p>
+      {action === undefined ? null : <button className="primary-button" type="button" onClick={action}><Icon name="compose" />New thread</button>}
+    </section>
+  );
 }
 
 function ThreadTitleEditor({
@@ -733,68 +856,33 @@ function ThreadTitleEditor({
   useEffect(() => {
     if (!editing) setDraft(title);
   }, [editing, title]);
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onRename(draft);
-      setEditing(false);
-    } catch (reason) {
-      setError(describeError(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
+  if (editing) {
+    return (
+      <form
+        className="thread-title-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setBusy(true);
+          setError(null);
+          void onRename(draft)
+            .then(() => setEditing(false))
+            .catch((reason: unknown) => setError(describeError(reason)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        <input autoFocus aria-label="Thread title" value={draft} onChange={(event) => setDraft(event.target.value)} />
+        <button type="submit" disabled={busy || !draft.trim()}>Save</button>
+        <button type="button" onClick={() => setEditing(false)}>Cancel</button>
+        {error ? <small role="alert">{error}</small> : null}
+      </form>
+    );
+  }
   return (
-    <div className="thread-title-editor">
-      {editing ? (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void save();
-          }}
-        >
-          <input
-            autoFocus
-            aria-label="Thread title"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-          <button type="submit" disabled={busy || !draft.trim()}>
-            Save
-          </button>
-          <button type="button" onClick={() => setEditing(false)}>
-            Cancel
-          </button>
-        </form>
-      ) : (
-        <div className="thread-title-line">
-          <h1>{title}</h1>
-          <button
-            type="button"
-            aria-label="Rename thread"
-            onClick={() => setEditing(true)}
-          >
-            Rename
-          </button>
-          {projection?.status === "generating" ? (
-            <small>Generating title…</small>
-          ) : null}
-          {projection?.status === "failed" ? (
-            <button
-              className="title-retry"
-              type="button"
-              onClick={() => void onRetry()}
-            >
-              Retry title
-            </button>
-          ) : null}
-        </div>
-      )}
-      {projection?.status === "failed" ? (
-        <span className="title-error">{projection.error}</span>
-      ) : null}
-      {error === null ? null : <span className="title-error">{error}</span>}
+    <div className="thread-title-line">
+      <strong>{title}</strong>
+      <button type="button" aria-label="Rename Thread" onClick={() => setEditing(true)}>Rename</button>
+      {projection?.status === "generating" ? <small>Generating title…</small> : null}
+      {projection?.status === "failed" ? <button type="button" onClick={() => void onRetry()}>Retry title</button> : null}
     </div>
   );
 }

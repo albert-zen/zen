@@ -217,6 +217,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
             .map((tool) => tool.name),
         };
       }),
+      contributions: [],
       recentInvocations: structuredClone(this.#audit),
       ...(this.#currentScreenshot === undefined
         ? {}

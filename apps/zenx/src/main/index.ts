@@ -527,6 +527,30 @@ function installCapabilityIpc(
       return capabilities.snapshot();
     },
   );
+  ipcMain.handle(
+    ipcChannels.capabilityContributionSet,
+    async (
+      _event,
+      capabilityId: unknown,
+      contributionId: unknown,
+      enabled: unknown,
+    ) => {
+      if (
+        typeof capabilityId !== "string" ||
+        capabilityId.length === 0 ||
+        typeof contributionId !== "string" ||
+        contributionId.length === 0 ||
+        typeof enabled !== "boolean"
+      ) {
+        throw new Error("Invalid capability UI contribution update");
+      }
+      return await capabilities.setContributionEnabled(
+        capabilityId,
+        contributionId,
+        enabled,
+      );
+    },
+  );
   capabilities.onChange((snapshot) => {
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(ipcChannels.capabilitiesChanged, snapshot);

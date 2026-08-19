@@ -1,13 +1,18 @@
 import type { ReactNode, SVGProps } from "react";
 
 type IconName =
+  | "arrow-down"
   | "check"
   | "chevron-down"
   | "chevron-right"
   | "compose"
   | "folder"
+  | "file"
   | "inbox"
+  | "layers"
+  | "lock"
   | "moon"
+  | "paperclip"
   | "panel-right"
   | "reasoning"
   | "settings"
@@ -16,6 +21,10 @@ type IconName =
   | "trigger"
   | "tree"
   | "stop"
+  | "send"
+  | "terminal"
+  | "users"
+  | "x"
   | "warning";
 
 type IconProps = SVGProps<SVGSVGElement> & {
@@ -24,6 +33,7 @@ type IconProps = SVGProps<SVGSVGElement> & {
 };
 
 const paths: Record<IconName, ReactNode> = {
+  "arrow-down": <path d="M8 2.2v11.2m-4-4 4 4 4-4" />,
   check: <path d="m2.4 8.4 3.4 3.4 7.8-7.8" />,
   "chevron-down": <path d="m3.6 6 4.4 4.4L12.4 6" />,
   "chevron-right": <path d="m6 3.6 4.4 4.4L6 12.4" />,
@@ -36,6 +46,12 @@ const paths: Record<IconName, ReactNode> = {
   folder: (
     <path d="M1.8 4.2C1.8 3.5 2.3 3 3 3h3l1.4 1.6H13c.7 0 1.2.5 1.2 1.2v6c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2V4.2Z" />
   ),
+  file: (
+    <>
+      <path d="M4 1.8h5.2l2.8 2.8v9.6H4z" />
+      <path d="M9.2 1.8v3h3" />
+    </>
+  ),
   inbox: (
     <>
       <path d="M2 9.5h3.4l1.2 1.8h2.8l1.2-1.8H14" />
@@ -43,6 +59,19 @@ const paths: Record<IconName, ReactNode> = {
     </>
   ),
   moon: <path d="M13.4 9.4A5.8 5.8 0 0 1 6.6 2.6a5.8 5.8 0 1 0 6.8 6.8Z" />,
+  layers: (
+    <>
+      <path d="m8 2 6 3.2-6 3.2-6-3.2Z" />
+      <path d="m2 8.2 6 3.2 6-3.2M2 11.1l6 3.2 6-3.2" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="3" y="7" width="10" height="7" rx="1.5" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+    </>
+  ),
+  paperclip: <path d="m13.5 7.7-6.2 6.2a3.5 3.5 0 0 1-5-5l7-7a2.4 2.4 0 0 1 3.4 3.4l-7 7a1.3 1.3 0 0 1-1.8-1.8l6.2-6.2" />,
   "panel-right": (
     <>
       <rect x="1.8" y="2.2" width="12.4" height="11.6" rx="1.5" />
@@ -76,6 +105,13 @@ const paths: Record<IconName, ReactNode> = {
   ),
   trigger: <path d="M8.8 1.6 3.4 9h3.4l-.9 5.4L11.3 7H7.9l.9-5.4Z" />,
   stop: <rect x="3.2" y="3.2" width="9.6" height="9.6" rx="1.5" />,
+  send: <path d="m3 8 5-5 5 5M8 3v10" />,
+  terminal: (
+    <>
+      <rect x="1.8" y="2.4" width="12.4" height="11.2" rx="1.8" />
+      <path d="m4.5 6 2 2-2 2M8.5 10h3" />
+    </>
+  ),
   tree: (
     <>
       <path d="M2.5 3.5h11M5.5 8h8M5.5 12.5h8" />
@@ -83,6 +119,15 @@ const paths: Record<IconName, ReactNode> = {
       <circle cx="3" cy="12.5" r=".2" />
     </>
   ),
+  users: (
+    <>
+      <circle cx="6" cy="5.2" r="2.2" />
+      <path d="M1.8 13c.3-2.8 1.7-4 4.2-4s3.9 1.2 4.2 4" />
+      <circle cx="11.7" cy="6" r="1.6" />
+      <path d="M10.5 9.8c2.2-.3 3.4.7 3.7 2.6" />
+    </>
+  ),
+  x: <path d="m3 3 10 10M13 3 3 13" />,
   warning: (
     <>
       <path d="M8 2 1.8 13h12.4L8 2Z" />

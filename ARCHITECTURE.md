@@ -79,6 +79,9 @@
 - **ZenXCapabilityRegistry** — ZenX 主进程注册 bundled/local capability package 的 manifest、
   显式权限与 provider，把已授权的结构化工具和 skill/prompt 资源组合进本机 host；执行历史仍只由
   canonical tool call/result 投影，credential、浏览器会话和默认屏幕内容不进入 journal。
+- **ZenXCapabilityUiContribution** — 已加载 capability manifest 只能通过有类型、受 ZenX 控制的
+  product slot descriptor 声明页面入口；ZenX 只持久化 descriptor 是否挂载，不能借此获得任意
+  DOM/路由能力或改变 capability grant、工具执行与会话状态。
 - **ZenXCapabilityInteractionMode** — ZenX 把工具声明为不改变全局输入/焦点的 `background_safe`
   、必须接管前台的 `foreground_required` 或在独立桌面执行的 `isolated`，让产品提示、调度和 host policy
   协商实际影响且禁止静默降级。

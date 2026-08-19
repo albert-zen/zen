@@ -1,21 +1,32 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   PublicHostSettings,
   ZenXHostProfile,
   ZenXProviderProfile,
 } from "../../main/host-profile.js";
-import { Icon } from "./icons.js";
 import { CapabilitySettings } from "./CapabilitySettings.js";
+import { Icon } from "./icons.js";
 
-export function SettingsView({ onClose }: { onClose(): void }) {
+type SettingsTab = "account" | "models" | "plugins" | "general";
+
+export function SettingsView({
+  onClose,
+  onOpenSidebar,
+}: {
+  onClose(): void;
+  onOpenSidebar?(): void;
+}) {
+  const [tab, setTab] = useState<SettingsTab>("account");
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [models, setModels] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [manualCode, setManualCode] = useState(false);
+  const navRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -62,21 +73,14 @@ export function SettingsView({ onClose }: { onClose(): void }) {
 
   const save = async () => {
     if (draft === null) return;
-    setBusy("save");
-    setError(null);
+    setBusy("save"); setError(null); setStatus(null);
     try {
-      const modelList = models
-        .split(/[\n,]/u)
-        .map((value) => value.trim())
-        .filter(Boolean);
+      const modelList = models.split(/[\n,]/u).map((value) => value.trim()).filter(Boolean);
       const value = await window.zenx.settings.save(
         { ...draft, onboardingComplete: true, models: modelList },
         apiKey.trim().length > 0 ? apiKey : undefined,
       );
-      setSettings(value);
-      setDraft(value.profile);
-      setApiKey("");
-      onClose();
+      setSettings(value); setDraft(value.profile); setApiKey(""); setStatus("Settings saved · local host ready");
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -84,283 +88,61 @@ export function SettingsView({ onClose }: { onClose(): void }) {
     }
   };
 
-  const login = async () => {
-    setBusy("login");
-    setError(null);
-    try {
-      const value = await window.zenx.settings.loginSubscription();
-      setSettings(value);
-      setManualCode(false);
-    } catch (reason) {
-      setError(
-        `${describeError(reason)} Open Settings and retry, or paste the redirect URL when prompted.`,
-      );
-    } finally {
-      setBusy(null);
-    }
-  };
-
   if (draft === null || settings === null) {
-    return (
-      <section className="settings-view">
-        <div className="loading-ring" />
-        <p>{error ?? "Loading local settings…"}</p>
-      </section>
-    );
+    return <section className="product-page settings-view"><div className="page-loading"><div className="loading-ring" /><p>{error ?? "Loading local settings…"}</p></div></section>;
   }
   const provider = draft.provider;
+  const tabs: Array<{ id: SettingsTab; label: string; icon: "users" | "layers" | "trigger" | "settings" }> = [
+    { id: "account", label: "Account", icon: "users" },
+    { id: "models", label: "Models & provider", icon: "layers" },
+    { id: "plugins", label: "Plugins", icon: "trigger" },
+    { id: "general", label: "General", icon: "settings" },
+  ];
   return (
-    <section className="settings-view" aria-label="ZenX settings">
-      <header className="settings-header">
-        <div>
-          <span>ZenX host</span>
-          <h1>
-            {draft.onboardingComplete ? "Settings" : "Connect a provider"}
-          </h1>
-          <p>
-            Credentials stay on this Mac. Threads only record the effective
-            provider and model.
-          </p>
-        </div>
-        {draft.onboardingComplete ? (
-          <button
-            className="icon-button"
-            type="button"
-            aria-label="Close settings"
-            onClick={onClose}
-          >
-            ×
-          </button>
-        ) : null}
+    <section className="product-page settings-view" aria-label="ZenX settings">
+      <header className="page-header">
+        <div className="page-title"><button className="icon-button mobile-menu" type="button" aria-label="Open sidebar" onClick={onOpenSidebar}><Icon name="tree" /></button><div><h1>Settings</h1><p>Account, models, plugins, and local host</p></div></div>
+        <div className="page-header-actions"><button className="quiet-button" type="button" onClick={onClose}>Done</button><button className="primary-button" type="button" disabled={busy !== null} onClick={() => void save()}>{busy === "save" ? "Restarting host…" : "Save and restart host"}</button></div>
       </header>
-      <div className="settings-scroll">
-        <div className="settings-card">
-          <h2>Provider</h2>
-          <div
-            className="provider-tabs"
-            role="tablist"
-            aria-label="Provider type"
-          >
-            {(
-              ["openai-subscription", "openai-compatible", "fake"] as const
-            ).map((type) => (
-              <button
-                key={type}
-                type="button"
-                role="tab"
-                aria-selected={draft.provider.type === type}
-                onClick={() => setProvider(type)}
-              >
-                {type === "openai-subscription"
-                  ? "OpenAI subscription"
-                  : type === "openai-compatible"
-                    ? "API provider"
-                    : "Local demo"}
-              </button>
-            ))}
+      <div className="page-scroll">
+        <div className="settings-layout">
+          <nav ref={navRef} className="settings-nav" role="tablist" aria-label="Settings sections" onKeyDown={(event) => { if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; const buttons = Array.from(navRef.current?.querySelectorAll("button") ?? []); const current = buttons.indexOf(document.activeElement as HTMLButtonElement); if (current < 0) return; event.preventDefault(); let next = current; if (event.key === "ArrowDown" || event.key === "ArrowRight") next = (current + 1) % buttons.length; if (event.key === "ArrowUp" || event.key === "ArrowLeft") next = (current - 1 + buttons.length) % buttons.length; if (event.key === "Home") next = 0; if (event.key === "End") next = buttons.length - 1; buttons[next]?.focus(); const id = buttons[next]?.dataset.tab as SettingsTab | undefined; if (id) setTab(id); }}>
+            {tabs.map((item) => <button data-tab={item.id} key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}><Icon name={item.icon} /><span>{item.label}</span></button>)}
+          </nav>
+          <div className="settings-panel">
+            {tab === "account" ? <AccountPanel settings={settings} busy={busy} manualCode={manualCode} setBusy={setBusy} setError={setError} setManualCode={setManualCode} setSettings={setSettings} /> : null}
+            {tab === "models" ? <ModelsPanel apiKey={apiKey} draft={draft} models={models} provider={provider} settings={settings} setApiKey={setApiKey} setDraft={setDraft} setModels={setModels} setProvider={setProvider} /> : null}
+            {tab === "plugins" ? <><header><h2>Plugins</h2><p>Manage loaded packages, their declared product spaces, and Agent tool grants without mixing those states.</p></header><CapabilitySettings /></> : null}
+            {tab === "general" ? <GeneralPanel draft={draft} setDraft={setDraft} /> : null}
+            {error ? <div className="settings-error" role="alert"><Icon name="warning" />{error}</div> : null}
+            {status ? <div className="settings-success" role="status"><Icon name="check" />{status}</div> : null}
           </div>
-          {provider.type === "openai-subscription" ? (
-            <div className="auth-panel">
-              <div>
-                <strong>
-                  {settings.subscription.authenticated
-                    ? "Signed in"
-                    : "Not signed in"}
-                </strong>
-                <span>
-                  {settings.subscription.accountId ??
-                    "Use your ChatGPT subscription in ZenX."}
-                </span>
-              </div>
-              {settings.subscription.authenticated ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    void window.zenx.settings
-                      .logoutSubscription()
-                      .then(setSettings)
-                      .catch((reason: unknown) =>
-                        setError(describeError(reason)),
-                      )
-                  }
-                >
-                  Sign out
-                </button>
-              ) : (
-                <button
-                  className="primary-button"
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={() => void login()}
-                >
-                  {busy === "login"
-                    ? "Waiting for browser…"
-                    : "Sign in with OpenAI"}
-                </button>
-              )}
-              {manualCode ? (
-                <ManualCode
-                  onSubmit={(code) =>
-                    void window.zenx.settings.submitManualCode(code)
-                  }
-                />
-              ) : null}
-            </div>
-          ) : provider.type === "openai-compatible" ? (
-            <div className="settings-grid">
-              <Field
-                label="Display name"
-                value={provider.displayName}
-                onChange={(value) =>
-                  setDraft({
-                    ...draft,
-                    provider: { ...provider, displayName: value },
-                  })
-                }
-              />
-              <Field
-                label="Provider name"
-                value={provider.name}
-                onChange={(value) =>
-                  setDraft({ ...draft, provider: { ...provider, name: value } })
-                }
-              />
-              <Field
-                wide
-                label="Base URL"
-                value={provider.baseUrl}
-                onChange={(value) =>
-                  setDraft({
-                    ...draft,
-                    provider: { ...provider, baseUrl: value },
-                  })
-                }
-              />
-              <Field
-                wide
-                secret
-                label="API key"
-                placeholder={
-                  settings.hasApiKey
-                    ? "Saved securely — leave blank to keep"
-                    : "Required"
-                }
-                value={apiKey}
-                onChange={setApiKey}
-              />
-            </div>
-          ) : (
-            <p className="settings-note">
-              A deterministic local provider for trying the interface without
-              network access.
-            </p>
-          )}
-        </div>
-        <div className="settings-card">
-          <h2>Models and workspace</h2>
-          <div className="settings-grid">
-            <Field
-              label="Default model"
-              value={draft.defaultModel}
-              onChange={(value) => setDraft({ ...draft, defaultModel: value })}
-            />
-            <Field
-              label="Title model"
-              value={draft.titleModel}
-              onChange={(value) => setDraft({ ...draft, titleModel: value })}
-            />
-            <Field
-              label="Workspace"
-              value={draft.workspace}
-              onChange={(value) => setDraft({ ...draft, workspace: value })}
-            />
-            <label className="field wide">
-              <span>
-                Available models <small>one per line</small>
-              </span>
-              <textarea
-                rows={4}
-                value={models}
-                onChange={(event) => setModels(event.target.value)}
-              />
-            </label>
-          </div>
-          <p className="settings-note">
-            The title model is independent from the thread ModelCatalog and
-            defaults to gpt-5.6-luna. Existing threads keep their
-            ZAS-authoritative model until you change it explicitly.
-          </p>
-        </div>
-        <CapabilitySettings />
-        {error === null ? null : (
-          <div className="settings-error" role="alert">
-            <Icon name="warning" size={14} />
-            {error}
-          </div>
-        )}
-        <div className="settings-actions">
-          <button
-            className="primary-button"
-            type="button"
-            disabled={busy !== null}
-            onClick={() => void save()}
-          >
-            {busy === "save" ? "Restarting host…" : "Save and restart host"}
-          </button>
         </div>
       </div>
     </section>
   );
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-  secret = false,
-  wide = false,
-}: {
-  label: string;
-  value: string;
-  onChange(value: string): void;
-  placeholder?: string;
-  secret?: boolean;
-  wide?: boolean;
-}) {
-  return (
-    <label className={`field${wide ? " wide" : ""}`}>
-      <span>{label}</span>
-      <input
-        type={secret ? "password" : "text"}
-        value={value}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
-  );
+function AccountPanel({ settings, busy, manualCode, setBusy, setError, setManualCode, setSettings }: { settings: PublicHostSettings; busy: string | null; manualCode: boolean; setBusy(value: string | null): void; setError(value: string | null): void; setManualCode(value: boolean): void; setSettings(value: PublicHostSettings): void }) {
+  const login = () => { setBusy("login"); setError(null); void window.zenx.settings.loginSubscription().then((value) => { setSettings(value); setManualCode(false); }).catch((reason: unknown) => setError(describeError(reason))).finally(() => setBusy(null)); };
+  return <><header><h2>Account</h2><p>Credentials remain in the local ZenX vault and never enter the Thread Item stream.</p></header><div className="page-card settings-card"><div className="settings-card-head"><div><h3>OpenAI subscription</h3><p>Use an authenticated ChatGPT subscription for ZenX model access.</p></div><span className={settings.subscription.authenticated ? "status-good" : "status-muted"}>{settings.subscription.authenticated ? "Signed in" : "Not signed in"}</span></div><div className="settings-row"><div><strong>{settings.subscription.accountId ?? "No account connected"}</strong><span>{settings.subscription.authenticated ? "Authentication is stored in the operating system credential boundary." : "Connect a subscription when this provider is selected."}</span></div>{settings.subscription.authenticated ? <button className="danger-button" type="button" onClick={() => void window.zenx.settings.logoutSubscription().then(setSettings).catch((reason: unknown) => setError(describeError(reason)))}>Sign out</button> : <button className="primary-button" type="button" disabled={busy !== null} onClick={login}>{busy === "login" ? "Waiting for browser…" : "Sign in with OpenAI"}</button>}</div>{manualCode ? <ManualCode /> : null}</div><div className="page-card settings-card"><div className="settings-row"><div><strong>Privacy boundary</strong><span>Thread history stores only effective runtime settings. Subscription identity and provider secrets remain outside canonical Items.</span></div><Icon name="lock" /></div></div></>;
 }
 
-function ManualCode({ onSubmit }: { onSubmit(value: string): void }) {
+function ModelsPanel({ apiKey, draft, models, provider, settings, setApiKey, setDraft, setModels, setProvider }: { apiKey: string; draft: ZenXHostProfile; models: string; provider: ZenXProviderProfile; settings: PublicHostSettings; setApiKey(value: string): void; setDraft(value: ZenXHostProfile): void; setModels(value: string): void; setProvider(value: ZenXProviderProfile["type"]): void }) {
+  return <><header><h2>Models & provider</h2><p>Choose the host adapter and models exposed to new Threads.</p></header><div className="page-card settings-card"><div className="provider-tabs" role="tablist" aria-label="Provider type">{(["openai-subscription", "openai-compatible", "fake"] as const).map((type) => <button key={type} type="button" role="tab" aria-selected={provider.type === type} onClick={() => setProvider(type)}>{type === "openai-subscription" ? "OpenAI subscription" : type === "openai-compatible" ? "API provider" : "Local demo"}</button>)}</div>{provider.type === "openai-compatible" ? <div className="form-grid"><Field label="Display name" value={provider.displayName} onChange={(value) => setDraft({ ...draft, provider: { ...provider, displayName: value } })} /><Field label="Provider name" value={provider.name} onChange={(value) => setDraft({ ...draft, provider: { ...provider, name: value } })} /><Field wide label="Base URL" value={provider.baseUrl} onChange={(value) => setDraft({ ...draft, provider: { ...provider, baseUrl: value } })} /><Field wide secret label="API key" placeholder={settings.hasApiKey ? "Saved securely — leave blank to keep" : "Required"} value={apiKey} onChange={setApiKey} /></div> : provider.type === "fake" ? <p className="settings-note">The deterministic local provider is for offline protocol and UI testing. Thread lists present it as “Local demo,” never as a fake brand.</p> : <p className="settings-note">Model access uses the authenticated subscription shown in Account.</p>}</div><div className="page-card settings-card"><div className="form-grid"><Field label="Default model" value={draft.defaultModel} onChange={(value) => setDraft({ ...draft, defaultModel: value })} /><Field label="Title model" value={draft.titleModel} onChange={(value) => setDraft({ ...draft, titleModel: value })} /><label className="field wide"><span>Available models <small>one per line</small></span><textarea rows={5} value={models} onChange={(event) => setModels(event.target.value)} /></label></div><p className="settings-note">Existing Threads keep the ZAS-authoritative model until changed explicitly in their Composer.</p></div></>;
+}
+
+function GeneralPanel({ draft, setDraft }: { draft: ZenXHostProfile; setDraft(value: ZenXHostProfile): void }) {
+  return <><header><h2>General</h2><p>Local workspace defaults and Zen App Server behavior.</p></header><div className="page-card settings-card"><div className="form-grid"><Field wide label="Default workspace" value={draft.workspace} onChange={(value) => setDraft({ ...draft, workspace: value })} /><label className="field"><span>Approval policy</span><select value={draft.approvalPolicy} onChange={(event) => setDraft({ ...draft, approvalPolicy: event.target.value as "always" | "never" })}><option value="always">Approval required</option><option value="never">Full access</option></select></label></div><div className="settings-row"><div><strong>Zen App Server</strong><span>Saving restarts the local host with these defaults. Existing Thread settings remain authoritative.</span></div><span className="status-good">Local</span></div></div></>;
+}
+
+function Field({ label, value, onChange, placeholder, secret = false, wide = false }: { label: string; value: string; onChange(value: string): void; placeholder?: string; secret?: boolean; wide?: boolean }) {
+  return <label className={`field${wide ? " wide" : ""}`}><span>{label}</span><input type={secret ? "password" : "text"} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} /></label>;
+}
+
+function ManualCode() {
   const [value, setValue] = useState("");
-  return (
-    <div className="manual-code">
-      <label className="field">
-        <span>Authorization code or redirect URL</span>
-        <input
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-        />
-      </label>
-      <button
-        type="button"
-        disabled={!value.trim()}
-        onClick={() => onSubmit(value)}
-      >
-        Continue
-      </button>
-    </div>
-  );
+  return <div className="manual-code"><label className="field"><span>Authorization code or redirect URL</span><input value={value} onChange={(event) => setValue(event.target.value)} /></label><button type="button" disabled={!value.trim()} onClick={() => void window.zenx.settings.submitManualCode(value)}>Continue</button></div>;
 }
 
 function describeError(error: unknown): string {

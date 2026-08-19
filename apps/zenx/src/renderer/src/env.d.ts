@@ -117,6 +117,11 @@ declare global {
           capabilityId: string,
           permissionIds?: string[],
         ): Promise<ZenXCapabilitySnapshot>;
+        setContributionEnabled(
+          capabilityId: string,
+          contributionId: string,
+          enabled: boolean,
+        ): Promise<ZenXCapabilitySnapshot>;
         onChange(
           listener: (snapshot: ZenXCapabilitySnapshot) => void,
         ): () => void;

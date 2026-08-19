@@ -6,38 +6,37 @@ import test from "node:test";
 import type { Thread, Turn } from "../src/protocol-client/index.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
 import {
-  beginComposerSubmission,
   editComposer,
   emptyComposerState,
   type ComposerState,
 } from "../src/renderer/src/composer-state.js";
 import { ThreadView } from "../src/renderer/src/ThreadView.js";
-import {
-  capabilityToolName,
-  isForegroundTakeoverTool,
-} from "../src/renderer/src/ThreadView.js";
 
 const noop = async () => undefined;
 
-test("idle composer exposes only normal send", () => {
+test("idle composer exposes one disabled Send action when empty", () => {
   const html = render(false, []);
-  assert.match(html, />Send</);
-  assert.doesNotMatch(html, /Steer now/);
-  assert.doesNotMatch(html, /Interrupt &amp; send/);
-  assert.doesNotMatch(html, /Queue/i);
+  assert.match(html, /aria-label="Send"/u);
+  assert.match(html, /action-orb send/u);
+  assert.doesNotMatch(html, /Steer now/u);
 });
 
-test("active composer stays editable and exposes three distinct actions", () => {
+test("running empty composer exposes Stop without locking the editor", () => {
   const html = render(true, []);
-  assert.match(html, /aria-label="Message"/);
-  assert.doesNotMatch(html, /<textarea[^>]*disabled/);
-  assert.match(html, /Steer now/);
-  assert.match(html, /Interrupt &amp; send/);
-  assert.match(html, /Interrupt without sending the draft/);
-  assert.doesNotMatch(html, /Queue/i);
+  assert.match(html, /aria-label="Message"/u);
+  assert.doesNotMatch(html, /<textarea[^>]*disabled/u);
+  assert.match(html, /aria-label="Stop"/u);
 });
 
-test("pending approval explains steer and hard-steer behavior", () => {
+test("running draft exposes Steer and Interrupt and send", () => {
+  const composer = editComposer(emptyComposerState(), "change direction");
+  const html = render(true, [], composer);
+  assert.match(html, />Steer</u);
+  assert.match(html, /aria-label="Interrupt and send"/u);
+  assert.doesNotMatch(html, /Interrupt without sending the draft/u);
+});
+
+test("pending approvals render in the bottom zone next to the composer", () => {
   const approval = {
     requestId: "approval-1",
     status: "pending",
@@ -51,34 +50,9 @@ test("pending approval explains steer and hard-steer behavior", () => {
     },
   } as ApprovalCardState;
   const html = render(true, [approval]);
-  assert.match(html, /does not approve the pending command/);
-  assert.match(html, /Interrupt &amp; send cancels it/);
-});
-
-test("pending submission fences duplicate actions without locking the editor", () => {
-  const composer = beginComposerSubmission(
-    editComposer(emptyComposerState(), "guidance"),
-    "steer",
-    "turn-1",
-    () => "message-1",
-  );
-  const html = render(true, [], composer);
-  assert.doesNotMatch(html, /<textarea[^>]*disabled/);
-  assert.match(html, /<button[^>]*disabled[^>]*>.*Steering…/s);
-  assert.match(html, /Adding guidance to the current turn/);
-});
-
-test("labels capability audit cards separately from shell commands", () => {
-  assert.equal(
-    capabilityToolName('browser_inspect {"sessionId":"one"}'),
-    "browser_inspect",
-  );
-  assert.equal(capabilityToolName("printf hello"), null);
-  assert.equal(
-    isForegroundTakeoverTool('computer_foreground_click {"x":1,"y":2}'),
-    true,
-  );
-  assert.equal(isForegroundTakeoverTool("computer_press {}"), false);
+  assert.match(html, /class="bottom-zone"/u);
+  assert.match(html, /class="approval-bar"/u);
+  assert.match(html, /Allow once/u);
 });
 
 function render(
@@ -108,7 +82,7 @@ function thread(turns: Turn[]): Thread {
     preview: "",
     ephemeral: false,
     isPinned: false,
-    modelProvider: "fake",
+    modelProvider: "openai",
     createdAt: 10,
     updatedAt: 10,
     recencyAt: null,

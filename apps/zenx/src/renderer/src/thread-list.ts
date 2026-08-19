@@ -1,8 +1,4 @@
-import type {
-  ServerNotificationMethod,
-  ServerNotificationParams,
-  Thread,
-} from "../../protocol-client/index.js";
+import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 
 export type SidebarMode = "inbox" | "projects";
 
@@ -14,13 +10,18 @@ interface SidebarStorage {
 export interface InboxSection {
   key: "needs" | "active" | "watching" | "settled";
   label: string;
-  threads: Thread[];
+  threads: NativeThreadSummary[];
 }
 
 export interface ProjectGroup {
   key: string;
   label: string;
-  threads: Thread[];
+  threads: NativeThreadSummary[];
+}
+
+export interface ThreadModelIdentity {
+  label: string;
+  providerKind: "openai" | "anthropic" | "google" | "local" | "generic";
 }
 
 export function readSidebarMode(
@@ -39,7 +40,7 @@ export function writeSidebarMode(
 }
 
 export function deriveInboxSections(
-  threads: readonly Thread[],
+  threads: readonly NativeThreadSummary[],
   pendingApprovalThreadIds: ReadonlySet<string> = new Set(),
   watchingThreadIds: ReadonlySet<string> = new Set(),
 ): InboxSection[] {
@@ -50,8 +51,8 @@ export function deriveInboxSections(
       label: "Needs you",
       threads: sorted.filter(
         (thread) =>
-          thread.status.type === "systemError" ||
-          pendingApprovalThreadIds.has(thread.id),
+          thread.status === "systemError" ||
+          pendingApprovalThreadIds.has(thread.threadId),
       ),
     },
     {
@@ -59,8 +60,8 @@ export function deriveInboxSections(
       label: "In progress",
       threads: sorted.filter(
         (thread) =>
-          thread.status.type === "active" &&
-          !pendingApprovalThreadIds.has(thread.id),
+          thread.status === "active" &&
+          !pendingApprovalThreadIds.has(thread.threadId),
       ),
     },
     {
@@ -68,9 +69,9 @@ export function deriveInboxSections(
       label: "Watching",
       threads: sorted.filter(
         (thread) =>
-          thread.status.type === "idle" &&
-          watchingThreadIds.has(thread.id) &&
-          !pendingApprovalThreadIds.has(thread.id),
+          thread.status === "idle" &&
+          watchingThreadIds.has(thread.threadId) &&
+          !pendingApprovalThreadIds.has(thread.threadId),
       ),
     },
     {
@@ -78,23 +79,22 @@ export function deriveInboxSections(
       label: "Completed",
       threads: sorted.filter(
         (thread) =>
-          thread.status.type === "idle" &&
-          !watchingThreadIds.has(thread.id) &&
-          !pendingApprovalThreadIds.has(thread.id),
+          thread.status === "idle" &&
+          !watchingThreadIds.has(thread.threadId) &&
+          !pendingApprovalThreadIds.has(thread.threadId),
       ),
     },
   ];
 }
 
 export function deriveProjectGroups(
-  threads: readonly Thread[],
+  threads: readonly NativeThreadSummary[],
 ): ProjectGroup[] {
-  const groups = new Map<string, Thread[]>();
+  const groups = new Map<string, NativeThreadSummary[]>();
   for (const thread of sortByRecency(threads)) {
-    const key =
-      thread.status.type === "systemError" || thread.cwd.length === 0
-        ? "__unavailable__"
-        : thread.cwd;
+    const cwd =
+      thread.status === "systemError" ? "" : thread.currentMetadata.cwd;
+    const key = cwd.length === 0 ? "__unavailable__" : cwd;
     const list = groups.get(key) ?? [];
     list.push(thread);
     groups.set(key, list);
@@ -113,97 +113,54 @@ export function deriveProjectGroups(
     });
 }
 
-export function applyThreadNotification(
-  threads: readonly Thread[],
-  method: ServerNotificationMethod,
-  params: ServerNotificationParams[ServerNotificationMethod],
-  nowSeconds = Math.floor(Date.now() / 1_000),
-): Thread[] {
-  if (method === "thread/started") {
-    const started = (params as ServerNotificationParams["thread/started"])
-      .thread;
-    return [started, ...threads.filter((thread) => thread.id !== started.id)];
-  }
-  if (method === "thread/name/updated") {
-    const update = params as ServerNotificationParams["thread/name/updated"];
-    return threads.map((thread) =>
-      thread.id === update.threadId
-        ? { ...thread, name: update.threadName, updatedAt: nowSeconds }
-        : thread,
-    );
-  }
-  if (method === "thread/archived") {
-    const event = params as ServerNotificationParams["thread/archived"];
-    return threads.filter((thread) => thread.id !== event.threadId);
-  }
-  if (method === "thread/settings/updated") {
-    const update =
-      params as ServerNotificationParams["thread/settings/updated"];
-    return threads.map((thread) =>
-      thread.id === update.threadId && thread.status.type !== "systemError"
-        ? {
-            ...thread,
-            modelProvider: update.threadSettings.modelProvider,
-            updatedAt: nowSeconds,
-          }
-        : thread,
-    );
-  }
-  if (method === "turn/started") {
-    const event = params as ServerNotificationParams["turn/started"];
-    return threads.map((thread) =>
-      thread.id === event.threadId && thread.status.type !== "systemError"
-        ? {
-            ...thread,
-            status: { type: "active" as const, activeFlags: [] },
-            updatedAt: nowSeconds,
-          }
-        : thread,
-    );
-  }
-  if (method === "item/completed") {
-    const event = params as ServerNotificationParams["item/completed"];
-    if (event.item.type !== "userMessage") return [...threads];
-    const preview = event.item.content
-      .map((content) => content.text)
-      .join("\n");
-    return threads.map((thread) =>
-      thread.id === event.threadId && thread.status.type !== "systemError"
-        ? { ...thread, preview, updatedAt: nowSeconds }
-        : thread,
-    );
-  }
-  if (method === "turn/completed") {
-    const event = params as ServerNotificationParams["turn/completed"];
-    return threads.map((thread) =>
-      thread.id === event.threadId && thread.status.type !== "systemError"
-        ? {
-            ...thread,
-            status: { type: "idle" as const },
-            updatedAt: nowSeconds,
-          }
-        : thread,
-    );
-  }
-  return [...threads];
-}
-
-export function threadTitle(thread: Thread): string {
+export function threadTitle(thread: NativeThreadSummary): string {
   const named = thread.name?.trim() ?? "";
   const preview = thread.preview.trim();
   const wakeup = wakeupLabel(named) ?? wakeupLabel(preview);
   if (wakeup !== null) return wakeup;
   if (named.length > 0) return named;
   if (preview.length > 0) return preview;
-  return thread.status.type === "systemError"
-    ? `Unavailable thread · ${thread.id.slice(0, 8)}`
+  return thread.status === "systemError"
+    ? `Unavailable thread · ${thread.threadId.slice(0, 8)}`
     : "Untitled thread";
 }
 
-export function threadPreview(thread: Thread): string {
+export function threadPreview(thread: NativeThreadSummary): string {
   const preview = thread.preview.trim();
   const wakeup = wakeupLabel(preview) ?? wakeupLabel(thread.name ?? "");
   return wakeup === null ? preview : `${wakeup} · system-level wakeup`;
+}
+
+export function threadProject(thread: NativeThreadSummary): string {
+  if (thread.status === "systemError") return "Unavailable journal";
+  return projectLabel(thread.currentMetadata.cwd);
+}
+
+export function threadModelIdentity(
+  thread: NativeThreadSummary,
+): ThreadModelIdentity | null {
+  if (thread.status === "systemError") return null;
+  const model = thread.currentMetadata.model.trim();
+  const provider = thread.currentMetadata.provider.toLocaleLowerCase();
+  if (model.length === 0) return null;
+  if (model.toLocaleLowerCase() === "fake") {
+    return { label: "Local demo", providerKind: "local" };
+  }
+  const normalized = model
+    .replace(/^gpt-/iu, "GPT-")
+    .replace(/^claude-/iu, "Claude ")
+    .replace(/^gemini-/iu, "Gemini ");
+  const providerKind =
+    provider.includes("openai") || /^gpt-/iu.test(model)
+      ? "openai"
+      : provider.includes("anthropic") || /^claude/iu.test(model)
+        ? "anthropic"
+        : provider.includes("google") || /^gemini/iu.test(model)
+          ? "google"
+          : provider.includes("local")
+            ? "local"
+            : "generic";
+  return { label: normalized, providerKind };
 }
 
 function wakeupLabel(value: string): string | null {
@@ -217,11 +174,14 @@ function wakeupLabel(value: string): string | null {
   return "Trigger wakeup";
 }
 
-function sortByRecency(threads: readonly Thread[]): Thread[] {
-  return [...threads].sort(
-    (left, right) =>
-      right.updatedAt - left.updatedAt || left.id.localeCompare(right.id),
-  );
+function sortByRecency(
+  threads: readonly NativeThreadSummary[],
+): NativeThreadSummary[] {
+  return [...threads].sort((left, right) => {
+    const leftTime = left.updatedAt === null ? 0 : Date.parse(left.updatedAt);
+    const rightTime = right.updatedAt === null ? 0 : Date.parse(right.updatedAt);
+    return rightTime - leftTime || left.threadId.localeCompare(right.threadId);
+  });
 }
 
 function projectLabel(cwd: string): string {

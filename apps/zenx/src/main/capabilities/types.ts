@@ -35,6 +35,22 @@ export interface ZenXCapabilityResource {
   content: string;
 }
 
+export interface ZenXCapabilityUiContribution {
+  id: string;
+  slot: "sidebar-plugin-space";
+  label: string;
+  icon: "trigger" | "rooms";
+  page: "triggers" | "rooms";
+  order: number;
+}
+
+export interface ZenXCapabilityUiContributionSummary
+  extends ZenXCapabilityUiContribution {
+  capabilityId: string;
+  enabled: boolean;
+  available: boolean;
+}
+
 export interface ZenXCapabilityManifest {
   schemaVersion: 1;
   id: string;
@@ -51,7 +67,10 @@ export interface ZenXCapabilityManifest {
   tools: ZenXCapabilityTool[];
   resources: ZenXCapabilityResource[];
   settings?: Readonly<Record<string, unknown>>;
-  ui?: { settingsSection?: string };
+  ui?: {
+    settingsSection?: string;
+    contributions?: ZenXCapabilityUiContribution[];
+  };
 }
 
 export interface ZenXCapabilityPackage {
@@ -118,6 +137,7 @@ export interface ZenXCapabilitySummary {
 
 export interface ZenXCapabilitySnapshot {
   capabilities: ZenXCapabilitySummary[];
+  contributions: ZenXCapabilityUiContributionSummary[];
   recentInvocations: ZenXCapabilityAuditRecord[];
   /** Renderer-only live projection; it is intentionally absent from canonical Items. */
   currentScreenshot?: ZenXCapabilityScreenshotArtifact;

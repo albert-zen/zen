@@ -229,6 +229,27 @@ const manifest: ZenXCapabilityManifest = {
     ),
   ],
   resources: [],
+  ui: {
+    settingsSection: "automation",
+    contributions: [
+      {
+        id: "triggers",
+        slot: "sidebar-plugin-space",
+        label: "Triggers",
+        icon: "trigger",
+        page: "triggers",
+        order: 10,
+      },
+      {
+        id: "rooms",
+        slot: "sidebar-plugin-space",
+        label: "Rooms",
+        icon: "rooms",
+        page: "rooms",
+        order: 20,
+      },
+    ],
+  },
 };
 
 export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPackage {

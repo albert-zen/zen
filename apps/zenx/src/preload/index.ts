@@ -209,6 +209,17 @@ contextBridge.exposeInMainWorld("zenx", {
         capabilityId,
         permissionIds,
       ),
+    setContributionEnabled: async (
+      capabilityId: string,
+      contributionId: string,
+      enabled: boolean,
+    ): Promise<ZenXCapabilitySnapshot> =>
+      await ipcRenderer.invoke(
+        ipcChannels.capabilityContributionSet,
+        capabilityId,
+        contributionId,
+        enabled,
+      ),
     onChange: (
       listener: (snapshot: ZenXCapabilitySnapshot) => void,
     ): (() => void) => {

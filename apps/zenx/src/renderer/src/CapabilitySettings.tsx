@@ -10,12 +10,6 @@ export function CapabilitySettings() {
   const [snapshot, setSnapshot] = useState<ZenXCapabilitySnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -36,7 +30,7 @@ export function CapabilitySettings() {
     capability: ZenXCapabilitySummary,
     grant: boolean,
   ) => {
-    setBusy(capability.manifest.id);
+    setBusy(`grant:${capability.manifest.id}`);
     setError(null);
     try {
       const next = grant
@@ -51,233 +45,60 @@ export function CapabilitySettings() {
   };
 
   if (snapshot === null) {
-    return (
-      <div className="settings-card capability-settings">
-        <h2>Agent capabilities</h2>
-        <p className="settings-note">{error ?? "Loading capabilities…"}</p>
-      </div>
-    );
+    return <div className="page-card settings-card"><p>{error ?? "Loading installed plugins…"}</p></div>;
   }
 
-  const currentScreenshot =
-    snapshot.currentScreenshot !== undefined &&
-    Date.parse(snapshot.currentScreenshot.expiresAt) > now
-      ? snapshot.currentScreenshot
-      : undefined;
-
   return (
-    <div className="settings-card capability-settings">
-      <div className="capability-heading">
-        <div>
-          <h2>Agent capabilities</h2>
-          <p className="settings-note">
-            Grants control which structured tools the Agent can discover and
-            execute. Per-call approval and the execution sandbox remain
-            separate. Foreground-required tools are labeled because they may
-            temporarily take over pointer, keyboard, or focus; Stop cancels a
-            running operation.
-          </p>
-        </div>
-        <span>{snapshot.capabilities.length} installed</span>
+    <>
+      <div className="page-card settings-card plugin-boundary">
+        <span className="plugin-icon"><Icon name="layers" /></span>
+        <div><strong>Extension boundary</strong><span>Projects, Inbox, Threads, and Settings remain native. Loaded packages can mount declared pages only in Plugin spaces.</span></div>
+        <small>{snapshot.contributions.filter((item) => item.enabled && item.available).length} Sidebar contributions active</small>
       </div>
-      <div className="capability-list">
-        {snapshot.capabilities.map((capability) => {
-          const granted =
-            capability.manifest.permissions.length ===
-            capability.granted.length;
-          return (
-            <article className="capability-card" key={capability.manifest.id}>
-              <header>
-                <div>
-                  <strong>{capability.manifest.displayName}</strong>
-                  <span>
-                    {capability.source} · v{capability.manifest.version}
-                  </span>
-                  <span>
-                    {capability.manifest.provider.id} ·{" "}
-                    {capability.manifest.provider.platforms.join(", ")}
-                  </span>
-                  {capability.available ? null : (
-                    <span>{capability.unavailableReason}</span>
-                  )}
-                </div>
+
+      {snapshot.contributions.length === 0 ? null : (
+        <div className="page-card settings-card">
+          <div className="settings-card-head"><div><h3>Plugin spaces</h3><p>Page enablement is independent from Agent tool grants and per-call approval.</p></div></div>
+          <div className="capability-list compact">
+            {snapshot.contributions.map((contribution) => (
+              <div className="capability-row" key={`${contribution.capabilityId}:${contribution.id}`}>
+                <span className="plugin-icon"><Icon name={contribution.icon === "rooms" ? "users" : "trigger"} /></span>
+                <div><strong>{contribution.label}</strong><span>{contribution.available ? `${contribution.page} page · bundled contribution` : "Package unavailable"}</span></div>
                 <button
-                  className={granted ? "danger-button" : "primary-button"}
+                  className="plugin-switch"
                   type="button"
-                  disabled={busy !== null || !capability.available}
-                  onClick={() => void setGranted(capability, !granted)}
-                >
-                  {busy === capability.manifest.id
-                    ? "Restarting host…"
-                    : granted
-                      ? "Revoke"
-                      : "Grant"}
-                </button>
-              </header>
-              <p>{capability.manifest.description}</p>
-              <ul>
-                {capability.manifest.permissions.map((permission) => {
-                  const allowed = capability.granted.some(
-                    (grant) => grant.permissionId === permission.id,
-                  );
-                  return (
-                    <li key={permission.id}>
-                      <Icon name={allowed ? "check" : "warning"} size={12} />
-                      <span>
-                        <strong>{permission.title}</strong>
-                        <small>
-                          {permission.scope} · {permission.description}
-                        </small>
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-              <ul>
-                {capability.manifest.tools.map((tool) => (
-                  <li key={tool.name}>
-                    <Icon
-                      name={
-                        tool.interactionMode !== "foreground_required"
-                          ? "check"
-                          : "warning"
-                      }
-                      size={12}
-                    />
-                    <span>
-                      <strong>{tool.name}</strong>
-                      <small>
-                        {tool.interactionMode} · {tool.capabilities.join(", ")}
-                      </small>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <footer>
-                {capability.enabledTools.length} of{" "}
-                {capability.manifest.tools.length} tools exposed ·{" "}
-                {
-                  capability.manifest.tools.filter(
-                    (tool) => tool.interactionMode === "background_safe",
-                  ).length
-                }{" "}
-                background-safe · {capability.blockedTools.length} foreground
-                blocked · {capability.manifest.resources.length} instruction
-                resources
-              </footer>
-            </article>
-          );
-        })}
-      </div>
-      {snapshot.recentInvocations.length === 0 &&
-      currentScreenshot === undefined ? null : (
-        <div className="capability-live" aria-live="polite">
-          <h3>Live capability operations</h3>
-          <ol>
-            {snapshot.recentInvocations.slice(0, 8).map((invocation) => (
-              <li key={invocation.id}>
-                <strong>{invocation.toolName}</strong>
-                <span>{invocation.status}</span>
-                <time>
-                  {new Date(invocation.startedAt).toLocaleTimeString()}
-                </time>
-              </li>
-            ))}
-          </ol>
-          {currentScreenshot === undefined ? null : (
-            <figure>
-              {currentScreenshot.status === "captured" ? (
-                <img
-                  alt={`Current browser observation ${currentScreenshot.observationId ?? ""}`}
-                  src={fileArtifactUrl(currentScreenshot.artifactPath)}
+                  role="switch"
+                  aria-checked={contribution.enabled}
+                  aria-label={`${contribution.enabled ? "Disable" : "Enable"} ${contribution.label} plugin space`}
+                  disabled={busy !== null || !contribution.available}
+                  onClick={() => {
+                    const key = `contribution:${contribution.capabilityId}:${contribution.id}`;
+                    setBusy(key); setError(null);
+                    void window.zenx.capabilities.setContributionEnabled(contribution.capabilityId, contribution.id, !contribution.enabled).then(setSnapshot).catch((reason: unknown) => setError(describeError(reason))).finally(() => setBusy(null));
+                  }}
                 />
-              ) : (
-                <figcaption>
-                  Screenshot unavailable; this is not a live browser
-                  observation.
-                  {currentScreenshot.reason === undefined
-                    ? ""
-                    : ` ${currentScreenshot.reason}.`}
-                </figcaption>
-              )}
-              <figcaption>
-                {currentScreenshot.status === "captured"
-                  ? "Current observation"
-                  : "Capture status: fallback"}{" "}
-                {currentScreenshot.observationId ?? "unknown"} ·{" "}
-                {currentScreenshot.width}×{currentScreenshot.height}
-              </figcaption>
-            </figure>
-          )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
-      {snapshot.providerDiagnostics.length === 0 ? null : (
-        <div className="capability-audit">
-          <h3>Execution providers</h3>
-          {snapshot.providerDiagnostics.map((provider) => (
-            <div
-              key={`${provider.capabilityId}:${provider.providerId}`}
-              title={provider.reason ?? provider.permissionSummary}
-            >
-              <Icon
-                name={
-                  provider.status === "selected" ||
-                  provider.status === "available"
-                    ? "check"
-                    : "warning"
-                }
-                size={12}
-              />
-              <code>{provider.providerId}</code>
-              <span>{provider.status}</span>
-              <span>{provider.interactionModes.join(", ")}</span>
-              {provider.capabilityId === "browser" ? (
-                <span>{provider.sessionMode ?? "mode-unreported"}</span>
-              ) : null}
-              <span>{provider.version ?? "bundled"}</span>
-              <span>{provider.integrity ?? "integrity-unreported"}</span>
-            </div>
-          ))}
+
+      <div className="page-card settings-card">
+        <div className="settings-card-head"><div><h3>Installed capability packages</h3><p>Grants control Agent tools. They do not mount or hide product pages.</p></div><span>{snapshot.capabilities.length} installed locally</span></div>
+        <div className="capability-list">
+          {snapshot.capabilities.map((capability) => {
+            const granted = capability.manifest.permissions.length > 0 && capability.manifest.permissions.length === capability.granted.length;
+            return <div className="capability-row" key={capability.manifest.id}><span className="plugin-icon"><Icon name={capability.manifest.id === "browser" ? "search" : capability.manifest.id === "computer" ? "panel-right" : capability.manifest.id.includes("automation") ? "trigger" : "layers"} /></span><div><strong>{capability.manifest.displayName}</strong><span>{capability.source} · v{capability.manifest.version} · {capability.manifest.permissions.length} permissions · {capability.manifest.tools.length} tools{capability.available ? "" : ` · ${capability.unavailableReason}`}</span></div><button className={granted ? "danger-button" : "secondary-button"} type="button" disabled={busy !== null || !capability.available || capability.manifest.permissions.length === 0} onClick={() => void setGranted(capability, !granted)}>{busy === `grant:${capability.manifest.id}` ? "Restarting…" : granted ? "Revoke" : "Grant"}</button></div>;
+          })}
         </div>
-      )}
-      {snapshot.recentInvocations.length === 0 ? null : (
-        <div className="capability-audit">
-          <h3>Recent capability use</h3>
-          {snapshot.recentInvocations.slice(0, 8).map((invocation) => (
-            <div key={invocation.id}>
-              <Icon
-                name={invocation.status === "completed" ? "check" : "warning"}
-                size={12}
-              />
-              <code>{invocation.toolName}</code>
-              <span>{invocation.interactionMode}</span>
-              <span>{invocation.status}</span>
-              <time>{new Date(invocation.startedAt).toLocaleTimeString()}</time>
-            </div>
-          ))}
-        </div>
-      )}
-      {snapshot.discoveryErrors.map((message) => (
-        <div className="settings-error" role="alert" key={message}>
-          <Icon name="warning" size={14} />
-          Capability: {message}
-        </div>
-      ))}
-      {error === null ? null : (
-        <div className="settings-error" role="alert">
-          <Icon name="warning" size={14} />
-          {error}
-        </div>
-      )}
-    </div>
+      </div>
+
+      {snapshot.providerDiagnostics.length === 0 ? null : <div className="page-card settings-card"><div className="settings-card-head"><div><h3>Execution providers</h3><p>Availability reported by the current local capability catalog.</p></div></div>{snapshot.providerDiagnostics.map((provider) => <div className="settings-row" key={`${provider.capabilityId}:${provider.providerId}`}><div><strong>{provider.providerId}</strong><span>{provider.reason ?? provider.permissionSummary ?? provider.interactionModes.join(", ")}</span></div><small className={provider.status === "unavailable" ? "status-bad" : "status-good"}>{provider.status}</small></div>)}</div>}
+      {error ? <div className="settings-error" role="alert"><Icon name="warning" />{error}</div> : null}
+    </>
   );
 }
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function fileArtifactUrl(artifactPath: string): string {
-  const normalized = artifactPath.replaceAll("\\", "/");
-  return `file://${normalized.startsWith("/") ? "" : "/"}${encodeURI(normalized)}`;
 }
