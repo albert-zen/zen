@@ -16,6 +16,13 @@ test("packaged Project acceptance stays disabled for ordinary launches", () => {
 
 test("packaged Project acceptance requires one explicit config argument", () => {
   assert.equal(
+    projectWorkspaceAcceptanceConfigPath(
+      ["ZenX.exe"],
+      "C:\\smoke\\acceptance.json",
+    ),
+    "C:\\smoke\\acceptance.json",
+  );
+  assert.equal(
     projectWorkspaceAcceptanceConfigPath([
       "ZenX.exe",
       "--zenx-project-acceptance=C:\\smoke\\acceptance.json",
@@ -28,6 +35,13 @@ test("packaged Project acceptance requires one explicit config argument", () => 
       "--zenx-project-acceptance=first.json",
       "--zenx-project-acceptance=second.json",
     ]),
+    null,
+  );
+  assert.equal(
+    projectWorkspaceAcceptanceConfigPath(
+      ["ZenX.exe", "--zenx-project-acceptance=argument.json"],
+      "environment.json",
+    ),
     null,
   );
 });

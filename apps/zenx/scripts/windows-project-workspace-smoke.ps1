@@ -34,10 +34,15 @@ function Start-ZenXAcceptance {
     projectB = $projectBName
     resultPath = $resultPath
   } | ConvertTo-Json | Set-Content -LiteralPath $acceptancePath -Encoding UTF8
-  return Start-Process -FilePath $Executable -ArgumentList @(
-    ('--user-data-dir="' + $UserData + '"'),
-    ('--zenx-project-acceptance="' + $acceptancePath + '"')
-  ) -PassThru
+  $previousAcceptance = $env:ZENX_PROJECT_ACCEPTANCE_CONFIG
+  try {
+    $env:ZENX_PROJECT_ACCEPTANCE_CONFIG = $acceptancePath
+    return Start-Process -FilePath $Executable -ArgumentList @(
+      ('--user-data-dir="' + $UserData + '"')
+    ) -PassThru
+  } finally {
+    $env:ZENX_PROJECT_ACCEPTANCE_CONFIG = $previousAcceptance
+  }
 }
 
 function Wait-ZenXAcceptance {

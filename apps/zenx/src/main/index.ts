@@ -59,8 +59,12 @@ const projectProjection = new ZenXProjectProjection();
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
 let quitting = false;
+const projectWorkspaceAcceptanceEnvironment =
+  process.env["ZENX_PROJECT_ACCEPTANCE_CONFIG"];
+delete process.env["ZENX_PROJECT_ACCEPTANCE_CONFIG"];
 const projectWorkspaceAcceptancePath = projectWorkspaceAcceptanceConfigPath(
   process.argv,
+  projectWorkspaceAcceptanceEnvironment,
 );
 
 function createWindow(): BrowserWindow {

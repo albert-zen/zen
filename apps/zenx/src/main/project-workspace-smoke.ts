@@ -19,10 +19,12 @@ interface AcceptanceOptions {
 
 export function projectWorkspaceAcceptanceConfigPath(
   arguments_: readonly string[],
+  environmentValue?: string,
 ): string | null {
   const values = arguments_
     .filter((argument) => argument.startsWith(ACCEPTANCE_PREFIX))
     .map((argument) => argument.slice(ACCEPTANCE_PREFIX.length));
+  if (environmentValue !== undefined) values.push(environmentValue);
   return values.length === 1 && values[0]!.length > 0 ? values[0]! : null;
 }
 
