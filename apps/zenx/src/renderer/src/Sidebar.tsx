@@ -11,6 +11,7 @@ import {
   threadProject,
   threadTitle,
   type SidebarMode,
+  type ThreadScope,
 } from "./thread-list.js";
 
 interface SidebarProps {
@@ -21,12 +22,17 @@ interface SidebarProps {
   onNewThread(): void;
   onOpenContribution(page: "triggers" | "rooms"): void;
   onOpenSettings(): void;
+  onRetryThreads(): void;
   onSelectThread(threadId: string): void;
+  onThreadScopeChange(scope: ThreadScope): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   pluginContributions: readonly LoadedPluginContribution[];
   selectedPage: "agent" | "triggers" | "rooms" | "settings";
   selectedThreadId: string | null;
   serverReady: boolean;
+  threadError: string | null;
+  threadLoading: boolean;
+  threadScope: ThreadScope;
   threads: readonly NativeThreadSummary[];
   triggerSnapshot: TriggerSnapshot;
 }
@@ -39,12 +45,17 @@ export function Sidebar({
   onNewThread,
   onOpenContribution,
   onOpenSettings,
+  onRetryThreads,
   onSelectThread,
+  onThreadScopeChange,
   pendingApprovalThreadIds,
   pluginContributions,
   selectedPage,
   selectedThreadId,
   serverReady,
+  threadError,
+  threadLoading,
+  threadScope,
   threads,
   triggerSnapshot,
 }: SidebarProps) {
@@ -70,22 +81,24 @@ export function Sidebar({
               <span>ZENX</span>
             </div>
             <div className="brand-actions">
-              <button
-                className="icon-button inbox-button"
-                type="button"
-                aria-label={
-                  mode === "inbox" ? "Return to projects" : "Open inbox"
-                }
-                aria-pressed={mode === "inbox"}
-                onClick={() =>
-                  onModeChange(mode === "inbox" ? "projects" : "inbox")
-                }
-              >
-                <Icon name="inbox" />
-                {pendingApprovalThreadIds.size > 0 ? (
-                  <span className="inbox-dot" aria-hidden="true" />
-                ) : null}
-              </button>
+              {threadScope === "active" ? (
+                <button
+                  className="icon-button inbox-button"
+                  type="button"
+                  aria-label={
+                    mode === "inbox" ? "Return to projects" : "Open inbox"
+                  }
+                  aria-pressed={mode === "inbox"}
+                  onClick={() =>
+                    onModeChange(mode === "inbox" ? "projects" : "inbox")
+                  }
+                >
+                  <Icon name="inbox" />
+                  {pendingApprovalThreadIds.size > 0 ? (
+                    <span className="inbox-dot" aria-hidden="true" />
+                  ) : null}
+                </button>
+              ) : null}
               <button
                 className="icon-button"
                 type="button"
@@ -129,20 +142,65 @@ export function Sidebar({
             </section>
           )}
 
+          <div
+            className="thread-scope-tabs"
+            role="tablist"
+            aria-label="Thread views"
+          >
+            {(["active", "archived"] as const).map((scope) => (
+              <button
+                aria-controls="thread-scope-panel"
+                id={`thread-scope-${scope}`}
+                key={scope}
+                type="button"
+                role="tab"
+                aria-selected={threadScope === scope}
+                onClick={() => onThreadScopeChange(scope)}
+              >
+                {scope === "active" ? "Active" : "Archived"}
+              </button>
+            ))}
+          </div>
+
           <div className="sidebar-view-head">
-            <strong>{mode === "inbox" ? "Inbox" : "Projects"}</strong>
+            <strong>
+              {threadScope === "archived"
+                ? "Archived"
+                : mode === "inbox"
+                  ? "Inbox"
+                  : "Projects"}
+            </strong>
             <span>{threads.length}</span>
           </div>
         </header>
 
-        <div className="sidebar-scroll">
+        <div
+          className="sidebar-scroll"
+          id="thread-scope-panel"
+          role="tabpanel"
+          aria-labelledby={`thread-scope-${threadScope}`}
+        >
           {!serverReady ? (
             <p className="sidebar-empty">Waiting for the local App Server.</p>
+          ) : threadLoading ? (
+            <p className="sidebar-empty" role="status">
+              Loading {threadScope === "active" ? "active" : "archived"}{" "}
+              Threads…
+            </p>
+          ) : threadError !== null ? (
+            <div className="sidebar-empty sidebar-error" role="alert">
+              <p>{threadError}</p>
+              <button type="button" onClick={onRetryThreads}>
+                Try again
+              </button>
+            </div>
           ) : threads.length === 0 ? (
             <p className="sidebar-empty">
-              Your conversations will appear here.
+              {threadScope === "archived"
+                ? "No archived Threads yet. Archived conversations stay safe here until you restore them."
+                : "Your conversations will appear here."}
             </p>
-          ) : mode === "inbox" ? (
+          ) : threadScope === "active" && mode === "inbox" ? (
             <InboxView
               onSelectThread={onSelectThread}
               pendingApprovalThreadIds={pendingApprovalThreadIds}

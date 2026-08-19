@@ -71,10 +71,22 @@ test("hosts a real App Server and removes its private token on shutdown", async 
     });
     await manager.request("thread/archive", { threadId: started.thread.id });
     assert.deepEqual(await manager.listThreadSummaries(), []);
+    const archived = await manager.listThreadSummaries({ archived: true });
+    assert.equal(archived[0]?.threadId, started.thread.id);
+    await manager.request("thread/name/set", {
+      threadId: started.thread.id,
+      name: "Managed Thread",
+    });
     assert.equal(
-      (await manager.listThreadSummaries({ archived: true }))[0]?.threadId,
+      (await manager.listThreadSummaries({ archived: true }))[0]?.name,
+      "Managed Thread",
+    );
+    await manager.request("thread/unarchive", { threadId: started.thread.id });
+    assert.equal(
+      (await manager.listThreadSummaries())[0]?.threadId,
       started.thread.id,
     );
+    assert.deepEqual(await manager.listThreadSummaries({ archived: true }), []);
     if (process.platform !== "win32") {
       assert.equal((await stat(tokenFile)).mode & 0o777, 0o600);
     }

@@ -1,6 +1,7 @@
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 
 export type SidebarMode = "inbox" | "projects";
+export type ThreadScope = "active" | "archived";
 
 interface SidebarStorage {
   getItem(key: string): string | null;
@@ -37,6 +38,21 @@ export function writeSidebarMode(
   mode: SidebarMode,
 ): void {
   storage.setItem("zenx-sidebar-mode", mode);
+}
+
+export function readThreadScope(
+  storage: Pick<SidebarStorage, "getItem">,
+): ThreadScope {
+  return storage.getItem("zenx-thread-scope") === "archived"
+    ? "archived"
+    : "active";
+}
+
+export function writeThreadScope(
+  storage: Pick<SidebarStorage, "setItem">,
+  scope: ThreadScope,
+): void {
+  storage.setItem("zenx-thread-scope", scope);
 }
 
 export function deriveInboxSections(

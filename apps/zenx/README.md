@@ -9,7 +9,14 @@ Thread list product data is defined by ZAS's native `ThreadSummary` /
 host-local process boundary and preload exposes a typed IPC method. Codex Thread
 DTOs remain compatibility-only protocol types; they do not define ZenX's product
 model.
-The current renderer is intentionally not migrated in this slice.
+
+The renderer offers explicit Active and Archived Thread views. Active Threads
+can be renamed or archived, and archived Threads can be opened and unarchived.
+These actions use `thread/name/set`, `thread/archive`, and `thread/unarchive`
+through the existing App Server client; the renderer never reads journals or
+keeps a second Thread model. Archive is the reversible alternative to deletion.
+The UI disables Archive while a Turn is active, reports query and mutation
+failures in place, and leaves the running Turn and its settings unchanged.
 
 ## Run
 
