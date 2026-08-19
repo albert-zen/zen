@@ -95,6 +95,14 @@ function isThreadSummaryListOptions(
 }
 
 export function isHostEvent(value: unknown): value is HostEvent {
+  try {
+    return isHostEventUnsafe(value);
+  } catch {
+    return false;
+  }
+}
+
+function isHostEventUnsafe(value: unknown): value is HostEvent {
   if (typeof value !== "object" || value === null || !("type" in value)) {
     return false;
   }

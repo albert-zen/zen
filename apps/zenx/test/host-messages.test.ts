@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { AppServerManager } from "../src/main/app-server-manager.js";
+import type { ZenXCapabilityHost } from "../src/main/capabilities/types.js";
 import { isHostEvent } from "../src/main/host-messages.js";
 
 const validSummary = {
@@ -144,6 +145,22 @@ test("rejects malformed native Thread summaries at the host boundary", () => {
   );
 });
 
+test("host event validation is total for hostile object access", () => {
+  const hostile = new Proxy(
+    {},
+    {
+      has: () => {
+        throw new Error("hostile has trap");
+      },
+      get: () => {
+        throw new Error("hostile getter");
+      },
+    },
+  );
+  assert.doesNotThrow(() => isHostEvent(hostile));
+  assert.equal(isHostEvent(hostile), false);
+});
+
 test("manager rejects a malformed matching summary response", async () => {
   const fixture = await createFixtureManager("matching-malformed");
   try {
@@ -198,6 +215,33 @@ test("manager rejects only the active request targeted by an unknown discriminan
   }
 });
 
+test("known host events ignore a colliding active summary requestId", async () => {
+  const invocations: string[] = [];
+  const capabilityHost: ZenXCapabilityHost = {
+    hostSnapshot: () => ({ definitions: [] }),
+    execute: async (invocation) => {
+      invocations.push(
+        `${invocation.name}:${String(invocation.arguments.target)}`,
+      );
+      return { output: "ok", exitCode: 0 };
+    },
+  };
+  const fixture = await createFixtureManager(
+    "colliding-known-events",
+    capabilityHost,
+  );
+  try {
+    await fixture.manager.start();
+    const summaries = await within(fixture.manager.listThreadSummaries());
+    assert.equal(summaries[0]?.threadId, "fixture-thread");
+    await waitFor(() => invocations.length === 1);
+    assert.deepEqual(invocations, ["fixture_inspect:summary"]);
+  } finally {
+    await fixture.manager.stop();
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
 test("manager ignores unmatched and late malformed summary responses", async () => {
   const fixture = await createFixtureManager("valid-with-noise");
   try {
@@ -219,7 +263,10 @@ test("manager ignores unmatched and late malformed summary responses", async () 
   }
 });
 
-async function createFixtureManager(mode: string): Promise<{
+async function createFixtureManager(
+  mode: string,
+  capabilityHost?: ZenXCapabilityHost,
+): Promise<{
   directory: string;
   manager: AppServerManager;
 }> {
@@ -243,8 +290,17 @@ async function createFixtureManager(mode: string): Promise<{
       },
       execArgv: ["--import", "tsx"],
       startupTimeoutMs: 10_000,
+      ...(capabilityHost === undefined ? {} : { capabilityHost }),
     }),
   };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for state");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 async function within<T>(promise: Promise<T>): Promise<T> {

@@ -398,64 +398,69 @@ export class AppServerManager {
   #installCapabilityBridge(child: ChildProcess): void {
     child.on("message", (message: unknown) => {
       if (this.#child !== child) return;
-      const threadSummaryRequestId = readHostMessageRequestId(message);
-      if (threadSummaryRequestId !== undefined) {
+      const hostEvent = isHostEvent(message) ? message : undefined;
+      if (hostEvent?.type === "thread-summary/result") {
         const pending = this.#pendingThreadSummaryRequests.get(
-          threadSummaryRequestId,
+          hostEvent.requestId,
         );
         if (pending !== undefined) {
-          this.#pendingThreadSummaryRequests.delete(threadSummaryRequestId);
-          if (
-            !isHostEvent(message) ||
-            message.type !== "thread-summary/result"
-          ) {
+          this.#pendingThreadSummaryRequests.delete(hostEvent.requestId);
+          if (hostEvent.error !== undefined)
+            pending.reject(new Error(hostEvent.error));
+          else pending.resolve(hostEvent.summaries);
+        }
+        return;
+      }
+      if (hostEvent === undefined) {
+        const threadSummaryRequestId = readHostMessageRequestId(message);
+        if (threadSummaryRequestId !== undefined) {
+          const pending = this.#pendingThreadSummaryRequests.get(
+            threadSummaryRequestId,
+          );
+          if (pending !== undefined) {
+            this.#pendingThreadSummaryRequests.delete(threadSummaryRequestId);
             pending.reject(
               new Error("Malformed native Thread summary response"),
             );
-            return;
           }
-          if (message.error !== undefined)
-            pending.reject(new Error(message.error));
-          else pending.resolve(message.summaries);
-          return;
         }
+        return;
       }
-      if (!isHostEvent(message)) return;
-      if (message.type === "capability/cancel") {
+      if (hostEvent.type === "capability/cancel") {
         this.#activeCapabilityInvocations
-          .get(message.invocationId)
+          .get(hostEvent.invocationId)
           ?.abort(
             new DOMException("Capability invocation cancelled", "AbortError"),
           );
         return;
       }
-      if (message.type !== "capability/invoke") return;
+      if (hostEvent.type !== "capability/invoke") return;
       const host = this.#options.capabilityHost;
       if (host === undefined) {
         child.send({
           type: "capability/result",
-          invocationId: message.invocationId,
+          invocationId: hostEvent.invocationId,
           error: "ZenX capability host is unavailable",
         } satisfies HostCommand);
         return;
       }
-      if (this.#activeCapabilityInvocations.has(message.invocationId)) {
+      if (this.#activeCapabilityInvocations.has(hostEvent.invocationId)) {
         child.send({
           type: "capability/result",
-          invocationId: message.invocationId,
-          error: `Duplicate capability invocation ${message.invocationId}`,
+          invocationId: hostEvent.invocationId,
+          error: `Duplicate capability invocation ${hostEvent.invocationId}`,
         } satisfies HostCommand);
         return;
       }
       const controller = new AbortController();
-      this.#activeCapabilityInvocations.set(message.invocationId, controller);
+      this.#activeCapabilityInvocations.set(hostEvent.invocationId, controller);
       void host
-        .execute({ ...message.invocation, signal: controller.signal })
+        .execute({ ...hostEvent.invocation, signal: controller.signal })
         .then((result) => {
           if (this.#child === child && child.connected) {
             child.send({
               type: "capability/result",
-              invocationId: message.invocationId,
+              invocationId: hostEvent.invocationId,
               output: result.output,
               exitCode: result.exitCode,
             } satisfies HostCommand);
@@ -465,13 +470,13 @@ export class AppServerManager {
           if (this.#child === child && child.connected) {
             child.send({
               type: "capability/result",
-              invocationId: message.invocationId,
+              invocationId: hostEvent.invocationId,
               error: asError(error).message,
             } satisfies HostCommand);
           }
         })
         .finally(() => {
-          this.#activeCapabilityInvocations.delete(message.invocationId);
+          this.#activeCapabilityInvocations.delete(hostEvent.invocationId);
         });
     });
   }
@@ -583,13 +588,17 @@ function asError(error: unknown): Error {
 }
 
 function readHostMessageRequestId(value: unknown): string | undefined {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("requestId" in value) ||
-    typeof value.requestId !== "string"
-  ) {
+  try {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      !("requestId" in value) ||
+      typeof value.requestId !== "string"
+    ) {
+      return undefined;
+    }
+    return value.requestId;
+  } catch {
     return undefined;
   }
-  return value.requestId;
 }

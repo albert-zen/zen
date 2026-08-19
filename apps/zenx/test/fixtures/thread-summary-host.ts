@@ -54,6 +54,26 @@ async function handle(command: HostCommand): Promise<void> {
     });
     return;
   }
+  if (mode === "colliding-known-events") {
+    process.send?.({
+      type: "capability/cancel",
+      invocationId: "unrelated-capability",
+      requestId: command.requestId,
+    });
+    process.send?.({
+      type: "capability/invoke",
+      invocationId: "fixture-capability",
+      requestId: command.requestId,
+      invocation: {
+        callId: "call-1",
+        name: "fixture_inspect",
+        arguments: { target: "summary" },
+        cwd: "/workspace",
+      },
+    });
+    setImmediate(() => sendValidSummary(command));
+    return;
+  }
   if (mode === "matching-malformed") {
     process.send?.({
       type: "thread-summary/result",
@@ -75,6 +95,19 @@ async function handle(command: HostCommand): Promise<void> {
     requestId: `unmatched-${command.requestId}`,
     summaries: [{ threadId: 42 }],
   });
+  sendValidSummary(command);
+  setImmediate(() => {
+    process.send?.({
+      type: "thread-summary/result",
+      requestId: command.requestId,
+      summaries: [{ threadId: 42 }],
+    });
+  });
+}
+
+function sendValidSummary(
+  command: Extract<HostCommand, { type: "thread-summary/list" }>,
+): void {
   process.send?.({
     type: "thread-summary/result",
     requestId: command.requestId,
@@ -95,12 +128,5 @@ async function handle(command: HostCommand): Promise<void> {
         status: "idle",
       },
     ],
-  });
-  setImmediate(() => {
-    process.send?.({
-      type: "thread-summary/result",
-      requestId: command.requestId,
-      summaries: [{ threadId: 42 }],
-    });
   });
 }
