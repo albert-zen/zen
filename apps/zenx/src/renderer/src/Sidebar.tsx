@@ -114,9 +114,7 @@ export function Sidebar({
                   onClick={() => onOpenContribution(contribution.page)}
                 >
                   <Icon
-                    name={
-                      contribution.icon === "rooms" ? "users" : "trigger"
-                    }
+                    name={contribution.icon === "rooms" ? "users" : "trigger"}
                   />
                   <span>{contribution.label}</span>
                   <small>
@@ -141,7 +139,9 @@ export function Sidebar({
           {!serverReady ? (
             <p className="sidebar-empty">Waiting for the local App Server.</p>
           ) : threads.length === 0 ? (
-            <p className="sidebar-empty">Your conversations will appear here.</p>
+            <p className="sidebar-empty">
+              Your conversations will appear here.
+            </p>
           ) : mode === "inbox" ? (
             <InboxView
               onSelectThread={onSelectThread}

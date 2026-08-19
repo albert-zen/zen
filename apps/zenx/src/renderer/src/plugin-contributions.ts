@@ -3,8 +3,7 @@ import type {
   ZenXPluginSnapshot,
 } from "../../main/capabilities/types.js";
 
-export interface LoadedPluginContribution
-  extends ZenXPluginSidebarProjection {
+export interface LoadedPluginContribution extends ZenXPluginSidebarProjection {
   page: "triggers" | "rooms";
 }
 
@@ -13,8 +12,9 @@ export function loadedPluginContributions(
 ): LoadedPluginContribution[] {
   if (snapshot === null) return [];
   return snapshot.sidebar
-    .filter((contribution) =>
-      contribution.pageId === "triggers" || contribution.pageId === "rooms",
+    .filter(
+      (contribution) =>
+        contribution.pageId === "triggers" || contribution.pageId === "rooms",
     )
     .map((contribution) => ({
       ...contribution,
@@ -22,6 +22,7 @@ export function loadedPluginContributions(
     }))
     .sort(
       (left, right) =>
-        (left.order ?? 0) - (right.order ?? 0) || left.key.localeCompare(right.key),
+        (left.order ?? 0) - (right.order ?? 0) ||
+        left.key.localeCompare(right.key),
     );
 }

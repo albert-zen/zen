@@ -342,7 +342,10 @@ function TurnBlock({
       {!complete || expanded ? (
         <div className="turn-history">
           {projection.history.map((node) => (
-            <DisplayNode key={node.kind === "agent" ? node.item.id : node.id} node={node} />
+            <DisplayNode
+              key={node.kind === "agent" ? node.item.id : node.id}
+              node={node}
+            />
           ))}
           {!complete && projection.finalItem !== null ? (
             <AgentMessage item={projection.finalItem} />
@@ -416,7 +419,9 @@ function TraceGroup({
                     name={item.type === "reasoning" ? "reasoning" : "terminal"}
                     size={14}
                   />
-                  <strong>{item.type === "reasoning" ? "Think" : "Tool"}</strong>
+                  <strong>
+                    {item.type === "reasoning" ? "Think" : "Tool"}
+                  </strong>
                   <span>{traceItemLabel(item)}</span>
                   <StatusMark item={item} />
                   <Icon name="chevron-down" size={13} />
@@ -446,7 +451,9 @@ function TraceDetail({ item }: { item: ThreadItem }) {
   if (item.type === "reasoning") {
     return (
       <div className="trace-detail">
-        {item.summary.length === 0 ? "No reasoning summary was provided." : item.summary.join("\n")}
+        {item.summary.length === 0
+          ? "No reasoning summary was provided."
+          : item.summary.join("\n")}
       </div>
     );
   }
@@ -468,7 +475,9 @@ function UserMessage({
   return (
     <article className="user-row">
       <div className="user-bubble">
-        <Markdown text={item.content.map((content) => content.text).join("\n")} />
+        <Markdown
+          text={item.content.map((content) => content.text).join("\n")}
+        />
       </div>
     </article>
   );
@@ -532,7 +541,11 @@ function ApprovalBar({
         <button type="button" onClick={() => void respond("decline")}>
           Deny
         </button>
-        <button className="allow" type="button" onClick={() => void respond("accept")}>
+        <button
+          className="allow"
+          type="button"
+          onClick={() => void respond("accept")}
+        >
           Allow once
         </button>
       </div>
@@ -564,7 +577,9 @@ function completedTurnLabel(turn: Turn): string {
 function formatDuration(milliseconds: number): string {
   if (milliseconds < 1_000) return `${milliseconds}ms`;
   const seconds = Math.round(milliseconds / 1_000);
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return seconds < 60
+    ? `${seconds}s`
+    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 function commandStatus(

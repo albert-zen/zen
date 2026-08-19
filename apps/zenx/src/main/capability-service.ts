@@ -264,7 +264,6 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     await this.#registry.close();
     if (!this.#computerRegistered) await this.#computerBackend?.close();
   }
-
 }
 
 function describeError(error: unknown): string {

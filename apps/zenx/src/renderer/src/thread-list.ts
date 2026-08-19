@@ -179,7 +179,8 @@ function sortByRecency(
 ): NativeThreadSummary[] {
   return [...threads].sort((left, right) => {
     const leftTime = left.updatedAt === null ? 0 : Date.parse(left.updatedAt);
-    const rightTime = right.updatedAt === null ? 0 : Date.parse(right.updatedAt);
+    const rightTime =
+      right.updatedAt === null ? 0 : Date.parse(right.updatedAt);
     return rightTime - leftTime || left.threadId.localeCompare(right.threadId);
   });
 }

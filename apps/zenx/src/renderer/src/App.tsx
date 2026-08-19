@@ -81,16 +81,18 @@ export function App() {
   const [serverStatus, setServerStatus] = useState<AppServerHostStatus>({
     type: "starting",
   });
-  const [threadSummaries, setThreadSummaries] = useState<
-    NativeThreadSummary[]
-  >([]);
+  const [threadSummaries, setThreadSummaries] = useState<NativeThreadSummary[]>(
+    [],
+  );
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<ApprovalCardState[]>([]);
   const [models, setModels] = useState<ModelSummary[]>([]);
-  const [modelCatalogError, setModelCatalogError] = useState<string | null>(null);
+  const [modelCatalogError, setModelCatalogError] = useState<string | null>(
+    null,
+  );
   const [selectedSettings, setSelectedSettings] =
     useState<SelectedThreadSettings | null>(null);
   const [switchingModel, setSwitchingModel] = useState(false);
@@ -137,7 +139,8 @@ export function App() {
       setThreadDetail(result.thread);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
     } catch (error) {
-      if (selectionEpoch.current === epoch) setThreadError(describeError(error));
+      if (selectionEpoch.current === epoch)
+        setThreadError(describeError(error));
     } finally {
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
@@ -203,7 +206,9 @@ export function App() {
       .getPendingApprovals()
       .then((pending) => {
         if (active)
-          setApprovals((current) => pending.reduce(addApprovalRequest, current));
+          setApprovals((current) =>
+            pending.reduce(addApprovalRequest, current),
+          );
       })
       .catch(() => undefined);
     void window.zenx.protocol
@@ -216,7 +221,9 @@ export function App() {
           void loadModels();
         }
       })
-      .catch((error: unknown) => active && setRequestError(describeError(error)));
+      .catch(
+        (error: unknown) => active && setRequestError(describeError(error)),
+      );
     return () => {
       active = false;
       disposeStatus();
@@ -315,7 +322,8 @@ export function App() {
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
       await loadThreadSummaries();
     } catch (error) {
-      if (selectionEpoch.current === epoch) setThreadError(describeError(error));
+      if (selectionEpoch.current === epoch)
+        setThreadError(describeError(error));
     } finally {
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
@@ -361,7 +369,9 @@ export function App() {
             }));
         })
         .catch((error: unknown) =>
-          setRequestError(`Thread title could not be staged: ${describeError(error)}`),
+          setRequestError(
+            `Thread title could not be staged: ${describeError(error)}`,
+          ),
         );
       const input = [{ type: "text" as const, text: submission.text }];
       if (submission.intent === "start") {
@@ -518,7 +528,8 @@ export function App() {
               updateComposer(threadId, (state) => editComposer(state, draft))
             }
             onInterrupt={async (turnId) => {
-              if (threadDetail === null) throw new Error("No thread is selected");
+              if (threadDetail === null)
+                throw new Error("No thread is selected");
               await window.zenx.protocol.request("turn/interrupt", {
                 threadId: threadDetail.id,
                 turnId,
@@ -625,7 +636,10 @@ function AgentSurface({
     decision: ApprovalDecision,
   ): Promise<void>;
   onRetryTitle(): Promise<void>;
-  onSubmit(intent: ComposerIntent, expectedTurnId: string | null): Promise<void>;
+  onSubmit(
+    intent: ComposerIntent,
+    expectedTurnId: string | null,
+  ): Promise<void>;
   requestError: string | null;
   selectedSettings: SelectedThreadSettings | null;
   selectedSummary: NativeThreadSummary | null;
@@ -693,11 +707,16 @@ function AgentSurface({
         <EmptyState
           error
           title="Zen App Server stopped"
-          detail={serverStatus.type === "error" ? serverStatus.message : requestError!}
+          detail={
+            serverStatus.type === "error" ? serverStatus.message : requestError!
+          }
         />
       ) : serverStatus.type !== "ready" ? (
         <EmptyState
-          loading={serverStatus.type === "starting" || serverStatus.type === "reconnecting"}
+          loading={
+            serverStatus.type === "starting" ||
+            serverStatus.type === "reconnecting"
+          }
           title={
             serverStatus.type === "starting"
               ? "Starting Zen App Server"
@@ -708,9 +727,17 @@ function AgentSurface({
           detail="Your draft is preserved while ZenX reconnects to the local runtime."
         />
       ) : threadLoading ? (
-        <EmptyState loading title="Loading conversation" detail="Reconstructing this Thread from App Server history…" />
+        <EmptyState
+          loading
+          title="Loading conversation"
+          detail="Reconstructing this Thread from App Server history…"
+        />
       ) : threadError !== null ? (
-        <EmptyState error title="Could not open conversation" detail={threadError} />
+        <EmptyState
+          error
+          title="Could not open conversation"
+          detail={threadError}
+        />
       ) : selectedSummary === null || threadDetail === null ? (
         <EmptyState
           title="No thread selected"
@@ -773,29 +800,56 @@ function WorkspaceDrawer({
   }, []);
   const commands = thread.turns.flatMap((turn) =>
     turn.items.filter(
-      (item): item is Extract<(typeof turn.items)[number], { type: "commandExecution" }> =>
-        item.type === "commandExecution",
+      (
+        item,
+      ): item is Extract<
+        (typeof turn.items)[number],
+        { type: "commandExecution" }
+      > => item.type === "commandExecution",
     ),
   );
   return (
     <div
       className="drawer-layer"
       role="presentation"
-      onPointerDown={(event) => event.target === event.currentTarget && onClose()}
+      onPointerDown={(event) =>
+        event.target === event.currentTarget && onClose()
+      }
     >
-      <aside className="workspace-drawer" role="dialog" aria-modal="true" aria-labelledby="workspace-drawer-title">
+      <aside
+        className="workspace-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="workspace-drawer-title"
+      >
         <header>
           <div>
             <strong id="workspace-drawer-title">Workspace</strong>
             <span>Linked context for this Thread</span>
           </div>
-          <button ref={closeRef} className="icon-button" type="button" aria-label="Close workspace" onClick={onClose}>
+          <button
+            ref={closeRef}
+            className="icon-button"
+            type="button"
+            aria-label="Close workspace"
+            onClick={onClose}
+          >
             <Icon name="x" />
           </button>
         </header>
-        <div className="drawer-tabs" role="tablist" aria-label="Workspace views">
+        <div
+          className="drawer-tabs"
+          role="tablist"
+          aria-label="Workspace views"
+        >
           {(["files", "artifacts", "context"] as const).map((name) => (
-            <button key={name} type="button" role="tab" aria-selected={tab === name} onClick={() => setTab(name)}>
+            <button
+              key={name}
+              type="button"
+              role="tab"
+              aria-selected={tab === name}
+              onClick={() => setTab(name)}
+            >
               {name[0]!.toUpperCase() + name.slice(1)}
             </button>
           ))}
@@ -803,12 +857,20 @@ function WorkspaceDrawer({
         <div className="drawer-content">
           {tab === "files" ? (
             <>
-              <p>Files explicitly represented by this Thread’s current product projection.</p>
+              <p>
+                Files explicitly represented by this Thread’s current product
+                projection.
+              </p>
               <div className="drawer-row">
                 <Icon name="folder" />
-                <div><strong>{thread.cwd}</strong><span>Thread workspace</span></div>
+                <div>
+                  <strong>{thread.cwd}</strong>
+                  <span>Thread workspace</span>
+                </div>
               </div>
-              <p className="drawer-empty">No file-reference Items are available for this Thread.</p>
+              <p className="drawer-empty">
+                No file-reference Items are available for this Thread.
+              </p>
             </>
           ) : tab === "artifacts" ? (
             capabilitySnapshot?.currentScreenshot === undefined ? (
@@ -816,14 +878,41 @@ function WorkspaceDrawer({
             ) : (
               <div className="drawer-row">
                 <Icon name="file" />
-                <div><strong>Browser observation</strong><span>{capabilitySnapshot.currentScreenshot.width} × {capabilitySnapshot.currentScreenshot.height}</span></div>
+                <div>
+                  <strong>Browser observation</strong>
+                  <span>
+                    {capabilitySnapshot.currentScreenshot.width} ×{" "}
+                    {capabilitySnapshot.currentScreenshot.height}
+                  </span>
+                </div>
               </div>
             )
           ) : (
             <>
-              <div className="drawer-row"><Icon name="folder" /><div><strong>{thread.cwd}</strong><span>Current workspace</span></div></div>
-              <div className="drawer-row"><Icon name="layers" /><div><strong>{settings?.model ?? thread.modelProvider}</strong><span>Effective Thread model</span></div></div>
-              <div className="drawer-row"><Icon name="terminal" /><div><strong>{commands.length} tool {commands.length === 1 ? "call" : "calls"}</strong><span>From canonical Thread Items</span></div></div>
+              <div className="drawer-row">
+                <Icon name="folder" />
+                <div>
+                  <strong>{thread.cwd}</strong>
+                  <span>Current workspace</span>
+                </div>
+              </div>
+              <div className="drawer-row">
+                <Icon name="layers" />
+                <div>
+                  <strong>{settings?.model ?? thread.modelProvider}</strong>
+                  <span>Effective Thread model</span>
+                </div>
+              </div>
+              <div className="drawer-row">
+                <Icon name="terminal" />
+                <div>
+                  <strong>
+                    {commands.length} tool{" "}
+                    {commands.length === 1 ? "call" : "calls"}
+                  </strong>
+                  <span>From canonical Thread Items</span>
+                </div>
+              </div>
             </>
           )}
         </div>
@@ -846,11 +935,25 @@ function EmptyState({
   error?: boolean;
 }) {
   return (
-    <section className={`empty-canvas${error ? " error" : ""}`} role={error ? "alert" : undefined}>
-      {loading ? <div className="loading-ring" /> : <div className="empty-glyph"><Icon name={error ? "warning" : "compose"} size={20} /></div>}
+    <section
+      className={`empty-canvas${error ? " error" : ""}`}
+      role={error ? "alert" : undefined}
+    >
+      {loading ? (
+        <div className="loading-ring" />
+      ) : (
+        <div className="empty-glyph">
+          <Icon name={error ? "warning" : "compose"} size={20} />
+        </div>
+      )}
       <h2>{title}</h2>
       <p>{detail}</p>
-      {action === undefined ? null : <button className="primary-button" type="button" onClick={action}><Icon name="compose" />New thread</button>}
+      {action === undefined ? null : (
+        <button className="primary-button" type="button" onClick={action}>
+          <Icon name="compose" />
+          New thread
+        </button>
+      )}
     </section>
   );
 }
@@ -887,9 +990,18 @@ function ThreadTitleEditor({
             .finally(() => setBusy(false));
         }}
       >
-        <input autoFocus aria-label="Thread title" value={draft} onChange={(event) => setDraft(event.target.value)} />
-        <button type="submit" disabled={busy || !draft.trim()}>Save</button>
-        <button type="button" onClick={() => setEditing(false)}>Cancel</button>
+        <input
+          autoFocus
+          aria-label="Thread title"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <button type="submit" disabled={busy || !draft.trim()}>
+          Save
+        </button>
+        <button type="button" onClick={() => setEditing(false)}>
+          Cancel
+        </button>
         {error ? <small role="alert">{error}</small> : null}
       </form>
     );
@@ -897,9 +1009,21 @@ function ThreadTitleEditor({
   return (
     <div className="thread-title-line">
       <strong>{title}</strong>
-      <button type="button" aria-label="Rename Thread" onClick={() => setEditing(true)}>Rename</button>
-      {projection?.status === "generating" ? <small>Generating title…</small> : null}
-      {projection?.status === "failed" ? <button type="button" onClick={() => void onRetry()}>Retry title</button> : null}
+      <button
+        type="button"
+        aria-label="Rename Thread"
+        onClick={() => setEditing(true)}
+      >
+        Rename
+      </button>
+      {projection?.status === "generating" ? (
+        <small>Generating title…</small>
+      ) : null}
+      {projection?.status === "failed" ? (
+        <button type="button" onClick={() => void onRetry()}>
+          Retry title
+        </button>
+      ) : null}
     </div>
   );
 }

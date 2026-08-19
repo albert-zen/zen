@@ -73,14 +73,22 @@ export function SettingsView({
 
   const save = async () => {
     if (draft === null) return;
-    setBusy("save"); setError(null); setStatus(null);
+    setBusy("save");
+    setError(null);
+    setStatus(null);
     try {
-      const modelList = models.split(/[\n,]/u).map((value) => value.trim()).filter(Boolean);
+      const modelList = models
+        .split(/[\n,]/u)
+        .map((value) => value.trim())
+        .filter(Boolean);
       const value = await window.zenx.settings.save(
         { ...draft, onboardingComplete: true, models: modelList },
         apiKey.trim().length > 0 ? apiKey : undefined,
       );
-      setSettings(value); setDraft(value.profile); setApiKey(""); setStatus("Settings saved · local host ready");
+      setSettings(value);
+      setDraft(value.profile);
+      setApiKey("");
+      setStatus("Settings saved · local host ready");
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -89,10 +97,21 @@ export function SettingsView({
   };
 
   if (draft === null || settings === null) {
-    return <section className="product-page settings-view"><div className="page-loading"><div className="loading-ring" /><p>{error ?? "Loading local settings…"}</p></div></section>;
+    return (
+      <section className="product-page settings-view">
+        <div className="page-loading">
+          <div className="loading-ring" />
+          <p>{error ?? "Loading local settings…"}</p>
+        </div>
+      </section>
+    );
   }
   const provider = draft.provider;
-  const tabs: Array<{ id: SettingsTab; label: string; icon: "users" | "layers" | "trigger" | "settings" }> = [
+  const tabs: Array<{
+    id: SettingsTab;
+    label: string;
+    icon: "users" | "layers" | "trigger" | "settings";
+  }> = [
     { id: "account", label: "Account", icon: "users" },
     { id: "models", label: "Models & provider", icon: "layers" },
     { id: "plugins", label: "Plugins", icon: "trigger" },
@@ -101,21 +120,139 @@ export function SettingsView({
   return (
     <section className="product-page settings-view" aria-label="ZenX settings">
       <header className="page-header">
-        <div className="page-title"><button className="icon-button mobile-menu" type="button" aria-label="Open sidebar" onClick={onOpenSidebar}><Icon name="tree" /></button><div><h1>Settings</h1><p>Account, models, plugins, and local host</p></div></div>
-        <div className="page-header-actions"><button className="quiet-button" type="button" onClick={onClose}>Done</button><button className="primary-button" type="button" disabled={busy !== null} onClick={() => void save()}>{busy === "save" ? "Restarting host…" : "Save and restart host"}</button></div>
+        <div className="page-title">
+          <button
+            className="icon-button mobile-menu"
+            type="button"
+            aria-label="Open sidebar"
+            onClick={onOpenSidebar}
+          >
+            <Icon name="tree" />
+          </button>
+          <div>
+            <h1>Settings</h1>
+            <p>Account, models, plugins, and local host</p>
+          </div>
+        </div>
+        <div className="page-header-actions">
+          <button className="quiet-button" type="button" onClick={onClose}>
+            Done
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void save()}
+          >
+            {busy === "save" ? "Restarting host…" : "Save and restart host"}
+          </button>
+        </div>
       </header>
       <div className="page-scroll">
         <div className="settings-layout">
-          <nav ref={navRef} className="settings-nav" role="tablist" aria-label="Settings sections" onKeyDown={(event) => { if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; const buttons = Array.from(navRef.current?.querySelectorAll("button") ?? []); const current = buttons.indexOf(document.activeElement as HTMLButtonElement); if (current < 0) return; event.preventDefault(); let next = current; if (event.key === "ArrowDown" || event.key === "ArrowRight") next = (current + 1) % buttons.length; if (event.key === "ArrowUp" || event.key === "ArrowLeft") next = (current - 1 + buttons.length) % buttons.length; if (event.key === "Home") next = 0; if (event.key === "End") next = buttons.length - 1; buttons[next]?.focus(); const id = buttons[next]?.dataset.tab as SettingsTab | undefined; if (id) setTab(id); }}>
-            {tabs.map((item) => <button data-tab={item.id} key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}><Icon name={item.icon} /><span>{item.label}</span></button>)}
+          <nav
+            ref={navRef}
+            className="settings-nav"
+            role="tablist"
+            aria-label="Settings sections"
+            onKeyDown={(event) => {
+              if (
+                ![
+                  "ArrowUp",
+                  "ArrowDown",
+                  "ArrowLeft",
+                  "ArrowRight",
+                  "Home",
+                  "End",
+                ].includes(event.key)
+              )
+                return;
+              const buttons = Array.from(
+                navRef.current?.querySelectorAll("button") ?? [],
+              );
+              const current = buttons.indexOf(
+                document.activeElement as HTMLButtonElement,
+              );
+              if (current < 0) return;
+              event.preventDefault();
+              let next = current;
+              if (event.key === "ArrowDown" || event.key === "ArrowRight")
+                next = (current + 1) % buttons.length;
+              if (event.key === "ArrowUp" || event.key === "ArrowLeft")
+                next = (current - 1 + buttons.length) % buttons.length;
+              if (event.key === "Home") next = 0;
+              if (event.key === "End") next = buttons.length - 1;
+              buttons[next]?.focus();
+              const id = buttons[next]?.dataset.tab as SettingsTab | undefined;
+              if (id) setTab(id);
+            }}
+          >
+            {tabs.map((item) => (
+              <button
+                data-tab={item.id}
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === item.id}
+                onClick={() => setTab(item.id)}
+              >
+                <Icon name={item.icon} />
+                <span>{item.label}</span>
+              </button>
+            ))}
           </nav>
           <div className="settings-panel">
-            {tab === "account" ? <AccountPanel settings={settings} busy={busy} manualCode={manualCode} setBusy={setBusy} setError={setError} setManualCode={setManualCode} setSettings={setSettings} /> : null}
-            {tab === "models" ? <ModelsPanel apiKey={apiKey} draft={draft} models={models} provider={provider} settings={settings} setApiKey={setApiKey} setDraft={setDraft} setModels={setModels} setProvider={setProvider} /> : null}
-            {tab === "plugins" ? <><header><h2>Plugins</h2><p>Manage loaded packages, their declared product spaces, and Agent tool grants without mixing those states.</p></header><CapabilitySettings /></> : null}
-            {tab === "general" ? <GeneralPanel draft={draft} setDraft={setDraft} /> : null}
-            {error ? <div className="settings-error" role="alert"><Icon name="warning" />{error}</div> : null}
-            {status ? <div className="settings-success" role="status"><Icon name="check" />{status}</div> : null}
+            {tab === "account" ? (
+              <AccountPanel
+                settings={settings}
+                busy={busy}
+                manualCode={manualCode}
+                setBusy={setBusy}
+                setError={setError}
+                setManualCode={setManualCode}
+                setSettings={setSettings}
+              />
+            ) : null}
+            {tab === "models" ? (
+              <ModelsPanel
+                apiKey={apiKey}
+                draft={draft}
+                models={models}
+                provider={provider}
+                settings={settings}
+                setApiKey={setApiKey}
+                setDraft={setDraft}
+                setModels={setModels}
+                setProvider={setProvider}
+              />
+            ) : null}
+            {tab === "plugins" ? (
+              <>
+                <header>
+                  <h2>Plugins</h2>
+                  <p>
+                    Manage loaded packages, their declared product spaces, and
+                    Agent tool grants without mixing those states.
+                  </p>
+                </header>
+                <CapabilitySettings />
+              </>
+            ) : null}
+            {tab === "general" ? (
+              <GeneralPanel draft={draft} setDraft={setDraft} />
+            ) : null}
+            {error ? (
+              <div className="settings-error" role="alert">
+                <Icon name="warning" />
+                {error}
+              </div>
+            ) : null}
+            {status ? (
+              <div className="settings-success" role="status">
+                <Icon name="check" />
+                {status}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -123,26 +260,358 @@ export function SettingsView({
   );
 }
 
-function AccountPanel({ settings, busy, manualCode, setBusy, setError, setManualCode, setSettings }: { settings: PublicHostSettings; busy: string | null; manualCode: boolean; setBusy(value: string | null): void; setError(value: string | null): void; setManualCode(value: boolean): void; setSettings(value: PublicHostSettings): void }) {
-  const login = () => { setBusy("login"); setError(null); void window.zenx.settings.loginSubscription().then((value) => { setSettings(value); setManualCode(false); }).catch((reason: unknown) => setError(describeError(reason))).finally(() => setBusy(null)); };
-  return <><header><h2>Account</h2><p>Credentials remain in the local ZenX vault and never enter the Thread Item stream.</p></header><div className="page-card settings-card"><div className="settings-card-head"><div><h3>OpenAI subscription</h3><p>Use an authenticated ChatGPT subscription for ZenX model access.</p></div><span className={settings.subscription.authenticated ? "status-good" : "status-muted"}>{settings.subscription.authenticated ? "Signed in" : "Not signed in"}</span></div><div className="settings-row"><div><strong>{settings.subscription.accountId ?? "No account connected"}</strong><span>{settings.subscription.authenticated ? "Authentication is stored in the operating system credential boundary." : "Connect a subscription when this provider is selected."}</span></div>{settings.subscription.authenticated ? <button className="danger-button" type="button" onClick={() => void window.zenx.settings.logoutSubscription().then(setSettings).catch((reason: unknown) => setError(describeError(reason)))}>Sign out</button> : <button className="primary-button" type="button" disabled={busy !== null} onClick={login}>{busy === "login" ? "Waiting for browser…" : "Sign in with OpenAI"}</button>}</div>{manualCode ? <ManualCode /> : null}</div><div className="page-card settings-card"><div className="settings-row"><div><strong>Privacy boundary</strong><span>Thread history stores only effective runtime settings. Subscription identity and provider secrets remain outside canonical Items.</span></div><Icon name="lock" /></div></div></>;
+function AccountPanel({
+  settings,
+  busy,
+  manualCode,
+  setBusy,
+  setError,
+  setManualCode,
+  setSettings,
+}: {
+  settings: PublicHostSettings;
+  busy: string | null;
+  manualCode: boolean;
+  setBusy(value: string | null): void;
+  setError(value: string | null): void;
+  setManualCode(value: boolean): void;
+  setSettings(value: PublicHostSettings): void;
+}) {
+  const login = () => {
+    setBusy("login");
+    setError(null);
+    void window.zenx.settings
+      .loginSubscription()
+      .then((value) => {
+        setSettings(value);
+        setManualCode(false);
+      })
+      .catch((reason: unknown) => setError(describeError(reason)))
+      .finally(() => setBusy(null));
+  };
+  return (
+    <>
+      <header>
+        <h2>Account</h2>
+        <p>
+          Credentials remain in the local ZenX vault and never enter the Thread
+          Item stream.
+        </p>
+      </header>
+      <div className="page-card settings-card">
+        <div className="settings-card-head">
+          <div>
+            <h3>OpenAI subscription</h3>
+            <p>
+              Use an authenticated ChatGPT subscription for ZenX model access.
+            </p>
+          </div>
+          <span
+            className={
+              settings.subscription.authenticated
+                ? "status-good"
+                : "status-muted"
+            }
+          >
+            {settings.subscription.authenticated
+              ? "Signed in"
+              : "Not signed in"}
+          </span>
+        </div>
+        <div className="settings-row">
+          <div>
+            <strong>
+              {settings.subscription.accountId ?? "No account connected"}
+            </strong>
+            <span>
+              {settings.subscription.authenticated
+                ? "Authentication is stored in the operating system credential boundary."
+                : "Connect a subscription when this provider is selected."}
+            </span>
+          </div>
+          {settings.subscription.authenticated ? (
+            <button
+              className="danger-button"
+              type="button"
+              onClick={() =>
+                void window.zenx.settings
+                  .logoutSubscription()
+                  .then(setSettings)
+                  .catch((reason: unknown) => setError(describeError(reason)))
+              }
+            >
+              Sign out
+            </button>
+          ) : (
+            <button
+              className="primary-button"
+              type="button"
+              disabled={busy !== null}
+              onClick={login}
+            >
+              {busy === "login"
+                ? "Waiting for browser…"
+                : "Sign in with OpenAI"}
+            </button>
+          )}
+        </div>
+        {manualCode ? <ManualCode /> : null}
+      </div>
+      <div className="page-card settings-card">
+        <div className="settings-row">
+          <div>
+            <strong>Privacy boundary</strong>
+            <span>
+              Thread history stores only effective runtime settings.
+              Subscription identity and provider secrets remain outside
+              canonical Items.
+            </span>
+          </div>
+          <Icon name="lock" />
+        </div>
+      </div>
+    </>
+  );
 }
 
-function ModelsPanel({ apiKey, draft, models, provider, settings, setApiKey, setDraft, setModels, setProvider }: { apiKey: string; draft: ZenXHostProfile; models: string; provider: ZenXProviderProfile; settings: PublicHostSettings; setApiKey(value: string): void; setDraft(value: ZenXHostProfile): void; setModels(value: string): void; setProvider(value: ZenXProviderProfile["type"]): void }) {
-  return <><header><h2>Models & provider</h2><p>Choose the host adapter and models exposed to new Threads.</p></header><div className="page-card settings-card"><div className="provider-tabs" role="tablist" aria-label="Provider type">{(["openai-subscription", "openai-compatible", "fake"] as const).map((type) => <button key={type} type="button" role="tab" aria-selected={provider.type === type} onClick={() => setProvider(type)}>{type === "openai-subscription" ? "OpenAI subscription" : type === "openai-compatible" ? "API provider" : "Local demo"}</button>)}</div>{provider.type === "openai-compatible" ? <div className="form-grid"><Field label="Display name" value={provider.displayName} onChange={(value) => setDraft({ ...draft, provider: { ...provider, displayName: value } })} /><Field label="Provider name" value={provider.name} onChange={(value) => setDraft({ ...draft, provider: { ...provider, name: value } })} /><Field wide label="Base URL" value={provider.baseUrl} onChange={(value) => setDraft({ ...draft, provider: { ...provider, baseUrl: value } })} /><Field wide secret label="API key" placeholder={settings.hasApiKey ? "Saved securely — leave blank to keep" : "Required"} value={apiKey} onChange={setApiKey} /></div> : provider.type === "fake" ? <p className="settings-note">The deterministic local provider is for offline protocol and UI testing. Thread lists present it as “Local demo,” never as a fake brand.</p> : <p className="settings-note">Model access uses the authenticated subscription shown in Account.</p>}</div><div className="page-card settings-card"><div className="form-grid"><Field label="Default model" value={draft.defaultModel} onChange={(value) => setDraft({ ...draft, defaultModel: value })} /><Field label="Title model" value={draft.titleModel} onChange={(value) => setDraft({ ...draft, titleModel: value })} /><label className="field wide"><span>Available models <small>one per line</small></span><textarea rows={5} value={models} onChange={(event) => setModels(event.target.value)} /></label></div><p className="settings-note">Existing Threads keep the ZAS-authoritative model until changed explicitly in their Composer.</p></div></>;
+function ModelsPanel({
+  apiKey,
+  draft,
+  models,
+  provider,
+  settings,
+  setApiKey,
+  setDraft,
+  setModels,
+  setProvider,
+}: {
+  apiKey: string;
+  draft: ZenXHostProfile;
+  models: string;
+  provider: ZenXProviderProfile;
+  settings: PublicHostSettings;
+  setApiKey(value: string): void;
+  setDraft(value: ZenXHostProfile): void;
+  setModels(value: string): void;
+  setProvider(value: ZenXProviderProfile["type"]): void;
+}) {
+  return (
+    <>
+      <header>
+        <h2>Models & provider</h2>
+        <p>Choose the host adapter and models exposed to new Threads.</p>
+      </header>
+      <div className="page-card settings-card">
+        <div
+          className="provider-tabs"
+          role="tablist"
+          aria-label="Provider type"
+        >
+          {(["openai-subscription", "openai-compatible", "fake"] as const).map(
+            (type) => (
+              <button
+                key={type}
+                type="button"
+                role="tab"
+                aria-selected={provider.type === type}
+                onClick={() => setProvider(type)}
+              >
+                {type === "openai-subscription"
+                  ? "OpenAI subscription"
+                  : type === "openai-compatible"
+                    ? "API provider"
+                    : "Local demo"}
+              </button>
+            ),
+          )}
+        </div>
+        {provider.type === "openai-compatible" ? (
+          <div className="form-grid">
+            <Field
+              label="Display name"
+              value={provider.displayName}
+              onChange={(value) =>
+                setDraft({
+                  ...draft,
+                  provider: { ...provider, displayName: value },
+                })
+              }
+            />
+            <Field
+              label="Provider name"
+              value={provider.name}
+              onChange={(value) =>
+                setDraft({ ...draft, provider: { ...provider, name: value } })
+              }
+            />
+            <Field
+              wide
+              label="Base URL"
+              value={provider.baseUrl}
+              onChange={(value) =>
+                setDraft({
+                  ...draft,
+                  provider: { ...provider, baseUrl: value },
+                })
+              }
+            />
+            <Field
+              wide
+              secret
+              label="API key"
+              placeholder={
+                settings.hasApiKey
+                  ? "Saved securely — leave blank to keep"
+                  : "Required"
+              }
+              value={apiKey}
+              onChange={setApiKey}
+            />
+          </div>
+        ) : provider.type === "fake" ? (
+          <p className="settings-note">
+            The deterministic local provider is for offline protocol and UI
+            testing. Thread lists present it as “Local demo,” never as a fake
+            brand.
+          </p>
+        ) : (
+          <p className="settings-note">
+            Model access uses the authenticated subscription shown in Account.
+          </p>
+        )}
+      </div>
+      <div className="page-card settings-card">
+        <div className="form-grid">
+          <Field
+            label="Default model"
+            value={draft.defaultModel}
+            onChange={(value) => setDraft({ ...draft, defaultModel: value })}
+          />
+          <Field
+            label="Title model"
+            value={draft.titleModel}
+            onChange={(value) => setDraft({ ...draft, titleModel: value })}
+          />
+          <label className="field wide">
+            <span>
+              Available models <small>one per line</small>
+            </span>
+            <textarea
+              rows={5}
+              value={models}
+              onChange={(event) => setModels(event.target.value)}
+            />
+          </label>
+        </div>
+        <p className="settings-note">
+          Existing Threads keep the ZAS-authoritative model until changed
+          explicitly in their Composer.
+        </p>
+      </div>
+    </>
+  );
 }
 
-function GeneralPanel({ draft, setDraft }: { draft: ZenXHostProfile; setDraft(value: ZenXHostProfile): void }) {
-  return <><header><h2>General</h2><p>Local workspace defaults and Zen App Server behavior.</p></header><div className="page-card settings-card"><div className="form-grid"><Field wide label="Default workspace" value={draft.workspace} onChange={(value) => setDraft({ ...draft, workspace: value })} /><label className="field"><span>Approval policy</span><select value={draft.approvalPolicy} onChange={(event) => setDraft({ ...draft, approvalPolicy: event.target.value as "always" | "never" })}><option value="always">Approval required</option><option value="never">Full access</option></select></label></div><div className="settings-row"><div><strong>Zen App Server</strong><span>Saving restarts the local host with these defaults. Existing Thread settings remain authoritative.</span></div><span className="status-good">Local</span></div></div></>;
+function GeneralPanel({
+  draft,
+  setDraft,
+}: {
+  draft: ZenXHostProfile;
+  setDraft(value: ZenXHostProfile): void;
+}) {
+  return (
+    <>
+      <header>
+        <h2>General</h2>
+        <p>Local workspace defaults and Zen App Server behavior.</p>
+      </header>
+      <div className="page-card settings-card">
+        <div className="form-grid">
+          <Field
+            wide
+            label="Default workspace"
+            value={draft.workspace}
+            onChange={(value) => setDraft({ ...draft, workspace: value })}
+          />
+          <label className="field">
+            <span>Approval policy</span>
+            <select
+              value={draft.approvalPolicy}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  approvalPolicy: event.target.value as "always" | "never",
+                })
+              }
+            >
+              <option value="always">Approval required</option>
+              <option value="never">Full access</option>
+            </select>
+          </label>
+        </div>
+        <div className="settings-row">
+          <div>
+            <strong>Zen App Server</strong>
+            <span>
+              Saving restarts the local host with these defaults. Existing
+              Thread settings remain authoritative.
+            </span>
+          </div>
+          <span className="status-good">Local</span>
+        </div>
+      </div>
+    </>
+  );
 }
 
-function Field({ label, value, onChange, placeholder, secret = false, wide = false }: { label: string; value: string; onChange(value: string): void; placeholder?: string; secret?: boolean; wide?: boolean }) {
-  return <label className={`field${wide ? " wide" : ""}`}><span>{label}</span><input type={secret ? "password" : "text"} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} /></label>;
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  secret = false,
+  wide = false,
+}: {
+  label: string;
+  value: string;
+  onChange(value: string): void;
+  placeholder?: string;
+  secret?: boolean;
+  wide?: boolean;
+}) {
+  return (
+    <label className={`field${wide ? " wide" : ""}`}>
+      <span>{label}</span>
+      <input
+        type={secret ? "password" : "text"}
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
 }
 
 function ManualCode() {
   const [value, setValue] = useState("");
-  return <div className="manual-code"><label className="field"><span>Authorization code or redirect URL</span><input value={value} onChange={(event) => setValue(event.target.value)} /></label><button type="button" disabled={!value.trim()} onClick={() => void window.zenx.settings.submitManualCode(value)}>Continue</button></div>;
+  return (
+    <div className="manual-code">
+      <label className="field">
+        <span>Authorization code or redirect URL</span>
+        <input
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+        />
+      </label>
+      <button
+        type="button"
+        disabled={!value.trim()}
+        onClick={() => void window.zenx.settings.submitManualCode(value)}
+      >
+        Continue
+      </button>
+    </div>
+  );
 }
 
 function describeError(error: unknown): string {

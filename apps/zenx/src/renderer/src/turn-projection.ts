@@ -66,10 +66,10 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
     terminalFallback:
       turn.status === "inProgress" || finalItem !== null
         ? null
-        : turn.error?.message ??
+        : (turn.error?.message ??
           (turn.status === "interrupted"
             ? "This turn was interrupted before a final response arrived."
-            : "This turn ended without a final response."),
+            : "This turn ended without a final response.")),
   };
 }
 

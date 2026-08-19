@@ -23,7 +23,10 @@ export function CapabilitySettings() {
     const disposePlugins = window.zenx.plugins.onChange((value) => {
       if (active) setPlugins(value);
     });
-    void Promise.all([window.zenx.capabilities.get(), window.zenx.plugins.get()])
+    void Promise.all([
+      window.zenx.capabilities.get(),
+      window.zenx.plugins.get(),
+    ])
       .then(([nextCapabilities, nextPlugins]) => {
         if (!active) return;
         setCapabilities(nextCapabilities);
@@ -85,10 +88,15 @@ export function CapabilitySettings() {
   return (
     <>
       <div className="page-card settings-card plugin-boundary">
-        <span className="plugin-icon"><Icon name="layers" /></span>
+        <span className="plugin-icon">
+          <Icon name="layers" />
+        </span>
         <div>
           <strong>Extension boundary</strong>
-          <span>Projects, Inbox, Threads, and Settings remain native. Enabled packages can mount only their declared pages in Plugin spaces.</span>
+          <span>
+            Projects, Inbox, Threads, and Settings remain native. Enabled
+            packages can mount only their declared pages in Plugin spaces.
+          </span>
         </div>
         <small>{plugins.sidebar.length} Sidebar contributions active</small>
       </div>
@@ -98,16 +106,24 @@ export function CapabilitySettings() {
           <div className="settings-card-head">
             <div>
               <h3>Plugin spaces</h3>
-              <p>Disabling a package removes its product space and its Agent tools. Permission grants remain a separate control.</p>
+              <p>
+                Disabling a package removes its product space and its Agent
+                tools. Permission grants remain a separate control.
+              </p>
             </div>
           </div>
           <div className="capability-list compact">
             {contributedPlugins.map((plugin) => (
               <div className="capability-row" key={plugin.id}>
-                <span className="plugin-icon"><Icon name={pluginIcon(plugin.id)} /></span>
+                <span className="plugin-icon">
+                  <Icon name={pluginIcon(plugin.id)} />
+                </span>
                 <div>
                   <strong>{plugin.displayName}</strong>
-                  <span>{plugin.source} · v{plugin.version} · {plugin.contributionCount} contributions</span>
+                  <span>
+                    {plugin.source} · v{plugin.version} ·{" "}
+                    {plugin.contributionCount} contributions
+                  </span>
                 </div>
                 <button
                   className="plugin-switch"
@@ -128,7 +144,10 @@ export function CapabilitySettings() {
         <div className="settings-card-head">
           <div>
             <h3>Installed capability packages</h3>
-            <p>Grants decide which enabled tools the Agent may call. They do not install or mount pages.</p>
+            <p>
+              Grants decide which enabled tools the Agent may call. They do not
+              install or mount pages.
+            </p>
           </div>
           <span>{capabilities.capabilities.length} installed locally</span>
         </div>
@@ -136,21 +155,41 @@ export function CapabilitySettings() {
           {capabilities.capabilities.map((capability) => {
             const granted =
               capability.manifest.permissions.length > 0 &&
-              capability.manifest.permissions.length === capability.granted.length;
+              capability.manifest.permissions.length ===
+                capability.granted.length;
             return (
               <div className="capability-row" key={capability.manifest.id}>
-                <span className="plugin-icon"><Icon name={pluginIcon(capability.manifest.id)} /></span>
+                <span className="plugin-icon">
+                  <Icon name={pluginIcon(capability.manifest.id)} />
+                </span>
                 <div>
                   <strong>{capability.manifest.displayName}</strong>
-                  <span>{capability.source} · v{capability.manifest.version} · {capability.enabled ? "enabled" : "disabled"} · {capability.manifest.permissions.length} permissions · {capability.manifest.tools.length} tools{capability.available ? "" : ` · ${capability.unavailableReason}`}</span>
+                  <span>
+                    {capability.source} · v{capability.manifest.version} ·{" "}
+                    {capability.enabled ? "enabled" : "disabled"} ·{" "}
+                    {capability.manifest.permissions.length} permissions ·{" "}
+                    {capability.manifest.tools.length} tools
+                    {capability.available
+                      ? ""
+                      : ` · ${capability.unavailableReason}`}
+                  </span>
                 </div>
                 <button
                   className={granted ? "danger-button" : "secondary-button"}
                   type="button"
-                  disabled={busy !== null || !capability.enabled || !capability.available || capability.manifest.permissions.length === 0}
+                  disabled={
+                    busy !== null ||
+                    !capability.enabled ||
+                    !capability.available ||
+                    capability.manifest.permissions.length === 0
+                  }
                   onClick={() => void setGranted(capability, !granted)}
                 >
-                  {busy === `grant:${capability.manifest.id}` ? "Restarting…" : granted ? "Revoke" : "Grant"}
+                  {busy === `grant:${capability.manifest.id}`
+                    ? "Restarting…"
+                    : granted
+                      ? "Revoke"
+                      : "Grant"}
                 </button>
               </div>
             );
@@ -161,22 +200,52 @@ export function CapabilitySettings() {
       {capabilities.providerDiagnostics.length === 0 ? null : (
         <div className="page-card settings-card">
           <div className="settings-card-head">
-            <div><h3>Execution providers</h3><p>Availability reported by the current local capability catalog.</p></div>
+            <div>
+              <h3>Execution providers</h3>
+              <p>
+                Availability reported by the current local capability catalog.
+              </p>
+            </div>
           </div>
           {capabilities.providerDiagnostics.map((provider) => (
-            <div className="settings-row" key={`${provider.capabilityId}:${provider.providerId}`}>
-              <div><strong>{provider.providerId}</strong><span>{provider.reason ?? provider.permissionSummary ?? provider.interactionModes.join(", ")}</span></div>
-              <small className={provider.status === "unavailable" ? "status-bad" : "status-good"}>{provider.status}</small>
+            <div
+              className="settings-row"
+              key={`${provider.capabilityId}:${provider.providerId}`}
+            >
+              <div>
+                <strong>{provider.providerId}</strong>
+                <span>
+                  {provider.reason ??
+                    provider.permissionSummary ??
+                    provider.interactionModes.join(", ")}
+                </span>
+              </div>
+              <small
+                className={
+                  provider.status === "unavailable"
+                    ? "status-bad"
+                    : "status-good"
+                }
+              >
+                {provider.status}
+              </small>
             </div>
           ))}
         </div>
       )}
-      {error ? <div className="settings-error" role="alert"><Icon name="warning" />{error}</div> : null}
+      {error ? (
+        <div className="settings-error" role="alert">
+          <Icon name="warning" />
+          {error}
+        </div>
+      ) : null}
     </>
   );
 }
 
-function pluginIcon(id: string): "search" | "panel-right" | "trigger" | "users" | "layers" {
+function pluginIcon(
+  id: string,
+): "search" | "panel-right" | "trigger" | "users" | "layers" {
   if (id === "browser") return "search";
   if (id === "computer") return "panel-right";
   if (id.includes("triggers")) return "trigger";
