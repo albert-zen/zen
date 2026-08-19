@@ -55,6 +55,8 @@ const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
 let quitting = false;
 
+configureProjectWorkspaceSmokeDebugger(process.argv);
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
@@ -255,6 +257,18 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
+
+function configureProjectWorkspaceSmokeDebugger(arguments_: readonly string[]) {
+  const prefix = "--zenx-project-smoke-cdp-port=";
+  const value = arguments_
+    .find((argument) => argument.startsWith(prefix))
+    ?.slice(prefix.length);
+  if (value === undefined || !/^\d{1,5}$/u.test(value)) return;
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) return;
+  app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
+  app.commandLine.appendSwitch("remote-debugging-port", String(port));
+}
 
 app.on("before-quit", (event) => {
   if (quitting || appServerManager === undefined) return;

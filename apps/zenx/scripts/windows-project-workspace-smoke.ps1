@@ -30,8 +30,7 @@ function Start-ZenX {
   param([string] $Executable, [string] $UserData, [int] $CdpPort)
   $started = Start-Process -FilePath $Executable -ArgumentList @(
     "--user-data-dir=$UserData",
-    "--remote-debugging-address=127.0.0.1",
-    "--remote-debugging-port=$CdpPort"
+    "--zenx-project-smoke-cdp-port=$CdpPort"
   ) -PassThru
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   do {
