@@ -21,6 +21,8 @@ $zenData = Join-Path $smokeRoot "zen-data"
 $profilePath = Join-Path $userData "host-profile.json"
 $acceptancePath = Join-Path $smokeRoot "acceptance.json"
 $resultPath = Join-Path $smokeRoot "result.json"
+$stdoutPath = Join-Path $smokeRoot "zenx.stdout.log"
+$stderrPath = Join-Path $smokeRoot "zenx.stderr.log"
 $process = $null
 $previousZenData = $env:ZENX_DATA_DIR
 
@@ -39,23 +41,47 @@ function Start-ZenXAcceptance {
     $env:ZENX_PROJECT_ACCEPTANCE_CONFIG = $acceptancePath
     return Start-Process -FilePath $Executable -ArgumentList @(
       ('--user-data-dir="' + $UserData + '"')
-    ) -PassThru
+    ) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
   } finally {
     $env:ZENX_PROJECT_ACCEPTANCE_CONFIG = $previousAcceptance
   }
+}
+
+function Write-AcceptanceDiagnostics {
+  param($Process, [string] $Mode)
+  $exitCode = "running"
+  if ($null -ne $Process -and $Process.HasExited) { $exitCode = [string]$Process.ExitCode }
+  Write-Host "ZenX packaged acceptance diagnostics: mode=$Mode pid=$($Process.Id) exitCode=$exitCode"
+  foreach ($path in @($acceptancePath, $resultPath, $profilePath, $stdoutPath, $stderrPath)) {
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+      Write-Host "--- $path"
+      Get-Content -Raw -LiteralPath $path | Write-Host
+    } else {
+      Write-Host "--- missing: $path"
+    }
+  }
+  Write-Host "--- isolated directory listing: $smokeRoot"
+  Get-ChildItem -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue |
+    Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize | Out-String | Write-Host
 }
 
 function Wait-ZenXAcceptance {
   param($Process, [string] $Mode)
   $deadline = [DateTime]::UtcNow.AddSeconds(120)
   while (-not (Test-Path -LiteralPath $resultPath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
+    if ($Process.HasExited) {
+      Write-AcceptanceDiagnostics -Process $Process -Mode $Mode
+      throw "Packaged ZenX exited with code $($Process.ExitCode) before reporting the $Mode acceptance result."
+    }
     Start-Sleep -Milliseconds 250
   }
   if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+    Write-AcceptanceDiagnostics -Process $Process -Mode $Mode
     throw "Packaged ZenX did not report the $Mode acceptance result before timeout."
   }
   $result = Get-Content -Raw -LiteralPath $resultPath | ConvertFrom-Json
   if ($result.ok -ne $true -or $result.applicationMenuAbsent -ne $true -or $result.mode -ne $Mode) {
+    Write-AcceptanceDiagnostics -Process $Process -Mode $Mode
     throw "Packaged ZenX $Mode acceptance failed: $($result.error)"
   }
   Wait-Process -Id $Process.Id -Timeout 30 -ErrorAction SilentlyContinue

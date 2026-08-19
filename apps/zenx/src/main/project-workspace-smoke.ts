@@ -31,14 +31,19 @@ export function projectWorkspaceAcceptanceConfigPath(
 export async function runProjectWorkspaceAcceptance(
   options: AcceptanceOptions,
 ): Promise<void> {
-  const config = readConfig(
-    JSON.parse(await readFile(options.configPath, "utf8")) as unknown,
+  console.info(
+    `Packaged Project workspace acceptance activated: ${options.configPath}`,
   );
+  const config = await readProjectWorkspaceAcceptanceConfig(
+    options.configPath,
+  );
+  console.info(`Packaged Project workspace acceptance config read: ${config.mode}`);
   try {
     if (!options.applicationMenuAbsent) {
       throw new Error("Packaged ZenX exposed an unexpected application menu");
     }
     await waitForLoad(options.window);
+    console.info("Packaged Project workspace acceptance renderer loaded");
     if (config.mode === "mutate") {
       await clickButton(options.window, "Add project");
       await clickButton(options.window, config.fixture);
@@ -81,6 +86,13 @@ export async function runProjectWorkspaceAcceptance(
     });
     throw error;
   }
+}
+
+export async function readProjectWorkspaceAcceptanceConfig(
+  configPath: string,
+): Promise<ProjectWorkspaceAcceptanceConfig> {
+  const source = await readFile(configPath, "utf8");
+  return readConfig(JSON.parse(source.replace(/^\uFEFF/u, "")) as unknown);
 }
 
 async function waitForLoad(window: BrowserWindow): Promise<void> {
