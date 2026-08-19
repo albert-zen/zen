@@ -84,7 +84,15 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "ZenX build failed." }
   $packageOutput = & node ./scripts/package-zenx-portable.mjs --app
   if ($LASTEXITCODE -ne 0) { throw "ZenX portable packaging failed." }
-  $package = $packageOutput | Out-String | ConvertFrom-Json
+  $packageLines = @($packageOutput)
+  $jsonStart = 0
+  while ($jsonStart -lt $packageLines.Count -and $packageLines[$jsonStart].Trim() -ne "{") {
+    $jsonStart++
+  }
+  if ($jsonStart -ge $packageLines.Count) {
+    throw "ZenX portable packaging did not report its artifact as JSON."
+  }
+  $package = ($packageLines[$jsonStart..($packageLines.Count - 1)] -join [Environment]::NewLine) | ConvertFrom-Json
   if (-not (Test-Path -LiteralPath $package.executable -PathType Leaf)) {
     throw "Packaged ZenX executable is missing: $($package.executable)"
   }
