@@ -21,6 +21,11 @@ Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / 
 以及可显式授权的 bundled/local capability registry 已形成可运行 vertical slice。
 ZenX 的产品读取模型来自 ZAS 原生 `ThreadSummary` 查询，并经 Electron main/preload
 typed IPC 暴露；Codex Thread DTO 只属于兼容协议 adapter，不定义 ZenX 产品模型。
+Capability package 同时是首期插件安装单元：main/preload 提供 typed plugin snapshot，Host 只从
+manifest 投影已启用 package 的受控 Sidebar/page contribution。Triggers 与 Rooms 已拆成两个
+独立 bundled plugins；任一关闭后，其 contribution 与 host tools 同时撤销，并通过既有 Capability
+restart 路径更新运行时。Package enablement 与 permission grant
+保存在同一原子 capability 配置文档的不同字段；grant、per-call approval 与 sandbox 仍是独立状态。
 首批 browser provider 默认优先复用 Playwright CLI 的跨平台 headless 隔离 session，缺失或不兼容时
 回落到 bundled Electron/CDP 临时 profile；用户也可显式选择 loopback CDP user-session
 provider 附着到自己预先开启的 Chrome/Edge/Chromium，原位使用认证状态而不导出 cookie、

@@ -24,7 +24,10 @@ import type {
   RoomMember,
   TriggerSnapshot,
 } from "../main/trigger-types.js";
-import type { ZenXCapabilitySnapshot } from "../main/capabilities/types.js";
+import type {
+  ZenXCapabilitySnapshot,
+  ZenXPluginSnapshot,
+} from "../main/capabilities/types.js";
 import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
@@ -209,17 +212,6 @@ contextBridge.exposeInMainWorld("zenx", {
         capabilityId,
         permissionIds,
       ),
-    setContributionEnabled: async (
-      capabilityId: string,
-      contributionId: string,
-      enabled: boolean,
-    ): Promise<ZenXCapabilitySnapshot> =>
-      await ipcRenderer.invoke(
-        ipcChannels.capabilityContributionSet,
-        capabilityId,
-        contributionId,
-        enabled,
-      ),
     onChange: (
       listener: (snapshot: ZenXCapabilitySnapshot) => void,
     ): (() => void) => {
@@ -229,6 +221,29 @@ contextBridge.exposeInMainWorld("zenx", {
       ) => listener(snapshot);
       ipcRenderer.on(ipcChannels.capabilitiesChanged, wrapped);
       return () => ipcRenderer.off(ipcChannels.capabilitiesChanged, wrapped);
+    },
+  },
+  plugins: {
+    get: async (): Promise<ZenXPluginSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.pluginsGet),
+    setEnabled: async (
+      pluginId: string,
+      enabled: boolean,
+    ): Promise<ZenXPluginSnapshot> =>
+      await ipcRenderer.invoke(
+        ipcChannels.pluginsSetEnabled,
+        pluginId,
+        enabled,
+      ),
+    onChange: (
+      listener: (snapshot: ZenXPluginSnapshot) => void,
+    ): (() => void) => {
+      const wrapped = (
+        _event: Electron.IpcRendererEvent,
+        snapshot: ZenXPluginSnapshot,
+      ) => listener(snapshot);
+      ipcRenderer.on(ipcChannels.pluginsChanged, wrapped);
+      return () => ipcRenderer.off(ipcChannels.pluginsChanged, wrapped);
     },
   },
 });

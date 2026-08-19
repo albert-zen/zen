@@ -67,6 +67,144 @@ const manifest: ZenXCapabilityManifest = {
   ],
 };
 
+const pluginManifest: ZenXCapabilityManifest = {
+  ...structuredClone(manifest),
+  contributions: {
+    pages: [
+      {
+        id: "fixture",
+        title: "Fixture",
+        route: "/plugins/fixture/fixture",
+      },
+    ],
+    sidebar: [
+      {
+        id: "fixture",
+        label: "Fixture",
+        icon: "fixture",
+        pageId: "fixture",
+        order: 20,
+      },
+    ],
+  },
+};
+
+test("projects enabled plugin contributions and removes tools and UI when disabled", async () => {
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+  );
+  await registry.initialize();
+  registry.register(pluginPackageFixture(async () => ({ ok: true })));
+  await registry.grant("fixture", ["fixture.read"]);
+
+  assert.equal(registry.snapshot().capabilities[0]?.enabled, true);
+  assert.deepEqual(registry.pluginSnapshot().sidebar, [
+    {
+      id: "fixture",
+      key: "fixture:fixture",
+      pluginId: "fixture",
+      label: "Fixture",
+      icon: "fixture",
+      pageId: "fixture",
+      order: 20,
+    },
+  ]);
+  assert.deepEqual(
+    registry.hostSnapshot().definitions.map((tool) => tool.name),
+    ["fixture_inspect"],
+  );
+
+  await registry.setEnabled("fixture", false);
+  assert.equal(registry.snapshot().capabilities[0]?.enabled, false);
+  assert.deepEqual(registry.pluginSnapshot().sidebar, []);
+  assert.deepEqual(registry.pluginSnapshot().pages, []);
+  assert.deepEqual(registry.hostSnapshot().definitions, []);
+  await assert.rejects(
+    registry.execute(invocation("fixture_inspect", {})),
+    /disabled/u,
+  );
+
+  await registry.setEnabled("fixture", true);
+  assert.equal(registry.snapshot().capabilities[0]?.enabled, true);
+  assert.equal(registry.pluginSnapshot().sidebar.length, 1);
+});
+
+test("failed enablement persistence leaves memory, tools, and contributions unchanged", async () => {
+  const registry = new ZenXCapabilityRegistry({
+    load: async () => ({ grants: {}, disabled: [] }),
+    save: async () => {
+      throw new Error("capability config unavailable");
+    },
+  });
+  await registry.initialize();
+  registry.register(pluginPackageFixture(async () => ({ ok: true })));
+  const before = registry.snapshot();
+  const beforeHost = registry.hostSnapshot();
+  const beforePlugins = registry.pluginSnapshot();
+
+  await assert.rejects(
+    registry.setEnabled("fixture", false),
+    /capability config unavailable/u,
+  );
+  assert.deepEqual(registry.snapshot(), before);
+  assert.deepEqual(registry.hostSnapshot(), beforeHost);
+  assert.deepEqual(registry.pluginSnapshot(), beforePlugins);
+});
+
+test("persisted disablement is authoritative when a package registers later", async () => {
+  const registry = new ZenXCapabilityRegistry({
+    load: async () => ({ grants: {}, disabled: ["fixture"] }),
+    save: async () => undefined,
+  });
+  await registry.initialize();
+  registry.register(pluginPackageFixture(async () => ({ ok: true })));
+
+  assert.equal(registry.snapshot().capabilities[0]?.enabled, false);
+  assert.deepEqual(registry.hostSnapshot().definitions, []);
+  assert.deepEqual(registry.pluginSnapshot().sidebar, []);
+});
+
+test("unregister unloads package tools and contributions", async () => {
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+  );
+  await registry.initialize();
+  let closes = 0;
+  registry.register({
+    ...pluginPackageFixture(async () => ({ ok: true })),
+    close: () => {
+      closes += 1;
+    },
+  });
+  await registry.grant("fixture", ["fixture.read"]);
+  assert.equal(registry.pluginSnapshot().sidebar.length, 1);
+
+  await registry.unregister("fixture");
+  await registry.unregister("fixture");
+  assert.equal(closes, 1);
+  assert.deepEqual(registry.pluginSnapshot().plugins, []);
+  assert.deepEqual(registry.hostSnapshot().definitions, []);
+});
+
+test("rejects malformed or dangling plugin contributions", async () => {
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+  );
+  await registry.initialize();
+  const invalid = structuredClone(pluginManifest);
+  invalid.contributions!.sidebar![0]!.pageId = "missing";
+  assert.throws(
+    () => registry.register({ manifest: invalid, invoke: async () => null }),
+    /unknown page missing/u,
+  );
+  const unsafe = structuredClone(pluginManifest);
+  unsafe.contributions!.pages![0]!.route = "/settings";
+  assert.throws(
+    () => registry.register({ manifest: unsafe, invoke: async () => null }),
+    /plugin route/u,
+  );
+});
+
 test("registers, grants, revokes, and unregisters package contributions", async () => {
   const registry = new ZenXCapabilityRegistry(
     new MemoryZenXCapabilityGrantStore(),
@@ -110,6 +248,51 @@ test("registers, grants, revokes, and unregisters package contributions", async 
   await registry.unregister("fixture");
   assert.deepEqual(registry.snapshot().capabilities, []);
   assert.deepEqual(registry.hostSnapshot().definitions, []);
+});
+
+test("failed grant persistence leaves snapshot and host projection unchanged", async () => {
+  const registry = new ZenXCapabilityRegistry({
+    load: async () => ({ grants: {}, disabled: [] }),
+    save: async () => {
+      throw new Error("grant store unavailable");
+    },
+  });
+  await registry.initialize();
+  registry.register(packageFixture(async () => ({ ok: true })));
+  const beforeSnapshot = registry.snapshot();
+  const beforeHost = registry.hostSnapshot();
+
+  await assert.rejects(
+    registry.grant("fixture", ["fixture.read"]),
+    /grant store unavailable/u,
+  );
+  assert.deepEqual(registry.snapshot(), beforeSnapshot);
+  assert.deepEqual(registry.hostSnapshot(), beforeHost);
+});
+
+test("failed revoke persistence leaves snapshot and host projection unchanged", async () => {
+  const registry = new ZenXCapabilityRegistry({
+    load: async () => ({
+      grants: {
+        fixture: [{ permissionId: "fixture.read", scope: "workspace" }],
+      },
+      disabled: [],
+    }),
+    save: async () => {
+      throw new Error("grant store unavailable");
+    },
+  });
+  await registry.initialize();
+  registry.register(packageFixture(async () => ({ ok: true })));
+  const beforeSnapshot = registry.snapshot();
+  const beforeHost = registry.hostSnapshot();
+
+  await assert.rejects(
+    registry.revoke("fixture", ["fixture.read"]),
+    /grant store unavailable/u,
+  );
+  assert.deepEqual(registry.snapshot(), beforeSnapshot);
+  assert.deepEqual(registry.hostSnapshot(), beforeHost);
 });
 
 test("bounds ordinary provider output and projects invocation audit", async () => {
@@ -347,6 +530,12 @@ function packageFixture(
   invoke: ZenXCapabilityPackage["invoke"],
 ): ZenXCapabilityPackage {
   return { manifest: structuredClone(manifest), invoke };
+}
+
+function pluginPackageFixture(
+  invoke: ZenXCapabilityPackage["invoke"],
+): ZenXCapabilityPackage {
+  return { manifest: structuredClone(pluginManifest), invoke };
 }
 
 function invocation(name: string, arguments_: Record<string, unknown>) {

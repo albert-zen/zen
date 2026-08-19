@@ -22,7 +22,10 @@ import { ZenXSettingsService } from "./settings-service.js";
 import { zenXProviderTransport } from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
-import { ZenXAutomationControlCapabilityPackage } from "./capabilities/automation-control-package.js";
+import {
+  ZenXRoomsCapabilityPackage,
+  ZenXTriggersCapabilityPackage,
+} from "./capabilities/automation-control-package.js";
 import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
 import { normalizeTitleOwnershipFailure } from "./thread-title-failure.js";
 import { ZenXThreadTitleStore } from "./thread-title-store.js";
@@ -155,8 +158,9 @@ app.whenReady().then(async () => {
       { titles: titleCoordinator },
     );
     capabilityService.register(
-      new ZenXAutomationControlCapabilityPackage(triggerService),
+      new ZenXTriggersCapabilityPackage(triggerService),
     );
+    capabilityService.register(new ZenXRoomsCapabilityPackage(triggerService));
     await triggerService.start();
     installTriggerIpc(triggerService);
     if (startupError === undefined) await appServerManager.start();
@@ -509,6 +513,7 @@ function installCapabilityIpc(
   manager: AppServerManager,
 ): void {
   ipcMain.handle(ipcChannels.capabilitiesGet, () => capabilities.snapshot());
+  ipcMain.handle(ipcChannels.pluginsGet, () => capabilities.pluginSnapshot());
   ipcMain.handle(
     ipcChannels.capabilitiesGrant,
     async (_event, capabilityId: unknown, permissionIds: unknown) => {
@@ -528,32 +533,23 @@ function installCapabilityIpc(
     },
   );
   ipcMain.handle(
-    ipcChannels.capabilityContributionSet,
-    async (
-      _event,
-      capabilityId: unknown,
-      contributionId: unknown,
-      enabled: unknown,
-    ) => {
-      if (
-        typeof capabilityId !== "string" ||
-        capabilityId.length === 0 ||
-        typeof contributionId !== "string" ||
-        contributionId.length === 0 ||
-        typeof enabled !== "boolean"
-      ) {
-        throw new Error("Invalid capability UI contribution update");
+    ipcChannels.pluginsSetEnabled,
+    async (_event, pluginId: unknown, enabled: unknown) => {
+      if (typeof pluginId !== "string" || typeof enabled !== "boolean") {
+        throw new Error("Invalid plugin enablement request");
       }
-      return await capabilities.setContributionEnabled(
-        capabilityId,
-        contributionId,
-        enabled,
-      );
+      await capabilities.setEnabled(pluginId, enabled);
+      await manager.restartCapabilities();
+      return capabilities.pluginSnapshot();
     },
   );
   capabilities.onChange((snapshot) => {
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send(ipcChannels.capabilitiesChanged, snapshot);
+      window.webContents.send(
+        ipcChannels.pluginsChanged,
+        capabilities.pluginSnapshot(),
+      );
     }
   });
 }

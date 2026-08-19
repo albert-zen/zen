@@ -32,9 +32,20 @@ import {
   utf8Bytes,
   withinBytes,
 } from "../trigger-limits.js";
-import type { ZenXCapabilityManifest, ZenXCapabilityPackage } from "./types.js";
+import type {
+  ZenXCapabilityManifest,
+  ZenXCapabilityPackage,
+  ZenXPluginPageContribution,
+  ZenXPluginSidebarContribution,
+} from "./types.js";
 
 export const ZENX_AUTOMATION_CONTROL_CAPABILITY_ID = "zenx-automation-control";
+export const ZENX_TRIGGERS_CAPABILITY_ID = "zenx-triggers";
+export const ZENX_ROOMS_CAPABILITY_ID = "zenx-rooms";
+export const ZENX_TRIGGERS_READ_PERMISSION = "zenx-triggers.read";
+export const ZENX_TRIGGERS_WRITE_PERMISSION = "zenx-triggers.write";
+export const ZENX_ROOMS_READ_PERMISSION = "zenx-rooms.read";
+export const ZENX_ROOMS_WRITE_PERMISSION = "zenx-rooms.write";
 export const ZENX_AUTOMATION_READ_PERMISSION = "zenx-automation-control.read";
 export const ZENX_AUTOMATION_WRITE_PERMISSION = "zenx-automation-control.write";
 
@@ -229,27 +240,6 @@ const manifest: ZenXCapabilityManifest = {
     ),
   ],
   resources: [],
-  ui: {
-    settingsSection: "automation",
-    contributions: [
-      {
-        id: "triggers",
-        slot: "sidebar-plugin-space",
-        label: "Triggers",
-        icon: "trigger",
-        page: "triggers",
-        order: 10,
-      },
-      {
-        id: "rooms",
-        slot: "sidebar-plugin-space",
-        label: "Rooms",
-        icon: "rooms",
-        page: "rooms",
-        order: 20,
-      },
-    ],
-  },
 };
 
 export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPackage {
@@ -326,6 +316,134 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
         throw new Error(`Unsupported ZenX automation tool: ${name}`);
     }
   }
+}
+
+export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
+  readonly #delegate: ZenXAutomationControlCapabilityPackage;
+  readonly manifest: ZenXCapabilityManifest;
+
+  constructor(port: ZenXAutomationControlPort) {
+    this.#delegate = new ZenXAutomationControlCapabilityPackage(port);
+    this.manifest = automationPluginManifest(this.#delegate.manifest, {
+      id: ZENX_TRIGGERS_CAPABILITY_ID,
+      displayName: "Triggers",
+      description: "Schedule and inspect ZenX Trigger wakeups.",
+      toolPrefix: "zenx_triggers_",
+      providerCapability: "zenx.triggers.manage",
+      readPermission: ZENX_TRIGGERS_READ_PERMISSION,
+      writePermission: ZENX_TRIGGERS_WRITE_PERMISSION,
+      page: {
+        id: "triggers",
+        title: "Triggers",
+        route: "/plugins/zenx-triggers/triggers",
+      },
+      sidebar: {
+        id: "triggers",
+        label: "Triggers",
+        icon: "clock",
+        pageId: "triggers",
+        order: 10,
+      },
+    });
+  }
+
+  async invoke(name: string, invocation: ToolInvocation): Promise<unknown> {
+    if (!name.startsWith("zenx_triggers_")) {
+      throw new Error(`Unsupported Triggers tool: ${name}`);
+    }
+    return await this.#delegate.invoke(name, invocation);
+  }
+}
+
+export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
+  readonly #delegate: ZenXAutomationControlCapabilityPackage;
+  readonly manifest: ZenXCapabilityManifest;
+
+  constructor(port: ZenXAutomationControlPort) {
+    this.#delegate = new ZenXAutomationControlCapabilityPackage(port);
+    this.manifest = automationPluginManifest(this.#delegate.manifest, {
+      id: ZENX_ROOMS_CAPABILITY_ID,
+      displayName: "Rooms",
+      description: "Manage shared ZenX Room collaboration.",
+      toolPrefix: "zenx_rooms_",
+      providerCapability: "zenx.rooms.manage",
+      readPermission: ZENX_ROOMS_READ_PERMISSION,
+      writePermission: ZENX_ROOMS_WRITE_PERMISSION,
+      page: {
+        id: "rooms",
+        title: "Rooms",
+        route: "/plugins/zenx-rooms/rooms",
+      },
+      sidebar: {
+        id: "rooms",
+        label: "Rooms",
+        icon: "users",
+        pageId: "rooms",
+        order: 20,
+      },
+    });
+  }
+
+  async invoke(name: string, invocation: ToolInvocation): Promise<unknown> {
+    if (!name.startsWith("zenx_rooms_")) {
+      throw new Error(`Unsupported Rooms tool: ${name}`);
+    }
+    return await this.#delegate.invoke(name, invocation);
+  }
+}
+
+function automationPluginManifest(
+  source: ZenXCapabilityManifest,
+  plugin: {
+    id: string;
+    displayName: string;
+    description: string;
+    toolPrefix: string;
+    providerCapability: string;
+    readPermission: string;
+    writePermission: string;
+    page: ZenXPluginPageContribution;
+    sidebar: ZenXPluginSidebarContribution;
+  },
+): ZenXCapabilityManifest {
+  return {
+    ...structuredClone(source),
+    id: plugin.id,
+    displayName: plugin.displayName,
+    description: plugin.description,
+    provider: {
+      ...structuredClone(source.provider),
+      capabilities: [plugin.providerCapability],
+    },
+    permissions: source.permissions.map((permission) => ({
+      ...structuredClone(permission),
+      id:
+        permission.id === ZENX_AUTOMATION_READ_PERMISSION
+          ? plugin.readPermission
+          : plugin.writePermission,
+      title: permission.title.replace("Triggers and Rooms", plugin.displayName),
+      description: permission.description.replace(
+        "Trigger definitions, bounded wakeup history, Rooms, and messages",
+        plugin.displayName === "Triggers"
+          ? "Trigger definitions and bounded wakeup history"
+          : "Rooms and bounded recent messages",
+      ),
+    })),
+    tools: source.tools
+      .filter((tool) => tool.name.startsWith(plugin.toolPrefix))
+      .map((tool) => ({
+        ...structuredClone(tool),
+        permissions: tool.permissions.map((permission) =>
+          permission === ZENX_AUTOMATION_READ_PERMISSION
+            ? plugin.readPermission
+            : plugin.writePermission,
+        ),
+      })),
+    contributions: {
+      pages: [plugin.page],
+      sidebar: [plugin.sidebar],
+    },
+  };
 }
 
 function readSafeTrigger(trigger: ZenXTrigger): unknown {

@@ -5,7 +5,10 @@ import type {
   AppServerHostStatus,
   ApprovalDecision,
 } from "../../main/app-server-manager.js";
-import type { ZenXCapabilitySnapshot } from "../../main/capabilities/types.js";
+import type {
+  ZenXCapabilitySnapshot,
+  ZenXPluginSnapshot,
+} from "../../main/capabilities/types.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
 import type {
   ThreadTitleProjection,
@@ -72,6 +75,8 @@ export function App() {
   });
   const [capabilitySnapshot, setCapabilitySnapshot] =
     useState<ZenXCapabilitySnapshot | null>(null);
+  const [pluginSnapshot, setPluginSnapshot] =
+    useState<ZenXPluginSnapshot | null>(null);
   const [titleSnapshot, setTitleSnapshot] = useState<ThreadTitleSnapshot>({});
   const [serverStatus, setServerStatus] = useState<AppServerHostStatus>({
     type: "starting",
@@ -222,6 +227,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const dispose = window.zenx.plugins.onChange(setPluginSnapshot);
+    void window.zenx.plugins
+      .get()
+      .then(setPluginSnapshot)
+      .catch((error: unknown) =>
+        setRequestError(`ZenX plugin catalog failed: ${describeError(error)}`),
+      );
+    return dispose;
+  }, []);
+
+  useEffect(() => {
     const dispose = window.zenx.triggers.onChange(setTriggerSnapshot);
     void window.zenx.triggers
       .get()
@@ -281,7 +297,7 @@ export function App() {
   const selectedSummary =
     summaries.find((summary) => summary.threadId === selectedThreadId) ?? null;
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
-  const pluginContributions = loadedPluginContributions(capabilitySnapshot);
+  const pluginContributions = loadedPluginContributions(pluginSnapshot);
 
   const newThread = async () => {
     const epoch = ++selectionEpoch.current;

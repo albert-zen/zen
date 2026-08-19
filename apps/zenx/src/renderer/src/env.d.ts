@@ -21,7 +21,10 @@ import type {
   RoomMember,
   TriggerSnapshot,
 } from "../../main/trigger-types.js";
-import type { ZenXCapabilitySnapshot } from "../../main/capabilities/types.js";
+import type {
+  ZenXCapabilitySnapshot,
+  ZenXPluginSnapshot,
+} from "../../main/capabilities/types.js";
 import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
@@ -117,14 +120,17 @@ declare global {
           capabilityId: string,
           permissionIds?: string[],
         ): Promise<ZenXCapabilitySnapshot>;
-        setContributionEnabled(
-          capabilityId: string,
-          contributionId: string,
-          enabled: boolean,
-        ): Promise<ZenXCapabilitySnapshot>;
         onChange(
           listener: (snapshot: ZenXCapabilitySnapshot) => void,
         ): () => void;
+      };
+      plugins: {
+        get(): Promise<ZenXPluginSnapshot>;
+        setEnabled(
+          pluginId: string,
+          enabled: boolean,
+        ): Promise<ZenXPluginSnapshot>;
+        onChange(listener: (snapshot: ZenXPluginSnapshot) => void): () => void;
       };
     };
   }

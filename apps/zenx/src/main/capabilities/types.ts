@@ -35,20 +35,23 @@ export interface ZenXCapabilityResource {
   content: string;
 }
 
-export interface ZenXCapabilityUiContribution {
+export interface ZenXPluginSidebarContribution {
   id: string;
-  slot: "sidebar-plugin-space";
   label: string;
-  icon: "trigger" | "rooms";
-  page: "triggers" | "rooms";
-  order: number;
+  icon: string;
+  pageId: string;
+  order?: number;
 }
 
-export interface ZenXCapabilityUiContributionSummary
-  extends ZenXCapabilityUiContribution {
-  capabilityId: string;
-  enabled: boolean;
-  available: boolean;
+export interface ZenXPluginPageContribution {
+  id: string;
+  title: string;
+  route: string;
+}
+
+export interface ZenXPluginContributions {
+  sidebar?: ZenXPluginSidebarContribution[];
+  pages?: ZenXPluginPageContribution[];
 }
 
 export interface ZenXCapabilityManifest {
@@ -66,11 +69,9 @@ export interface ZenXCapabilityManifest {
   permissions: ZenXCapabilityPermission[];
   tools: ZenXCapabilityTool[];
   resources: ZenXCapabilityResource[];
+  contributions?: ZenXPluginContributions;
   settings?: Readonly<Record<string, unknown>>;
-  ui?: {
-    settingsSection?: string;
-    contributions?: ZenXCapabilityUiContribution[];
-  };
+  ui?: { settingsSection?: string };
 }
 
 export interface ZenXCapabilityPackage {
@@ -128,6 +129,7 @@ export interface ZenXCapabilitySummary {
     resources: Array<Omit<ZenXCapabilityResource, "content">>;
   };
   source: "bundled" | "local";
+  enabled: boolean;
   available: boolean;
   unavailableReason?: string;
   granted: ZenXCapabilityGrant[];
@@ -135,9 +137,34 @@ export interface ZenXCapabilitySummary {
   blockedTools: string[];
 }
 
+export interface ZenXPluginContributionProjection {
+  key: string;
+  pluginId: string;
+}
+
+export interface ZenXPluginSidebarProjection
+  extends ZenXPluginSidebarContribution, ZenXPluginContributionProjection {}
+
+export interface ZenXPluginPageProjection
+  extends ZenXPluginPageContribution, ZenXPluginContributionProjection {}
+
+export interface ZenXPluginSummary {
+  id: string;
+  displayName: string;
+  version: string;
+  source: "bundled" | "local";
+  enabled: boolean;
+  contributionCount: number;
+}
+
+export interface ZenXPluginSnapshot {
+  plugins: ZenXPluginSummary[];
+  sidebar: ZenXPluginSidebarProjection[];
+  pages: ZenXPluginPageProjection[];
+}
+
 export interface ZenXCapabilitySnapshot {
   capabilities: ZenXCapabilitySummary[];
-  contributions: ZenXCapabilityUiContributionSummary[];
   recentInvocations: ZenXCapabilityAuditRecord[];
   /** Renderer-only live projection; it is intentionally absent from canonical Items. */
   currentScreenshot?: ZenXCapabilityScreenshotArtifact;
@@ -154,9 +181,17 @@ export interface ZenXCapabilityHost {
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
 }
 
-export interface ZenXCapabilityGrantStore {
-  load(): Promise<Record<string, ZenXCapabilityGrant[]>>;
-  save(grants: Readonly<Record<string, ZenXCapabilityGrant[]>>): Promise<void>;
+export interface ZenXCapabilityConfigurationStore {
+  load(): Promise<ZenXCapabilityConfiguration>;
+  save(configuration: ZenXCapabilityConfiguration): Promise<void>;
+}
+
+/** Compatibility name for the existing capability-grants persistence seam. */
+export type ZenXCapabilityGrantStore = ZenXCapabilityConfigurationStore;
+
+export interface ZenXCapabilityConfiguration {
+  grants: Record<string, ZenXCapabilityGrant[]>;
+  disabled: string[];
 }
 
 export interface RegisteredZenXCapability {

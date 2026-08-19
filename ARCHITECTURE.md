@@ -79,9 +79,12 @@
 - **ZenXCapabilityRegistry** — ZenX 主进程注册 bundled/local capability package 的 manifest、
   显式权限与 provider，把已授权的结构化工具和 skill/prompt 资源组合进本机 host；执行历史仍只由
   canonical tool call/result 投影，credential、浏览器会话和默认屏幕内容不进入 journal。
-- **ZenXCapabilityUiContribution** — 已加载 capability manifest 只能通过有类型、受 ZenX 控制的
-  product slot descriptor 声明页面入口；ZenX 只持久化 descriptor 是否挂载，不能借此获得任意
-  DOM/路由能力或改变 capability grant、工具执行与会话状态。
+- **ZenXPluginContribution** — Capability package 可在 manifest 中声明受控的 sidebar/page
+  contribution；registry 只投影已启用 package 的稳定 `pluginId:contributionId`，renderer 通过
+  typed main/preload snapshot 消费，package 不取得 DOM、router 或核心导航的修改权。
+- **ZenXCapabilityConfiguration** — ZenX 主进程在同一原子配置文档中分别持久化 package
+  enablement 与 permission grants；enablement 决定 package 的 host/UI 投影，grant 只决定工具和
+  resource 权限，二者都不进入 Core、Thread 或 canonical ItemList。
 - **ZenXCapabilityInteractionMode** — ZenX 把工具声明为不改变全局输入/焦点的 `background_safe`
   、必须接管前台的 `foreground_required` 或在独立桌面执行的 `isolated`，让产品提示、调度和 host policy
   协商实际影响且禁止静默降级。
@@ -168,9 +171,9 @@
 - **ZenXTransientProcessContainment** — ZenX 本地程序 runner 以 OS-specific process identity、
   bounded termination 与反复 quiescence 证明约束瞬时子进程树；它不进入 durable state、scheduler 或 retry system，
   无法证明 containment 时只产生明确失败。
-- **ZenXAutomationControlCapability** — ZenX capability registry 中由独立 read/write 权限保护的 Trigger
-  与 Room 工具集合；工具只调用现有 Trigger/Room store 和 App Server port，不拥有 Agent、Thread、Turn
-  或 transcript 语义。
+- **ZenXAutomationControlCapability** — Triggers 与 Rooms 作为两个 bundled capability package，
+  分别声明自己的工具、页面和 Sidebar contribution；二者仍只调用同一个现有 Trigger/Room store 与
+  App Server port，不拥有 Agent、Thread、Turn 或 transcript 语义。
 - **ZenXTriggerRoomRetention** — Trigger/Room canonical registry 在单次 mutation 中执行显式数量、字段与
   UTF-8 字节上限；保留全部非 terminal wakeup，并只保留 bounded terminal audit 与 Room 消息，同时保留
   admission-failure audit，确保 65th admission-failure 事实不会被同一 mutation 淘汰。

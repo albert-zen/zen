@@ -10,10 +10,6 @@ import {
   type ZenXComputerBackend,
 } from "./capabilities/computer-provider.js";
 import { JsonZenXCapabilityGrantStore } from "./capabilities/grant-store.js";
-import {
-  JsonZenXCapabilityContributionStore,
-  type ZenXCapabilityContributionStore,
-} from "./capabilities/contribution-store.js";
 import { discoverLocalCapabilityPackages } from "./capabilities/local-package.js";
 import { ZenXCapabilityRegistry } from "./capabilities/registry.js";
 import {
@@ -28,12 +24,11 @@ import type {
   ZenXCapabilityPackage,
   ZenXCapabilitySnapshot,
   ZenXCapabilityManifest,
-  ZenXCapabilityUiContributionSummary,
+  ZenXPluginSnapshot,
 } from "./capabilities/types.js";
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #registry: ZenXCapabilityRegistry;
-  readonly #contributionStore: ZenXCapabilityContributionStore;
   readonly #userDataDirectory: string;
   readonly #localDirectory: string;
   readonly #browserBackend?: ZenXBrowserBackend;
@@ -43,13 +38,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #resourcesDirectory?: string;
   readonly #bundledManifestSha256?: string;
   #computerRegistered = false;
-  #contributionEnabled: Record<string, boolean> = {};
-  readonly #listeners = new Set<(snapshot: ZenXCapabilitySnapshot) => void>();
 
   constructor(options: {
     userDataDirectory: string;
     grantStore?: ZenXCapabilityGrantStore;
-    contributionStore?: ZenXCapabilityContributionStore;
     localDirectory?: string;
     browserBackend?: ZenXBrowserBackend;
     computerBackend?: ZenXComputerBackend;
@@ -64,12 +56,6 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           path.join(options.userDataDirectory, "capability-grants.json"),
         ),
     );
-    this.#contributionStore =
-      options.contributionStore ??
-      new JsonZenXCapabilityContributionStore(
-        path.join(options.userDataDirectory, "ui-contributions.json"),
-      );
-    this.#registry.onChange(() => this.#emit());
     this.#userDataDirectory = options.userDataDirectory;
     this.#localDirectory =
       options.localDirectory ??
@@ -84,7 +70,6 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   async initialize(): Promise<void> {
     await this.#registry.initialize();
-    this.#contributionEnabled = await this.#contributionStore.load();
     const browser =
       this.#browserBackend === undefined
         ? await selectBrowserProvider({
@@ -172,32 +157,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   snapshot(): ZenXCapabilitySnapshot {
-    const snapshot = this.#registry.snapshot();
-    return {
-      ...snapshot,
-      contributions: projectUiContributions(
-        snapshot,
-        this.#contributionEnabled,
-      ),
-    };
+    return this.#registry.snapshot();
   }
 
-  async setContributionEnabled(
-    capabilityId: string,
-    contributionId: string,
-    enabled: boolean,
-  ): Promise<ZenXCapabilitySnapshot> {
-    const key = contributionKey(capabilityId, contributionId);
-    const exists = this.snapshot().contributions.some(
-      (contribution) =>
-        contribution.capabilityId === capabilityId &&
-        contribution.id === contributionId,
-    );
-    if (!exists) throw new Error(`Unknown ZenX UI contribution: ${key}`);
-    this.#contributionEnabled = { ...this.#contributionEnabled, [key]: enabled };
-    await this.#contributionStore.save(this.#contributionEnabled);
-    this.#emit();
-    return this.snapshot();
+  pluginSnapshot(): ZenXPluginSnapshot {
+    return this.#registry.pluginSnapshot();
   }
 
   register(
@@ -284,9 +248,16 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return this.snapshot();
   }
 
+  async setEnabled(
+    capabilityId: string,
+    enabled: boolean,
+  ): Promise<ZenXPluginSnapshot> {
+    await this.#registry.setEnabled(capabilityId, enabled);
+    return this.pluginSnapshot();
+  }
+
   onChange(listener: (snapshot: ZenXCapabilitySnapshot) => void): () => void {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
+    return this.#registry.onChange(listener);
   }
 
   async close(): Promise<void> {
@@ -294,35 +265,6 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     if (!this.#computerRegistered) await this.#computerBackend?.close();
   }
 
-  #emit(): void {
-    const snapshot = this.snapshot();
-    for (const listener of this.#listeners) listener(snapshot);
-  }
-}
-
-export function projectUiContributions(
-  snapshot: Pick<ZenXCapabilitySnapshot, "capabilities">,
-  enabled: Readonly<Record<string, boolean>>,
-): ZenXCapabilityUiContributionSummary[] {
-  return snapshot.capabilities
-    .flatMap((capability) =>
-      (capability.manifest.ui?.contributions ?? []).map((contribution) => ({
-        ...contribution,
-        capabilityId: capability.manifest.id,
-        available: capability.available,
-        enabled:
-          enabled[contributionKey(capability.manifest.id, contribution.id)] ??
-          true,
-      })),
-    )
-    .sort(
-      (left, right) =>
-        left.order - right.order || left.id.localeCompare(right.id),
-    );
-}
-
-function contributionKey(capabilityId: string, contributionId: string): string {
-  return `${capabilityId}:${contributionId}`;
 }
 
 function describeError(error: unknown): string {

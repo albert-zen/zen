@@ -2,10 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ToolInvocation } from "../../../src/tool.js";
+import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
+import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
 import {
   ZENX_AUTOMATION_READ_PERMISSION,
   ZENX_AUTOMATION_WRITE_PERMISSION,
+  ZENX_ROOMS_CAPABILITY_ID,
+  ZENX_ROOMS_READ_PERMISSION,
+  ZENX_TRIGGERS_CAPABILITY_ID,
+  ZENX_TRIGGERS_READ_PERMISSION,
   ZenXAutomationControlCapabilityPackage,
+  ZenXRoomsCapabilityPackage,
+  ZenXTriggersCapabilityPackage,
   type ZenXAutomationControlPort,
 } from "../src/main/capabilities/automation-control-package.js";
 import type {
@@ -45,6 +53,70 @@ test("automation tools have independent read and write grants", () => {
       "zenx_rooms_post_message",
     ],
   );
+});
+
+test("Triggers and Rooms are independent bundled plugin manifests", () => {
+  const port = new FakePort();
+  const triggers = new ZenXTriggersCapabilityPackage(port);
+  const rooms = new ZenXRoomsCapabilityPackage(port);
+
+  assert.equal(triggers.manifest.id, ZENX_TRIGGERS_CAPABILITY_ID);
+  assert.ok(
+    triggers.manifest.tools.every((tool) =>
+      tool.name.startsWith("zenx_triggers_"),
+    ),
+  );
+  assert.equal(
+    triggers.manifest.contributions?.sidebar?.[0]?.pageId,
+    "triggers",
+  );
+  assert.equal(
+    triggers.manifest.tools.find((tool) => tool.name === "zenx_triggers_list")
+      ?.permissions[0],
+    ZENX_TRIGGERS_READ_PERMISSION,
+  );
+  assert.equal(rooms.manifest.id, ZENX_ROOMS_CAPABILITY_ID);
+  assert.ok(
+    rooms.manifest.tools.every((tool) => tool.name.startsWith("zenx_rooms_")),
+  );
+  assert.equal(rooms.manifest.contributions?.pages?.[0]?.id, "rooms");
+  assert.equal(
+    rooms.manifest.tools.find((tool) => tool.name === "zenx_rooms_list")
+      ?.permissions[0],
+    ZENX_ROOMS_READ_PERMISSION,
+  );
+});
+
+test("real Triggers and Rooms manifests project and disable independently", async () => {
+  const registry = new ZenXCapabilityRegistry(
+    new MemoryZenXCapabilityGrantStore(),
+  );
+  const port = new FakePort();
+  await registry.initialize();
+  registry.register(new ZenXTriggersCapabilityPackage(port));
+  registry.register(new ZenXRoomsCapabilityPackage(port));
+  await registry.grant(ZENX_TRIGGERS_CAPABILITY_ID);
+  await registry.grant(ZENX_ROOMS_CAPABILITY_ID);
+
+  assert.deepEqual(
+    registry.pluginSnapshot().sidebar.map((item) => item.pluginId),
+    [ZENX_TRIGGERS_CAPABILITY_ID, ZENX_ROOMS_CAPABILITY_ID],
+  );
+  await registry.setEnabled(ZENX_TRIGGERS_CAPABILITY_ID, false);
+  assert.deepEqual(
+    registry.pluginSnapshot().sidebar.map((item) => item.pluginId),
+    [ZENX_ROOMS_CAPABILITY_ID],
+  );
+  assert.ok(
+    registry
+      .hostSnapshot()
+      .definitions.every((tool) => tool.name.startsWith("zenx_rooms_")),
+  );
+  await assert.rejects(
+    registry.execute(invocation("zenx_triggers_list", {})),
+    /disabled/u,
+  );
+  await registry.execute(invocation("zenx_rooms_list", {}));
 });
 
 test("automation tools route Trigger CRUD and every Room operation", async () => {
@@ -202,6 +274,19 @@ async function invoke(
     callId: `call-${name}`,
   };
   return await capability.invoke(name, invocation);
+}
+
+function invocation(
+  name: string,
+  args: Record<string, unknown>,
+): ToolInvocation {
+  return {
+    name,
+    arguments: args,
+    cwd: process.cwd(),
+    signal: new AbortController().signal,
+    callId: `registry-${name}`,
+  };
 }
 
 class FakePort implements ZenXAutomationControlPort {

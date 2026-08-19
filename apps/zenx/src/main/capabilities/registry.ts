@@ -9,7 +9,7 @@ import type {
   RegisteredZenXCapability,
   ZenXCapabilityAuditRecord,
   ZenXCapabilityGrant,
-  ZenXCapabilityGrantStore,
+  ZenXCapabilityConfigurationStore,
   ZenXCapabilityHost,
   ZenXCapabilityHostSnapshot,
   ZenXCapabilityManifest,
@@ -19,6 +19,7 @@ import type {
   ZenXCapabilityScreenshotArtifact,
   ZenXCapabilityTool,
   ZenXCapabilityInteractionMode,
+  ZenXPluginSnapshot,
 } from "./types.js";
 import {
   MAX_CAPABILITY_OUTPUT_BYTES,
@@ -35,7 +36,7 @@ export interface ZenXCapabilityRegistryOptions {
 }
 
 export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
-  readonly #grantStore: ZenXCapabilityGrantStore;
+  readonly #configurationStore: ZenXCapabilityConfigurationStore;
   readonly #registered = new Map<string, RegisteredZenXCapability>();
   readonly #toolOwners = new Map<
     string,
@@ -50,12 +51,13 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   readonly #discoveryErrors: string[] = [];
   readonly #options: ZenXCapabilityRegistryOptions;
   #grants: Record<string, ZenXCapabilityGrant[]> = {};
+  #disabled = new Set<string>();
 
   constructor(
-    grantStore: ZenXCapabilityGrantStore,
+    configurationStore: ZenXCapabilityConfigurationStore,
     options: Partial<ZenXCapabilityRegistryOptions> = {},
   ) {
-    this.#grantStore = grantStore;
+    this.#configurationStore = configurationStore;
     this.#options = {
       allowForegroundRequired: true,
       platform: process.platform,
@@ -64,7 +66,9 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   }
 
   async initialize(): Promise<void> {
-    this.#grants = await this.#grantStore.load();
+    const configuration = await this.#configurationStore.load();
+    this.#grants = configuration.grants;
+    this.#disabled = new Set(configuration.disabled);
   }
 
   register(
@@ -83,7 +87,21 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         throw new Error(`Capability tool ${tool.name} is already registered`);
       }
     }
-    this.#registered.set(manifest.id, { package: capabilityPackage, source });
+    for (const page of manifest.contributions?.pages ?? []) {
+      for (const registered of this.#registered.values()) {
+        if (
+          registered.package.manifest.contributions?.pages?.some(
+            (candidate) => candidate.route === page.route,
+          ) === true
+        ) {
+          throw new Error(
+            `Plugin page route ${page.route} is already registered`,
+          );
+        }
+      }
+    }
+    const registration = { package: capabilityPackage, source } as const;
+    this.#registered.set(manifest.id, registration);
     for (const tool of manifest.tools) {
       this.#toolOwners.set(tool.name, { capabilityId: manifest.id, tool });
     }
@@ -156,11 +174,15 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         scope: permission.scope,
       });
     }
-    this.#grants = {
+    const nextGrants = {
       ...this.#grants,
       [capabilityId]: [...existing.values()],
     };
-    await this.#grantStore.save(this.#grants);
+    await this.#configurationStore.save({
+      grants: structuredClone(nextGrants),
+      disabled: [...this.#disabled],
+    });
+    this.#grants = nextGrants;
     this.#emit();
   }
 
@@ -169,19 +191,24 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     permissionIds?: readonly string[],
   ): Promise<void> {
     this.#requireCapability(capabilityId);
+    let nextGrants: Record<string, ZenXCapabilityGrant[]>;
     if (permissionIds === undefined) {
       const { [capabilityId]: _removed, ...remaining } = this.#grants;
-      this.#grants = remaining;
+      nextGrants = remaining;
     } else {
       const revoked = new Set(permissionIds);
-      this.#grants = {
+      nextGrants = {
         ...this.#grants,
         [capabilityId]: (this.#grants[capabilityId] ?? []).filter(
           (grant) => !revoked.has(grant.permissionId),
         ),
       };
     }
-    await this.#grantStore.save(this.#grants);
+    await this.#configurationStore.save({
+      grants: structuredClone(nextGrants),
+      disabled: [...this.#disabled],
+    });
+    this.#grants = nextGrants;
     if (capabilityId === "browser") this.#clearBrowserProjection();
     this.#emit();
   }
@@ -198,6 +225,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
             ),
           },
           source: registered.source,
+          enabled: !this.#disabled.has(manifest.id),
           available: this.#isProviderAvailable(manifest),
           ...(this.#isProviderAvailable(manifest)
             ? {}
@@ -208,16 +236,17 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
           enabledTools: manifest.tools
             .filter((tool) => this.#isToolExposed(manifest.id, tool))
             .map((tool) => tool.name),
-          blockedTools: manifest.tools
-            .filter(
-              (tool) =>
-                this.#hasPermissions(manifest.id, tool.permissions) &&
-                !this.#isInteractionAllowed(tool.interactionMode),
-            )
-            .map((tool) => tool.name),
+          blockedTools: this.#disabled.has(manifest.id)
+            ? []
+            : manifest.tools
+                .filter(
+                  (tool) =>
+                    this.#hasPermissions(manifest.id, tool.permissions) &&
+                    !this.#isInteractionAllowed(tool.interactionMode),
+                )
+                .map((tool) => tool.name),
         };
       }),
-      contributions: [],
       recentInvocations: structuredClone(this.#audit),
       ...(this.#currentScreenshot === undefined
         ? {}
@@ -227,11 +256,73 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     };
   }
 
+  pluginSnapshot(): ZenXPluginSnapshot {
+    const plugins = [...this.#registered.values()].map((registered) => {
+      const manifest = registered.package.manifest;
+      return {
+        id: manifest.id,
+        displayName: manifest.displayName,
+        version: manifest.version,
+        source: registered.source,
+        enabled: !this.#disabled.has(manifest.id),
+        contributionCount:
+          (manifest.contributions?.sidebar?.length ?? 0) +
+          (manifest.contributions?.pages?.length ?? 0),
+      };
+    });
+    const enabled = [...this.#registered.values()].filter(
+      (registered) => !this.#disabled.has(registered.package.manifest.id),
+    );
+    const pages = enabled.flatMap((registered) => {
+      const pluginId = registered.package.manifest.id;
+      return (registered.package.manifest.contributions?.pages ?? []).map(
+        (page) => ({
+          ...structuredClone(page),
+          key: `${pluginId}:${page.id}`,
+          pluginId,
+        }),
+      );
+    });
+    const sidebar = enabled
+      .flatMap((registered) => {
+        const pluginId = registered.package.manifest.id;
+        return (registered.package.manifest.contributions?.sidebar ?? []).map(
+          (contribution) => ({
+            ...structuredClone(contribution),
+            key: `${pluginId}:${contribution.id}`,
+            pluginId,
+          }),
+        );
+      })
+      .sort(
+        (left, right) =>
+          (left.order ?? 0) - (right.order ?? 0) ||
+          left.key.localeCompare(right.key),
+      );
+    return { plugins, sidebar, pages };
+  }
+
+  async setEnabled(capabilityId: string, enabled: boolean): Promise<void> {
+    this.#requireCapability(capabilityId);
+    if (enabled === !this.#disabled.has(capabilityId)) return;
+    const nextDisabled = new Set(this.#disabled);
+    if (enabled) nextDisabled.delete(capabilityId);
+    else nextDisabled.add(capabilityId);
+    await this.#configurationStore.save({
+      grants: structuredClone(this.#grants),
+      disabled: [...nextDisabled],
+    });
+    this.#disabled = nextDisabled;
+    if (!enabled && capabilityId === "browser") this.#clearBrowserProjection();
+    this.#emit();
+  }
+
   hostSnapshot(): ZenXCapabilityHostSnapshot {
     const definitions: ModelTool[] = [];
     const resources: string[] = [];
     for (const registered of this.#registered.values()) {
       const manifest = registered.package.manifest;
+      if (this.#disabled.has(manifest.id)) continue;
       if (!this.#isProviderAvailable(manifest)) continue;
       for (const tool of manifest.tools) {
         if (this.#isToolExposed(manifest.id, tool)) {
@@ -341,6 +432,9 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     if (owner === undefined) {
       throw new Error(`Unsupported ZenX capability tool: ${invocation.name}`);
     }
+    if (this.#disabled.has(owner.capabilityId)) {
+      throw new Error(`Capability ${owner.capabilityId} is disabled`);
+    }
     if (!this.#hasPermissions(owner.capabilityId, owner.tool.permissions)) {
       throw new Error(
         `Capability ${owner.capabilityId} is not granted for ${invocation.name}`,
@@ -415,6 +509,9 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     const capabilityId = requiredString(arguments_, "capabilityId");
     const resourceId = requiredString(arguments_, "resourceId");
     const manifest = this.#requireCapability(capabilityId).package.manifest;
+    if (this.#disabled.has(capabilityId)) {
+      throw new Error(`Capability ${capabilityId} is disabled`);
+    }
     if (!this.#isProviderAvailable(manifest)) {
       throw new Error(
         `Capability provider ${manifest.provider.id} does not support ${this.#options.platform}`,
@@ -457,6 +554,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
 
   #isToolExposed(capabilityId: string, tool: ZenXCapabilityTool): boolean {
     return (
+      !this.#disabled.has(capabilityId) &&
       this.#isProviderAvailable(
         this.#requireCapability(capabilityId).package.manifest,
       ) &&
@@ -557,6 +655,67 @@ function validateManifest(
   const permissionIds = new Set(
     manifest.permissions.map((permission) => permission.id),
   );
+  const pages = manifest.contributions?.pages ?? [];
+  const pageIds = new Set<string>();
+  for (const page of pages) {
+    if (
+      typeof page.id !== "string" ||
+      !isContributionId(page.id) ||
+      pageIds.has(page.id)
+    ) {
+      throw new Error(
+        `Capability ${manifest.id} has invalid or duplicate page ${page.id}`,
+      );
+    }
+    if (
+      typeof page.route !== "string" ||
+      !new RegExp(
+        `^/plugins/${manifest.id}/[a-z][a-z0-9-]*(?:/[a-z][a-z0-9-]*)*$`,
+        "u",
+      ).test(page.route)
+    ) {
+      throw new Error(
+        `Capability ${manifest.id} page ${page.id} must use a plugin route under /plugins/${manifest.id}/`,
+      );
+    }
+    if (typeof page.title !== "string" || page.title.trim().length === 0) {
+      throw new Error(`Capability ${manifest.id} page ${page.id} has no title`);
+    }
+    pageIds.add(page.id);
+  }
+  const sidebarIds = new Set<string>();
+  for (const contribution of manifest.contributions?.sidebar ?? []) {
+    if (
+      typeof contribution.id !== "string" ||
+      !isContributionId(contribution.id) ||
+      sidebarIds.has(contribution.id)
+    ) {
+      throw new Error(
+        `Capability ${manifest.id} has invalid or duplicate sidebar contribution ${contribution.id}`,
+      );
+    }
+    if (
+      typeof contribution.pageId !== "string" ||
+      !pageIds.has(contribution.pageId)
+    ) {
+      throw new Error(
+        `Capability ${manifest.id} sidebar ${contribution.id} targets unknown page ${contribution.pageId}`,
+      );
+    }
+    if (
+      typeof contribution.label !== "string" ||
+      contribution.label.trim().length === 0 ||
+      typeof contribution.icon !== "string" ||
+      contribution.icon.trim().length === 0 ||
+      (contribution.order !== undefined &&
+        !Number.isSafeInteger(contribution.order))
+    ) {
+      throw new Error(
+        `Capability ${manifest.id} sidebar ${contribution.id} is invalid`,
+      );
+    }
+    sidebarIds.add(contribution.id);
+  }
   if (permissionIds.size !== manifest.permissions.length) {
     throw new Error(`Capability ${manifest.id} has duplicate permissions`);
   }
@@ -600,6 +759,10 @@ function validateManifest(
     }
   }
   return manifest;
+}
+
+function isContributionId(value: string): boolean {
+  return /^[a-z][a-z0-9-]{0,62}$/u.test(value);
 }
 
 function boundedResult(

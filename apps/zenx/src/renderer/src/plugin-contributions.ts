@@ -1,27 +1,27 @@
 import type {
-  ZenXCapabilitySnapshot,
-  ZenXCapabilityUiContribution,
+  ZenXPluginSidebarProjection,
+  ZenXPluginSnapshot,
 } from "../../main/capabilities/types.js";
 
 export interface LoadedPluginContribution
-  extends ZenXCapabilityUiContribution {
-  capabilityId: string;
-  available: boolean;
+  extends ZenXPluginSidebarProjection {
+  page: "triggers" | "rooms";
 }
 
 export function loadedPluginContributions(
-  snapshot: ZenXCapabilitySnapshot | null,
+  snapshot: ZenXPluginSnapshot | null,
 ): LoadedPluginContribution[] {
   if (snapshot === null) return [];
-  return snapshot.contributions
-    .filter(
-      (contribution) =>
-        contribution.slot === "sidebar-plugin-space" &&
-        contribution.available &&
-        contribution.enabled,
+  return snapshot.sidebar
+    .filter((contribution) =>
+      contribution.pageId === "triggers" || contribution.pageId === "rooms",
     )
+    .map((contribution) => ({
+      ...contribution,
+      page: contribution.pageId as "triggers" | "rooms",
+    }))
     .sort(
       (left, right) =>
-        left.order - right.order || left.id.localeCompare(right.id),
+        (left.order ?? 0) - (right.order ?? 0) || left.key.localeCompare(right.key),
     );
 }

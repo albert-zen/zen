@@ -31,6 +31,8 @@ export const ipcChannels = {
   capabilitiesGet: "zenx:capabilities:get",
   capabilitiesGrant: "zenx:capabilities:grant",
   capabilitiesRevoke: "zenx:capabilities:revoke",
-  capabilityContributionSet: "zenx:capabilities:contribution-set",
   capabilitiesChanged: "zenx:capabilities:changed",
+  pluginsGet: "zenx:plugins:get",
+  pluginsSetEnabled: "zenx:plugins:set-enabled",
+  pluginsChanged: "zenx:plugins:changed",
 } as const;
