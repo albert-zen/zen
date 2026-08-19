@@ -18,6 +18,7 @@ import {
   projectCommandStarted,
   projectCompletedItem,
   projectThread,
+  projectThreadSummary,
   projectTurn,
   threadSettings,
   threadSettingsUpdated,
@@ -323,9 +324,11 @@ export class CodexConnection {
           requestedCursor === undefined
             ? undefined
             : decodeThreadListCursor(requestedCursor);
-        const snapshots = await this.#appServer.listThreads({ archived });
-        const limit = optionalListLimit(params.limit, snapshots.length);
-        const snapshotIds = snapshots.map((snapshot) => snapshot.id);
+        const summaries = await this.#appServer.listThreadSummaries({
+          archived,
+        });
+        const limit = optionalListLimit(params.limit, summaries.length);
+        const snapshotIds = summaries.map((summary) => summary.threadId);
         const cursor =
           decodedCursor === undefined
             ? {
@@ -345,16 +348,14 @@ export class CodexConnection {
             "thread/list cursor expired because the filtered Thread snapshot changed",
           );
         }
-        const page = snapshots.slice(cursor.offset, cursor.offset + limit);
+        const page = summaries.slice(cursor.offset, cursor.offset + limit);
         const nextOffset = cursor.offset + page.length;
         this.#send({
           id: request.id,
           result: {
-            data: page.map((snapshot) =>
-              projectThread(snapshot, { includeTurns: false }),
-            ),
+            data: page.map(projectThreadSummary),
             nextCursor:
-              limit > 0 && nextOffset < snapshots.length
+              limit > 0 && nextOffset < summaries.length
                 ? encodeThreadListCursor({ ...cursor, offset: nextOffset })
                 : null,
             backwardsCursor: null,

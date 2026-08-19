@@ -15,6 +15,10 @@ import {
   JsonlThreadMetadataStore,
   type ThreadMetadataStore,
 } from "../../../src/thread-metadata.js";
+import {
+  JsonThreadSummaryProjection,
+  type ThreadSummaryProjection,
+} from "../../../src/thread-summary.js";
 import { ShellToolExecutor, type ToolExecutor } from "../../../src/tool.js";
 import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
 
@@ -43,6 +47,7 @@ export interface ZenHostOptions {
   secretEnvironmentVariables?: readonly string[];
   journal?: ThreadJournal;
   threadMetadata?: ThreadMetadataStore;
+  threadSummaryProjection?: ThreadSummaryProjection;
   tools?: ToolExecutor;
 }
 
@@ -92,6 +97,11 @@ export function createHostedAppServer(
       options.threadMetadata ??
       new JsonlThreadMetadataStore(
         path.join(options.dataDirectory, "thread-metadata.jsonl"),
+      ),
+    threadSummaryProjection:
+      options.threadSummaryProjection ??
+      new JsonThreadSummaryProjection(
+        path.join(options.dataDirectory, "thread-summaries.json"),
       ),
     defaults: {
       cwd: path.resolve(options.cwd),

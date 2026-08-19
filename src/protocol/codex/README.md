@@ -58,7 +58,9 @@ plan collaboration mode 等未实现配置返回 `-32602`。T3 总会发送的
 Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，避免发送
 不完整的 0.146.0 类型。
 
-`thread/list` 当前只接受 `archived`、`limit` 与 `cursor`。非终页返回的 opaque
+`thread/list` 在本目录内把 ZAS 原生 `ThreadSummary` 查询结果映射为固定版本的
+Codex Thread DTO；wire DTO 不定义 ZAS 或 ZenX 的产品读取模型。它当前只接受
+`archived`、`limit` 与 `cursor`。非终页返回的 opaque
 cursor 绑定 archived filter、按 threadId 排序的筛选快照与当前位置，但不绑定 page
 limit；续页可以省略或改变 limit。跨筛选器、无效或已过期 cursor 返回 `-32602`，
 不得静默重放第一页。终页的 `nextCursor` 为 null。固定子集不支持 `sortKey` /

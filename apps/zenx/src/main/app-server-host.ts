@@ -43,6 +43,30 @@ async function handleCommand(command: HostCommand): Promise<void> {
     await shutdown();
     return;
   }
+  if (command.type === "thread-summary/list") {
+    if (appServer === undefined) {
+      send({
+        type: "thread-summary/result",
+        requestId: command.requestId,
+        error: "Zen App Server is not ready",
+      });
+      return;
+    }
+    try {
+      send({
+        type: "thread-summary/result",
+        requestId: command.requestId,
+        summaries: await appServer.listThreadSummaries(command.options),
+      });
+    } catch (error) {
+      send({
+        type: "thread-summary/result",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
   if (server !== undefined) {
     throw new Error("ZenX App Server host already started");
   }

@@ -10,6 +10,13 @@
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — 驱动一个 Thread 的循环：从 ItemList 编译上下文 → 调用模型 → 执行工具，把发生的一切追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
+- **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
+  ThreadMetadataStore 归约为可持久化、可删除重建的原生 `ThreadSummary` /
+  `CurrentMetadata` 列表读取模型；它只加速产品读取，不成为新的权威状态。
+- **CodexThreadSummaryAdapter** — `src/protocol/codex/` 在固定协议边界把 ZAS
+  原生 summary 映射为兼容的 Codex Thread DTO，不反向定义 Zen 产品模型。
+- **ZenXThreadSummaryAdapter** — ZenX Electron main 通过既有 host-local 进程边界查询
+  ZAS 原生 summary，并以 typed IPC 暴露给产品层，不拥有 Thread 语义或新增 wire method。
 - **SoftSteerDeliveryAnchor** — 当前执行在每次模型采样前设置的临时 response id；
   steer 的 canonical `user_message.deliveryAfter` 持久化这个排序锚点，使下一次
   采样能从 ItemList 重建正确上下文，而不形成第二份 mailbox 或会话状态。

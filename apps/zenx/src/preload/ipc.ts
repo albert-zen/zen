@@ -7,6 +7,7 @@ export const ipcChannels = {
   respondApproval: "zenx:protocol:respond-approval",
   status: "zenx:app-server:status",
   notification: "zenx:protocol:notification",
+  threadSummariesList: "zenx:threads:list",
   settingsGet: "zenx:settings:get",
   settingsSave: "zenx:settings:save",
   subscriptionLogin: "zenx:settings:subscription-login",

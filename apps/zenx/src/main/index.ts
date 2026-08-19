@@ -270,6 +270,11 @@ function installProtocolIpc(
     () => manager.pendingApprovalRequests,
   );
   ipcMain.handle(
+    ipcChannels.threadSummariesList,
+    async (_event, options: unknown) =>
+      await manager.listThreadSummaries(readThreadSummaryListOptions(options)),
+  );
+  ipcMain.handle(
     ipcChannels.request,
     async (_event, method: unknown, params: unknown) => {
       if (!isClientRequestMethod(method)) {
@@ -353,12 +358,32 @@ function installTitleIpc(titles: ZenXThreadTitleCoordinator): void {
 function installFailedProtocolIpc(message: string): void {
   ipcMain.handle(ipcChannels.getStatus, () => ({ type: "error", message }));
   ipcMain.handle(ipcChannels.getPendingApprovals, () => []);
+  ipcMain.handle(ipcChannels.threadSummariesList, () => {
+    throw new Error(`Zen App Server is not ready: ${message}`);
+  });
   ipcMain.handle(ipcChannels.request, () => {
     throw new Error(`Zen App Server is not ready: ${message}`);
   });
   ipcMain.handle(ipcChannels.respondApproval, () => {
     throw new Error(`Zen App Server is not ready: ${message}`);
   });
+}
+
+function readThreadSummaryListOptions(value: unknown): { archived?: boolean } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Invalid native Thread summary query");
+  }
+  const entries = Object.entries(value);
+  if (
+    entries.some(
+      ([key, entry]) => key !== "archived" || typeof entry !== "boolean",
+    )
+  ) {
+    throw new Error("Invalid native Thread summary query");
+  }
+  return "archived" in value
+    ? { archived: (value as { archived: boolean }).archived }
+    : {};
 }
 
 function installSettingsIpc(

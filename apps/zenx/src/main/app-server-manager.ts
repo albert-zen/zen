@@ -19,6 +19,10 @@ import {
   type ZenXHostConfig,
 } from "./host-messages.js";
 import type { ZenXCapabilityHost } from "./capabilities/types.js";
+import type {
+  NativeThreadSummary,
+  ThreadSummaryListOptions,
+} from "../../../../src/thread-summary.js";
 
 export type AppServerHostStatus =
   | { type: "starting" }
@@ -75,10 +79,18 @@ export class AppServerManager {
   >();
   readonly #pendingApprovals = new Map<string, PendingApproval>();
   readonly #activeCapabilityInvocations = new Map<string, AbortController>();
+  readonly #pendingThreadSummaryRequests = new Map<
+    string,
+    {
+      resolve(summaries: NativeThreadSummary[]): void;
+      reject(error: Error): void;
+    }
+  >();
   #status: AppServerHostStatus = { type: "stopped" };
   #child: ChildProcess | undefined;
   #client: ZenXProtocolClient | undefined;
   #stopping = false;
+  #nextThreadSummaryRequest = 1;
 
   constructor(options: AppServerManagerOptions) {
     this.#options = options;
@@ -177,6 +189,36 @@ export class AppServerManager {
     return await this.#client.request(method, params);
   }
 
+  async listThreadSummaries(
+    options: ThreadSummaryListOptions = {},
+  ): Promise<NativeThreadSummary[]> {
+    if (
+      this.#status.type !== "ready" ||
+      this.#child === undefined ||
+      !this.#child.connected
+    ) {
+      const detail =
+        this.#status.type === "error" ? `: ${this.#status.message}` : "";
+      throw new Error(`Zen App Server is not ready${detail}`);
+    }
+    const requestId = `thread-summary-${String(this.#nextThreadSummaryRequest++)}`;
+    return await new Promise<NativeThreadSummary[]>((resolve, reject) => {
+      this.#pendingThreadSummaryRequests.set(requestId, { resolve, reject });
+      this.#child!.send(
+        {
+          type: "thread-summary/list",
+          requestId,
+          options,
+        } satisfies HostCommand,
+        (error) => {
+          if (error === null) return;
+          this.#pendingThreadSummaryRequests.delete(requestId);
+          reject(error);
+        },
+      );
+    });
+  }
+
   onStatus(listener: (status: AppServerHostStatus) => void): () => void {
     this.#statusListeners.add(listener);
     return () => this.#statusListeners.delete(listener);
@@ -222,6 +264,9 @@ export class AppServerManager {
     this.#stopping = true;
     this.#cancelPendingApprovals();
     this.#cancelCapabilityInvocations();
+    this.#rejectPendingThreadSummaryRequests(
+      new Error("Zen App Server host stopped"),
+    );
     this.#client?.close();
     this.#client = undefined;
     const child = this.#child;
@@ -323,6 +368,9 @@ export class AppServerManager {
     this.#child = undefined;
     this.#cancelPendingApprovals();
     this.#cancelCapabilityInvocations();
+    this.#rejectPendingThreadSummaryRequests(
+      new Error("Zen App Server stopped before returning Thread summaries"),
+    );
     this.#client?.close();
     this.#client = undefined;
     if (!this.#stopping) {
@@ -350,6 +398,17 @@ export class AppServerManager {
   #installCapabilityBridge(child: ChildProcess): void {
     child.on("message", (message: unknown) => {
       if (!isHostEvent(message) || this.#child !== child) return;
+      if (message.type === "thread-summary/result") {
+        const pending = this.#pendingThreadSummaryRequests.get(
+          message.requestId,
+        );
+        if (pending === undefined) return;
+        this.#pendingThreadSummaryRequests.delete(message.requestId);
+        if (message.error !== undefined)
+          pending.reject(new Error(message.error));
+        else pending.resolve(message.summaries ?? []);
+        return;
+      }
       if (message.type === "capability/cancel") {
         this.#activeCapabilityInvocations
           .get(message.invocationId)
@@ -412,6 +471,13 @@ export class AppServerManager {
       );
     }
     this.#activeCapabilityInvocations.clear();
+  }
+
+  #rejectPendingThreadSummaryRequests(error: Error): void {
+    for (const pending of this.#pendingThreadSummaryRequests.values()) {
+      pending.reject(error);
+    }
+    this.#pendingThreadSummaryRequests.clear();
   }
 }
 

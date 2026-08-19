@@ -27,6 +27,14 @@ import {
   type ThreadProductMetadata,
   type ThreadMetadataStore,
 } from "./thread-metadata.js";
+import {
+  InMemoryThreadSummaryProjection,
+  type NativeThreadSummary,
+  type ThreadSummary,
+  type ThreadSummaryListOptions,
+  type ThreadSummaryProjection,
+  type UnavailableThreadSummary,
+} from "./thread-summary.js";
 import type { ApprovalHandler } from "./tool.js";
 
 export interface AppServerDefaults {
@@ -118,6 +126,7 @@ export class ZenAppServer {
   readonly #runtime: AgentRuntime;
   readonly #modelCatalog: ModelCatalog;
   readonly #threadMetadata: ThreadMetadataStore;
+  readonly #threadSummaryProjection: ThreadSummaryProjection;
   readonly #defaults: AppServerDefaults;
   readonly #id: () => string;
   readonly #now: () => string;
@@ -137,12 +146,16 @@ export class ZenAppServer {
     string,
     { clientId: string; result: Promise<ReplaceTurnResult> }
   >();
+  #threadSummaries: Map<string, NativeThreadSummary> | undefined;
+  #threadSummaryLoad: Promise<void> | undefined;
+  #threadSummaryWrites: Promise<void> = Promise.resolve();
 
   constructor(options: {
     journal: ThreadJournal;
     runtime: AgentRuntime;
     modelCatalog: ModelCatalog;
     threadMetadata: ThreadMetadataStore;
+    threadSummaryProjection?: ThreadSummaryProjection;
     defaults: AppServerDefaults;
     idFactory?: () => string;
     now?: () => string;
@@ -151,6 +164,8 @@ export class ZenAppServer {
     this.#runtime = options.runtime;
     this.#modelCatalog = options.modelCatalog;
     this.#threadMetadata = options.threadMetadata;
+    this.#threadSummaryProjection =
+      options.threadSummaryProjection ?? new InMemoryThreadSummaryProjection();
     this.#defaults = {
       ...options.defaults,
       cwd: path.resolve(options.defaults.cwd),
@@ -221,6 +236,18 @@ export class ZenAppServer {
     return snapshots.filter((snapshot) => snapshot.archived === archived);
   }
 
+  async listThreadSummaries(
+    options: ThreadSummaryListOptions = {},
+  ): Promise<NativeThreadSummary[]> {
+    await this.#ensureThreadSummaries();
+    const archived = options.archived ?? false;
+    return structuredClone(
+      [...this.#threadSummaries!.values()]
+        .filter((summary) => summary.archived === archived)
+        .sort((left, right) => left.threadId.localeCompare(right.threadId)),
+    );
+  }
+
   async readThread(threadId: string): Promise<ThreadSnapshot> {
     const thread = await this.#requireThread(threadId);
     return await this.#snapshot(
@@ -259,22 +286,26 @@ export class ZenAppServer {
     threadId: string,
     requestedName: string,
   ): Promise<ThreadSnapshot> {
-    const thread = await this.#requireThread(threadId);
-    let name: string;
-    try {
-      name = normalizeThreadName(requestedName);
-    } catch (error) {
-      throw new AppServerError(
-        "invalid_request",
-        error instanceof Error ? error.message : String(error),
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      let name: string;
+      try {
+        name = normalizeThreadName(requestedName);
+      } catch (error) {
+        throw new AppServerError(
+          "invalid_request",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      await this.#ensureThreadSummaries();
+      await this.#threadMetadata.setName(threadId, name);
+      await this.#refreshThreadSummary(thread);
+      this.#emit({ type: "thread_name_updated", threadId, name });
+      return await this.#snapshot(
+        thread,
+        this.#activeTurns.get(threadId)?.turnId,
       );
-    }
-    await this.#threadMetadata.setName(threadId, name);
-    this.#emit({ type: "thread_name_updated", threadId, name });
-    return await this.#snapshot(
-      thread,
-      this.#activeTurns.get(threadId)?.turnId,
-    );
+    });
   }
 
   async setThreadArchived(
@@ -291,6 +322,7 @@ export class ZenAppServer {
         );
       }
       await this.#threadMetadata.setArchived(threadId, archived);
+      await this.#refreshThreadSummary(thread);
       this.#emit({
         type: "thread_archived_updated",
         threadId,
@@ -853,9 +885,11 @@ export class ZenAppServer {
   }
 
   async #commit(thread: Thread, item: CanonicalItem): Promise<void> {
+    await this.#ensureThreadSummaries();
     thread.validateAppend(item);
     await this.#journal.append(item);
     thread.append(item);
+    await this.#refreshThreadSummary(thread);
   }
 
   async #snapshot(
@@ -911,6 +945,152 @@ export class ZenAppServer {
       ...(productMetadata.name === undefined
         ? {}
         : { name: productMetadata.name }),
+    };
+  }
+
+  async #ensureThreadSummaries(): Promise<void> {
+    if (this.#threadSummaries !== undefined) return;
+    if (this.#threadSummaryLoad !== undefined) {
+      await this.#threadSummaryLoad;
+      return;
+    }
+    const load = this.#loadOrRebuildThreadSummaries();
+    this.#threadSummaryLoad = load;
+    try {
+      await load;
+    } finally {
+      if (this.#threadSummaryLoad === load) this.#threadSummaryLoad = undefined;
+    }
+  }
+
+  async #loadOrRebuildThreadSummaries(): Promise<void> {
+    const threadIds = await this.#journal.listThreadIds();
+    let persisted: NativeThreadSummary[] | undefined;
+    try {
+      persisted = await this.#threadSummaryProjection.load();
+    } catch (error) {
+      console.warn("Could not load native Thread summary projection", error);
+    }
+    const rebuilt = new Map<string, NativeThreadSummary>();
+    for (const threadId of threadIds) {
+      try {
+        const thread = await this.#loadThread(threadId);
+        if (thread !== undefined) {
+          rebuilt.set(threadId, await this.#summary(thread));
+        }
+      } catch (error) {
+        console.warn(`Could not rebuild Thread summary ${threadId}`, error);
+        rebuilt.set(threadId, await this.#unavailableSummary(threadId, error));
+      }
+    }
+    this.#threadSummaries = rebuilt;
+    const persistedForRestart = persisted?.map((summary) =>
+      summary.status === "active"
+        ? { ...summary, status: "idle" as const }
+        : summary,
+    );
+    if (
+      persistedForRestart === undefined ||
+      !sameSummaries(persistedForRestart, [...rebuilt.values()])
+    ) {
+      await this.#persistThreadSummaries();
+    }
+  }
+
+  async #refreshThreadSummary(thread: Thread): Promise<void> {
+    await this.#ensureThreadSummaries();
+    const update = this.#threadSummaryWrites.then(async () => {
+      this.#threadSummaries!.set(thread.id, await this.#summary(thread));
+      await this.#saveThreadSummaries();
+    });
+    this.#threadSummaryWrites = update.catch(() => undefined);
+    await update;
+  }
+
+  async #persistThreadSummaries(): Promise<void> {
+    const update = this.#threadSummaryWrites.then(async () => {
+      await this.#saveThreadSummaries();
+    });
+    this.#threadSummaryWrites = update.catch(() => undefined);
+    await update;
+  }
+
+  async #saveThreadSummaries(): Promise<void> {
+    try {
+      await this.#threadSummaryProjection.replace(
+        [...this.#threadSummaries!.values()].sort((left, right) =>
+          left.threadId.localeCompare(right.threadId),
+        ),
+      );
+    } catch (error) {
+      console.warn("Could not persist native Thread summary projection", error);
+    }
+  }
+
+  async #summary(thread: Thread): Promise<ThreadSummary> {
+    const configuration = thread.effectiveConfiguration();
+    let productMetadata: ThreadProductMetadata = {};
+    try {
+      productMetadata = await this.#threadMetadata.read(thread.id);
+    } catch (error) {
+      console.warn(
+        `Could not read product metadata for Thread summary ${thread.id}`,
+        error,
+      );
+    }
+    const metadata = thread.items.find(
+      (item): item is ThreadMetadataItem => item.type === "thread_metadata",
+    );
+    if (metadata === undefined) {
+      throw new Error(`Thread ${thread.id} has no metadata item`);
+    }
+    return {
+      threadId: thread.id,
+      currentMetadata: configuration,
+      archived: productMetadata.archived ?? false,
+      ...(productMetadata.name === undefined
+        ? {}
+        : { name: productMetadata.name }),
+      createdAt: metadata.createdAt,
+      updatedAt: thread.items.at(-1)?.createdAt ?? metadata.createdAt,
+      preview:
+        thread.items.find((item) => item.type === "user_message")?.text ?? "",
+      status: thread
+        .deriveTurns(
+          this.#activeTurns.get(thread.id)?.turnId === undefined
+            ? {}
+            : { activeTurnId: this.#activeTurns.get(thread.id)!.turnId },
+        )
+        .some((turn) => turn.status === "inProgress")
+        ? "active"
+        : "idle",
+    };
+  }
+
+  async #unavailableSummary(
+    threadId: string,
+    error: unknown,
+  ): Promise<UnavailableThreadSummary> {
+    let productMetadata: ThreadProductMetadata = {};
+    try {
+      productMetadata = await this.#threadMetadata.read(threadId);
+    } catch (metadataError) {
+      console.warn(
+        `Could not read product metadata for unavailable Thread summary ${threadId}`,
+        metadataError,
+      );
+    }
+    return {
+      threadId,
+      archived: productMetadata.archived ?? false,
+      ...(productMetadata.name === undefined
+        ? {}
+        : { name: productMetadata.name }),
+      createdAt: null,
+      updatedAt: null,
+      preview: "Thread journal could not be loaded.",
+      status: "systemError",
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 
@@ -1002,4 +1182,15 @@ function deferred<T>(): {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function sameSummaries(
+  left: readonly NativeThreadSummary[],
+  right: readonly NativeThreadSummary[],
+): boolean {
+  const sorted = (values: readonly NativeThreadSummary[]) =>
+    [...values].sort((first, second) =>
+      first.threadId.localeCompare(second.threadId),
+    );
+  return JSON.stringify(sorted(left)) === JSON.stringify(sorted(right));
 }

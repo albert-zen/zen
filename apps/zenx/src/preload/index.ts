@@ -29,6 +29,10 @@ import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
 } from "../main/thread-title-types.js";
+import type {
+  NativeThreadSummary,
+  ThreadSummaryListOptions,
+} from "../../../../src/thread-summary.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -94,6 +98,12 @@ contextBridge.exposeInMainWorld("zenx", {
       ipcRenderer.on(ipcChannels.notification, wrapped);
       return () => ipcRenderer.off(ipcChannels.notification, wrapped);
     },
+  },
+  threads: {
+    list: async (
+      options: ThreadSummaryListOptions = {},
+    ): Promise<NativeThreadSummary[]> =>
+      await ipcRenderer.invoke(ipcChannels.threadSummariesList, options),
   },
   settings: {
     get: async (): Promise<PublicHostSettings> =>

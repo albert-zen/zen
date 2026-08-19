@@ -4,6 +4,13 @@ ZenX is Zen's in-development Electron client. It hosts the same App Server used
 by the CLI and keeps desktop-only configuration and orchestration outside Zen
 Core.
 
+Thread list product data is defined by ZAS's native `ThreadSummary` /
+`CurrentMetadata` read model. Electron main queries it through the existing
+host-local process boundary and preload exposes a typed IPC method. Codex Thread
+DTOs remain compatibility-only protocol types; they do not define ZenX's product
+model.
+The current renderer is intentionally not migrated in this slice.
+
 ## Run
 
 ```sh

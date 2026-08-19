@@ -10,6 +10,7 @@ import type {
   ToolResultItem,
 } from "../../item.js";
 import type { DerivedTurn } from "../../thread.js";
+import type { NativeThreadSummary } from "../../thread-summary.js";
 
 export interface CodexThread {
   id: string;
@@ -131,6 +132,47 @@ export function projectThread(
     turns: options.includeTurns
       ? snapshot.turns.map((turn) => projectTurn(turn, true, snapshot.cwd))
       : [],
+  };
+}
+
+export function projectThreadSummary(
+  summary: NativeThreadSummary,
+): CodexThread {
+  if (summary.status === "systemError") {
+    return projectUnavailableThread({
+      id: summary.threadId,
+      status: "systemError",
+      error: summary.error,
+      archived: summary.archived,
+      ...(summary.name === undefined ? {} : { name: summary.name }),
+    });
+  }
+  return {
+    id: summary.threadId,
+    sessionId: summary.threadId,
+    forkedFromId: null,
+    parentThreadId: null,
+    preview: summary.preview,
+    ephemeral: false,
+    isPinned: false,
+    modelProvider: summary.currentMetadata.provider,
+    createdAt: seconds(summary.createdAt),
+    updatedAt: seconds(summary.updatedAt),
+    recencyAt: null,
+    status:
+      summary.status === "active"
+        ? { type: "active", activeFlags: [] }
+        : { type: "idle" },
+    path: null,
+    cwd: summary.currentMetadata.cwd,
+    cliVersion: "zen/0.1.0",
+    source: "appServer",
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: summary.name ?? null,
+    turns: [],
   };
 }
 

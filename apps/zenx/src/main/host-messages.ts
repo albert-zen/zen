@@ -1,7 +1,14 @@
 import type { ZenHostOptions } from "../../../../apps/cli/src/host.js";
+import type {
+  NativeThreadSummary,
+  ThreadSummaryListOptions,
+} from "../../../../src/thread-summary.js";
 import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
 
-export type ZenXHostConfig = Omit<ZenHostOptions, "journal" | "threadMetadata">;
+export type ZenXHostConfig = Omit<
+  ZenHostOptions,
+  "journal" | "threadMetadata" | "threadSummaryProjection"
+>;
 
 export type HostCommand =
   | {
@@ -11,6 +18,11 @@ export type HostCommand =
       capabilities: ZenXCapabilityHostSnapshot;
     }
   | { type: "shutdown" }
+  | {
+      type: "thread-summary/list";
+      requestId: string;
+      options: ThreadSummaryListOptions;
+    }
   | CapabilityResultCommand;
 
 export interface CapabilityResultCommand {
@@ -24,6 +36,12 @@ export interface CapabilityResultCommand {
 export type HostEvent =
   | { type: "ready"; url: string }
   | { type: "error"; message: string }
+  | {
+      type: "thread-summary/result";
+      requestId: string;
+      summaries?: NativeThreadSummary[];
+      error?: string;
+    }
   | {
       type: "capability/invoke";
       invocationId: string;
@@ -40,9 +58,32 @@ export function isHostCommand(value: unknown): value is HostCommand {
   if (typeof value !== "object" || value === null || !("type" in value)) {
     return false;
   }
-  const type = (value as { type?: unknown }).type;
+  const command = value as {
+    type?: unknown;
+    requestId?: unknown;
+    options?: unknown;
+  };
+  const type = command.type;
   return (
-    type === "start" || type === "shutdown" || type === "capability/result"
+    type === "start" ||
+    type === "shutdown" ||
+    type === "capability/result" ||
+    (type === "thread-summary/list" &&
+      typeof command.requestId === "string" &&
+      isThreadSummaryListOptions(command.options))
+  );
+}
+
+function isThreadSummaryListOptions(
+  value: unknown,
+): value is ThreadSummaryListOptions {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([key, entry]) => key === "archived" && typeof entry === "boolean",
+    )
   );
 }
 
@@ -56,10 +97,17 @@ export function isHostEvent(value: unknown): value is HostEvent {
     message?: unknown;
     invocationId?: unknown;
     invocation?: unknown;
+    requestId?: unknown;
+    summaries?: unknown;
+    error?: unknown;
   };
   return (
     (event.type === "ready" && typeof event.url === "string") ||
     (event.type === "error" && typeof event.message === "string") ||
+    (event.type === "thread-summary/result" &&
+      typeof event.requestId === "string" &&
+      (event.summaries === undefined || Array.isArray(event.summaries)) &&
+      (event.error === undefined || typeof event.error === "string")) ||
     ((event.type === "capability/invoke" ||
       event.type === "capability/cancel") &&
       typeof event.invocationId === "string")

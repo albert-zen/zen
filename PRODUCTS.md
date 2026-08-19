@@ -19,6 +19,8 @@ stub App Server 记录真实调用，在不污染 Zen Core 的前提下扩展协
 host、Thread 列表与恢复、流式 Item、审批、模型切换、soft steer、interrupt 与
 Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / Room，
 以及可显式授权的 bundled/local capability registry 已形成可运行 vertical slice。
+ZenX 的产品读取模型来自 ZAS 原生 `ThreadSummary` 查询，并经 Electron main/preload
+typed IPC 暴露；Codex Thread DTO 只属于兼容协议 adapter，不定义 ZenX 产品模型。
 首批 browser provider 默认优先复用 Playwright CLI 的跨平台 headless 隔离 session，缺失或不兼容时
 回落到 bundled Electron/CDP 临时 profile；用户也可显式选择 loopback CDP user-session
 provider 附着到自己预先开启的 Chrome/Edge/Chromium，原位使用认证状态而不导出 cookie、

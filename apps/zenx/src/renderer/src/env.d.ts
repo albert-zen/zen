@@ -26,6 +26,10 @@ import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
 } from "../../main/thread-title-types.js";
+import type {
+  NativeThreadSummary,
+  ThreadSummaryListOptions,
+} from "../../../../../src/thread-summary.js";
 
 declare global {
   interface Window {
@@ -55,6 +59,11 @@ declare global {
             params: ServerNotificationParams[M],
           ) => void,
         ): () => void;
+      };
+      threads: {
+        list(
+          options?: ThreadSummaryListOptions,
+        ): Promise<NativeThreadSummary[]>;
       };
       settings: {
         get(): Promise<PublicHostSettings>;
