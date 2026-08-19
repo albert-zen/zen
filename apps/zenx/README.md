@@ -17,6 +17,13 @@ The current renderer is intentionally not migrated in this slice.
 npm --workspace apps/zenx run dev
 ```
 
+## Design reference
+
+The reviewed [high-fidelity prototype](prototypes/high-fidelity/README.md) is a
+static design and interaction reference with its own local preview instructions.
+It is not production renderer code, product architecture, runtime behavior, or
+build input.
+
 The first window is onboarding. Choose an OpenAI subscription, an
 OpenAI-compatible API provider, or the deterministic local demo. Saving restarts
 the local host; existing Thread model settings remain authoritative in ZAS.
