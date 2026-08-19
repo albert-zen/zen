@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,10 +12,14 @@ test("discovers and executes a local process package with a minimal JSON contrac
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-local-capability-"),
   );
-  const executable = path.join(directory, "provider.mjs");
+  const script = path.join(directory, "provider.mjs");
+  const executable = path.join(
+    directory,
+    process.platform === "win32" ? "provider-node.exe" : "provider.mjs",
+  );
   try {
     await writeFile(
-      executable,
+      script,
       `#!/usr/bin/env node
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
@@ -24,7 +28,11 @@ process.stdout.write(JSON.stringify({ tool: request.tool, value: request.argumen
 `,
       "utf8",
     );
-    await chmod(executable, 0o700);
+    if (process.platform === "win32") {
+      await copyFile(process.execPath, executable);
+    } else {
+      await chmod(executable, 0o700);
+    }
     await writeFile(
       path.join(directory, "fixture.json"),
       JSON.stringify({
@@ -58,7 +66,14 @@ process.stdout.write(JSON.stringify({ tool: request.tool, value: request.argumen
           },
         ],
         resources: [],
-        runtime: { type: "process", command: "./provider.mjs" },
+        runtime: {
+          type: "process",
+          command:
+            process.platform === "win32"
+              ? "./provider-node.exe"
+              : "./provider.mjs",
+          args: process.platform === "win32" ? ["./provider.mjs"] : [],
+        },
       }),
       "utf8",
     );

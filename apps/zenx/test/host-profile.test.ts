@@ -22,7 +22,7 @@ const profile = {
   defaultModel: "qwen3",
   titleModel: "gpt-5.6-luna",
   models: ["qwen3", "deepseek-r1"],
-  workspace: "/tmp/workspace",
+  workspace: path.join(os.tmpdir(), "workspace"),
   approvalPolicy: "always" as const,
 };
 
@@ -37,8 +37,8 @@ test("round-trips credential-free host settings and builds the ModelCatalog conf
     assert.deepEqual(read, profile);
     assert.deepEqual(
       hostConfigFromProfile(read, {
-        dataDirectory: "/tmp/data",
-        subscriptionProfilePath: "/tmp/auth",
+        dataDirectory: path.join(os.tmpdir(), "data"),
+        subscriptionProfilePath: path.join(os.tmpdir(), "auth"),
         apiKey: "secret",
       }).models,
       ["qwen3", "deepseek-r1"],

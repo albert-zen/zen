@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { shellPrintCommand } from "./fixtures.js";
+
 import { createHostedAppServer } from "../apps/cli/src/host.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
 import {
@@ -1574,7 +1576,7 @@ test("resumed connections complete commands from canonical tool-call history", a
       input: [
         {
           type: "text",
-          text: "!shell printf resumed-command",
+          text: `!shell ${shellPrintCommand("resumed-command")}`,
           text_elements: [],
         },
       ],
@@ -1683,7 +1685,7 @@ test("CLI executes one full local protocol turn", async () => {
       "run",
       "--data-dir",
       temporaryDirectory,
-      "!shell printf cli-full-access",
+      `!shell ${shellPrintCommand("cli-full-access")}`,
     ]);
     assert.equal(fullAccessTool.stderr, "");
     assert.match(fullAccessTool.stdout, /Command result:\s+cli-full-access/u);
@@ -1693,7 +1695,7 @@ test("CLI executes one full local protocol turn", async () => {
       "--data-dir",
       temporaryDirectory,
       "--approve",
-      "!shell printf cli-approved",
+      `!shell ${shellPrintCommand("cli-approved")}`,
     ]);
     assert.equal(approvedTool.stderr, "");
     assert.match(approvedTool.stdout, /Command result:\s+cli-approved/u);

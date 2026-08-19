@@ -475,7 +475,11 @@ test("browser PKCE login stores an independent mode-0600 profile", async () => {
   assert.equal(tokenBody?.get("grant_type"), "authorization_code");
   assert.equal(tokenBody?.get("code"), "manual-authorization-code");
   assert.equal(tokenBody?.get("refresh_token"), null);
-  assert.equal((await stat(profilePath)).mode & 0o777, 0o600);
+  const profileMetadata = await stat(profilePath);
+  assert(profileMetadata.isFile());
+  if (process.platform !== "win32") {
+    assert.equal(profileMetadata.mode & 0o777, 0o600);
+  }
 
   const stored = await readFile(profilePath, "utf8");
   assert.equal(stored.includes("zen-refresh"), true);
@@ -540,7 +544,11 @@ test("serializes rotating refresh across independent profile instances", async (
   assert.equal(refreshes, 1);
   assert.equal(left.accessToken, secretAccessToken);
   assert.equal(right.accessToken, secretAccessToken);
-  assert.equal((await stat(profilePath)).mode & 0o777, 0o600);
+  const profileMetadata = await stat(profilePath);
+  assert(profileMetadata.isFile());
+  if (process.platform !== "win32") {
+    assert.equal(profileMetadata.mode & 0o777, 0o600);
+  }
   const stored = await readFile(profilePath, "utf8");
   assert.equal(stored.includes("rotated-refresh"), true);
   assert.equal(stored.includes("single-use-refresh"), false);

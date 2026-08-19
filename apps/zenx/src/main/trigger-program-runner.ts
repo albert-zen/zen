@@ -13,11 +13,14 @@ export const DEFAULT_PROGRAM_OUTPUT_BYTES = 64 * 1024;
 export const MAX_PROGRAM_OUTPUT_BYTES = 1024 * 1024;
 export const DEFAULT_PROGRAM_TIMEOUT_MS = 30_000;
 const PROGRAM_TERM_GRACE_MS = 250;
-const PROGRAM_FORCE_SETTLEMENT_MS = 1_500;
-const PROGRAM_QUIESCENCE_TIMEOUT_MS = 900;
+const PROGRAM_FORCE_SETTLEMENT_MS =
+  process.platform === "win32" ? 12_000 : 1_500;
+const PROGRAM_QUIESCENCE_TIMEOUT_MS =
+  process.platform === "win32" ? 8_000 : 900;
 const PROGRAM_QUIESCENCE_PASSES = 2;
 const PROGRAM_QUIESCENCE_POLL_MS = 40;
 const MAX_PROGRAM_STDERR_BYTES = 8 * 1_024;
+const PROCESS_TABLE_TIMEOUT_MS = process.platform === "win32" ? 4_000 : 750;
 
 export interface TriggerProgramRunInput {
   invocationId: string;
@@ -102,7 +105,6 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         resolve(result("failed", null, null, describeError(error)));
         return;
       }
-      const initialTree = captureProcessTree(child.pid).catch(() => undefined);
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let stdoutBytes = 0;
@@ -195,7 +197,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         stopCollection();
         child.stdin.destroy();
         const treeAtTermination = captureProcessTree(child.pid).catch(
-          () => initialTree,
+          () => undefined,
         );
         termination = treeAtTermination.then(async (tree) => {
           if (tree !== undefined) {
@@ -486,54 +488,55 @@ async function verifyAndTerminateWindows(
   rootPid: number,
   tree: ProcessTreeSnapshot,
 ): Promise<TerminationResult> {
+  const table = await captureProcessTable();
+  let tracked = [tree.root, ...tree.descendants];
+  const beforeExpansion = validateTrackedIdentities(tracked, table.entries);
+  if (beforeExpansion !== null) return { ok: false, error: beforeExpansion };
+  tracked = addDescendants(tracked, table.entries);
+  const identityError = validateTrackedIdentities(tracked, table.entries);
+  if (identityError !== null) return { ok: false, error: identityError };
+  const live = tracked.filter((identity) =>
+    table.entries.some((candidate) => candidate.pid === identity.pid),
+  );
+  const currentRoot = table.entries.find(
+    (candidate) => candidate.pid === tree.root.pid,
+  );
+  if (currentRoot !== undefined) {
+    if (!identityMatches(tree.root, currentRoot))
+      return {
+        ok: false,
+        error: `PID ${String(tree.root.pid)} identity changed; containment was not proven`,
+      };
+    const rootResult = await runTaskkill(rootPid, true);
+    if (!rootResult.ok && rootResult.error !== "process was not found")
+      return { ok: false, error: rootResult.error };
+  }
+  for (const identity of live) {
+    const current = table.entries.find(
+      (candidate) => candidate.pid === identity.pid,
+    );
+    if (!identityMatches(identity, current))
+      return {
+        ok: false,
+        error: `PID ${String(identity.pid)} identity changed; containment was not proven`,
+      };
+    const result = await runTaskkill(identity.pid, true);
+    if (!result.ok && result.error !== "process was not found")
+      return {
+        ok: false,
+        error: `PID ${String(identity.pid)}: ${result.error}`,
+      };
+  }
+
   let stableAbsentPasses = 0;
   const deadline = Date.now() + PROGRAM_QUIESCENCE_TIMEOUT_MS;
-  let tracked = [tree.root, ...tree.descendants];
   while (Date.now() < deadline) {
-    const table = await captureProcessTable();
-    const beforeExpansion = validateTrackedIdentities(tracked, table.entries);
-    if (beforeExpansion !== null) return { ok: false, error: beforeExpansion };
-    tracked = addDescendants(tracked, table.entries);
-    const identityError = validateTrackedIdentities(tracked, table.entries);
-    if (identityError !== null) return { ok: false, error: identityError };
-    const live = tracked.filter((identity) =>
-      table.entries.some((candidate) => candidate.pid === identity.pid),
-    );
-    if (live.length === 0) {
+    if (tracked.every((identity) => !processIsAlive(identity.pid))) {
       stableAbsentPasses += 1;
       if (stableAbsentPasses >= PROGRAM_QUIESCENCE_PASSES)
         return { ok: true, error: "" };
     } else {
       stableAbsentPasses = 0;
-      const currentRoot = table.entries.find(
-        (candidate) => candidate.pid === tree.root.pid,
-      );
-      if (currentRoot !== undefined) {
-        if (!identityMatches(tree.root, currentRoot))
-          return {
-            ok: false,
-            error: `PID ${String(tree.root.pid)} identity changed; containment was not proven`,
-          };
-        const rootResult = await runTaskkill(rootPid, true);
-        if (!rootResult.ok && rootResult.error !== "process was not found")
-          return { ok: false, error: rootResult.error };
-      }
-      for (const identity of live) {
-        const current = table.entries.find(
-          (candidate) => candidate.pid === identity.pid,
-        );
-        if (!identityMatches(identity, current))
-          return {
-            ok: false,
-            error: `PID ${String(identity.pid)} identity changed; containment was not proven`,
-          };
-        const result = await runTaskkill(identity.pid, false);
-        if (!result.ok && result.error !== "process was not found")
-          return {
-            ok: false,
-            error: `PID ${String(identity.pid)}: ${result.error}`,
-          };
-      }
     }
     await delay(PROGRAM_QUIESCENCE_POLL_MS);
   }
@@ -542,6 +545,15 @@ async function verifyAndTerminateWindows(
     error:
       "process-tree quiescence could not be proven before the bounded deadline",
   };
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
 
 async function verifyAndTerminatePosix(
@@ -726,14 +738,19 @@ function captureProcessTree(
 }
 
 async function captureProcessTable(): Promise<ProcessTableSnapshot> {
-  const command = process.platform === "win32" ? "wmic.exe" : "ps";
+  const command = process.platform === "win32" ? "powershell.exe" : "ps";
   const args =
     process.platform === "win32"
       ? [
-          "process",
-          "get",
-          "ProcessId,ParentProcessId,CreationDate",
-          "/format:list",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          [
+            "$ErrorActionPreference = 'Stop'",
+            "Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate | ForEach-Object {",
+            "  '{0}|{1}|{2}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToUniversalTime().Ticks",
+            "}",
+          ].join("; "),
         ]
       : ["-eo", "pid=,ppid=,pgid=,sid=,lstart="];
   const output = await new Promise<string>((resolve, reject) => {
@@ -767,7 +784,7 @@ async function captureProcessTable(): Promise<ProcessTableSnapshot> {
       timer = setTimeout(() => {
         processHandle?.kill("SIGKILL");
         finish(new Error(`${command} process-tree snapshot timed out`));
-      }, 750);
+      }, PROCESS_TABLE_TIMEOUT_MS);
     } catch (error) {
       finish(new Error(describeError(error)));
     }
@@ -779,38 +796,18 @@ async function captureProcessTable(): Promise<ProcessTableSnapshot> {
 
 function parseWindowsProcessTable(output: string): ProcessTableSnapshot {
   const entries: ProcessIdentity[] = [];
-  let record: {
-    pid?: number;
-    parentPid?: number;
-    startTime?: string | null;
-  } = {};
-  const flush = (): void => {
-    if (record.pid !== undefined && record.parentPid !== undefined)
-      entries.push({
-        pid: record.pid,
-        parentPid: record.parentPid,
-        processGroupId: null,
-        sessionId: null,
-        startTime: record.startTime ?? null,
-      });
-    record = {};
-  };
   for (const line of output.split(/\r?\n/u)) {
     const trimmed = line.trim();
-    if (trimmed === "") {
-      flush();
-      continue;
-    }
-    const match = trimmed.match(
-      /^(ProcessId|ParentProcessId|CreationDate)=(.*)$/u,
-    );
+    const match = trimmed.match(/^(\d+)\|(\d+)\|(\d+)$/u);
     if (match === null) continue;
-    if (match[1] === "ProcessId") record.pid = Number(match[2]!);
-    else if (match[1] === "ParentProcessId")
-      record.parentPid = Number(match[2]!);
-    else record.startTime = match[2]!.trim() || null;
+    entries.push({
+      pid: Number(match[1]!),
+      parentPid: Number(match[2]!),
+      processGroupId: null,
+      sessionId: null,
+      startTime: match[3]!,
+    });
   }
-  flush();
   return { entries };
 }
 

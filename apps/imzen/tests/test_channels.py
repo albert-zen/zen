@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -155,7 +156,7 @@ def test_qq_credentials_are_loaded_from_an_imzen_owned_private_file(tmp_path):
     assert "credentials_file" not in resolved
 
 
-def test_qq_credentials_file_must_be_private(tmp_path):
+def test_qq_credentials_file_uses_platform_permission_evidence(tmp_path):
     credentials = tmp_path / "qq.json"
     credentials.write_text(
         json.dumps({"appid": 123456789, "appsecret": "private-value"}),
@@ -168,8 +169,12 @@ def test_qq_credentials_file_must_be_private(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigurationError, match="must not be readable"):
-        build_channels(config, factory=factory, permission_mode="approval-required")
+    if os.name == "nt":
+        channels = build_channels(config, factory=factory, permission_mode="approval-required")
+        assert channels[0].config["client_secret"] == "private-value"
+    else:
+        with pytest.raises(ConfigurationError, match="must not be readable"):
+            build_channels(config, factory=factory, permission_mode="approval-required")
 
 
 def test_no_config_creates_no_channels():
