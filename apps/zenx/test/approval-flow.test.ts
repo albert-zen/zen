@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { shellPrintCommand } from "./fixtures/shell-command.js";
+
 import {
   AppServerManager,
   type ApprovalRequestEvent,
@@ -59,7 +61,9 @@ test("broadcasts approval state to two renderer clients and completes both decis
     });
     await manager.request("turn/start", {
       threadId: started.thread.id,
-      input: [{ type: "text", text: "!shell printf zenx-approved" }],
+      input: [
+        { type: "text", text: `!shell ${shellPrintCommand("zenx-approved")}` },
+      ],
     });
     await within(approvalSeen.promise);
     assert.deepEqual(secondRequests, firstRequests);

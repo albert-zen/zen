@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { shellPrintCommand } from "./fixtures/shell-command.js";
+
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import type { Thread } from "../src/protocol-client/index.js";
 import { applyThreadViewNotification } from "../src/renderer/src/thread-view-state.js";
@@ -36,7 +38,9 @@ test("projects a streamed tool turn from the hosted App Server", async () => {
 
     await manager.request("turn/start", {
       threadId: projected.id,
-      input: [{ type: "text", text: "!shell printf zenx-stream" }],
+      input: [
+        { type: "text", text: `!shell ${shellPrintCommand("zenx-stream")}` },
+      ],
     });
     await within(complete.promise);
     dispose();

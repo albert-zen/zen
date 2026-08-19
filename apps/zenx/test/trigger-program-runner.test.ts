@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -7,9 +7,61 @@ import test from "node:test";
 import {
   ZenXTriggerProgramRunner,
   type TriggerProgramRunInput,
+  verifyAndTerminateWindowsProcessTree,
+  type WindowsProcessIdentity,
+  type WindowsProcessTableSnapshot,
 } from "../src/main/trigger-program-runner.js";
 
 const runner = new ZenXTriggerProgramRunner();
+
+test("Windows containment never reuses stale identity evidence for a second tree kill", async () => {
+  const root: WindowsProcessIdentity = {
+    pid: 101,
+    parentPid: 1,
+    processGroupId: null,
+    sessionId: null,
+    startTime: "root-original",
+  };
+  const descendant: WindowsProcessIdentity = {
+    pid: 202,
+    parentPid: root.pid,
+    processGroupId: null,
+    sessionId: null,
+    startTime: "descendant-original",
+  };
+  let table: WindowsProcessTableSnapshot = {
+    entries: [root, descendant],
+  };
+  const taskkills: Array<[number, boolean]> = [];
+
+  const result = await verifyAndTerminateWindowsProcessTree(
+    root.pid,
+    { root, descendants: [descendant] },
+    {
+      captureProcessTable: async () => structuredClone(table),
+      runTaskkill: async (pid, tree) => {
+        taskkills.push([pid, tree]);
+        table = {
+          entries: [
+            {
+              ...root,
+              startTime: "root-reused-after-first-tree-kill",
+            },
+            {
+              ...descendant,
+              startTime: "descendant-reused-after-first-tree-kill",
+            },
+          ],
+        };
+        return { ok: true, error: "" };
+      },
+      processIsAlive: (pid) => table.entries.some((entry) => entry.pid === pid),
+    },
+  );
+
+  assert.deepEqual(result, { ok: true, error: "" });
+  assert.deepEqual(taskkills, [[root.pid, true]]);
+});
 
 test("program runner passes bounded JSON input, cwd, and env", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-program-"));
@@ -91,7 +143,7 @@ test("program runner records malformed, nonzero, oversized, timeout, and cancell
   const timedOut = await runner.run(
     {
       command: process.execPath,
-      args: ["-e", "setTimeout(()=>{},1000)"],
+      args: ["-e", "setTimeout(()=>{},30000)"],
       timeoutMs: 20,
     },
     { invocationId: "timeout", stage: "action", event: {} },
@@ -101,7 +153,7 @@ test("program runner records malformed, nonzero, oversized, timeout, and cancell
 
   const controller = new AbortController();
   const cancelled = runner.run(
-    { command: process.execPath, args: ["-e", "setTimeout(()=>{},1000)"] },
+    { command: process.execPath, args: ["-e", "setTimeout(()=>{},30000)"] },
     { invocationId: "cancel", stage: "action", event: {} },
     controller.signal,
   );
@@ -109,11 +161,14 @@ test("program runner records malformed, nonzero, oversized, timeout, and cancell
   assert.equal((await cancelled).status, "cancelled");
 });
 
-test("program runner contains a TERM-ignoring descendant after cancellation", async () => {
+test("program runner contains a descendant after cancellation", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-program-kill-"));
   const marker = path.join(directory, "late-marker");
-  const descendant = `const fs=require('node:fs');setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),400);`;
-  const parent = `const {spawn}=require('node:child_process');process.on('SIGTERM',()=>{});spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});setInterval(()=>process.stdout.write(JSON.stringify({ok:true})+'\\n'),50);`;
+  const ready = path.join(directory, "ready");
+  const descendant = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),5000);`;
+  const ignoreTermination =
+    process.platform === "win32" ? "" : "process.on('SIGTERM',()=>{});";
+  const parent = `const {spawn}=require('node:child_process');${ignoreTermination}spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});setInterval(()=>process.stdout.write(JSON.stringify({ok:true})+'\\n'),50);`;
   const controller = new AbortController();
   try {
     const running = runner.run(
@@ -125,25 +180,32 @@ test("program runner contains a TERM-ignoring descendant after cancellation", as
       { invocationId: "contained-cancel", stage: "action", event: {} },
       controller.signal,
     );
-    await delay(40);
+    const descendantPid = Number(await waitForFile(ready));
+    assert(Number.isInteger(descendantPid) && descendantPid > 0);
     controller.abort(new Error("cancel fixture"));
     const result = await running;
     assert.equal(result.status, "cancelled");
     assert.equal(result.output, null);
-    await delay(600);
+    await waitForProcessExit(descendantPid);
     await assert.rejects(stat(marker), { code: "ENOENT" });
   } finally {
     await assert.rejects(stat(marker), { code: "ENOENT" });
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("program runner forces the tree when the direct child exits on TERM", async () => {
+test("program runner contains descendants when the direct child exits", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-program-tree-close-"),
   );
   const marker = path.join(directory, "late-marker");
-  const descendant = `const fs=require('node:fs');setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),400);`;
-  const parent = `const {spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000);`;
+  const ready = path.join(directory, "ready");
+  const descendant = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),5000);`;
+  const exitOnTermination =
+    process.platform === "win32"
+      ? ""
+      : "process.on('SIGTERM',()=>process.exit(0));";
+  const parent = `const {spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});${exitOnTermination}setInterval(()=>{},1000);`;
   const controller = new AbortController();
   try {
     const running = runner.run(
@@ -151,16 +213,45 @@ test("program runner forces the tree when the direct child exits on TERM", async
       { invocationId: "tree-close", stage: "action", event: {} },
       controller.signal,
     );
-    await delay(40);
+    const descendantPid = Number(await waitForFile(ready));
+    assert(Number.isInteger(descendantPid) && descendantPid > 0);
     controller.abort(new Error("tree close fixture"));
     assert.equal((await running).status, "cancelled");
-    await delay(600);
+    await waitForProcessExit(descendantPid);
     await assert.rejects(stat(marker), { code: "ENOENT" });
   } finally {
     await assert.rejects(stat(marker), { code: "ENOENT" });
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForFile(file: string): Promise<string> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await delay(10);
+    }
+  }
+  throw new Error(`Timed out waiting for fixture file: ${file}`);
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw error;
+    }
+    await delay(10);
+  }
+  throw new Error(`Fixture process ${String(pid)} did not exit`);
 }

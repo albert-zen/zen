@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { shellPrintCommand } from "./fixtures.js";
+
 import { type AppServerEvent, ZenAppServer } from "../src/app-server.js";
 import type {
   CanonicalItem,
@@ -774,9 +776,11 @@ test("keeps stale open turns interrupted while only the current turn is active",
 test("shell tool has a separate approval decision and execution result", async () => {
   const server = createServer({ approvalPolicy: "always" });
   const thread = await server.startThread();
-  const turn = await server.startTurn(thread.id, "!shell printf approved", {
-    requestApproval: async () => "accept",
-  });
+  const turn = await server.startTurn(
+    thread.id,
+    `!shell ${shellPrintCommand("approved")}`,
+    { requestApproval: async () => "accept" },
+  );
   await turn.done;
 
   const snapshot = await server.readThread(thread.id);
@@ -836,12 +840,15 @@ test("provider credentials are absent from shell output and canonical items", as
     const thread = await server.startThread();
     const script = [
       `const fs = require("node:fs")`,
-      `const inherited = [process.env.OPENAI_API_KEY ?? "", process.env.PATH ?? ""]`,
-      `const secrets = fs.readFileSync(process.argv[1], "utf8")`,
-      `process.stdout.write(inherited.join("|") + "|" + secrets)`,
+      `const inheritedKey = process.env.OPENAI_API_KEY ?? ""`,
+      `const inheritedPath = process.env.PATH ?? ""`,
+      `const secrets = fs.readFileSync(process.argv[2], "utf8")`,
+      `process.stdout.write("KEY=" + inheritedKey + "|PATH=" + inheritedPath + "|" + secrets)`,
       `process.stderr.write("|" + secrets)`,
     ].join("; ");
-    const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)} ${JSON.stringify(secretFile)}`;
+    const scriptFile = path.join(temporaryDirectory, "credential-fixture.cjs");
+    await writeFile(scriptFile, script, "utf8");
+    const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(scriptFile)} ${JSON.stringify(secretFile)}`;
     const turn = await server.startTurn(thread.id, `!shell ${command}`);
     await turn.done;
 
@@ -849,7 +856,7 @@ test("provider credentials are absent from shell output and canonical items", as
     const result = snapshot.items.find((item) => item.type === "tool_result");
     assert(result?.type === "tool_result");
     assert.equal(result.exitCode, 0);
-    assert(result.output.includes("||"));
+    assert(result.output.includes("KEY=|PATH="));
     assert.equal(result.output.match(/\[REDACTED\]/gu)?.length, 4);
     assert(!JSON.stringify(snapshot.items).includes(providerKey));
     assert(!JSON.stringify(snapshot.items).includes(blockedPath));
