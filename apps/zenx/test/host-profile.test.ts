@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -94,6 +94,28 @@ test("reports a corrupt persisted host profile instead of silently replacing it"
     await writeFile(file, "{not-json", { mode: 0o600 });
     const store = new ZenXHostProfileStore(file);
     await assert.rejects(store.read(profile), /contains invalid JSON/u);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("concurrent profile stores use independent atomic staging files", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-concurrent-"),
+  );
+  try {
+    const file = path.join(directory, "host-profile.json");
+    const first = new ZenXHostProfileStore(file);
+    const second = new ZenXHostProfileStore(file);
+
+    await Promise.all([
+      first.write({ ...profile, defaultModel: "qwen3" }),
+      second.write({ ...profile, defaultModel: "deepseek-r1" }),
+    ]);
+
+    const persisted = await first.read(profile);
+    assert.ok(["qwen3", "deepseek-r1"].includes(persisted.defaultModel));
+    assert.deepEqual(await readdir(directory), ["host-profile.json"]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

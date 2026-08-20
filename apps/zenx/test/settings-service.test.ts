@@ -134,6 +134,41 @@ test("starts with no implicit Project and activates the first added workspace", 
   }
 });
 
+test("serializes concurrent workspace mutations without losing either update", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-concurrent-workspaces-"),
+  );
+  const firstWorkspace = path.join(directory, "first");
+  const secondWorkspace = path.join(directory, "second");
+  try {
+    const service = settingsFor(directory, {
+      login: async () => undefined,
+      logout: async () => undefined,
+      status: async () => ({ authenticated: false, expired: false }),
+    });
+    await service.initialize({});
+
+    await Promise.all([
+      service.addWorkspace(firstWorkspace),
+      service.addWorkspace(secondWorkspace),
+    ]);
+
+    assert.deepEqual(
+      new Set((await service.publicSettings()).profile.workspaces),
+      new Set([path.resolve(firstWorkspace), path.resolve(secondWorkspace)]),
+    );
+    const persisted = JSON.parse(
+      await readFile(path.join(directory, "host-profile.json"), "utf8"),
+    ) as { workspaces: string[] };
+    assert.deepEqual(
+      new Set(persisted.workspaces),
+      new Set([path.resolve(firstWorkspace), path.resolve(secondWorkspace)]),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("clears the OAuth concurrency guard after failure so login can retry", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-oauth-retry-"));
   let attempts = 0;
