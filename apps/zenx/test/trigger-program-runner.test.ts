@@ -120,15 +120,8 @@ test(
   "Windows identity adapter rejects a stale identity and terminates the matching handle",
   { skip: process.platform !== "win32" },
   async () => {
-    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    assert(child.pid !== undefined);
+    const { child, identity } = await spawnWindowsIdentityFixture();
     try {
-      const table = await realWindowsProcessOperations.captureProcessTable();
-      const identity = table.entries.find((entry) => entry.pid === child.pid);
-      assert(identity?.startTime !== null && identity?.startTime !== undefined);
       const stale = await realWindowsProcessOperations.terminateProcessIdentity(
         {
           ...identity,
@@ -136,15 +129,15 @@ test(
         },
       );
       assert.deepEqual(stale, { ok: false, error: "process was not found" });
-      process.kill(child.pid, 0);
+      process.kill(identity.pid, 0);
 
       assert.deepEqual(
         await realWindowsProcessOperations.terminateProcessIdentity(identity),
         { ok: true, error: "" },
       );
-      await waitForProcessExit(child.pid);
+      await waitForProcessExit(identity.pid);
     } finally {
-      killFixtureProcess(child.pid);
+      killFixtureProcess(identity.pid);
     }
   },
 );
@@ -153,16 +146,8 @@ test(
   "Windows identity adapter accepts exit after matching the open handle",
   { skip: process.platform !== "win32" },
   async () => {
-    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    assert(child.pid !== undefined);
+    const { child, identity } = await spawnWindowsIdentityFixture();
     try {
-      const table = await realWindowsProcessOperations.captureProcessTable();
-      const identity = table.entries.find((entry) => entry.pid === child.pid);
-      assert(identity?.startTime !== null && identity?.startTime !== undefined);
-
       const result = await terminateWindowsProcessIdentity(
         identity,
         async () => {
@@ -176,9 +161,9 @@ test(
       );
 
       assert.deepEqual(result, { ok: true, error: "" });
-      await waitForProcessExit(child.pid);
+      await waitForProcessExit(identity.pid);
     } finally {
-      killFixtureProcess(child.pid);
+      killFixtureProcess(identity.pid);
     }
   },
 );
@@ -636,4 +621,75 @@ function killFixtureProcess(pid: number): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
+}
+
+async function spawnWindowsIdentityFixture(): Promise<{
+  child: ReturnType<typeof spawn>;
+  identity: WindowsProcessIdentity & { startTime: string };
+}> {
+  const script = [
+    "$start = [System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().Ticks",
+    "$start -= $start % 10",
+    '[Console]::Out.WriteLine("$PID|$start")',
+    "[Console]::Out.Flush()",
+    "while ($true) { Start-Sleep -Seconds 1 }",
+  ].join("; ");
+  const child = spawn(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    { stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+  );
+  assert(child.pid !== undefined);
+  assert(child.stdout !== null);
+  const line = await new Promise<string>((resolve, reject) => {
+    let output = "";
+    let settled = false;
+    const finish = (value: string | Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.stdout?.removeListener("data", onData);
+      child.removeListener("error", onError);
+      child.removeListener("exit", onExit);
+      if (value instanceof Error) {
+        killFixtureProcess(child.pid!);
+        reject(value);
+      } else resolve(value);
+    };
+    const onData = (chunk: string): void => {
+      output += chunk;
+      const newline = output.indexOf("\n");
+      if (newline >= 0) finish(output.slice(0, newline).trim());
+    };
+    const onError = (error: Error): void => finish(error);
+    const onExit = (code: number | null): void =>
+      finish(
+        new Error(
+          `Windows identity fixture exited with code ${String(code)} before reporting its identity`,
+        ),
+      );
+    const timer = setTimeout(
+      () => finish(new Error("Windows identity fixture did not become ready")),
+      10_000,
+    );
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", onData);
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
+  const match = line.match(/^(\d+)\|(\d+)$/u);
+  if (match === null || Number(match[1]) !== child.pid) {
+    killFixtureProcess(child.pid);
+    throw new Error("Windows identity fixture reported an invalid identity");
+  }
+  return {
+    child,
+    identity: {
+      pid: child.pid,
+      parentPid: process.pid,
+      processGroupId: null,
+      sessionId: null,
+      startTime: match[2]!,
+    },
+  };
 }
