@@ -134,11 +134,84 @@ test("archiving an active Thread opens its Settings restore entry", async () => 
   }
 });
 
+test("serializes cross-row Pin mutations against the latest confirmed order", async () => {
+  const requests: Array<{
+    threadIds: readonly string[];
+    response: ReturnType<typeof deferred<ReturnType<typeof publicSettings>>>;
+  }> = [];
+  const threads = [
+    summary(false, "thread-1", "Thread one"),
+    summary(false, "thread-2", "Thread two"),
+  ];
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: threads.map((thread) => thread.threadId),
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async (archived) => (archived ? [] : threads),
+      setPinnedThreadIds: async (threadIds) => {
+        const response = deferred<ReturnType<typeof publicSettings>>();
+        requests.push({ threadIds: [...threadIds], response });
+        return await response.promise;
+      },
+    },
+  );
+  try {
+    await act(async () => threadMenuButton("Thread one").click());
+    await act(async () => exactButton("Pin")?.click());
+    await act(async () => threadMenuButton("Thread two").click());
+    await act(async () => exactButton("Pin")?.click());
+
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0]?.threadIds, ["thread-1"]);
+
+    await act(async () => {
+      requests[0]?.response.resolve(publicSettings(["thread-1"]));
+      await Promise.resolve();
+    });
+    await waitFor(() => requests.length === 2);
+    assert.deepEqual(requests[1]?.threadIds, ["thread-2", "thread-1"]);
+
+    await act(async () => {
+      requests[1]?.response.resolve(publicSettings(["thread-2", "thread-1"]));
+      await Promise.resolve();
+    });
+    await waitFor(
+      () =>
+        document.querySelectorAll(".pinned-thread-group .thread-row").length ===
+        2,
+    );
+    assert.deepEqual(
+      [
+        ...document.querySelectorAll(
+          ".pinned-thread-group .thread-title > span:first-child",
+        ),
+      ].map((title) => title.textContent),
+      ["Thread two", "Thread one"],
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
     initialPinnedThreadIds?: string[];
     onPinnedThreadIds?(threadIds: readonly string[]): void;
+    setPinnedThreadIds?(
+      threadIds: readonly string[],
+    ): Promise<ReturnType<typeof publicSettings>>;
     request?(method: string): Promise<unknown>;
     threads?(archived: boolean): Promise<NativeThreadSummary[]>;
   } = {},
@@ -181,6 +254,8 @@ async function mountApp(
     settings: {
       get: async () => currentSettings,
       setPinnedThreadIds: async (threadIds: readonly string[]) => {
+        if (options.setPinnedThreadIds !== undefined)
+          return await options.setPinnedThreadIds(threadIds);
         options.onPinnedThreadIds?.(threadIds);
         currentSettings = publicSettings([...threadIds]);
         return currentSettings;
@@ -243,9 +318,13 @@ function publicSettings(pinnedThreadIds: string[]) {
   };
 }
 
-function summary(archived: boolean): NativeThreadSummary {
+function summary(
+  archived: boolean,
+  threadId = "thread-1",
+  name = "Thread one",
+): NativeThreadSummary {
   return {
-    threadId: "thread-1",
+    threadId,
     currentMetadata: {
       model: "fake",
       provider: "fake",
@@ -256,10 +335,18 @@ function summary(archived: boolean): NativeThreadSummary {
     archived,
     createdAt: new Date(1_000).toISOString(),
     updatedAt: new Date(2_000).toISOString(),
-    name: "Thread one",
+    name,
     preview: "",
     status: "idle",
   };
+}
+
+function threadMenuButton(threadName: string): HTMLButtonElement {
+  const button = document.querySelector<HTMLButtonElement>(
+    `[aria-label="Manage ${threadName}"]`,
+  );
+  assert.ok(button, `Expected menu trigger for ${threadName}`);
+  return button;
 }
 
 function liveThread(): Thread {
@@ -312,4 +399,15 @@ async function waitFor<T>(read: () => T | null | undefined): Promise<T> {
     });
   }
   throw new Error("Timed out waiting for App interaction state");
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((finish) => {
+    resolve = finish;
+  });
+  return { promise, resolve };
 }
