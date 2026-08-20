@@ -334,7 +334,7 @@ export function Sidebar({
                 threads={threads}
                 watchingThreadIds={watchingThreadIds}
               />
-              {projectsOpen ? (
+              {threadScope === "archived" || projectsOpen ? (
                 <ProjectsView
                   projects={projects}
                   onNewThread={onNewThread}

@@ -211,6 +211,29 @@ test("persists profile-local pinned Thread ids across service instances", async 
   }
 });
 
+test("settings save preserves pins added after its profile draft was read", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-stale-pins-"));
+  const subscription = {
+    login: async () => undefined,
+    logout: async () => undefined,
+    status: async () => ({ authenticated: false, expired: false }),
+  };
+  try {
+    const service = settingsFor(directory, subscription);
+    await service.initialize({});
+    const staleDraft = (await service.publicSettings()).profile;
+
+    await service.setThreadPinned("thread-91", true);
+    await service.save({ ...staleDraft, onboardingComplete: true });
+
+    const saved = (await service.publicSettings()).profile;
+    assert.equal(saved.onboardingComplete, true);
+    assert.deepEqual(saved.pinnedThreadIds, ["thread-91"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test(
   "POSIX symlink aliases drive add, mark-used, default, and remove by one canonical key",
   { skip: process.platform === "win32" },

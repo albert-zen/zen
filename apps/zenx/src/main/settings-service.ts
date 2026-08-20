@@ -138,7 +138,10 @@ export class ZenXSettingsService {
     const structurallyValidated = validateHostProfile(profile);
     await this.#queueProfileOperation(async () => {
       const validated = await normalizeCanonicalWorkspaces(
-        structurallyValidated,
+        validateHostProfile({
+          ...structurallyValidated,
+          pinnedThreadIds: this.#requireProfile().pinnedThreadIds,
+        }),
       );
       if (apiKey !== undefined && apiKey.length > 0)
         await this.#vault.writeApiKey(apiKey);

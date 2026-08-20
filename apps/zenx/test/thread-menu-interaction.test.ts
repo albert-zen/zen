@@ -161,6 +161,58 @@ test("Thread menu manages keyboard focus through close and row removal", async (
   }
 });
 
+test("Archived Threads remain visible after Projects was collapsed", async () => {
+  const dom = new JSDOM(
+    "<!doctype html><html><body><div id=root></div></body></html>",
+    { url: "http://localhost" },
+  );
+  const previousGlobals = {
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    Node: globalThis.Node,
+    window: globalThis.window,
+  };
+  Object.assign(globalThis, {
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    window: dom.window,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const container = document.getElementById("root");
+  assert.ok(container);
+  const root = createRoot(container);
+
+  try {
+    await act(async () => root.render(createElement(ArchivedSwitchSidebar)));
+    const projectsToggle = requiredElement<HTMLButtonElement>(
+      ".projects-section-toggle",
+    );
+    await act(async () => projectsToggle.click());
+    assert.equal(document.querySelector(".thread-row-shell"), null);
+
+    const archivedTab = requiredElement<HTMLButtonElement>(
+      "#thread-scope-archived",
+    );
+    await act(async () => archivedTab.click());
+
+    assert.match(container.textContent ?? "", /Archived preview/u);
+    const trigger = requiredElement<HTMLButtonElement>(".thread-menu-trigger");
+    await act(async () => trigger.click());
+    assert.ok(
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ).some((item) => item.textContent?.trim() === "Unarchive"),
+    );
+  } finally {
+    await act(async () => root.unmount());
+    Object.assign(globalThis, previousGlobals, {
+      IS_REACT_ACT_ENVIRONMENT: undefined,
+    });
+    dom.window.close();
+  }
+});
+
 function TestSidebar() {
   const [threads, setThreads] = useState<NativeThreadSummary[]>([
     activeSummary(),
@@ -212,6 +264,54 @@ function TestSidebar() {
   });
 }
 
+function ArchivedSwitchSidebar() {
+  const [scope, setScope] = useState<"active" | "archived">("active");
+  const threads = scope === "active" ? [activeSummary()] : [archivedSummary()];
+  return createElement(Sidebar, {
+    mode: "projects",
+    liveThread: null,
+    open: true,
+    onClose: noop,
+    onModeChange: noop,
+    onNewThread: noop,
+    onAddProject: noop,
+    onRemoveProject: noop,
+    onSetDefaultProject: noop,
+    onOpenContribution: noop,
+    onOpenSettings: noop,
+    onChangeThreadLifecycle: async () => undefined,
+    onChangeThreadPin: async () => undefined,
+    onRenameThread: async () => undefined,
+    onRetryThreads: noop,
+    onSelectThread: noop,
+    onThreadScopeChange: setScope,
+    pendingApprovalThreadIds: new Set<string>(),
+    pinnedThreadIds: [],
+    pluginContributions: [],
+    projects: {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: threads.map((thread) => thread.threadId),
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    selectedPage: "agent",
+    selectedThreadId: null,
+    serverReady: true,
+    threadError: null,
+    threadLoading: false,
+    threadScope: scope,
+    threads,
+    triggerSnapshot: { triggers: [], history: [], rooms: [] },
+  });
+}
+
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
   assert.ok(element, `Expected ${selector}`);
@@ -233,5 +333,14 @@ function activeSummary(): NativeThreadSummary {
     updatedAt: new Date(2_000).toISOString(),
     preview: "Thread preview",
     status: "idle",
+  };
+}
+
+function archivedSummary(): NativeThreadSummary {
+  return {
+    ...activeSummary(),
+    threadId: "archived-thread",
+    archived: true,
+    preview: "Archived preview",
   };
 }
