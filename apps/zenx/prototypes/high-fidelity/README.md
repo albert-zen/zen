@@ -1,8 +1,8 @@
 # ZenX high-fidelity prototype
 
-This directory preserves the reviewed ZenX high-fidelity prototype as a
-non-production design and interaction reference. It is not part of the ZenX
-renderer, product architecture, runtime, or build.
+This directory preserves the reviewed ZenX high-fidelity prototype as a static,
+non-production artifact. It is not part of the renderer, product architecture,
+runtime, or build, and it is not authoritative for current UI/UX decisions.
 
 ## Provenance
 
@@ -14,7 +14,6 @@ renderer, product architecture, runtime, or build.
 ## Files
 
 - `zenx-high-fidelity-prototype.html` — editable visualization fragment.
-- `zenx-high-fidelity-implementation-notes.md` — product projection, interaction, responsive, plugin, and implementation constraints.
 
 ## Local preview
 
@@ -31,4 +30,6 @@ temporary server after review.
 
 ## Scope
 
-The HTML uses static review data. Formal implementation must bind ZEM Items, plugin manifests, grants, approvals, runtime state, and provider configuration from the ZenX Host rather than copying the prototype data model.
+The HTML uses static review data and preserves the imported snapshot unchanged.
+Current product rules live only in [ZenX UI/UX decisions](../../docs/ui-ux.md);
+later confirmed decisions there take precedence over this prototype.
