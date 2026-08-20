@@ -1,6 +1,15 @@
 import { execFile, spawn } from "node:child_process";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { randomUUID } from "node:crypto";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -9,72 +18,146 @@ const run = promisify(execFile);
 const zenx = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const root = path.resolve(zenx, "..", "..");
 const out = path.join(zenx, "out");
-const resources = path.join(zenx, ".packaged", "resources");
+const packagedRoot = path.join(zenx, ".packaged");
+const runsRoot = path.join(packagedRoot, "runs");
+const artifactRoot = path.join(packagedRoot, "artifact");
+const artifactCache = path.join(packagedRoot, "cache", "artifacts");
 
 if (isDirectExecution()) await packageZenX(process.argv.slice(2));
 
 async function packageZenX(arguments_) {
   const target = arguments_.includes("--app") ? "app" : "smoke";
-  let staging;
-  try {
-    const assembly = JSON.parse(
-      (
-        await run(process.execPath, [
-          path.join(root, "scripts", "assemble-zenx-providers.mjs"),
-          "--output",
-          resources,
-        ])
-      ).stdout,
-    );
-    staging = await mkdtemp(path.join(os.tmpdir(), "zenx-package-"));
-    const appDir = path.join(staging, "app");
-    const zenxPackage = JSON.parse(
-      await readFile(path.join(zenx, "package.json"), "utf8"),
-    );
-    await stagePackage({
-      target,
-      outDirectory: out,
-      rootDirectory: root,
-      appDirectory: appDir,
-      manifestSha256: assembly.manifestSha256,
-    });
-    await writeFile(
-      path.join(appDir, "package.json"),
-      `${JSON.stringify(packageManifest(target, zenxPackage), null, 2)}\n`,
-    );
-    const { packager } = await import("@electron/packager");
-    const packaged = await packager({
-      dir: appDir,
-      out: path.join(zenx, ".packaged", "artifact"),
-      overwrite: true,
-      platform: process.platform,
-      arch: process.arch,
-      name: target === "app" ? "ZenX" : "ZenXProviderSmoke",
-      electronVersion: "43.2.0",
-      extraResource: [path.join(resources, "providers")],
-      asar: false,
-    });
-    const executable = executablePath(packaged[0], target);
-    console.log(
-      JSON.stringify(
-        {
-          packagedArtifact: packaged[0],
-          executable,
-          target,
-          version: zenxPackage.version,
-          manifestDigest: assembly.manifestSha256,
-          releaseSizeBytes: assembly.releaseSizeBytes,
-        },
-        null,
-        2,
-      ),
-    );
-    if (target === "smoke") await runExecutable(executable);
-  } finally {
-    if (staging !== undefined) {
+  const productName = target === "app" ? "ZenX" : "ZenXProviderSmoke";
+  const targetDirectory = `${productName}-${process.platform}-${process.arch}`;
+  await withPackagingTargetLock(packagedRoot, targetDirectory, async () => {
+    await mkdir(runsRoot, { recursive: true, mode: 0o700 });
+    const staging = await mkdtemp(path.join(runsRoot, "package-"));
+    try {
+      const resources = path.join(staging, "resources");
+      const appDir = path.join(staging, "app");
+      const stagedArtifacts = path.join(staging, "artifact");
+      const assembly = JSON.parse(
+        (
+          await run(process.execPath, [
+            path.join(root, "scripts", "assemble-zenx-providers.mjs"),
+            "--output",
+            resources,
+            "--cache",
+            artifactCache,
+          ])
+        ).stdout,
+      );
+      const zenxPackage = JSON.parse(
+        await readFile(path.join(zenx, "package.json"), "utf8"),
+      );
+      await stagePackage({
+        target,
+        outDirectory: out,
+        rootDirectory: root,
+        appDirectory: appDir,
+        manifestSha256: assembly.manifestSha256,
+      });
+      await writeFile(
+        path.join(appDir, "package.json"),
+        `${JSON.stringify(packageManifest(target, zenxPackage), null, 2)}\n`,
+      );
+      const { packager } = await import("@electron/packager");
+      const packaged = await packager({
+        dir: appDir,
+        out: stagedArtifacts,
+        overwrite: false,
+        platform: process.platform,
+        arch: process.arch,
+        name: productName,
+        electronVersion: "43.2.0",
+        extraResource: [path.join(resources, "providers")],
+        asar: false,
+      });
+      if (path.basename(packaged[0]) !== targetDirectory) {
+        throw new Error(
+          `Electron packager returned unexpected target ${path.basename(packaged[0])}`,
+        );
+      }
+      if (target === "smoke") {
+        await runExecutable(executablePath(packaged[0], target));
+      }
+      const publishedArtifact = await publishPackagedArtifact(
+        packaged[0],
+        path.join(artifactRoot, targetDirectory),
+      );
+      const executable = executablePath(publishedArtifact, target);
+      console.log(
+        JSON.stringify(
+          {
+            packagedArtifact: publishedArtifact,
+            executable,
+            target,
+            version: zenxPackage.version,
+            manifestDigest: assembly.manifestSha256,
+            releaseSizeBytes: assembly.releaseSizeBytes,
+          },
+          null,
+          2,
+        ),
+      );
+    } finally {
       await rm(staging, { recursive: true, force: true });
     }
+  });
+}
+
+export async function withPackagingTargetLock(
+  packageRoot,
+  targetDirectory,
+  action,
+) {
+  const locks = path.join(packageRoot, "locks");
+  await mkdir(locks, { recursive: true, mode: 0o700 });
+  const lockPath = path.join(locks, `${targetDirectory}.lock`);
+  let lock;
+  try {
+    lock = await open(lockPath, "wx", 0o600);
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      throw new Error(
+        `Packaging target ${targetDirectory} is already in progress; if no packaging process is active, remove the stale lock explicitly`,
+      );
+    }
+    throw error;
   }
+  try {
+    await lock.writeFile(`${String(process.pid)} ${randomUUID()}\n`);
+    await lock.sync();
+    return await action();
+  } finally {
+    await lock.close();
+    await rm(lockPath, { force: true });
+  }
+}
+
+export async function publishPackagedArtifact(stagedArtifact, finalArtifact) {
+  await mkdir(path.dirname(finalArtifact), { recursive: true, mode: 0o700 });
+  const retiredArtifact = path.join(
+    path.dirname(finalArtifact),
+    `.${path.basename(finalArtifact)}.${randomUUID()}.retired`,
+  );
+  let retired = false;
+  try {
+    await rename(finalArtifact, retiredArtifact);
+    retired = true;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  try {
+    await rename(stagedArtifact, finalArtifact);
+  } catch (error) {
+    if (retired) await rename(retiredArtifact, finalArtifact);
+    throw error;
+  }
+  if (retired) {
+    await rm(retiredArtifact, { recursive: true, force: true });
+  }
+  return finalArtifact;
 }
 
 export async function stagePackage(options) {

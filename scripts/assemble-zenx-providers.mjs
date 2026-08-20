@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { createReadStream } from "node:fs";
 import {
+  cp,
   mkdir,
   mkdtemp,
   readFile,
   rm,
   writeFile,
-  cp,
   readdir,
   stat,
 } from "node:fs/promises";
@@ -14,6 +15,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+
+import { acquireVerifiedArtifact } from "./verified-artifact-acquisition.mjs";
 
 const run = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -28,12 +31,26 @@ const lock = JSON.parse(await readFile(lockPath, "utf8"));
 const outputArgumentIndex = process.argv.indexOf("--output");
 const outputArgument =
   outputArgumentIndex >= 0 ? process.argv[outputArgumentIndex + 1] : undefined;
+const cacheArgumentIndex = process.argv.indexOf("--cache");
+const cacheArgument =
+  cacheArgumentIndex >= 0 ? process.argv[cacheArgumentIndex + 1] : undefined;
+const runs = path.join(zenx, ".packaged", "runs");
+await mkdir(runs, { recursive: true, mode: 0o700 });
+const defaultRun =
+  outputArgument === undefined
+    ? await mkdtemp(path.join(runs, "provider-assembly-"))
+    : undefined;
 const output = path.resolve(
-  outputArgument ?? path.join(zenx, ".packaged", "resources"),
+  outputArgument ?? path.join(defaultRun, "resources"),
+);
+const artifactCache = path.resolve(
+  cacheArgument ?? path.join(zenx, ".packaged", "cache", "artifacts"),
 );
 const providers = path.join(output, "providers");
 const work = await mkdtemp(path.join(os.tmpdir(), "zenx-provider-assembly-"));
 const maxAssetBytes = 512 * 1024 * 1024;
+const maxConnectMilliseconds = 10_000;
+const artifactDownloadMilliseconds = 2 * 60 * 1_000;
 
 try {
   await rm(providers, { recursive: true, force: true });
@@ -44,12 +61,11 @@ try {
   const nodeArchive = lock.node.platformArchives[nodeKey];
   if (nodeArchive === undefined)
     throw new Error(`No pinned Node runtime for ${nodeKey}`);
-  const nodeBytes = await fetchVerified(
+  const nodeArchivePath = await acquireArtifact(
+    `Node.js ${lock.node.version} ${nodeKey} runtime`,
     `${lock.node.releaseBase}${nodeArchive.file}`,
     nodeArchive.sha256,
   );
-  const nodeArchivePath = path.join(work, nodeArchive.file);
-  await writeFile(nodeArchivePath, nodeBytes);
   const nodeExtract = path.join(work, "node");
   await mkdir(nodeExtract);
   await extract(nodeArchivePath, nodeExtract);
@@ -85,18 +101,35 @@ try {
   );
   const browsersPath = path.join(providers, "playwright-browsers");
   await mkdir(browsersPath, { recursive: true, mode: 0o700 });
-  await run(
-    runtimePath,
-    [
-      path.join(providers, "playwright-cli", "playwright-cli.js"),
-      "install-browser",
-    ],
-    {
-      cwd: path.join(providers, "playwright-cli"),
-      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersPath },
-      maxBuffer: 8 * 1024 * 1024,
-    },
-  );
+  try {
+    await run(
+      runtimePath,
+      [
+        path.join(providers, "playwright-cli", "playwright-cli.js"),
+        "install-browser",
+      ],
+      {
+        cwd: path.join(providers, "playwright-cli"),
+        env: {
+          ...process.env,
+          PLAYWRIGHT_BROWSERS_PATH: browsersPath,
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: String(
+            maxConnectMilliseconds,
+          ),
+        },
+        timeout: artifactDownloadMilliseconds,
+        killSignal: "SIGTERM",
+        maxBuffer: 8 * 1024 * 1024,
+      },
+    );
+  } catch (error) {
+    if (error?.killed === true || error?.signal === "SIGTERM") {
+      throw new Error(
+        `Pinned Playwright browser payload installation exceeded ${String(artifactDownloadMilliseconds)}ms`,
+      );
+    }
+    throw new Error("Pinned Playwright browser payload installation failed");
+  }
   const manifest = {
     schemaVersion: 1,
     providers: {
@@ -157,9 +190,12 @@ try {
 
 async function assembleNpmProvider(id, platform, runtimePath) {
   const pin = lock.providers[id];
-  const archive = await fetchVerified(pin.tarball, pin.sha256);
-  const archivePath = path.join(work, `${id}.tgz`);
-  await writeFile(archivePath, archive);
+  const archivePath = await acquireArtifact(
+    `${id} ${pin.version}`,
+    pin.tarball,
+    pin.sha256,
+  );
+  await verifyNpmIntegrity(id, archivePath, pin.integrity);
   const extracted = path.join(work, id);
   await mkdir(extracted);
   await extract(archivePath, extracted);
@@ -167,19 +203,19 @@ async function assembleNpmProvider(id, platform, runtimePath) {
   const destination = path.join(providers, id);
   await cp(packageDir, destination, { recursive: true, force: true });
   if (id === "playwright-cli") {
-    await runNpm(
-      [
-        "install",
-        "--prefix",
-        destination,
-        "--ignore-scripts",
-        "--no-save",
-        "--package-lock=true",
-        "--omit=dev",
-        "--omit=optional",
-      ],
-      { cwd: destination },
-    );
+    for (const dependency of pin.transitive ?? []) {
+      const dependencyArchive = await acquireArtifact(
+        `${dependency.name} ${dependency.version}`,
+        dependency.tarball,
+        dependency.sha256,
+      );
+      await verifyNpmIntegrity(
+        dependency.name,
+        dependencyArchive,
+        dependency.integrity,
+      );
+      await installPinnedDependency(dependency, dependencyArchive, destination);
+    }
   }
   const executable =
     id === "playwright-cli"
@@ -200,25 +236,6 @@ async function assembleNpmProvider(id, platform, runtimePath) {
   await appendLicenseNotice(destination, id, pin.license);
   const assets = [];
   if (id === "playwright-cli") {
-    const generatedLock = path.join(
-      destination,
-      "node_modules",
-      ".package-lock.json",
-    );
-    const generated = JSON.parse(await readFile(generatedLock, "utf8"));
-    for (const dependency of pin.transitive ?? []) {
-      const entry = generated.packages?.[`node_modules/${dependency.name}`];
-      if (
-        entry?.version !== dependency.version ||
-        entry.resolved !== dependency.tarball ||
-        entry.integrity !== dependency.integrity
-      ) {
-        throw new Error(
-          `playwright-cli transitive package mismatch for ${dependency.name}`,
-        );
-      }
-      await fetchVerified(dependency.tarball, dependency.sha256);
-    }
     const dependencyLock = canonicalDependencyLock(pin.transitive ?? []);
     const dependencyLockSha256 = sha256(dependencyLock);
     if (
@@ -284,32 +301,67 @@ async function walkFiles(rootDir) {
   return files;
 }
 
-async function fetchVerified(url, expected) {
-  const response = await fetch(url, { redirect: "error" });
-  if (!response.ok)
-    throw new Error(`Provider archive fetch failed: ${response.status} ${url}`);
-  const bytes = Buffer.from(await response.arrayBuffer());
-  const actual = sha256(bytes);
-  if (actual !== expected)
-    throw new Error(`Provider archive integrity mismatch for ${url}`);
-  return bytes;
-}
-
 async function extract(archive, destination) {
   await run("tar", ["-xf", archive, "-C", destination]);
 }
 
-async function runNpm(args, options) {
-  const npmExecPath =
-    process.env.npm_execpath ??
-    path.join(
-      path.dirname(process.execPath),
-      "node_modules",
-      "npm",
-      "bin",
-      "npm-cli.js",
+async function acquireArtifact(artifactName, url, digest) {
+  return await acquireVerifiedArtifact({
+    artifactName,
+    url,
+    digest,
+    deadline: Date.now() + artifactDownloadMilliseconds,
+    cacheLocation: artifactCache,
+  });
+}
+
+async function verifyNpmIntegrity(id, archive, integrity) {
+  const separator = integrity.indexOf("-");
+  const algorithm = integrity.slice(0, separator);
+  const expected = integrity.slice(separator + 1);
+  if (algorithm !== "sha512" || expected.length === 0) {
+    throw new Error(`${id} has an unsupported npm integrity pin`);
+  }
+  const hash = createHash(algorithm);
+  const file = createReadStream(archive);
+  for await (const chunk of file) hash.update(chunk);
+  if (hash.digest("base64") !== expected) {
+    throw new Error(`${id} npm integrity mismatch`);
+  }
+}
+
+async function installPinnedDependency(dependency, archive, destination) {
+  const extracted = path.join(
+    work,
+    `dependency-${dependency.name.replaceAll("/", "-")}`,
+  );
+  await mkdir(extracted);
+  await extract(archive, extracted);
+  const packageDirectory = path.join(extracted, "package");
+  const metadata = JSON.parse(
+    await readFile(path.join(packageDirectory, "package.json"), "utf8"),
+  );
+  if (
+    metadata.name !== dependency.name ||
+    metadata.version !== dependency.version
+  ) {
+    throw new Error(
+      `playwright-cli transitive package mismatch for ${dependency.name}`,
     );
-  return await run(process.execPath, [npmExecPath, ...args], options);
+  }
+  const dependencyDirectory = path.join(
+    destination,
+    "node_modules",
+    ...dependency.name.split("/"),
+  );
+  await mkdir(path.dirname(dependencyDirectory), {
+    recursive: true,
+    mode: 0o700,
+  });
+  await cp(packageDirectory, dependencyDirectory, {
+    recursive: true,
+    force: true,
+  });
 }
 
 async function findFile(root, name) {
