@@ -12,6 +12,7 @@ type IconName =
   | "file"
   | "inbox"
   | "folder-plus"
+  | "grip"
   | "layers"
   | "lock"
   | "moon"
@@ -64,6 +65,16 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="M1.8 4.2C1.8 3.5 2.3 3 3 3h3l1.4 1.6H13c.7 0 1.2.5 1.2 1.2v6c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2V4.2Z" />
       <path d="M8 7v4M6 9h4" />
+    </>
+  ),
+  grip: (
+    <>
+      <circle cx="5.5" cy="4" r="0.6" fill="currentColor" stroke="none" />
+      <circle cx="10.5" cy="4" r="0.6" fill="currentColor" stroke="none" />
+      <circle cx="5.5" cy="8" r="0.6" fill="currentColor" stroke="none" />
+      <circle cx="10.5" cy="8" r="0.6" fill="currentColor" stroke="none" />
+      <circle cx="5.5" cy="12" r="0.6" fill="currentColor" stroke="none" />
+      <circle cx="10.5" cy="12" r="0.6" fill="currentColor" stroke="none" />
     </>
   ),
   file: (

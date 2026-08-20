@@ -71,6 +71,9 @@
 - **ZenXThreadPinProjection** — ZenXHostProfile 按本机 threadId 顺序持久化 Sidebar Pin，
   renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
   canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。
+- **ZenXSidebarOrderPreference** — ZenXHostProfile 按 canonical Project key 与 owning
+  Project 分区的 threadId preference list 持久化本机 Sidebar 顺序；未知项按稳定投影追加、
+  移除项忽略，且排序不改变 cwd、Project identity、Thread state 或 canonical ItemList。
 - **ZenXCredentialVault** — ZenX 通过操作系统安全存储保护的 Provider credential
   存放点；解密后的 secret 只在主进程内存中交给 host，绝不进入 renderer、进程环境、
   App Server 协议或 canonical ItemList。

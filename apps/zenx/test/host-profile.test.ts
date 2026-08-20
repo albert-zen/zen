@@ -27,6 +27,7 @@ const profile = {
   lastUsedWorkspace: null,
   approvalPolicy: "always" as const,
   pinnedThreadIds: [],
+  sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
 };
 
 test("round-trips credential-free host settings and builds the ModelCatalog config", async () => {
@@ -81,6 +82,7 @@ test("defaults legacy profiles to the independent Luna title model", () => {
     workspaces: _workspaces,
     lastUsedWorkspace: _lastUsedWorkspace,
     pinnedThreadIds: _pinnedThreadIds,
+    sidebarOrder: _sidebarOrder,
     ...legacy
   } = profile;
   const validated = validateHostProfile(legacy);
@@ -88,6 +90,10 @@ test("defaults legacy profiles to the independent Luna title model", () => {
   assert.deepEqual(validated.workspaces, [path.resolve(profile.workspace)]);
   assert.equal(validated.lastUsedWorkspace, null);
   assert.deepEqual(validated.pinnedThreadIds, []);
+  assert.deepEqual(validated.sidebarOrder, {
+    projectKeys: [],
+    threadIdsByProject: {},
+  });
 });
 
 test("reports a corrupt persisted host profile instead of silently replacing it", async () => {

@@ -6,6 +6,8 @@ import {
   deriveInboxSections,
   derivePinnedThreads,
   deriveProjectGroups,
+  moveSidebarProject,
+  moveSidebarThread,
   projectThreadStartParams,
   readSidebarMode,
   startProjectThread,
@@ -15,6 +17,7 @@ import {
   threadTitle,
   writeSidebarMode,
 } from "../src/renderer/src/thread-list.js";
+import type { ZenXSidebarOrder } from "../src/main/host-profile.js";
 
 test("persists the selected sidebar mode and defaults invalid values to projects", () => {
   const values = new Map<string, string>();
@@ -113,6 +116,111 @@ test("groups native summaries only by current cwd", () => {
       ["zen", ["zen-a"]],
       ["Unavailable journals", ["broken"]],
     ],
+  );
+});
+
+test("reconciles persisted Project and per-Project Thread preferences with current stable order", () => {
+  const preference: ZenXSidebarOrder = {
+    projectKeys: ["/removed", "/work/b"],
+    threadIdsByProject: {
+      "/work/b": ["removed-thread", "b-old"],
+    },
+  };
+  const projection = {
+    projects: [
+      project("/work/a", ["a-new"]),
+      project("/work/b", ["b-new", "b-old"]),
+      project("/work/c", ["c-new"]),
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  };
+
+  const groups = deriveProjectGroups(
+    [
+      summary("a-new", "idle", 40, "/work/a"),
+      summary("b-new", "idle", 30, "/work/b"),
+      summary("b-old", "idle", 20, "/work/b"),
+      summary("c-new", "idle", 10, "/work/c"),
+    ],
+    projection,
+    preference,
+  );
+
+  assert.deepEqual(
+    groups.map((group) => [
+      group.key,
+      group.threads.map((thread) => thread.threadId),
+    ]),
+    [
+      ["/work/b", ["b-old", "b-new"]],
+      ["/work/a", ["a-new"]],
+      ["/work/c", ["c-new"]],
+    ],
+  );
+});
+
+test("moves Threads only inside their owning Project without changing membership", () => {
+  const projection = {
+    projects: [project("/work/a", ["a-1", "a-2"]), project("/work/b", ["b-1"])],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  };
+  const threads = [
+    summary("a-1", "active", 30, "/work/a"),
+    summary("a-2", "idle", 20, "/work/a"),
+    summary("b-1", "idle", 10, "/work/b"),
+  ];
+  const initial: ZenXSidebarOrder = {
+    projectKeys: [],
+    threadIdsByProject: {},
+  };
+
+  const rejected = moveSidebarThread(
+    initial,
+    threads,
+    projection,
+    "/work/a",
+    "a-1",
+    "/work/b",
+    "b-1",
+    "before",
+  );
+  assert.equal(rejected, initial);
+
+  const moved = moveSidebarThread(
+    initial,
+    threads,
+    projection,
+    "/work/a",
+    "a-2",
+    "/work/a",
+    "a-1",
+    "before",
+  );
+  assert.deepEqual(moved.threadIdsByProject, {
+    "/work/a": ["a-2", "a-1"],
+  });
+  assert.equal(threads[0]!.status, "active");
+  assert.equal(threads[0]!.currentMetadata.cwd, "/work/a");
+});
+
+test("moves Projects globally while retaining per-Project Thread preferences", () => {
+  const projection = {
+    projects: [project("/work/a", []), project("/work/b", [])],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  };
+  const initial: ZenXSidebarOrder = {
+    projectKeys: [],
+    threadIdsByProject: { "/work/a": ["a-2", "a-1"] },
+  };
+  assert.deepEqual(
+    moveSidebarProject(initial, projection, "/work/b", "/work/a", "before"),
+    {
+      projectKeys: ["/work/b", "/work/a"],
+      threadIdsByProject: initial.threadIdsByProject,
+    },
   );
 });
 
@@ -277,5 +385,15 @@ function broken(threadId: string): NativeThreadSummary {
     preview: "",
     status: "systemError",
     error: "journal failed",
+  };
+}
+
+function project(key: string, threadIds: string[]) {
+  return {
+    key,
+    workspace: key,
+    configured: true,
+    isDefault: false,
+    threadIds,
   };
 }

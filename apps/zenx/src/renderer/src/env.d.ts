@@ -14,6 +14,7 @@ import type {
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  ZenXSidebarOrder,
   ZenXSettingsUpdate,
 } from "../../main/host-profile.js";
 import type {
@@ -92,6 +93,7 @@ declare global {
         setPinnedThreadIds(
           threadIds: readonly string[],
         ): Promise<PublicHostSettings>;
+        setSidebarOrder(order: ZenXSidebarOrder): Promise<PublicHostSettings>;
         getDirectoryBrowser(): Promise<DirectoryBrowserSnapshot>;
         listDirectory(directory: string): Promise<DirectoryListing>;
         loginSubscription(): Promise<PublicHostSettings>;

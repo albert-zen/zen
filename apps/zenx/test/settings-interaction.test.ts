@@ -30,6 +30,7 @@ const settings: PublicHostSettings = {
     lastUsedWorkspace: "/work/zen",
     approvalPolicy: "never",
     pinnedThreadIds: [],
+    sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   },
   hasApiKey: false,
   subscription: { authenticated: false, expired: false },
