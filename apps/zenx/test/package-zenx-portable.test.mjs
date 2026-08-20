@@ -26,13 +26,18 @@ import {
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
 
-test("uses the production ICNS only for the packaged macOS application", () => {
+test("uses production platform icons only for packaged applications", () => {
   assert.equal(
     path.basename(applicationIconForPlatform("darwin", "app")),
     "zenx.icns",
   );
   assert.equal(applicationIconForPlatform("darwin", "smoke"), undefined);
-  assert.equal(applicationIconForPlatform("win32", "app"), undefined);
+  assert.equal(
+    path.basename(applicationIconForPlatform("win32", "app")),
+    "zenx.ico",
+  );
+  assert.equal(applicationIconForPlatform("win32", "smoke"), undefined);
+  assert.equal(applicationIconForPlatform("linux", "app"), undefined);
 });
 
 test("copies packaged provider symlinks verbatim into the platform resources directory", async () => {
