@@ -21,6 +21,8 @@ const PROGRAM_QUIESCENCE_PASSES = 2;
 const PROGRAM_QUIESCENCE_POLL_MS = 40;
 const MAX_PROGRAM_STDERR_BYTES = 8 * 1_024;
 const PROCESS_TABLE_TIMEOUT_MS = process.platform === "win32" ? 4_000 : 750;
+const MAX_PROCESS_TABLE_BYTES = 128 * 1_024;
+const WINDOWS_IDENTITY_TERMINATION_TIMEOUT_MS = 4_000;
 
 export interface TriggerProgramRunInput {
   invocationId: string;
@@ -171,14 +173,22 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
                 };
           return forced;
         });
-        const terminationResult = await withDeadline(
-          containment,
-          PROGRAM_FORCE_SETTLEMENT_MS,
-          {
+        let terminationResult: TerminationResult;
+        try {
+          terminationResult = await withDeadline(
+            containment,
+            PROGRAM_FORCE_SETTLEMENT_MS,
+            {
+              ok: false,
+              error: "bounded process-tree termination deadline expired",
+            },
+          );
+        } catch (error) {
+          terminationResult = {
             ok: false,
-            error: "bounded process-tree termination deadline expired",
-          },
-        );
+            error: `process-tree termination failed: ${describeError(error)}`,
+          };
+        }
         if (settled || requested === null) return;
         if (terminationResult.ok) finish(requested);
         else
@@ -196,21 +206,24 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         requested = value;
         stopCollection();
         child.stdin.destroy();
-        const treeAtTermination = captureProcessTree(child.pid).catch(
-          () => undefined,
+        const treeAtTermination = captureProcessTree(child.pid).then(
+          (tree) => ({ tree, error: null }),
+          (error: unknown) => ({
+            tree: undefined,
+            error: describeError(error),
+          }),
         );
-        termination = treeAtTermination.then(async (tree) => {
-          if (tree !== undefined) {
-            capturedTree = tree;
-            return await terminateProcessTree(child, false, tree);
+        termination = treeAtTermination.then(async (snapshot) => {
+          if (snapshot.tree !== undefined) {
+            capturedTree = snapshot.tree;
+            return await terminateProcessTree(child, false, snapshot.tree);
           }
           await terminateProcessTree(child, false);
           const exited = await verifyExitedChild(child);
           if (exited.ok) return exited;
           return {
             ok: false as const,
-            error:
-              "process-tree snapshot unavailable; containment was not proven",
+            error: `process-tree snapshot unavailable: ${snapshot.error ?? "unknown discovery failure"}; containment was not proven`,
           };
         });
         forceTimer = setTimeout(() => {
@@ -394,9 +407,8 @@ export interface WindowsProcessTreeSnapshot {
 
 export interface WindowsProcessOperations {
   captureProcessTable(): Promise<WindowsProcessTableSnapshot>;
-  runTaskkill(
-    pid: number,
-    tree: boolean,
+  terminateProcessIdentity(
+    expected: WindowsProcessIdentity,
   ): Promise<{ ok: boolean; error: string }>;
 }
 
@@ -519,7 +531,12 @@ export async function verifyAndTerminateWindowsProcessTree(
   let firstPass = true;
   while (firstPass || Date.now() < deadline) {
     firstPass = false;
-    const table = await operations.captureProcessTable();
+    let table: WindowsProcessTableSnapshot;
+    try {
+      table = await operations.captureProcessTable();
+    } catch (error) {
+      return processTableDiscoveryFailure(error);
+    }
     tracked = addWindowsDescendants(tracked, table.entries);
     const unknownIdentity = tracked.find(
       (identity) => identity.startTime === null,
@@ -543,13 +560,7 @@ export async function verifyAndTerminateWindowsProcessTree(
       stableAbsentPasses = 0;
       for (const identity of live) {
         if (Date.now() >= deadline) return quiescenceDeadlineFailure();
-        const freshTable = await operations.captureProcessTable();
-        const current = freshTable.entries.find(
-          (candidate) => candidate.pid === identity.pid,
-        );
-        if (!identityMatches(identity, current)) continue;
-        if (Date.now() >= deadline) return quiescenceDeadlineFailure();
-        const termination = await operations.runTaskkill(identity.pid, true);
+        const termination = await operations.terminateProcessIdentity(identity);
         if (!termination.ok && termination.error !== "process was not found")
           return {
             ok: false,
@@ -580,9 +591,9 @@ function boundedDuration(value: number | undefined, maximum: number): number {
   return Math.min(maximum, Math.max(0, Math.floor(value)));
 }
 
-const realWindowsProcessOperations: WindowsProcessOperations = {
+export const realWindowsProcessOperations: WindowsProcessOperations = {
   captureProcessTable,
-  runTaskkill,
+  terminateProcessIdentity: terminateWindowsProcessIdentity,
 };
 
 async function verifyAndTerminatePosix(
@@ -593,7 +604,12 @@ async function verifyAndTerminatePosix(
   const deadline = Date.now() + PROGRAM_QUIESCENCE_TIMEOUT_MS;
   let tracked = [tree.root, ...tree.descendants];
   while (Date.now() < deadline) {
-    const table = await captureProcessTable();
+    let table: ProcessTableSnapshot;
+    try {
+      table = await captureProcessTable();
+    } catch (error) {
+      return processTableDiscoveryFailure(error);
+    }
     const beforeExpansion = validateTrackedIdentities(tracked, table.entries);
     if (beforeExpansion !== null) return { ok: false, error: beforeExpansion };
     tracked = addDescendants(tracked, table.entries);
@@ -640,6 +656,13 @@ async function verifyAndTerminatePosix(
     ok: false,
     error:
       "process-tree quiescence could not be proven before the bounded deadline",
+  };
+}
+
+function processTableDiscoveryFailure(error: unknown): TerminationResult {
+  return {
+    ok: false,
+    error: `process-table discovery failed: ${describeError(error)}`,
   };
 }
 
@@ -751,15 +774,111 @@ function windowsIdentityPredates(
   return BigInt(identity.startTime) < BigInt(other.startTime);
 }
 
-async function runTaskkill(
-  pid: number,
-  tree: boolean,
-): Promise<{ ok: boolean; error: string }> {
+export async function terminateWindowsProcessIdentity(
+  expected: WindowsProcessIdentity,
+  // Test-only handshake for the real adapter's exit-after-match fixture.
+  identityMatchedFixture?: () => void | Promise<void>,
+): Promise<TerminationResult> {
+  if (expected.startTime === null || !/^\d+$/u.test(expected.startTime))
+    return {
+      ok: false,
+      error: `PID ${String(expected.pid)} has unknown process identity`,
+    };
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class ZenXExpectedProcessTermination
+{
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CloseHandle(IntPtr handle);
+}
+'@
+
+function Test-ProcessExited([IntPtr]$process, [string]$context) {
+  $wait = [ZenXExpectedProcessTermination]::WaitForSingleObject($process, 0)
+  if ($wait -eq 0) { return $true }
+  if ($wait -eq 258) { return $false }
+  if ($wait -eq [UInt32]::MaxValue) {
+    $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    throw "WaitForSingleObject ($context) failed with Win32 error $code"
+  }
+  throw "WaitForSingleObject ($context) returned unexpected status $wait"
+}
+
+# PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+$handle = [ZenXExpectedProcessTermination]::OpenProcess(0x101001, $false, ${String(expected.pid)})
+if ($handle -eq [IntPtr]::Zero) {
+  $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+  if ($code -eq 87 -or $code -eq 1168) { exit 3 }
+  throw "OpenProcess failed with Win32 error $code"
+}
+
+$matched = $false
+try {
+  $expectedStartTime = [Int64]::Parse('${expected.startTime}')
+  $creation = 0L
+  $exit = 0L
+  $kernel = 0L
+  $user = 0L
+  if (![ZenXExpectedProcessTermination]::GetProcessTimes($handle, [ref]$creation, [ref]$exit, [ref]$kernel, [ref]$user)) {
+    $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    throw "GetProcessTimes failed with Win32 error $code"
+  }
+  $actualStartTime = ([DateTime]::FromFileTimeUtc($creation)).Ticks
+  # CIM datetime exposes microseconds while FILETIME exposes 100-nanosecond ticks.
+  $actualStartTime -= $actualStartTime % 10
+  if ($actualStartTime -eq $expectedStartTime) {
+    $matched = $true
+${
+  identityMatchedFixture === undefined
+    ? ""
+    : `    [Console]::Out.WriteLine('ZENX_IDENTITY_MATCHED')
+    [Console]::Out.Flush()
+    if ([Console]::In.ReadLine() -ne 'continue') {
+      throw "identity-match fixture did not continue"
+    }
+`
+}    if (!(Test-ProcessExited $handle 'before termination')) {
+      if (![ZenXExpectedProcessTermination]::TerminateProcess($handle, 1)) {
+        $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        if (!(Test-ProcessExited $handle 'after TerminateProcess failure')) {
+          throw "TerminateProcess failed with Win32 error $code"
+        }
+      }
+    }
+  }
+} finally {
+  [void][ZenXExpectedProcessTermination]::CloseHandle($handle)
+}
+if (!$matched) { exit 3 }
+`;
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
   return await new Promise((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let killer: ReturnType<typeof spawn> | undefined;
-    const finish = (value: { ok: boolean; error: string }): void => {
+    let stderr = "";
+    let stdout = "";
+    let identityHookStarted = false;
+    const finish = (value: TerminationResult): void => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
@@ -767,18 +886,54 @@ async function runTaskkill(
     };
     try {
       killer = spawn(
-        "taskkill",
-        tree ? ["/PID", String(pid), "/T", "/F"] : ["/PID", String(pid), "/F"],
-        { windowsHide: true, stdio: "ignore" },
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+        {
+          windowsHide: true,
+          stdio:
+            identityMatchedFixture === undefined
+              ? ["ignore", "ignore", "pipe"]
+              : ["pipe", "pipe", "pipe"],
+        },
       );
+      killer.stderr?.setEncoding("utf8");
+      killer.stderr?.on("data", (chunk: string) => {
+        if (stderr.length < MAX_PROGRAM_STDERR_BYTES) stderr += chunk;
+      });
+      if (identityMatchedFixture !== undefined) {
+        killer.stdout?.setEncoding("utf8");
+        killer.stdout?.on("data", (chunk: string) => {
+          if (identityHookStarted) return;
+          stdout += chunk;
+          if (!stdout.includes("ZENX_IDENTITY_MATCHED")) return;
+          identityHookStarted = true;
+          void Promise.resolve()
+            .then(identityMatchedFixture)
+            .then(
+              () => {
+                if (!settled) killer?.stdin?.end("continue\n");
+              },
+              (error: unknown) => {
+                killer?.kill("SIGKILL");
+                finish({
+                  ok: false,
+                  error: `identity-match fixture failed: ${describeError(error)}`,
+                });
+              },
+            );
+        });
+      }
     } catch (error) {
       finish({ ok: false, error: describeError(error) });
       return;
     }
     timer = setTimeout(() => {
       killer?.kill("SIGKILL");
-      finish({ ok: false, error: "taskkill timed out" });
-    }, 750);
+      finish({
+        ok: false,
+        error: `PID ${String(expected.pid)} identity-aware termination timed out`,
+      });
+    }, WINDOWS_IDENTITY_TERMINATION_TIMEOUT_MS);
     killer.once("error", (error: unknown) =>
       finish({ ok: false, error: describeError(error) }),
     );
@@ -786,9 +941,14 @@ async function runTaskkill(
       finish(
         code === 0
           ? { ok: true, error: "" }
-          : code === 128
+          : code === 3
             ? { ok: false, error: "process was not found" }
-            : { ok: false, error: `taskkill exited with code ${String(code)}` },
+            : {
+                ok: false,
+                error:
+                  boundedError(stderr) ??
+                  `identity-aware termination exited with code ${String(code)}`,
+              },
       ),
     );
   });
@@ -832,7 +992,9 @@ async function captureProcessTable(): Promise<ProcessTableSnapshot> {
         : // Darwin ps has no sid= keyword; session identity is not used here.
           ["-axo", "pid=,ppid=,pgid=,lstart="];
   const output = await new Promise<string>((resolve, reject) => {
-    let text = "";
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let overflowed = false;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let processHandle: ReturnType<typeof spawn> | undefined;
@@ -841,16 +1003,23 @@ async function captureProcessTable(): Promise<ProcessTableSnapshot> {
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
       if (error !== null) reject(error);
-      else resolve(text);
+      else if (overflowed)
+        reject(new Error("process-table snapshot exceeded its 128 KiB bound"));
+      else resolve(Buffer.concat(chunks).toString("utf8"));
     };
     try {
       processHandle = spawn(command, args, {
         windowsHide: true,
         stdio: ["ignore", "pipe", "ignore"],
       });
-      processHandle.stdout?.setEncoding("utf8");
-      processHandle.stdout?.on("data", (chunk: string) => {
-        if (text.length < 128 * 1024) text += chunk;
+      processHandle.stdout?.on("data", (chunk: Buffer | string) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        if (bytes + buffer.length > MAX_PROCESS_TABLE_BYTES) {
+          overflowed = true;
+          return;
+        }
+        bytes += buffer.length;
+        chunks.push(buffer);
       });
       processHandle.once("error", (error: unknown) =>
         finish(new Error(describeError(error))),
@@ -876,8 +1045,10 @@ function parseWindowsProcessTable(output: string): ProcessTableSnapshot {
   const entries: ProcessIdentity[] = [];
   for (const line of output.split(/\r?\n/u)) {
     const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
     const match = trimmed.match(/^(\d+)\|(\d+)\|(\d+)$/u);
-    if (match === null) continue;
+    if (match === null)
+      throw new Error("Windows process-table snapshot was incomplete");
     entries.push({
       pid: Number(match[1]!),
       parentPid: Number(match[2]!),
@@ -895,10 +1066,12 @@ function parsePosixProcessTable(
 ): ProcessTableSnapshot {
   const entries: ProcessIdentity[] = [];
   for (const line of output.split(/\r?\n/u)) {
+    if (line.trim().length === 0) continue;
     const match = includesSessionId
       ? line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/u)
       : line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/u);
-    if (match === null) continue;
+    if (match === null)
+      throw new Error("POSIX process-table snapshot was incomplete");
     entries.push({
       pid: Number(match[1]!),
       parentPid: Number(match[2]!),
@@ -915,7 +1088,7 @@ async function withDeadline<T>(
   milliseconds: number,
   fallback: T,
 ): Promise<T> {
-  return await new Promise<T>((resolve) => {
+  return await new Promise<T>((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
@@ -929,11 +1102,11 @@ async function withDeadline<T>(
         clearTimeout(timer);
         resolve(value);
       },
-      () => {
+      (error: unknown) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve(fallback);
+        reject(error);
       },
     );
   });

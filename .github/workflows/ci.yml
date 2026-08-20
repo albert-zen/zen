@@ -88,6 +88,8 @@ jobs:
       - name: Report WinApp CLI version
         run: winapp --version
       - run: npm ci
+      - name: Exercise trigger process containment on Windows
+        run: npm --workspace apps/zenx exec -- tsx --test test/trigger-program-runner.test.ts
       - run: npm --workspace apps/zenx run smoke:windows-computer
 
   zenx-windows-packaged-provider-smoke:
