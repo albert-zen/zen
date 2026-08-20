@@ -1189,6 +1189,69 @@ test("waits for a terminal predecessor handle to settle before starting its succ
   if (outcome.status === "fulfilled") await outcome.value.done;
 });
 
+test("does not let a rejected terminal predecessor handle reject successor admission", async () => {
+  const predecessorTerminal = testDeferred<void>();
+  const releasePredecessor = testDeferred<void>();
+  let runs = 0;
+  class RejectedSettlementRuntime extends AgentRuntime {
+    override async runTurn(options: RunTurnOptions): Promise<void> {
+      await super.runTurn(options);
+      runs += 1;
+      if (runs !== 1) return;
+      predecessorTerminal.resolve();
+      await releasePredecessor.promise;
+      throw new Error("fixture rejection after canonical terminal");
+    }
+  }
+  const runtime = new RejectedSettlementRuntime({
+    model: new FakeModel(),
+    tools: new ShellToolExecutor(),
+  });
+  const server = createServer({ runtime });
+  const thread = await server.startThread();
+  const predecessor = await server.startTurn(thread.id, "first");
+  await testWithin(
+    predecessorTerminal.promise,
+    "predecessor canonical terminal Item before rejected settlement",
+  );
+  assert.equal(
+    (await server.readThread(thread.id)).turns[0]?.status,
+    "completed",
+  );
+
+  let earlyOutcome:
+    | PromiseSettledResult<Awaited<ReturnType<typeof server.startTurn>>>
+    | undefined;
+  const successorOutcome = server.startTurn(thread.id, "second").then(
+    (value) => ({ status: "fulfilled", value }) as const,
+    (reason: unknown) => ({ status: "rejected", reason }) as const,
+  );
+  void successorOutcome.then((outcome) => {
+    earlyOutcome = outcome;
+  });
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      earlyOutcome,
+      undefined,
+      "successor launch must wait while the terminal predecessor handle settles",
+    );
+  } finally {
+    releasePredecessor.resolve();
+  }
+
+  await assert.rejects(
+    predecessor.done,
+    /fixture rejection after canonical terminal/u,
+  );
+  const outcome = await testWithin(
+    successorOutcome,
+    "successor launch after rejected predecessor settlement",
+  );
+  assert.equal(outcome.status, "fulfilled");
+  if (outcome.status === "fulfilled") await outcome.value.done;
+});
+
 test("deduplicates concurrent cold thread loads before starting a turn", async () => {
   const backing = new InMemoryThreadJournal();
   const threadId = "cold_thread";

@@ -387,7 +387,9 @@ export class ZenAppServer {
         // A terminal Item is externally observable before the execution
         // handle's finalizer removes it. Preserve idle => startable semantics
         // by awaiting that exact predecessor instead of racing its finalizer.
-        await predecessor.done;
+        // The predecessor's caller owns its outcome; admission needs only
+        // outcome-neutral writer quiescence after canonical terminal state.
+        await Promise.allSettled([predecessor.done]);
       }
       const pendingReplacement = this.#pendingReplacement(thread);
       if (
