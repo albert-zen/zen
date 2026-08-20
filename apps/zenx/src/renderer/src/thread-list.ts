@@ -3,7 +3,6 @@ import type { Thread } from "../../protocol-client/index.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 
 export type SidebarMode = "inbox" | "projects";
-export type ThreadScope = "active" | "archived";
 
 interface SidebarStorage {
   getItem(key: string): string | null;
@@ -27,7 +26,22 @@ export interface ProjectGroup {
 
 export interface ThreadModelIdentity {
   label: string;
-  providerKind: "openai" | "anthropic" | "google" | "local" | "generic";
+  providerKind: "openai" | "deepseek" | "qwen" | "local" | "generic";
+}
+
+export function derivePinnedThreads(
+  threads: readonly NativeThreadSummary[],
+  pinnedThreadIds: readonly string[],
+): NativeThreadSummary[] {
+  const activeById = new Map(
+    threads
+      .filter((thread) => !thread.archived)
+      .map((thread) => [thread.threadId, thread] as const),
+  );
+  return pinnedThreadIds.flatMap((threadId) => {
+    const thread = activeById.get(threadId);
+    return thread === undefined ? [] : [thread];
+  });
 }
 
 export function lastUsedProjectWorkspace(
@@ -74,21 +88,6 @@ export function writeSidebarMode(
   mode: SidebarMode,
 ): void {
   storage.setItem("zenx-sidebar-mode", mode);
-}
-
-export function readThreadScope(
-  storage: Pick<SidebarStorage, "getItem">,
-): ThreadScope {
-  return storage.getItem("zenx-thread-scope") === "archived"
-    ? "archived"
-    : "active";
-}
-
-export function writeThreadScope(
-  storage: Pick<SidebarStorage, "setItem">,
-  scope: ThreadScope,
-): void {
-  storage.setItem("zenx-thread-scope", scope);
 }
 
 export function threadHasActiveTurn(
@@ -230,10 +229,10 @@ export function threadModelIdentity(
   const providerKind =
     provider.includes("openai") || /^gpt-/iu.test(model)
       ? "openai"
-      : provider.includes("anthropic") || /^claude/iu.test(model)
-        ? "anthropic"
-        : provider.includes("google") || /^gemini/iu.test(model)
-          ? "google"
+      : provider.includes("deepseek") || /^deepseek/iu.test(model)
+        ? "deepseek"
+        : provider.includes("qwen") || /^qwen/iu.test(model)
+          ? "qwen"
           : provider.includes("local")
             ? "local"
             : "generic";

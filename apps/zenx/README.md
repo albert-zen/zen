@@ -1,28 +1,25 @@
 # ZenX
 
-## Desktop shell policy
+ZenX is Zen's in-development Electron product. Its main process hosts the same
+App Server used by the CLI and keeps desktop-only configuration and
+orchestration outside Zen Core.
+
+## UI/UX decisions
+
+Current UI/UX product rules are maintained only in [docs/ui-ux.md](docs/ui-ux.md).
+
+## Runtime boundaries
 
 Projects are ZenX host-profile workspace entries grouped with ZAS native Thread
 `cwd` by canonical filesystem identity; symlink/junction aliases share one
 Project while the configured user-selected path remains its display path. The
 projection resolves the nearest existing ancestor asynchronously and falls back
 to the lexical absolute path when realpath is unavailable, so missing or denied
-paths remain usable. Projects are not Core runtime objects. Add Project uses
-ZenX's read-only directory picker. Removing an entry only changes the host
-profile and never deletes the directory, its files, or Thread journals.
-New Thread always carries an explicit configured Project `cwd`. The top-level
-action reuses the last Project used for a Thread; if that record is missing or
-the Project was removed, ZenX asks the user to choose and never falls back to
-Documents or the process working directory.
-
-Packaged Windows and Linux builds install no application menu, removing
-Electron's default File/Edit/View/Window strip. macOS keeps a minimal native
-application, edit, and window menu so standard system roles and text editing
-shortcuts remain available; ZenX product navigation stays in the renderer.
-
-ZenX is Zen's in-development Electron client. It hosts the same App Server used
-by the CLI and keeps desktop-only configuration and orchestration outside Zen
-Core.
+paths remain usable. It publishes configuration refreshes latest-wins and
+re-canonicalizes immutable per-operation snapshots, so filesystem identity may
+recover or change without becoming a permanently cached Project key. Projects
+are not Core runtime objects. Removing an entry only changes the host profile
+and never deletes the directory, its files, or Thread journals.
 
 Thread list product data is defined by ZAS's native `ThreadSummary` /
 `CurrentMetadata` read model. Electron main queries it through the existing
@@ -30,14 +27,6 @@ host-local process boundary and preload exposes a typed IPC method. Codex Thread
 DTOs remain compatibility-only protocol types; they do not define ZenX's product
 model. The renderer and Agent self-control consume the same main-process Project
 projection instance.
-
-The renderer offers explicit Active and Archived Thread views. Active Threads
-can be renamed or archived, and archived Threads can be opened and unarchived.
-These actions use `thread/name/set`, `thread/archive`, and `thread/unarchive`
-through the existing App Server client; the renderer never reads journals or
-keeps a second Thread model. Archive is the reversible alternative to deletion.
-The UI disables Archive while a Turn is active, reports query and mutation
-failures in place, and leaves the running Turn and its settings unchanged.
 
 ## Run
 
@@ -58,10 +47,13 @@ a single-file executable. It is written below
 together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
 Linux.
 
-Each packaging command assembles resources and runs Electron packager in its
-own `.packaged/runs/` directory, reusing only SHA-256-addressed verified archive
-cache files. A completed directory replaces the stable artifact under a
-per-target lock; a concurrent command for the same target fails explicitly.
+Each packaging command builds a private output snapshot, assembles resources,
+and runs Electron packager in its own `.packaged/runs/` directory, reusing only
+SHA-256-addressed verified archive cache files. The Playwright browser archive
+is pinned per platform in the same provider lock and its complete extracted
+payload is covered by the final manifest. A completed directory replaces the
+stable artifact under a per-target lock; a concurrent command for the same
+target fails explicitly.
 
 The development package identity remains `@zen/zenx`, while the portable
 runtime identity is `zenx` and its packager product/display name is `ZenX`.
@@ -74,25 +66,19 @@ Packaging does not migrate, delete, or redirect either profile. Pass
 `--user-data-dir=<new-path>` when you deliberately need an isolated profile for
 testing; never point that option at an existing browser or ZenX profile.
 
-The Windows packaged Project acceptance (`smoke:windows-projects`) launches
-the real packaged ZenX shell and drives Add Project, default selection,
-removal, and restart through a main-process acceptance hook that executes only
-when its explicit isolated config environment parameter is present. The main
-process consumes and removes that parameter before starting any child host. The
-hook uses the real renderer and IPC without opening a debug port, verifies the
-native application menu is absent, and confirms that removal preserves Project
-marker files.
+The Windows packaged Project acceptance (`smoke:windows-projects`) launches the
+real packaged ZenX shell and exercises the Project workspace lifecycle through a
+main-process acceptance hook that executes only when its explicit isolated
+config environment parameter is present. The main process consumes and removes
+that parameter before starting any child host. The hook uses the real renderer
+and IPC without opening a debug port and confirms that workspace removal
+preserves Project marker files.
 
-## Design reference
+## Host configuration
 
-The reviewed [high-fidelity prototype](prototypes/high-fidelity/README.md) is a
-static design and interaction reference with its own local preview instructions.
-It is not production renderer code, product architecture, runtime behavior, or
-build input.
-
-The first window is onboarding. Choose an OpenAI subscription, an
-OpenAI-compatible API provider, or the deterministic local demo. Saving restarts
-the local host; existing Thread model settings remain authoritative in ZAS.
+ZenX supports an OpenAI subscription, an OpenAI-compatible API provider, or the
+deterministic local demo. Applying relevant host-profile changes restarts the
+local host; existing Thread model settings remain authoritative in ZAS.
 
 Host profiles live under Electron `userData` without credentials. Compatible
 provider API keys are encrypted with Electron `safeStorage`; subscription OAuth
@@ -101,12 +87,10 @@ journals, App Server protocol history, or shell environment.
 
 ## Triggers and Rooms
 
-The per-Thread Trigger rail can register one-shot or recurring timers,
-`turn_completed` watches, Room mentions, and named signal conditions. `Scheduled`
-lists every active trigger, recent history, Rooms, and a renderer-IPC signal
-simulator for local testing. A hit persists an auditable occurrence with a stable
-client message ID, then starts a normal App Server Turn. Failures remain visible
-and are never silently retried.
+ZenX can register one-shot or recurring timers, `turn_completed` watches, Room
+mentions, and named signal conditions. A hit persists an auditable occurrence
+with a stable client message ID, then starts a normal App Server Turn. Failures
+remain visible and are never silently retried.
 
 The bundled `zenx-triggers` and `zenx-rooms` capability packages expose their
 own separately permissioned read and write tools for Trigger
@@ -132,11 +116,11 @@ snapshot rather than copying a second authoritative transcript.
 
 ## Capabilities
 
-ZenX owns a capability registry outside Zen Core. Settings shows every bundled
-or local package, its provider/platform metadata, requested permission scopes,
-tool capabilities and interaction mode, instruction resources, and recent
-in-memory audit projection. Granting or revoking a package restarts the local
-host so the Agent sees exactly the currently authorized tool definitions.
+ZenX owns a capability registry outside Zen Core. It records bundled or local
+package provider/platform metadata, requested permission scopes, tool
+capabilities and interaction mode, instruction resources, and a recent in-memory
+audit projection. Granting or revoking a package restarts the local host so the
+Agent sees exactly the currently authorized tool definitions.
 Capability grants, per-call approval, and the execution sandbox remain separate
 concepts. A host may impose a background-only execution policy without treating
 that restriction as a missing grant.
@@ -154,17 +138,17 @@ the last operation. Permission grants are retained and do not imply enablement.
 Tool-only packages are valid and simply contribute no UI.
 
 Triggers (`zenx-triggers`) and Rooms (`zenx-rooms`) are separate bundled
-packages over the existing Trigger/Room service. Each contributes one page and
-one Plugin-spaces Sidebar item. Disabling either package removes only its own
+packages over the existing Trigger/Room service. Each exposes only its own
+controlled product contributions. Disabling either package removes only its own
 projection and tools; the Trigger/Room data model and canonical Turn delivery
 remain unchanged.
 
 ### Bundled self-control provider
 
 The `zenx-self-control` package is a bundled, cross-platform,
-`background_safe` capability. It is hidden from the Agent until the existing
-Capabilities UI grants its workspace-read and local-device-control permissions;
-grant/revoke uses the same host restart behavior as every other package. Its
+`background_safe` capability. It is hidden from the Agent until its
+workspace-read and local-device-control permissions are granted; grant/revoke
+uses the same host restart behavior as every other package. Its
 provider-valid tools are `zenx_projects_list`, `zenx_threads_list`,
 `zenx_threads_create`, `zenx_threads_read`, `zenx_threads_status`,
 `zenx_threads_rename`, `zenx_threads_archive`, `zenx_threads_unarchive`, and
@@ -220,8 +204,9 @@ Inspection and action reuse authenticated page state in place, but only bounded
 visible text and opaque target IDs reach the Agent; cookies, storage state, auth
 headers, and credentials are never requested or returned. Closing a tab/session
 in this mode only detaches ZenX state, and closing ZenX only disconnects CDP; the
-user's tabs, browser process, storage, and profile remain intact. Settings labels
-browser provider diagnostics as `user-session` or `isolated-session`.
+user's tabs, browser process, storage, and profile remain intact. Host
+diagnostics identify the browser provider as `user-session` or
+`isolated-session`.
 One transient provider-local attachment-epoch boundary serializes every public
 request, including tab/session/backend close, and preserves bounded create/
 attach/enable/mutation/detach outcome evidence until closure is known. Inspect/
@@ -265,11 +250,11 @@ It also offers a reliable `foreground_required` baseline for
 global click/key/scroll through a private Swift/CGEvent helper. Arbitrary
 foreground text entry is omitted from this tracer bullet because an untargeted
 text tool cannot prove that the focused control is non-secret. Foreground
-tool names and the running card explicitly warn that the real pointer, keyboard,
-or focused application can be taken over; execution waits briefly so the user
-can press Stop, and cancellation terminates the helper. A background-safe action
-never falls back to foreground input: missing accessibility semantics is
-reported as unsupported/foreground-required.
+operations explicitly surface that the real pointer, keyboard, or focused
+application can be taken over; execution remains cancellable and cancellation
+terminates the helper. A background-safe action never falls back to foreground
+input: missing accessibility semantics is reported as
+unsupported/foreground-required.
 
 The macOS provider requires Accessibility permission; window capture also
 requires Screen Recording, and first-use helper compilation requires Apple
@@ -443,9 +428,9 @@ browser process and tabs alive without projecting cookie material.
 It does
 not run foreground takeover against the user's desktop; foreground execution
 and immediate pre-input cancellation are covered by provider/bridge tests. The
-2026-08-09 packaged Electron smoke also covered onboarding/host
-restart, Thread creation, Markdown rendering and copy affordances, the persistent
-Projects/Inbox toggle, Watching, and a real timer wakeup card.
+2026-08-09 packaged Electron smoke also covered onboarding/host restart, Thread
+creation, Markdown rendering and copy affordances, desktop navigation, Watching,
+and a real timer wakeup card.
 
 Still requiring user verification: a real OpenAI subscription OAuth grant, a
 real compatible-provider key/model, and multi-person Room wording in production

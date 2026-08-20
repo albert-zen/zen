@@ -4,8 +4,8 @@ import test from "node:test";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import {
   deriveInboxSections,
+  derivePinnedThreads,
   deriveProjectGroups,
-  readThreadScope,
   projectThreadStartParams,
   readSidebarMode,
   startProjectThread,
@@ -13,7 +13,6 @@ import {
   threadModelIdentity,
   threadPreview,
   threadTitle,
-  writeThreadScope,
   writeSidebarMode,
 } from "../src/renderer/src/thread-list.js";
 
@@ -28,19 +27,6 @@ test("persists the selected sidebar mode and defaults invalid values to projects
   assert.equal(readSidebarMode(storage), "inbox");
   values.set("zenx-sidebar-mode", "unexpected");
   assert.equal(readSidebarMode(storage), "projects");
-});
-
-test("persists Active or Archived without accepting unknown Thread scopes", () => {
-  const values = new Map<string, string>();
-  const storage = {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => values.set(key, value),
-  };
-  assert.equal(readThreadScope(storage), "active");
-  writeThreadScope(storage, "archived");
-  assert.equal(readThreadScope(storage), "archived");
-  values.set("zenx-thread-scope", "deleted");
-  assert.equal(readThreadScope(storage), "active");
 });
 
 test("derives inbox groups from native summary status", () => {
@@ -64,6 +50,19 @@ test("derives inbox groups from native summary status", () => {
       ["watching", ["watching"]],
       ["settled", ["settled"]],
     ],
+  );
+});
+
+test("projects local Pins in persisted order while filtering archived and missing Threads", () => {
+  const first = summary("first", "idle", 20);
+  const second = summary("second", "idle", 30);
+  const archived = { ...summary("archived", "idle", 40), archived: true };
+  assert.deepEqual(
+    derivePinnedThreads(
+      [first, second, archived],
+      ["second", "missing", "archived", "first"],
+    ).map((thread) => thread.threadId),
+    ["second", "first"],
   );
 });
 
@@ -232,6 +231,18 @@ test("shows only logo category and friendly model identity", () => {
     label: "Local demo",
     providerKind: "local",
   });
+  const deepseek = summary("deepseek", "idle", 20);
+  deepseek.currentMetadata.model = "deepseek-chat";
+  deepseek.currentMetadata.provider = "deepseek";
+  assert.equal(threadModelIdentity(deepseek)?.providerKind, "deepseek");
+  const qwen = summary("qwen", "idle", 20);
+  qwen.currentMetadata.model = "qwen-max";
+  qwen.currentMetadata.provider = "dashscope";
+  assert.equal(threadModelIdentity(qwen)?.providerKind, "qwen");
+  const unknown = summary("unknown", "idle", 20);
+  unknown.currentMetadata.model = "custom-model";
+  unknown.currentMetadata.provider = "private-provider";
+  assert.equal(threadModelIdentity(unknown)?.providerKind, "generic");
 });
 
 function summary(

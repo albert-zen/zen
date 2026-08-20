@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -52,6 +52,23 @@ test("POSIX project identity preserves case", async () => {
     await projectPathKey("/Work/Zen", "linux"),
     await projectPathKey("/work/zen", "linux"),
   );
+});
+
+test("Windows case aliases share one resolution per operation", async () => {
+  let resolutions = 0;
+  const projection = new ZenXProjectProjection("win32", async (candidate) => {
+    resolutions += 1;
+    return candidate;
+  });
+
+  await projection.updateConfiguration(
+    ["C:\\Work\\Zen"],
+    "c:\\work\\zen",
+    "C:\\WORK\\ZEN",
+  );
+  await projection.project([]);
+
+  assert.equal(resolutions, 2);
 });
 
 test("does not invent a Project when host configuration is empty", async () => {
@@ -163,6 +180,126 @@ test("falls back to the lexical absolute path when realpath is unavailable", asy
   assert.equal(snapshot.lastUsedWorkspace, workspace);
 });
 
+test("a slower obsolete configuration refresh cannot replace a newer one", async () => {
+  const slowWorkspace = path.resolve("slow-workspace");
+  const fastWorkspace = path.resolve("fast-workspace");
+  let announceSlow!: () => void;
+  const slowStarted = new Promise<void>((resolve) => {
+    announceSlow = resolve;
+  });
+  let releaseSlow!: () => void;
+  const slowGate = new Promise<void>((resolve) => {
+    releaseSlow = resolve;
+  });
+  const projection = new ZenXProjectProjection("linux", async (candidate) => {
+    if (candidate === slowWorkspace) {
+      announceSlow();
+      await slowGate;
+    }
+    return candidate;
+  });
+
+  const slow = projection.updateConfiguration([slowWorkspace], slowWorkspace);
+  await slowStarted;
+  await projection.updateConfiguration([fastWorkspace], fastWorkspace);
+  releaseSlow();
+  await slow;
+
+  const snapshot = await projection.project([]);
+  assert.deepEqual(
+    snapshot.projects.map((project) => project.workspace),
+    [fastWorkspace],
+  );
+});
+
+test("configuration, default, and last-used share one identity snapshot", async () => {
+  const alias = path.resolve("single-snapshot-alias");
+  const first = path.resolve("single-snapshot-first");
+  const retargeted = path.resolve("single-snapshot-retargeted");
+  let aliasResolutions = 0;
+  const projection = new ZenXProjectProjection("linux", async (candidate) => {
+    if (candidate !== alias) return candidate;
+    aliasResolutions += 1;
+    return aliasResolutions === 1 ? first : retargeted;
+  });
+
+  await projection.updateConfiguration([alias], alias, alias);
+  const snapshot = await projection.project([]);
+
+  assert.equal(snapshot.projects.length, 1);
+  assert.equal(snapshot.projects[0]?.workspace, alias);
+  assert.equal(snapshot.projects[0]?.isDefault, true);
+  assert.equal(snapshot.lastUsedWorkspace, alias);
+  assert.equal(aliasResolutions, 2);
+});
+
+test(
+  "POSIX missing paths reconcile after becoming symlink aliases",
+  { skip: process.platform === "win32" },
+  async () => await exerciseMissingAliasAppearance("dir"),
+);
+
+test(
+  "Windows missing paths reconcile after becoming junction aliases",
+  { skip: process.platform !== "win32" },
+  async () => await exerciseMissingAliasAppearance("junction"),
+);
+
+test(
+  "POSIX configured aliases follow retargeted filesystem identity",
+  { skip: process.platform === "win32" },
+  async () => await exerciseAliasRetarget("dir"),
+);
+
+test(
+  "Windows configured junctions follow retargeted filesystem identity",
+  { skip: process.platform !== "win32" },
+  async () => await exerciseAliasRetarget("junction"),
+);
+
+test("configured paths reconcile after realpath fallback recovers", async () => {
+  const alias = path.resolve("temporarily-unavailable-alias");
+  const physical = path.resolve("physical-after-recovery");
+  const permissionDenied = Object.assign(new Error("permission denied"), {
+    code: "EACCES",
+  });
+  let unavailable = true;
+  const projection = new ZenXProjectProjection("linux", async (candidate) => {
+    if (candidate === alias) {
+      if (unavailable) throw permissionDenied;
+      return physical;
+    }
+    return candidate;
+  });
+
+  await projection.updateConfiguration([alias], alias, alias);
+  unavailable = false;
+
+  const snapshot = await projection.project([
+    { id: "recovered-thread", cwd: physical },
+  ]);
+  assert.equal(snapshot.projects.length, 1);
+  assert.equal(snapshot.projects[0]?.workspace, alias);
+  assert.deepEqual(snapshot.projects[0]?.threadIds, ["recovered-thread"]);
+  assert.equal(await projection.configuredWorkspace(physical), alias);
+});
+
+test("nearest-ancestor resolution rechecks a path that appears mid-flight", async () => {
+  const alias = path.resolve("appearing-alias");
+  const physical = path.resolve("appearing-physical");
+  let missing = true;
+  const key = await projectPathKey(alias, "linux", async (candidate) => {
+    if (candidate === alias && missing) {
+      missing = false;
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    }
+    if (candidate === alias) return physical;
+    return candidate;
+  });
+
+  assert.equal(key, physical);
+});
+
 async function withAliasedDirectory(
   type: "dir" | "junction",
   run: (paths: { physical: string; alias: string }) => Promise<void>,
@@ -176,6 +313,59 @@ async function withAliasedDirectory(
     await mkdir(physical);
     await symlink(physical, alias, type);
     await run({ physical, alias });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+async function exerciseMissingAliasAppearance(
+  type: "dir" | "junction",
+): Promise<void> {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-project-missing-alias-"),
+  );
+  const physical = path.join(directory, "physical");
+  const alias = path.join(directory, "later-alias");
+  try {
+    await mkdir(physical);
+    const projection = new ZenXProjectProjection();
+    await projection.updateConfiguration([alias], alias);
+    await symlink(physical, alias, type);
+
+    const snapshot = await projection.project([
+      { id: "physical-thread", cwd: physical },
+    ]);
+    assert.equal(snapshot.projects.length, 1);
+    assert.equal(snapshot.projects[0]?.workspace, alias);
+    assert.deepEqual(snapshot.projects[0]?.threadIds, ["physical-thread"]);
+    assert.equal(await projection.configuredWorkspace(physical), alias);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+async function exerciseAliasRetarget(type: "dir" | "junction"): Promise<void> {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-project-retarget-"),
+  );
+  const first = path.join(directory, "first");
+  const second = path.join(directory, "second");
+  const alias = path.join(directory, "alias");
+  try {
+    await Promise.all([mkdir(first), mkdir(second)]);
+    await symlink(first, alias, type);
+    const projection = new ZenXProjectProjection();
+    await projection.updateConfiguration([alias], alias);
+    await unlink(alias);
+    await symlink(second, alias, type);
+
+    const snapshot = await projection.project([
+      { id: "retargeted-thread", cwd: second },
+    ]);
+    assert.equal(snapshot.projects.length, 1);
+    assert.equal(snapshot.projects[0]?.workspace, alias);
+    assert.deepEqual(snapshot.projects[0]?.threadIds, ["retargeted-thread"]);
+    assert.equal(await projection.configuredWorkspace(second), alias);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

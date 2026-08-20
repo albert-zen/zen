@@ -20,11 +20,19 @@ export interface ZenXProjectProjectionSnapshot {
   lastUsedWorkspace: string | null;
 }
 
-type ProjectRealpath = (candidate: string) => Promise<string>;
+export type ProjectRealpath = (candidate: string) => Promise<string>;
 
-interface ProjectPathIdentity {
-  displayPath: string;
-  key: string;
+export interface ProjectPathIdentity {
+  readonly displayPath: string;
+  readonly key: string;
+}
+
+export type ProjectPathSnapshot = readonly ProjectPathIdentity[];
+
+interface ProjectConfigurationSnapshot {
+  readonly workspaces: readonly string[];
+  readonly defaultWorkspace: string | null;
+  readonly lastUsedWorkspace: string | null;
 }
 
 const nodeProjectRealpath: ProjectRealpath = async (candidate) =>
@@ -34,9 +42,12 @@ const nodeProjectRealpath: ProjectRealpath = async (candidate) =>
 export class ZenXProjectProjection {
   readonly #platform: NodeJS.Platform;
   readonly #realpath: ProjectRealpath;
-  #workspaces: ProjectPathIdentity[] = [];
-  #defaultKey: string | null = null;
-  #lastUsedWorkspace: string | null = null;
+  #configuration: ProjectConfigurationSnapshot = Object.freeze({
+    workspaces: Object.freeze([]),
+    defaultWorkspace: null,
+    lastUsedWorkspace: null,
+  });
+  #configurationRevision = 0;
 
   constructor(
     platform: NodeJS.Platform = process.platform,
@@ -51,58 +62,88 @@ export class ZenXProjectProjection {
     defaultWorkspace: string | null,
     lastUsedWorkspace: string | null = null,
   ): Promise<void> {
+    const revision = ++this.#configurationRevision;
     const unique = new Map<string, ProjectPathIdentity>();
     const candidates =
       defaultWorkspace === null
         ? workspaces
         : [defaultWorkspace, ...workspaces];
-    for (const workspace of await Promise.all(
-      candidates.map(
-        async (candidate) =>
-          await projectPathIdentity(candidate, this.#platform, this.#realpath),
-      ),
-    )) {
+    const values = [
+      ...candidates,
+      ...(lastUsedWorkspace === null ? [] : [lastUsedWorkspace]),
+    ];
+    const identities = await this.#canonicalSnapshot(values);
+    const workspaceIdentities = identities.slice(0, candidates.length);
+    for (const workspace of workspaceIdentities) {
       if (!unique.has(workspace.key)) unique.set(workspace.key, workspace);
     }
-    const nextWorkspaces = [...unique.values()];
+    const nextWorkspaces = [...unique.values()].map(
+      (workspace) => workspace.displayPath,
+    );
     const nextDefaultKey =
-      defaultWorkspace === null
+      defaultWorkspace === null ? null : workspaceIdentities[0]?.key;
+    const nextDefaultWorkspace =
+      nextDefaultKey === null || nextDefaultKey === undefined
         ? null
-        : (
-            await projectPathIdentity(
-              defaultWorkspace,
-              this.#platform,
-              this.#realpath,
-            )
-          ).key;
+        : (unique.get(nextDefaultKey)?.displayPath ?? null);
+    const lastUsedIdentity =
+      lastUsedWorkspace === null ? undefined : identities.at(-1);
     const lastUsedKey =
-      lastUsedWorkspace === null
-        ? null
-        : (
-            await projectPathIdentity(
-              lastUsedWorkspace,
-              this.#platform,
-              this.#realpath,
-            )
-          ).key;
+      lastUsedWorkspace === null ? null : (lastUsedIdentity?.key ?? null);
     const nextLastUsedWorkspace =
       lastUsedKey === null
         ? null
-        : (nextWorkspaces.find((workspace) => workspace.key === lastUsedKey)
-            ?.displayPath ?? null);
-    this.#workspaces = nextWorkspaces;
-    this.#defaultKey = nextDefaultKey;
-    this.#lastUsedWorkspace = nextLastUsedWorkspace;
+        : (unique.get(lastUsedKey)?.displayPath ?? null);
+    if (revision !== this.#configurationRevision) return;
+    this.#configuration = Object.freeze({
+      workspaces: Object.freeze(nextWorkspaces),
+      defaultWorkspace: nextDefaultWorkspace,
+      lastUsedWorkspace: nextLastUsedWorkspace,
+    });
   }
 
   async project(
     threads: readonly ProjectProjectionThread[],
   ): Promise<ZenXProjectProjectionSnapshot> {
-    const configuredWorkspaces = this.#workspaces;
-    const defaultKey = this.#defaultKey;
-    const lastUsedWorkspace = this.#lastUsedWorkspace;
+    const configuration = this.#configuration;
+    const availableThreads = threads.filter(
+      (thread): thread is ProjectProjectionThread & { cwd: string } =>
+        thread.cwd !== null && thread.cwd.trim().length > 0,
+    );
+    const defaultIndex =
+      configuration.defaultWorkspace === null
+        ? undefined
+        : configuration.workspaces.length;
+    const lastUsedIndex =
+      configuration.lastUsedWorkspace === null
+        ? undefined
+        : configuration.workspaces.length +
+          (defaultIndex === undefined ? 0 : 1);
+    const threadOffset =
+      configuration.workspaces.length +
+      (defaultIndex === undefined ? 0 : 1) +
+      (lastUsedIndex === undefined ? 0 : 1);
+    const identities = await this.#canonicalSnapshot([
+      ...configuration.workspaces,
+      ...(configuration.defaultWorkspace === null
+        ? []
+        : [configuration.defaultWorkspace]),
+      ...(configuration.lastUsedWorkspace === null
+        ? []
+        : [configuration.lastUsedWorkspace]),
+      ...availableThreads.map((thread) => thread.cwd),
+    ]);
+    const configuredWorkspaces = identities.slice(
+      0,
+      configuration.workspaces.length,
+    );
+    const defaultKey =
+      defaultIndex === undefined
+        ? null
+        : (identities[defaultIndex]?.key ?? null);
     const projects = new Map<string, ZenXProjectProjectionEntry>();
     for (const workspace of configuredWorkspaces) {
+      if (projects.has(workspace.key)) continue;
       projects.set(workspace.key, {
         key: workspace.key,
         workspace: workspace.displayPath,
@@ -112,19 +153,15 @@ export class ZenXProjectProjection {
       });
     }
     const unavailableThreadIds: string[] = [];
-    const resolvedThreads = await Promise.all(
-      threads.map(async (thread) => ({
-        thread,
-        identity:
-          thread.cwd === null || thread.cwd.trim().length === 0
-            ? null
-            : await projectPathIdentity(
-                thread.cwd,
-                this.#platform,
-                this.#realpath,
-              ),
-      })),
-    );
+    let availableThreadIndex = 0;
+    const resolvedThreads = threads.map((thread) => {
+      if (thread.cwd === null || thread.cwd.trim().length === 0) {
+        return { thread, identity: null };
+      }
+      const identity = identities[threadOffset + availableThreadIndex] ?? null;
+      availableThreadIndex += 1;
+      return { thread, identity };
+    });
     for (const { thread, identity } of resolvedThreads) {
       if (identity === null) {
         unavailableThreadIds.push(thread.id);
@@ -140,26 +177,53 @@ export class ZenXProjectProjection {
       project.threadIds.push(thread.id);
       projects.set(identity.key, project);
     }
+    const lastUsedKey =
+      lastUsedIndex === undefined
+        ? null
+        : (identities[lastUsedIndex]?.key ?? null);
+    const resolvedLastUsedWorkspace =
+      lastUsedKey === null || !projects.get(lastUsedKey)?.configured
+        ? null
+        : (projects.get(lastUsedKey)?.workspace ?? null);
     return {
       projects: [...projects.values()].sort((left, right) =>
         left.workspace.localeCompare(right.workspace),
       ),
       unavailableThreadIds,
-      lastUsedWorkspace,
+      lastUsedWorkspace: resolvedLastUsedWorkspace,
     };
   }
 
   async configuredWorkspace(value: string): Promise<string | null> {
-    const key = await this.canonicalKey(value);
+    const configuration = this.#configuration;
+    const identities = await this.#canonicalSnapshot([
+      ...configuration.workspaces,
+      value,
+    ]);
+    const requested = identities.at(-1);
+    if (requested === undefined) return null;
     return (
-      this.#workspaces.find((workspace) => workspace.key === key)
-        ?.displayPath ?? null
+      identities
+        .slice(0, configuration.workspaces.length)
+        .find((workspace) => workspace.key === requested.key)?.displayPath ??
+      null
     );
   }
 
   async canonicalKey(value: string): Promise<string> {
-    return (await projectPathIdentity(value, this.#platform, this.#realpath))
-      .key;
+    return (await this.canonicalKeys([value]))[0]!;
+  }
+
+  async canonicalKeys(values: readonly string[]): Promise<readonly string[]> {
+    return Object.freeze(
+      (await this.#canonicalSnapshot(values)).map((identity) => identity.key),
+    );
+  }
+
+  async #canonicalSnapshot(
+    values: readonly string[],
+  ): Promise<ProjectPathSnapshot> {
+    return await projectPathSnapshot(values, this.#platform, this.#realpath);
   }
 }
 
@@ -168,7 +232,35 @@ export async function projectPathKey(
   platform: NodeJS.Platform = process.platform,
   resolveRealpath: ProjectRealpath = nodeProjectRealpath,
 ): Promise<string> {
-  return (await projectPathIdentity(value, platform, resolveRealpath)).key;
+  return (await projectPathSnapshot([value], platform, resolveRealpath))[0]!
+    .key;
+}
+
+export async function projectPathSnapshot(
+  values: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+  resolveRealpath: ProjectRealpath = nodeProjectRealpath,
+): Promise<ProjectPathSnapshot> {
+  const pathApi = platform === "win32" ? path.win32 : path;
+  const pending = new Map<string, Promise<string>>();
+  const identities = await Promise.all(
+    values.map(async (value) => {
+      const displayPath = pathApi.resolve(value);
+      const lexicalKey =
+        platform === "win32"
+          ? displayPath.toLocaleLowerCase("en-US")
+          : displayPath;
+      let key = pending.get(lexicalKey);
+      if (key === undefined) {
+        key = projectPathIdentity(displayPath, platform, resolveRealpath).then(
+          (identity) => identity.key,
+        );
+        pending.set(lexicalKey, key);
+      }
+      return Object.freeze({ displayPath, key: await key });
+    }),
+  );
+  return Object.freeze(identities);
 }
 
 async function projectPathIdentity(
@@ -181,6 +273,7 @@ async function projectPathIdentity(
   const unresolved: string[] = [];
   let cursor = displayPath;
   let canonicalPath: string | undefined;
+  let shouldRecheck = false;
 
   while (canonicalPath === undefined) {
     try {
@@ -190,6 +283,7 @@ async function projectPathIdentity(
       if (code !== "ENOENT" && code !== "ENOTDIR") {
         canonicalPath = displayPath;
         unresolved.length = 0;
+        shouldRecheck = true;
         break;
       }
       const parent = pathApi.dirname(cursor);
@@ -199,17 +293,27 @@ async function projectPathIdentity(
       }
       unresolved.unshift(pathApi.basename(cursor));
       cursor = parent;
+      shouldRecheck = true;
+    }
+  }
+
+  if (shouldRecheck) {
+    try {
+      canonicalPath = await resolveRealpath(displayPath);
+      unresolved.length = 0;
+    } catch {
+      // Keep the bounded first result; a later operation will canonicalize again.
     }
   }
 
   const physicalPath = pathApi.normalize(
     pathApi.join(canonicalPath, ...unresolved),
   );
-  return {
+  return Object.freeze({
     displayPath,
     key:
       platform === "win32"
         ? physicalPath.toLocaleLowerCase("en-US")
         : physicalPath,
-  };
+  });
 }

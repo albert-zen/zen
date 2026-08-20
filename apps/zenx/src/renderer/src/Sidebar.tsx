@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
@@ -6,6 +13,8 @@ import type { Thread } from "../../protocol-client/index.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
+import { ProviderLogo } from "./ProviderLogo.js";
+import { ZenXBrand } from "./ZenXBrand.js";
 import {
   deriveInboxSections,
   deriveProjectGroups,
@@ -14,7 +23,6 @@ import {
   threadProject,
   threadTitle,
   type SidebarMode,
-  type ThreadScope,
 } from "./thread-list.js";
 
 interface SidebarProps {
@@ -22,6 +30,7 @@ interface SidebarProps {
   open: boolean;
   onClose(): void;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onModeChange(mode: SidebarMode): void;
   onNewThread(workspace?: string): void;
   onAddProject(): void;
@@ -32,17 +41,17 @@ interface SidebarProps {
   onRetryThreads(): void;
   onRenameThread(threadId: string, title: string): Promise<void>;
   onSelectThread(threadId: string): void;
-  onThreadScopeChange(scope: ThreadScope): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   pluginContributions: readonly LoadedPluginContribution[];
   selectedPage: "agent" | "triggers" | "rooms" | "settings";
   selectedThreadId: string | null;
+  serverError?: boolean;
   serverReady: boolean;
   liveThread: Thread | null;
   threadError: string | null;
   threadLoading: boolean;
-  threadScope: ThreadScope;
   projects: ZenXProjectProjectionSnapshot;
+  pinnedThreads: readonly NativeThreadSummary[];
   threads: readonly NativeThreadSummary[];
   triggerSnapshot: TriggerSnapshot;
 }
@@ -52,6 +61,7 @@ export function Sidebar({
   open,
   onClose,
   onChangeThreadLifecycle,
+  onChangeThreadPinned,
   onModeChange,
   onNewThread,
   onAddProject,
@@ -62,17 +72,17 @@ export function Sidebar({
   onRetryThreads,
   onRenameThread,
   onSelectThread,
-  onThreadScopeChange,
   pendingApprovalThreadIds,
   pluginContributions,
   selectedPage,
   selectedThreadId,
+  serverError = false,
   serverReady,
   liveThread,
   threadError,
   threadLoading,
-  threadScope,
   projects,
+  pinnedThreads,
   threads,
   triggerSnapshot,
 }: SidebarProps) {
@@ -89,6 +99,29 @@ export function Sidebar({
   const configuredProjects = projects.projects.filter(
     (project) => project.configured,
   );
+  const pinnedThreadIds = useMemo(
+    () => new Set(pinnedThreads.map((thread) => thread.threadId)),
+    [pinnedThreads],
+  );
+  const [pendingPinFocus, setPendingPinFocus] = useState<
+    "pinned" | "list" | null
+  >(null);
+  const changeThreadPinned = async (thread: NativeThreadSummary) => {
+    const willPin = !pinnedThreadIds.has(thread.threadId);
+    await onChangeThreadPinned(thread);
+    setPendingPinFocus(willPin && mode === "projects" ? "pinned" : "list");
+  };
+  useLayoutEffect(() => {
+    if (pendingPinFocus === null) return;
+    const target = document.getElementById(
+      pendingPinFocus === "pinned"
+        ? "sidebar-pinned-heading"
+        : "sidebar-thread-list-heading",
+    );
+    if (target === null) return;
+    target.focus();
+    setPendingPinFocus(null);
+  }, [mode, pendingPinFocus, pinnedThreads]);
   const watchingThreadIds = useMemo(
     () =>
       new Set(
@@ -106,29 +139,24 @@ export function Sidebar({
       >
         <header className="sidebar-header">
           <div className="brand-row">
-            <div className="brand" aria-label="ZenX">
-              <BrandMark />
-              <span>ZENX</span>
-            </div>
+            <ZenXBrand />
             <div className="brand-actions">
-              {threadScope === "active" ? (
-                <button
-                  className="icon-button inbox-button"
-                  type="button"
-                  aria-label={
-                    mode === "inbox" ? "Return to projects" : "Open inbox"
-                  }
-                  aria-pressed={mode === "inbox"}
-                  onClick={() =>
-                    onModeChange(mode === "inbox" ? "projects" : "inbox")
-                  }
-                >
-                  <Icon name="inbox" />
-                  {pendingApprovalThreadIds.size > 0 ? (
-                    <span className="inbox-dot" aria-hidden="true" />
-                  ) : null}
-                </button>
-              ) : null}
+              <button
+                className="icon-button inbox-button"
+                type="button"
+                aria-label={
+                  mode === "inbox" ? "Return to projects" : "Open inbox"
+                }
+                aria-pressed={mode === "inbox"}
+                onClick={() =>
+                  onModeChange(mode === "inbox" ? "projects" : "inbox")
+                }
+              >
+                <Icon name="inbox" />
+                {pendingApprovalThreadIds.size > 0 ? (
+                  <span className="inbox-dot" aria-hidden="true" />
+                ) : null}
+              </button>
             </div>
           </div>
 
@@ -163,26 +191,6 @@ export function Sidebar({
               ))}
             </section>
           )}
-
-          <div
-            className="thread-scope-tabs"
-            role="tablist"
-            aria-label="Thread views"
-          >
-            {(["active", "archived"] as const).map((scope) => (
-              <button
-                aria-controls="thread-scope-panel"
-                id={`thread-scope-${scope}`}
-                key={scope}
-                type="button"
-                role="tab"
-                aria-selected={threadScope === scope}
-                onClick={() => onThreadScopeChange(scope)}
-              >
-                {scope === "active" ? "Active" : "Archived"}
-              </button>
-            ))}
-          </div>
 
           <div className="new-thread-control">
             <button
@@ -238,10 +246,9 @@ export function Sidebar({
           </div>
 
           <div className="sidebar-view-head">
-            {threadScope === "archived" ? (
-              <strong>Archived</strong>
-            ) : mode === "projects" ? (
+            {mode === "projects" ? (
               <button
+                id="sidebar-thread-list-heading"
                 className="projects-section-toggle"
                 type="button"
                 aria-expanded={projectsOpen}
@@ -255,15 +262,19 @@ export function Sidebar({
                 <strong>Projects</strong>
               </button>
             ) : (
-              <strong>Inbox</strong>
+              <strong id="sidebar-thread-list-heading" tabIndex={-1}>
+                Inbox
+              </strong>
             )}
             {mode === "projects" ? (
               <button
                 className="sidebar-inline-action"
                 type="button"
+                aria-label="Add project"
+                title="Add project"
                 onClick={onAddProject}
               >
-                Add project
+                <Icon name="folder-plus" size={14} />
               </button>
             ) : (
               <span>{threads.length}</span>
@@ -273,16 +284,13 @@ export function Sidebar({
 
         <div
           className="sidebar-scroll"
-          id="thread-scope-panel"
-          role="tabpanel"
-          aria-labelledby={`thread-scope-${threadScope}`}
+          aria-labelledby="sidebar-thread-list-heading"
         >
           {!serverReady ? (
             <p className="sidebar-empty">Waiting for the local App Server.</p>
           ) : threadLoading ? (
             <p className="sidebar-empty" role="status">
-              Loading {threadScope === "active" ? "active" : "archived"}{" "}
-              Threads…
+              Loading active Threads…
             </p>
           ) : threadError !== null ? (
             <div className="sidebar-empty sidebar-error" role="alert">
@@ -291,60 +299,82 @@ export function Sidebar({
                 Try again
               </button>
             </div>
-          ) : threadScope === "archived" && threads.length === 0 ? (
-            <p className="sidebar-empty">
-              No archived Threads yet. Archived conversations stay safe here
-              until you restore them.
-            </p>
-          ) : threadScope === "active" &&
-            mode === "inbox" &&
-            threads.length === 0 ? (
+          ) : mode === "inbox" && threads.length === 0 ? (
             <p className="sidebar-empty">
               Your conversations will appear here.
             </p>
-          ) : threadScope === "active" && mode === "inbox" ? (
+          ) : mode === "inbox" ? (
             <InboxView
               onSelectThread={onSelectThread}
               onChangeThreadLifecycle={onChangeThreadLifecycle}
+              onChangeThreadPinned={changeThreadPinned}
               onRenameThread={onRenameThread}
               pendingApprovalThreadIds={pendingApprovalThreadIds}
               selectedThreadId={selectedThreadId}
               threads={threads}
               liveThread={liveThread}
+              pinnedThreadIds={pinnedThreadIds}
               watchingThreadIds={watchingThreadIds}
             />
-          ) : !projectsOpen ? null : (
-            <ProjectsView
-              projects={projects}
-              onNewThread={onNewThread}
-              onRemoveProject={onRemoveProject}
-              onSetDefaultProject={onSetDefaultProject}
-              onSelectThread={onSelectThread}
-              onChangeThreadLifecycle={onChangeThreadLifecycle}
-              onRenameThread={onRenameThread}
-              pendingApprovalThreadIds={pendingApprovalThreadIds}
-              selectedThreadId={selectedThreadId}
-              threads={threads}
-              liveThread={liveThread}
-              watchingThreadIds={watchingThreadIds}
-            />
+          ) : (
+            <>
+              {pinnedThreads.length === 0 ? null : (
+                <PinnedThreadsView
+                  liveThread={liveThread}
+                  onChangeThreadLifecycle={onChangeThreadLifecycle}
+                  onChangeThreadPinned={changeThreadPinned}
+                  onRenameThread={onRenameThread}
+                  onSelectThread={onSelectThread}
+                  pendingApprovalThreadIds={pendingApprovalThreadIds}
+                  selectedThreadId={selectedThreadId}
+                  threads={pinnedThreads}
+                  watchingThreadIds={watchingThreadIds}
+                />
+              )}
+              {!projectsOpen ? null : (
+                <ProjectsView
+                  projects={projects}
+                  onNewThread={onNewThread}
+                  onRemoveProject={onRemoveProject}
+                  onSetDefaultProject={onSetDefaultProject}
+                  onSelectThread={onSelectThread}
+                  onChangeThreadLifecycle={onChangeThreadLifecycle}
+                  onChangeThreadPinned={changeThreadPinned}
+                  onRenameThread={onRenameThread}
+                  pendingApprovalThreadIds={pendingApprovalThreadIds}
+                  selectedThreadId={selectedThreadId}
+                  threads={threads.filter(
+                    (thread) => !pinnedThreadIds.has(thread.threadId),
+                  )}
+                  liveThread={liveThread}
+                  pinnedThreadIds={pinnedThreadIds}
+                  watchingThreadIds={watchingThreadIds}
+                />
+              )}
+            </>
           )}
         </div>
 
         <footer className="sidebar-footer">
-          <div className="service-status">
-            <span className={`live-dot${serverReady ? " ready" : ""}`} />
-            <span>{serverReady ? "Local service ready" : "Connecting…"}</span>
-          </div>
           <button
-            className="icon-button"
+            className="settings-nav-row"
             type="button"
             aria-current={selectedPage === "settings" ? "page" : undefined}
-            aria-label="Settings"
             onClick={onOpenSettings}
           >
             <Icon name="settings" />
+            <span>Settings</span>
           </button>
+          <div className="service-status">
+            <span className={`live-dot${serverReady ? " ready" : ""}`} />
+            <span>
+              {serverReady
+                ? "Local service ready"
+                : serverError
+                  ? "Local service stopped"
+                  : "Connecting…"}
+            </span>
+          </div>
         </footer>
       </aside>
       <button
@@ -362,19 +392,23 @@ function InboxView({
   selectedThreadId,
   onSelectThread,
   onChangeThreadLifecycle,
+  onChangeThreadPinned,
   onRenameThread,
   pendingApprovalThreadIds,
   liveThread,
   watchingThreadIds,
+  pinnedThreadIds,
 }: {
   threads: readonly NativeThreadSummary[];
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
   pendingApprovalThreadIds: ReadonlySet<string>;
   liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
+  pinnedThreadIds: ReadonlySet<string>;
 }) {
   return deriveInboxSections(
     threads,
@@ -390,9 +424,11 @@ function InboxView({
             key={thread.threadId}
             hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
             onChangeThreadLifecycle={onChangeThreadLifecycle}
+            onChangeThreadPinned={onChangeThreadPinned}
             onRenameThread={onRenameThread}
             onSelectThread={onSelectThread}
             pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
+            pinned={pinnedThreadIds.has(thread.threadId)}
             selected={thread.threadId === selectedThreadId}
             thread={thread}
             watching={watchingThreadIds.has(thread.threadId)}
@@ -400,6 +436,54 @@ function InboxView({
         ))}
       </section>
     ),
+  );
+}
+
+function PinnedThreadsView({
+  liveThread,
+  onChangeThreadLifecycle,
+  onChangeThreadPinned,
+  onRenameThread,
+  onSelectThread,
+  pendingApprovalThreadIds,
+  selectedThreadId,
+  threads,
+  watchingThreadIds,
+}: {
+  liveThread: Thread | null;
+  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
+  onRenameThread(threadId: string, title: string): Promise<void>;
+  onSelectThread(threadId: string): void;
+  pendingApprovalThreadIds: ReadonlySet<string>;
+  selectedThreadId: string | null;
+  threads: readonly NativeThreadSummary[];
+  watchingThreadIds: ReadonlySet<string>;
+}) {
+  return (
+    <section
+      className="pinned-thread-group"
+      aria-labelledby="sidebar-pinned-heading"
+    >
+      <h2 id="sidebar-pinned-heading" tabIndex={-1}>
+        Pinned
+      </h2>
+      {threads.map((thread) => (
+        <ThreadRow
+          hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
+          key={thread.threadId}
+          onChangeThreadLifecycle={onChangeThreadLifecycle}
+          onChangeThreadPinned={onChangeThreadPinned}
+          onRenameThread={onRenameThread}
+          onSelectThread={onSelectThread}
+          pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
+          pinned
+          selected={thread.threadId === selectedThreadId}
+          thread={thread}
+          watching={watchingThreadIds.has(thread.threadId)}
+        />
+      ))}
+    </section>
   );
 }
 
@@ -412,10 +496,12 @@ function ProjectsView({
   selectedThreadId,
   onSelectThread,
   onChangeThreadLifecycle,
+  onChangeThreadPinned,
   onRenameThread,
   pendingApprovalThreadIds,
   liveThread,
   watchingThreadIds,
+  pinnedThreadIds,
 }: {
   projects: ZenXProjectProjectionSnapshot;
   onNewThread(workspace?: string): void;
@@ -425,10 +511,12 @@ function ProjectsView({
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
   pendingApprovalThreadIds: ReadonlySet<string>;
   liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
+  pinnedThreadIds: ReadonlySet<string>;
 }) {
   if (
     projects.projects.length === 0 &&
@@ -448,6 +536,7 @@ function ProjectsView({
       key={group.key}
       liveThread={liveThread}
       onChangeThreadLifecycle={onChangeThreadLifecycle}
+      onChangeThreadPinned={onChangeThreadPinned}
       onRenameThread={onRenameThread}
       onNewThread={onNewThread}
       onRemoveProject={onRemoveProject}
@@ -455,6 +544,7 @@ function ProjectsView({
       onSelectThread={onSelectThread}
       pendingApprovalThreadIds={pendingApprovalThreadIds}
       selectedThreadId={selectedThreadId}
+      pinnedThreadIds={pinnedThreadIds}
       watchingThreadIds={watchingThreadIds}
     />
   ));
@@ -473,10 +563,12 @@ function ProjectRows({
   selectedThreadId,
   onSelectThread,
   onChangeThreadLifecycle,
+  onChangeThreadPinned,
   onRenameThread,
   pendingApprovalThreadIds,
   liveThread,
   watchingThreadIds,
+  pinnedThreadIds,
 }: {
   group: ReturnType<typeof deriveProjectGroups>[number];
   onNewThread(workspace?: string): void;
@@ -485,10 +577,12 @@ function ProjectRows({
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
   pendingApprovalThreadIds: ReadonlySet<string>;
   liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
+  pinnedThreadIds: ReadonlySet<string>;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -549,9 +643,11 @@ function ProjectRows({
             hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
             key={thread.threadId}
             onChangeThreadLifecycle={onChangeThreadLifecycle}
+            onChangeThreadPinned={onChangeThreadPinned}
             onRenameThread={onRenameThread}
             onSelectThread={onSelectThread}
             pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
+            pinned={pinnedThreadIds.has(thread.threadId)}
             selected={thread.threadId === selectedThreadId}
             thread={thread}
             watching={watchingThreadIds.has(thread.threadId)}
@@ -567,9 +663,11 @@ function ThreadRow({
   selected,
   hasActiveTurn,
   onChangeThreadLifecycle,
+  onChangeThreadPinned,
   onRenameThread,
   onSelectThread,
   pendingApproval,
+  pinned,
   watching,
   inbox = false,
 }: {
@@ -577,34 +675,36 @@ function ThreadRow({
   selected: boolean;
   hasActiveTurn: boolean;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
   onSelectThread(threadId: string): void;
   pendingApproval: boolean;
+  pinned: boolean;
   watching: boolean;
   inbox?: boolean;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreMenuFocusRef = useRef(false);
   const initialMenuFocusRef = useRef<"first" | "last">("first");
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(threadTitle(thread));
   const [busyAction, setBusyAction] = useState<
-    "rename" | "archive" | "unarchive" | null
+    "rename" | "pin" | "unpin" | "archive" | "unarchive" | null
   >(null);
   const [menuError, setMenuError] = useState<string | null>(null);
-  const restoreMenuTriggerFocus = () => {
-    queueMicrotask(() => menuTriggerRef.current?.focus());
-  };
   const closeMenu = (restoreFocus = true) => {
+    restoreMenuFocusRef.current = restoreFocus;
     setMenuOpen(false);
     setRenaming(false);
-    if (restoreFocus) restoreMenuTriggerFocus();
   };
-  const focusThreadScope = () => {
+  const focusThreadListHeading = (nextPinned = pinned) => {
     document
-      .getElementById(`thread-scope-${thread.archived ? "archived" : "active"}`)
+      .getElementById(
+        nextPinned ? "sidebar-pinned-heading" : "sidebar-thread-list-heading",
+      )
       ?.focus();
   };
   useEffect(() => {
@@ -624,6 +724,11 @@ function ThreadRow({
       initialMenuFocusRef.current === "last" ? items.at(-1) : items.at(0);
     item?.focus();
   }, [menuOpen, renaming]);
+  useLayoutEffect(() => {
+    if (menuOpen || !restoreMenuFocusRef.current) return;
+    restoreMenuFocusRef.current = false;
+    menuTriggerRef.current?.focus();
+  }, [menuOpen]);
   const identity = threadModelIdentity(thread);
   const contents = (
     <>
@@ -644,22 +749,23 @@ function ThreadRow({
       </span>
       {identity === null ? null : (
         <span className="model-line">
-          <ProviderMark kind={identity.providerKind} />
+          <ProviderLogo kind={identity.providerKind} />
           <span>{identity.label}</span>
         </span>
       )}
     </>
   );
   const runAction = async (
-    action: "rename" | "archive" | "unarchive",
+    action: "rename" | "pin" | "unpin" | "archive" | "unarchive",
     operation: () => Promise<void>,
   ) => {
     setBusyAction(action);
     setMenuError(null);
     try {
-      if (action !== "rename") focusThreadScope();
+      if (action !== "rename") focusThreadListHeading();
       await operation();
-      if (action !== "rename") focusThreadScope();
+      if (action !== "rename" && action !== "pin" && action !== "unpin")
+        focusThreadListHeading(false);
       closeMenu(action === "rename");
     } catch (error) {
       setMenuError(error instanceof Error ? error.message : String(error));
@@ -681,7 +787,7 @@ function ThreadRow({
       ref={rowRef}
       className="thread-row-shell"
       onKeyDown={(event) => {
-        if (event.key === "Escape") {
+        if (menuOpen && event.key === "Escape") {
           event.preventDefault();
           closeMenu();
         }
@@ -710,6 +816,7 @@ function ThreadRow({
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         aria-controls={menuOpen ? `thread-menu-${thread.threadId}` : undefined}
+        title={`Manage ${threadTitle(thread)}`}
         onClick={() => {
           if (menuOpen) {
             closeMenu();
@@ -732,7 +839,7 @@ function ThreadRow({
           setMenuOpen(true);
         }}
       >
-        <Icon name="more" />
+        <Icon name="more" size={18} />
       </button>
       <ThreadItemMenu
         archived={thread.archived}
@@ -743,6 +850,7 @@ function ThreadRow({
         menuId={`thread-menu-${thread.threadId}`}
         menuRef={menuRef}
         open={menuOpen}
+        pinned={pinned}
         renaming={renaming}
         renameDraft={renameDraft}
         onArchive={() =>
@@ -752,6 +860,11 @@ function ThreadRow({
         onCancelRename={() => setRenaming(false)}
         onRequestClose={() => closeMenu()}
         onDraftChange={setRenameDraft}
+        onPin={() =>
+          void runAction(pinned ? "unpin" : "pin", () =>
+            onChangeThreadPinned(thread),
+          )
+        }
         onRename={() =>
           void runAction("rename", () =>
             onRenameThread(thread.threadId, renameDraft),
@@ -774,6 +887,7 @@ export function ThreadItemMenu({
   menuId,
   menuRef,
   open,
+  pinned,
   renaming,
   renameDraft,
   onArchive,
@@ -781,17 +895,19 @@ export function ThreadItemMenu({
   onCancelRename,
   onRequestClose,
   onDraftChange,
+  onPin,
   onRename,
   onUnarchive,
 }: {
   archived: boolean;
-  busyAction: "rename" | "archive" | "unarchive" | null;
+  busyAction: "rename" | "pin" | "unpin" | "archive" | "unarchive" | null;
   error: string | null;
   hasActiveTurn: boolean;
   labelledBy?: string;
   menuId?: string;
   menuRef?: RefObject<HTMLDivElement | null>;
   open: boolean;
+  pinned: boolean;
   renaming: boolean;
   renameDraft: string;
   onArchive(): void;
@@ -799,6 +915,7 @@ export function ThreadItemMenu({
   onCancelRename(): void;
   onRequestClose?(): void;
   onDraftChange(value: string): void;
+  onPin(): void;
   onRename(): void;
   onUnarchive(): void;
 }) {
@@ -896,6 +1013,23 @@ export function ThreadItemMenu({
             type="button"
             role="menuitem"
             tabIndex={-1}
+            data-thread-action={pinned ? "unpin" : "pin"}
+            disabled={busy}
+            onClick={onPin}
+          >
+            <Icon name={pinned ? "pin-off" : "pin"} />
+            {busyAction === "pin"
+              ? "Pinning…"
+              : busyAction === "unpin"
+                ? "Unpinning…"
+                : pinned
+                  ? "Unpin"
+                  : "Pin"}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
             data-thread-action="archive"
             disabled={busy || hasActiveTurn}
             title={
@@ -926,35 +1060,5 @@ function enabledMenuItems(container: HTMLElement | null): HTMLButtonElement[] {
     container.querySelectorAll<HTMLButtonElement>(
       'button[role="menuitem"]:not(:disabled)',
     ),
-  );
-}
-
-function ProviderMark({
-  kind,
-}: {
-  kind: "openai" | "anthropic" | "google" | "local" | "generic";
-}) {
-  return (
-    <span className={`provider-mark ${kind}`} aria-hidden="true">
-      {kind === "openai"
-        ? "◎"
-        : kind === "anthropic"
-          ? "A"
-          : kind === "google"
-            ? "✦"
-            : kind === "local"
-              ? "⌂"
-              : "◇"}
-    </span>
-  );
-}
-
-function BrandMark() {
-  return (
-    <span className="brand-mark" aria-hidden="true">
-      <svg viewBox="0 0 18 18">
-        <path d="M3 13.5 7 5l4 8.5L15 5" />
-      </svg>
-    </span>
   );
 }

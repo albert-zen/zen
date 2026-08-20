@@ -25,7 +25,18 @@ export interface ZenXHostProfile {
   workspaces: string[];
   lastUsedWorkspace: string | null;
   approvalPolicy: "always" | "never";
+  pinnedThreadIds: string[];
 }
+
+export type ZenXSettingsUpdate = Pick<
+  ZenXHostProfile,
+  | "onboardingComplete"
+  | "provider"
+  | "defaultModel"
+  | "titleModel"
+  | "models"
+  | "approvalPolicy"
+>;
 
 export interface PublicHostSettings {
   profile: ZenXHostProfile;
@@ -121,6 +132,7 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     value.lastUsedWorkspace,
     workspaces,
   );
+  const pinnedThreadIds = normalizePinnedThreadIds(value.pinnedThreadIds);
   return {
     version: 1,
     onboardingComplete: value.onboardingComplete === true,
@@ -132,7 +144,27 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     workspaces,
     lastUsedWorkspace,
     approvalPolicy: value.approvalPolicy,
+    pinnedThreadIds,
   };
+}
+
+function normalizePinnedThreadIds(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 4_096) {
+    throw new Error("ZenX pinned Thread list is invalid");
+  }
+  return [
+    ...new Set(
+      value.map((entry) => {
+        if (typeof entry !== "string")
+          throw new Error("ZenX pinned Thread id is invalid");
+        const threadId = entry.trim();
+        if (threadId.length === 0 || threadId.length > 512)
+          throw new Error("ZenX pinned Thread id is invalid");
+        return threadId;
+      }),
+    ),
+  ];
 }
 
 function normalizeLastUsedWorkspace(

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { act, createElement, useState } from "react";
+import * as React from "react";
 import { createRoot } from "react-dom/client";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
-import { Sidebar } from "../src/renderer/src/Sidebar.js";
+const { act, createElement, useState } = React;
+Object.assign(globalThis, { React });
+const { Sidebar } = await import("../src/renderer/src/Sidebar.js");
 
 const noop = () => undefined;
 
@@ -34,9 +36,31 @@ test("Thread menu manages keyboard focus through close and row removal", async (
   try {
     await act(async () => root.render(createElement(TestSidebar)));
     const trigger = requiredElement<HTMLButtonElement>(".thread-menu-trigger");
+    const threadRow = requiredElement<HTMLButtonElement>(".thread-row");
+
+    threadRow.focus();
+    await act(async () => {
+      threadRow.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Escape",
+        }),
+      );
+      await Promise.resolve();
+    });
+    assert.equal(document.activeElement, threadRow);
+    assert.equal(document.querySelector('[role="menu"]'), null);
 
     await act(async () => trigger.click());
     assert.equal(document.activeElement?.textContent?.trim(), "Rename");
+    let menuPresentWhenTriggerFocusRestored: boolean | undefined;
+    const focusTrigger = trigger.focus.bind(trigger);
+    trigger.focus = () => {
+      menuPresentWhenTriggerFocusRestored =
+        document.querySelector('[role="menu"]') !== null;
+      focusTrigger();
+    };
 
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -46,7 +70,7 @@ test("Thread menu manages keyboard focus through close and row removal", async (
         }),
       );
     });
-    assert.equal(document.activeElement?.textContent?.trim(), "Archive");
+    assert.equal(document.activeElement?.textContent?.trim(), "Pin");
 
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -76,7 +100,7 @@ test("Thread menu manages keyboard focus through close and row removal", async (
         }),
       );
     });
-    assert.equal(document.activeElement?.textContent?.trim(), "Rename");
+    assert.equal(document.activeElement?.textContent?.trim(), "Pin");
 
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -88,6 +112,7 @@ test("Thread menu manages keyboard focus through close and row removal", async (
       await Promise.resolve();
     });
     assert.equal(document.activeElement, trigger);
+    assert.equal(menuPresentWhenTriggerFocusRestored, false);
     assert.equal(document.querySelector('[role="menu"]'), null);
 
     await act(async () => trigger.click());
@@ -112,7 +137,7 @@ test("Thread menu manages keyboard focus through close and row removal", async (
     assert.equal(document.querySelector(".thread-row-shell"), null);
     assert.equal(
       document.activeElement,
-      document.getElementById("thread-scope-active"),
+      document.getElementById("sidebar-thread-list-heading"),
     );
   } finally {
     await act(async () => root.unmount());
@@ -140,10 +165,10 @@ function TestSidebar() {
     onOpenContribution: noop,
     onOpenSettings: noop,
     onChangeThreadLifecycle: async () => setThreads([]),
+    onChangeThreadPinned: async () => undefined,
     onRenameThread: async () => undefined,
     onRetryThreads: noop,
     onSelectThread: noop,
-    onThreadScopeChange: noop,
     pendingApprovalThreadIds: new Set<string>(),
     pluginContributions: [],
     projects: {
@@ -164,7 +189,7 @@ function TestSidebar() {
     serverReady: true,
     threadError: null,
     threadLoading: false,
-    threadScope: "active",
+    pinnedThreads: [],
     threads,
     triggerSnapshot: { triggers: [], history: [], rooms: [] },
   });

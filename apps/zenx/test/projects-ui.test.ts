@@ -14,6 +14,7 @@ const baseProps = {
   onRemoveProject: () => undefined,
   onSetDefaultProject: () => undefined,
   onChangeThreadLifecycle: async () => undefined,
+  onChangeThreadPinned: async () => undefined,
   onRenameThread: async () => undefined,
   onRetryThreads: () => undefined,
   onOpenContribution: () => undefined,
@@ -26,8 +27,7 @@ const baseProps = {
   serverReady: true,
   threadError: null,
   threadLoading: false,
-  threadScope: "active" as const,
-  onThreadScopeChange: () => undefined,
+  pinnedThreads: [],
   threads: [],
   triggerSnapshot: { triggers: [], history: [], rooms: [] },
 };
@@ -47,7 +47,9 @@ test("no-project sidebar keeps explicit Add project and non-creating New thread 
   );
   assert.match(html, />New thread</u);
   assert.match(html, /Add project first/u);
-  assert.match(html, />Add project</u);
+  assert.match(html, /aria-label="Add project"/u);
+  assert.match(html, /title="Add project"/u);
+  assert.doesNotMatch(html, />Add project<\/button>/u);
   assert.match(html, /aria-expanded="true"/u);
   assert.match(html, /No projects yet/u);
 });

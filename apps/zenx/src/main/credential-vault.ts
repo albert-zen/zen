@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -76,12 +77,18 @@ export class ZenXCredentialVault {
       version: 1,
       apiKey: this.#encryption.encryptString(apiKey).toString("base64"),
     };
-    const temporary = `${this.#filePath}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(stored)}\n`, {
-      mode: 0o600,
-      encoding: "utf8",
-    });
-    await rename(temporary, this.#filePath);
+    const temporary = `${this.#filePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, `${JSON.stringify(stored)}\n`, {
+        mode: 0o600,
+        encoding: "utf8",
+      });
+      await rename(temporary, this.#filePath);
+    } finally {
+      await unlink(temporary).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      });
+    }
   }
 
   async clearApiKey(): Promise<void> {

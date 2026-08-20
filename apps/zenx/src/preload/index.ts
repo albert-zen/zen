@@ -16,7 +16,7 @@ import type {
 import { ipcChannels } from "./ipc.js";
 import type {
   PublicHostSettings,
-  ZenXHostProfile,
+  ZenXSettingsUpdate,
 } from "../main/host-profile.js";
 import type {
   CreateRoomInput,
@@ -123,10 +123,10 @@ contextBridge.exposeInMainWorld("zenx", {
     get: async (): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.settingsGet),
     save: async (
-      profile: ZenXHostProfile,
+      settings: ZenXSettingsUpdate,
       apiKey?: string,
     ): Promise<PublicHostSettings> =>
-      await ipcRenderer.invoke(ipcChannels.settingsSave, profile, apiKey),
+      await ipcRenderer.invoke(ipcChannels.settingsSave, settings, apiKey),
     addWorkspace: async (workspace: string): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.workspaceAdd, workspace),
     removeWorkspace: async (workspace: string): Promise<PublicHostSettings> =>
@@ -137,6 +137,10 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.workspaceDefault, workspace),
     markWorkspaceUsed: async (workspace: string): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.workspaceUse, workspace),
+    setPinnedThreadIds: async (
+      threadIds: readonly string[],
+    ): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(ipcChannels.pinnedThreadsSet, threadIds),
     getDirectoryBrowser: async (): Promise<DirectoryBrowserSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.directorySnapshot),
     listDirectory: async (directory: string): Promise<DirectoryListing> =>

@@ -20,8 +20,10 @@
 - **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS
   原生 Thread cwd 按最近存在祖先的异步 realpath 归一为 UI 和 Agent self-control 共用的
   Project 读模型；Windows 路径折叠大小写，POSIX 路径保留大小写，配置保留用户选择的展示路径，
-  realpath 不可用时退回 lexical absolute path，最近使用项由同一 host profile 持有且失效时不隐式回退，
-  它不拥有 Project、Thread 或 journal 状态。
+  realpath 不可用时退回 lexical absolute path，配置刷新按 latest-wins 发布且不长期缓存 filesystem identity，
+  每次投影、筛选、创建或 workspace mutation 从一份不可变的 canonicalization snapshot 派生，mutation
+  在既有队列内有界重验；最近使用项由同一 host profile 持有且失效时不隐式回退，
+  它不拥有 Project、Thread、journal 或 durable coordination 状态。
 - **ZenXDirectoryBrowser** — ZenX main 把 home、documents、Windows drive / POSIX root 与
   canonical 只读目录枚举投影给内部 picker；symlink/junction 只解析为目录目标，不修改文件系统。
 - **ZenXApplicationMenuPolicy** — ZenX 在 Windows/Linux 移除 Electron 默认菜单，在 macOS
@@ -63,9 +65,12 @@
 - **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
   幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
-- **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、workspace 与
-  审批默认值；它只用于组合本机 App Server host，不包含 credential，也不覆盖已存
-  Thread 的生效设置。
+- **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、workspace、
+  审批默认值与本地产品偏好；其中 host 配置只用于组合本机 App Server，不包含
+  credential，也不覆盖已存 Thread 的生效设置。
+- **ZenXThreadPinProjection** — ZenXHostProfile 按本机 threadId 顺序持久化 Sidebar Pin，
+  renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
+  canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。
 - **ZenXCredentialVault** — ZenX 通过操作系统安全存储保护的 Provider credential
   存放点；解密后的 secret 只在主进程内存中交给 host，绝不进入 renderer、进程环境、
   App Server 协议或 canonical ItemList。
@@ -122,12 +127,12 @@
 - **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider revoke 或 close 时单调使
   capability live projection 与 provider-owned artifacts 失效并重建可重建 provider；它不改写 canonical ItemList、
   grants 或 durable capability history，也不成为第二个 runtime/coordinator。
-- **ZenXBundledProviderProvisioning** — 打包 provider 只能由应用资源中的版本与 SHA-256 固定清单解析；缺失、离线或校验失败只产生可诊断的 unavailable 状态，不改写 Core 会话语义。
+- **ZenXBundledProviderProvisioning** — 打包 provider 只能由应用资源中的版本与 SHA-256 固定清单解析，实际执行的 browser payload 以有界目录摘要在选择与启动前重验，仅排除清单明确列出的非可执行 host-validation 状态；缺失、离线或校验失败只产生可诊断的 unavailable 状态，不改写 Core 会话语义。
 - **ZenXPlaywrightSessionFence** — Playwright provider 在一个瞬时 CLI session 内串行执行操作，并用稳定 tab/document identity 与 lifecycle revision 围住选择、观察、截图、摘要和关闭；该 fence 不进入 Core 或 durable journal。
-- **ZenXProviderLaunchVerification** — 外部 provider 在实际 spawn 前再次验证绑定的 canonical executable、shim companion、manifest digest 与 pinned semantic version；失败只产生显式诊断，不自动改用未验证资产。
+- **ZenXProviderLaunchVerification** — 外部 provider 在实际 spawn 前再次验证绑定的 canonical executable、browser payload、shim companion、manifest digest 与 pinned semantic version；失败只产生显式诊断，不自动改用未验证资产。
 - **ZenXPackagedProviderSmoke** — ZenX 构建验证用真实 resources/providers manifest、asset hash、version pin 与 bundled-only catalog path 检查离线 packaged provisioning；它是一次性测试流程，不是运行时 coordinator 或 durable state。
 - **VerifiedArtifactAcquisition** — ZenX release assembly 只以 artifact name、URL、SHA-256、deadline 与 cache location 取得 digest-addressed immutable file，并在内部收口 proxy-aware bounded transport、stream size、partial cleanup、cache revalidation 与 atomic publication；它不成为运行时下载器或第二条 packaging pipeline。
-- **ZenXPackagingRunStaging** — portable app 与 packaged smoke 继续复用同一 provider assembly、digest injection 与 Electron packager，但每次只在私有 run directory 内写 resources/app/artifact，以 target lock 拒绝同目标并发并在完整 staging 后发布稳定产物；它不复制 release pipeline。
+- **ZenXPackagingRunStaging** — portable app 与 packaged smoke 继续复用同一 provider assembly、digest injection 与 Electron packager，但每次只在私有 run directory 内写 build/resources/app/artifact，以 target lock 拒绝同目标并发并在完整 staging 后发布稳定产物；它不复制 release pipeline。
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 capability registry 暴露 Project/Thread 自控工具，
   只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
   不持有第二套 Project、Thread、Turn、transcript 或调度状态。

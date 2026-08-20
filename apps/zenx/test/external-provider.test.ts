@@ -72,3 +72,18 @@ test("bundled runtime execution never consults PATH", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("external provider runner applies a scoped Playwright browser path", async () => {
+  const runner = new SystemExternalProviderProcessRunner();
+  const browserPath = path.join(os.tmpdir(), "verified-playwright-browsers");
+  const result = await runner.run(
+    process.execPath,
+    ["-e", "process.stdout.write(process.env.PLAYWRIGHT_BROWSERS_PATH ?? '')"],
+    {
+      timeoutMs: 5_000,
+      maxOutputBytes: 1024,
+      environment: { PLAYWRIGHT_BROWSERS_PATH: browserPath },
+    },
+  );
+  assert.equal(result.stdout, browserPath);
+});

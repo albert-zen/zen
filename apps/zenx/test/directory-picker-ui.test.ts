@@ -122,8 +122,46 @@ test("directory picker exposes failure, retries, and cancels with Escape", async
   }
 });
 
+test("directory picker ignores Backspace before a root listing is available", async () => {
+  const pending = deferred<DirectoryListing>();
+  const harness = await mountPicker(async () => await pending.promise, {
+    locations: [{ label: "Root", path: "/" }],
+    initialPath: "/",
+  });
+  try {
+    await waitFor(() => harness.listCalls.length === 1);
+    await pressKey(
+      harness.dom,
+      harness.container.querySelector(".directory-picker-list")!,
+      "Backspace",
+    );
+    assert.deepEqual(harness.listCalls, ["/"]);
+
+    pending.resolve(listing("/", null, []));
+    await waitFor(() => currentSelection() === "/");
+    await pressKey(
+      harness.dom,
+      harness.container.querySelector(".directory-picker-list")!,
+      "Backspace",
+    );
+    assert.deepEqual(harness.listCalls, ["/"]);
+  } finally {
+    pending.resolve(listing("/", null, []));
+    await unmountPicker(harness);
+    harness.dom.window.close();
+  }
+});
+
 async function mountPicker(
   listDirectory: (directory: string) => Promise<DirectoryListing>,
+  snapshot: DirectoryBrowserSnapshot = {
+    locations: [
+      { label: "Home", path: "/home" },
+      { label: "Documents", path: "/docs" },
+      { label: "Root", path: "/" },
+    ],
+    initialPath: "/docs",
+  },
 ): Promise<PickerHarness> {
   const dom = new JSDOM("<!doctype html><body></body>", {
     url: "https://zenx.local/",
@@ -142,14 +180,6 @@ async function mountPicker(
   dom.window.document.body.append(previous);
   previous.focus();
 
-  const snapshot: DirectoryBrowserSnapshot = {
-    locations: [
-      { label: "Home", path: "/home" },
-      { label: "Documents", path: "/docs" },
-      { label: "Root", path: "/" },
-    ],
-    initialPath: "/docs",
-  };
   const listCalls: string[] = [];
   Object.assign(dom.window, {
     zenx: {
@@ -274,4 +304,15 @@ async function waitFor<T>(read: () => T | null | undefined): Promise<T> {
     });
   }
   throw new Error("Timed out waiting for picker interaction state");
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((finish) => {
+    resolve = finish;
+  });
+  return { promise, resolve };
 }

@@ -49,19 +49,17 @@ import {
 import { loadedPluginContributions } from "./plugin-contributions.js";
 import { RoomView } from "./RoomView.js";
 import { ScheduledView } from "./ScheduledView.js";
-import { SettingsView } from "./SettingsView.js";
+import { SettingsView, type SettingsTab } from "./SettingsView.js";
 import { Sidebar } from "./Sidebar.js";
 import {
+  derivePinnedThreads,
   readSidebarMode,
-  readThreadScope,
   threadHasActiveTurn,
   lastUsedProjectWorkspace,
   startProjectThread,
   threadTitle,
   writeSidebarMode,
-  writeThreadScope,
   type SidebarMode,
-  type ThreadScope,
 } from "./thread-list.js";
 import { applyThreadViewNotification } from "./thread-view-state.js";
 import { ThreadLifecycleAction } from "./ThreadLifecycleAction.js";
@@ -74,9 +72,13 @@ export function App() {
   const threadSummaryLoadEpoch = useRef(0);
   const projectLoadEpoch = useRef(0);
   const selectedThreadIdRef = useRef<string | null>(null);
+  const archivingThreadIdsRef = useRef<ReadonlySet<string>>(new Set());
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
+  const pinnedThreadIdsRef = useRef<string[]>([]);
+  const pinMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
@@ -96,6 +98,7 @@ export function App() {
   const [threadSummaries, setThreadSummaries] = useState<NativeThreadSummary[]>(
     [],
   );
+  const [pinnedThreadIds, setPinnedThreadIds] = useState<string[]>([]);
   const [archivedThreadSummaries, setArchivedThreadSummaries] = useState<
     NativeThreadSummary[]
   >([]);
@@ -132,22 +135,38 @@ export function App() {
       return "projects";
     }
   });
-  const [threadScope, setThreadScope] = useState<ThreadScope>(() => {
-    try {
-      return readThreadScope(window.localStorage);
-    } catch {
-      return "active";
-    }
-  });
-  const threadScopeRef = useRef(threadScope);
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [projectError, setProjectError] = useState<string | null>(null);
   const [threadLifecycleBusy, setThreadLifecycleBusy] = useState(false);
   const [threadLifecycleError, setThreadLifecycleError] = useState<
     string | null
   >(null);
+  const [archivingThreadIds, setArchivingThreadIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [composerStates, setComposerStates] = useState<
     Record<string, ComposerState>
   >({});
+
+  const confirmPinnedThreadIds = (threadIds: readonly string[]) => {
+    const confirmed = [...threadIds];
+    pinnedThreadIdsRef.current = confirmed;
+    setPinnedThreadIds(confirmed);
+  };
+
+  const queuePinMutation = (
+    update: (current: readonly string[]) => readonly string[],
+  ): Promise<void> => {
+    const result = pinMutationQueueRef.current.then(async () => {
+      const current = pinnedThreadIdsRef.current;
+      const next = update(current);
+      if (next === current) return;
+      const value = await window.zenx.settings.setPinnedThreadIds(next);
+      confirmPinnedThreadIds(value.profile.pinnedThreadIds);
+    });
+    pinMutationQueueRef.current = result.catch(() => undefined);
+    return result;
+  };
 
   const loadThreadSummaries = async (showLoading = false) => {
     const epoch = ++threadSummaryLoadEpoch.current;
@@ -178,16 +197,17 @@ export function App() {
     setThreadListLoaded({ active: true, archived: true });
   };
 
-  const loadProjects = async (scope = threadScopeRef.current) => {
+  const loadProjects = async () => {
     const epoch = ++projectLoadEpoch.current;
     try {
-      const snapshot = await window.zenx.projects.get({
-        archived: scope === "archived",
-      });
-      if (projectLoadEpoch.current === epoch) setProjects(snapshot);
+      const snapshot = await window.zenx.projects.get({ archived: false });
+      if (projectLoadEpoch.current === epoch) {
+        setProjects(snapshot);
+        setProjectError(null);
+      }
     } catch (error) {
       if (projectLoadEpoch.current === epoch)
-        setRequestError(describeError(error));
+        setProjectError(describeError(error));
     }
   };
 
@@ -347,12 +367,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void window.zenx.settings
-      .get()
-      .then((value) => {
-        if (!value.profile.onboardingComplete) setPage("settings");
-      })
-      .catch(() => undefined);
+    const result = pinMutationQueueRef.current.then(async () => {
+      const value = await window.zenx.settings.get();
+      confirmPinnedThreadIds(value.profile.pinnedThreadIds);
+      if (!value.profile.onboardingComplete) setPage("settings");
+    });
+    pinMutationQueueRef.current = result.catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -387,8 +407,7 @@ export function App() {
       ? summary
       : { ...summary, name: titleSnapshot[summary.threadId]!.title },
   );
-  const visibleSummaries =
-    threadScope === "active" ? activeSummaries : archivedSummaries;
+  const pinnedSummaries = derivePinnedThreads(activeSummaries, pinnedThreadIds);
   const selectedSummary =
     [...activeSummaries, ...archivedSummaries].find(
       (summary) => summary.threadId === selectedThreadId,
@@ -410,19 +429,12 @@ export function App() {
         (startedWorkspace) => {
           void window.zenx.settings
             .markWorkspaceUsed(startedWorkspace)
-            .then(() => loadProjects("active"))
+            .then(() => loadProjects())
             .catch((error: unknown) => setRequestError(describeError(error)));
         },
       );
       if (selectionEpoch.current !== epoch) return;
       selectedThreadIdRef.current = result.thread.id;
-      threadScopeRef.current = "active";
-      setThreadScope("active");
-      try {
-        writeThreadScope(window.localStorage, "active");
-      } catch {
-        // The view remains active for this window.
-      }
       setPage("agent");
       setSidebarOpen(false);
       setSelectedThreadId(result.thread.id);
@@ -457,7 +469,11 @@ export function App() {
     intent: ComposerIntent,
     expectedTurnId: string | null,
   ) => {
-    if (threadDetail === null) return;
+    if (
+      threadDetail === null ||
+      archivingThreadIdsRef.current.has(threadDetail.id)
+    )
+      return;
     const threadId = threadDetail.id;
     const started = updateComposer(threadId, (state) =>
       beginComposerSubmission(state, intent, expectedTurnId, () =>
@@ -483,6 +499,10 @@ export function App() {
         );
       const input = [{ type: "text" as const, text: submission.text }];
       if (submission.intent === "start") {
+        if (archivingThreadIdsRef.current.has(threadId))
+          throw new Error(
+            "This Thread is being archived. Try again if archiving fails.",
+          );
         await window.zenx.protocol.request("turn/start", {
           threadId,
           input,
@@ -491,6 +511,10 @@ export function App() {
       } else if (submission.intent === "steer") {
         if (submission.expectedTurnId === null)
           throw new Error("The active turn changed before steering");
+        if (archivingThreadIdsRef.current.has(threadId))
+          throw new Error(
+            "This Thread is being archived. Try again if archiving fails.",
+          );
         await window.zenx.protocol.request("turn/steer", {
           threadId,
           expectedTurnId: submission.expectedTurnId,
@@ -500,6 +524,10 @@ export function App() {
       } else {
         if (submission.expectedTurnId === null)
           throw new Error("The active turn changed before replacement");
+        if (archivingThreadIdsRef.current.has(threadId))
+          throw new Error(
+            "This Thread is being archived. Try again if archiving fails.",
+          );
         await window.zenx.protocol.request("turn/replace", {
           threadId,
           expectedTurnId: submission.expectedTurnId,
@@ -577,35 +605,91 @@ export function App() {
     }));
   };
 
-  const performThreadLifecycle = async (summary: NativeThreadSummary) => {
+  const changeThreadPinned = async (summary: NativeThreadSummary) => {
+    const shouldPin = !pinnedThreadIds.includes(summary.threadId);
+    await queuePinMutation((current) =>
+      shouldPin
+        ? [
+            summary.threadId,
+            ...current.filter((threadId) => threadId !== summary.threadId),
+          ]
+        : current.filter((threadId) => threadId !== summary.threadId),
+    );
+  };
+
+  const clearSelectedThreadForArchive = (threadId: string) => {
+    if (selectedThreadIdRef.current !== threadId) return;
+    selectionEpoch.current += 1;
+    selectedThreadIdRef.current = null;
+    setSelectedThreadId(null);
+    setThreadDetail(null);
+    setSelectedSettings(null);
+    setSettingsTab("archived");
+    openPage("settings");
+  };
+
+  const setThreadArchiving = (threadId: string, archiving: boolean) => {
+    const current = archivingThreadIdsRef.current;
+    if (current.has(threadId) === archiving) return;
+    const next = new Set(current);
+    if (archiving) next.add(threadId);
+    else next.delete(threadId);
+    archivingThreadIdsRef.current = next;
+    setArchivingThreadIds(next);
+  };
+
+  const performThreadLifecycle = async (
+    summary: NativeThreadSummary,
+    clearSelectedOnArchive = false,
+  ) => {
     if (!summary.archived && threadHasActiveTurn(summary, threadDetail)) {
       throw new Error("Wait for the active Turn to finish before archiving.");
     }
-    await window.zenx.protocol.request(
-      summary.archived ? "thread/unarchive" : "thread/archive",
-      { threadId: summary.threadId },
-    );
+    const fenceSelectedArchive =
+      !summary.archived &&
+      clearSelectedOnArchive &&
+      selectedThreadIdRef.current === summary.threadId;
+    if (
+      fenceSelectedArchive &&
+      archivingThreadIdsRef.current.has(summary.threadId)
+    )
+      return;
+    if (fenceSelectedArchive) setThreadArchiving(summary.threadId, true);
+    try {
+      await window.zenx.protocol.request(
+        summary.archived ? "thread/unarchive" : "thread/archive",
+        { threadId: summary.threadId },
+      );
+    } catch (error) {
+      if (fenceSelectedArchive) setThreadArchiving(summary.threadId, false);
+      throw error;
+    }
+    if (!summary.archived) {
+      if (clearSelectedOnArchive)
+        clearSelectedThreadForArchive(summary.threadId);
+      if (fenceSelectedArchive) setThreadArchiving(summary.threadId, false);
+      try {
+        await queuePinMutation((current) =>
+          current.includes(summary.threadId)
+            ? current.filter((threadId) => threadId !== summary.threadId)
+            : current,
+        );
+      } catch (error) {
+        setRequestError(
+          `Thread archived, but its local Pin could not be cleared: ${describeError(error)}`,
+        );
+      }
+    }
     await loadThreadSummaries();
     await loadProjects();
   };
 
   const changeThreadLifecycle = async () => {
     if (selectedSummary === null) return;
-    const nextScope: ThreadScope = selectedSummary.archived
-      ? "active"
-      : "archived";
     setThreadLifecycleBusy(true);
     setThreadLifecycleError(null);
     try {
-      await performThreadLifecycle(selectedSummary);
-      threadScopeRef.current = nextScope;
-      setThreadScope(nextScope);
-      await loadProjects(nextScope);
-      try {
-        writeThreadScope(window.localStorage, nextScope);
-      } catch {
-        // The view remains valid for this window.
-      }
+      await performThreadLifecycle(selectedSummary, true);
     } catch (error) {
       setThreadLifecycleError(describeError(error));
     } finally {
@@ -620,7 +704,10 @@ export function App() {
         mode={sidebarMode}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        onChangeThreadLifecycle={performThreadLifecycle}
+        onChangeThreadLifecycle={(summary) =>
+          performThreadLifecycle(summary, true)
+        }
+        onChangeThreadPinned={changeThreadPinned}
         onModeChange={(mode) => {
           setSidebarMode(mode);
           try {
@@ -650,34 +737,31 @@ export function App() {
         onRetryThreads={() => void loadThreadSummaries(true)}
         onRenameThread={renameThread}
         onSelectThread={(threadId) => void resumeThread(threadId)}
-        onThreadScopeChange={(scope) => {
-          threadScopeRef.current = scope;
-          setThreadScope(scope);
-          void loadProjects(scope);
-          try {
-            writeThreadScope(window.localStorage, scope);
-          } catch {
-            // The preference remains valid for this window.
-          }
-        }}
         pendingApprovalThreadIds={pendingThreadIds}
         pluginContributions={pluginContributions}
         selectedPage={page}
         selectedThreadId={selectedThreadId}
+        serverError={serverStatus.type === "error"}
         serverReady={serverStatus.type === "ready"}
         projects={projects}
-        threadError={threadListErrors[threadScope]}
-        threadLoading={!threadListLoaded[threadScope]}
-        threadScope={threadScope}
-        threads={visibleSummaries}
+        pinnedThreads={pinnedSummaries}
+        threadError={threadListErrors.active}
+        threadLoading={!threadListLoaded.active}
+        threads={activeSummaries}
         triggerSnapshot={triggerSnapshot}
       />
 
       <main className="workspace">
         {page === "settings" ? (
           <SettingsView
-            onClose={() => openPage("agent")}
+            archivedError={threadListErrors.archived}
+            archivedLoading={!threadListLoaded.archived}
+            archivedThreads={archivedSummaries}
+            onRetryArchived={() => void loadThreadSummaries(true)}
+            onTabChange={setSettingsTab}
+            onUnarchive={performThreadLifecycle}
             onOpenSidebar={() => setSidebarOpen(true)}
+            tab={settingsTab}
           />
         ) : page === "triggers" ? (
           <ScheduledView
@@ -729,7 +813,7 @@ export function App() {
             onAddProject={() => setProjectPickerOpen(true)}
             onNewThread={() => {
               if (lastUsedWorkspace !== null) void newThread(lastUsedWorkspace);
-              else setSidebarOpen(true);
+              else setProjectPickerOpen(true);
             }}
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
@@ -749,13 +833,16 @@ export function App() {
               }));
             }}
             onSubmit={submitComposer}
-            requestError={requestError}
+            requestError={projectError ?? requestError}
             selectedSettings={selectedSettings}
             selectedSummary={selectedSummary}
             serverStatus={serverStatus}
             switchingModel={switchingModel}
             threadLifecycleBusy={threadLifecycleBusy}
             threadLifecycleError={threadLifecycleError}
+            threadArchiving={
+              threadDetail !== null && archivingThreadIds.has(threadDetail.id)
+            }
             threadDetail={threadDetail}
             threadError={threadError}
             threadLoading={threadLoading}
@@ -822,6 +909,7 @@ function AgentSurface({
   switchingModel,
   threadLifecycleBusy,
   threadLifecycleError,
+  threadArchiving,
   threadDetail,
   threadError,
   threadLoading,
@@ -860,6 +948,7 @@ function AgentSurface({
   switchingModel: boolean;
   threadLifecycleBusy: boolean;
   threadLifecycleError: string | null;
+  threadArchiving: boolean;
   threadDetail: Thread | null;
   threadError: string | null;
   threadLoading: boolean;
@@ -901,10 +990,11 @@ function AgentSurface({
         </div>
         <div className="top-actions">
           {selectedSummary === null ||
-          selectedSummary.status === "systemError" ? null : (
+          selectedSummary.status === "systemError" ||
+          selectedSummary.archived ? null : (
             <ThreadLifecycleAction
               archived={selectedSummary.archived}
-              busy={threadLifecycleBusy}
+              busy={threadLifecycleBusy || threadArchiving}
               error={threadLifecycleError}
               hasActiveTurn={threadHasActiveTurn(selectedSummary, threadDetail)}
               onChange={onChangeThreadLifecycle}
@@ -934,7 +1024,11 @@ function AgentSurface({
       {serverStatus.type === "error" || requestError !== null ? (
         <EmptyState
           error
-          title="Zen App Server stopped"
+          title={
+            serverStatus.type === "error"
+              ? "Zen App Server stopped"
+              : "ZenX could not load data"
+          }
           detail={
             serverStatus.type === "error" ? serverStatus.message : requestError!
           }
@@ -990,6 +1084,7 @@ function AgentSurface({
             (approval) => approval.params.threadId === threadDetail.id,
           )}
           composer={composerStates[threadDetail.id] ?? emptyComposerState()}
+          composerDisabled={threadArchiving}
           modelDisabled={!canChangeThreadModel(threadDetail)}
           modelError={modelUpdateError ?? modelCatalogError}
           models={models}

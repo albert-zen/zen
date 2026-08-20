@@ -17,7 +17,6 @@ import { fileURLToPath } from "node:url";
 const run = promisify(execFile);
 const zenx = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const root = path.resolve(zenx, "..", "..");
-const out = path.join(zenx, "out");
 const packagedRoot = path.join(zenx, ".packaged");
 const runsRoot = path.join(packagedRoot, "runs");
 const artifactRoot = path.join(packagedRoot, "artifact");
@@ -33,6 +32,7 @@ async function packageZenX(arguments_) {
     await mkdir(runsRoot, { recursive: true, mode: 0o700 });
     const staging = await mkdtemp(path.join(runsRoot, "package-"));
     try {
+      const buildSnapshot = await createBuildSnapshot(staging);
       const resources = path.join(staging, "resources");
       const appDir = path.join(staging, "app");
       const stagedArtifacts = path.join(staging, "artifact");
@@ -52,7 +52,7 @@ async function packageZenX(arguments_) {
       );
       await stagePackage({
         target,
-        outDirectory: out,
+        outDirectory: buildSnapshot,
         rootDirectory: root,
         appDirectory: appDir,
         manifestSha256: assembly.manifestSha256,
@@ -70,7 +70,17 @@ async function packageZenX(arguments_) {
         arch: process.arch,
         name: productName,
         electronVersion: "43.2.0",
-        extraResource: [path.join(resources, "providers")],
+        ...(applicationIconForPlatform(process.platform, target) === undefined
+          ? {}
+          : { icon: applicationIconForPlatform(process.platform, target) }),
+        afterCopy: [
+          async ({ buildPath }) => {
+            await copyPackagedProviderResources({
+              buildPath,
+              sourceDirectory: path.join(resources, "providers"),
+            });
+          },
+        ],
         asar: false,
       });
       if (path.basename(packaged[0]) !== targetDirectory) {
@@ -104,6 +114,40 @@ async function packageZenX(arguments_) {
       await rm(staging, { recursive: true, force: true });
     }
   });
+}
+
+export function applicationIconForPlatform(platform, target = "app") {
+  if (platform !== "darwin" || target !== "app") return undefined;
+  return path.join(zenx, "resources", "icons", "zenx.icns");
+}
+
+/** Build only into the current packaging run before anything snapshots it. */
+export async function createBuildSnapshot(
+  stagingDirectory,
+  build = runZenXBuild,
+) {
+  const buildDirectory = path.join(stagingDirectory, "build");
+  await build(buildDirectory);
+  return buildDirectory;
+}
+
+async function runZenXBuild(buildDirectory) {
+  await run(
+    process.execPath,
+    [
+      path.join(
+        root,
+        "node_modules",
+        "electron-vite",
+        "bin",
+        "electron-vite.js",
+      ),
+      "build",
+      "--outDir",
+      buildDirectory,
+    ],
+    { cwd: zenx },
+  );
 }
 
 export async function withPackagingTargetLock(
@@ -180,6 +224,20 @@ export async function stagePackage(options) {
     });
   }
   await injectProviderManifestDigest(stagedMain, options.manifestSha256);
+}
+
+export async function copyPackagedProviderResources(options) {
+  const resourcesDirectory = path.dirname(options.buildPath);
+  const destination = path.join(
+    resourcesDirectory,
+    path.basename(options.sourceDirectory),
+  );
+  await mkdir(resourcesDirectory, { recursive: true, mode: 0o700 });
+  await cp(options.sourceDirectory, destination, {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
+  return destination;
 }
 
 export function packageManifest(target, zenxPackage) {
