@@ -153,6 +153,7 @@ Tool 状态统一投影为 `queued / running / success / failed / cancelled / ap
 以下是 visual guidance，不是协议或状态要求：
 
 - 用户消息使用右对齐气泡；Agent Message 左侧自然排版，不使用气泡或重复头像轨道。
+- Conversation stream 中的 Agent Message 不显示重复的 assistant logo/avatar + “ZenX” identity row；Completed Turn 的 **Worked for** disclosure 或 Running Turn 的 **Working** 状态直接成为首条 metadata，正文与 inline Trace / Tool affordance 紧随其后。此规则不影响产品壳/Sidebar 的 ZenX 品牌，也不影响 Thread row 的 Provider logo + model identity。
 - Agent Message 与 Trace Group 位于 Turn 的同一一级流中，不制造错误缩进。
 - 正文优先可读宽度、行高和段落节奏；Trace 比正文更小、更弱。
 - Trace Group 保持轻量，不使用厚边框或每一步一个大卡片。
