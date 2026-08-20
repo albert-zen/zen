@@ -1,7 +1,9 @@
 # PRODUCTS
 
-所有接入端平级，都只通过 App Server 协议工作。任何接入端都不得拥有
-自己的 Agent、Thread、Turn 或调度语义。
+Zen App Server 是 Thread 路由、AgentRuntime 执行与 Item event 广播的唯一服务
+入口。CLI、IMZen 与未来 Web 作为协议客户端访问它；ZenX Electron main 托管并
+组合本机 ZAS，renderer 经 typed IPC 消费产品投影。任何产品或 adapter 都不得复制
+ZAS 的 Agent、Thread、Turn 或调度语义。
 
 ## 第一客户端
 
@@ -15,15 +17,16 @@ stub App Server 记录真实调用，在不污染 Zen Core 的前提下扩展协
 
 ## 桌面
 
-**ZenX 正在开发**，是与 CLI、IMZen 平级的本地桌面接入端。当前已跑通 Electron
-host、Thread 列表与恢复、流式 Item、审批、模型切换、soft steer、interrupt 与
-Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / Room，
-以及可显式授权的 bundled/local capability registry 已形成可运行 vertical slice。
+**ZenX 正在开发**，是围绕同一个 ZAS 构建的本地 Electron 产品。Electron main
+托管并组合本机 ZAS host 与桌面外层状态，renderer 经 main/preload typed IPC
+消费产品投影，不另建 Agent、Thread、Turn 或调度语义。当前已跑通 Thread 列表与
+恢复、流式 Item、审批、模型切换、soft steer、interrupt 与 Interrupt & send；
+Provider/onboarding、安全 Markdown、Trigger / Watching / Room，以及可显式授权的
+bundled/local capability registry 已形成可运行 vertical slice。
 ZenX 的产品读取模型来自 ZAS 原生 `ThreadSummary` 查询，并经 Electron main/preload
 typed IPC 暴露；Codex Thread DTO 只属于兼容协议 adapter，不定义 ZenX 产品模型。
-高保真 renderer 提供 Active / Archived Thread 视图：活动 Thread 可重命名和归档，
-归档 Thread 可查看并取消归档；全部通过既有 App Server 操作，Archive 作为可逆的
-安全删除替代，不提供永久删除，也不在活动 Turn 期间暗改 Thread 设置。
+当前 UI/UX 决策只在 [apps/zenx/docs/ui-ux.md](apps/zenx/docs/ui-ux.md) 维护；
+本文件不另行定义页面层级或交互规则。
 Capability package 同时是首期插件安装单元：main/preload 提供 typed plugin snapshot，Host 只从
 manifest 投影已启用 package 的受控 Sidebar/page contribution。Triggers 与 Rooms 已拆成两个
 独立 bundled plugins；任一关闭后，其 contribution 与 host tools 同时撤销，并通过既有 Capability
