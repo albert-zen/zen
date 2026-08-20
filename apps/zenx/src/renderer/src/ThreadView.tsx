@@ -324,12 +324,6 @@ function TurnBlock({
           <WakeupCard entry={wakeup} key={item.id} />
         );
       })}
-      <div className="agent-meta">
-        <span className="agent-glyph" aria-hidden="true">
-          Z
-        </span>
-        <strong>ZenX</strong>
-      </div>
       {complete ? (
         <button
           className="turn-toggle"
