@@ -207,10 +207,7 @@ export function App() {
       confirmProfilePreferences(value.profile);
     });
     profilePreferenceQueueRef.current = result.catch(() => undefined);
-    return result.catch((error: unknown) => {
-      setRequestError(`Could not save Sidebar order: ${describeError(error)}`);
-      throw error;
-    });
+    return result;
   };
 
   const loadThreadSummaries = async (showLoading = false) => {

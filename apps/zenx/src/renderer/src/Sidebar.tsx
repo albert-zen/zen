@@ -107,6 +107,12 @@ export function Sidebar({
   threads,
   triggerSnapshot,
 }: SidebarProps) {
+  const [sidebarOrderError, setSidebarOrderError] = useState<string | null>(
+    null,
+  );
+  const [sidebarOrderRetry, setSidebarOrderRetry] = useState<
+    (() => Promise<void>) | null
+  >(null);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [projectChooserOpen, setProjectChooserOpen] = useState(false);
   const lastUsedProject =
@@ -139,6 +145,19 @@ export function Sidebar({
     const willPin = !pinnedThreadIds.has(thread.threadId);
     await onChangeThreadPinned(thread);
     setPendingPinFocus(willPin && mode === "projects" ? "pinned" : "list");
+  };
+  const reportSidebarOrderError = (
+    error: unknown,
+    retry: () => Promise<void>,
+  ) => {
+    setSidebarOrderError(
+      `Could not save Sidebar order: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    setSidebarOrderRetry(() => retry);
+  };
+  const clearSidebarOrderError = () => {
+    setSidebarOrderError(null);
+    setSidebarOrderRetry(null);
   };
   useLayoutEffect(() => {
     if (pendingPinFocus === null) return;
@@ -315,6 +334,21 @@ export function Sidebar({
           className="sidebar-scroll"
           aria-labelledby="sidebar-thread-list-heading"
         >
+          {sidebarOrderError !== null ? (
+            <div className="sidebar-empty sidebar-error" role="alert">
+              <p>{sidebarOrderError}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  const retry = sidebarOrderRetry;
+                  clearSidebarOrderError();
+                  if (retry !== null) void retry();
+                }}
+              >
+                Try again
+              </button>
+            </div>
+          ) : null}
           {!serverReady ? (
             <p className="sidebar-empty">Waiting for the local App Server.</p>
           ) : threadLoading ? (
@@ -373,6 +407,8 @@ export function Sidebar({
                   onRenameThread={onRenameThread}
                   onReorderProject={onReorderProject}
                   onReorderThread={onReorderThread}
+                  onSidebarOrderError={reportSidebarOrderError}
+                  onSidebarOrderAttempt={clearSidebarOrderError}
                   pendingApprovalThreadIds={pendingApprovalThreadIds}
                   selectedThreadId={selectedThreadId}
                   threads={threads.filter(
@@ -533,6 +569,8 @@ function ProjectsView({
   onRenameThread,
   onReorderProject,
   onReorderThread,
+  onSidebarOrderError,
+  onSidebarOrderAttempt,
   pendingApprovalThreadIds,
   liveThread,
   watchingThreadIds,
@@ -551,6 +589,8 @@ function ProjectsView({
   onRenameThread(threadId: string, title: string): Promise<void>;
   onReorderProject?: SidebarProps["onReorderProject"];
   onReorderThread?: SidebarProps["onReorderThread"];
+  onSidebarOrderError?: (error: unknown, retry: () => Promise<void>) => void;
+  onSidebarOrderAttempt?: () => void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
@@ -624,6 +664,8 @@ function ProjectsView({
                       group.key,
                       dropPlacement(event),
                     ),
+                  onSidebarOrderAttempt,
+                  onSidebarOrderError,
                 );
               },
               onKeyDown: (event) => {
@@ -644,6 +686,8 @@ function ProjectsView({
                       target.key,
                       event.key === "ArrowUp" ? "before" : "after",
                     ),
+                  onSidebarOrderAttempt,
+                  onSidebarOrderError,
                 );
               },
             }
@@ -691,6 +735,8 @@ function ProjectsView({
                       targetThreadId,
                       dropPlacement(event),
                     ),
+                  onSidebarOrderAttempt,
+                  onSidebarOrderError,
                 );
               },
               onKeyDown: (threadIndex, threadId, event) => {
@@ -712,6 +758,8 @@ function ProjectsView({
                       target.threadId,
                       event.key === "ArrowUp" ? "before" : "after",
                     ),
+                  onSidebarOrderAttempt,
+                  onSidebarOrderError,
                 );
               },
             }
@@ -1348,11 +1396,16 @@ function dropPlacement<T extends HTMLElement>(
 async function reorderAndRestoreFocus(
   handleId: string,
   operation: () => Promise<void>,
+  onAttempt?: () => void,
+  onError?: (error: unknown, retry: () => Promise<void>) => void,
 ): Promise<void> {
+  onAttempt?.();
   try {
     await operation();
-  } catch {
-    // App reports persistence failures in its existing request-error surface.
+  } catch (error) {
+    onError?.(error, () =>
+      reorderAndRestoreFocus(handleId, operation, onAttempt, onError),
+    );
   } finally {
     const restore = () => document.getElementById(handleId)?.focus();
     if (typeof requestAnimationFrame === "function") {

@@ -52,8 +52,9 @@ test("reorder handles stay visually quiet with keyboard and narrow-width access"
   );
   assert.match(
     styles,
-    /\.reorder-handle\s*\{[^}]*opacity: 0;[^}]*visibility: hidden;[^}]*pointer-events: none;/su,
+    /\.reorder-handle\s*\{[^}]*opacity: 0;[^}]*pointer-events: none;/su,
   );
+  assert.doesNotMatch(styles, /\.reorder-handle\s*\{[^}]*visibility: hidden/su);
   assert.match(
     styles,
     /\.project-header:focus-within > \.project-reorder-handle/u,

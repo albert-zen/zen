@@ -13,7 +13,7 @@ import {
   type SidebarOrderPlacement,
 } from "../src/renderer/src/thread-list.js";
 
-const { act, createElement, useState } = React;
+const { act, createElement, useRef, useState } = React;
 Object.assign(globalThis, { React });
 const { Sidebar } = await import("../src/renderer/src/Sidebar.js");
 const noop = () => undefined;
@@ -118,6 +118,27 @@ test("keyboard reorder restores focus while preserving selection, Pin, and activ
   });
 });
 
+test("reorder handles remain in sequential Tab order while visually quiet", async () => {
+  await withDom(async (root) => {
+    await act(async () => root.render(createElement(StaticSidebar)));
+    const handles = [
+      ...document.querySelectorAll<HTMLButtonElement>(".reorder-handle"),
+    ];
+    assert.ok(handles.length > 0);
+    assert.ok(handles.every((handle) => handle.tabIndex === 0));
+    assert.deepEqual(
+      handles.map((handle) => handle.id),
+      [
+        "sidebar-project-order-%2Fwork%2Fa",
+        "sidebar-thread-order-active",
+        "sidebar-thread-order-idle",
+        "sidebar-project-order-%2Fwork%2Fb",
+        "sidebar-thread-order-other",
+      ],
+    );
+  });
+});
+
 test("native Thread drag refuses a drop in a different Project", async () => {
   let reorderCalls = 0;
   await withDom(async (root) => {
@@ -144,6 +165,54 @@ test("native Thread drag refuses a drop in a different Project", async () => {
     });
     assert.equal(reorderCalls, 0);
     assert.deepEqual(projectKeys(), ["/work/a", "/work/b"]);
+  });
+});
+
+test("Sidebar order failure is recoverable without replacing the Thread view", async () => {
+  await withDom(async (root) => {
+    await act(async () => root.render(createElement(FailingSidebar)));
+    const projectA = requiredButton('[aria-label^="Reorder project a."]');
+    projectA.focus();
+    await act(async () => {
+      projectA.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.match(
+      document.body.textContent ?? "",
+      /Could not save Sidebar order/u,
+    );
+    assert.equal(
+      document
+        .querySelector('[data-thread-id="active"] .thread-row')
+        ?.getAttribute("aria-current"),
+      "page",
+    );
+    assert.equal(document.activeElement, projectA);
+
+    await act(async () => {
+      requiredButton(".sidebar-error button").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Could not save Sidebar order/u,
+    );
+    assert.deepEqual(projectKeys(), ["/work/b", "/work/a"]);
+    assert.equal(document.activeElement, projectA);
+    assert.equal(
+      document
+        .querySelector('[data-thread-id="active"] .thread-row')
+        ?.getAttribute("aria-current"),
+      "page",
+    );
   });
 });
 
@@ -229,6 +298,34 @@ function OrderingSidebar() {
           placement,
         ),
       ),
+  });
+}
+
+function FailingSidebar() {
+  const [order, setOrder] = useState<ZenXSidebarOrder>({
+    projectKeys: [],
+    threadIdsByProject: {},
+  });
+  const attempts = useRef(0);
+  return createElement(StaticSidebar, {
+    sidebarOrder: order,
+    onReorderProject: async (
+      sourceKey: string,
+      targetKey: string,
+      placement: SidebarOrderPlacement,
+    ) => {
+      attempts.current += 1;
+      if (attempts.current === 1) throw new Error("temporary profile failure");
+      setOrder((current) =>
+        moveSidebarProject(
+          current,
+          projection,
+          sourceKey,
+          targetKey,
+          placement,
+        ),
+      );
+    },
   });
 }
 
