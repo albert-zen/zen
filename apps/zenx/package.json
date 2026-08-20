@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "brand:generate": "node ./scripts/generate-brand-assets.mjs",
+    "brand:check": "node ./scripts/generate-brand-assets.mjs --check",
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false",
     "test": "tsx --test test/**/*.test.ts test/**/*.test.mjs",
     "test:project-identity": "tsx --test test/project-projection.test.ts test/settings-service.test.ts test/self-control-capability.test.ts",
@@ -20,7 +22,7 @@
     "smoke:windows-projects": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-project-workspace-smoke.ps1",
     "smoke:windows-user-browser": "tsx src/main/user-browser-smoke.ts",
     "smoke:providers": "npm run build && electron ./out/main/provider-smoke.js",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run brand:check && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "react": "^19.2.8",

@@ -75,9 +75,15 @@ Thread
 ### 3.1 品牌与 Logo
 
 - 产品壳必须保留正式 **ZenX logo / wordmark** 的位置。Provider logo 只用于 Thread 的 Provider / model identity，不能替代 ZenX 产品标识；原型中的合成品牌标记不是正式资产。
-- [ZenX Logo 概念参考板](assets/brand/zenx-logo-concept-board.png) 是用户制作的设计概念参考：两个相同组件在中心重叠并分别构成 Z / X，表达 symmetry、connection 与 infinite potential，同时配合 ZENX 字标。
-- 该概念板不是可直接用于产品的 production logo asset；不得从图中抠取或重编码 raster，也不得据此擅自重画。正式 UI 等待用户导出的 SVG 与适合小尺寸界面的平面单色版本；金属、发光与压印只属于品牌展示效果。
-- 当前 renderer 只保留可替换的 Logo 组件与 asset 入口，不把临时 Logo 的几何结构写入产品壳布局。
+- [ZenX Logo 概念参考板](assets/brand/zenx-logo-concept-board.png) 是用户制作的设计概念参考：两个相同组件在中心形成连接，概念说明以 overlap 表达 symmetry、connection 与 infinite potential，同时配合 ZENX 字标。平面构造图中的 X 两件组件在中心接缝相接，不共享内部几何区域。
+- Production ZX 由用户确认的概念板 04 黑白轮廓经过机械阈值分割、闭合区域填充和 Potrace 曲线拟合生成：Z 与 X 保持两个独立 path，X 两片在源轮廓中分离并在 compact mark 中保留为两个独立构件；不嵌入 raster，不保留线稿 stroke，也不把金属效果带入 canonical SVG。概念板保持 byte-identical，是用户创作的唯一设计来源；mechanical SVG 是其工程化派生资产。字标仍是无字体依赖的路径化光学校准近似。
+- 资产角色：`zenx-symbol.svg` 是完整 Z + X 符号，`zenx-lockup.svg` 用于较大品牌场景，`zenx-wordmark.svg` 是无字体依赖的路径字标，`zenx-mark.svg` 是方形 app / Sidebar 小标。Renderer 只经 `ZenXBrand` 的可替换 asset seam 使用 mark 与 wordmark，不把几何写入布局/CSS，也不与 Provider branding 混用。
+- 小尺寸默认使用 compact X center-seam mark：16 / 20 / 24 / 32px 均保持一个单色 silhouette；低于 16px 不使用。完整 symbol、lockup 和 wordmark 不在 32px 小图标位压缩。对比预览中的压缩 ZX 方案在 32px 以下过密，因此不作为产品资产。
+- Canonical SVG 使用透明背景、稳定 `viewBox` 和 `currentColor` 单色填充。直接内嵌时设置 `color`；作为外部 asset 时由组件用 CSS mask 投影当前文字色。深色背景使用浅色，浅色背景使用近黑色，并保持清晰对比；不通过 outline、shadow 或滤镜补偿低对比。
+- macOS application icon 使用独立的 `1024×1024` vector source：近黑平面圆角 tile + 暖白 compact mark，图形限制在 80px source safe area 内；`.icns` 由同一 source 的 16–1024px deterministic raster set 生成。该固定双色是 application-icon fill contract，不改变 canonical monochrome masters。
+- `ZENX` 字标按概念板可见的宽体几何笔画进行路径化光学近似，不声称复刻未知 proprietary font；其字宽、横画与字距只服务于与原板一致的技术感。
+- 金属、发光、压印、材质、outline 和展示板阴影只属于 presentation treatment，不进入正常产品 UI、canonical SVG 或 app icon。
+- [Production contact sheet](assets/brand/zenx-brand-preview.svg) 以确定性 SVG 展示深/浅背景、16 / 20 / 24 / 32 / 64 / 128 / 512px、compact mark、完整 symbol / lockup、wordmark、compact 方案对比与 macOS icon safe area。
 
 ### 3.2 默认布局与核心导航
 

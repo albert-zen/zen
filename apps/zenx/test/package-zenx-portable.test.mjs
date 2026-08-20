@@ -15,6 +15,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  applicationIconForPlatform,
   copyPackagedProviderResources,
   createBuildSnapshot,
   packageManifest,
@@ -24,6 +25,15 @@ import {
 } from "../scripts/package-zenx-portable.mjs";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
+
+test("uses the production ICNS only for the packaged macOS application", () => {
+  assert.equal(
+    path.basename(applicationIconForPlatform("darwin", "app")),
+    "zenx.icns",
+  );
+  assert.equal(applicationIconForPlatform("darwin", "smoke"), undefined);
+  assert.equal(applicationIconForPlatform("win32", "app"), undefined);
+});
 
 test("copies packaged provider symlinks verbatim into the platform resources directory", async () => {
   const directory = await mkdtemp(
