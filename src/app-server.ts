@@ -375,14 +375,20 @@ export class ZenAppServer {
       throw new AppServerError("invalid_request", "Turn input cannot be empty");
     }
     const launch = await this.#withThreadMutation(threadId, async () => {
-      if (this.#activeTurns.has(threadId)) {
-        throw new AppServerError(
-          "thread_busy",
-          `Thread ${threadId} already has a running turn`,
-        );
-      }
-
       const thread = await this.#requireThread(threadId);
+      const predecessor = this.#activeTurns.get(threadId);
+      if (predecessor !== undefined) {
+        if (!this.#isTerminal(thread, predecessor.turnId)) {
+          throw new AppServerError(
+            "thread_busy",
+            `Thread ${threadId} already has a running turn`,
+          );
+        }
+        // A terminal Item is externally observable before the execution
+        // handle's finalizer removes it. Preserve idle => startable semantics
+        // by awaiting that exact predecessor instead of racing its finalizer.
+        await predecessor.done;
+      }
       const pendingReplacement = this.#pendingReplacement(thread);
       if (
         pendingReplacement !== undefined &&

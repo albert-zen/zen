@@ -13,6 +13,7 @@ import type {
   ThreadTitleInference,
   ThreadTitleSnapshot,
 } from "../src/main/thread-title-types.js";
+import { waitForTitleStatus } from "./fixtures/thread-title-state.js";
 
 test("stages the first meaningful input immediately, bounds it, then generates", async () => {
   await withCoordinator(async ({ coordinator, inference, events, names }) => {
@@ -22,11 +23,17 @@ test("stages the first meaningful input immediately, bounds it, then generates",
     assert.equal(observed?.status, "generating");
     assert.ok(Array.from(observed?.title ?? "").length <= 64);
     inference.resolve("Semantic release planning");
-    await waitFor(events, "thread-a", "generated");
+    await waitForTitleStatus(
+      coordinator,
+      "thread-a",
+      "generated",
+      "initial title generation",
+    );
     assert.equal(
       coordinator.snapshot()["thread-a"]?.title,
       "Semantic release planning",
     );
+    await coordinator.stop();
     assert.deepEqual(names.slice(-1), ["Semantic release planning"]);
   });
 });
@@ -38,12 +45,22 @@ test("failure preserves the provisional title and explicit retry can generate", 
       "Investigate flaky CI",
     );
     inference.reject(new Error("title model unavailable"));
-    await waitFor(events, "thread-a", "failed");
+    await waitForTitleStatus(
+      coordinator,
+      "thread-a",
+      "failed",
+      "failed title generation",
+    );
     assert.equal(coordinator.snapshot()["thread-a"]?.title, observed?.title);
     const retry = await coordinator.retry("thread-a");
     assert.equal(retry.status, "generating");
     inference.resolve("Flaky CI investigation");
-    await waitFor(events, "thread-a", "generated");
+    await waitForTitleStatus(
+      coordinator,
+      "thread-a",
+      "generated",
+      "explicit title retry",
+    );
   });
 });
 
@@ -55,7 +72,7 @@ test("manual rename before a late completion is authoritative", async () => {
       "My authoritative title",
     );
     inference.resolve("Late generated title");
-    await tick();
+    await coordinator.stop();
     assert.equal(manual.status, "manual");
     assert.equal(
       coordinator.snapshot()["thread-a"]?.title,
@@ -69,7 +86,12 @@ test("manual rename after generation remains authoritative", async () => {
   await withCoordinator(async ({ coordinator, inference, events }) => {
     await coordinator.observe("thread-a", "Original request");
     inference.resolve("Generated title");
-    await waitFor(events, "thread-a", "generated");
+    await waitForTitleStatus(
+      coordinator,
+      "thread-a",
+      "generated",
+      "generation before manual rename",
+    );
     await coordinator.rename("thread-a", "Manual after generation");
     assert.equal(coordinator.snapshot()["thread-a"]?.status, "manual");
     assert.equal(
@@ -89,7 +111,12 @@ test("duplicate first messages launch only one generation", async () => {
     assert.deepEqual(duplicate, first);
     assert.equal(inference.calls, 1);
     inference.resolve("Done");
-    await waitFor(events, "thread-a", "generated");
+    await waitForTitleStatus(
+      coordinator,
+      "thread-a",
+      "generated",
+      "deduplicated title generation",
+    );
   });
 });
 
@@ -113,14 +140,16 @@ test("restart marks in-flight generation failed without automatic retry", async 
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-title-restart-"),
   );
+  let first: ZenXThreadTitleCoordinator | undefined;
+  let restarted: ZenXThreadTitleCoordinator | undefined;
   try {
     const store = new ZenXThreadTitleStore(path.join(directory, "titles.json"));
     const inference = new ControlledInference();
-    const first = coordinator(store, inference);
+    first = coordinator(store, inference);
     await first.initialize();
     await first.observe("thread-a", "Restart race");
     const restartedInference = new ControlledInference();
-    const restarted = coordinator(store, restartedInference);
+    restarted = coordinator(store, restartedInference);
     await restarted.initialize();
     assert.equal(restarted.snapshot()["thread-a"]?.status, "failed");
     assert.match(
@@ -129,6 +158,8 @@ test("restart marks in-flight generation failed without automatic retry", async 
     );
     assert.equal(restartedInference.calls, 0);
   } finally {
+    await restarted?.close();
+    await first?.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -137,11 +168,12 @@ test("corrupt title metadata disables naming without starting inference", async 
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-title-corrupt-"),
   );
+  let instance: ZenXThreadTitleCoordinator | undefined;
   try {
     const file = path.join(directory, "titles.json");
     await writeFile(file, "{not-json", "utf8");
     const inference = new ControlledInference();
-    const instance = coordinator(new ZenXThreadTitleStore(file), inference);
+    instance = coordinator(new ZenXThreadTitleStore(file), inference);
     await instance.initialize();
     await assert.rejects(
       instance.observe("thread-a", "Turn must still be allowed by the caller"),
@@ -149,6 +181,9 @@ test("corrupt title metadata disables naming without starting inference", async 
     );
     assert.equal(inference.calls, 0);
   } finally {
+    if (instance !== undefined) {
+      await assert.rejects(instance.close(), /invalid JSON/u);
+    }
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -162,16 +197,19 @@ async function withCoordinator(
   }) => Promise<void>,
 ): Promise<void> {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-title-"));
+  let instanceToClose: ZenXThreadTitleCoordinator | undefined;
   try {
     const store = new ZenXThreadTitleStore(path.join(directory, "titles.json"));
     const inference = new ControlledInference();
     const names: string[] = [];
     const instance = coordinator(store, inference, names);
+    instanceToClose = instance;
     const events: ThreadTitleSnapshot[] = [];
     instance.onChange((snapshot) => events.push(snapshot));
     await instance.initialize();
     await run({ coordinator: instance, inference, events, names });
   } finally {
+    await instanceToClose?.close();
     await rm(directory, { recursive: true, force: true });
   }
 }
@@ -198,11 +236,28 @@ class ControlledInference implements ThreadTitleInference {
     reject(error: Error): void;
   }> = [];
 
-  async generate(): Promise<string> {
+  async generate(
+    _input: string,
+    _model: string,
+    signal: AbortSignal,
+  ): Promise<string> {
     this.calls += 1;
-    return await new Promise<string>((resolve, reject) =>
-      this.#pending.push({ resolve, reject }),
-    );
+    return await new Promise<string>((resolve, reject) => {
+      const abort = (): void => pending.reject(abortError(signal));
+      const pending = {
+        resolve: (value: string): void => {
+          signal.removeEventListener("abort", abort);
+          resolve(value);
+        },
+        reject: (error: Error): void => {
+          signal.removeEventListener("abort", abort);
+          reject(error);
+        },
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+      else this.#pending.push(pending);
+    });
   }
 
   resolve(value: string): void {
@@ -213,19 +268,8 @@ class ControlledInference implements ThreadTitleInference {
   }
 }
 
-async function waitFor(
-  events: ThreadTitleSnapshot[],
-  threadId: string,
-  status: string,
-): Promise<void> {
-  for (let attempt = 0; attempt < 5_000; attempt += 1) {
-    if (events.some((snapshot) => snapshot[threadId]?.status === status))
-      return;
-    await tick();
-  }
-  assert.fail(`Timed out waiting for title status ${status}`);
-}
-
-async function tick(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Title generation aborted", "AbortError");
 }

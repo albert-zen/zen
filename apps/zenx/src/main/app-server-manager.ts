@@ -336,8 +336,18 @@ export class AppServerManager {
     const child = this.#child;
     if (child !== undefined && child.exitCode === null) {
       child.send({ type: "shutdown" } satisfies HostCommand);
-      await waitForExit(child, 3_000);
-      if (child.exitCode === null) child.kill("SIGTERM");
+      const exitedGracefully = await waitForExit(child, 3_000);
+      if (!exitedGracefully) {
+        child.kill("SIGTERM");
+        const terminated = await waitForExit(child, 3_000);
+        if (!terminated) {
+          throw new Error(
+            `Timed out after 3000ms waiting for Zen App Server child ${String(
+              child.pid ?? "unknown",
+            )} to settle after SIGTERM`,
+          );
+        }
+      }
     }
     this.#child = undefined;
     await this.#recoveryPromise;
@@ -701,18 +711,25 @@ async function waitForReady(
 async function waitForExit(
   child: ChildProcess,
   timeoutMs: number,
-): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      child.off("exit", exited);
-      resolve();
-    }, timeoutMs);
-    const exited = (): void => {
-      clearTimeout(timer);
-      resolve();
+): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (exited: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      child.off("exit", didExit);
+      resolve(exited);
     };
-    child.once("exit", exited);
+    const didExit = (): void => finish(true);
+    child.once("exit", didExit);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      finish(true);
+      return;
+    }
+    timer = setTimeout(() => finish(false), timeoutMs);
   });
 }
 

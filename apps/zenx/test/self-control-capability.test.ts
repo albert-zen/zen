@@ -72,7 +72,11 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     });
     const threadId = stringField(created, "threadId");
 
-    const firstCommand = waitForCommand(manager, threadId);
+    const firstCommand = waitForCommand(
+      manager,
+      threadId,
+      "initial self-control command start",
+    );
     const first = await invoke(tools, "zenx_threads_send", {
       threadId,
       mode: "start",
@@ -85,6 +89,12 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     assert.equal(active.status, "active");
     assert.equal(active.activeTurnId, firstTurnId);
 
+    const firstCompleted = waitForManagerTurnCompleted(
+      manager,
+      threadId,
+      "steered initial Turn completion",
+      (turnId) => turnId === firstTurnId,
+    );
     const steered = await invoke(tools, "zenx_threads_send", {
       threadId,
       mode: "steer",
@@ -94,9 +104,13 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     });
     assert.equal(steered.mode, "steer");
     assert.equal(steered.expectedTurnId, firstTurnId);
-    await waitUntilIdle(tools, threadId);
+    await firstCompleted;
 
-    const secondCommand = waitForCommand(manager, threadId);
+    const secondCommand = waitForCommand(
+      manager,
+      threadId,
+      "replace target command start",
+    );
     const second = await invoke(tools, "zenx_threads_send", {
       threadId,
       mode: "start",
@@ -105,6 +119,12 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     });
     const secondTurnId = stringField(second, "turnId");
     await secondCommand;
+    const successorCompleted = waitForManagerTurnCompleted(
+      manager,
+      threadId,
+      "replacement successor completion",
+      (turnId) => turnId !== secondTurnId,
+    );
     const replaced = await invoke(tools, "zenx_threads_send", {
       threadId,
       mode: "replace",
@@ -114,15 +134,22 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     });
     assert.equal(replaced.interruptedTurnId, secondTurnId);
     assert.notEqual(replaced.turnId, secondTurnId);
-    await waitUntilIdle(tools, threadId);
+    await successorCompleted;
 
+    const followUpCompleted = waitForManagerTurnCompleted(
+      manager,
+      threadId,
+      "follow-up Turn completion",
+      (turnId) =>
+        turnId !== secondTurnId && turnId !== stringField(replaced, "turnId"),
+    );
     await invoke(tools, "zenx_threads_send", {
       threadId,
       mode: "start",
       text: "Follow-up prompt.",
       clientUserMessageId: "host-follow-up",
     });
-    await waitUntilIdle(tools, threadId);
+    await followUpCompleted;
 
     const recent = await invoke(tools, "zenx_threads_read", {
       threadId,
@@ -200,6 +227,7 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     const bridgeCompleted = waitForManagerTurnCompleted(
       manager,
       bridgeThread.thread.id,
+      "host capability bridge Turn completion",
     );
     await manager.request("turn/start", {
       threadId: bridgeThread.thread.id,
@@ -847,11 +875,16 @@ async function invoke(
 function waitForCommand(
   manager: AppServerManager,
   threadId: string,
+  stage: string,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       dispose();
-      reject(new Error("Timed out waiting for command execution"));
+      reject(
+        new Error(
+          `Timed out after 10000ms during ${stage}: waiting for command item/started on Thread ${threadId}`,
+        ),
+      );
     }, 10_000);
     const dispose = manager.onNotification((method, params) => {
       if (method === "item/started") {
@@ -868,19 +901,6 @@ function waitForCommand(
       }
     });
   });
-}
-
-async function waitUntilIdle(
-  tools: ToolExecutor,
-  threadId: string,
-): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const status = await invoke(tools, "zenx_threads_status", { threadId });
-    if (status.status === "idle") return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error("Timed out waiting for Thread to become idle");
 }
 
 function waitForTurnCompleted(
@@ -905,16 +925,27 @@ function waitForTurnCompleted(
 function waitForManagerTurnCompleted(
   manager: AppServerManager,
   threadId: string,
+  stage: string,
+  matchesTurn: (turnId: string) => boolean = () => true,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    const observedTurnIds: string[] = [];
     const timer = setTimeout(() => {
       dispose();
-      reject(new Error("Timed out waiting for hosted turn/completed"));
+      reject(
+        new Error(
+          `Timed out after 10000ms during ${stage}: waiting for hosted turn/completed on Thread ${threadId}; observed Turn IDs=${JSON.stringify(
+            observedTurnIds,
+          )}`,
+        ),
+      );
     }, 10_000);
     const dispose = manager.onNotification((method, params) => {
       if (method !== "turn/completed") return;
       const completed = params as ServerNotificationParams["turn/completed"];
       if (completed.threadId !== threadId) return;
+      observedTurnIds.push(completed.turn.id);
+      if (!matchesTurn(completed.turn.id)) return;
       clearTimeout(timer);
       dispose();
       resolve();

@@ -27,7 +27,7 @@ import {
 } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
 import { projectThread } from "../src/protocol/codex/mapper.js";
-import { AgentRuntime } from "../src/runtime.js";
+import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
 import {
   InMemoryThreadMetadataStore,
   JsonlThreadMetadataStore,
@@ -45,17 +45,20 @@ function createServer(
     tools?: ToolExecutor;
     idFactory?: () => string;
     runtimeIdFactory?: () => string;
+    runtime?: AgentRuntime;
   } = {},
 ): ZenAppServer {
   return new ZenAppServer({
     journal: options.journal ?? new InMemoryThreadJournal(),
-    runtime: new AgentRuntime({
-      model: options.model ?? new FakeModel(),
-      tools: options.tools ?? new ShellToolExecutor(),
-      ...(options.runtimeIdFactory === undefined
-        ? {}
-        : { idFactory: options.runtimeIdFactory }),
-    }),
+    runtime:
+      options.runtime ??
+      new AgentRuntime({
+        model: options.model ?? new FakeModel(),
+        tools: options.tools ?? new ShellToolExecutor(),
+        ...(options.runtimeIdFactory === undefined
+          ? {}
+          : { idFactory: options.runtimeIdFactory }),
+      }),
     modelCatalog:
       options.modelCatalog ??
       new StaticModelCatalog([{ id: "fake", isDefault: true }]),
@@ -1125,6 +1128,65 @@ test("allows only one active turn per thread under concurrent requests", async (
   assert.equal(rejected.length, 1);
   assert.match(String(rejected[0]?.reason), /already has a running turn/);
   await fulfilled[0]?.value.done;
+});
+
+test("waits for a terminal predecessor handle to settle before starting its successor", async () => {
+  const predecessorTerminal = testDeferred<void>();
+  const releasePredecessor = testDeferred<void>();
+  let runs = 0;
+  class DelayedSettlementRuntime extends AgentRuntime {
+    override async runTurn(options: RunTurnOptions): Promise<void> {
+      await super.runTurn(options);
+      runs += 1;
+      if (runs !== 1) return;
+      predecessorTerminal.resolve();
+      await releasePredecessor.promise;
+    }
+  }
+  const runtime = new DelayedSettlementRuntime({
+    model: new FakeModel(),
+    tools: new ShellToolExecutor(),
+  });
+  const server = createServer({ runtime });
+  const thread = await server.startThread();
+  const predecessor = await server.startTurn(thread.id, "first");
+  await testWithin(
+    predecessorTerminal.promise,
+    "predecessor canonical terminal Item before handle settlement",
+  );
+  assert.equal(
+    (await server.readThread(thread.id)).turns[0]?.status,
+    "completed",
+  );
+
+  let earlyOutcome:
+    | PromiseSettledResult<Awaited<ReturnType<typeof server.startTurn>>>
+    | undefined;
+  const successorOutcome = server.startTurn(thread.id, "second").then(
+    (value) => ({ status: "fulfilled", value }) as const,
+    (reason: unknown) => ({ status: "rejected", reason }) as const,
+  );
+  void successorOutcome.then((outcome) => {
+    earlyOutcome = outcome;
+  });
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      earlyOutcome,
+      undefined,
+      "successor launch must wait while the terminal predecessor handle settles",
+    );
+  } finally {
+    releasePredecessor.resolve();
+  }
+
+  await predecessor.done;
+  const outcome = await testWithin(
+    successorOutcome,
+    "successor launch after predecessor handle settlement",
+  );
+  assert.equal(outcome.status, "fulfilled");
+  if (outcome.status === "fulfilled") await outcome.value.done;
 });
 
 test("deduplicates concurrent cold thread loads before starting a turn", async () => {
