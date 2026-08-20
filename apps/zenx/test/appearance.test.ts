@@ -114,6 +114,11 @@ test("light semantic text, primary actions, and control boundaries meet contrast
   );
   assert.match(
     css,
+    /\.composer > textarea::placeholder\s*\{[^}]*color:\s*var\(--text-3\)[^}]*opacity:\s*1/u,
+  );
+  assert.match(css, /\.field small\s*\{[^}]*color:\s*var\(--text-3\)/u);
+  assert.match(
+    css,
     /\.thread-row\.selected\s*\{[^}]*background:\s*var\(--surface-hover\)/u,
   );
   assert.match(
@@ -127,6 +132,36 @@ test("light semantic text, primary actions, and control boundaries meet contrast
     assert.ok(inputRule, `missing .${selector} input rule`);
     assert.match(inputRule, /border:\s*1px solid var\(--border-control\)/u);
     assert.match(inputRule, /background:\s*var\(--surface-inset\)/u);
+  }
+
+  const lightOpacity = (selector: string) => {
+    const value = css.match(
+      new RegExp(
+        `:root\\[data-appearance="light"\\] \\.${selector}\\s*\\{[^}]*opacity:\\s*([0-9.]+)`,
+        "u",
+      ),
+    )?.[1];
+    assert.ok(value, `missing Light opacity override for .${selector}`);
+    return Number(value);
+  };
+  const serviceOpacity = lightOpacity("service-status");
+  const unavailableThreadOpacity = lightOpacity("thread-row\\.system-error");
+  assert.equal(serviceOpacity, 1);
+  assert.equal(unavailableThreadOpacity, 1);
+  assert.ok(
+    effectiveContrastRatio(token("text-3"), token("sidebar"), serviceOpacity) >=
+      4.5,
+    "Light service status must remain readable after opacity compositing",
+  );
+  for (const surface of ["sidebar", "surface-hover"]) {
+    assert.ok(
+      effectiveContrastRatio(
+        token("text-3"),
+        token(surface),
+        unavailableThreadOpacity,
+      ) >= 4.5,
+      `unavailable Thread metadata must remain readable over --${surface}`,
+    );
   }
 });
 
@@ -170,10 +205,43 @@ function contrastRatio(foreground: string, background: string): number {
   );
 }
 
-function relativeLuminance(hex: string): number {
-  const channels = [1, 3, 5].map((offset) =>
+function effectiveContrastRatio(
+  foreground: string,
+  background: string,
+  opacity: number,
+): number {
+  return contrastRatio(
+    compositeHex(foreground, background, opacity),
+    background,
+  );
+}
+
+function compositeHex(
+  foreground: string,
+  background: string,
+  opacity: number,
+): string {
+  const foregroundChannels = hexChannels(foreground);
+  const backgroundChannels = hexChannels(background);
+  return `#${foregroundChannels
+    .map((channel, index) =>
+      Math.round(
+        channel * opacity + (backgroundChannels[index] ?? 0) * (1 - opacity),
+      )
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+function hexChannels(hex: string): number[] {
+  return [1, 3, 5].map((offset) =>
     Number.parseInt(hex.slice(offset, offset + 2), 16),
   );
+}
+
+function relativeLuminance(hex: string): number {
+  const channels = hexChannels(hex);
   const [red = 0, green = 0, blue = 0] = channels.map((value) => {
     const channel = value / 255;
     return channel <= 0.04045
