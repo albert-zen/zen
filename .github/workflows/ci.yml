@@ -163,6 +163,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm --workspace apps/zenx run test:project-identity
       - run: npm --workspace apps/zenx run smoke:windows-projects
 
   zenx-windows-user-browser-smoke:

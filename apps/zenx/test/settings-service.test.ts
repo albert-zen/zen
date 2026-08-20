@@ -5,6 +5,7 @@ import {
   readFile,
   rm,
   symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -403,6 +404,97 @@ test(
   async () => await exerciseAliasWorkspaceMutations("junction"),
 );
 
+test(
+  "POSIX queued mutations resolve aliases after a symlink retarget",
+  { skip: process.platform === "win32" },
+  async () => await exerciseQueuedAliasRetarget("dir"),
+);
+
+test(
+  "Windows queued mutations resolve aliases after a junction retarget",
+  { skip: process.platform !== "win32" },
+  async () => await exerciseQueuedAliasRetarget("junction"),
+);
+
+test("workspace mutations retry one filesystem identity change", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-settings-identity-retry-"),
+  );
+  const first = path.join(directory, "first");
+  const second = path.join(directory, "second");
+  const alias = path.join(directory, "alias");
+  let aliasResolutions = 0;
+  try {
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(
+        path.join(directory, "credentials.vault"),
+        encryption,
+      ),
+      subscription: idleSubscription(),
+      projectPlatform: "linux",
+      projectRealpath: async (candidate) => {
+        if (candidate !== alias) return candidate;
+        aliasResolutions += 1;
+        return aliasResolutions === 1 ? first : second;
+      },
+    });
+    await service.initialize({ ZENX_CWD: second });
+
+    await service.markWorkspaceUsed(alias);
+
+    assert.equal(
+      (await service.publicSettings()).profile.lastUsedWorkspace,
+      second,
+    );
+    assert.equal(aliasResolutions, 4);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("workspace mutations fail after bounded identity revalidation", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-settings-identity-unstable-"),
+  );
+  const first = path.join(directory, "first");
+  const second = path.join(directory, "second");
+  const alias = path.join(directory, "alias");
+  let aliasResolutions = 0;
+  try {
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(
+        path.join(directory, "credentials.vault"),
+        encryption,
+      ),
+      subscription: idleSubscription(),
+      projectPlatform: "linux",
+      projectRealpath: async (candidate) => {
+        if (candidate !== alias) return candidate;
+        aliasResolutions += 1;
+        return aliasResolutions % 2 === 1 ? first : second;
+      },
+    });
+    await service.initialize({ ZENX_CWD: second });
+
+    await assert.rejects(
+      async () => await service.markWorkspaceUsed(alias),
+      /filesystem identity changed/u,
+    );
+
+    assert.equal(
+      (await service.publicSettings()).profile.lastUsedWorkspace,
+      null,
+    );
+    assert.equal(aliasResolutions, 4);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("clears the OAuth concurrency guard after failure so login can retry", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-oauth-retry-"));
   let attempts = 0;
@@ -477,6 +569,107 @@ async function exerciseAliasWorkspaceMutations(
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+async function exerciseQueuedAliasRetarget(
+  type: "dir" | "junction",
+): Promise<void> {
+  for (const operation of ["mark-used", "default", "remove"] as const) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), `zenx-settings-retarget-${operation}-`),
+    );
+    const first = path.join(directory, "first");
+    const second = path.join(directory, "second");
+    const other = path.join(directory, "other");
+    const alias = path.join(directory, "alias");
+    try {
+      await Promise.all([mkdir(first), mkdir(second), mkdir(other)]);
+      await symlink(first, alias, type);
+      const vault = new BlockingCredentialVault(
+        path.join(directory, "credentials.vault"),
+        encryption,
+      );
+      const service = new ZenXSettingsService({
+        userDataDirectory: directory,
+        zenDataDirectory: path.join(directory, "zen"),
+        vault,
+        subscription: idleSubscription(),
+      });
+      await service.initialize({ ZENX_CWD: other });
+      await service.addWorkspace(second);
+      const profile = (await service.publicSettings()).profile;
+
+      const blocker = vault.blockNextWrite();
+      const queuedSave = service.save(profile, "queued-secret");
+      await blocker.started;
+      const mutation =
+        operation === "mark-used"
+          ? service.markWorkspaceUsed(alias)
+          : operation === "default"
+            ? service.setDefaultWorkspace(alias)
+            : service.removeWorkspace(alias);
+      await unlink(alias);
+      await symlink(second, alias, type);
+      blocker.release();
+      await queuedSave;
+      await mutation;
+
+      const updated = (await service.publicSettings()).profile;
+      if (operation === "mark-used") {
+        assert.equal(updated.lastUsedWorkspace, second);
+      } else if (operation === "default") {
+        assert.equal(updated.workspace, second);
+      } else {
+        assert.deepEqual(updated.workspaces, [other]);
+        assert.equal(updated.workspace, other);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+}
+
+class BlockingCredentialVault extends ZenXCredentialVault {
+  #nextWrite:
+    | {
+        readonly started: () => void;
+        readonly gate: Promise<void>;
+      }
+    | undefined;
+
+  blockNextWrite(): { started: Promise<void>; release(): void } {
+    let announceStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      announceStarted = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#nextWrite = { started: announceStarted, gate };
+    return { started, release };
+  }
+
+  override async writeApiKey(apiKey: string): Promise<void> {
+    const blocker = this.#nextWrite;
+    this.#nextWrite = undefined;
+    if (blocker !== undefined) {
+      blocker.started();
+      await blocker.gate;
+    }
+    await super.writeApiKey(apiKey);
+  }
+}
+
+function idleSubscription(): Pick<
+  OpenAiSubscriptionAuthProfile,
+  "login" | "logout" | "status"
+> {
+  return {
+    login: async () => undefined,
+    logout: async () => undefined,
+    status: async () => ({ authenticated: false, expired: false }),
+  };
 }
 
 test("cleans an aborted manual OAuth wait and accepts a later login", async () => {

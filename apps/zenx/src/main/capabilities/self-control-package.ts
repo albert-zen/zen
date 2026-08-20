@@ -377,21 +377,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     assertOnly(args, ["workspace", "cwd", "query", "archived", "limit"]);
     const workspace = optionalString(args.workspace, "workspace");
     const cwd = optionalString(args.cwd, "cwd");
-    if (workspace !== undefined && cwd !== undefined) {
-      if (
-        (await this.#appServer.projectProjection.canonicalKey(workspace)) !==
-        (await this.#appServer.projectProjection.canonicalKey(cwd))
-      ) {
-        throw new Error(
-          "workspace and cwd filters must identify the same path",
-        );
-      }
-    }
     const cwdFilter = workspace ?? cwd;
-    const filterKey =
-      cwdFilter === undefined
-        ? undefined
-        : await this.#appServer.projectProjection.canonicalKey(cwdFilter);
     const query = optionalString(args.query, "query")?.toLocaleLowerCase();
     const archived = optionalBoolean(args.archived, "archived") ?? false;
     const limit = boundedInteger(
@@ -402,21 +388,39 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     );
     const listed = (await this.#appServer.request("thread/list", { archived }))
       .data;
-    const threads = (
-      await Promise.all(
-        listed.map(async (thread) => ({
-          thread,
-          matches:
-            filterKey === undefined ||
-            (thread.cwd.length > 0 &&
-              (await this.#appServer.projectProjection.canonicalKey(
-                thread.cwd,
-              )) === filterKey),
-        })),
-      )
-    )
-      .filter(({ matches }) => matches)
-      .map(({ thread }) => thread)
+    let filtered = listed;
+    if (cwdFilter !== undefined) {
+      const filterPaths = [
+        ...(workspace === undefined ? [] : [workspace]),
+        ...(cwd === undefined ? [] : [cwd]),
+      ];
+      const threadsWithCwd = listed.filter((thread) => thread.cwd.length > 0);
+      const keys = await this.#appServer.projectProjection.canonicalKeys([
+        ...filterPaths,
+        ...threadsWithCwd.map((thread) => thread.cwd),
+      ]);
+      const workspaceKey = workspace === undefined ? undefined : keys[0];
+      const cwdKey =
+        cwd === undefined ? undefined : keys[workspace === undefined ? 0 : 1];
+      if (
+        workspaceKey !== undefined &&
+        cwdKey !== undefined &&
+        workspaceKey !== cwdKey
+      ) {
+        throw new Error(
+          "workspace and cwd filters must identify the same path",
+        );
+      }
+      const filterKey = workspaceKey ?? cwdKey;
+      const threadOffset = filterPaths.length;
+      const matchingIds = new Set(
+        threadsWithCwd
+          .filter((_thread, index) => keys[threadOffset + index] === filterKey)
+          .map((thread) => thread.id),
+      );
+      filtered = listed.filter((thread) => matchingIds.has(thread.id));
+    }
+    const threads = filtered
       .filter((thread) => query === undefined || matchesQuery(thread, query))
       .sort((left, right) => right.updatedAt - left.updatedAt);
     return {
