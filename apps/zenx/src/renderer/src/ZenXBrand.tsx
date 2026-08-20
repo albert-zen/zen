@@ -1,18 +1,28 @@
-const zenxLogoPlaceholder = new URL(
-  "./assets/zenx-logo-placeholder.svg",
+import type { CSSProperties } from "react";
+
+const zenxMark = new URL("./assets/brand/zenx-mark.svg", import.meta.url).href;
+const zenxWordmark = new URL(
+  "./assets/brand/zenx-wordmark.svg",
   import.meta.url,
 ).href;
+
+function brandAssetStyle(asset: string): CSSProperties {
+  return { "--zenx-brand-asset": `url("${asset}")` } as CSSProperties;
+}
 
 export function ZenXBrand() {
   return (
     <div className="brand" aria-label="ZenX">
-      <img
+      <span
         className="brand-mark"
-        src={zenxLogoPlaceholder}
-        alt=""
+        style={brandAssetStyle(zenxMark)}
         aria-hidden="true"
       />
-      <span className="brand-wordmark">ZENX</span>
+      <span
+        className="brand-wordmark"
+        style={brandAssetStyle(zenxWordmark)}
+        aria-hidden="true"
+      />
     </div>
   );
 }

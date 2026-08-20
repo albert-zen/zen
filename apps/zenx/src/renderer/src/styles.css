@@ -134,15 +134,28 @@ a:focus-visible {
 .brand {
   min-width: 0;
   gap: 10px;
-  letter-spacing: 0.16em;
-  font-size: 14px;
-  font-weight: 550;
+}
+.brand-mark,
+.brand-wordmark {
+  flex: 0 0 auto;
+  display: block;
+  background: currentColor;
+  -webkit-mask-image: var(--zenx-brand-asset);
+  mask-image: var(--zenx-brand-asset);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
 }
 .brand-mark {
   width: 27px;
   height: 27px;
-  flex: 0 0 auto;
-  display: block;
+}
+.brand-wordmark {
+  width: 75px;
+  height: 16px;
 }
 .brand-actions {
   gap: 4px;

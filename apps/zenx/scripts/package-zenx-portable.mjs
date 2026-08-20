@@ -70,6 +70,9 @@ async function packageZenX(arguments_) {
         arch: process.arch,
         name: productName,
         electronVersion: "43.2.0",
+        ...(applicationIconForPlatform(process.platform, target) === undefined
+          ? {}
+          : { icon: applicationIconForPlatform(process.platform, target) }),
         afterCopy: [
           async ({ buildPath }) => {
             await copyPackagedProviderResources({
@@ -111,6 +114,11 @@ async function packageZenX(arguments_) {
       await rm(staging, { recursive: true, force: true });
     }
   });
+}
+
+export function applicationIconForPlatform(platform, target = "app") {
+  if (platform !== "darwin" || target !== "app") return undefined;
+  return path.join(zenx, "resources", "icons", "zenx.icns");
 }
 
 /** Build only into the current packaging run before anything snapshots it. */
