@@ -66,6 +66,7 @@ export async function resolveBundledProvider(
     platform: NodeJS.Platform;
     expectedVersion?: string;
     expectedManifestSha256?: string;
+    verifyDirectoryAssets?: boolean;
   },
 ): Promise<BundledProviderResolution> {
   let providerRoot: string;
@@ -257,9 +258,11 @@ export async function resolveBundledProvider(
         if (!isWithin(providerRoot, assetRealPath))
           throw new Error("asset resolves outside its resource directory");
         const assetSha256 =
-          kind === "directory"
+          kind === "directory" && options.verifyDirectoryAssets !== false
             ? await hashBundledDirectoryAsset(assetRealPath, asset.ignoredPaths)
-            : await hashBundledFileAsset(assetRealPath);
+            : kind === "file"
+              ? await hashBundledFileAsset(assetRealPath)
+              : asset.sha256;
         if (assetSha256 !== asset.sha256)
           throw new Error(`asset integrity mismatch: ${asset.path}`);
         assets.push({
@@ -337,6 +340,7 @@ export async function verifyBundledProvider(
   options: {
     resourcesDirectory: string;
     platform: NodeJS.Platform;
+    verifyDirectoryAssets?: boolean;
   },
 ): Promise<void> {
   const resolved = await resolveBundledProvider(selected.providerId, {
@@ -403,7 +407,11 @@ export async function verifyBundledProvider(
  */
 export async function bindBundledProviderLaunch(
   selected: BundledProvider,
-  options: { resourcesDirectory: string; platform: NodeJS.Platform },
+  options: {
+    resourcesDirectory: string;
+    platform: NodeJS.Platform;
+    verifyDirectoryAssets?: boolean;
+  },
 ): Promise<() => Promise<void>> {
   await verifyBundledProvider(selected, options);
   const handles = [] as Awaited<ReturnType<typeof open>>[];

@@ -227,14 +227,6 @@ export async function selectBrowserProvider(
       ],
     };
   }
-  const bundledVerify =
-    bundled?.provider === undefined
-      ? undefined
-      : async () =>
-          await verifyBundledProvider(bundled.provider!, {
-            resourcesDirectory: options.resourcesDirectory!,
-            platform,
-          });
   const bundledBind =
     bundled?.provider === undefined
       ? undefined
@@ -243,14 +235,32 @@ export async function selectBrowserProvider(
             resourcesDirectory: options.resourcesDirectory!,
             platform,
           });
+  const bundledInvocationVerify =
+    bundled?.provider === undefined
+      ? undefined
+      : async () =>
+          await verifyBundledProvider(bundled.provider!, {
+            resourcesDirectory: options.resourcesDirectory!,
+            platform,
+            verifyDirectoryAssets: false,
+          });
+  const bundledInvocationBind =
+    bundled?.provider === undefined
+      ? undefined
+      : async () =>
+          await bindBundledProviderLaunch(bundled.provider!, {
+            resourcesDirectory: options.resourcesDirectory!,
+            platform,
+            verifyDirectoryAssets: false,
+          });
   try {
     const version = await probePlaywrightCli(
       executable,
       runner,
       bundled?.provider?.version,
       bundled?.provider?.runtime?.path,
-      bundledBind,
-      bundledVerify,
+      bundledInvocationBind,
+      bundledInvocationVerify,
     );
     const playwrightDirectory = path.join(
       options.userDataDirectory,
@@ -266,8 +276,10 @@ export async function selectBrowserProvider(
           ? {}
           : {
               runtimeExecutable: bundled.provider.runtime?.path,
-              bindBeforeSpawn: bundledBind,
-              verifyExecutable: bundledVerify,
+              bindBeforeSpawn: bundledInvocationBind,
+              verifyExecutable: bundledInvocationVerify,
+              bindBrowserBeforeLaunch: bundledBind,
+              verifyBrowserBeforeLaunch: bundledInvocationVerify,
               browser: "chromium",
               processEnvironment: {
                 PLAYWRIGHT_BROWSERS_PATH: path.join(

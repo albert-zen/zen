@@ -27,7 +27,10 @@ browser executable and a deterministic digest of the complete extracted
 payload; bundled-provider selection and launch verification re-hash them. The
 manifest explicitly excludes only Playwright's root `DEPENDENCIES_VALIDATED`
 host-validation state file; all archive entries and any other additions remain
-inside the fail-closed digest boundary.
+inside the fail-closed digest boundary. The complete directory is re-hashed at
+selection and immediately before each browser launch; later commands against
+that running browser continue to re-hash the provider, runtime, browser
+executable, and ordinary companion assets without rescanning the large tree.
 
 The Playwright provider also records every shipped transitive package in
 `provider-lock.json` with its exact tarball URL, npm SRI, and SHA-256. Assembly

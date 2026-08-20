@@ -77,6 +77,20 @@ test("packaged provisioning verifies the complete browser payload directory", as
       }),
       /asset integrity mismatch|changed/u,
     );
+    await verifyBundledProvider(resolved.provider!, {
+      resourcesDirectory: root,
+      platform: "linux",
+      verifyDirectoryAssets: false,
+    });
+    await writeFile(executable, "tampered executable");
+    await assert.rejects(
+      verifyBundledProvider(resolved.provider!, {
+        resourcesDirectory: root,
+        platform: "linux",
+        verifyDirectoryAssets: false,
+      }),
+      /asset integrity mismatch|changed/u,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

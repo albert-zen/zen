@@ -97,6 +97,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   readonly #verifyExecutable?: () => Promise<void>;
   readonly #runtimeExecutable?: string;
   readonly #bindBeforeSpawn?: () => Promise<() => Promise<void>>;
+  readonly #verifyBrowserBeforeLaunch?: () => Promise<void>;
+  readonly #bindBrowserBeforeLaunch?: () => Promise<() => Promise<void>>;
   readonly #browser?: "chromium";
   readonly #processEnvironment?: NodeJS.ProcessEnv;
   readonly #sessions = new Map<string, PlaywrightSessionState>();
@@ -111,6 +113,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     verifyExecutable?: () => Promise<void>;
     runtimeExecutable?: string;
     bindBeforeSpawn?: () => Promise<() => Promise<void>>;
+    verifyBrowserBeforeLaunch?: () => Promise<void>;
+    bindBrowserBeforeLaunch?: () => Promise<() => Promise<void>>;
     browser?: "chromium";
     processEnvironment?: NodeJS.ProcessEnv;
   }) {
@@ -120,6 +124,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     this.#verifyExecutable = options.verifyExecutable;
     this.#runtimeExecutable = options.runtimeExecutable;
     this.#bindBeforeSpawn = options.bindBeforeSpawn;
+    this.#verifyBrowserBeforeLaunch = options.verifyBrowserBeforeLaunch;
+    this.#bindBrowserBeforeLaunch = options.bindBrowserBeforeLaunch;
     this.#browser = options.browser;
     this.#processEnvironment = options.processEnvironment;
     this.#artifacts = new BrowserScreenshotArtifactStore(
@@ -420,14 +426,21 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     maxOutputBytes = 512 * 1024,
   ): Promise<Record<string, unknown>> {
     try {
-      await this.#verifyExecutable?.();
+      const launchesBrowser = args[0] === "open";
+      const verifyBeforeSpawn = launchesBrowser
+        ? (this.#verifyBrowserBeforeLaunch ?? this.#verifyExecutable)
+        : this.#verifyExecutable;
+      const bindBeforeSpawn = launchesBrowser
+        ? (this.#bindBrowserBeforeLaunch ?? this.#bindBeforeSpawn)
+        : this.#bindBeforeSpawn;
+      await verifyBeforeSpawn?.();
       const result = await this.#runner.run(
         this.#executable,
         [
           "--json",
           `-s=${session.cliSessionName}`,
           ...args,
-          ...(args[0] === "open" && this.#browser !== undefined
+          ...(launchesBrowser && this.#browser !== undefined
             ? ["--browser", this.#browser]
             : []),
         ],
@@ -438,8 +451,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
           maxOutputBytes,
           environment: this.#processEnvironment,
           runtimeExecutable: this.#runtimeExecutable,
-          bindBeforeSpawn: this.#bindBeforeSpawn,
-          verifyBeforeSpawn: this.#verifyExecutable,
+          bindBeforeSpawn,
+          verifyBeforeSpawn,
         },
       );
       const response = parseExternalJson("playwright-cli", result.stdout);

@@ -79,6 +79,28 @@ test("Playwright tab summaries redact URL credentials and values", async () => {
   await backend.close();
 });
 
+test("Playwright re-hashes the browser tree only before a browser launch", async () => {
+  const runner = new FakePlaywrightRunner();
+  let browserVerifications = 0;
+  let invocationVerifications = 0;
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+    verifyBrowserBeforeLaunch: async () => {
+      browserVerifications += 1;
+    },
+    verifyExecutable: async () => {
+      invocationVerifications += 1;
+    },
+  });
+  const opened = await backend.open("research", "https://example.com/");
+  await backend.inspect("research", opened.tabId);
+  assert.equal(browserVerifications, 1);
+  assert.ok(invocationVerifications > 0);
+  await backend.close();
+});
+
 test("Playwright provider fails closed on an incompatible snapshot schema", async () => {
   const runner = new FakePlaywrightRunner();
   runner.invalidSnapshot = true;
