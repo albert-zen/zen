@@ -187,6 +187,37 @@ test("allows active-turn model no-ops but rejects real changes", async () => {
   assert.equal((await server.readThread(thread.id)).model, "fake");
 });
 
+test("rejects archiving a Thread while its Turn is active", async () => {
+  let releaseModel: (() => void) | undefined;
+  const waiting = new Promise<void>((resolve) => {
+    releaseModel = resolve;
+  });
+  const slowModel: ModelAdapter = {
+    provider: "slow",
+    async *stream(): AsyncIterable<ModelEvent> {
+      await waiting;
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({ model: slowModel });
+  const thread = await server.startThread();
+  const active = await server.startTurn(thread.id, "wait");
+
+  await assert.rejects(
+    server.setThreadArchived(thread.id, true),
+    (error: unknown) =>
+      error instanceof Error && "code" in error && error.code === "thread_busy",
+  );
+  assert.equal((await server.readThread(thread.id)).archived, false);
+
+  releaseModel?.();
+  await active.done;
+  assert.equal(
+    (await server.setThreadArchived(thread.id, true)).archived,
+    true,
+  );
+});
+
 test("persists user-facing names outside the canonical ItemList", async () => {
   const temporaryDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zen-thread-metadata-test-"),

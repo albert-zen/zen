@@ -1,4 +1,5 @@
-import { mkdir, open, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { ZenXHostConfig } from "./host-messages.js";
@@ -75,12 +76,18 @@ export class ZenXHostProfileStore {
     const validated = validateHostProfile(profile);
     const directory = path.dirname(this.#filePath);
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    const temporary = `${this.#filePath}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(validated, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await rename(temporary, this.#filePath);
+    const temporary = `${this.#filePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, `${JSON.stringify(validated, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await rename(temporary, this.#filePath);
+    } finally {
+      await unlink(temporary).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      });
+    }
   }
 }
 

@@ -71,6 +71,7 @@ type ProductPage = "agent" | "settings" | "triggers" | "rooms";
 
 export function App() {
   const selectionEpoch = useRef(0);
+  const threadSummaryLoadEpoch = useRef(0);
   const projectLoadEpoch = useRef(0);
   const selectedThreadIdRef = useRef<string | null>(null);
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
@@ -149,11 +150,13 @@ export function App() {
   >({});
 
   const loadThreadSummaries = async (showLoading = false) => {
+    const epoch = ++threadSummaryLoadEpoch.current;
     if (showLoading) setThreadListLoaded({ active: false, archived: false });
     const [active, archived] = await Promise.allSettled([
       window.zenx.threads.list({ archived: false }),
       window.zenx.threads.list({ archived: true }),
     ]);
+    if (threadSummaryLoadEpoch.current !== epoch) return;
     if (active.status === "fulfilled") {
       setThreadSummaries(active.value);
       setThreadListErrors((current) => ({ ...current, active: null }));

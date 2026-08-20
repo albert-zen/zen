@@ -321,6 +321,17 @@ export class ZenAppServer {
           this.#activeTurns.get(threadId)?.turnId,
         );
       }
+      const active = this.#activeTurns.get(threadId);
+      if (
+        archived &&
+        ((active !== undefined && !this.#isTerminal(thread, active.turnId)) ||
+          this.#pendingReplacement(thread) !== undefined)
+      ) {
+        throw new AppServerError(
+          "thread_busy",
+          `Thread ${threadId} already has a running turn`,
+        );
+      }
       await this.#threadMetadata.setArchived(threadId, archived);
       await this.#refreshThreadSummary(thread);
       this.#emit({

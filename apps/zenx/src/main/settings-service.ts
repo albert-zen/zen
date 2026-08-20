@@ -27,6 +27,7 @@ export class ZenXSettingsService {
     Partial<Pick<OpenAiSubscriptionAuthProfile, "acquireAccessLease">>;
   readonly #vault: ZenXCredentialVault;
   #profile: ZenXHostProfile | undefined;
+  #profileOperations: Promise<void> = Promise.resolve();
   #loginInProgress = false;
   #manualCode:
     | {
@@ -135,97 +136,109 @@ export class ZenXSettingsService {
 
   async save(profile: ZenXHostProfile, apiKey?: string): Promise<void> {
     const validated = validateHostProfile(profile);
-    if (apiKey !== undefined && apiKey.length > 0)
-      await this.#vault.writeApiKey(apiKey);
-    if (
-      validated.provider.type === "openai-compatible" &&
-      !(await this.#vault.hasApiKey())
-    ) {
-      throw new Error("Add an API key before activating this provider");
-    }
-    await this.#profileStore.write(validated);
-    this.#profile = validated;
+    await this.#queueProfileOperation(async () => {
+      if (apiKey !== undefined && apiKey.length > 0)
+        await this.#vault.writeApiKey(apiKey);
+      if (
+        validated.provider.type === "openai-compatible" &&
+        !(await this.#vault.hasApiKey())
+      ) {
+        throw new Error("Add an API key before activating this provider");
+      }
+      await this.#profileStore.write(validated);
+      this.#profile = validated;
+    });
   }
 
   async addWorkspace(workspace: string): Promise<boolean> {
-    const current = this.#requireProfile();
     const candidate = workspace.trim();
     if (candidate.length === 0) throw new Error("Workspace is required");
     const resolved = path.resolve(candidate);
-    if (
-      current.workspaces.some(
-        (entry) => workspaceKey(entry) === workspaceKey(resolved),
+    return await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      if (
+        current.workspaces.some(
+          (entry) => workspaceKey(entry) === workspaceKey(resolved),
+        )
       )
-    )
-      return false;
-    const isFirst = current.workspace === null;
-    const next = validateHostProfile({
-      ...current,
-      workspace: isFirst ? resolved : current.workspace,
-      workspaces: [...current.workspaces, resolved],
+        return false;
+      const isFirst = current.workspace === null;
+      const next = validateHostProfile({
+        ...current,
+        workspace: isFirst ? resolved : current.workspace,
+        workspaces: [...current.workspaces, resolved],
+      });
+      await this.#profileStore.write(next);
+      this.#profile = next;
+      return isFirst;
     });
-    await this.#profileStore.write(next);
-    this.#profile = next;
-    return isFirst;
   }
 
   async removeWorkspace(workspace: string): Promise<boolean> {
-    const current = this.#requireProfile();
     const key = workspaceKey(workspace);
-    const nextWorkspaces = current.workspaces.filter(
-      (entry) => workspaceKey(entry) !== key,
-    );
-    if (nextWorkspaces.length === current.workspaces.length) return false;
-    const defaultRemoved =
-      current.workspace !== null && workspaceKey(current.workspace) === key;
-    const next = validateHostProfile({
-      ...current,
-      workspace: defaultRemoved
-        ? (nextWorkspaces[0] ?? null)
-        : current.workspace,
-      workspaces: nextWorkspaces,
+    return await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const nextWorkspaces = current.workspaces.filter(
+        (entry) => workspaceKey(entry) !== key,
+      );
+      if (nextWorkspaces.length === current.workspaces.length) return false;
+      const defaultRemoved =
+        current.workspace !== null && workspaceKey(current.workspace) === key;
+      const next = validateHostProfile({
+        ...current,
+        workspace: defaultRemoved
+          ? (nextWorkspaces[0] ?? null)
+          : current.workspace,
+        workspaces: nextWorkspaces,
+      });
+      await this.#profileStore.write(next);
+      this.#profile = next;
+      return defaultRemoved;
     });
-    await this.#profileStore.write(next);
-    this.#profile = next;
-    return defaultRemoved;
   }
 
   async setDefaultWorkspace(workspace: string): Promise<boolean> {
-    const current = this.#requireProfile();
     const key = workspaceKey(workspace);
-    const selected = current.workspaces.find(
-      (entry) => workspaceKey(entry) === key,
-    );
-    if (selected === undefined) throw new Error("Workspace is not configured");
-    if (
-      current.workspace !== null &&
-      workspaceKey(selected) === workspaceKey(current.workspace)
-    )
-      return false;
-    const next = validateHostProfile({ ...current, workspace: selected });
-    await this.#profileStore.write(next);
-    this.#profile = next;
-    return true;
+    return await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const selected = current.workspaces.find(
+        (entry) => workspaceKey(entry) === key,
+      );
+      if (selected === undefined)
+        throw new Error("Workspace is not configured");
+      if (
+        current.workspace !== null &&
+        workspaceKey(selected) === workspaceKey(current.workspace)
+      )
+        return false;
+      const next = validateHostProfile({ ...current, workspace: selected });
+      await this.#profileStore.write(next);
+      this.#profile = next;
+      return true;
+    });
   }
 
   async markWorkspaceUsed(workspace: string): Promise<void> {
-    const current = this.#requireProfile();
     const key = workspaceKey(workspace);
-    const selected = current.workspaces.find(
-      (entry) => workspaceKey(entry) === key,
-    );
-    if (selected === undefined) throw new Error("Workspace is not configured");
-    if (
-      current.lastUsedWorkspace !== null &&
-      workspaceKey(current.lastUsedWorkspace) === key
-    )
-      return;
-    const next = validateHostProfile({
-      ...current,
-      lastUsedWorkspace: selected,
+    await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const selected = current.workspaces.find(
+        (entry) => workspaceKey(entry) === key,
+      );
+      if (selected === undefined)
+        throw new Error("Workspace is not configured");
+      if (
+        current.lastUsedWorkspace !== null &&
+        workspaceKey(current.lastUsedWorkspace) === key
+      )
+        return;
+      const next = validateHostProfile({
+        ...current,
+        lastUsedWorkspace: selected,
+      });
+      await this.#profileStore.write(next);
+      this.#profile = next;
     });
-    await this.#profileStore.write(next);
-    this.#profile = next;
   }
 
   async login(
@@ -283,6 +296,15 @@ export class ZenXSettingsService {
     if (this.#profile === undefined)
       throw new Error("ZenX settings are not initialized");
     return this.#profile;
+  }
+
+  #queueProfileOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#profileOperations.then(operation);
+    this.#profileOperations = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }
 
