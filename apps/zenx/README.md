@@ -7,9 +7,12 @@ Projects are ZenX host-profile workspace entries grouped with ZAS native Thread
 Project while the configured user-selected path remains its display path. The
 projection resolves the nearest existing ancestor asynchronously and falls back
 to the lexical absolute path when realpath is unavailable, so missing or denied
-paths remain usable. Projects are not Core runtime objects. Add Project uses
-ZenX's read-only directory picker. Removing an entry only changes the host
-profile and never deletes the directory, its files, or Thread journals.
+paths remain usable. It publishes configuration refreshes latest-wins and
+re-canonicalizes immutable per-operation snapshots, so filesystem identity may
+recover or change without becoming a permanently cached Project key. Projects
+are not Core runtime objects. Add Project uses ZenX's read-only directory picker.
+Removing an entry only changes the host profile and never deletes the directory,
+its files, or Thread journals.
 New Thread always carries an explicit configured Project `cwd`. The top-level
 action reuses the last Project used for a Thread; if that record is missing or
 the Project was removed, ZenX asks the user to choose and never falls back to

@@ -544,6 +544,80 @@ test("self-control Project and Thread filters reconcile filesystem aliases", asy
   }
 });
 
+test("self-control Thread filters use one canonicalization snapshot", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-control-filter-snapshot-"),
+  );
+  const alias = path.join(directory, "alias");
+  const physical = path.join(directory, "physical");
+  const retargeted = path.join(directory, "retargeted");
+  let aliasResolutions = 0;
+  const projection = new ZenXProjectProjection("linux", async (candidate) => {
+    if (candidate !== alias) return candidate;
+    aliasResolutions += 1;
+    return aliasResolutions === 1 ? physical : retargeted;
+  });
+  const thread: Thread = {
+    id: "thread-filter-snapshot",
+    sessionId: "thread-filter-snapshot",
+    forkedFromId: null,
+    parentThreadId: null,
+    preview: "Canonical filter snapshot",
+    ephemeral: false,
+    isPinned: false,
+    modelProvider: "fake",
+    createdAt: 1,
+    updatedAt: 2,
+    recencyAt: null,
+    status: { type: "idle" },
+    path: null,
+    cwd: physical,
+    cliVersion: "zen/0.1.0",
+    source: "appServer",
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: null,
+    turns: [],
+  };
+  const port: AppServerRequestPort = {
+    projectProjection: projection,
+    async request<M extends ClientRequestMethod>(
+      method: M,
+      _params: ClientRequestParams[M],
+    ): Promise<ClientRequestResults[M]> {
+      assert.equal(method, "thread/list");
+      return {
+        data: [thread],
+        nextCursor: null,
+        backwardsCursor: null,
+      } as ClientRequestResults[M];
+    },
+  };
+  const capabilities = await grantedSelfControl(directory, port);
+  try {
+    const listed = await invoke(
+      capabilityTools(capabilities),
+      "zenx_threads_list",
+      {
+        workspace: alias,
+        cwd: alias,
+        limit: 10,
+      },
+    );
+
+    assert.equal(
+      (listed.threads as Array<{ threadId: string }>)[0]?.threadId,
+      thread.id,
+    );
+    assert.equal(aliasResolutions, 1);
+  } finally {
+    await capabilities.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("all hosted tool definitions serialize through the OpenAI subscription boundary", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-control-openai-"),

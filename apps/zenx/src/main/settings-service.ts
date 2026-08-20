@@ -10,11 +10,28 @@ import {
   type PublicHostSettings,
   type ZenXHostProfile,
   ZenXHostProfileStore,
+  type ZenXSettingsUpdate,
   validateHostProfile,
 } from "./host-profile.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
 import { resolveZenXHostConfig } from "./host-config.js";
-import { projectPathKey } from "./project-projection.js";
+import {
+  type ProjectPathIdentity,
+  type ProjectPathSnapshot,
+  type ProjectRealpath,
+  projectPathSnapshot,
+} from "./project-projection.js";
+
+const MAX_WORKSPACE_IDENTITY_ATTEMPTS = 2;
+
+interface CanonicalWorkspaceSnapshot {
+  readonly profile: ZenXHostProfile;
+  readonly entries: readonly ProjectPathIdentity[];
+  readonly requested: readonly ProjectPathIdentity[];
+  readonly identities: ProjectPathSnapshot;
+  readonly defaultKey: string | null;
+  readonly lastUsedKey: string | null;
+}
 
 export class ZenXSettingsService {
   readonly #dataDirectory: string;
@@ -26,6 +43,8 @@ export class ZenXSettingsService {
   > &
     Partial<Pick<OpenAiSubscriptionAuthProfile, "acquireAccessLease">>;
   readonly #vault: ZenXCredentialVault;
+  readonly #projectPlatform: NodeJS.Platform;
+  readonly #projectRealpath: ProjectRealpath | undefined;
   #profile: ZenXHostProfile | undefined;
   #profileOperations: Promise<void> = Promise.resolve();
   #loginInProgress = false;
@@ -42,39 +61,58 @@ export class ZenXSettingsService {
     userDataDirectory: string;
     zenDataDirectory: string;
     vault: ZenXCredentialVault;
+    profileStore?: ZenXHostProfileStore;
     subscription?: Pick<
       OpenAiSubscriptionAuthProfile,
       "login" | "logout" | "status"
     >;
+    projectPlatform?: NodeJS.Platform;
+    projectRealpath?: ProjectRealpath;
   }) {
     this.#dataDirectory = options.zenDataDirectory;
     this.#profilePath = path.join(
       options.userDataDirectory,
       "openai-subscription-auth.json",
     );
-    this.#profileStore = new ZenXHostProfileStore(
-      path.join(options.userDataDirectory, "host-profile.json"),
-    );
+    this.#profileStore =
+      options.profileStore ??
+      new ZenXHostProfileStore(
+        path.join(options.userDataDirectory, "host-profile.json"),
+      );
     this.#subscription =
       options.subscription ??
       new OpenAiSubscriptionAuthProfile(this.#profilePath);
     this.#vault = options.vault;
+    this.#projectPlatform = options.projectPlatform ?? process.platform;
+    this.#projectRealpath = options.projectRealpath;
   }
 
   async initialize(environment: NodeJS.ProcessEnv): Promise<void> {
-    const existing = await this.#profileStore.readOptional();
-    if (existing !== undefined) {
-      this.#profile = await normalizeCanonicalWorkspaces(existing);
-      return;
-    }
-    const configureWorkspace = environment.ZENX_CWD !== undefined;
-    const legacy = resolveZenXHostConfig(environment);
-    const fallback = profileFromLegacy(legacy, configureWorkspace);
-    if (legacy.provider.type === "openai-compatible") {
-      await this.#vault.writeApiKey(legacy.provider.apiKey);
-    }
-    this.#profile = await normalizeCanonicalWorkspaces(fallback);
-    await this.#profileStore.write(this.#profile);
+    await this.#queueProfileOperation(async () => {
+      const existing = await this.#profileStore.readOptional();
+      if (existing !== undefined) {
+        this.#profile = await normalizeCanonicalWorkspaces(
+          existing,
+          this.#projectPlatform,
+          this.#projectRealpath,
+        );
+        return;
+      }
+      const configureWorkspace = environment.ZENX_CWD !== undefined;
+      const legacy = resolveZenXHostConfig(environment);
+      const fallback = await normalizeCanonicalWorkspaces(
+        profileFromLegacy(legacy, configureWorkspace),
+        this.#projectPlatform,
+        this.#projectRealpath,
+      );
+      await this.#persistProfile(
+        fallback,
+        legacy.provider.type === "openai-compatible"
+          ? legacy.provider.apiKey
+          : undefined,
+      );
+      this.#profile = fallback;
+    });
   }
 
   async publicSettings(): Promise<PublicHostSettings> {
@@ -134,21 +172,31 @@ export class ZenXSettingsService {
     };
   }
 
-  async save(profile: ZenXHostProfile, apiKey?: string): Promise<void> {
-    const structurallyValidated = validateHostProfile(profile);
+  async save(settings: ZenXSettingsUpdate, apiKey?: string): Promise<void> {
     await this.#queueProfileOperation(async () => {
-      const validated = await normalizeCanonicalWorkspaces(
-        structurallyValidated,
-      );
-      if (apiKey !== undefined && apiKey.length > 0)
-        await this.#vault.writeApiKey(apiKey);
+      const current = this.#requireProfile();
+      const validated = (
+        await this.#stableWorkspaceSnapshot(
+          validateHostProfile({
+            ...current,
+            onboardingComplete: settings.onboardingComplete,
+            provider: settings.provider,
+            defaultModel: settings.defaultModel,
+            titleModel: settings.titleModel,
+            models: settings.models,
+            approvalPolicy: settings.approvalPolicy,
+          }),
+          [],
+        )
+      ).profile;
       if (
         validated.provider.type === "openai-compatible" &&
+        !(apiKey !== undefined && apiKey.length > 0) &&
         !(await this.#vault.hasApiKey())
       ) {
         throw new Error("Add an API key before activating this provider");
       }
-      await this.#profileStore.write(validated);
+      await this.#persistProfile(validated, apiKey);
       this.#profile = validated;
     });
   }
@@ -158,20 +206,21 @@ export class ZenXSettingsService {
     if (candidate.length === 0) throw new Error("Workspace is required");
     const resolved = path.resolve(candidate);
     return await this.#queueProfileOperation(async () => {
-      const current = await normalizeCanonicalWorkspaces(
+      const snapshot = await this.#stableWorkspaceSnapshot(
         this.#requireProfile(),
+        [resolved],
       );
-      const candidateKey = await projectPathKey(resolved);
-      const entries = await canonicalWorkspaceEntries(current.workspaces);
+      const current = snapshot.profile;
+      const candidateIdentity = snapshot.requested[0]!;
+      const candidateKey = candidateIdentity.key;
+      const entries = snapshot.entries;
       if (entries.some((entry) => entry.key === candidateKey)) return false;
       const isFirst = current.workspace === null;
-      const next = await normalizeCanonicalWorkspaces(
-        validateHostProfile({
-          ...current,
-          workspace: isFirst ? resolved : current.workspace,
-          workspaces: [...current.workspaces, resolved],
-        }),
-      );
+      const next = validateHostProfile({
+        ...current,
+        workspace: isFirst ? candidateIdentity.displayPath : current.workspace,
+        workspaces: [...current.workspaces, candidateIdentity.displayPath],
+      });
       await this.#profileStore.write(next);
       this.#profile = next;
       return isFirst;
@@ -179,28 +228,27 @@ export class ZenXSettingsService {
   }
 
   async removeWorkspace(workspace: string): Promise<boolean> {
-    const key = await projectPathKey(workspace);
     return await this.#queueProfileOperation(async () => {
-      const current = await normalizeCanonicalWorkspaces(
+      const snapshot = await this.#stableWorkspaceSnapshot(
         this.#requireProfile(),
+        [workspace],
       );
-      const entries = await canonicalWorkspaceEntries(current.workspaces);
+      const current = snapshot.profile;
+      const key = snapshot.requested[0]!.key;
+      const entries = snapshot.entries;
       const nextWorkspaces = entries
         .filter((entry) => entry.key !== key)
-        .map((entry) => entry.workspace);
+        .map((entry) => entry.displayPath);
       if (nextWorkspaces.length === current.workspaces.length) return false;
       const defaultRemoved =
-        current.workspace !== null &&
-        (await projectPathKey(current.workspace)) === key;
-      const next = await normalizeCanonicalWorkspaces(
-        validateHostProfile({
-          ...current,
-          workspace: defaultRemoved
-            ? (nextWorkspaces[0] ?? null)
-            : current.workspace,
-          workspaces: nextWorkspaces,
-        }),
-      );
+        current.workspace !== null && snapshot.defaultKey === key;
+      const next = validateHostProfile({
+        ...current,
+        workspace: defaultRemoved
+          ? (nextWorkspaces[0] ?? null)
+          : current.workspace,
+        workspaces: nextWorkspaces,
+      });
       await this.#profileStore.write(next);
       this.#profile = next;
       return defaultRemoved;
@@ -208,24 +256,21 @@ export class ZenXSettingsService {
   }
 
   async setDefaultWorkspace(workspace: string): Promise<boolean> {
-    const key = await projectPathKey(workspace);
     return await this.#queueProfileOperation(async () => {
-      const current = await normalizeCanonicalWorkspaces(
+      const snapshot = await this.#stableWorkspaceSnapshot(
         this.#requireProfile(),
+        [workspace],
       );
-      const selected = (
-        await canonicalWorkspaceEntries(current.workspaces)
-      ).find((entry) => entry.key === key)?.workspace;
+      const current = snapshot.profile;
+      const key = snapshot.requested[0]!.key;
+      const selected = snapshot.entries.find(
+        (entry) => entry.key === key,
+      )?.displayPath;
       if (selected === undefined)
         throw new Error("Workspace is not configured");
-      if (
-        current.workspace !== null &&
-        (await projectPathKey(current.workspace)) === key
-      )
+      if (current.workspace !== null && snapshot.defaultKey === key)
         return false;
-      const next = await normalizeCanonicalWorkspaces(
-        validateHostProfile({ ...current, workspace: selected }),
-      );
+      const next = validateHostProfile({ ...current, workspace: selected });
       await this.#profileStore.write(next);
       this.#profile = next;
       return true;
@@ -233,27 +278,24 @@ export class ZenXSettingsService {
   }
 
   async markWorkspaceUsed(workspace: string): Promise<void> {
-    const key = await projectPathKey(workspace);
     await this.#queueProfileOperation(async () => {
-      const current = await normalizeCanonicalWorkspaces(
+      const snapshot = await this.#stableWorkspaceSnapshot(
         this.#requireProfile(),
+        [workspace],
       );
-      const selected = (
-        await canonicalWorkspaceEntries(current.workspaces)
-      ).find((entry) => entry.key === key)?.workspace;
+      const current = snapshot.profile;
+      const key = snapshot.requested[0]!.key;
+      const selected = snapshot.entries.find(
+        (entry) => entry.key === key,
+      )?.displayPath;
       if (selected === undefined)
         throw new Error("Workspace is not configured");
-      if (
-        current.lastUsedWorkspace !== null &&
-        (await projectPathKey(current.lastUsedWorkspace)) === key
-      )
+      if (current.lastUsedWorkspace !== null && snapshot.lastUsedKey === key)
         return;
-      const next = await normalizeCanonicalWorkspaces(
-        validateHostProfile({
-          ...current,
-          lastUsedWorkspace: selected,
-        }),
-      );
+      const next = validateHostProfile({
+        ...current,
+        lastUsedWorkspace: selected,
+      });
       await this.#profileStore.write(next);
       this.#profile = next;
     });
@@ -324,43 +366,135 @@ export class ZenXSettingsService {
     );
     return result;
   }
+
+  async #stableWorkspaceSnapshot(
+    profile: ZenXHostProfile,
+    requested: readonly string[],
+  ): Promise<CanonicalWorkspaceSnapshot> {
+    for (
+      let attempt = 0;
+      attempt < MAX_WORKSPACE_IDENTITY_ATTEMPTS;
+      attempt += 1
+    ) {
+      const snapshot = await canonicalWorkspaceSnapshot(
+        profile,
+        requested,
+        this.#projectPlatform,
+        this.#projectRealpath,
+      );
+      const revalidated = await projectPathSnapshot(
+        snapshot.identities.map((identity) => identity.displayPath),
+        this.#projectPlatform,
+        this.#projectRealpath,
+      );
+      if (
+        revalidated.every(
+          (identity, index) => identity.key === snapshot.identities[index]?.key,
+        )
+      ) {
+        return snapshot;
+      }
+    }
+    throw new Error(
+      "Workspace filesystem identity changed during the operation; try again",
+    );
+  }
+
+  async #persistProfile(
+    profile: ZenXHostProfile,
+    apiKey?: string,
+  ): Promise<void> {
+    const rotatesCredential = apiKey !== undefined && apiKey.length > 0;
+    const previousApiKey = rotatesCredential
+      ? await this.#vault.readApiKey()
+      : undefined;
+    if (rotatesCredential) await this.#vault.writeApiKey(apiKey);
+    try {
+      await this.#profileStore.write(profile);
+    } catch (persistenceError) {
+      if (!rotatesCredential) throw persistenceError;
+      try {
+        if (previousApiKey === undefined) await this.#vault.clearApiKey();
+        else await this.#vault.writeApiKey(previousApiKey);
+      } catch (compensationError) {
+        throw new AggregateError(
+          [persistenceError, compensationError],
+          "ZenX settings were partially saved: host profile persistence failed and the previous credential could not be restored",
+        );
+      }
+      throw persistenceError;
+    }
+  }
 }
 
 async function normalizeCanonicalWorkspaces(
   profile: ZenXHostProfile,
+  platform: NodeJS.Platform,
+  resolveRealpath: ProjectRealpath | undefined,
 ): Promise<ZenXHostProfile> {
-  const candidates =
-    profile.workspace === null
-      ? profile.workspaces
-      : [profile.workspace, ...profile.workspaces];
-  const unique = new Map<string, string>();
-  for (const entry of await canonicalWorkspaceEntries(candidates)) {
-    if (!unique.has(entry.key)) unique.set(entry.key, entry.workspace);
-  }
-  const defaultKey =
-    profile.workspace === null ? null : await projectPathKey(profile.workspace);
-  const lastUsedKey =
-    profile.lastUsedWorkspace === null
-      ? null
-      : await projectPathKey(profile.lastUsedWorkspace);
-  return {
-    ...profile,
-    workspace: defaultKey === null ? null : (unique.get(defaultKey) ?? null),
-    workspaces: [...unique.values()],
-    lastUsedWorkspace:
-      lastUsedKey === null ? null : (unique.get(lastUsedKey) ?? null),
-  };
+  return (
+    await canonicalWorkspaceSnapshot(profile, [], platform, resolveRealpath)
+  ).profile;
 }
 
-async function canonicalWorkspaceEntries(
-  workspaces: readonly string[],
-): Promise<Array<{ workspace: string; key: string }>> {
-  return await Promise.all(
-    workspaces.map(async (workspace) => ({
-      workspace: path.resolve(workspace),
-      key: await projectPathKey(workspace),
-    })),
+async function canonicalWorkspaceSnapshot(
+  profile: ZenXHostProfile,
+  requested: readonly string[],
+  platform: NodeJS.Platform,
+  resolveRealpath: ProjectRealpath | undefined,
+): Promise<CanonicalWorkspaceSnapshot> {
+  const validated = validateHostProfile(profile);
+  const candidates =
+    validated.workspace === null
+      ? validated.workspaces
+      : [validated.workspace, ...validated.workspaces];
+  const defaultIndex = validated.workspace === null ? undefined : 0;
+  const lastUsedIndex =
+    validated.lastUsedWorkspace === null ? undefined : candidates.length;
+  const requestedOffset =
+    candidates.length + (lastUsedIndex === undefined ? 0 : 1);
+  const identities = await projectPathSnapshot(
+    [
+      ...candidates,
+      ...(validated.lastUsedWorkspace === null
+        ? []
+        : [validated.lastUsedWorkspace]),
+      ...requested,
+    ],
+    platform,
+    resolveRealpath,
   );
+  const unique = new Map<string, ProjectPathIdentity>();
+  for (const entry of identities.slice(0, candidates.length)) {
+    if (!unique.has(entry.key)) unique.set(entry.key, entry);
+  }
+  const entries = Object.freeze([...unique.values()]);
+  const defaultKey =
+    defaultIndex === undefined ? null : (identities[defaultIndex]?.key ?? null);
+  const lastUsedKey =
+    lastUsedIndex === undefined
+      ? null
+      : (identities[lastUsedIndex]?.key ?? null);
+  const normalized = validateHostProfile({
+    ...validated,
+    workspace:
+      defaultKey === null
+        ? null
+        : (unique.get(defaultKey)?.displayPath ?? null),
+    workspaces: entries.map((entry) => entry.displayPath),
+    lastUsedWorkspace:
+      lastUsedKey === null
+        ? null
+        : (unique.get(lastUsedKey)?.displayPath ?? null),
+  });
+  return Object.freeze({
+    profile: normalized,
+    entries,
+    requested: Object.freeze(identities.slice(requestedOffset)),
+    identities,
+    defaultKey,
+    lastUsedKey,
+  });
 }
 
 function profileFromLegacy(

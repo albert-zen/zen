@@ -18,7 +18,7 @@ import { ipcChannels } from "../preload/ipc.js";
 import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
-import type { ZenXHostProfile } from "./host-profile.js";
+import type { ZenXSettingsUpdate } from "./host-profile.js";
 import { ZenXSettingsService } from "./settings-service.js";
 import { zenXProviderTransport } from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
@@ -522,11 +522,11 @@ function installSettingsIpc(
   );
   ipcMain.handle(
     ipcChannels.settingsSave,
-    async (_event, profile: ZenXHostProfile, apiKey?: unknown) => {
+    async (_event, update: ZenXSettingsUpdate, apiKey?: unknown) => {
       if (apiKey !== undefined && typeof apiKey !== "string") {
         throw new Error("Invalid API key");
       }
-      await settings.save(profile, apiKey);
+      await settings.save(update, apiKey);
       await refreshProjects();
       await restartHost();
       return await settings.publicSettings();
