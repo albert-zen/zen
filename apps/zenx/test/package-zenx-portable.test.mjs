@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -13,7 +14,9 @@ import test from "node:test";
 
 import {
   packageManifest,
+  publishPackagedArtifact,
   stagePackage,
+  withPackagingTargetLock,
 } from "../scripts/package-zenx-portable.mjs";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
@@ -93,6 +96,61 @@ test("stages only the provider smoke through the same digest path", async () => 
     );
   } finally {
     await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("publishes a complete run artifact without exposing its staging path", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-publish-test-"));
+  try {
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+
+    assert.equal(await publishPackagedArtifact(staged, published), published);
+    assert.equal(
+      await readFile(path.join(published, "version"), "utf8"),
+      "new",
+    );
+    await assert.rejects(access(staged), { code: "ENOENT" });
+    assert.deepEqual(await readdir(path.dirname(published)), ["ZenX-fixture"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("fails concurrent packaging of the same target explicitly", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-lock-test-"));
+  let enter;
+  let release;
+  const entered = new Promise((resolve) => {
+    enter = resolve;
+  });
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  try {
+    const first = withPackagingTargetLock(
+      directory,
+      "ZenX-fixture",
+      async () => {
+        enter();
+        await held;
+      },
+    );
+    await entered;
+    await assert.rejects(
+      withPackagingTargetLock(directory, "ZenX-fixture", async () => {}),
+      /ZenX-fixture is already in progress/u,
+    );
+    release();
+    await first;
+    assert.deepEqual(await readdir(path.join(directory, "locks")), []);
+  } finally {
+    release?.();
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

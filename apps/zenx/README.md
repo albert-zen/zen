@@ -54,6 +54,11 @@ a single-file executable. It is written below
 together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
 Linux.
 
+Each packaging command assembles resources and runs Electron packager in its
+own `.packaged/runs/` directory, reusing only SHA-256-addressed verified archive
+cache files. A completed directory replaces the stable artifact under a
+per-target lock; a concurrent command for the same target fails explicitly.
+
 The development package identity remains `@zen/zenx`, while the portable
 runtime identity is `zenx` and its packager product/display name is `ZenX`.
 Consequently, Electron keeps their default profiles separate: on Windows they

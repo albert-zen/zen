@@ -12,6 +12,12 @@ digest. Missing network, archive, runtime, browser payload, or integrity
 verification is an explicit build failure; there is no PATH fallback in bundled
 mode.
 
+Pinned archives are acquired as bounded streams and atomically published into a
+SHA-256-addressed immutable cache after verification. Every cache hit is hashed
+again before use; partial, oversized, timed-out, or mismatched responses never
+become cache entries. Provider assembly writes only to the caller's private run
+staging directory.
+
 The Playwright provider also records every shipped transitive package in
 `provider-lock.json` with its exact tarball URL, npm SRI, and SHA-256. Assembly
 validates npm's resolved entries against those pins and writes the deterministic
