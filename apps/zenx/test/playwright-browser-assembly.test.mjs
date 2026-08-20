@@ -228,9 +228,12 @@ test("browser assembly fails closed on digest and reuses verified cache offline"
       deadline: Date.now() + 5_000,
     });
     assert.equal(offline.assets[0].sha256, online.assets[0].sha256);
-    assert.deepEqual(await readdir(path.join(cacheLocation, "sha256")), [
-      archiveSha256,
-    ]);
+    assert.deepEqual(
+      (await readdir(path.join(cacheLocation, "sha256"))).filter(
+        (entry) => !entry.startsWith("."),
+      ),
+      [archiveSha256],
+    );
   } finally {
     await server?.close();
     await rm(directory, { recursive: true, force: true });

@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmod,
+  lstat,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
   rm,
   stat,
+  symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -159,6 +163,281 @@ test("re-verifies a cache hit before reuse", async () => {
     assert.deepEqual(await readFile(cached), bytes);
     assert.equal(requests, 2);
   } finally {
+    await fixture.close();
+  }
+});
+
+test("serializes invalid-cache cleanup with a competing publish", async () => {
+  const bytes = Buffer.from("transaction winner bytes");
+  const digest = sha256(bytes);
+  let releaseRequest;
+  const requestReceived = new Promise((resolve) => {
+    releaseRequest = resolve;
+  });
+  const fixture = await createFixture((_request, response) => {
+    response.end(bytes, releaseRequest);
+  });
+  const cacheFile = path.join(fixture.cacheLocation, "sha256", digest);
+  const readyFile = path.join(fixture.cacheLocation, "slow-ready");
+  const releaseFile = path.join(fixture.cacheLocation, "release-slow");
+  await mkdir(path.dirname(cacheFile), { recursive: true });
+  await writeFile(cacheFile, "invalid predecessor");
+
+  const slow = acquirePausedAfterCacheSnapshot(
+    {
+      artifactName: "slow invalid-cache contender",
+      url: "http://127.0.0.1:1/unavailable",
+      digest,
+      deadline: Date.now() + 5_000,
+      cacheLocation: fixture.cacheLocation,
+    },
+    { cacheFile, readyFile, releaseFile },
+  );
+  try {
+    await waitForPath(readyFile);
+    const fast = acquireInChild({
+      artifactName: "publishing contender",
+      url: `${fixture.url}/winner`,
+      digest,
+      deadline: Date.now() + 5_000,
+      cacheLocation: fixture.cacheLocation,
+    });
+    const publishedBeforeRelease = await Promise.race([
+      requestReceived.then(async () => {
+        await fast;
+        return true;
+      }),
+      delay(500).then(() => false),
+    ]);
+    await writeFile(releaseFile, "release");
+
+    const slowResult = await slow;
+    assert.equal(slowResult.ok, false);
+    const fastResult = await fast;
+    assert.equal(fastResult, cacheFile);
+    assert.deepEqual(await readFile(cacheFile), bytes);
+    assert.equal(
+      publishedBeforeRelease,
+      false,
+      "a contender must not publish while the invalid-cache transaction is held",
+    );
+  } finally {
+    await writeFile(releaseFile, "release").catch(() => {});
+    await fixture.close();
+  }
+});
+
+test(
+  "removes a cache-path symlink without changing its target",
+  { skip: process.platform === "win32" ? "POSIX mode contract" : false },
+  async () => {
+    const bytes = Buffer.from("replacement artifact bytes");
+    const digest = sha256(bytes);
+    const fixture = await createFixture((_request, response) => {
+      response.end(bytes);
+    });
+    const cacheFile = path.join(fixture.cacheLocation, "sha256", digest);
+    const target = path.join(fixture.cacheLocation, "symlink-target");
+    try {
+      await mkdir(path.dirname(cacheFile), { recursive: true });
+      await writeFile(target, "do not mutate this target", { mode: 0o444 });
+      await chmod(target, 0o444);
+      const targetMode = (await stat(target)).mode & 0o777;
+      await symlink(target, cacheFile);
+
+      assert.equal(
+        await acquireVerifiedArtifact({
+          artifactName: "symlinked cache fixture",
+          url: `${fixture.url}/replacement`,
+          digest,
+          deadline: Date.now() + 2_000,
+          cacheLocation: fixture.cacheLocation,
+        }),
+        cacheFile,
+      );
+
+      assert.deepEqual(await readFile(cacheFile), bytes);
+      assert.equal((await lstat(cacheFile)).isFile(), true);
+      assert.equal(await readFile(target, "utf8"), "do not mutate this target");
+      assert.equal((await stat(target)).mode & 0o777, targetMode);
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+test("converges cross-process contenders through one download", async () => {
+  const bytes = Buffer.from("one serialized download");
+  let requests = 0;
+  const fixture = await createFixture((_request, response) => {
+    requests += 1;
+    setTimeout(() => response.end(bytes), 50);
+  });
+  try {
+    const options = {
+      artifactName: "cross-process stress fixture",
+      url: `${fixture.url}/serialized`,
+      digest: sha256(bytes),
+      deadline: Date.now() + 10_000,
+      cacheLocation: fixture.cacheLocation,
+    };
+    const settled = await Promise.allSettled(
+      Array.from({ length: 12 }, () => acquireInChild(options)),
+    );
+    const failures = settled.filter((result) => result.status === "rejected");
+    assert.deepEqual(
+      failures.map((result) => result.reason?.message ?? String(result.reason)),
+      [],
+    );
+    const results = settled.map((result) => result.value);
+
+    assert.equal(new Set(results).size, 1);
+    assert.deepEqual(await readFile(results[0]), bytes);
+    assert.equal(requests, 1);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("ignores a participant atomically retired while it is observed", async () => {
+  const bytes = Buffer.from("retirement race recovery");
+  const digest = sha256(bytes);
+  const fixture = await createFixture((_request, response) => {
+    response.end(bytes);
+  });
+  const record = await seedParticipant(fixture.cacheLocation, digest, {
+    token: "retiring-observer-fixture",
+    createdAt: Date.now(),
+    deadline: Date.now() + 30_000,
+    ticket: 1,
+  });
+  try {
+    const result = await acquireAfterRetiringObservedParticipant(
+      {
+        artifactName: "retirement observer fixture",
+        url: `${fixture.url}/retired-observer`,
+        digest,
+        deadline: Date.now() + 5_000,
+        cacheLocation: fixture.cacheLocation,
+      },
+      record,
+    );
+
+    assert.deepEqual(await readFile(result), bytes);
+    assert.deepEqual(await readdir(record.transactionRoot), []);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("quarantines a live participant with future-skewed timestamps", async () => {
+  const bytes = Buffer.from("future timestamp recovery");
+  const digest = sha256(bytes);
+  const fixture = await createFixture((_request, response) => {
+    response.end(bytes);
+  });
+  const future = Date.now() + 24 * 60 * 60_000;
+  const record = await seedParticipant(fixture.cacheLocation, digest, {
+    token: "future-owner-fixture",
+    createdAt: future,
+    deadline: future + 30_000,
+    ticket: 1,
+    modifiedAt: future,
+  });
+  try {
+    const result = await acquireVerifiedArtifact({
+      artifactName: "future owner fixture",
+      url: `${fixture.url}/future-owner`,
+      digest,
+      deadline: Date.now() + 2_000,
+      cacheLocation: fixture.cacheLocation,
+    });
+
+    assert.deepEqual(await readFile(result), bytes);
+    assert.deepEqual(await readdir(record.transactionRoot), []);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("quarantines a published participant without a ticket", async () => {
+  const bytes = Buffer.from("invalid participant recovery");
+  const digest = sha256(bytes);
+  const fixture = await createFixture((_request, response) => {
+    response.end(bytes);
+  });
+  const record = await seedParticipant(fixture.cacheLocation, digest, {
+    token: "missing-ticket-fixture",
+    createdAt: Date.now(),
+    deadline: Date.now() + 30_000,
+  });
+  try {
+    const result = await acquireVerifiedArtifact({
+      artifactName: "invalid participant fixture",
+      url: `${fixture.url}/invalid-participant`,
+      digest,
+      deadline: Date.now() + 2_000,
+      cacheLocation: fixture.cacheLocation,
+    });
+
+    assert.deepEqual(await readFile(result), bytes);
+    assert.deepEqual(await readdir(record.transactionRoot), []);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("reclaims a dead contender without leaving the digest blocked", async () => {
+  const bytes = Buffer.from("recovered after dead owner");
+  const digest = sha256(bytes);
+  const fixture = await createFixture((_request, response) => {
+    response.end(bytes);
+  });
+  const cacheFile = path.join(fixture.cacheLocation, "sha256", digest);
+  const readyFile = path.join(fixture.cacheLocation, "dead-owner-ready");
+  const releaseFile = path.join(fixture.cacheLocation, "never-release-owner");
+  await mkdir(path.dirname(cacheFile), { recursive: true });
+  await writeFile(cacheFile, "invalid predecessor");
+
+  const deadOwner = acquirePausedAfterCacheSnapshot(
+    {
+      artifactName: "dead cache transaction owner",
+      url: `${fixture.url}/unused`,
+      digest,
+      deadline: Date.now() + 30_000,
+      cacheLocation: fixture.cacheLocation,
+    },
+    { cacheFile, readyFile, releaseFile },
+  );
+  try {
+    await waitForPath(readyFile);
+    assert.equal(deadOwner.child.kill(), true);
+    await assert.rejects(deadOwner, /paused acquisition exited/u);
+
+    const started = Date.now();
+    assert.equal(
+      await acquireVerifiedArtifact({
+        artifactName: "dead-owner recovery fixture",
+        url: `${fixture.url}/recovery`,
+        digest,
+        deadline: Date.now() + 2_000,
+        cacheLocation: fixture.cacheLocation,
+      }),
+      cacheFile,
+    );
+    assert.ok(
+      Date.now() - started < 1_500,
+      "dead owner cleanup must be bounded",
+    );
+    assert.deepEqual(await readFile(cacheFile), bytes);
+    assert.deepEqual(
+      await readdir(
+        path.join(fixture.cacheLocation, "sha256", ".transactions", digest),
+      ),
+      [],
+    );
+  } finally {
+    deadOwner.child.kill();
     await fixture.close();
   }
 });
@@ -358,6 +637,193 @@ async function acquireInChild(options, environment) {
     },
   );
   return result.stdout;
+}
+
+async function acquireAfterRetiringObservedParticipant(options, record) {
+  const source = `
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const originalReadFile = fs.promises.readFile;
+    let ownerObservations = 0;
+    fs.promises.readFile = async (...arguments_) => {
+      const result = await originalReadFile(...arguments_);
+      if (String(arguments_[0]) === process.env.ZENX_OBSERVED_OWNER) {
+        ownerObservations += 1;
+        if (ownerObservations === 2) {
+          await fs.promises.rename(
+            process.env.ZENX_OBSERVED_PARTICIPANT,
+            process.env.ZENX_RETIRED_PARTICIPANT,
+          );
+          await fs.promises.rm(process.env.ZENX_RETIRED_PARTICIPANT, {
+            recursive: true,
+            force: true,
+          });
+        }
+      }
+      return result;
+    };
+    syncBuiltinESMExports();
+    const { acquireVerifiedArtifact } = await import(${JSON.stringify(acquisitionModule)});
+    const result = await acquireVerifiedArtifact(JSON.parse(process.env.ZENX_ARTIFACT_OPTIONS));
+    process.stdout.write(result);
+  `;
+  const retiredParticipant = path.join(
+    record.transactionRoot,
+    `retired-${path.basename(record.directory)}-fixture`,
+  );
+  const result = await run(
+    process.execPath,
+    ["--input-type=module", "--eval", source],
+    {
+      env: {
+        ...process.env,
+        ZENX_ARTIFACT_OPTIONS: JSON.stringify(options),
+        ZENX_OBSERVED_OWNER: path.join(record.directory, "owner.json"),
+        ZENX_OBSERVED_PARTICIPANT: record.directory,
+        ZENX_RETIRED_PARTICIPANT: retiredParticipant,
+      },
+    },
+  );
+  return result.stdout;
+}
+
+function acquirePausedAfterCacheSnapshot(options, gate) {
+  const source = `
+    import fs from "node:fs";
+    const originalOpen = fs.promises.open;
+    const originalWriteFile = fs.promises.writeFile;
+    const originalAccess = fs.promises.access;
+    let paused = false;
+    fs.promises.open = async (...arguments_) => {
+      const handle = await originalOpen(...arguments_);
+      if (!paused && String(arguments_[0]) === process.env.ZENX_CACHE_FILE) {
+        paused = true;
+        const metadata = await handle.stat();
+        const snapshot = await handle.readFile();
+        await handle.close();
+        await originalWriteFile(process.env.ZENX_READY_FILE, "ready");
+        while (true) {
+          try {
+            await originalAccess(process.env.ZENX_RELEASE_FILE);
+            break;
+          } catch (error) {
+            if (error?.code !== "ENOENT") throw error;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        let position = 0;
+        return {
+          stat: async () => metadata,
+          read: async (buffer, offset, length) => {
+            const bytesRead = Math.min(length, snapshot.byteLength - position);
+            if (bytesRead > 0) {
+              snapshot.copy(buffer, offset, position, position + bytesRead);
+              position += bytesRead;
+            }
+            return { bytesRead, buffer };
+          },
+          close: async () => {},
+        };
+      }
+      return handle;
+    };
+    const { acquireVerifiedArtifact } = await import(${JSON.stringify(acquisitionModule)});
+    try {
+      const result = await acquireVerifiedArtifact(JSON.parse(process.env.ZENX_ARTIFACT_OPTIONS));
+      process.stdout.write(JSON.stringify({ ok: true, result }));
+    } catch (error) {
+      process.stdout.write(JSON.stringify({ ok: false, message: error.message }));
+    }
+  `;
+  const child = spawn(
+    process.execPath,
+    ["--input-type=module", "--eval", source],
+    {
+      env: {
+        ...process.env,
+        ZENX_ARTIFACT_OPTIONS: JSON.stringify(options),
+        ZENX_CACHE_FILE: gate.cacheFile,
+        ZENX_READY_FILE: gate.readyFile,
+        ZENX_RELEASE_FILE: gate.releaseFile,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  const completion = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code !== 0) {
+        reject(
+          new Error(
+            `paused acquisition exited ${String(code)} ${signal ?? ""}: ${stderr}`,
+          ),
+        );
+        return;
+      }
+      resolve(JSON.parse(stdout));
+    });
+  });
+  completion.child = child;
+  return completion;
+}
+
+async function seedParticipant(cacheLocation, digest, options) {
+  const transactionRoot = path.join(
+    cacheLocation,
+    "sha256",
+    ".transactions",
+    digest,
+  );
+  const directory = path.join(transactionRoot, `participant-${options.token}`);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await writeFile(
+    path.join(directory, "owner.json"),
+    `${JSON.stringify({
+      version: 1,
+      token: options.token,
+      pid: process.pid,
+      createdAt: options.createdAt,
+      deadline: options.deadline,
+    })}\n`,
+    { mode: 0o600 },
+  );
+  if (options.choosing === true) {
+    await writeFile(path.join(directory, "choosing"), "", { mode: 0o600 });
+  }
+  if (options.ticket !== undefined) {
+    await writeFile(path.join(directory, "ticket"), `${options.ticket}\n`, {
+      mode: 0o600,
+    });
+  }
+  if (options.modifiedAt !== undefined) {
+    const modifiedAt = new Date(options.modifiedAt);
+    await utimes(directory, modifiedAt, modifiedAt);
+  }
+  return { transactionRoot, directory };
+}
+
+async function waitForPath(file) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      await stat(file);
+      return;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await delay(10);
+  }
+  throw new Error(`Timed out waiting for ${file}`);
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function cacheFiles(root) {
