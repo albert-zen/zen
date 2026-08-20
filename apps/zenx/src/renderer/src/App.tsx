@@ -475,11 +475,19 @@ export function App() {
     )
       return;
     const threadId = threadDetail.id;
-    const started = updateComposer(threadId, (state) =>
-      beginComposerSubmission(state, intent, expectedTurnId, () =>
-        crypto.randomUUID(),
-      ),
+    const current = composerStatesRef.current[threadId] ?? emptyComposerState();
+    const started = beginComposerSubmission(
+      current,
+      intent,
+      expectedTurnId,
+      () => crypto.randomUUID(),
     );
+    if (started === current) return;
+    composerStatesRef.current = {
+      ...composerStatesRef.current,
+      [threadId]: started,
+    };
+    setComposerStates(composerStatesRef.current);
     const submission = started.submission;
     if (submission === null || submission.status !== "pending") return;
     try {
