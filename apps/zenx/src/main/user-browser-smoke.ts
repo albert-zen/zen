@@ -13,6 +13,11 @@ import {
   UserBrowserCdpOutcomeUnknownError,
   windowsBrowserExecutableCandidates,
 } from "./capabilities/user-browser-provider.js";
+import {
+  observeOwnedChild,
+  type OwnedChildObservation,
+  type OwnedChildTerminalOutcome,
+} from "./owned-child-process.js";
 
 if (process.platform !== "win32") {
   throw new Error("The real user-browser CDP smoke is Windows-only");
@@ -597,23 +602,16 @@ async function findBrowserExecutable(): Promise<string> {
   );
 }
 
-interface SmokeChildOutcome {
-  readonly type: "close" | "error";
-  readonly code: number | null;
-  readonly signal: NodeJS.Signals | null;
-  readonly error?: Error;
-}
-
 interface SmokeChildObservation {
-  readonly ended: Promise<SmokeChildOutcome>;
-  outcome(): SmokeChildOutcome | undefined;
+  readonly terminal: Promise<OwnedChildTerminalOutcome>;
+  outcome(): OwnedChildTerminalOutcome | undefined;
   diagnostics(stage: string, detail?: string): string;
 }
 
 function observeSmokeChild(child: ChildProcess): SmokeChildObservation {
   let stdout = "";
   let stderr = "";
-  let outcome: SmokeChildOutcome | undefined;
+  const owned = observeOwnedChild(child);
   const append = (current: string, chunk: string): string =>
     current.length >= 8_192 ? current : `${current}${chunk}`.slice(0, 8_192);
   child.stdout?.setEncoding("utf8");
@@ -624,27 +622,11 @@ function observeSmokeChild(child: ChildProcess): SmokeChildObservation {
   child.stderr?.on("data", (chunk: string) => {
     stderr = append(stderr, chunk);
   });
-  const ended = new Promise<SmokeChildOutcome>((resolve) => {
-    child.once("error", (error) => {
-      outcome = {
-        type: "error",
-        code: child.exitCode,
-        signal: child.signalCode,
-        error,
-      };
-      resolve(outcome);
-    });
-    child.once("close", (code, signal) => {
-      if (outcome?.type === "error") return;
-      outcome = { type: "close", code, signal };
-      resolve(outcome);
-    });
-  });
   return {
-    ended,
-    outcome: () => outcome,
+    terminal: owned.terminal,
+    outcome: owned.outcome,
     diagnostics: (stage, detail) =>
-      `real user browser fixture ${stage}; pid=${String(child.pid ?? "unavailable")}; exitCode=${String(child.exitCode)}; signal=${String(child.signalCode)}; stdout=${JSON.stringify(stdout.trim())}; stderr=${JSON.stringify(stderr.trim())}${detail === undefined ? "" : `; ${detail}`}`,
+      `real user browser fixture ${stage}; pid=${String(child.pid ?? "unavailable")}; exitCode=${String(child.exitCode)}; signal=${String(child.signalCode)}; childError=${JSON.stringify(owned.lastError()?.message ?? "")}; stdout=${JSON.stringify(stdout.trim())}; stderr=${JSON.stringify(stderr.trim())}${detail === undefined ? "" : `; ${detail}`}`,
   };
 }
 
@@ -693,23 +675,28 @@ async function readDevToolsPort(
         ),
       );
     }, 15_000);
-    void observation.ended.then((outcome) => {
+    void observation.terminal.then((outcome) => {
       finish(
         new Error(
           observation.diagnostics(
-            "exited before publishing DevToolsActivePort",
+            outcome.type === "spawn_error"
+              ? "failed to create a process before publishing DevToolsActivePort"
+              : "exited before publishing DevToolsActivePort",
             `outcome=${JSON.stringify({
               type: outcome.type,
               code: outcome.code,
               signal: outcome.signal,
-              error: outcome.error?.message,
+              error:
+                outcome.type === "spawn_error"
+                  ? outcome.error.message
+                  : undefined,
             })}; path=${activePort}; lastRead=${lastRead}`,
           ),
         ),
       );
     });
     if (child.exitCode !== null || child.signalCode !== null) {
-      void observation.ended;
+      void observation.terminal;
     }
   });
   return await readiness;
@@ -778,19 +765,30 @@ async function stopProcessTree(
       },
     );
     const cleanupObservation = observeSmokeChild(cleanup);
-    const cleanupResult = await cleanupObservation.ended;
-    if (cleanupResult.type === "error" || cleanupResult.code !== 0) {
-      const killed = child.kill("SIGKILL");
-      if (!killed && observation.outcome() === undefined) {
-        throw new Error(
+    const cleanupResult = await cleanupObservation.terminal;
+    if (cleanupResult.type === "spawn_error" || cleanupResult.code !== 0) {
+      try {
+        child.kill("SIGKILL");
+      } catch (error) {
+        console.error(
           cleanupObservation.diagnostics(
-            "taskkill failed and direct child termination was unavailable",
+            "taskkill failed and the final exact child kill threw",
+            `error=${error instanceof Error ? error.message : String(error)}`,
           ),
         );
       }
     } else if (observation.outcome() === undefined) {
-      child.kill("SIGKILL");
+      try {
+        child.kill("SIGKILL");
+      } catch (error) {
+        console.error(
+          observation.diagnostics(
+            "taskkill completed but the final exact child kill threw",
+            `error=${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
+      }
     }
   }
-  await observation.ended;
+  await observation.terminal;
 }

@@ -1,10 +1,18 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 
 import type {
   TriggerProgramSpec,
   TriggerProgramStage,
 } from "./trigger-types.js";
 import { MAX_PROGRAM_TIMEOUT_MS } from "./trigger-limits.js";
+import {
+  observeOwnedChild,
+  type OwnedChildObservation,
+} from "./owned-child-process.js";
 
 export { MAX_PROGRAM_TIMEOUT_MS } from "./trigger-limits.js";
 
@@ -846,6 +854,67 @@ if (!$matched) { exit 3 }
     let lastStage = "spawn";
     let identityHookStarted = false;
     let forcedFailure: string | undefined;
+    let killerObservation: OwnedChildObservation | undefined;
+    let escalationStarted = false;
+    const appendFailure = (detail: string): void => {
+      forcedFailure =
+        forcedFailure === undefined ? detail : `${forcedFailure}; ${detail}`;
+    };
+    const escalateOwnedHelper = async (): Promise<void> => {
+      if (
+        escalationStarted ||
+        killer === undefined ||
+        killer.pid === undefined ||
+        killerObservation?.outcome() !== undefined
+      )
+        return;
+      escalationStarted = true;
+      const pid = killer.pid;
+      const cleanup = spawn("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      let cleanupStdout = "";
+      let cleanupStderr = "";
+      cleanup.stdout?.setEncoding("utf8");
+      cleanup.stdout?.on("data", (chunk: string) => {
+        if (cleanupStdout.length < MAX_PROGRAM_STDERR_BYTES)
+          cleanupStdout += chunk;
+      });
+      cleanup.stderr?.setEncoding("utf8");
+      cleanup.stderr?.on("data", (chunk: string) => {
+        if (cleanupStderr.length < MAX_PROGRAM_STDERR_BYTES)
+          cleanupStderr += chunk;
+      });
+      const cleanupObservation = observeOwnedChild(cleanup);
+      const cleanupResult = await cleanupObservation.terminal;
+      if (cleanupResult.type === "spawn_error" || cleanupResult.code !== 0) {
+        appendFailure(
+          `exact helper PID ${String(pid)} taskkill escalation failed: outcome=${JSON.stringify(
+            cleanupResult.type === "spawn_error"
+              ? { type: cleanupResult.type, error: cleanupResult.error.message }
+              : cleanupResult,
+          )}; stdout=${JSON.stringify(boundedError(cleanupStdout) ?? "")}; stderr=${JSON.stringify(boundedError(cleanupStderr) ?? "")}`,
+        );
+        try {
+          killer.kill("SIGKILL");
+        } catch (error) {
+          appendFailure(
+            `final exact helper kill failed: ${describeError(error)}`,
+          );
+        }
+      }
+    };
+    const requestOwnedHelperTermination = (): void => {
+      if (killer === undefined || killerObservation?.outcome() !== undefined)
+        return;
+      try {
+        if (!killer.kill("SIGKILL")) void escalateOwnedHelper();
+      } catch (error) {
+        appendFailure(`exact helper kill failed: ${describeError(error)}`);
+        void escalateOwnedHelper();
+      }
+    };
     const finish = (value: TerminationResult): void => {
       if (settled) return;
       settled = true;
@@ -864,6 +933,7 @@ if (!$matched) { exit 3 }
               : ["pipe", "pipe", "pipe"],
         },
       );
+      killerObservation = observeOwnedChild(killer as ChildProcess);
       killer.stderr?.setEncoding("utf8");
       killer.stderr?.on("data", (chunk: string) => {
         if (stderr.length < MAX_PROGRAM_STDERR_BYTES) stderr += chunk;
@@ -885,7 +955,7 @@ if (!$matched) { exit 3 }
               },
               (error: unknown) => {
                 forcedFailure = `identity-match fixture failed: ${describeError(error)}`;
-                killer?.kill("SIGKILL");
+                requestOwnedHelperTermination();
               },
             );
         }
@@ -898,27 +968,33 @@ if (!$matched) { exit 3 }
       forcedFailure = `PID ${String(expected.pid)} identity-aware termination timed out during ${lastStage}; stdout=${JSON.stringify(
         boundedError(stdout) ?? "",
       )}; stderr=${JSON.stringify(boundedError(stderr) ?? "")}`;
-      killer?.kill("SIGKILL");
+      requestOwnedHelperTermination();
     }, WINDOWS_IDENTITY_TERMINATION_TIMEOUT_MS);
-    killer.once("error", (error: unknown) =>
-      finish({ ok: false, error: describeError(error) }),
-    );
-    killer.once("close", (code: number | null, signal: NodeJS.Signals | null) =>
+    killer.on("error", (error: unknown) => {
+      if (killerObservation?.outcome()?.type === "spawn_error") return;
+      appendFailure(
+        `identity-aware termination helper error: ${describeError(error)}`,
+      );
+      void escalateOwnedHelper();
+    });
+    void killerObservation.terminal.then((outcome) =>
       finish(
-        forcedFailure !== undefined
-          ? { ok: false, error: forcedFailure }
-          : code === 0
-            ? { ok: true, error: "" }
-            : code === 3
-              ? { ok: false, error: "process was not found" }
-              : {
-                  ok: false,
-                  error:
-                    boundedError(stderr) ??
-                    `identity-aware termination exited with code ${String(code)} and signal ${String(signal)} during ${lastStage}; stdout=${JSON.stringify(
-                      boundedError(stdout) ?? "",
-                    )}`,
-                },
+        outcome.type === "spawn_error"
+          ? { ok: false, error: describeError(outcome.error) }
+          : forcedFailure !== undefined
+            ? { ok: false, error: forcedFailure }
+            : outcome.code === 0
+              ? { ok: true, error: "" }
+              : outcome.code === 3
+                ? { ok: false, error: "process was not found" }
+                : {
+                    ok: false,
+                    error:
+                      boundedError(stderr) ??
+                      `identity-aware termination exited with code ${String(outcome.code)} and signal ${String(outcome.signal)} during ${lastStage}; stdout=${JSON.stringify(
+                        boundedError(stdout) ?? "",
+                      )}`,
+                  },
       ),
     );
   });
