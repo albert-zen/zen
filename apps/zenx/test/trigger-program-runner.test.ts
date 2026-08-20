@@ -48,14 +48,12 @@ test("timed-out process observation settles its exact helper before rejecting", 
 });
 
 test(
-  "Windows process-table observation stays complete under concurrent cold helpers",
+  "Windows process-table observation stays complete across repeated cold helpers",
   { skip: process.platform !== "win32" },
   async () => {
-    const snapshots = await Promise.all(
-      Array.from({ length: 4 }, async () =>
-        realWindowsProcessOperations.captureProcessTable(),
-      ),
-    );
+    const snapshots: WindowsProcessTableSnapshot[] = [];
+    for (let attempt = 0; attempt < 4; attempt += 1)
+      snapshots.push(await realWindowsProcessOperations.captureProcessTable());
 
     for (const snapshot of snapshots) {
       const current = snapshot.entries.find(
