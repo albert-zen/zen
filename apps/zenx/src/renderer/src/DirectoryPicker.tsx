@@ -102,9 +102,12 @@ export function DirectoryPicker({
     } else if (event.key === "End" && count > 0) {
       event.preventDefault();
       setActiveIndex(count - 1);
-    } else if (event.key === "Backspace" && listing?.parent !== null) {
-      event.preventDefault();
-      void open(listing!.parent!);
+    } else if (event.key === "Backspace") {
+      const parent = listing?.parent;
+      if (parent !== null && parent !== undefined) {
+        event.preventDefault();
+        void open(parent);
+      }
     }
   };
 

@@ -137,6 +137,10 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.workspaceDefault, workspace),
     markWorkspaceUsed: async (workspace: string): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.workspaceUse, workspace),
+    setPinnedThreadIds: async (
+      threadIds: readonly string[],
+    ): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(ipcChannels.pinnedThreadsSet, threadIds),
     getDirectoryBrowser: async (): Promise<DirectoryBrowserSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.directorySnapshot),
     listDirectory: async (directory: string): Promise<DirectoryListing> =>

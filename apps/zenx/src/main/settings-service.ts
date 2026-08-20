@@ -241,6 +241,25 @@ export class ZenXSettingsService {
     });
   }
 
+  async setPinnedThreadIds(threadIds: readonly string[]): Promise<void> {
+    await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const next = validateHostProfile({
+        ...current,
+        pinnedThreadIds: [...threadIds],
+      });
+      if (
+        next.pinnedThreadIds.length === current.pinnedThreadIds.length &&
+        next.pinnedThreadIds.every(
+          (threadId, index) => threadId === current.pinnedThreadIds[index],
+        )
+      )
+        return;
+      await this.#profileStore.write(next);
+      this.#profile = next;
+    });
+  }
+
   async login(
     openBrowser: (url: string) => void,
     manualCodeRequested: () => void,
@@ -337,5 +356,6 @@ function profileFromLegacy(
     workspaces: configureWorkspace ? [config.cwd] : [],
     lastUsedWorkspace: null,
     approvalPolicy: config.approvalPolicy,
+    pinnedThreadIds: [],
   };
 }

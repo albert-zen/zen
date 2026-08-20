@@ -88,6 +88,9 @@ declare global {
         removeWorkspace(workspace: string): Promise<PublicHostSettings>;
         setDefaultWorkspace(workspace: string): Promise<PublicHostSettings>;
         markWorkspaceUsed(workspace: string): Promise<PublicHostSettings>;
+        setPinnedThreadIds(
+          threadIds: readonly string[],
+        ): Promise<PublicHostSettings>;
         getDirectoryBrowser(): Promise<DirectoryBrowserSnapshot>;
         listDirectory(directory: string): Promise<DirectoryListing>;
         loginSubscription(): Promise<PublicHostSettings>;
