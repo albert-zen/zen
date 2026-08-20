@@ -99,6 +99,27 @@ test("Archived threads is a Settings section with keyboard-reachable Unarchive",
   }
 });
 
+test("General switches Appearance immediately without restarting the host", async () => {
+  const saved: ZenXHostProfile[] = [];
+  const harness = await mountSettings("general", async (profile) => {
+    saved.push(profile);
+    return { ...settings, profile };
+  });
+  try {
+    await waitFor(() => exactButton("Light"));
+    const light = exactButton("Light");
+    assert.ok(light);
+    await act(async () => light.click());
+    assert.equal(document.documentElement.dataset.appearance, "light");
+    assert.equal(localStorage.getItem("zenx.appearance"), "light");
+    assert.equal(light.getAttribute("aria-checked"), "true");
+    assert.equal(saved.length, 0);
+    assert.equal(exactButton("Apply & restart")?.disabled, true);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 interface Harness {
   dom: JSDOM;
   root: Root;
@@ -124,6 +145,8 @@ async function mountSettings(
     document: globalThis.document,
     Event: globalThis.Event,
     HTMLElement: globalThis.HTMLElement,
+    localStorage: globalThis.localStorage,
+    matchMedia: globalThis.matchMedia,
     Node: globalThis.Node,
     window: globalThis.window,
   };
@@ -131,6 +154,12 @@ async function mountSettings(
     document: dom.window.document,
     Event: dom.window.Event,
     HTMLElement: dom.window.HTMLElement,
+    localStorage: dom.window.localStorage,
+    matchMedia: () => ({
+      matches: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }),
     Node: dom.window.Node,
     window: dom.window,
     IS_REACT_ACT_ENVIRONMENT: true,
