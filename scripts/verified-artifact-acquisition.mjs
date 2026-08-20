@@ -1,5 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, link, lstat, mkdir, open, rm, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import {
+  access,
+  link,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 
 import { EnvHttpProxyAgent, fetch } from "undici";
@@ -7,12 +20,21 @@ import { EnvHttpProxyAgent, fetch } from "undici";
 const digestPattern = /^[a-f0-9]{64}$/u;
 const maxArtifactBytes = 512 * 1024 * 1024;
 const maxConnectMilliseconds = 10_000;
+// Production acquisitions use a two-minute deadline. A dead owner is reaped
+// immediately by PID; PID reuse or a corrupt future deadline can delay cleanup
+// only until this lease bound, and an owner revalidates its ticket before
+// invalid cleanup and atomic publish.
+const maxTransactionLeaseMilliseconds = 5 * 60_000;
 const readBufferBytes = 64 * 1024;
+const transactionInitializationGraceMilliseconds = 2_000;
+const transactionRetirementGraceMilliseconds = 5_000;
+const transactionWaitMilliseconds = 25;
 
 /**
  * Acquire one digest-addressed immutable file. Cache verification, proxy-aware
- * transport, timeouts, streaming bounds, partial cleanup, and atomic cache
- * publication stay behind this interface.
+ * transport, timeouts, streaming bounds, partial cleanup, no-follow cache
+ * handling, and the per-digest cross-process transaction stay behind this
+ * interface.
  */
 export async function acquireVerifiedArtifact(options) {
   const artifactName = requiredString(options?.artifactName, "artifactName");
@@ -26,17 +48,26 @@ export async function acquireVerifiedArtifact(options) {
   try {
     ensureBeforeDeadline(deadline);
     await mkdir(cacheDirectory, { recursive: true, mode: 0o700 });
-    if (await isVerifiedFile(cacheFile, digest, deadline)) {
-      await makeImmutable(cacheFile);
-      return cacheFile;
-    }
-    await removeInvalidCacheEntry(cacheFile);
-    return await downloadAndPublish({
-      url: options.url,
+    return await withDigestTransaction({
+      cacheDirectory,
       digest,
       deadline,
-      cacheDirectory,
-      cacheFile,
+      action: async (transaction) => {
+        if (await isVerifiedFile(cacheFile, digest, deadline)) {
+          return cacheFile;
+        }
+        await assertTransactionOwner(transaction);
+        await removeInvalidCacheEntry(cacheFile);
+        await assertTransactionOwner(transaction);
+        return await downloadAndPublish({
+          url: options.url,
+          digest,
+          deadline,
+          cacheDirectory,
+          cacheFile,
+          transaction,
+        });
+      },
     });
   } catch (error) {
     const reason = acquisitionReason(error);
@@ -114,6 +145,7 @@ async function downloadAndPublish(options) {
     }
 
     ensureBeforeDeadline(options.deadline);
+    await assertTransactionOwner(options.transaction);
     try {
       await link(partialFile, options.cacheFile);
     } catch (error) {
@@ -130,7 +162,6 @@ async function downloadAndPublish(options) {
         );
       }
     }
-    await makeImmutable(options.cacheFile);
     return options.cacheFile;
   } catch (error) {
     if (controller.signal.aborted) {
@@ -145,20 +176,36 @@ async function downloadAndPublish(options) {
 }
 
 async function isVerifiedFile(file, expectedDigest, deadline) {
-  let metadata;
+  let pathMetadata;
   try {
-    metadata = await lstat(file);
+    pathMetadata = await lstat(file);
   } catch (error) {
     if (error?.code === "ENOENT") return false;
     throw error;
   }
-  if (!metadata.isFile() || metadata.size > maxArtifactBytes) return false;
+  if (!pathMetadata.isFile() || pathMetadata.size > maxArtifactBytes) {
+    return false;
+  }
 
-  const handle = await open(file, "r");
+  let handle;
+  try {
+    handle = await openRegularFileNoFollow(file);
+  } catch (error) {
+    if (isMissingOrSymlinkError(error)) return false;
+    throw error;
+  }
   const hash = createHash("sha256");
   const buffer = Buffer.allocUnsafe(readBufferBytes);
   let position = 0;
   try {
+    const handleMetadata = await handle.stat();
+    if (
+      !handleMetadata.isFile() ||
+      !sameFile(pathMetadata, handleMetadata) ||
+      handleMetadata.size > maxArtifactBytes
+    ) {
+      return false;
+    }
     while (true) {
       ensureBeforeDeadline(deadline);
       const { bytesRead } = await handle.read(
@@ -172,29 +219,350 @@ async function isVerifiedFile(file, expectedDigest, deadline) {
       position += bytesRead;
       if (position > maxArtifactBytes) return false;
     }
+    ensureBeforeDeadline(deadline);
+    const currentPathMetadata = await lstat(file).catch((error) => {
+      if (error?.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (
+      currentPathMetadata === undefined ||
+      !sameFile(currentPathMetadata, handleMetadata) ||
+      hash.digest("hex") !== expectedDigest
+    ) {
+      return false;
+    }
+    await handle.chmod(0o444);
+    return true;
   } finally {
     await handle.close();
   }
-  ensureBeforeDeadline(deadline);
-  return hash.digest("hex") === expectedDigest;
 }
 
 async function removeInvalidCacheEntry(file) {
+  const quarantine = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${randomUUID()}.invalid`,
+  );
   try {
-    await chmod(file, 0o600);
+    await rename(file, quarantine);
   } catch (error) {
     if (error?.code === "ENOENT") return;
     throw error;
   }
+
+  let shouldRestore = true;
   try {
-    await unlink(file);
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
+    const pathMetadata = await lstat(quarantine);
+    if (pathMetadata.isSymbolicLink()) {
+      await unlink(quarantine);
+      shouldRestore = false;
+      return;
+    }
+    if (!pathMetadata.isFile()) {
+      throw acquisitionFailure("invalid cache entry is not a regular file");
+    }
+
+    const handle = await openRegularFileNoFollow(quarantine);
+    try {
+      const handleMetadata = await handle.stat();
+      if (!handleMetadata.isFile() || !sameFile(pathMetadata, handleMetadata)) {
+        throw acquisitionFailure("invalid cache entry changed during cleanup");
+      }
+      await handle.chmod(0o600);
+    } finally {
+      await handle.close();
+    }
+    await unlink(quarantine);
+    shouldRestore = false;
+  } finally {
+    if (shouldRestore) {
+      await rename(quarantine, file).catch(() => {});
+    }
   }
 }
 
-async function makeImmutable(file) {
-  await chmod(file, 0o444);
+async function openRegularFileNoFollow(file) {
+  const flags =
+    constants.O_RDONLY |
+    (typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0);
+  return await open(file, flags);
+}
+
+async function withDigestTransaction(options) {
+  const transactionRoot = path.join(
+    options.cacheDirectory,
+    ".transactions",
+    options.digest,
+  );
+  await mkdir(transactionRoot, { recursive: true, mode: 0o700 });
+  const transaction = await acquireTransaction({
+    transactionRoot,
+    deadline: options.deadline,
+  });
+  try {
+    await assertTransactionOwner(transaction);
+    return await options.action(transaction);
+  } finally {
+    await retireTransactionDirectory(
+      transaction.transactionRoot,
+      transaction.directory,
+    );
+  }
+}
+
+async function acquireTransaction(options) {
+  // Unique contender directories avoid a fixed lock pathname's stale-cleanup
+  // ABA race. Each contender chooses one ticket, then waits for every lower
+  // (ticket, token) pair; newcomers observe the published ticket and queue later.
+  const token = randomUUID();
+  const createdAt = Date.now();
+  const candidateDirectory = path.join(
+    options.transactionRoot,
+    `candidate-${token}`,
+  );
+  const directory = path.join(options.transactionRoot, `participant-${token}`);
+  const owner = {
+    version: 1,
+    token,
+    pid: process.pid,
+    createdAt,
+    deadline: options.deadline,
+  };
+  await mkdir(candidateDirectory, { mode: 0o700 });
+  try {
+    await Promise.all([
+      writeFile(
+        path.join(candidateDirectory, "owner.json"),
+        `${JSON.stringify(owner)}\n`,
+        { mode: 0o600 },
+      ),
+      writeFile(path.join(candidateDirectory, "choosing"), "", {
+        mode: 0o600,
+      }),
+    ]);
+    await rename(candidateDirectory, directory);
+
+    const participants = await activeParticipants(options.transactionRoot);
+    const ticket =
+      participants.reduce(
+        (maximum, participant) =>
+          participant.ticket === undefined
+            ? maximum
+            : Math.max(maximum, participant.ticket),
+        0,
+      ) + 1;
+    if (!Number.isSafeInteger(ticket)) {
+      throw acquisitionFailure("cache transaction ticket space exhausted");
+    }
+    await writeFile(path.join(directory, "ticket"), `${String(ticket)}\n`, {
+      mode: 0o600,
+    });
+    await unlink(path.join(directory, "choosing"));
+
+    const transaction = {
+      transactionRoot: options.transactionRoot,
+      directory,
+      token,
+      ticket,
+      deadline: options.deadline,
+    };
+    while (true) {
+      ensureBeforeDeadline(options.deadline);
+      if (!(await hasPrecedingParticipant(transaction))) return transaction;
+      await waitForTransaction(options.deadline);
+    }
+  } catch (error) {
+    await retireTransactionDirectory(
+      options.transactionRoot,
+      candidateDirectory,
+    );
+    await retireTransactionDirectory(options.transactionRoot, directory);
+    throw error;
+  }
+}
+
+async function hasPrecedingParticipant(transaction) {
+  const participants = await activeParticipants(transaction.transactionRoot);
+  for (const participant of participants) {
+    if (participant.token === transaction.token) continue;
+    if (participant.choosing) return true;
+    if (participant.ticket === undefined) {
+      throw acquisitionFailure("cache transaction state is invalid");
+    }
+    if (
+      participant.ticket < transaction.ticket ||
+      (participant.ticket === transaction.ticket &&
+        participant.token < transaction.token)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function activeParticipants(transactionRoot) {
+  const result = [];
+  for (const entry of await readdir(transactionRoot, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith("retired-")) {
+      await rm(path.join(transactionRoot, entry.name), {
+        recursive: true,
+        force: true,
+      });
+      continue;
+    }
+    if (
+      !entry.isDirectory() ||
+      (!entry.name.startsWith("candidate-") &&
+        !entry.name.startsWith("participant-"))
+    ) {
+      continue;
+    }
+    const participant = await readParticipant(
+      path.join(transactionRoot, entry.name),
+      entry.name,
+    );
+    if (participant === undefined) continue;
+    if (participant.stale) {
+      await retireTransactionDirectory(transactionRoot, participant.directory);
+      continue;
+    }
+    result.push(participant);
+  }
+  return result;
+}
+
+async function retireTransactionDirectory(transactionRoot, directory) {
+  // Removing the active name atomically keeps observers from reading a
+  // half-deleted owner/ticket pair. A crash after rename leaves only inert state
+  // that the next scan removes.
+  const retiredDirectory = path.join(
+    transactionRoot,
+    `retired-${path.basename(directory)}-${randomUUID()}`,
+  );
+  try {
+    await rename(directory, retiredDirectory);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  await rm(retiredDirectory, { recursive: true, force: true });
+}
+
+async function readParticipant(directory, name) {
+  let directoryMetadata;
+  try {
+    directoryMetadata = await lstat(directory);
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (!directoryMetadata.isDirectory()) return undefined;
+
+  let owner;
+  try {
+    owner = JSON.parse(
+      await readFile(path.join(directory, "owner.json"), "utf8"),
+    );
+  } catch (error) {
+    if (error?.code !== "ENOENT" && !(error instanceof SyntaxError))
+      throw error;
+  }
+  const token = name.replace(/^(?:candidate|participant)-/u, "");
+  const validOwner =
+    owner?.version === 1 &&
+    owner.token === token &&
+    Number.isSafeInteger(owner.pid) &&
+    owner.pid > 0 &&
+    Number.isSafeInteger(owner.createdAt) &&
+    Number.isSafeInteger(owner.deadline);
+  const age = Date.now() - directoryMetadata.mtimeMs;
+  if (!validOwner) {
+    return {
+      directory,
+      token,
+      choosing: true,
+      ticket: undefined,
+      stale: age >= transactionInitializationGraceMilliseconds,
+    };
+  }
+
+  const retirementDeadline = Math.min(
+    owner.deadline + transactionRetirementGraceMilliseconds,
+    owner.createdAt + maxTransactionLeaseMilliseconds,
+  );
+  const stale = !processIsAlive(owner.pid) || Date.now() >= retirementDeadline;
+  if (stale) {
+    return { directory, token, choosing: true, ticket: undefined, stale };
+  }
+
+  const choosing =
+    name.startsWith("candidate-") ||
+    (await pathExists(path.join(directory, "choosing")));
+  let ticket;
+  try {
+    const value = Number(
+      (await readFile(path.join(directory, "ticket"), "utf8")).trim(),
+    );
+    if (Number.isSafeInteger(value) && value > 0) ticket = value;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return { directory, token, choosing, ticket, stale: false };
+}
+
+async function assertTransactionOwner(transaction) {
+  ensureBeforeDeadline(transaction.deadline);
+  const participant = await readParticipant(
+    transaction.directory,
+    `participant-${transaction.token}`,
+  );
+  if (
+    participant === undefined ||
+    participant.stale ||
+    participant.choosing ||
+    participant.ticket !== transaction.ticket
+  ) {
+    throw acquisitionFailure("cache transaction ownership expired");
+  }
+}
+
+async function waitForTransaction(deadline) {
+  const wait = Math.min(
+    transactionWaitMilliseconds,
+    remainingMilliseconds(deadline),
+  );
+  await new Promise((resolve) => setTimeout(resolve, wait));
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function pathExists(file) {
+  try {
+    await access(file);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function sameFile(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function isMissingOrSymlinkError(error) {
+  return (
+    error?.code === "ENOENT" ||
+    error?.code === "ELOOP" ||
+    error?.code === "EMLINK"
+  );
 }
 
 function normalizeTransportFailure(error) {
