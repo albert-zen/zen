@@ -73,7 +73,7 @@
   --border-soft: #d9dde7;
   --text: #1c2029;
   --text-2: #4d5361;
-  --text-3: #626979;
+  --text-3: #616878;
   --accent: #526fb9;
   --accent-2: #7658ae;
   --accent-soft: rgb(82 111 185 / 13%);
@@ -757,7 +757,7 @@ a:focus-visible {
   min-width: 0;
   height: 34px;
   padding: 0 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: 7px;
   background: var(--surface-inset);
   color: var(--text);
@@ -1013,7 +1013,7 @@ a:focus-visible {
 .thread-title-form input {
   min-width: 100px;
   height: 30px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: 7px;
   background: var(--surface-inset);
   color: var(--text);

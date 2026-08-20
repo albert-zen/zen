@@ -89,6 +89,10 @@ test("light semantic text, primary actions, and control boundaries meet contrast
     );
   }
   assert.ok(
+    contrastRatio(token("text-3"), token("surface-hover")) >= 4.5,
+    "selected Thread metadata must meet 4.5:1",
+  );
+  assert.ok(
     contrastRatio(token("text-on-accent"), token("accent")) >= 4.5,
     "primary action text must meet 4.5:1",
   );
@@ -108,6 +112,22 @@ test("light semantic text, primary actions, and control boundaries meet contrast
     css,
     /\.appearance-options label > span\s*\{[^}]*border:\s*1px solid var\(--border-control\)/u,
   );
+  assert.match(
+    css,
+    /\.thread-row\.selected\s*\{[^}]*background:\s*var\(--surface-hover\)/u,
+  );
+  assert.match(
+    css,
+    /\.thread-project,\s*\.model-line\s*\{[^}]*color:\s*var\(--text-3\)/u,
+  );
+  for (const selector of ["thread-menu-rename", "thread-title-form"]) {
+    const inputRule = css.match(
+      new RegExp(`\\.${selector} input\\s*\\{([^}]*)\\}`, "u"),
+    )?.[1];
+    assert.ok(inputRule, `missing .${selector} input rule`);
+    assert.match(inputRule, /border:\s*1px solid var\(--border-control\)/u);
+    assert.match(inputRule, /background:\s*var\(--surface-inset\)/u);
+  }
 });
 
 class FakeSystemPreference {
