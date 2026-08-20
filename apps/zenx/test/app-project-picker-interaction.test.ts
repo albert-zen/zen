@@ -7,6 +7,7 @@ import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
+import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
 import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projection.js";
 import type { Thread } from "../src/protocol-client/index.js";
 const { act, createElement } = React;
@@ -62,6 +63,80 @@ test("zero-Project New thread opens the existing directory picker", async () => 
       document.querySelector('[role="dialog"]')?.textContent ?? "",
       /Add a project folder/u,
     );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("packaged startup clears a transient Project failure after the App Server becomes ready", async () => {
+  const projects: ZenXProjectProjectionSnapshot = {
+    projects: [
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work/zen",
+  };
+  let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+  let projectCalls = 0;
+  const harness = await mountApp(projects, {
+    getStatus: async () => ({ type: "starting" }),
+    onStatus: (listener) => {
+      statusListener = listener;
+      return () => {
+        statusListener = undefined;
+      };
+    },
+    projectsGet: async () => {
+      projectCalls += 1;
+      if (projectCalls === 1) throw new Error("Zen App Server is not ready");
+      return projects;
+    },
+  });
+  try {
+    assert.match(document.body.textContent ?? "", /Connecting…/u);
+    assert.ok(statusListener);
+
+    await act(async () => {
+      statusListener?.({ type: "ready", reconnected: false });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => projectCalls === 1);
+    assert.match(document.body.textContent ?? "", /ZenX could not load data/u);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Zen App Server stopped/u,
+    );
+    assert.match(document.body.textContent ?? "", /Local service ready/u);
+
+    await act(async () => {
+      statusListener?.({ type: "starting" });
+      statusListener?.({ type: "ready", reconnected: true });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => projectCalls === 2);
+    await waitFor(
+      () =>
+        !(document.body.textContent ?? "").includes(
+          "Zen App Server is not ready",
+        ),
+    );
+    assert.match(document.body.textContent ?? "", /Local service ready/u);
+    assert.match(document.body.textContent ?? "", /No thread selected/u);
+
+    await act(async () => {
+      statusListener?.({ type: "error", message: "host exited" });
+      await Promise.resolve();
+    });
+    assert.match(document.body.textContent ?? "", /Zen App Server stopped/u);
+    assert.match(document.body.textContent ?? "", /Local service stopped/u);
   } finally {
     await unmountApp(harness);
   }
@@ -487,8 +562,11 @@ test("serializes cross-row Pin mutations against the latest confirmed order", as
 async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
+    getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
+    onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
+    projectsGet?(): Promise<ZenXProjectProjectionSnapshot>;
     setPinnedThreadIds?(
       threadIds: readonly string[],
     ): Promise<ReturnType<typeof publicSettings>>;
@@ -514,7 +592,10 @@ async function mountApp(
   const zenx = {
     platform: "darwin",
     protocol: {
-      getStatus: async () => ({ type: "ready", reconnected: false }),
+      getStatus: async () =>
+        options.getStatus === undefined
+          ? { type: "ready", reconnected: false }
+          : await options.getStatus(),
       getPendingApprovals: async () => [],
       request: async (method: string) => {
         if (method === "model/list") return { data: [] };
@@ -524,14 +605,20 @@ async function mountApp(
       respondToApproval: async () => undefined,
       onApprovalRequest: () => () => undefined,
       onApprovalResolved: () => () => undefined,
-      onStatus: () => () => undefined,
+      onStatus: (listener: (status: AppServerHostStatus) => void) =>
+        options.onStatus?.(listener) ?? (() => undefined),
       onNotification: () => () => undefined,
     },
     threads: {
       list: async ({ archived }: { archived: boolean }) =>
         options.threads === undefined ? [] : await options.threads(archived),
     },
-    projects: { get: async () => projects },
+    projects: {
+      get: async () =>
+        options.projectsGet === undefined
+          ? projects
+          : await options.projectsGet(),
+    },
     settings: {
       get: async () => currentSettings,
       setPinnedThreadIds: async (threadIds: readonly string[]) => {

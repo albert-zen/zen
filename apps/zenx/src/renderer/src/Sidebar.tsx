@@ -45,6 +45,7 @@ interface SidebarProps {
   pluginContributions: readonly LoadedPluginContribution[];
   selectedPage: "agent" | "triggers" | "rooms" | "settings";
   selectedThreadId: string | null;
+  serverError?: boolean;
   serverReady: boolean;
   liveThread: Thread | null;
   threadError: string | null;
@@ -75,6 +76,7 @@ export function Sidebar({
   pluginContributions,
   selectedPage,
   selectedThreadId,
+  serverError = false,
   serverReady,
   liveThread,
   threadError,
@@ -365,7 +367,13 @@ export function Sidebar({
           </button>
           <div className="service-status">
             <span className={`live-dot${serverReady ? " ready" : ""}`} />
-            <span>{serverReady ? "Local service ready" : "Connecting…"}</span>
+            <span>
+              {serverReady
+                ? "Local service ready"
+                : serverError
+                  ? "Local service stopped"
+                  : "Connecting…"}
+            </span>
           </div>
         </footer>
       </aside>

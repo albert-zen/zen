@@ -136,6 +136,7 @@ export function App() {
     }
   });
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [projectError, setProjectError] = useState<string | null>(null);
   const [threadLifecycleBusy, setThreadLifecycleBusy] = useState(false);
   const [threadLifecycleError, setThreadLifecycleError] = useState<
     string | null
@@ -200,10 +201,13 @@ export function App() {
     const epoch = ++projectLoadEpoch.current;
     try {
       const snapshot = await window.zenx.projects.get({ archived: false });
-      if (projectLoadEpoch.current === epoch) setProjects(snapshot);
+      if (projectLoadEpoch.current === epoch) {
+        setProjects(snapshot);
+        setProjectError(null);
+      }
     } catch (error) {
       if (projectLoadEpoch.current === epoch)
-        setRequestError(describeError(error));
+        setProjectError(describeError(error));
     }
   };
 
@@ -737,6 +741,7 @@ export function App() {
         pluginContributions={pluginContributions}
         selectedPage={page}
         selectedThreadId={selectedThreadId}
+        serverError={serverStatus.type === "error"}
         serverReady={serverStatus.type === "ready"}
         projects={projects}
         pinnedThreads={pinnedSummaries}
@@ -828,7 +833,7 @@ export function App() {
               }));
             }}
             onSubmit={submitComposer}
-            requestError={requestError}
+            requestError={projectError ?? requestError}
             selectedSettings={selectedSettings}
             selectedSummary={selectedSummary}
             serverStatus={serverStatus}
@@ -1019,7 +1024,11 @@ function AgentSurface({
       {serverStatus.type === "error" || requestError !== null ? (
         <EmptyState
           error
-          title="Zen App Server stopped"
+          title={
+            serverStatus.type === "error"
+              ? "Zen App Server stopped"
+              : "ZenX could not load data"
+          }
           detail={
             serverStatus.type === "error" ? serverStatus.message : requestError!
           }
