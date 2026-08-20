@@ -72,6 +72,7 @@ export function App() {
   const threadSummaryLoadEpoch = useRef(0);
   const projectLoadEpoch = useRef(0);
   const selectedThreadIdRef = useRef<string | null>(null);
+  const archivingThreadIdsRef = useRef<ReadonlySet<string>>(new Set());
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
   const pinnedThreadIdsRef = useRef<string[]>([]);
   const pinMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -139,6 +140,9 @@ export function App() {
   const [threadLifecycleError, setThreadLifecycleError] = useState<
     string | null
   >(null);
+  const [archivingThreadIds, setArchivingThreadIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [composerStates, setComposerStates] = useState<
     Record<string, ComposerState>
   >({});
@@ -461,7 +465,11 @@ export function App() {
     intent: ComposerIntent,
     expectedTurnId: string | null,
   ) => {
-    if (threadDetail === null) return;
+    if (
+      threadDetail === null ||
+      archivingThreadIdsRef.current.has(threadDetail.id)
+    )
+      return;
     const threadId = threadDetail.id;
     const started = updateComposer(threadId, (state) =>
       beginComposerSubmission(state, intent, expectedTurnId, () =>
@@ -604,6 +612,16 @@ export function App() {
     openPage("settings");
   };
 
+  const setThreadArchiving = (threadId: string, archiving: boolean) => {
+    const current = archivingThreadIdsRef.current;
+    if (current.has(threadId) === archiving) return;
+    const next = new Set(current);
+    if (archiving) next.add(threadId);
+    else next.delete(threadId);
+    archivingThreadIdsRef.current = next;
+    setArchivingThreadIds(next);
+  };
+
   const performThreadLifecycle = async (
     summary: NativeThreadSummary,
     clearSelectedOnArchive = false,
@@ -611,13 +629,24 @@ export function App() {
     if (!summary.archived && threadHasActiveTurn(summary, threadDetail)) {
       throw new Error("Wait for the active Turn to finish before archiving.");
     }
-    await window.zenx.protocol.request(
-      summary.archived ? "thread/unarchive" : "thread/archive",
-      { threadId: summary.threadId },
-    );
+    const fenceSelectedArchive =
+      !summary.archived &&
+      clearSelectedOnArchive &&
+      selectedThreadIdRef.current === summary.threadId;
+    if (fenceSelectedArchive) setThreadArchiving(summary.threadId, true);
+    try {
+      await window.zenx.protocol.request(
+        summary.archived ? "thread/unarchive" : "thread/archive",
+        { threadId: summary.threadId },
+      );
+    } catch (error) {
+      if (fenceSelectedArchive) setThreadArchiving(summary.threadId, false);
+      throw error;
+    }
     if (!summary.archived) {
       if (clearSelectedOnArchive)
         clearSelectedThreadForArchive(summary.threadId);
+      if (fenceSelectedArchive) setThreadArchiving(summary.threadId, false);
       try {
         await queuePinMutation((current) =>
           current.includes(summary.threadId)
@@ -789,6 +818,9 @@ export function App() {
             switchingModel={switchingModel}
             threadLifecycleBusy={threadLifecycleBusy}
             threadLifecycleError={threadLifecycleError}
+            threadArchiving={
+              threadDetail !== null && archivingThreadIds.has(threadDetail.id)
+            }
             threadDetail={threadDetail}
             threadError={threadError}
             threadLoading={threadLoading}
@@ -855,6 +887,7 @@ function AgentSurface({
   switchingModel,
   threadLifecycleBusy,
   threadLifecycleError,
+  threadArchiving,
   threadDetail,
   threadError,
   threadLoading,
@@ -893,6 +926,7 @@ function AgentSurface({
   switchingModel: boolean;
   threadLifecycleBusy: boolean;
   threadLifecycleError: string | null;
+  threadArchiving: boolean;
   threadDetail: Thread | null;
   threadError: string | null;
   threadLoading: boolean;
@@ -938,7 +972,7 @@ function AgentSurface({
           selectedSummary.archived ? null : (
             <ThreadLifecycleAction
               archived={selectedSummary.archived}
-              busy={threadLifecycleBusy}
+              busy={threadLifecycleBusy || threadArchiving}
               error={threadLifecycleError}
               hasActiveTurn={threadHasActiveTurn(selectedSummary, threadDetail)}
               onChange={onChangeThreadLifecycle}
@@ -1024,6 +1058,7 @@ function AgentSurface({
             (approval) => approval.params.threadId === threadDetail.id,
           )}
           composer={composerStates[threadDetail.id] ?? emptyComposerState()}
+          composerDisabled={threadArchiving}
           modelDisabled={!canChangeThreadModel(threadDetail)}
           modelError={modelUpdateError ?? modelCatalogError}
           models={models}

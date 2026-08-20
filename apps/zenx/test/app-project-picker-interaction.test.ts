@@ -138,6 +138,95 @@ test("Sidebar archive clears the selected Chat and opens its Settings restore en
   }
 });
 
+test("selected Sidebar archive fences Send until a failed response restores Chat", async () => {
+  const archiveResponse = deferred<unknown>();
+  let turnStartCalls = 0;
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      request: async (method) => {
+        if (method === "thread/resume")
+          return {
+            thread: liveThread(),
+            model: "fake",
+            modelProvider: "fake",
+          };
+        if (method === "thread/archive") return await archiveResponse.promise;
+        if (method === "turn/start") {
+          turnStartCalls += 1;
+          return {};
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+      threads: async (archived) => (archived ? [] : [summary(false)]),
+    },
+  );
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Keep this draft");
+    const staleSend = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    assert.equal(staleSend.disabled, false);
+
+    await act(async () => threadMenuButton("Thread one").click());
+    const archive = await waitFor(() => exactMenuButton("Archive"));
+    await act(async () => {
+      archive.click();
+      staleSend.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    assert.equal(turnStartCalls, 0);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")?.disabled,
+      true,
+    );
+
+    await act(async () => {
+      archiveResponse.reject(new Error("archive failed"));
+      await Promise.resolve();
+    });
+    const restoredComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    assert.equal(restoredComposer.value, "Keep this draft");
+    assert.match(document.body.textContent ?? "", /archive failed/u);
+
+    const restoredSend = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    assert.equal(restoredSend.disabled, false);
+    await act(async () => {
+      restoredSend.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.equal(turnStartCalls, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("serializes cross-row Pin mutations against the latest confirmed order", async () => {
   const requests: Array<{
     threadIds: readonly string[];
@@ -280,6 +369,7 @@ async function mountApp(
     },
     titles: {
       get: async () => ({}),
+      observe: async () => undefined,
       onChange: () => () => undefined,
     },
     triggers: {
@@ -389,6 +479,28 @@ async function unmountApp(harness: AppHarness): Promise<void> {
   harness.dom.window.close();
 }
 
+async function setTextareaValue(
+  textarea: HTMLTextAreaElement,
+  value: string,
+): Promise<void> {
+  const reactPropsKey = Object.getOwnPropertyNames(textarea).find((key) =>
+    key.startsWith("__reactProps$"),
+  );
+  assert.ok(reactPropsKey);
+  const props = (
+    textarea as unknown as Record<
+      string,
+      { onChange?(event: { target: { value: string } }): void }
+    >
+  )[reactPropsKey];
+  const onChange = props?.onChange;
+  assert.ok(onChange);
+  await act(async () => {
+    onChange({ target: { value } });
+    await Promise.resolve();
+  });
+}
+
 function exactButton(label: string): HTMLButtonElement | undefined {
   return [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent?.trim() === label,
@@ -415,10 +527,13 @@ async function waitFor<T>(read: () => T | null | undefined): Promise<T> {
 function deferred<T>(): {
   promise: Promise<T>;
   resolve(value: T): void;
+  reject(reason: unknown): void;
 } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((finish) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((finish, fail) => {
     resolve = finish;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }

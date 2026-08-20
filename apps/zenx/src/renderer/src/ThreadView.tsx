@@ -23,6 +23,7 @@ import {
 interface ThreadViewProps {
   approvals: readonly ApprovalCardState[];
   composer: ComposerState;
+  composerDisabled?: boolean;
   modelDisabled?: boolean;
   modelError?: string | null;
   models?: readonly ModelSummary[];
@@ -48,6 +49,7 @@ interface ThreadViewProps {
 export function ThreadView({
   approvals,
   composer,
+  composerDisabled = false,
   modelDisabled = false,
   modelError = null,
   models = [],
@@ -84,14 +86,15 @@ export function ThreadView({
   }, [thread.turns, approvals]);
 
   const submit = (intent: ComposerIntent) => {
-    if (draft.length === 0 || submitting) return;
+    if (composerDisabled || draft.length === 0 || submitting) return;
     if (intent === "start" && runningTurn !== null) return;
     if (intent !== "start" && runningTurn === null) return;
     void onSubmit(intent, runningTurn?.id ?? null);
   };
 
   const interrupt = async () => {
-    if (runningTurn === null || interrupting || submitting) return;
+    if (composerDisabled || runningTurn === null || interrupting || submitting)
+      return;
     setInterrupting(true);
     setInterruptError(null);
     try {
@@ -186,6 +189,7 @@ export function ThreadView({
           <textarea
             id="thread-composer"
             aria-label="Message"
+            disabled={composerDisabled}
             onChange={(event) => onDraftChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key !== "Enter" || event.shiftKey) return;
@@ -222,7 +226,9 @@ export function ThreadView({
                     aria-describedby={
                       modelError === null ? undefined : "composer-model-error"
                     }
-                    disabled={modelDisabled || switchingModel}
+                    disabled={
+                      composerDisabled || modelDisabled || switchingModel
+                    }
                     onChange={(event) => onModelChange?.(event.target.value)}
                     value={selectedModel}
                   >
@@ -253,7 +259,7 @@ export function ThreadView({
                 <button
                   className="steer-button"
                   type="button"
-                  disabled={submitting}
+                  disabled={composerDisabled || submitting}
                   onClick={() => submit("steer")}
                 >
                   {submitting && composer.submission?.intent === "steer"
@@ -267,6 +273,7 @@ export function ThreadView({
                 aria-label={primaryLabel}
                 title={primaryLabel}
                 disabled={
+                  composerDisabled ||
                   interrupting ||
                   submitting ||
                   (primaryMode === "send" && draft.length === 0)
