@@ -42,6 +42,7 @@ const server = createServer((request, response) => {
 });
 
 let browser: ChildProcess | undefined;
+let browserObservation: SmokeChildObservation | undefined;
 let directory: string | undefined;
 
 try {
@@ -57,9 +58,14 @@ try {
       "--no-default-browser-check",
       `http://127.0.0.1:${String(port)}/seed`,
     ],
-    { stdio: "ignore", windowsHide: true },
+    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
   );
-  const debuggingPort = await readDevToolsPort(directory);
+  browserObservation = observeSmokeChild(browser);
+  const debuggingPort = await readDevToolsPort(
+    directory,
+    browser,
+    browserObservation,
+  );
   const endpoint = `http://127.0.0.1:${debuggingPort}`;
   const selection = await selectBrowserProvider({
     userDataDirectory: directory,
@@ -238,10 +244,10 @@ try {
     }),
   );
 } finally {
-  await closeServer();
-  if (browser?.pid !== undefined) {
-    await stopProcessTree(browser.pid);
+  if (browser !== undefined && browserObservation !== undefined) {
+    await stopProcessTree(browser, browserObservation);
   }
+  await closeServer();
   if (directory !== undefined) {
     await rm(directory, {
       recursive: true,
@@ -591,20 +597,122 @@ async function findBrowserExecutable(): Promise<string> {
   );
 }
 
-async function readDevToolsPort(userDataDirectory: string): Promise<string> {
-  return await retry(async () => {
-    try {
-      const [port] = (
-        await readFile(
-          path.join(userDataDirectory, "DevToolsActivePort"),
-          "utf8",
-        )
-      ).split(/\r?\n/u);
-      return /^\d+$/u.test(port ?? "") ? port : undefined;
-    } catch {
-      return undefined;
+interface SmokeChildOutcome {
+  readonly type: "close" | "error";
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly error?: Error;
+}
+
+interface SmokeChildObservation {
+  readonly ended: Promise<SmokeChildOutcome>;
+  outcome(): SmokeChildOutcome | undefined;
+  diagnostics(stage: string, detail?: string): string;
+}
+
+function observeSmokeChild(child: ChildProcess): SmokeChildObservation {
+  let stdout = "";
+  let stderr = "";
+  let outcome: SmokeChildOutcome | undefined;
+  const append = (current: string, chunk: string): string =>
+    current.length >= 8_192 ? current : `${current}${chunk}`.slice(0, 8_192);
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => {
+    stdout = append(stdout, chunk);
+  });
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: string) => {
+    stderr = append(stderr, chunk);
+  });
+  const ended = new Promise<SmokeChildOutcome>((resolve) => {
+    child.once("error", (error) => {
+      outcome = {
+        type: "error",
+        code: child.exitCode,
+        signal: child.signalCode,
+        error,
+      };
+      resolve(outcome);
+    });
+    child.once("close", (code, signal) => {
+      if (outcome?.type === "error") return;
+      outcome = { type: "close", code, signal };
+      resolve(outcome);
+    });
+  });
+  return {
+    ended,
+    outcome: () => outcome,
+    diagnostics: (stage, detail) =>
+      `real user browser fixture ${stage}; pid=${String(child.pid ?? "unavailable")}; exitCode=${String(child.exitCode)}; signal=${String(child.signalCode)}; stdout=${JSON.stringify(stdout.trim())}; stderr=${JSON.stringify(stderr.trim())}${detail === undefined ? "" : `; ${detail}`}`,
+  };
+}
+
+async function readDevToolsPort(
+  userDataDirectory: string,
+  child: ChildProcess,
+  observation: SmokeChildObservation,
+): Promise<string> {
+  const activePort = path.join(userDataDirectory, "DevToolsActivePort");
+  let lastRead = "not attempted";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  const readiness = new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const finish = (value: string | Error): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if (pollTimer !== undefined) clearTimeout(pollTimer);
+      if (value instanceof Error) reject(value);
+      else resolve(value);
+    };
+    const poll = async (): Promise<void> => {
+      if (settled) return;
+      try {
+        const [port] = (await readFile(activePort, "utf8")).split(/\r?\n/u);
+        if (/^\d+$/u.test(port ?? "")) {
+          finish(port!);
+          return;
+        }
+        lastRead = `invalid contents ${JSON.stringify(port ?? "")}`;
+      } catch (error) {
+        const failure = error as NodeJS.ErrnoException;
+        lastRead = `${failure.code ?? "read error"}: ${failure.message}`;
+      }
+      pollTimer = setTimeout(() => void poll(), 100);
+    };
+    void poll();
+    timer = setTimeout(() => {
+      finish(
+        new Error(
+          observation.diagnostics(
+            "did not publish DevToolsActivePort before the readiness deadline",
+            `path=${activePort}; lastRead=${lastRead}`,
+          ),
+        ),
+      );
+    }, 15_000);
+    void observation.ended.then((outcome) => {
+      finish(
+        new Error(
+          observation.diagnostics(
+            "exited before publishing DevToolsActivePort",
+            `outcome=${JSON.stringify({
+              type: outcome.type,
+              code: outcome.code,
+              signal: outcome.signal,
+              error: outcome.error?.message,
+            })}; path=${activePort}; lastRead=${lastRead}`,
+          ),
+        ),
+      );
+    });
+    if (child.exitCode !== null || child.signalCode !== null) {
+      void observation.ended;
     }
   });
+  return await readiness;
 }
 
 async function retry<T>(operation: () => Promise<T | undefined>): Promise<T> {
@@ -649,18 +757,40 @@ async function listen(): Promise<number> {
 
 async function closeServer(): Promise<void> {
   if (!server.listening) return;
-  await new Promise<void>((resolve, reject) =>
+  const closed = new Promise<void>((resolve, reject) =>
     server.close((error) => (error === undefined ? resolve() : reject(error))),
   );
+  server.closeAllConnections();
+  await closed;
 }
 
-async function stopProcessTree(pid: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const cleanup = spawn("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    cleanup.once("exit", () => resolve());
-    cleanup.once("error", () => resolve());
-  });
+async function stopProcessTree(
+  child: ChildProcess,
+  observation: SmokeChildObservation,
+): Promise<void> {
+  if (observation.outcome() === undefined && child.pid !== undefined) {
+    const cleanup = spawn(
+      "taskkill.exe",
+      ["/PID", String(child.pid), "/T", "/F"],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      },
+    );
+    const cleanupObservation = observeSmokeChild(cleanup);
+    const cleanupResult = await cleanupObservation.ended;
+    if (cleanupResult.type === "error" || cleanupResult.code !== 0) {
+      const killed = child.kill("SIGKILL");
+      if (!killed && observation.outcome() === undefined) {
+        throw new Error(
+          cleanupObservation.diagnostics(
+            "taskkill failed and direct child termination was unavailable",
+          ),
+        );
+      }
+    } else if (observation.outcome() === undefined) {
+      child.kill("SIGKILL");
+    }
+  }
+  await observation.ended;
 }
