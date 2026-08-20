@@ -11,6 +11,7 @@ import type {
   PublicHostSettings,
   ZenXHostProfile,
 } from "../src/main/host-profile.js";
+import type { AppearancePreference } from "../src/renderer/src/appearance.js";
 import type { SettingsTab } from "../src/renderer/src/SettingsView.js";
 
 const { act, createElement, useState } = React;
@@ -106,13 +107,25 @@ test("General switches Appearance immediately without restarting the host", asyn
     return { ...settings, profile };
   });
   try {
-    await waitFor(() => exactButton("Light"));
-    const light = exactButton("Light");
+    await waitFor(() => appearanceRadio("light"));
+    const system = appearanceRadio("system");
+    const light = appearanceRadio("light");
+    const dark = appearanceRadio("dark");
+    assert.ok(system);
     assert.ok(light);
+    assert.ok(dark);
+    assert.equal(system.type, "radio");
+    assert.equal(light.type, "radio");
+    assert.equal(dark.type, "radio");
+    assert.equal(system.name, "appearance");
+    assert.equal(light.name, system.name);
+    assert.equal(dark.name, system.name);
     await act(async () => light.click());
     assert.equal(document.documentElement.dataset.appearance, "light");
     assert.equal(localStorage.getItem("zenx.appearance"), "light");
-    assert.equal(light.getAttribute("aria-checked"), "true");
+    assert.equal(light.checked, true);
+    assert.equal(system.checked, false);
+    assert.equal(dark.checked, false);
     assert.equal(saved.length, 0);
     assert.equal(exactButton("Apply & restart")?.disabled, true);
   } finally {
@@ -220,6 +233,14 @@ function exactButton(label: string): HTMLButtonElement | undefined {
   return [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent?.trim() === label,
   );
+}
+
+function appearanceRadio(
+  value: AppearancePreference,
+): HTMLInputElement | undefined {
+  return Array.from(
+    document.querySelectorAll<HTMLInputElement>('input[name="appearance"]'),
+  ).find((input) => input.value === value);
 }
 
 async function waitFor<T>(read: () => T | null | undefined): Promise<T> {

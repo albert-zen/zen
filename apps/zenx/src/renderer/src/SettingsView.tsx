@@ -700,26 +700,24 @@ function GeneralPanel({
           </div>
           <span className="status-muted">Local</span>
         </div>
-        <div
-          className="appearance-options"
-          role="radiogroup"
-          aria-label="Appearance"
-        >
+        <fieldset className="appearance-options">
+          <legend className="sr-only">Appearance</legend>
           {(["system", "light", "dark"] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              role="radio"
-              aria-checked={appearance === option}
-              onClick={() => {
-                appearanceController.setPreference(option);
-                setAppearance(option);
-              }}
-            >
-              {option[0]?.toUpperCase() + option.slice(1)}
-            </button>
+            <label key={option}>
+              <input
+                type="radio"
+                name="appearance"
+                value={option}
+                checked={appearance === option}
+                onChange={() => {
+                  appearanceController.setPreference(option);
+                  setAppearance(option);
+                }}
+              />
+              <span>{option[0]?.toUpperCase() + option.slice(1)}</span>
+            </label>
           ))}
-        </div>
+        </fieldset>
         <p className="settings-note">
           Appearance changes immediately. System follows your operating system
           setting.

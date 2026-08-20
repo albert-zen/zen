@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { JSDOM } from "jsdom";
@@ -64,6 +65,51 @@ test("persists switches and follows live system changes only in System", () => {
   dom.window.close();
 });
 
+test("light semantic text, primary actions, and control boundaries meet contrast targets", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const lightTokens = css.match(
+    /:root\[data-appearance="light"\]\s*\{([\s\S]*?)\n\}/u,
+  )?.[1];
+  assert.ok(lightTokens);
+  const token = (name: string) => {
+    const value = lightTokens.match(
+      new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "iu"),
+    )?.[1];
+    assert.ok(value, `missing light --${name}`);
+    return value;
+  };
+
+  for (const surface of ["surface-inset", "sidebar", "main", "surface"]) {
+    assert.ok(
+      contrastRatio(token("text-3"), token(surface)) >= 4.5,
+      `--text-3 must meet 4.5:1 against --${surface}`,
+    );
+  }
+  assert.ok(
+    contrastRatio(token("text-on-accent"), token("accent")) >= 4.5,
+    "primary action text must meet 4.5:1",
+  );
+  assert.ok(
+    contrastRatio(token("border-control"), token("surface-inset")) >= 3,
+    "control boundaries must meet 3:1",
+  );
+  assert.ok(
+    contrastRatio(token("border-accent"), token("surface-inset")) >= 3,
+    "selected control boundaries must meet 3:1",
+  );
+  assert.match(
+    css,
+    /\.primary-button\s*\{[^}]*color:\s*var\(--text-on-accent\)/u,
+  );
+  assert.match(
+    css,
+    /\.appearance-options label > span\s*\{[^}]*border:\s*1px solid var\(--border-control\)/u,
+  );
+});
+
 class FakeSystemPreference {
   matches: boolean;
   readonly #listeners = new Set<() => void>();
@@ -93,4 +139,26 @@ function storageWith(initial?: string): Pick<Storage, "getItem" | "setItem"> {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => void values.set(key, value),
   };
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  return (
+    (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+    (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
+  );
+}
+
+function relativeLuminance(hex: string): number {
+  const channels = [1, 3, 5].map((offset) =>
+    Number.parseInt(hex.slice(offset, offset + 2), 16),
+  );
+  const [red = 0, green = 0, blue = 0] = channels.map((value) => {
+    const channel = value / 255;
+    return channel <= 0.04045
+      ? channel / 12.92
+      : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
