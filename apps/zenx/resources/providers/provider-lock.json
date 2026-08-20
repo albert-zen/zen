@@ -33,31 +33,26 @@
     "platformArchives": {
       "win32-x64": {
         "url": "https://storage.googleapis.com/chrome-for-testing-public/152.0.7977.8/win64/chrome-win64.zip",
-        "sourceUrl": "https://cdn.playwright.dev/builds/cft/152.0.7977.8/win64/chrome-win64.zip",
         "sha256": "8bee006dddbee3c428e30cc4b2f9035870b403dc52ffd9bdf2bd3c1bf3822166",
         "executable": "chrome-win64/chrome.exe"
       },
       "darwin-x64": {
         "url": "https://storage.googleapis.com/chrome-for-testing-public/152.0.7977.8/mac-x64/chrome-mac-x64.zip",
-        "sourceUrl": "https://cdn.playwright.dev/builds/cft/152.0.7977.8/mac-x64/chrome-mac-x64.zip",
         "sha256": "d2f6f1b817032dfbc03f80fa304f3a2e91727293ce6e796b248e483ddea32099",
         "executable": "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
       },
       "darwin-arm64": {
         "url": "https://storage.googleapis.com/chrome-for-testing-public/152.0.7977.8/mac-arm64/chrome-mac-arm64.zip",
-        "sourceUrl": "https://cdn.playwright.dev/builds/cft/152.0.7977.8/mac-arm64/chrome-mac-arm64.zip",
         "sha256": "78570bb23c7442f581c2b5f1c86c3e83b68b6cd35424cf390add51a1e305398b",
         "executable": "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
       },
       "linux-x64": {
         "url": "https://storage.googleapis.com/chrome-for-testing-public/152.0.7977.8/linux64/chrome-linux64.zip",
-        "sourceUrl": "https://cdn.playwright.dev/builds/cft/152.0.7977.8/linux64/chrome-linux64.zip",
         "sha256": "931865951a28fccf0491a7f5e0a2fe1a0605765210a4ce4a4758d9d3d97d0b77",
         "executable": "chrome-linux64/chrome"
       },
       "linux-arm64": {
         "url": "https://playwright.download.prss.microsoft.com/dbazure/download/playwright/builds/chromium/1237/chromium-linux-arm64.zip",
-        "sourceUrl": "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1237/chromium-linux-arm64.zip",
         "sha256": "a188a0c13a944da8eb9b327dd473bf0378a10e170b2729d75b7be4520a9cfa1a",
         "executable": "chrome-linux/chrome"
       }

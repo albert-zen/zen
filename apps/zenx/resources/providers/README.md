@@ -19,13 +19,14 @@ again before use; partial, oversized, timed-out, or mismatched responses never
 become cache entries. Provider assembly writes only to the caller's private run
 staging directory.
 
-The browser archive URL, Playwright revision, version, executable path, and
-per-platform SHA-256 are part of the same release lock. Assembly acquires that
-archive through the verified artifact cache, extracts it directly, and never
-invokes Playwright's downloader. The final provider manifest pins both the
-browser executable and a deterministic digest of the complete extracted
-payload; bundled-provider selection and launch verification re-hash them. The
-manifest explicitly excludes only Playwright's root `DEPENDENCIES_VALIDATED`
+The verified browser archive URL and per-platform SHA-256 are the sole archive
+authority in the same release lock as the Playwright revision, version, and
+executable path. Assembly acquires that archive through the verified artifact
+cache, extracts it directly, and never invokes Playwright's downloader. The
+final provider manifest pins both the browser executable and a deterministic
+digest of the complete extracted payload. Bundled-provider selection and
+launch verification re-hash them. The manifest explicitly excludes only
+Playwright's root `DEPENDENCIES_VALIDATED`
 host-validation state file; all archive entries and any other additions remain
 inside the fail-closed digest boundary. The complete directory is re-hashed at
 selection and immediately before each browser launch; later commands against
