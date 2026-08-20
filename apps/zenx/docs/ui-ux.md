@@ -158,6 +158,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 | Idle     | Empty     | Send disabled    |
 
 - 不拆成常驻 Stop、Steer 和 Send 三个按钮。
+- 运行中有草稿时，**Steer** 是保留当前 Turn 的显式次要动作；稳定 primary action 同时切换为 **Interrupt & Send**，用于中断当前路径并发送草稿。两者不得静默互相降级，也不得隐藏用户选择的是 soft steer 还是 hard steer。
 - 状态切换不引发 Composer 几何跳动；按钮保持清晰图标、准确 `aria-label` / tooltip 和适合当前输入方式的 hit target。
 - 附件、模型、权限与 primary action 共享视觉基线，并按宽度与优先级渐进隐藏。
 - 不在 Composer 重复显示 Turn 已经表达的运行时长或状态。
@@ -271,7 +272,7 @@ ThreadView
 - [ ] Tool details 位于 chat flow，approval 位于 Composer 上方，没有常驻 Activity rail。
 - [ ] Running Turn 始终展开；Completed Turn 默认只显示一次 Final Message并可展开历史。
 - [ ] Agent Message 不嵌套在 Trace Group；连续 Thinking/Tool Items 保持顺序并被轻量聚合。
-- [ ] Composer 在 Stop、Interrupt & Send、Send 和 disabled 之间正确切换且几何稳定。
+- [ ] Composer 的 Steer、Stop、Interrupt & Send、Send 和 disabled 均语义明确；primary action 切换时几何稳定。
 - [ ] 离开实时底部后显示 Back to live，streaming 不破坏 scroll、focus、draft 或 disclosure。
 - [ ] 宽屏、紧凑桌面和移动 drawer 均无页面级横向滚动或 action/title overlap。
 - [ ] Enter、Space、Escape、outside-click、focus return 和 reduced motion 行为正确。
