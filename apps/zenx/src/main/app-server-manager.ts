@@ -39,6 +39,7 @@ export interface AppServerManagerOptions {
   execArgv?: string[];
   environment?: NodeJS.ProcessEnv;
   startupTimeoutMs?: number;
+  recoveryDelaysMs?: readonly number[];
   capabilityHost?: ZenXCapabilityHost;
 }
 
@@ -94,7 +95,10 @@ export class AppServerManager {
   #client: ZenXProtocolClient | undefined;
   #acceptingCapabilityInvocations = false;
   #stopping = false;
+  #recoverUnexpectedExits = false;
   #stopPromise: Promise<void> | undefined;
+  #recoveryPromise: Promise<void> | undefined;
+  #lifecycle = 0;
   #nextThreadSummaryRequest = 1;
   #capabilityRestartTail: Promise<void> = Promise.resolve();
 
@@ -118,13 +122,32 @@ export class AppServerManager {
   }
 
   async start(): Promise<void> {
-    if (this.#child !== undefined) {
+    if (this.#child !== undefined || this.#recoveryPromise !== undefined) {
       throw new Error("ZenX App Server host is already running");
     }
-    this.#acceptingCapabilityInvocations = false;
     this.#stopping = false;
+    this.#recoverUnexpectedExits = false;
+    const lifecycle = ++this.#lifecycle;
     this.#setStatus({ type: "starting" });
+    try {
+      await this.#startHost(lifecycle);
+      this.#setStatus({ type: "ready", reconnected: false });
+    } catch (error) {
+      const message = asError(error).message;
+      if (lifecycle === this.#lifecycle && !this.#stopping) {
+        this.#setStatus({ type: "error", message });
+      }
+      throw new Error(message);
+    }
+  }
+
+  async #startHost(lifecycle: number): Promise<void> {
+    this.#acceptingCapabilityInvocations = false;
     const bearerToken = await createPrivateTokenFile(this.#options.tokenFile);
+    if (lifecycle !== this.#lifecycle || this.#stopping) {
+      await removeTokenFile(this.#options.tokenFile);
+      throw new Error("Zen App Server startup was cancelled");
+    }
     const child = fork(this.#options.entryPath, [], {
       cwd: process.cwd(),
       env: {
@@ -159,20 +182,29 @@ export class AppServerManager {
         },
       );
       this.#installCapabilityBridge(child);
-      this.#client = await ZenXProtocolClient.connect({
+      const client = await ZenXProtocolClient.connect({
         url,
         clientInfo: { name: "zenx", title: "ZenX", version: "0.1.0" },
         bearerTokenFile: this.#options.tokenFile,
       });
-      this.#forwardNotifications(this.#client);
+      if (lifecycle !== this.#lifecycle || this.#stopping) {
+        client.close();
+        throw new Error("Zen App Server startup was cancelled");
+      }
+      this.#client = client;
+      this.#forwardNotifications(client);
       this.#acceptingCapabilityInvocations = true;
-      this.#setStatus({ type: "ready", reconnected: false });
+      this.#recoverUnexpectedExits = true;
     } catch (error) {
       this.#acceptingCapabilityInvocations = false;
-      const message = asError(error).message;
-      this.#setStatus({ type: "error", message });
-      child.kill("SIGTERM");
-      throw new Error(message);
+      if (this.#child === child) this.#child = undefined;
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+      }
+      if (lifecycle === this.#lifecycle) {
+        await removeTokenFile(this.#options.tokenFile);
+      }
+      throw error;
     }
   }
 
@@ -281,6 +313,8 @@ export class AppServerManager {
       return;
     }
     this.#stopping = true;
+    this.#recoverUnexpectedExits = false;
+    ++this.#lifecycle;
     this.#acceptingCapabilityInvocations = false;
     const stopping = this.#performStop();
     this.#stopPromise = stopping;
@@ -306,6 +340,7 @@ export class AppServerManager {
       if (child.exitCode === null) child.kill("SIGTERM");
     }
     this.#child = undefined;
+    await this.#recoveryPromise;
     await removeTokenFile(this.#options.tokenFile);
     this.#setStatus({ type: "stopped" });
   }
@@ -404,14 +439,49 @@ export class AppServerManager {
     );
     this.#client?.close();
     this.#client = undefined;
-    if (!this.#stopping) {
+    if (!this.#stopping && this.#recoverUnexpectedExits) {
       const reason =
         signal === null ? `exit code ${String(code)}` : `signal ${signal}`;
-      this.#setStatus({
-        type: "error",
-        message: `Zen App Server stopped unexpectedly (${reason})`,
-      });
+      this.#beginRecovery(reason);
     }
+  }
+
+  #beginRecovery(reason: string): void {
+    if (this.#recoveryPromise !== undefined || this.#stopping) return;
+    const lifecycle = this.#lifecycle;
+    const delays = this.#options.recoveryDelaysMs ?? [100, 500, 1_000];
+    const recovery = (async () => {
+      let lastError = new Error(
+        `Zen App Server stopped unexpectedly (${reason})`,
+      );
+      for (const [index, delayMs] of delays.entries()) {
+        const attempt = index + 1;
+        this.#setStatus({ type: "reconnecting", attempt, delayMs });
+        await delay(delayMs);
+        if (lifecycle !== this.#lifecycle || this.#stopping) return;
+        try {
+          await this.#startHost(lifecycle);
+          this.#recoveryPromise = undefined;
+          this.#setStatus({ type: "ready", reconnected: true });
+          return;
+        } catch (error) {
+          lastError = asError(error);
+        }
+      }
+      if (lifecycle === this.#lifecycle && !this.#stopping) {
+        this.#recoverUnexpectedExits = false;
+        this.#setStatus({
+          type: "error",
+          message: `Zen App Server recovery failed after ${String(delays.length)} attempts: ${lastError.message}`,
+        });
+      }
+    })();
+    this.#recoveryPromise = recovery;
+    void recovery.finally(() => {
+      if (this.#recoveryPromise === recovery) {
+        this.#recoveryPromise = undefined;
+      }
+    });
   }
 
   #setStatus(status: AppServerHostStatus): void {
@@ -577,6 +647,10 @@ async function removeTokenFile(filePath: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function waitForReady(

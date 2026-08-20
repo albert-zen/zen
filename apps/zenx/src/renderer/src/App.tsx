@@ -253,12 +253,14 @@ export function App() {
     }
   };
 
-  const resumeThread = async (threadId: string) => {
+  const resumeThread = async (threadId: string, preserveNavigation = false) => {
     const epoch = ++selectionEpoch.current;
     selectedThreadIdRef.current = threadId;
-    setPage("agent");
-    setSidebarOpen(false);
-    setWorkspaceOpen(false);
+    if (!preserveNavigation) {
+      setPage("agent");
+      setSidebarOpen(false);
+      setWorkspaceOpen(false);
+    }
     setSelectedThreadId(threadId);
     setThreadDetail(null);
     setSelectedSettings(null);
@@ -307,7 +309,7 @@ export function App() {
         void loadProjects();
         void loadModels();
         if (status.reconnected && selectedThreadIdRef.current !== null) {
-          void resumeThread(selectedThreadIdRef.current);
+          void resumeThread(selectedThreadIdRef.current, true);
         }
       }
     });
