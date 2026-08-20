@@ -11,6 +11,7 @@ import type {
 } from "../../main/capabilities/types.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
+import type { ZenXSidebarOrder } from "../../main/host-profile.js";
 import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
@@ -53,9 +54,12 @@ import { SettingsView, type SettingsTab } from "./SettingsView.js";
 import { Sidebar } from "./Sidebar.js";
 import {
   derivePinnedThreads,
+  EMPTY_SIDEBAR_ORDER,
   readSidebarMode,
   threadHasActiveTurn,
   lastUsedProjectWorkspace,
+  moveSidebarProject,
+  moveSidebarThread,
   startProjectThread,
   threadTitle,
   writeSidebarMode,
@@ -75,7 +79,8 @@ export function App() {
   const archivingThreadIdsRef = useRef<ReadonlySet<string>>(new Set());
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
   const pinnedThreadIdsRef = useRef<string[]>([]);
-  const pinMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const sidebarOrderRef = useRef<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
+  const profilePreferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
@@ -99,6 +104,8 @@ export function App() {
     [],
   );
   const [pinnedThreadIds, setPinnedThreadIds] = useState<string[]>([]);
+  const [sidebarOrder, setSidebarOrder] =
+    useState<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
   const [archivedThreadSummaries, setArchivedThreadSummaries] = useState<
     NativeThreadSummary[]
   >([]);
@@ -154,17 +161,52 @@ export function App() {
     setPinnedThreadIds(confirmed);
   };
 
+  const confirmSidebarOrder = (order: ZenXSidebarOrder) => {
+    const confirmed = {
+      projectKeys: [...order.projectKeys],
+      threadIdsByProject: Object.fromEntries(
+        Object.entries(order.threadIdsByProject).map(
+          ([projectKey, threadIds]) => [projectKey, [...threadIds]],
+        ),
+      ),
+    };
+    sidebarOrderRef.current = confirmed;
+    setSidebarOrder(confirmed);
+  };
+
+  const confirmProfilePreferences = (profile: {
+    pinnedThreadIds: readonly string[];
+    sidebarOrder: ZenXSidebarOrder;
+  }) => {
+    confirmPinnedThreadIds(profile.pinnedThreadIds);
+    confirmSidebarOrder(profile.sidebarOrder);
+  };
+
   const queuePinMutation = (
     update: (current: readonly string[]) => readonly string[],
   ): Promise<void> => {
-    const result = pinMutationQueueRef.current.then(async () => {
+    const result = profilePreferenceQueueRef.current.then(async () => {
       const current = pinnedThreadIdsRef.current;
       const next = update(current);
       if (next === current) return;
       const value = await window.zenx.settings.setPinnedThreadIds(next);
-      confirmPinnedThreadIds(value.profile.pinnedThreadIds);
+      confirmProfilePreferences(value.profile);
     });
-    pinMutationQueueRef.current = result.catch(() => undefined);
+    profilePreferenceQueueRef.current = result.catch(() => undefined);
+    return result;
+  };
+
+  const queueSidebarOrderMutation = (
+    update: (current: ZenXSidebarOrder) => ZenXSidebarOrder,
+  ): Promise<void> => {
+    const result = profilePreferenceQueueRef.current.then(async () => {
+      const current = sidebarOrderRef.current;
+      const next = update(current);
+      if (next === current) return;
+      const value = await window.zenx.settings.setSidebarOrder(next);
+      confirmProfilePreferences(value.profile);
+    });
+    profilePreferenceQueueRef.current = result.catch(() => undefined);
     return result;
   };
 
@@ -367,12 +409,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const result = pinMutationQueueRef.current.then(async () => {
+    const result = profilePreferenceQueueRef.current.then(async () => {
       const value = await window.zenx.settings.get();
-      confirmPinnedThreadIds(value.profile.pinnedThreadIds);
+      confirmProfilePreferences(value.profile);
       if (!value.profile.onboardingComplete) setPage("settings");
     });
-    pinMutationQueueRef.current = result.catch(() => undefined);
+    profilePreferenceQueueRef.current = result.catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -475,11 +517,19 @@ export function App() {
     )
       return;
     const threadId = threadDetail.id;
-    const started = updateComposer(threadId, (state) =>
-      beginComposerSubmission(state, intent, expectedTurnId, () =>
-        crypto.randomUUID(),
-      ),
+    const current = composerStatesRef.current[threadId] ?? emptyComposerState();
+    const started = beginComposerSubmission(
+      current,
+      intent,
+      expectedTurnId,
+      () => crypto.randomUUID(),
     );
+    if (started === current) return;
+    composerStatesRef.current = {
+      ...composerStatesRef.current,
+      [threadId]: started,
+    };
+    setComposerStates(composerStatesRef.current);
     const submission = started.submission;
     if (submission === null || submission.status !== "pending") return;
     try {
@@ -708,6 +758,37 @@ export function App() {
           performThreadLifecycle(summary, true)
         }
         onChangeThreadPinned={changeThreadPinned}
+        onReorderProject={(sourceKey, targetKey, placement) =>
+          queueSidebarOrderMutation((current) =>
+            moveSidebarProject(
+              current,
+              projects,
+              sourceKey,
+              targetKey,
+              placement,
+            ),
+          )
+        }
+        onReorderThread={(
+          sourceProjectKey,
+          sourceThreadId,
+          targetProjectKey,
+          targetThreadId,
+          placement,
+        ) =>
+          queueSidebarOrderMutation((current) =>
+            moveSidebarThread(
+              current,
+              activeSummaries,
+              projects,
+              sourceProjectKey,
+              sourceThreadId,
+              targetProjectKey,
+              targetThreadId,
+              placement,
+            ),
+          )
+        }
         onModeChange={(mode) => {
           setSidebarMode(mode);
           try {
@@ -744,6 +825,7 @@ export function App() {
         serverError={serverStatus.type === "error"}
         serverReady={serverStatus.type === "ready"}
         projects={projects}
+        sidebarOrder={sidebarOrder}
         pinnedThreads={pinnedSummaries}
         threadError={threadListErrors.active}
         threadLoading={!threadListLoaded.active}

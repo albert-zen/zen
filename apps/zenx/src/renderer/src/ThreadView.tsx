@@ -182,7 +182,13 @@ export function ThreadView({
             onRespond={onRespondToApproval}
           />
         ))}
-        <div className="composer">
+        <form
+          className="composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            primary();
+          }}
+        >
           <label className="sr-only" htmlFor="thread-composer">
             Message ZenX
           </label>
@@ -193,7 +199,9 @@ export function ThreadView({
             onChange={(event) => onDraftChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key !== "Enter" || event.shiftKey) return;
+              if (event.nativeEvent.isComposing) return;
               event.preventDefault();
+              if (event.repeat) return;
               submit(runningTurn === null ? "start" : "steer");
             }}
             placeholder={
@@ -294,7 +302,7 @@ export function ThreadView({
               {interruptError ?? composer.submission?.error ?? modelError}
             </p>
           ) : null}
-        </div>
+        </form>
       </div>
     </div>
   );
@@ -324,12 +332,6 @@ function TurnBlock({
           <WakeupCard entry={wakeup} key={item.id} />
         );
       })}
-      <div className="agent-meta">
-        <span className="agent-glyph" aria-hidden="true">
-          Z
-        </span>
-        <strong>ZenX</strong>
-      </div>
       {complete ? (
         <button
           className="turn-toggle"

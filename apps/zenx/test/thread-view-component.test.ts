@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
-import type { Thread, Turn } from "../src/protocol-client/index.js";
+import type { Thread, ThreadItem, Turn } from "../src/protocol-client/index.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
 import {
   editComposer,
@@ -55,16 +55,56 @@ test("pending approvals render in the bottom zone next to the composer", () => {
   assert.match(html, /Allow once/u);
 });
 
+test("assistant messages omit the identity row while preserving metadata and content", () => {
+  const html = renderTurns([
+    turnWithItems("completed", [user("request"), agent("Final answer")], 1_000),
+  ]);
+
+  assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
+  assert.match(
+    html,
+    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
+  );
+  assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
+});
+
+test("assistant messages retain running reasoning and tool disclosure affordances", () => {
+  const html = renderTurns([
+    turnWithItems("inProgress", [
+      user("Inspect the project"),
+      agent("Checking the relevant files."),
+      reasoning("Mapped the rendering path"),
+      command("rg ThreadView"),
+    ]),
+  ]);
+
+  assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
+  assert.match(html, /class="turn-running-label"[\s\S]*Working/u);
+  assert.match(html, /Checking the relevant files\./u);
+  assert.match(
+    html,
+    /class="trace-toggle"[^>]*aria-expanded="false"[\s\S]*Reasoned and used rg[\s\S]*2 items/u,
+  );
+});
+
 function render(
   active: boolean,
   approvals: readonly ApprovalCardState[],
+  composer: ComposerState = emptyComposerState(),
+) {
+  return renderTurns(active ? [turn()] : [], approvals, composer);
+}
+
+function renderTurns(
+  turns: Turn[],
+  approvals: readonly ApprovalCardState[] = [],
   composer: ComposerState = emptyComposerState(),
 ) {
   return renderToStaticMarkup(
     createElement(ThreadView, {
       approvals,
       composer,
-      thread: thread(active ? [turn()] : []),
+      thread: thread(turns),
       onDraftChange: () => undefined,
       onInterrupt: noop,
       onRespondToApproval: noop,
@@ -104,14 +144,68 @@ function thread(turns: Turn[]): Thread {
 }
 
 function turn(): Turn {
+  return turnWithItems("inProgress", []);
+}
+
+function turnWithItems(
+  status: Turn["status"],
+  items: ThreadItem[],
+  durationMs: number | null = null,
+): Turn {
   return {
     id: "turn-1",
-    items: [],
+    items,
     itemsView: "full",
-    status: "inProgress",
+    status,
     error: null,
     startedAt: 10,
-    completedAt: null,
+    completedAt: status === "inProgress" ? null : 11,
+    durationMs,
+  };
+}
+
+function user(text: string): ThreadItem {
+  return {
+    type: "userMessage",
+    id: "user-1",
+    clientId: null,
+    content: [{ type: "text", text, text_elements: [] }],
+  };
+}
+
+function agent(text: string): ThreadItem {
+  return {
+    type: "agentMessage",
+    id: `agent-${text}`,
+    text,
+    phase: "final_answer",
+    memoryCitation: null,
+  };
+}
+
+function reasoning(summary: string): ThreadItem {
+  return {
+    type: "reasoning",
+    id: "reasoning-1",
+    summary: [summary],
+    content: [],
+  };
+}
+
+function command(value: string): ThreadItem {
+  return {
+    type: "commandExecution",
+    id: "command-1",
+    pluginId: null,
+    scriptPath: null,
+    command: value,
+    cwd: "/workspace",
+    processId: null,
+    source: "agent",
+    status: "completed",
+    commandActions: [],
+    aggregatedOutput: "ThreadView.tsx",
+    exitCode: 0,
     durationMs: null,
   };
 }

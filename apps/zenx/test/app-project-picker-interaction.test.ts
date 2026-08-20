@@ -142,6 +142,179 @@ test("packaged startup clears a transient Project failure after the App Server b
   }
 });
 
+test("same-event-loop duplicate Send owns one title stage and turn request", async () => {
+  const titleResponse = deferred<undefined>();
+  let titleCalls = 0;
+  const turnStartRequests: unknown[] = [];
+  const harness = await mountThreadApp({
+    observeTitle: async () => {
+      titleCalls += 1;
+      return await titleResponse.promise;
+    },
+    request: async (method, params) => {
+      if (method === "thread/resume") return resumed(liveThread());
+      if (method === "turn/start") {
+        turnStartRequests.push(params);
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Only once");
+    const send = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    await invokePrimarySubmit(send, 2, async () => {
+      titleResponse.resolve(undefined);
+    });
+
+    assert.equal(titleCalls, 1);
+    assert.equal(turnStartRequests.length, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("Composer keyboard and form routes do not duplicate one submit event", async () => {
+  const turnStartRequests: unknown[] = [];
+  const harness = await mountThreadApp({
+    request: async (method, params) => {
+      if (method === "thread/resume") return resumed(liveThread());
+      if (method === "turn/start") {
+        turnStartRequests.push(params);
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Keyboard message");
+    await dispatchComposerKey(composer, { isComposing: true, key: "Enter" });
+    await dispatchComposerKey(composer, { key: "Enter", repeat: true });
+    assert.equal(turnStartRequests.length, 0);
+    assert.equal(composer.value, "Keyboard message");
+
+    await dispatchComposerKey(composer, { key: "Enter" });
+    await waitFor(() => turnStartRequests.length === 1);
+    await waitFor(() => composer.value === "");
+
+    await setTextareaValue(composer, "Command Enter message");
+    await dispatchComposerKey(composer, { key: "Enter", metaKey: true });
+    await waitFor(() => turnStartRequests.length === 2);
+    await waitFor(() => composer.value === "");
+
+    await setTextareaValue(composer, "Form message");
+    const form = document.querySelector<HTMLFormElement>("form.composer");
+    assert.ok(form);
+    await invokeFormSubmit(form);
+    assert.equal(turnStartRequests.length, 3);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("running Steer and Interrupt and send each own one pending admission", async () => {
+  const steerResponse = deferred<unknown>();
+  const replaceResponse = deferred<unknown>();
+  let steerCalls = 0;
+  let replaceCalls = 0;
+  const harness = await mountThreadApp({
+    request: async (method) => {
+      if (method === "thread/resume") return resumed(runningThread());
+      if (method === "turn/steer") {
+        steerCalls += 1;
+        return await steerResponse.promise;
+      }
+      if (method === "turn/replace") {
+        replaceCalls += 1;
+        return await replaceResponse.promise;
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Guide this turn");
+    const steer = await waitFor(() => exactButton("Steer"));
+    await invokeButtonClick(steer, 2);
+    assert.equal(steerCalls, 1);
+    await act(async () => {
+      steerResponse.resolve({ turnId: "turn-1" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => composer.value === "");
+
+    await setTextareaValue(composer, "Replace this turn");
+    const replace = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Interrupt and send"]',
+      ),
+    );
+    await invokePrimarySubmit(replace, 2);
+    assert.equal(replaceCalls, 1);
+    await act(async () => {
+      replaceResponse.resolve({
+        interruptedTurnId: "turn-1",
+        turnId: "turn-2",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("failed Send preserves its draft and stable id for a deliberate retry", async () => {
+  const turnStartRequests: Array<{
+    clientUserMessageId?: string;
+  }> = [];
+  const harness = await mountThreadApp({
+    request: async (method, params) => {
+      if (method === "thread/resume") return resumed(liveThread());
+      if (method === "turn/start") {
+        turnStartRequests.push(
+          (params ?? {}) as { clientUserMessageId?: string },
+        );
+        if (turnStartRequests.length === 1) throw new Error("offline");
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Retry this message");
+    const send = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => (document.body.textContent ?? "").includes("offline"));
+    assert.equal(composer.value, "Retry this message");
+
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => turnStartRequests.length === 2);
+    assert.equal(
+      turnStartRequests[1]?.clientUserMessageId,
+      turnStartRequests[0]?.clientUserMessageId,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("Sidebar archive clears the selected Chat and opens its Settings restore entry", async () => {
   let archived = false;
   let persistedPins = ["thread-1"];
@@ -570,7 +743,7 @@ async function mountApp(
     setPinnedThreadIds?(
       threadIds: readonly string[],
     ): Promise<ReturnType<typeof publicSettings>>;
-    request?(method: string): Promise<unknown>;
+    request?(method: string, params?: unknown): Promise<unknown>;
     observeTitle?(): Promise<undefined>;
     threads?(archived: boolean): Promise<NativeThreadSummary[]>;
   } = {},
@@ -597,9 +770,10 @@ async function mountApp(
           ? { type: "ready", reconnected: false }
           : await options.getStatus(),
       getPendingApprovals: async () => [],
-      request: async (method: string) => {
+      request: async (method: string, params?: unknown) => {
         if (method === "model/list") return { data: [] };
-        if (options.request !== undefined) return await options.request(method);
+        if (options.request !== undefined)
+          return await options.request(method, params);
         throw new Error(`Unexpected protocol request: ${method}`);
       },
       respondToApproval: async () => undefined,
@@ -682,6 +856,7 @@ function publicSettings(pinnedThreadIds: string[]) {
       lastUsedWorkspace: "/work/zen",
       approvalPolicy: "never" as const,
       pinnedThreadIds,
+      sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
     },
     hasApiKey: false,
     subscription: { authenticated: false, expired: false },
@@ -746,6 +921,143 @@ function liveThread(): Thread {
   };
 }
 
+function runningThread(): Thread {
+  return {
+    ...liveThread(),
+    status: { type: "active", activeFlags: [] },
+    turns: [
+      {
+        id: "turn-1",
+        items: [],
+        itemsView: "full",
+        status: "inProgress",
+        error: null,
+        startedAt: 10,
+        completedAt: null,
+        durationMs: null,
+      },
+    ],
+  };
+}
+
+function resumed(thread: Thread) {
+  return { thread, model: "fake", modelProvider: "fake" };
+}
+
+async function mountThreadApp(
+  options: Parameters<typeof mountApp>[1],
+): Promise<AppHarness> {
+  return await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async (archived) => (archived ? [] : [summary(false)]),
+      ...options,
+    },
+  );
+}
+
+async function selectedComposer(): Promise<HTMLTextAreaElement> {
+  const row = await waitFor(() =>
+    document.querySelector<HTMLButtonElement>(".thread-row"),
+  );
+  await act(async () => row.click());
+  return await waitFor(() =>
+    document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+  );
+}
+
+async function dispatchComposerKey(
+  composer: HTMLTextAreaElement,
+  init: KeyboardEventInit,
+): Promise<void> {
+  const onKeyDown = reactProps<{
+    onKeyDown?(event: {
+      key: string;
+      metaKey: boolean;
+      nativeEvent: { isComposing: boolean };
+      preventDefault(): void;
+      repeat: boolean;
+      shiftKey: boolean;
+    }): void;
+  }>(composer).onKeyDown;
+  assert.ok(onKeyDown);
+  await act(async () => {
+    onKeyDown({
+      key: init.key ?? "",
+      metaKey: init.metaKey ?? false,
+      nativeEvent: { isComposing: init.isComposing ?? false },
+      preventDefault: () => undefined,
+      repeat: init.repeat ?? false,
+      shiftKey: init.shiftKey ?? false,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+async function invokeButtonClick(
+  button: HTMLButtonElement,
+  times = 1,
+): Promise<void> {
+  const onClick = reactProps<{ onClick?(): void }>(button).onClick;
+  assert.ok(onClick);
+  await act(async () => {
+    for (let index = 0; index < times; index += 1) onClick();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+async function invokePrimarySubmit(
+  button: HTMLButtonElement,
+  times = 1,
+  beforeSettle?: () => Promise<void>,
+): Promise<void> {
+  const onClick = reactProps<{ onClick?(): void }>(button).onClick;
+  const form = button.closest<HTMLFormElement>("form");
+  await act(async () => {
+    for (let index = 0; index < times; index += 1) {
+      if (onClick !== undefined) onClick();
+      else {
+        assert.ok(form);
+        invokeFormSubmitNow(form);
+      }
+    }
+    await Promise.resolve();
+    await beforeSettle?.();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+async function invokeFormSubmit(form: HTMLFormElement): Promise<void> {
+  await act(async () => {
+    invokeFormSubmitNow(form);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function invokeFormSubmitNow(form: HTMLFormElement): void {
+  const onSubmit = reactProps<{
+    onSubmit?(event: { preventDefault(): void }): void;
+  }>(form).onSubmit;
+  assert.ok(onSubmit);
+  onSubmit({ preventDefault: () => undefined });
+}
+
 async function unmountApp(harness: AppHarness): Promise<void> {
   await act(async () => harness.root.unmount());
   Object.assign(globalThis, {
@@ -758,22 +1070,23 @@ async function setTextareaValue(
   textarea: HTMLTextAreaElement,
   value: string,
 ): Promise<void> {
-  const reactPropsKey = Object.getOwnPropertyNames(textarea).find((key) =>
-    key.startsWith("__reactProps$"),
-  );
-  assert.ok(reactPropsKey);
-  const props = (
-    textarea as unknown as Record<
-      string,
-      { onChange?(event: { target: { value: string } }): void }
-    >
-  )[reactPropsKey];
+  const props = reactProps<{
+    onChange?(event: { target: { value: string } }): void;
+  }>(textarea);
   const onChange = props?.onChange;
   assert.ok(onChange);
   await act(async () => {
     onChange({ target: { value } });
     await Promise.resolve();
   });
+}
+
+function reactProps<T>(element: Element): T {
+  const reactPropsKey = Object.getOwnPropertyNames(element).find((key) =>
+    key.startsWith("__reactProps$"),
+  );
+  assert.ok(reactPropsKey);
+  return (element as unknown as Record<string, T>)[reactPropsKey] as T;
 }
 
 function exactButton(label: string): HTMLButtonElement | undefined {

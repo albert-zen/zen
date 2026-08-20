@@ -181,6 +181,87 @@ test("serializes concurrent workspace mutations without losing either update", a
   }
 });
 
+test("persists Sidebar Project and per-Project Thread order across reload", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-sidebar-order-"),
+  );
+  try {
+    const first = settingsFor(directory, inactiveSubscription());
+    await first.initialize({});
+    await first.setSidebarOrder({
+      projectKeys: ["/work/b", "/work/a"],
+      threadIdsByProject: {
+        "/work/a": ["thread-2", "thread-1"],
+      },
+    });
+
+    const reloaded = settingsFor(directory, inactiveSubscription());
+    await reloaded.initialize({});
+    assert.deepEqual((await reloaded.publicSettings()).profile.sidebarOrder, {
+      projectKeys: ["/work/b", "/work/a"],
+      threadIdsByProject: {
+        "/work/a": ["thread-2", "thread-1"],
+      },
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("serializes repeated Sidebar reorders so the latest invocation wins", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-sidebar-order-latest-"),
+  );
+  const initial = settingsFor(directory, inactiveSubscription());
+  await initial.initialize({});
+  const store = new InverseCompletionProfileStore(
+    path.join(directory, "host-profile.json"),
+  );
+  const service = new ZenXSettingsService({
+    userDataDirectory: directory,
+    zenDataDirectory: path.join(directory, "zen"),
+    profileStore: store,
+    vault: new ZenXCredentialVault(
+      path.join(directory, "credentials.vault"),
+      encryption,
+    ),
+  });
+  try {
+    await service.initialize({});
+    const first = service.setSidebarOrder({
+      projectKeys: ["first", "second"],
+      threadIdsByProject: {},
+    });
+    await store.firstWriteStarted;
+    const second = service.setSidebarOrder({
+      projectKeys: ["second", "first"],
+      threadIdsByProject: { first: ["thread-b", "thread-a"] },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(store.writeCalls, 1);
+    store.releaseFirstWrite();
+    await Promise.all([first, second]);
+
+    const expected = {
+      projectKeys: ["second", "first"],
+      threadIdsByProject: { first: ["thread-b", "thread-a"] },
+    };
+    assert.deepEqual(
+      (await service.publicSettings()).profile.sidebarOrder,
+      expected,
+    );
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(path.join(directory, "host-profile.json"), "utf8"),
+      ).sidebarOrder,
+      expected,
+    );
+  } finally {
+    store.releaseFirstWrite();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("keeps inverse-completing initialize and save writes in invocation order", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-inverse-profile-writes-"),
@@ -310,6 +391,10 @@ test("merges stale Settings fields without overwriting a newer Project mutation"
     await service.initialize({});
     const stale = (await service.publicSettings()).profile;
     await service.addWorkspace(workspace);
+    await service.setSidebarOrder({
+      projectKeys: ["newest-project", "older-project"],
+      threadIdsByProject: { "newest-project": ["thread-2", "thread-1"] },
+    });
 
     await service.save({
       ...stale,
@@ -321,6 +406,10 @@ test("merges stale Settings fields without overwriting a newer Project mutation"
     assert.equal(profile.defaultModel, "saved-model");
     assert.equal(profile.workspace, path.resolve(workspace));
     assert.deepEqual(profile.workspaces, [path.resolve(workspace)]);
+    assert.deepEqual(profile.sidebarOrder, {
+      projectKeys: ["newest-project", "older-project"],
+      threadIdsByProject: { "newest-project": ["thread-2", "thread-1"] },
+    });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -841,6 +930,7 @@ function fakeProfile(model: string): ZenXHostProfile {
     workspaces: [],
     lastUsedWorkspace: null,
     pinnedThreadIds: [],
+    sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
     approvalPolicy: "always",
   };
 }
