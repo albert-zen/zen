@@ -13,6 +13,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  captureProcessTableCommandOutput,
   ZenXTriggerProgramRunner,
   realWindowsProcessOperations,
   terminateWindowsProcessIdentity,
@@ -23,6 +24,48 @@ import {
 } from "../src/main/trigger-program-runner.js";
 
 const runner = new ZenXTriggerProgramRunner();
+
+test("timed-out process observation settles its exact helper before rejecting", async () => {
+  let helperClosed = false;
+
+  await assert.rejects(
+    captureProcessTableCommandOutput(
+      process.execPath,
+      ["-e", "setInterval(() => undefined, 1000)"],
+      {
+        timeoutMs: 20,
+        onSpawn: (child) => {
+          child.once("close", () => {
+            helperClosed = true;
+          });
+        },
+      },
+    ),
+    /process-tree snapshot timed out/u,
+  );
+
+  assert.equal(helperClosed, true);
+});
+
+test(
+  "Windows process-table observation stays complete under concurrent cold helpers",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const snapshots = await Promise.all(
+      Array.from({ length: 4 }, async () =>
+        realWindowsProcessOperations.captureProcessTable(),
+      ),
+    );
+
+    for (const snapshot of snapshots) {
+      const current = snapshot.entries.find(
+        (entry) => entry.pid === process.pid,
+      );
+      assert(current !== undefined);
+      assert.match(current.startTime ?? "", /^\d+$/u);
+    }
+  },
+);
 
 test("Windows containment never reuses stale identity evidence for a second tree kill", async () => {
   const root: WindowsProcessIdentity = {
@@ -323,6 +366,68 @@ test("program runner records malformed, nonzero, and oversized outcomes", async 
   );
   assert.equal(oversized.status, "oversized_output");
 });
+
+test(
+  "program runner preserves originating outcomes when process discovery fails",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const discoveryError = "deterministic hosted process observation failure";
+    const constrainedRunner = new ZenXTriggerProgramRunner({
+      captureProcessTable: async () => {
+        throw new Error(discoveryError);
+      },
+      terminateProcessIdentity: async () => ({
+        ok: false,
+        error: "process was not found",
+      }),
+    });
+
+    const run = (
+      args: string[],
+      invocationId: string,
+      signal = new AbortController().signal,
+      timeoutMs?: number,
+    ) =>
+      constrainedRunner.run(
+        {
+          command: process.execPath,
+          args,
+          maxOutputBytes: 256,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        },
+        { invocationId, stage: "action", event: {} },
+        signal,
+      );
+    const oversized = await run(
+      ["-e", "console.log(JSON.stringify({ok:true, x:'x'.repeat(1000)}))"],
+      "oversized-discovery",
+    );
+    const timedOut = await run(
+      ["-e", "setInterval(() => undefined, 1000)"],
+      "timeout-discovery",
+      undefined,
+      20,
+    );
+    const controller = new AbortController();
+    const cancelledRun = run(
+      ["-e", "setInterval(() => undefined, 1000)"],
+      "cancelled-discovery",
+      controller.signal,
+    );
+    controller.abort(new Error("fixture cancellation"));
+    const cancelled = await cancelledRun;
+
+    for (const [actual, expected] of [
+      [oversized, "oversized_output"],
+      [timedOut, "timed_out"],
+      [cancelled, "cancelled"],
+    ] as const) {
+      assert.equal(actual.status, expected);
+      assert.match(actual.error ?? "", new RegExp(discoveryError, "u"));
+      assert.match(actual.error ?? "", /containment was not proven/u);
+    }
+  },
+);
 
 test("program runner preserves timeout and cancellation outcomes after containment", async () => {
   const timedOut = await runner.run(

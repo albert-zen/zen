@@ -63,6 +63,10 @@ export interface TriggerProgramRunner {
 }
 
 export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
+  constructor(
+    private readonly windowsProcessOperations: WindowsProcessOperations = realWindowsProcessOperations,
+  ) {}
+
   async run(
     spec: TriggerProgramSpec,
     input: TriggerProgramRunInput,
@@ -156,7 +160,10 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
           forceTimer = undefined;
         }
         if (capturedTree === undefined && child.exitCode !== null) {
-          const exited = await verifyExitedChild(child);
+          const exited = await verifyExitedChild(
+            child,
+            this.windowsProcessOperations.captureProcessTable,
+          );
           if (settled || requested === null) return;
           if (exited.ok) {
             finish(requested);
@@ -166,7 +173,12 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         containment ??= (
           termination ?? Promise.resolve({ ok: true, error: "" })
         ).then(async (softTermination) => {
-          const forced = await terminateProcessTree(child, true, capturedTree);
+          const forced = await terminateProcessTree(
+            child,
+            true,
+            capturedTree,
+            this.windowsProcessOperations,
+          );
           if (
             !softTermination.ok &&
             softTermination.error.startsWith(
@@ -199,22 +211,17 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         }
         if (settled || requested === null) return;
         if (terminationResult.ok) finish(requested);
-        else
-          finish(
-            result(
-              "failed",
-              null,
-              null,
-              `Program ${requested.status} did not prove process-tree containment: ${terminationResult.error}`,
-            ),
-          );
+        else finish(containmentFailure(requested, terminationResult.error));
       };
       const requestTermination = (value: TriggerProgramRunResult): void => {
         if (settled || requested !== null) return;
         requested = value;
         stopCollection();
         child.stdin.destroy();
-        const treeAtTermination = captureProcessTree(child.pid).then(
+        const treeAtTermination = captureProcessTree(
+          child.pid,
+          this.windowsProcessOperations.captureProcessTable,
+        ).then(
           (tree) => ({ tree, error: null }),
           (error: unknown) => ({
             tree: undefined,
@@ -224,10 +231,23 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         termination = treeAtTermination.then(async (snapshot) => {
           if (snapshot.tree !== undefined) {
             capturedTree = snapshot.tree;
-            return await terminateProcessTree(child, false, snapshot.tree);
+            return await terminateProcessTree(
+              child,
+              false,
+              snapshot.tree,
+              this.windowsProcessOperations,
+            );
           }
-          await terminateProcessTree(child, false);
-          const exited = await verifyExitedChild(child);
+          await terminateProcessTree(
+            child,
+            false,
+            undefined,
+            this.windowsProcessOperations,
+          );
+          const exited = await verifyExitedChild(
+            child,
+            this.windowsProcessOperations.captureProcessTable,
+          );
           if (exited.ok) return exited;
           return {
             ok: false as const,
@@ -433,6 +453,7 @@ function terminateProcessTree(
   child: ChildProcessWithoutNullStreams,
   force: boolean,
   tree?: ProcessTreeSnapshot,
+  windowsOperations: WindowsProcessOperations = realWindowsProcessOperations,
 ): Promise<TerminationResult> {
   if (child.pid === undefined)
     return Promise.resolve({
@@ -442,7 +463,7 @@ function terminateProcessTree(
   if (!force && child.exitCode !== null)
     return Promise.resolve({ ok: true, error: "" });
   if (process.platform === "win32")
-    return terminateWindowsProcessTree(child, force, tree);
+    return terminateWindowsProcessTree(child, force, tree, windowsOperations);
   return terminatePosixProcessTree(child, force, tree);
 }
 
@@ -450,6 +471,7 @@ async function terminateWindowsProcessTree(
   child: ChildProcessWithoutNullStreams,
   force: boolean,
   tree?: ProcessTreeSnapshot,
+  operations: WindowsProcessOperations = realWindowsProcessOperations,
 ): Promise<TerminationResult> {
   if (child.pid === undefined)
     return { ok: false, error: "the child process did not expose a PID" };
@@ -467,7 +489,11 @@ async function terminateWindowsProcessTree(
       error:
         "process-tree identity was unavailable; containment was not proven",
     };
-  return await verifyAndTerminateWindowsProcessTree(child.pid, tree);
+  return await verifyAndTerminateWindowsProcessTree(
+    child.pid,
+    tree,
+    operations,
+  );
 }
 
 async function terminatePosixProcessTree(
@@ -489,6 +515,7 @@ async function terminatePosixProcessTree(
 
 async function verifyExitedChild(
   child: ChildProcessWithoutNullStreams,
+  capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
 ): Promise<TerminationResult> {
   if (child.pid === undefined || child.exitCode === null)
     return {
@@ -496,7 +523,7 @@ async function verifyExitedChild(
       error: "the child process identity was unavailable before termination",
     };
   try {
-    const table = await captureProcessTable();
+    const table = await capture();
     const survivors = table.entries.filter(
       (entry) =>
         entry.parentPid === child.pid || entry.processGroupId === child.pid,
@@ -1002,10 +1029,11 @@ if (!$matched) { exit 3 }
 
 function captureProcessTree(
   pid: number | undefined,
+  capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
 ): Promise<ProcessTreeSnapshot> {
   if (pid === undefined)
     return Promise.reject(new Error("the child process did not expose a PID"));
-  return captureProcessTable().then((table) => {
+  return capture().then((table) => {
     const root = table.entries.find((entry) => entry.pid === pid);
     if (root === undefined || root.startTime === null)
       throw new Error("root process identity was unavailable");
@@ -1020,71 +1048,166 @@ function captureProcessTree(
 
 async function captureProcessTable(): Promise<ProcessTableSnapshot> {
   const command = process.platform === "win32" ? "powershell.exe" : "ps";
+  const windowsScript = `
+$ErrorActionPreference = 'Stop'
+$searcher = [System.Management.ManagementObjectSearcher]::new('SELECT ProcessId, ParentProcessId, CreationDate FROM Win32_Process')
+try {
+  $processes = $searcher.Get()
+  try {
+    foreach ($process in $processes) {
+      $created = [System.Management.ManagementDateTimeConverter]::ToDateTime([string]$process.CreationDate).ToUniversalTime().Ticks
+      [Console]::Out.WriteLine('{0}|{1}|{2}', $process.ProcessId, $process.ParentProcessId, $created)
+    }
+  } finally {
+    $processes.Dispose()
+  }
+} finally {
+  $searcher.Dispose()
+}
+`;
   const args =
     process.platform === "win32"
       ? [
           "-NoProfile",
           "-NonInteractive",
-          "-Command",
-          [
-            "$ErrorActionPreference = 'Stop'",
-            "Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate | ForEach-Object {",
-            "  '{0}|{1}|{2}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToUniversalTime().Ticks",
-            "}",
-          ].join("; "),
+          "-EncodedCommand",
+          Buffer.from(windowsScript, "utf16le").toString("base64"),
         ]
       : process.platform === "linux"
         ? ["-eo", "pid=,ppid=,pgid=,sid=,lstart="]
         : // Darwin ps has no sid= keyword; session identity is not used here.
           ["-axo", "pid=,ppid=,pgid=,lstart="];
-  const output = await new Promise<string>((resolve, reject) => {
+  const output = await captureProcessTableCommandOutput(command, args);
+  return process.platform === "win32"
+    ? parseWindowsProcessTable(output)
+    : parsePosixProcessTable(output, process.platform === "linux");
+}
+
+export async function captureProcessTableCommandOutput(
+  command: string,
+  args: readonly string[],
+  options: {
+    timeoutMs?: number;
+    maxOutputBytes?: number;
+    // Test-only observation hook; it cannot alter helper ownership.
+    onSpawn?: (child: ChildProcess) => void;
+  } = {},
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? PROCESS_TABLE_TIMEOUT_MS;
+  const maxOutputBytes = options.maxOutputBytes ?? MAX_PROCESS_TABLE_BYTES;
+  const overflowError = `process-table snapshot exceeded its ${
+    maxOutputBytes === MAX_PROCESS_TABLE_BYTES
+      ? "128 KiB"
+      : `${String(maxOutputBytes)} byte`
+  } bound`;
+  return await new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let bytes = 0;
     let overflowed = false;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let escalationTimer: ReturnType<typeof setTimeout> | undefined;
     let processHandle: ReturnType<typeof spawn> | undefined;
+    let observation: OwnedChildObservation | undefined;
+    let escalationSettlement: Promise<unknown> | undefined;
+    let forcedFailure: Error | undefined;
+    let stderr = "";
     const finish = (error: Error | null): void => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      if (escalationTimer !== undefined) clearTimeout(escalationTimer);
       if (error !== null) reject(error);
-      else if (overflowed)
-        reject(new Error("process-table snapshot exceeded its 128 KiB bound"));
+      else if (overflowed) reject(new Error(overflowError));
       else resolve(Buffer.concat(chunks).toString("utf8"));
     };
     try {
       processHandle = spawn(command, args, {
         windowsHide: true,
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
       });
+      observation = observeOwnedChild(processHandle);
+      try {
+        options.onSpawn?.(processHandle);
+      } catch (error) {
+        stderr += `; helper observation hook failed: ${describeError(error)}`;
+      }
       processHandle.stdout?.on("data", (chunk: Buffer | string) => {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        if (bytes + buffer.length > MAX_PROCESS_TABLE_BYTES) {
+        if (bytes + buffer.length > maxOutputBytes) {
           overflowed = true;
           return;
         }
         bytes += buffer.length;
         chunks.push(buffer);
       });
-      processHandle.once("error", (error: unknown) =>
-        finish(new Error(describeError(error))),
-      );
-      processHandle.once("close", (code: number | null) => {
-        if (code === 0) finish(null);
-        else finish(new Error(`${command} exited with code ${String(code)}`));
+      processHandle.stderr?.setEncoding("utf8");
+      processHandle.stderr?.on("data", (chunk: string) => {
+        if (stderr.length < MAX_PROGRAM_STDERR_BYTES) stderr += chunk;
       });
+      processHandle.on("error", (error: unknown) => {
+        if (observation?.outcome()?.type !== "spawn_error")
+          stderr += `; helper error: ${describeError(error)}`;
+      });
+      void observation.terminal.then(async (outcome) => {
+        await escalationSettlement;
+        if (forcedFailure !== undefined) {
+          const diagnostic = boundedError(stderr);
+          finish(
+            diagnostic === null
+              ? forcedFailure
+              : new Error(`${forcedFailure.message}; stderr=${diagnostic}`),
+          );
+        } else if (outcome.type === "spawn_error") finish(outcome.error);
+        else if (outcome.code === 0) finish(null);
+        else
+          finish(
+            new Error(
+              `${command} exited with code ${String(outcome.code)} and signal ${String(outcome.signal)}${boundedError(stderr) === null ? "" : `: ${boundedError(stderr)}`}`,
+            ),
+          );
+      });
+      const terminateAndSettle = (error: Error): void => {
+        if (forcedFailure !== undefined) return;
+        forcedFailure = error;
+        if (
+          processHandle?.pid === undefined ||
+          observation?.outcome() !== undefined
+        )
+          return;
+        try {
+          processHandle.kill("SIGKILL");
+        } catch (killError) {
+          stderr += `; exact helper kill failed: ${describeError(killError)}`;
+        }
+        if (process.platform === "win32") {
+          escalationTimer = setTimeout(() => {
+            if (
+              processHandle?.pid === undefined ||
+              observation?.outcome() !== undefined
+            )
+              return;
+            const escalation = spawn(
+              "taskkill.exe",
+              ["/PID", String(processHandle.pid), "/T", "/F"],
+              { stdio: "ignore", windowsHide: true },
+            );
+            escalationSettlement = observeOwnedChild(escalation).terminal;
+          }, PROGRAM_TERM_GRACE_MS);
+        }
+      };
       timer = setTimeout(() => {
-        processHandle?.kill("SIGKILL");
-        finish(new Error(`${command} process-tree snapshot timed out`));
-      }, PROCESS_TABLE_TIMEOUT_MS);
+        terminateAndSettle(
+          new Error(`${command} process-tree snapshot timed out`),
+        );
+      }, timeoutMs);
+      processHandle.stdout?.on("data", () => {
+        if (overflowed) terminateAndSettle(new Error(overflowError));
+      });
     } catch (error) {
       finish(new Error(describeError(error)));
     }
   });
-  return process.platform === "win32"
-    ? parseWindowsProcessTable(output)
-    : parsePosixProcessTable(output, process.platform === "linux");
 }
 
 function parseWindowsProcessTable(output: string): ProcessTableSnapshot {
@@ -1169,6 +1292,19 @@ function result(
   error: string | null,
 ): TriggerProgramRunResult {
   return { status, output: bound(output), exitCode, error: bound(error) };
+}
+
+function containmentFailure(
+  requested: TriggerProgramRunResult,
+  containmentError: string,
+): TriggerProgramRunResult {
+  const detail = `process-tree containment was not proven: ${containmentError}`;
+  return result(
+    requested.status,
+    requested.output,
+    requested.exitCode,
+    requested.error === null ? detail : `${requested.error}; ${detail}`,
+  );
 }
 
 function minimalEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
