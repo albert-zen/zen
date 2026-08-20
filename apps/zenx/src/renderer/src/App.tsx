@@ -73,6 +73,8 @@ export function App() {
   const projectLoadEpoch = useRef(0);
   const selectedThreadIdRef = useRef<string | null>(null);
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
+  const pinnedThreadIdsRef = useRef<string[]>([]);
+  const pinMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
@@ -140,6 +142,26 @@ export function App() {
   const [composerStates, setComposerStates] = useState<
     Record<string, ComposerState>
   >({});
+
+  const confirmPinnedThreadIds = (threadIds: readonly string[]) => {
+    const confirmed = [...threadIds];
+    pinnedThreadIdsRef.current = confirmed;
+    setPinnedThreadIds(confirmed);
+  };
+
+  const queuePinMutation = (
+    update: (current: readonly string[]) => readonly string[],
+  ): Promise<void> => {
+    const result = pinMutationQueueRef.current.then(async () => {
+      const current = pinnedThreadIdsRef.current;
+      const next = update(current);
+      if (next === current) return;
+      const value = await window.zenx.settings.setPinnedThreadIds(next);
+      confirmPinnedThreadIds(value.profile.pinnedThreadIds);
+    });
+    pinMutationQueueRef.current = result.catch(() => undefined);
+    return result;
+  };
 
   const loadThreadSummaries = async (showLoading = false) => {
     const epoch = ++threadSummaryLoadEpoch.current;
@@ -337,13 +359,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void window.zenx.settings
-      .get()
-      .then((value) => {
-        setPinnedThreadIds(value.profile.pinnedThreadIds);
-        if (!value.profile.onboardingComplete) setPage("settings");
-      })
-      .catch(() => undefined);
+    const result = pinMutationQueueRef.current.then(async () => {
+      const value = await window.zenx.settings.get();
+      confirmPinnedThreadIds(value.profile.pinnedThreadIds);
+      if (!value.profile.onboardingComplete) setPage("settings");
+    });
+    pinMutationQueueRef.current = result.catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -561,17 +582,15 @@ export function App() {
   };
 
   const changeThreadPinned = async (summary: NativeThreadSummary) => {
-    const pinned = pinnedThreadIds.includes(summary.threadId);
-    const next = pinned
-      ? pinnedThreadIds.filter((threadId) => threadId !== summary.threadId)
-      : [
-          summary.threadId,
-          ...pinnedThreadIds.filter(
-            (threadId) => threadId !== summary.threadId,
-          ),
-        ];
-    const value = await window.zenx.settings.setPinnedThreadIds(next);
-    setPinnedThreadIds(value.profile.pinnedThreadIds);
+    const shouldPin = !pinnedThreadIds.includes(summary.threadId);
+    await queuePinMutation((current) =>
+      shouldPin
+        ? [
+            summary.threadId,
+            ...current.filter((threadId) => threadId !== summary.threadId),
+          ]
+        : current.filter((threadId) => threadId !== summary.threadId),
+    );
   };
 
   const performThreadLifecycle = async (summary: NativeThreadSummary) => {
@@ -582,12 +601,13 @@ export function App() {
       summary.archived ? "thread/unarchive" : "thread/archive",
       { threadId: summary.threadId },
     );
-    if (!summary.archived && pinnedThreadIds.includes(summary.threadId)) {
+    if (!summary.archived) {
       try {
-        const value = await window.zenx.settings.setPinnedThreadIds(
-          pinnedThreadIds.filter((threadId) => threadId !== summary.threadId),
+        await queuePinMutation((current) =>
+          current.includes(summary.threadId)
+            ? current.filter((threadId) => threadId !== summary.threadId)
+            : current,
         );
-        setPinnedThreadIds(value.profile.pinnedThreadIds);
       } catch (error) {
         setRequestError(
           `Thread archived, but its local Pin could not be cleared: ${describeError(error)}`,
