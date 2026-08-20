@@ -130,7 +130,8 @@ export class AppServerManager {
     const lifecycle = ++this.#lifecycle;
     this.#setStatus({ type: "starting" });
     try {
-      await this.#startHost(lifecycle, false);
+      await this.#startHost(lifecycle);
+      this.#setStatus({ type: "ready", reconnected: false });
     } catch (error) {
       const message = asError(error).message;
       if (lifecycle === this.#lifecycle && !this.#stopping) {
@@ -140,7 +141,7 @@ export class AppServerManager {
     }
   }
 
-  async #startHost(lifecycle: number, reconnected: boolean): Promise<void> {
+  async #startHost(lifecycle: number): Promise<void> {
     this.#acceptingCapabilityInvocations = false;
     const bearerToken = await createPrivateTokenFile(this.#options.tokenFile);
     if (lifecycle !== this.#lifecycle || this.#stopping) {
@@ -194,7 +195,6 @@ export class AppServerManager {
       this.#forwardNotifications(client);
       this.#acceptingCapabilityInvocations = true;
       this.#recoverUnexpectedExits = true;
-      this.#setStatus({ type: "ready", reconnected });
     } catch (error) {
       this.#acceptingCapabilityInvocations = false;
       if (this.#child === child) this.#child = undefined;
@@ -460,7 +460,9 @@ export class AppServerManager {
         await delay(delayMs);
         if (lifecycle !== this.#lifecycle || this.#stopping) return;
         try {
-          await this.#startHost(lifecycle, true);
+          await this.#startHost(lifecycle);
+          this.#recoveryPromise = undefined;
+          this.#setStatus({ type: "ready", reconnected: true });
           return;
         } catch (error) {
           lastError = asError(error);

@@ -223,6 +223,56 @@ test("recovers a killed hosted App Server and admits one subsequent Turn", async
   }
 });
 
+test("recovers again when the replacement child exits as readiness is published", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-recovery-generation-"),
+  );
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+    },
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+    recoveryDelaysMs: [10, 20, 40],
+  });
+  const recoveredTwice = deferred<void>();
+  let recoveredCount = 0;
+  let firstReplacementProcessId: number | undefined;
+  manager.onStatus((status) => {
+    if (status.type !== "ready" || !status.reconnected) return;
+    recoveredCount += 1;
+    if (recoveredCount === 1) {
+      firstReplacementProcessId = manager.processId;
+      process.kill(firstReplacementProcessId!, "SIGKILL");
+    } else if (recoveredCount === 2) {
+      recoveredTwice.resolve();
+    }
+  });
+  try {
+    await manager.start();
+    process.kill(manager.processId!, "SIGKILL");
+
+    await within(recoveredTwice.promise);
+    assert.equal(recoveredCount, 2);
+    assert.notEqual(manager.processId, firstReplacementProcessId);
+    assert.deepEqual(await manager.request("thread/list", {}), {
+      data: [],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("intentional stop does not enter automatic recovery", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-stop-"));
   const manager = managerFor(directory);
