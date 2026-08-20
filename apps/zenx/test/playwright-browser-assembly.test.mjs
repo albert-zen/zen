@@ -49,10 +49,10 @@ test("provider lock is the only Playwright browser archive authority", async () 
       archive.url,
       /^https:\/\/(?:storage\.googleapis\.com|playwright\.download\.prss\.microsoft\.com)\//u,
     );
-    assert.match(archive.sourceUrl, /^https:\/\/cdn\.playwright\.dev\//u);
     assert.match(archive.sha256, /^[a-f0-9]{64}$/u);
     assert.equal(typeof archive.executable, "string");
     assert.ok(archive.executable.length > 0);
+    assert.equal("sourceUrl" in archive, false);
   }
   const assemblySource = await readFile(
     path.join(repositoryRoot, "scripts", "assemble-zenx-providers.mjs"),
@@ -62,7 +62,7 @@ test("provider lock is the only Playwright browser archive authority", async () 
   assert.doesNotMatch(assemblySource, /PLAYWRIGHT_DOWNLOAD_HOST/u);
 });
 
-test("browser assembly fails closed on digest and reuses verified cache offline", async () => {
+test("browser assembly rejects a wrong archive mapping and reuses verified cache offline", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-browser-assembly-test-"),
   );
@@ -134,7 +134,7 @@ test("browser assembly fails closed on digest and reuses verified cache offline"
           platformArchives: {
             [platformKey]: {
               ...pin.platformArchives[platformKey],
-              sha256: "0".repeat(64),
+              url: `${server.url}/wrong-browser.tar`,
             },
           },
         },
@@ -241,8 +241,16 @@ test("browser assembly fails closed on digest and reuses verified cache offline"
 });
 
 async function createArchiveServer(archive, size, onRequest) {
-  const server = createServer((_request, response) => {
+  const server = createServer((request, response) => {
     onRequest();
+    if (request.url === "/wrong-browser.tar") {
+      const wrongArchive = Buffer.from("not the pinned browser archive");
+      response.writeHead(200, {
+        "content-length": String(wrongArchive.byteLength),
+      });
+      response.end(wrongArchive);
+      return;
+    }
     response.writeHead(200, { "content-length": String(size) });
     createReadStream(archive).pipe(response);
   });
