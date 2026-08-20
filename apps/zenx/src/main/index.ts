@@ -159,7 +159,7 @@ app.whenReady().then(async () => {
       execPath: process.execPath,
       capabilityHost: capabilityService,
     });
-    selfControlPort.attach(appServerManager);
+    await selfControlPort.attach(appServerManager);
     titleCoordinator = new ZenXThreadTitleCoordinator({
       store: new ZenXThreadTitleStore(
         join(userDataDirectory, "thread-title-projections.json"),
@@ -214,10 +214,10 @@ app.whenReady().then(async () => {
           execPath: process.execPath,
           capabilityHost: capabilityService,
         });
-        selfControlPort.attach(appServerManager);
+        await selfControlPort.attach(appServerManager);
         await appServerManager.start();
       } else {
-        selfControlPort.attach(appServerManager);
+        await selfControlPort.attach(appServerManager);
         const restartErrors: Error[] = [];
         let hostStopped = false;
         try {
@@ -339,7 +339,7 @@ function installProtocolIpc(
     const threads = await manager.listThreadSummaries(
       readThreadSummaryListOptions(options),
     );
-    return projects.project(
+    return await projects.project(
       threads.map((thread) => ({
         id: thread.threadId,
         cwd:
@@ -565,7 +565,7 @@ async function syncProjectProjection(
   settings: ZenXSettingsService,
 ): Promise<void> {
   const profile = (await settings.publicSettings()).profile;
-  projectProjection.updateConfiguration(
+  await projectProjection.updateConfiguration(
     profile.workspaces,
     profile.workspace,
     profile.lastUsedWorkspace,

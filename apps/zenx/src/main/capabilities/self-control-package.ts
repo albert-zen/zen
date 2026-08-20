@@ -9,10 +9,7 @@ import type {
   ThreadItem,
 } from "../../protocol-client/index.js";
 import type { ZenXCapabilityManifest, ZenXCapabilityPackage } from "./types.js";
-import {
-  projectPathKey,
-  ZenXProjectProjection,
-} from "../project-projection.js";
+import { ZenXProjectProjection } from "../project-projection.js";
 
 export const ZENX_SELF_CONTROL_CAPABILITY_ID = "zenx-self-control";
 export const ZENX_SELF_CONTROL_WORKSPACE_PERMISSION =
@@ -56,14 +53,14 @@ export class MutableAppServerRequestPort implements AppServerRequestPort {
     this.projectProjection = projectProjection;
   }
 
-  attach(
+  async attach(
     target: AppServerRequestTarget,
     configuredWorkspace?: string | null,
     configuredWorkspaces: readonly string[] = [],
-  ): void {
+  ): Promise<void> {
     this.#target = target;
     if (configuredWorkspace !== undefined) {
-      this.projectProjection.updateConfiguration(
+      await this.projectProjection.updateConfiguration(
         configuredWorkspaces,
         configuredWorkspace,
       );
@@ -353,7 +350,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       MAX_LIST_LIMIT,
     );
     const threads = (await this.#appServer.request("thread/list", {})).data;
-    const snapshot = this.#appServer.projectProjection.project(
+    const snapshot = await this.#appServer.projectProjection.project(
       threads.map((thread) => ({
         id: thread.id,
         cwd: thread.status.type === "systemError" ? null : thread.cwd,
@@ -381,15 +378,20 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     const workspace = optionalString(args.workspace, "workspace");
     const cwd = optionalString(args.cwd, "cwd");
     if (workspace !== undefined && cwd !== undefined) {
-      if (projectPathKey(workspace) !== projectPathKey(cwd)) {
+      if (
+        (await this.#appServer.projectProjection.canonicalKey(workspace)) !==
+        (await this.#appServer.projectProjection.canonicalKey(cwd))
+      ) {
         throw new Error(
           "workspace and cwd filters must identify the same path",
         );
       }
     }
     const cwdFilter = workspace ?? cwd;
-    const resolvedFilter =
-      cwdFilter === undefined ? undefined : path.resolve(cwdFilter);
+    const filterKey =
+      cwdFilter === undefined
+        ? undefined
+        : await this.#appServer.projectProjection.canonicalKey(cwdFilter);
     const query = optionalString(args.query, "query")?.toLocaleLowerCase();
     const archived = optionalBoolean(args.archived, "archived") ?? false;
     const limit = boundedInteger(
@@ -398,15 +400,23 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       DEFAULT_LIST_LIMIT,
       MAX_LIST_LIMIT,
     );
+    const listed = (await this.#appServer.request("thread/list", { archived }))
+      .data;
     const threads = (
-      await this.#appServer.request("thread/list", { archived })
-    ).data
-      .filter(
-        (thread) =>
-          resolvedFilter === undefined ||
-          (thread.cwd.length > 0 &&
-            projectPathKey(thread.cwd) === projectPathKey(resolvedFilter)),
+      await Promise.all(
+        listed.map(async (thread) => ({
+          thread,
+          matches:
+            filterKey === undefined ||
+            (thread.cwd.length > 0 &&
+              (await this.#appServer.projectProjection.canonicalKey(
+                thread.cwd,
+              )) === filterKey),
+        })),
       )
+    )
+      .filter(({ matches }) => matches)
+      .map(({ thread }) => thread)
       .filter((thread) => query === undefined || matchesQuery(thread, query))
       .sort((left, right) => right.updatedAt - left.updatedAt);
     return {
@@ -422,7 +432,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     assertOnly(args, ["cwd", "model", "approvalPolicy", "sandbox"]);
     const requestedCwd = path.resolve(requiredString(args.cwd, "cwd"));
     const cwd =
-      this.#appServer.projectProjection.configuredWorkspace(requestedCwd);
+      await this.#appServer.projectProjection.configuredWorkspace(requestedCwd);
     if (cwd === null)
       throw new Error("Configure the workspace as a ZenX Project first");
     const model = optionalString(args.model, "model");

@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -169,6 +176,18 @@ test("serializes concurrent workspace mutations without losing either update", a
   }
 });
 
+test(
+  "POSIX symlink aliases drive add, mark-used, default, and remove by one canonical key",
+  { skip: process.platform === "win32" },
+  async () => await exerciseAliasWorkspaceMutations("dir"),
+);
+
+test(
+  "Windows junction aliases drive add, mark-used, default, and remove by one canonical key",
+  { skip: process.platform !== "win32" },
+  async () => await exerciseAliasWorkspaceMutations("junction"),
+);
+
 test("clears the OAuth concurrency guard after failure so login can retry", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-oauth-retry-"));
   let attempts = 0;
@@ -202,6 +221,48 @@ test("clears the OAuth concurrency guard after failure so login can retry", asyn
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+async function exerciseAliasWorkspaceMutations(
+  type: "dir" | "junction",
+): Promise<void> {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-settings-alias-"),
+  );
+  const physical = path.join(directory, "physical");
+  const alias = path.join(directory, "alias");
+  const other = path.join(directory, "other");
+  const marker = path.join(physical, "keep-me.txt");
+  try {
+    await Promise.all([mkdir(physical), mkdir(other)]);
+    await symlink(physical, alias, type);
+    await writeFile(marker, "keep");
+    const service = settingsFor(directory, {
+      login: async () => undefined,
+      logout: async () => undefined,
+      status: async () => ({ authenticated: false, expired: false }),
+    });
+    await service.initialize({ ZENX_CWD: physical });
+
+    assert.equal(await service.addWorkspace(alias), false);
+    await service.addWorkspace(other);
+    assert.equal(await service.setDefaultWorkspace(other), true);
+    await service.markWorkspaceUsed(alias);
+    let profile = (await service.publicSettings()).profile;
+    assert.equal(profile.lastUsedWorkspace, path.resolve(physical));
+    assert.equal(await service.setDefaultWorkspace(alias), true);
+    profile = (await service.publicSettings()).profile;
+    assert.equal(profile.workspace, path.resolve(physical));
+
+    assert.equal(await service.removeWorkspace(alias), true);
+    profile = (await service.publicSettings()).profile;
+    assert.deepEqual(profile.workspaces, [path.resolve(other)]);
+    assert.equal(profile.workspace, path.resolve(other));
+    assert.equal(profile.lastUsedWorkspace, null);
+    assert.equal(await readFile(marker, "utf8"), "keep");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
 
 test("cleans an aborted manual OAuth wait and accepts a later login", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-oauth-abort-"));

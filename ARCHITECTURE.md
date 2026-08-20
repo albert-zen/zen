@@ -18,8 +18,9 @@
 - **ZenXThreadSummaryAdapter** — ZenX Electron main 通过既有 host-local 进程边界查询
   ZAS 原生 summary，并以 typed IPC 暴露给产品层，不拥有 Thread 语义或新增 wire method。
 - **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS
-  原生 Thread cwd 投影为 UI 和 Agent self-control 共用的 Project 读模型；Windows 路径折叠大小写，
-  POSIX 路径保留大小写，最近使用项由同一 host profile 持有且失效时不隐式回退，
+  原生 Thread cwd 按最近存在祖先的异步 realpath 归一为 UI 和 Agent self-control 共用的
+  Project 读模型；Windows 路径折叠大小写，POSIX 路径保留大小写，配置保留用户选择的展示路径，
+  realpath 不可用时退回 lexical absolute path，最近使用项由同一 host profile 持有且失效时不隐式回退，
   它不拥有 Project、Thread 或 journal 状态。
 - **ZenXDirectoryBrowser** — ZenX main 把 home、documents、Windows drive / POSIX root 与
   canonical 只读目录枚举投影给内部 picker；symlink/junction 只解析为目录目标，不修改文件系统。

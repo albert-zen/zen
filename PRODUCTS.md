@@ -43,7 +43,8 @@ provider 与 skill/prompt 均由 ZenX 持有，不进入 Zen Core 或 Codex 协�
 
 ZenX Agent 的自控工具同样属于产品层：bundled capability package 经现有 registry
 显式授权 workspace/local-device 权限后才向 Agent 暴露；Project 列表只按已配置
-workspace 与 Thread 实际 cwd 派生；Thread 的创建、读取、状态、重命名、归档与取消归档，以及
+workspace 与 Thread 实际 cwd 的 canonical filesystem identity 派生，symlink/junction alias
+合并但保留用户选择的展示路径；Thread 的创建、读取、状态、重命名、归档与取消归档，以及
 `start | steer | replace` 发送全部经由 App Server。工具调用和目标 Thread 的结果分别
 进入各自权威 ItemList，不另建委派记录、消息队列或 transcript；互相监听
 `turn_completed` 后继续发起普通 Turn 是允许的。
