@@ -28,6 +28,7 @@ const maxTransactionLeaseMilliseconds = 5 * 60_000;
 const readBufferBytes = 64 * 1024;
 const transactionInitializationGraceMilliseconds = 2_000;
 const transactionRetirementGraceMilliseconds = 5_000;
+const transactionRenameRetryMilliseconds = 5_000;
 const transactionWaitMilliseconds = 25;
 
 /**
@@ -306,6 +307,7 @@ async function withDigestTransaction(options) {
     await retireTransactionDirectory(
       transaction.transactionRoot,
       transaction.directory,
+      transaction.deadline,
     );
   }
 }
@@ -340,9 +342,16 @@ async function acquireTransaction(options) {
         mode: 0o600,
       }),
     ]);
-    await rename(candidateDirectory, directory);
+    await renameTransactionPath(
+      candidateDirectory,
+      directory,
+      options.deadline,
+    );
 
-    const participants = await activeParticipants(options.transactionRoot);
+    const participants = await activeParticipants(
+      options.transactionRoot,
+      options.deadline,
+    );
     const ticket =
       participants.reduce(
         (maximum, participant) =>
@@ -375,14 +384,22 @@ async function acquireTransaction(options) {
     await retireTransactionDirectory(
       options.transactionRoot,
       candidateDirectory,
+      options.deadline,
     );
-    await retireTransactionDirectory(options.transactionRoot, directory);
+    await retireTransactionDirectory(
+      options.transactionRoot,
+      directory,
+      options.deadline,
+    );
     throw error;
   }
 }
 
 async function hasPrecedingParticipant(transaction) {
-  const participants = await activeParticipants(transaction.transactionRoot);
+  const participants = await activeParticipants(
+    transaction.transactionRoot,
+    transaction.deadline,
+  );
   for (const participant of participants) {
     if (participant.token === transaction.token) continue;
     if (participant.choosing) return true;
@@ -400,14 +417,11 @@ async function hasPrecedingParticipant(transaction) {
   return false;
 }
 
-async function activeParticipants(transactionRoot) {
+async function activeParticipants(transactionRoot, deadline) {
   const result = [];
   for (const entry of await readdir(transactionRoot, { withFileTypes: true })) {
     if (entry.isDirectory() && entry.name.startsWith("retired-")) {
-      await rm(path.join(transactionRoot, entry.name), {
-        recursive: true,
-        force: true,
-      });
+      await removeRetiredDirectory(path.join(transactionRoot, entry.name));
       continue;
     }
     if (
@@ -423,7 +437,11 @@ async function activeParticipants(transactionRoot) {
     );
     if (participant === undefined) continue;
     if (participant.stale) {
-      await retireTransactionDirectory(transactionRoot, participant.directory);
+      await retireTransactionDirectory(
+        transactionRoot,
+        participant.directory,
+        deadline,
+      );
       continue;
     }
     result.push(participant);
@@ -431,7 +449,11 @@ async function activeParticipants(transactionRoot) {
   return result;
 }
 
-async function retireTransactionDirectory(transactionRoot, directory) {
+async function retireTransactionDirectory(
+  transactionRoot,
+  directory,
+  deadline,
+) {
   // Removing the active name atomically keeps observers from reading a
   // half-deleted owner/ticket pair. A crash after rename leaves only inert state
   // that the next scan removes.
@@ -440,12 +462,65 @@ async function retireTransactionDirectory(transactionRoot, directory) {
     `retired-${path.basename(directory)}-${randomUUID()}`,
   );
   try {
-    await rename(directory, retiredDirectory);
+    await renameTransactionPath(
+      directory,
+      retiredDirectory,
+      Math.min(deadline, Date.now() + transactionRenameRetryMilliseconds),
+    );
   } catch (error) {
     if (error?.code === "ENOENT") return;
+    try {
+      await lstat(directory);
+    } catch (observationError) {
+      if (observationError?.code === "ENOENT") return;
+      throw observationError;
+    }
     throw error;
   }
-  await rm(retiredDirectory, { recursive: true, force: true });
+  await removeRetiredDirectory(retiredDirectory);
+}
+
+async function removeRetiredDirectory(directory) {
+  try {
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: transactionWaitMilliseconds,
+    });
+  } catch (error) {
+    // A retired name is already inert. Windows may keep it briefly busy while
+    // another contender is observing or deleting it; a later scan can finish
+    // this non-authoritative cleanup without blocking artifact acquisition.
+    if (
+      error?.code === "ENOENT" ||
+      error?.code === "EPERM" ||
+      error?.code === "EBUSY" ||
+      error?.code === "ENOTEMPTY"
+    ) {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function renameTransactionPath(source, destination, deadline) {
+  while (true) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error) {
+      if (
+        error?.code !== "EPERM" &&
+        error?.code !== "EBUSY" &&
+        error?.code !== "EACCES"
+      ) {
+        throw error;
+      }
+      ensureBeforeDeadline(deadline);
+      await waitForTransaction(deadline);
+    }
+  }
 }
 
 async function readParticipant(directory, name) {

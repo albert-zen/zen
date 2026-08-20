@@ -281,9 +281,15 @@ test("converges cross-process contenders through one download", async () => {
       deadline: Date.now() + 10_000,
       cacheLocation: fixture.cacheLocation,
     };
-    const results = await Promise.all(
+    const settled = await Promise.allSettled(
       Array.from({ length: 12 }, () => acquireInChild(options)),
     );
+    const failures = settled.filter((result) => result.status === "rejected");
+    assert.deepEqual(
+      failures.map((result) => result.reason?.message ?? String(result.reason)),
+      [],
+    );
+    const results = settled.map((result) => result.value);
 
     assert.equal(new Set(results).size, 1);
     assert.deepEqual(await readFile(results[0]), bytes);
