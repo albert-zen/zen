@@ -572,7 +572,7 @@ test("program runner contains descendants when the direct child exits", async ()
 });
 
 test(
-  "program runner rejects an overflowed process-table snapshot instead of proving false quiescence",
+  "program runner preserves cancellation with an overflowed process-table diagnostic",
   { skip: process.platform === "win32" },
   async () => {
     const fixture = await installProcessTableFixture("overflow");
@@ -593,7 +593,8 @@ test(
       pid = Number(await waitForFile(ready));
       controller.abort(new Error("overflow fixture"));
       const result = await running;
-      assert.equal(result.status, "failed");
+      assert.equal(result.status, "cancelled");
+      assert.match(result.error ?? "", /overflow fixture/u);
       assert.match(
         result.error ?? "",
         /process-table snapshot exceeded its 128 KiB bound/u,
@@ -611,7 +612,7 @@ test(
 );
 
 test(
-  "program runner preserves process discovery failure instead of reporting a deadline",
+  "program runner preserves cancellation with a discovery-failure diagnostic",
   { skip: process.platform === "win32" },
   async () => {
     const fixture = await installProcessTableFixture("failure");
@@ -628,7 +629,8 @@ test(
       pid = Number(await waitForFile(ready));
       controller.abort(new Error("discovery failure fixture"));
       const result = await running;
-      assert.equal(result.status, "failed");
+      assert.equal(result.status, "cancelled");
+      assert.match(result.error ?? "", /discovery failure fixture/u);
       assert.match(result.error ?? "", /ps exited with code 7/u);
       assert.doesNotMatch(
         result.error ?? "",
