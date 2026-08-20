@@ -31,6 +31,7 @@ export interface BundledProviderAsset {
   path: string;
   sha256: string;
   kind?: "file" | "directory";
+  ignoredPaths?: string[];
 }
 
 export interface BundledProviderResolution {
@@ -257,7 +258,7 @@ export async function resolveBundledProvider(
           throw new Error("asset resolves outside its resource directory");
         const assetSha256 =
           kind === "directory"
-            ? await hashBundledDirectoryAsset(assetRealPath)
+            ? await hashBundledDirectoryAsset(assetRealPath, asset.ignoredPaths)
             : await hashBundledFileAsset(assetRealPath);
         if (assetSha256 !== asset.sha256)
           throw new Error(`asset integrity mismatch: ${asset.path}`);
@@ -265,6 +266,9 @@ export async function resolveBundledProvider(
           path: assetRealPath,
           sha256: assetSha256,
           ...(asset.kind === undefined ? {} : { kind: asset.kind }),
+          ...(asset.ignoredPaths === undefined
+            ? {}
+            : { ignoredPaths: [...asset.ignoredPaths] }),
         });
       }
     } catch (error) {
@@ -359,7 +363,11 @@ export async function verifyBundledProvider(
       (asset, index) =>
         asset.path !== verified.assets?.[index]?.path ||
         asset.sha256 !== verified.assets?.[index]?.sha256 ||
-        asset.kind !== verified.assets?.[index]?.kind,
+        asset.kind !== verified.assets?.[index]?.kind ||
+        !equalStrings(
+          asset.ignoredPaths,
+          verified.assets?.[index]?.ignoredPaths,
+        ),
     )
   ) {
     throw new Error(
@@ -449,11 +457,13 @@ export async function bindBundledProviderLaunch(
 
 export async function hashBundledDirectoryAsset(
   rootDirectory: string,
+  ignoredPaths: readonly string[] = [],
 ): Promise<string> {
   const maxEntries = 20_000;
   const maxBytes = 2 * 1024 * 1024 * 1024;
   const root = await realpath(rootDirectory);
   const hash = createHash("sha256");
+  const ignored = new Set(ignoredPaths);
   let entriesSeen = 0;
   let bytesSeen = 0;
 
@@ -466,12 +476,21 @@ export async function hashBundledDirectoryAsset(
       left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
     );
     for (const entry of entries) {
+      const candidate = path.join(directory, entry.name);
+      const relative = path.posix.join(relativeDirectory, entry.name);
+      if (ignored.has(relative)) {
+        const ignoredMetadata = await lstat(candidate);
+        if (!ignoredMetadata.isFile() || ignoredMetadata.isSymbolicLink()) {
+          throw new Error(
+            `bundled directory runtime state must be a regular file: ${relative}`,
+          );
+        }
+        continue;
+      }
       entriesSeen += 1;
       if (entriesSeen > maxEntries) {
         throw new Error("bundled directory asset exceeds the entry bound");
       }
-      const candidate = path.join(directory, entry.name);
-      const relative = path.posix.join(relativeDirectory, entry.name);
       const metadata = await lstat(candidate);
       if (metadata.isDirectory()) {
         hash.update(`directory\0${relative}\0`);
@@ -574,12 +593,39 @@ function parseManifest(
             /^[a-f0-9]{64}$/u.test(asset.sha256) &&
             (asset.kind === undefined ||
               asset.kind === "file" ||
-              asset.kind === "directory"),
+              asset.kind === "directory") &&
+            (asset.ignoredPaths === undefined ||
+              (asset.kind === "directory" &&
+                Array.isArray(asset.ignoredPaths) &&
+                asset.ignoredPaths.length <= 16 &&
+                asset.ignoredPaths.every(isSafeRelativeAssetPath) &&
+                new Set(asset.ignoredPaths).size ===
+                  asset.ignoredPaths.length)),
         )))
   ) {
     return undefined;
   }
   return entry;
+}
+
+function isSafeRelativeAssetPath(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256) {
+    return false;
+  }
+  if (path.posix.isAbsolute(value) || value.includes("\\")) return false;
+  return !value
+    .split("/")
+    .some((segment) => segment === "" || segment === "." || segment === "..");
+}
+
+function equalStrings(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  return (
+    left?.length === right?.length &&
+    (left?.every((value, index) => value === right?.[index]) ?? true)
+  );
 }
 
 function isWithin(root: string, candidate: string): boolean {

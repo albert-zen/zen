@@ -35,6 +35,7 @@ const maxAssetBytes = 512 * 1024 * 1024;
 const artifactDownloadMilliseconds = 2 * 60 * 1_000;
 const maxBrowserPayloadEntries = 20_000;
 const maxBrowserPayloadBytes = 2 * 1024 * 1024 * 1024;
+const playwrightBrowserRuntimeStatePaths = ["DEPENDENCIES_VALIDATED"];
 let lock;
 let artifactCache;
 let providers;
@@ -248,8 +249,12 @@ export async function assemblePlaywrightBrowser(options) {
       assets: [
         {
           path: path.relative(options.providersDirectory, browserDirectory),
-          sha256: await hashBrowserPayloadDirectory(browserDirectory),
+          sha256: await hashBrowserPayloadDirectory(
+            browserDirectory,
+            playwrightBrowserRuntimeStatePaths,
+          ),
           kind: "directory",
+          ignoredPaths: playwrightBrowserRuntimeStatePaths,
         },
         {
           path: path.relative(options.providersDirectory, executable),
@@ -263,9 +268,13 @@ export async function assemblePlaywrightBrowser(options) {
   }
 }
 
-export async function hashBrowserPayloadDirectory(rootDirectory) {
+export async function hashBrowserPayloadDirectory(
+  rootDirectory,
+  ignoredPaths = [],
+) {
   const root = await realpath(rootDirectory);
   const hash = createHash("sha256");
+  const ignored = new Set(ignoredPaths);
   let entriesSeen = 0;
   let bytesSeen = 0;
 
@@ -275,12 +284,21 @@ export async function hashBrowserPayloadDirectory(rootDirectory) {
       left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
     );
     for (const entry of entries) {
+      const candidate = path.join(directory, entry.name);
+      const relative = path.posix.join(relativeDirectory, entry.name);
+      if (ignored.has(relative)) {
+        const ignoredMetadata = await lstat(candidate);
+        if (!ignoredMetadata.isFile() || ignoredMetadata.isSymbolicLink()) {
+          throw new Error(
+            `Playwright browser runtime state must be a regular file: ${relative}`,
+          );
+        }
+        continue;
+      }
       entriesSeen += 1;
       if (entriesSeen > maxBrowserPayloadEntries) {
         throw new Error("Playwright browser payload exceeds the entry bound");
       }
-      const candidate = path.join(directory, entry.name);
-      const relative = path.posix.join(relativeDirectory, entry.name);
       const metadata = await lstat(candidate);
       if (metadata.isDirectory()) {
         hash.update(`directory\0${relative}\0`);

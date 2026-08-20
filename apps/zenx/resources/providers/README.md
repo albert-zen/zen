@@ -24,7 +24,10 @@ per-platform SHA-256 are part of the same release lock. Assembly acquires that
 archive through the verified artifact cache, extracts it directly, and never
 invokes Playwright's downloader. The final provider manifest pins both the
 browser executable and a deterministic digest of the complete extracted
-payload; bundled-provider selection and launch verification re-hash them.
+payload; bundled-provider selection and launch verification re-hash them. The
+manifest explicitly excludes only Playwright's root `DEPENDENCIES_VALIDATED`
+host-validation state file; all archive entries and any other additions remain
+inside the fail-closed digest boundary.
 
 The Playwright provider also records every shipped transitive package in
 `provider-lock.json` with its exact tarball URL, npm SRI, and SHA-256. Assembly

@@ -122,7 +122,7 @@
 - **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider revoke 或 close 时单调使
   capability live projection 与 provider-owned artifacts 失效并重建可重建 provider；它不改写 canonical ItemList、
   grants 或 durable capability history，也不成为第二个 runtime/coordinator。
-- **ZenXBundledProviderProvisioning** — 打包 provider 只能由应用资源中的版本与 SHA-256 固定清单解析，实际执行的 browser payload 以有界目录摘要在选择与启动前重验；缺失、离线或校验失败只产生可诊断的 unavailable 状态，不改写 Core 会话语义。
+- **ZenXBundledProviderProvisioning** — 打包 provider 只能由应用资源中的版本与 SHA-256 固定清单解析，实际执行的 browser payload 以有界目录摘要在选择与启动前重验，仅排除清单明确列出的非可执行 host-validation 状态；缺失、离线或校验失败只产生可诊断的 unavailable 状态，不改写 Core 会话语义。
 - **ZenXPlaywrightSessionFence** — Playwright provider 在一个瞬时 CLI session 内串行执行操作，并用稳定 tab/document identity 与 lifecycle revision 围住选择、观察、截图、摘要和关闭；该 fence 不进入 Core 或 durable journal。
 - **ZenXProviderLaunchVerification** — 外部 provider 在实际 spawn 前再次验证绑定的 canonical executable、browser payload、shim companion、manifest digest 与 pinned semantic version；失败只产生显式诊断，不自动改用未验证资产。
 - **ZenXPackagedProviderSmoke** — ZenX 构建验证用真实 resources/providers manifest、asset hash、version pin 与 bundled-only catalog path 检查离线 packaged provisioning；它是一次性测试流程，不是运行时 coordinator 或 durable state。

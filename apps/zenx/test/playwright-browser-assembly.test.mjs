@@ -171,15 +171,39 @@ test("browser assembly fails closed on digest and reuses verified cache offline"
     });
     assert.equal(online.archiveSha256, archiveSha256);
     assert.equal(online.assets[0].kind, "directory");
+    assert.deepEqual(online.assets[0].ignoredPaths, ["DEPENDENCIES_VALIDATED"]);
     assert.equal(
       online.assets[0].sha256,
-      await hashBundledDirectoryAsset(online.browserDirectory),
+      await hashBundledDirectoryAsset(
+        online.browserDirectory,
+        online.assets[0].ignoredPaths,
+      ),
     );
     assert.equal(
       online.assets[1].sha256,
       sha256("verified browser executable"),
     );
     await access(path.join(online.browserDirectory, "INSTALLATION_COMPLETE"));
+    await writeFile(
+      path.join(online.browserDirectory, "DEPENDENCIES_VALIDATED"),
+      "",
+    );
+    assert.equal(
+      await hashBundledDirectoryAsset(
+        online.browserDirectory,
+        online.assets[0].ignoredPaths,
+      ),
+      online.assets[0].sha256,
+    );
+    await writeFile(path.join(online.browserDirectory, "untrusted.dll"), "x");
+    assert.notEqual(
+      await hashBundledDirectoryAsset(
+        online.browserDirectory,
+        online.assets[0].ignoredPaths,
+      ),
+      online.assets[0].sha256,
+    );
+    await rm(path.join(online.browserDirectory, "untrusted.dll"));
     assert.equal(requests, 2);
 
     await server.close();

@@ -42,6 +42,7 @@ test("packaged provisioning verifies the complete browser payload directory", as
               path: path.relative(providers, browser),
               sha256: await hashBundledDirectoryAsset(browser),
               kind: "directory",
+              ignoredPaths: ["DEPENDENCIES_VALIDATED"],
             },
             {
               path: path.relative(providers, executable),
@@ -61,6 +62,12 @@ test("packaged provisioning verifies the complete browser payload directory", as
     });
     assert.equal(resolved.provider?.assets?.[0]?.kind, "directory");
     assert.equal(resolved.provider?.assets?.length, 2);
+
+    await writeFile(path.join(browser, "DEPENDENCIES_VALIDATED"), "");
+    await verifyBundledProvider(resolved.provider!, {
+      resourcesDirectory: root,
+      platform: "linux",
+    });
 
     await writeFile(path.join(browser, "resource.pak"), "tampered resource");
     await assert.rejects(
