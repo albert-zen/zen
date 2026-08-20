@@ -840,6 +840,7 @@ function fakeProfile(model: string): ZenXHostProfile {
     workspace: null,
     workspaces: [],
     lastUsedWorkspace: null,
+    pinnedThreadIds: [],
     approvalPolicy: "always",
   };
 }
