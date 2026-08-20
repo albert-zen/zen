@@ -10,6 +10,7 @@ import {
   type PublicHostSettings,
   type ZenXHostProfile,
   ZenXHostProfileStore,
+  type ZenXSidebarOrder,
   type ZenXSettingsUpdate,
   validateHostProfile,
 } from "./host-profile.js";
@@ -320,6 +321,23 @@ export class ZenXSettingsService {
     });
   }
 
+  async setSidebarOrder(order: ZenXSidebarOrder): Promise<void> {
+    await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const next = validateHostProfile({
+        ...current,
+        sidebarOrder: order,
+      });
+      if (
+        JSON.stringify(next.sidebarOrder) ===
+        JSON.stringify(current.sidebarOrder)
+      )
+        return;
+      await this.#profileStore.write(next);
+      this.#profile = next;
+    });
+  }
+
   async login(
     openBrowser: (url: string) => void,
     manualCodeRequested: () => void,
@@ -546,5 +564,6 @@ function profileFromLegacy(
     lastUsedWorkspace: null,
     approvalPolicy: config.approvalPolicy,
     pinnedThreadIds: [],
+    sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   };
 }

@@ -1,6 +1,7 @@
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { Thread } from "../../protocol-client/index.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
+import type { ZenXSidebarOrder } from "../../main/host-profile.js";
 
 export type SidebarMode = "inbox" | "projects";
 
@@ -28,6 +29,13 @@ export interface ThreadModelIdentity {
   label: string;
   providerKind: "openai" | "deepseek" | "qwen" | "local" | "generic";
 }
+
+export type SidebarOrderPlacement = "before" | "after";
+
+export const EMPTY_SIDEBAR_ORDER: ZenXSidebarOrder = {
+  projectKeys: [],
+  threadIdsByProject: {},
+};
 
 export function derivePinnedThreads(
   threads: readonly NativeThreadSummary[],
@@ -153,32 +161,46 @@ export function deriveInboxSections(
 export function deriveProjectGroups(
   threads: readonly NativeThreadSummary[],
   projection: ZenXProjectProjectionSnapshot,
+  preference: ZenXSidebarOrder = EMPTY_SIDEBAR_ORDER,
 ): ProjectGroup[] {
   const byId = new Map(threads.map((thread) => [thread.threadId, thread]));
-  const groups: ProjectGroup[] = projection.projects.map((project) => ({
-    key: project.key,
-    label: projectLabel(project.workspace),
-    workspace: project.workspace,
-    configured: project.configured,
-    isDefault: project.isDefault,
-    threads: sortByRecency(
-      project.threadIds.flatMap((threadId) => {
-        const thread = byId.get(threadId);
-        return thread === undefined ? [] : [thread];
-      }),
-    ),
-  }));
-  groups.sort(
-    (left, right) =>
-      left.label.localeCompare(right.label) ||
-      left.key.localeCompare(right.key),
+  const groups: ProjectGroup[] = projection.projects
+    .map((project) => {
+      const stableThreads = sortByRecency(
+        project.threadIds.flatMap((threadId) => {
+          const thread = byId.get(threadId);
+          return thread === undefined ? [] : [thread];
+        }),
+      );
+      return {
+        key: project.key,
+        label: projectLabel(project.workspace),
+        workspace: project.workspace,
+        configured: project.configured,
+        isDefault: project.isDefault,
+        threads: orderByPreference(
+          stableThreads,
+          preference.threadIdsByProject[project.key] ?? [],
+          (thread) => thread.threadId,
+        ),
+      };
+    })
+    .sort(
+      (left, right) =>
+        left.label.localeCompare(right.label) ||
+        left.key.localeCompare(right.key),
+    );
+  const orderedGroups = orderByPreference(
+    groups,
+    preference.projectKeys,
+    (group) => group.key,
   );
   const unavailable = projection.unavailableThreadIds.flatMap((threadId) => {
     const thread = byId.get(threadId);
     return thread === undefined ? [] : [thread];
   });
   if (unavailable.length > 0)
-    groups.push({
+    orderedGroups.push({
       key: "__unavailable__",
       label: "Unavailable journals",
       workspace: null,
@@ -186,7 +208,86 @@ export function deriveProjectGroups(
       isDefault: false,
       threads: unavailable,
     });
-  return groups;
+  return orderedGroups;
+}
+
+export function moveSidebarProject(
+  preference: ZenXSidebarOrder,
+  projection: ZenXProjectProjectionSnapshot,
+  sourceKey: string,
+  targetKey: string,
+  placement: SidebarOrderPlacement,
+): ZenXSidebarOrder {
+  const stableProjects = projection.projects
+    .map((project) => ({
+      key: project.key,
+      label: projectLabel(project.workspace),
+    }))
+    .sort(
+      (left, right) =>
+        left.label.localeCompare(right.label) ||
+        left.key.localeCompare(right.key),
+    );
+  const order = orderByPreference(
+    stableProjects,
+    preference.projectKeys,
+    (project) => project.key,
+  ).map((project) => project.key);
+  const moved = moveIdentifier(order, sourceKey, targetKey, placement);
+  if (moved === null) return preference;
+  return {
+    projectKeys: moved,
+    threadIdsByProject: preference.threadIdsByProject,
+  };
+}
+
+export function moveSidebarThread(
+  preference: ZenXSidebarOrder,
+  threads: readonly NativeThreadSummary[],
+  projection: ZenXProjectProjectionSnapshot,
+  sourceProjectKey: string,
+  sourceThreadId: string,
+  targetProjectKey: string,
+  targetThreadId: string,
+  placement: SidebarOrderPlacement,
+): ZenXSidebarOrder {
+  if (sourceProjectKey !== targetProjectKey) return preference;
+  const project = projection.projects.find(
+    (candidate) => candidate.key === sourceProjectKey,
+  );
+  if (
+    project === undefined ||
+    !project.threadIds.includes(sourceThreadId) ||
+    !project.threadIds.includes(targetThreadId)
+  ) {
+    return preference;
+  }
+  const byId = new Map(threads.map((thread) => [thread.threadId, thread]));
+  const stableThreads = sortByRecency(
+    project.threadIds.flatMap((threadId) => {
+      const thread = byId.get(threadId);
+      return thread === undefined ? [] : [thread];
+    }),
+  );
+  const order = orderByPreference(
+    stableThreads,
+    preference.threadIdsByProject[sourceProjectKey] ?? [],
+    (thread) => thread.threadId,
+  ).map((thread) => thread.threadId);
+  const moved = moveIdentifier(
+    order,
+    sourceThreadId,
+    targetThreadId,
+    placement,
+  );
+  if (moved === null) return preference;
+  return {
+    projectKeys: preference.projectKeys,
+    threadIdsByProject: {
+      ...preference.threadIdsByProject,
+      [sourceProjectKey]: moved,
+    },
+  };
 }
 
 export function threadTitle(thread: NativeThreadSummary): string {
@@ -259,6 +360,50 @@ function sortByRecency(
       right.updatedAt === null ? 0 : Date.parse(right.updatedAt);
     return rightTime - leftTime || left.threadId.localeCompare(right.threadId);
   });
+}
+
+function orderByPreference<T>(
+  stableItems: readonly T[],
+  preferredIds: readonly string[],
+  identify: (item: T) => string,
+): T[] {
+  const byId = new Map(stableItems.map((item) => [identify(item), item]));
+  const ordered: T[] = [];
+  const included = new Set<string>();
+  for (const id of preferredIds) {
+    const item = byId.get(id);
+    if (item === undefined || included.has(id)) continue;
+    included.add(id);
+    ordered.push(item);
+  }
+  for (const item of stableItems) {
+    const id = identify(item);
+    if (included.has(id)) continue;
+    included.add(id);
+    ordered.push(item);
+  }
+  return ordered;
+}
+
+function moveIdentifier(
+  current: readonly string[],
+  sourceId: string,
+  targetId: string,
+  placement: SidebarOrderPlacement,
+): string[] | null {
+  if (sourceId === targetId) return null;
+  const sourceIndex = current.indexOf(sourceId);
+  const targetIndex = current.indexOf(targetId);
+  if (sourceIndex === -1 || targetIndex === -1) return null;
+  const moved = [...current];
+  moved.splice(sourceIndex, 1);
+  const remainingTargetIndex = moved.indexOf(targetId);
+  moved.splice(
+    placement === "after" ? remainingTargetIndex + 1 : remainingTargetIndex,
+    0,
+    sourceId,
+  );
+  return moved.every((id, index) => id === current[index]) ? null : moved;
 }
 
 function projectLabel(cwd: string): string {

@@ -44,3 +44,27 @@ test("Thread overflow stays inert until hover, focus, or an open menu", async ()
     /\.thread-row\.selected[^}]*\.thread-menu-trigger/su,
   );
 });
+
+test("reorder handles stay visually quiet with keyboard and narrow-width access", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.reorder-handle\s*\{[^}]*opacity: 0;[^}]*visibility: hidden;[^}]*pointer-events: none;/su,
+  );
+  assert.match(
+    styles,
+    /\.project-header:focus-within > \.project-reorder-handle/u,
+  );
+  assert.match(
+    styles,
+    /\.thread-row-shell:focus-within \.thread-reorder-handle/u,
+  );
+  const mobile = styles.slice(styles.indexOf("@media (max-width: 640px)"));
+  assert.match(
+    mobile,
+    /\.thread-reorder-handle,\s*\.project-reorder-handle,\s*\.thread-item-menu > button\s*\{\s*min-width: 44px;\s*min-height: 44px;/su,
+  );
+});

@@ -18,7 +18,7 @@ import { ipcChannels } from "../preload/ipc.js";
 import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
-import type { ZenXSettingsUpdate } from "./host-profile.js";
+import type { ZenXSettingsUpdate, ZenXSidebarOrder } from "./host-profile.js";
 import { ZenXSettingsService } from "./settings-service.js";
 import { zenXProviderTransport } from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
@@ -514,6 +514,13 @@ function installSettingsIpc(
       if (!Array.isArray(threadIds))
         throw new Error("Invalid pinned Thread list");
       await settings.setPinnedThreadIds(threadIds);
+      return await settings.publicSettings();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.sidebarOrderSet,
+    async (_event, order: unknown) => {
+      await settings.setSidebarOrder(order as ZenXSidebarOrder);
       return await settings.publicSettings();
     },
   );

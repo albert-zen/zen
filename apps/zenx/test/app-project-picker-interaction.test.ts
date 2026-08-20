@@ -595,6 +595,7 @@ function publicSettings(pinnedThreadIds: string[]) {
       lastUsedWorkspace: "/work/zen",
       approvalPolicy: "never" as const,
       pinnedThreadIds,
+      sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
     },
     hasApiKey: false,
     subscription: { authenticated: false, expired: false },

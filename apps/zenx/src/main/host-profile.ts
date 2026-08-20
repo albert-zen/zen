@@ -14,6 +14,11 @@ export type ZenXProviderProfile =
       baseUrl: string;
     };
 
+export interface ZenXSidebarOrder {
+  projectKeys: string[];
+  threadIdsByProject: Record<string, string[]>;
+}
+
 export interface ZenXHostProfile {
   version: 1;
   onboardingComplete: boolean;
@@ -26,6 +31,7 @@ export interface ZenXHostProfile {
   lastUsedWorkspace: string | null;
   approvalPolicy: "always" | "never";
   pinnedThreadIds: string[];
+  sidebarOrder: ZenXSidebarOrder;
 }
 
 export type ZenXSettingsUpdate = Pick<
@@ -133,6 +139,7 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     workspaces,
   );
   const pinnedThreadIds = normalizePinnedThreadIds(value.pinnedThreadIds);
+  const sidebarOrder = normalizeSidebarOrder(value.sidebarOrder);
   return {
     version: 1,
     onboardingComplete: value.onboardingComplete === true,
@@ -145,7 +152,77 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     lastUsedWorkspace,
     approvalPolicy: value.approvalPolicy,
     pinnedThreadIds,
+    sidebarOrder,
   };
+}
+
+function normalizeSidebarOrder(value: unknown): ZenXSidebarOrder {
+  if (value === undefined) {
+    return { projectKeys: [], threadIdsByProject: {} };
+  }
+  if (!isRecord(value) || !isRecord(value.threadIdsByProject)) {
+    throw new Error("ZenX Sidebar order is invalid");
+  }
+  const projectKeys = normalizeOrderIdentifiers(
+    value.projectKeys,
+    "Project key",
+    32_768,
+  );
+  const entries = Object.entries(value.threadIdsByProject);
+  if (entries.length > 4_096) {
+    throw new Error("ZenX Sidebar Thread order is invalid");
+  }
+  let totalThreadIds = 0;
+  const threadIdsByProject = Object.fromEntries(
+    entries.map(([projectKey, threadIds]) => {
+      const normalizedProjectKey = normalizeOrderIdentifier(
+        projectKey,
+        "Project key",
+        32_768,
+      );
+      const normalizedThreadIds = normalizeOrderIdentifiers(
+        threadIds,
+        "Thread id",
+        512,
+      );
+      totalThreadIds += normalizedThreadIds.length;
+      if (totalThreadIds > 4_096) {
+        throw new Error("ZenX Sidebar Thread order is invalid");
+      }
+      return [normalizedProjectKey, normalizedThreadIds] as const;
+    }),
+  );
+  return { projectKeys, threadIdsByProject };
+}
+
+function normalizeOrderIdentifiers(
+  value: unknown,
+  label: string,
+  maxLength: number,
+): string[] {
+  if (!Array.isArray(value) || value.length > 4_096) {
+    throw new Error(`ZenX Sidebar ${label} list is invalid`);
+  }
+  return [
+    ...new Set(
+      value.map((entry) => normalizeOrderIdentifier(entry, label, maxLength)),
+    ),
+  ];
+}
+
+function normalizeOrderIdentifier(
+  value: unknown,
+  label: string,
+  maxLength: number,
+): string {
+  if (typeof value !== "string") {
+    throw new Error(`ZenX Sidebar ${label} is invalid`);
+  }
+  const identifier = value.trim();
+  if (identifier.length === 0 || identifier.length > maxLength) {
+    throw new Error(`ZenX Sidebar ${label} is invalid`);
+  }
+  return identifier;
 }
 
 function normalizePinnedThreadIds(value: unknown): string[] {

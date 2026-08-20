@@ -28,7 +28,9 @@
 - Thread 列表产品数据来自 ZAS native `ThreadSummary` / `CurrentMetadata` read model，经 Electron main/preload typed IPC 投影。
 - Thread 的名称与归档由 ZAS 产品元数据负责；当前选择、disclosure、草稿、打开的菜单和面板属于 renderer-local UI 状态。
 - Archive 是当前已定义的可逆生命周期操作。本阶段 ZenX 不直接删除 journal，也不伪造 App Server 尚未定义的 Delete；永久 Delete 的 ownership、恢复、附件与历史语义仍为 **TBD**，这里不是永久产品禁令。
-- Pin 是 profile-local ZenX 产品状态。Pinned Thread IDs 不进入 canonical Items、不跨设备同步，也不改变 runtime priority、scheduling priority 或 Inbox ordering；Pin 只允许改变本地 Sidebar prominence。是否使用独立 Pinned section、放置位置与排序规则仍为 **TBD**。
+- Pin 是 profile-local ZenX 产品状态。Pinned Thread IDs 不进入 canonical Items、不跨设备同步，也不改变 runtime priority、scheduling priority 或 Inbox ordering；Pin 只允许改变本地 Sidebar prominence。Pin 不改变 Thread 的 owning Project，也不清除其 Project 内排序偏好。是否使用独立 Pinned section、放置位置与该 section 自身的排序规则仍为 **TBD**。
+- Project 与 Thread 的 Sidebar 顺序是 Settings-owned host-profile local preference，不是 canonical Item/journal fact，也不跨设备同步。Project 使用 canonical Project key 排序；Thread 顺序按 owning Project 分区保存，排序操作不能改变 cwd、Project identity 或把 Thread 移到另一 Project。
+- 持久化顺序是 preference list：仍存在的已知 ID 按记录顺序出现；未知或新出现的 Project/Thread 按当前稳定投影顺序追加；已移除的 ID 被忽略，并可在后续用户排序写入时自然修剪。Settings mutation 按用户操作调用顺序串行化，最后一次操作获胜。
 
 ### 2.2 Project 身份与 cwd
 
@@ -122,6 +124,9 @@ Thread
 - Escape 只在菜单或弹层确实打开时关闭并归还焦点，不得在无菜单时抢走当前焦点。
 - Thread title、ellipsis 与状态在紧凑宽度下不得重叠。异步 summary/read 结果必须有 freshness fence，旧结果不能覆盖较新的 Thread 选择。
 - 当前菜单不暴露未定义的永久 Delete；未来是否提供以及它的产品合同仍为 **TBD**。
+- Projects mode 中每个 Project header 与 owning Project 内的非 Pinned Thread row 提供轻量 reorder handle。handle 默认隐藏，只在 row/header hover、focus-within 或自身 focus 时出现，不占据默认视觉注意力；窄 Sidebar 仍保留完整可点击区域且不得造成 title/action overlap。
+- Pointer drag 可以全局重排 Project；Thread drag 只接受同一 owning Project 内的 drop。跨 Project drop 不产生 mutation，也不改变 cwd、selection、Pin、active Turn、menu、disclosure 或 archive semantics。
+- 每个 reorder handle 都是可聚焦 button，并以 Arrow Up / Arrow Down 执行等价移动；移动完成或保存失败后，焦点确定性返回同一个被移动对象的 handle。键盘路径与 pointer 路径使用同一 Settings mutation 与 reconciliation 规则。
 
 ### 4.2 Turn 状态与 disclosure
 
@@ -272,6 +277,10 @@ ThreadView
 - [ ] Add project 可发现、可聚焦，并遵守 canonical Project cwd 规则；New thread 最终 IA 不作为本轮验收合同。
 - [ ] canonical cwd aliases 归一为一个 Project，同时保留稳定 display path。
 - [ ] Pin 只改变 profile-local Sidebar prominence，不改变 Inbox/runtime/scheduling；不假定独立 Pinned section 或排序。
+- [ ] Project 可在 Sidebar 全局拖动排序；Thread 只可在 owning Project 内排序，跨 Project drop 不产生 mutation，也不改变 cwd/Project identity。
+- [ ] Sidebar 排序在 host profile 中本地持久化并按 preference list reconcile；新/未知项稳定追加、已移除项忽略，重复并发操作最后一次获胜。
+- [ ] Reorder handle 仅在 hover/focus 时出现；Arrow Up/Down 提供等价键盘操作并把焦点恢复到被移动对象，窄宽度下仍可操作。
+- [ ] Project/Thread 排序不改变 selection、Pin、active Turn、menus、focus recovery 或 archived semantics。
 - [ ] Thread row 只显示 local Provider logo + model name；unknown provider 使用 generic fallback。
 - [ ] Horizontal ellipsis 只在 hover、focus-within 或 menu open 时显示；selection 不让它常驻。
 - [ ] Thread menu 提供 Rename、Archive/Unarchive、Pin/Unpin；本阶段不伪造未定义的 Delete，但不把未来 Delete 写成永久禁令。

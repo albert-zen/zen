@@ -16,6 +16,7 @@ import type {
 import { ipcChannels } from "./ipc.js";
 import type {
   PublicHostSettings,
+  ZenXSidebarOrder,
   ZenXSettingsUpdate,
 } from "../main/host-profile.js";
 import type {
@@ -141,6 +142,10 @@ contextBridge.exposeInMainWorld("zenx", {
       threadIds: readonly string[],
     ): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.pinnedThreadsSet, threadIds),
+    setSidebarOrder: async (
+      order: ZenXSidebarOrder,
+    ): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(ipcChannels.sidebarOrderSet, order),
     getDirectoryBrowser: async (): Promise<DirectoryBrowserSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.directorySnapshot),
     listDirectory: async (directory: string): Promise<DirectoryListing> =>

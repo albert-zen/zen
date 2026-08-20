@@ -432,6 +432,43 @@ a:focus-visible {
   color: var(--text-2);
   background: rgb(255 255 255 / 2.5%);
 }
+.reorder-handle {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  cursor: grab;
+  transition:
+    opacity 140ms ease,
+    color 140ms ease,
+    background 140ms ease;
+}
+.reorder-handle:active {
+  cursor: grabbing;
+}
+.project-reorder-handle {
+  width: 26px;
+  height: 30px;
+  flex: 0 0 26px;
+}
+.project-header:hover > .project-reorder-handle,
+.project-header:focus-within > .project-reorder-handle,
+.project-reorder-handle:focus-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+.reorder-handle:hover,
+.reorder-handle:focus-visible {
+  color: var(--text);
+  background: var(--surface-3);
+}
 .project-toggle {
   min-width: 0;
   min-height: 34px;
@@ -524,6 +561,24 @@ a:focus-visible {
 .thread-row-shell {
   position: relative;
   min-width: 0;
+}
+.thread-row-shell.reorderable .thread-row {
+  padding-left: 44px;
+}
+.thread-reorder-handle {
+  position: absolute;
+  z-index: 2;
+  top: 14px;
+  left: 4px;
+  width: 34px;
+  height: 36px;
+}
+.thread-row-shell:hover .thread-reorder-handle,
+.thread-row-shell:focus-within .thread-reorder-handle,
+.thread-reorder-handle:focus-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 .thread-menu-trigger {
   position: absolute;
@@ -2775,6 +2830,8 @@ a:focus-visible {
     min-height: 44px;
   }
   .thread-menu-trigger,
+  .thread-reorder-handle,
+  .project-reorder-handle,
   .thread-item-menu > button {
     min-width: 44px;
     min-height: 44px;
