@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { Resvg } from "@resvg/resvg-js";
 import { board04TracePaths } from "./zenx-board04-trace-data.mjs";
 
 const run = promisify(execFile);
@@ -21,6 +22,7 @@ const iconAssets = path.join(zenxRoot, "resources", "icons");
 const docsAssets = path.join(zenxRoot, "docs", "assets", "brand");
 const expectedIcnsSha256 =
   "092be1243492780cd0a75882434e4f269c00430c1f38eb29c70421b5569701b2";
+const windowsIconSizes = [16, 24, 32, 48, 64, 128, 256];
 
 export const geometryVersion = "zenx-board04-mechanical-v1";
 export const wordmarkPaths = [
@@ -101,21 +103,22 @@ if (process.argv.includes("--check")) {
 }
 
 async function writeGeneratedAssets() {
-  if (process.platform !== "darwin") {
-    throw new Error(
-      "Generating the ZenX ICNS requires macOS sips and iconutil",
-    );
-  }
   await Promise.all(
     [...generatedTextAssets].map(async ([target, source]) => {
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, source);
     }),
   );
-  const icns = await generateNativeIcns(appIconSvg());
-  await writeFile(path.join(iconAssets, "zenx.icns"), icns);
+  const ico = generateWindowsIco(appIconSvg());
+  await writeFile(path.join(iconAssets, "zenx.ico"), ico);
+  let nativeIconMessage = "kept the checked-in macOS icon";
+  if (process.platform === "darwin") {
+    const icns = await generateNativeIcns(appIconSvg());
+    await writeFile(path.join(iconAssets, "zenx.icns"), icns);
+    nativeIconMessage = `generated ${icns.length} byte macOS icon`;
+  }
   console.log(
-    `Generated ${generatedTextAssets.size} ZenX SVG assets and ${icns.length} byte macOS icon`,
+    `Generated ${generatedTextAssets.size} ZenX SVG assets, ${ico.length} byte Windows icon, and ${nativeIconMessage}`,
   );
 }
 
@@ -132,12 +135,51 @@ async function checkGeneratedAssets() {
       ? actualIcon.equals(await generateNativeIcns(appIconSvg()))
       : sha256(actualIcon) === expectedIcnsSha256;
   if (!iconMatches) mismatches.push(path.relative(zenxRoot, iconTarget));
+  const windowsIconTarget = path.join(iconAssets, "zenx.ico");
+  const actualWindowsIcon = await readFile(windowsIconTarget).catch(() =>
+    Buffer.alloc(0),
+  );
+  if (!actualWindowsIcon.equals(generateWindowsIco(appIconSvg()))) {
+    mismatches.push(path.relative(zenxRoot, windowsIconTarget));
+  }
   if (mismatches.length > 0) {
     throw new Error(
       `Generated brand assets are stale: ${mismatches.join(", ")}`,
     );
   }
   console.log("ZenX generated brand assets are current");
+}
+
+function generateWindowsIco(source) {
+  const images = windowsIconSizes.map((size) =>
+    Buffer.from(
+      new Resvg(source, {
+        fitTo: { mode: "width", value: size },
+      })
+        .render()
+        .asPng(),
+    ),
+  );
+  const directorySize = 6 + images.length * 16;
+  const header = Buffer.alloc(directorySize);
+  header.writeUInt16LE(0, 0);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(images.length, 4);
+  let offset = directorySize;
+  for (const [index, image] of images.entries()) {
+    const entry = 6 + index * 16;
+    const size = windowsIconSizes[index];
+    header[entry] = size === 256 ? 0 : size;
+    header[entry + 1] = size === 256 ? 0 : size;
+    header[entry + 2] = 0;
+    header[entry + 3] = 0;
+    header.writeUInt16LE(1, entry + 4);
+    header.writeUInt16LE(32, entry + 6);
+    header.writeUInt32LE(image.length, entry + 8);
+    header.writeUInt32LE(offset, entry + 12);
+    offset += image.length;
+  }
+  return Buffer.concat([header, ...images]);
 }
 
 async function generateNativeIcns(source) {

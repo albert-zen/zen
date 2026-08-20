@@ -117,8 +117,12 @@ async function packageZenX(arguments_) {
 }
 
 export function applicationIconForPlatform(platform, target = "app") {
-  if (platform !== "darwin" || target !== "app") return undefined;
-  return path.join(zenx, "resources", "icons", "zenx.icns");
+  if (target !== "app") return undefined;
+  if (platform === "darwin")
+    return path.join(zenx, "resources", "icons", "zenx.icns");
+  if (platform === "win32")
+    return path.join(zenx, "resources", "icons", "zenx.ico");
+  return undefined;
 }
 
 /** Build only into the current packaging run before anything snapshots it. */

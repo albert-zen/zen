@@ -134,6 +134,37 @@ test("the checked-in macOS icon is a complete ICNS generated from the flat SVG s
   }
 });
 
+test("the checked-in Windows icon is a complete multi-resolution ICO", async () => {
+  const icon = await readFile(new URL("zenx.ico", iconRoot));
+  assert.equal(icon.readUInt16LE(0), 0);
+  assert.equal(icon.readUInt16LE(2), 1);
+  const count = icon.readUInt16LE(4);
+  assert.equal(count, 7);
+
+  const sizes = [];
+  for (let index = 0; index < count; index += 1) {
+    const entry = 6 + index * 16;
+    const width = icon[entry] === 0 ? 256 : icon[entry];
+    const height = icon[entry + 1] === 0 ? 256 : icon[entry + 1];
+    assert.equal(height, width);
+    assert.equal(icon[entry + 2], 0);
+    assert.equal(icon[entry + 3], 0);
+    assert.equal(icon.readUInt16LE(entry + 4), 1);
+    assert.equal(icon.readUInt16LE(entry + 6), 32);
+    const length = icon.readUInt32LE(entry + 8);
+    const offset = icon.readUInt32LE(entry + 12);
+    const png = icon.subarray(offset, offset + length);
+    assert.deepEqual(
+      png.subarray(0, 8),
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    );
+    assert.equal(png.readUInt32BE(16), width);
+    assert.equal(png.readUInt32BE(20), height);
+    sizes.push(width);
+  }
+  assert.deepEqual(sizes, [16, 24, 32, 48, 64, 128, 256]);
+});
+
 test("the user-created logo concept board remains byte-identical", async () => {
   const digest = createHash("sha256")
     .update(await readFile(conceptBoard))
