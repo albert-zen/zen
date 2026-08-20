@@ -120,7 +120,7 @@ test(
   "Windows identity adapter rejects a stale identity and terminates the matching handle",
   { skip: process.platform !== "win32" },
   async () => {
-    const { child, identity } = await spawnWindowsIdentityFixture();
+    const { child, identity, settled } = await spawnWindowsIdentityFixture();
     try {
       const stale = await realWindowsProcessOperations.terminateProcessIdentity(
         {
@@ -137,7 +137,7 @@ test(
       );
       await waitForProcessExit(identity.pid);
     } finally {
-      killFixtureProcess(identity.pid);
+      await stopWindowsIdentityFixture(child, settled);
     }
   },
 );
@@ -146,7 +146,7 @@ test(
   "Windows identity adapter accepts exit after matching the open handle",
   { skip: process.platform !== "win32" },
   async () => {
-    const { child, identity } = await spawnWindowsIdentityFixture();
+    const { child, identity, settled } = await spawnWindowsIdentityFixture();
     try {
       const result = await terminateWindowsProcessIdentity(
         identity,
@@ -163,7 +163,7 @@ test(
       assert.deepEqual(result, { ok: true, error: "" });
       await waitForProcessExit(identity.pid);
     } finally {
-      killFixtureProcess(identity.pid);
+      await stopWindowsIdentityFixture(child, settled);
     }
   },
 );
@@ -626,70 +626,95 @@ function killFixtureProcess(pid: number): void {
 async function spawnWindowsIdentityFixture(): Promise<{
   child: ReturnType<typeof spawn>;
   identity: WindowsProcessIdentity & { startTime: string };
+  settled: Promise<void>;
 }> {
-  const script = [
-    "$start = [System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().Ticks",
-    "$start -= $start % 10",
-    '[Console]::Out.WriteLine("$PID|$start")',
-    "[Console]::Out.Flush()",
-    "while ($true) { Start-Sleep -Seconds 1 }",
-  ].join("; ");
   const child = spawn(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    { stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+    process.execPath,
+    [
+      "-e",
+      "process.stdout.write(`${process.pid}|ready\\n`); setInterval(() => undefined, 1000)",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
   );
   assert(child.pid !== undefined);
   assert(child.stdout !== null);
-  const line = await new Promise<string>((resolve, reject) => {
-    let output = "";
-    let settled = false;
-    const finish = (value: string | Error): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.stdout?.removeListener("data", onData);
-      child.removeListener("error", onError);
-      child.removeListener("exit", onExit);
-      if (value instanceof Error) {
-        killFixtureProcess(child.pid!);
-        reject(value);
-      } else resolve(value);
-    };
-    const onData = (chunk: string): void => {
-      output += chunk;
-      const newline = output.indexOf("\n");
-      if (newline >= 0) finish(output.slice(0, newline).trim());
-    };
-    const onError = (error: Error): void => finish(error);
-    const onExit = (code: number | null): void =>
-      finish(
-        new Error(
-          `Windows identity fixture exited with code ${String(code)} before reporting its identity`,
-        ),
-      );
-    const timer = setTimeout(
-      () => finish(new Error("Windows identity fixture did not become ready")),
-      10_000,
-    );
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", onData);
-    child.once("error", onError);
-    child.once("exit", onExit);
+  assert(child.stderr !== null);
+  const settled = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+    child.once("error", () => resolve());
   });
-  const match = line.match(/^(\d+)\|(\d+)$/u);
-  if (match === null || Number(match[1]) !== child.pid) {
-    killFixtureProcess(child.pid);
-    throw new Error("Windows identity fixture reported an invalid identity");
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    if (stderr.length < 8_192) stderr += chunk;
+  });
+  try {
+    const line = await new Promise<string>((resolve, reject) => {
+      let output = "";
+      let settled = false;
+      const finish = (value: string | Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        child.stdout?.removeListener("data", onData);
+        child.removeListener("error", onError);
+        child.removeListener("exit", onExit);
+        if (value instanceof Error) reject(value);
+        else resolve(value);
+      };
+      const onData = (chunk: string): void => {
+        output += chunk;
+        const newline = output.indexOf("\n");
+        if (newline >= 0) finish(output.slice(0, newline).trim());
+      };
+      const onError = (error: Error): void => finish(error);
+      const onExit = (code: number | null): void =>
+        finish(
+          new Error(
+            `Windows identity fixture PID ${String(child.pid)} exited with code ${String(code)} and signal ${String(child.signalCode)} before reporting ready; stdout=${JSON.stringify(output)}; stderr=${JSON.stringify(stderr)}`,
+          ),
+        );
+      const timer = setTimeout(
+        () =>
+          finish(
+            new Error(
+              `Windows identity fixture PID ${String(child.pid)} did not become ready; exitCode=${String(child.exitCode)}; signal=${String(child.signalCode)}; stdout=${JSON.stringify(output)}; stderr=${JSON.stringify(stderr)}`,
+            ),
+          ),
+        10_000,
+      );
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", onData);
+      child.once("error", onError);
+      child.once("exit", onExit);
+    });
+    const match = line.match(/^(\d+)\|ready$/u);
+    if (match === null || Number(match[1]) !== child.pid)
+      throw new Error(
+        `Windows identity fixture PID ${String(child.pid)} reported invalid readiness ${JSON.stringify(line)}`,
+      );
+    const table = await realWindowsProcessOperations.captureProcessTable();
+    const identity = table.entries.find((entry) => entry.pid === child.pid);
+    if (identity?.startTime === null || identity?.startTime === undefined)
+      throw new Error(
+        `Windows identity fixture PID ${String(child.pid)} was ready but had no process-table identity`,
+      );
+    return {
+      child,
+      identity: { ...identity, startTime: identity.startTime },
+      settled,
+    };
+  } catch (error) {
+    await stopWindowsIdentityFixture(child, settled);
+    throw error;
   }
-  return {
-    child,
-    identity: {
-      pid: child.pid,
-      parentPid: process.pid,
-      processGroupId: null,
-      sessionId: null,
-      startTime: match[2]!,
-    },
-  };
+}
+
+async function stopWindowsIdentityFixture(
+  child: ReturnType<typeof spawn>,
+  settled: Promise<void>,
+): Promise<void> {
+  if (child.exitCode === null && child.signalCode === null)
+    child.kill("SIGKILL");
+  await settled;
 }

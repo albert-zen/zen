@@ -9,6 +9,10 @@ import { observeCompletedUserMessageTitle } from "../src/main/thread-title-notif
 import { ZenXThreadTitleStore } from "../src/main/thread-title-store.js";
 import type { ThreadTitleInference } from "../src/main/thread-title-types.js";
 import type { ServerNotificationParams } from "../src/protocol-client/index.js";
+import {
+  waitForTitleStage,
+  waitForTitleStatus,
+} from "./fixtures/thread-title-state.js";
 
 test("an externally-originated completed userMessage starts staged naming once", async () => {
   await withCoordinator(async ({ titles, inference }) => {
@@ -31,7 +35,12 @@ test("an externally-originated completed userMessage starts staged naming once",
     );
     assert.equal(inference.calls, 1);
     inference.resolve("Cross-client release workflow");
-    await waitForStatus(titles, "thread-external", "generated");
+    await waitForTitleStatus(
+      titles,
+      "thread-external",
+      "generated",
+      "external user-message title generation",
+    );
   });
 });
 
@@ -54,7 +63,7 @@ test("a canonical duplicate cannot restart generation or overwrite a pre-observe
     assert.equal(inference.calls, 1);
     assert.equal(titles.snapshot()["thread-preobserved"]?.status, "manual");
     inference.resolve("Late semantic title");
-    await tick();
+    await titles.stop();
     assert.equal(
       titles.snapshot()["thread-preobserved"]?.title,
       "Manual authority",
@@ -70,7 +79,7 @@ test("an App Server rename becomes authoritative over pending generation", async
       "Agent-managed name",
     );
     inference.resolve("Late generated name");
-    await tick();
+    await titles.stop();
     assert.deepEqual(titles.snapshot()["thread-agent-renamed"], {
       threadId: "thread-agent-renamed",
       title: "Agent-managed name",
@@ -133,6 +142,7 @@ async function withCoordinator(
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-title-notification-"),
   );
+  let titlesToClose: ZenXThreadTitleCoordinator | undefined;
   try {
     const inference = new ControlledInference();
     const titles = new ZenXThreadTitleCoordinator({
@@ -141,9 +151,11 @@ async function withCoordinator(
       titleModel: () => "gpt-5.6-luna",
       setNativeName: async () => undefined,
     });
+    titlesToClose = titles;
     await titles.initialize();
     await run({ titles, inference });
   } finally {
+    await titlesToClose?.close();
     await rm(directory, { recursive: true, force: true });
   }
 }
@@ -154,11 +166,19 @@ async function assertRenameWinsGenerationRace(
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-title-authority-race-"),
   );
+  let titlesToClose: ZenXThreadTitleCoordinator | undefined;
   try {
     const inference = new ControlledInference();
     let nativeName = "";
     let synchronization: Promise<unknown> | undefined;
     const synchronizations: Promise<unknown>[] = [];
+    const synchronizationStarted = signal();
+    const secondSynchronizationStarted = signal();
+    const trackSynchronization = (operation: Promise<unknown>): void => {
+      synchronizations.push(operation);
+      synchronizationStarted.resolve();
+      if (synchronizations.length === 2) secondSynchronizationStarted.resolve();
+    };
     let injected = false;
     let titles!: ZenXThreadTitleCoordinator;
     titles = new ZenXThreadTitleCoordinator({
@@ -177,7 +197,7 @@ async function assertRenameWinsGenerationRace(
             "thread-race",
             "Agent authority",
           );
-          synchronizations.push(synchronization);
+          trackSynchronization(synchronization);
           await synchronization;
         }
         nativeName = title;
@@ -185,10 +205,11 @@ async function assertRenameWinsGenerationRace(
           "thread-race",
           title,
         );
-        synchronizations.push(mirrorNotification);
+        trackSynchronization(mirrorNotification);
         await mirrorNotification;
       },
     });
+    titlesToClose = titles;
     if (phase === "after-generated-commit") {
       titles.onChange((snapshot) => {
         if (snapshot["thread-race"]?.status !== "generated" || injected) return;
@@ -198,23 +219,31 @@ async function assertRenameWinsGenerationRace(
           "thread-race",
           "Agent authority",
         );
-        synchronizations.push(synchronization);
+        trackSynchronization(synchronization);
       });
     }
     await titles.initialize();
     await titles.observe("thread-race", "Original title source");
     inference.resolve("Late generated");
-    for (
-      let attempt = 0;
-      attempt < 5_000 && synchronization === undefined;
-      attempt += 1
-    ) {
-      await tick();
-    }
+    await waitForTitleStage(
+      synchronizationStarted.promise,
+      `${phase} authority synchronization start`,
+      () =>
+        `tracked synchronizations=${String(
+          synchronizations.length,
+        )}; projection=${JSON.stringify(titles.snapshot()["thread-race"] ?? null)}`,
+    );
     assert.notEqual(synchronization, undefined);
     await synchronization;
     if (phase === "during-generated-mirror")
-      await until(() => synchronizations.length === 2);
+      await waitForTitleStage(
+        secondSynchronizationStarted.promise,
+        "generated mirror reconciliation start",
+        () =>
+          `tracked synchronizations=${String(synchronizations.length)}; projection=${JSON.stringify(
+            titles.snapshot()["thread-race"] ?? null,
+          )}`,
+      );
     for (let index = 0; index < synchronizations.length; index += 1)
       await synchronizations[index];
     assert.deepEqual(titles.snapshot()["thread-race"], {
@@ -233,49 +262,69 @@ async function assertRenameWinsGenerationRace(
         ? "Late generated"
         : "Agent authority",
     );
-    await titles.stop();
   } finally {
+    await titlesToClose?.close();
     await rm(directory, { recursive: true, force: true });
   }
 }
 
 class ControlledInference implements ThreadTitleInference {
   calls = 0;
-  #resolve: ((value: string) => void) | undefined;
+  #pending:
+    | {
+        resolve(value: string): void;
+        reject(error: Error): void;
+      }
+    | undefined;
 
-  async generate(): Promise<string> {
+  async generate(
+    _input: string,
+    _model: string,
+    signal: AbortSignal,
+  ): Promise<string> {
     this.calls += 1;
-    return await new Promise<string>((resolve) => {
-      this.#resolve = resolve;
+    return await new Promise<string>((resolve, reject) => {
+      const abort = (): void => pending.reject(abortError(signal));
+      const pending = {
+        resolve: (value: string): void => {
+          signal.removeEventListener("abort", abort);
+          resolve(value);
+        },
+        reject: (error: Error): void => {
+          signal.removeEventListener("abort", abort);
+          reject(error);
+        },
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+      else this.#pending = pending;
     });
   }
 
   resolve(value: string): void {
-    this.#resolve?.(value);
-    this.#resolve = undefined;
+    this.#pending?.resolve(value);
+    this.#pending = undefined;
   }
 }
 
-async function waitForStatus(
-  titles: ZenXThreadTitleCoordinator,
-  threadId: string,
-  status: string,
-): Promise<void> {
-  for (let attempt = 0; attempt < 5_000; attempt += 1) {
-    if (titles.snapshot()[threadId]?.status === status) return;
-    await tick();
-  }
-  assert.fail(`Timed out waiting for title status ${status}`);
+function signal(): { promise: Promise<void>; resolve(): void } {
+  let resolvePromise!: () => void;
+  let resolved = false;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: () => {
+      if (resolved) return;
+      resolved = true;
+      resolvePromise();
+    },
+  };
 }
 
-async function until(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 5_000; attempt += 1) {
-    if (predicate()) return;
-    await tick();
-  }
-  assert.fail("Timed out waiting for condition");
-}
-
-async function tick(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Title generation aborted", "AbortError");
 }
