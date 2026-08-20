@@ -20,8 +20,10 @@
 - **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS
   原生 Thread cwd 按最近存在祖先的异步 realpath 归一为 UI 和 Agent self-control 共用的
   Project 读模型；Windows 路径折叠大小写，POSIX 路径保留大小写，配置保留用户选择的展示路径，
-  realpath 不可用时退回 lexical absolute path，最近使用项由同一 host profile 持有且失效时不隐式回退，
-  它不拥有 Project、Thread 或 journal 状态。
+  realpath 不可用时退回 lexical absolute path，配置刷新按 latest-wins 发布且不长期缓存 filesystem identity，
+  每次投影、筛选、创建或 workspace mutation 从一份不可变的 canonicalization snapshot 派生，mutation
+  在既有队列内有界重验；最近使用项由同一 host profile 持有且失效时不隐式回退，
+  它不拥有 Project、Thread、journal 或 durable coordination 状态。
 - **ZenXDirectoryBrowser** — ZenX main 把 home、documents、Windows drive / POSIX root 与
   canonical 只读目录枚举投影给内部 picker；symlink/junction 只解析为目录目标，不修改文件系统。
 - **ZenXApplicationMenuPolicy** — ZenX 在 Windows/Linux 移除 Electron 默认菜单，在 macOS
