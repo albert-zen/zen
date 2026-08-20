@@ -1,6 +1,23 @@
 import { defineConfig } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
+import type { Plugin } from "vite";
+
+const productionStylePolicy = "style-src 'self'";
+const developmentStylePolicy = "style-src 'self' 'unsafe-inline'";
+
+function allowViteDevelopmentStyles(html: string): string {
+  if (!html.includes(productionStylePolicy)) {
+    throw new Error("ZenX renderer CSP is missing its production style policy");
+  }
+  return html.replace(productionStylePolicy, developmentStylePolicy);
+}
+
+const viteDevelopmentCsp: Plugin = {
+  name: "zenx-vite-development-csp",
+  apply: "serve",
+  transformIndexHtml: allowViteDevelopmentStyles,
+};
 
 export default defineConfig({
   main: {
@@ -34,6 +51,6 @@ export default defineConfig({
     },
   },
   renderer: {
-    plugins: [react()],
+    plugins: [viteDevelopmentCsp, react()],
   },
 });
