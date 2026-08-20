@@ -10,6 +10,7 @@ import {
   type PublicHostSettings,
   type ZenXHostProfile,
   ZenXHostProfileStore,
+  type ZenXSettingsUpdate,
   validateHostProfile,
 } from "./host-profile.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
@@ -42,6 +43,7 @@ export class ZenXSettingsService {
     userDataDirectory: string;
     zenDataDirectory: string;
     vault: ZenXCredentialVault;
+    profileStore?: ZenXHostProfileStore;
     subscription?: Pick<
       OpenAiSubscriptionAuthProfile,
       "login" | "logout" | "status"
@@ -52,9 +54,11 @@ export class ZenXSettingsService {
       options.userDataDirectory,
       "openai-subscription-auth.json",
     );
-    this.#profileStore = new ZenXHostProfileStore(
-      path.join(options.userDataDirectory, "host-profile.json"),
-    );
+    this.#profileStore =
+      options.profileStore ??
+      new ZenXHostProfileStore(
+        path.join(options.userDataDirectory, "host-profile.json"),
+      );
     this.#subscription =
       options.subscription ??
       new OpenAiSubscriptionAuthProfile(this.#profilePath);
@@ -62,19 +66,25 @@ export class ZenXSettingsService {
   }
 
   async initialize(environment: NodeJS.ProcessEnv): Promise<void> {
-    const existing = await this.#profileStore.readOptional();
-    if (existing !== undefined) {
-      this.#profile = await normalizeCanonicalWorkspaces(existing);
-      return;
-    }
-    const configureWorkspace = environment.ZENX_CWD !== undefined;
-    const legacy = resolveZenXHostConfig(environment);
-    const fallback = profileFromLegacy(legacy, configureWorkspace);
-    if (legacy.provider.type === "openai-compatible") {
-      await this.#vault.writeApiKey(legacy.provider.apiKey);
-    }
-    this.#profile = await normalizeCanonicalWorkspaces(fallback);
-    await this.#profileStore.write(this.#profile);
+    await this.#queueProfileOperation(async () => {
+      const existing = await this.#profileStore.readOptional();
+      if (existing !== undefined) {
+        this.#profile = await normalizeCanonicalWorkspaces(existing);
+        return;
+      }
+      const configureWorkspace = environment.ZENX_CWD !== undefined;
+      const legacy = resolveZenXHostConfig(environment);
+      const fallback = await normalizeCanonicalWorkspaces(
+        profileFromLegacy(legacy, configureWorkspace),
+      );
+      await this.#persistProfile(
+        fallback,
+        legacy.provider.type === "openai-compatible"
+          ? legacy.provider.apiKey
+          : undefined,
+      );
+      this.#profile = fallback;
+    });
   }
 
   async publicSettings(): Promise<PublicHostSettings> {
@@ -134,21 +144,28 @@ export class ZenXSettingsService {
     };
   }
 
-  async save(profile: ZenXHostProfile, apiKey?: string): Promise<void> {
-    const structurallyValidated = validateHostProfile(profile);
+  async save(settings: ZenXSettingsUpdate, apiKey?: string): Promise<void> {
     await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
       const validated = await normalizeCanonicalWorkspaces(
-        structurallyValidated,
+        validateHostProfile({
+          ...current,
+          onboardingComplete: settings.onboardingComplete,
+          provider: settings.provider,
+          defaultModel: settings.defaultModel,
+          titleModel: settings.titleModel,
+          models: settings.models,
+          approvalPolicy: settings.approvalPolicy,
+        }),
       );
-      if (apiKey !== undefined && apiKey.length > 0)
-        await this.#vault.writeApiKey(apiKey);
       if (
         validated.provider.type === "openai-compatible" &&
+        !(apiKey !== undefined && apiKey.length > 0) &&
         !(await this.#vault.hasApiKey())
       ) {
         throw new Error("Add an API key before activating this provider");
       }
-      await this.#profileStore.write(validated);
+      await this.#persistProfile(validated, apiKey);
       this.#profile = validated;
     });
   }
@@ -323,6 +340,32 @@ export class ZenXSettingsService {
       () => undefined,
     );
     return result;
+  }
+
+  async #persistProfile(
+    profile: ZenXHostProfile,
+    apiKey?: string,
+  ): Promise<void> {
+    const rotatesCredential = apiKey !== undefined && apiKey.length > 0;
+    const previousApiKey = rotatesCredential
+      ? await this.#vault.readApiKey()
+      : undefined;
+    if (rotatesCredential) await this.#vault.writeApiKey(apiKey);
+    try {
+      await this.#profileStore.write(profile);
+    } catch (persistenceError) {
+      if (!rotatesCredential) throw persistenceError;
+      try {
+        if (previousApiKey === undefined) await this.#vault.clearApiKey();
+        else await this.#vault.writeApiKey(previousApiKey);
+      } catch (compensationError) {
+        throw new AggregateError(
+          [persistenceError, compensationError],
+          "ZenX settings were partially saved: host profile persistence failed and the previous credential could not be restored",
+        );
+      }
+      throw persistenceError;
+    }
   }
 }
 

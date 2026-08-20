@@ -14,6 +14,7 @@ import type {
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  ZenXSettingsUpdate,
 } from "../../main/host-profile.js";
 import type {
   CreateRoomInput,
@@ -81,7 +82,7 @@ declare global {
       settings: {
         get(): Promise<PublicHostSettings>;
         save(
-          profile: ZenXHostProfile,
+          settings: ZenXSettingsUpdate,
           apiKey?: string,
         ): Promise<PublicHostSettings>;
         addWorkspace(workspace: string): Promise<PublicHostSettings>;

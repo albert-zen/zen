@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -42,6 +42,49 @@ test("refuses to persist a secret when system encryption is unavailable", async 
     await assert.rejects(
       vault.writeApiKey("secret"),
       /encryption is unavailable/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("uses independent staging files for concurrent credential writes and cleans them", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-vault-concurrent-"),
+  );
+  const file = path.join(directory, "credentials.vault");
+  try {
+    const vault = new ZenXCredentialVault(file, encryption);
+    await Promise.all([
+      vault.writeApiKey("first-secret"),
+      vault.writeApiKey("second-secret"),
+    ]);
+    assert.ok(
+      ["first-secret", "second-secret"].includes(
+        (await vault.readApiKey()) ?? "",
+      ),
+    );
+    assert.deepEqual(
+      (await readdir(directory)).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("cleans credential staging when atomic replacement fails", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-vault-cleanup-"),
+  );
+  const file = path.join(directory, "credentials.vault");
+  try {
+    await mkdir(file);
+    const vault = new ZenXCredentialVault(file, encryption);
+    await assert.rejects(vault.writeApiKey("secret"));
+    assert.deepEqual(
+      (await readdir(directory)).filter((entry) => entry.endsWith(".tmp")),
+      [],
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

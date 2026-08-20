@@ -27,6 +27,16 @@ export interface ZenXHostProfile {
   approvalPolicy: "always" | "never";
 }
 
+export type ZenXSettingsUpdate = Pick<
+  ZenXHostProfile,
+  | "onboardingComplete"
+  | "provider"
+  | "defaultModel"
+  | "titleModel"
+  | "models"
+  | "approvalPolicy"
+>;
+
 export interface PublicHostSettings {
   profile: ZenXHostProfile;
   hasApiKey: boolean;

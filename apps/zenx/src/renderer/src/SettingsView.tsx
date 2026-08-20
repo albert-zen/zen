@@ -82,7 +82,14 @@ export function SettingsView({
         .map((value) => value.trim())
         .filter(Boolean);
       const value = await window.zenx.settings.save(
-        { ...draft, onboardingComplete: true, models: modelList },
+        {
+          onboardingComplete: true,
+          provider: draft.provider,
+          defaultModel: draft.defaultModel,
+          titleModel: draft.titleModel,
+          models: modelList,
+          approvalPolicy: draft.approvalPolicy,
+        },
         apiKey.trim().length > 0 ? apiKey : undefined,
       );
       setSettings(value);
