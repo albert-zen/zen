@@ -774,8 +774,10 @@ function windowsIdentityPredates(
   return BigInt(identity.startTime) < BigInt(other.startTime);
 }
 
-async function terminateWindowsProcessIdentity(
+export async function terminateWindowsProcessIdentity(
   expected: WindowsProcessIdentity,
+  // Test-only handshake for the real adapter's exit-after-match fixture.
+  identityMatchedFixture?: () => void | Promise<void>,
 ): Promise<TerminationResult> {
   if (expected.startTime === null || !/^\d+$/u.test(expected.startTime))
     return {
@@ -801,7 +803,7 @@ public static class ZenXExpectedProcessTermination
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool TerminateProcess(IntPtr process, uint exitCode);
 
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", SetLastError = true)]
     public static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -810,7 +812,19 @@ public static class ZenXExpectedProcessTermination
 }
 '@
 
-$handle = [ZenXExpectedProcessTermination]::OpenProcess(0x1001, $false, ${String(expected.pid)})
+function Test-ProcessExited([IntPtr]$process, [string]$context) {
+  $wait = [ZenXExpectedProcessTermination]::WaitForSingleObject($process, 0)
+  if ($wait -eq 0) { return $true }
+  if ($wait -eq 258) { return $false }
+  if ($wait -eq [UInt32]::MaxValue) {
+    $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    throw "WaitForSingleObject ($context) failed with Win32 error $code"
+  }
+  throw "WaitForSingleObject ($context) returned unexpected status $wait"
+}
+
+# PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+$handle = [ZenXExpectedProcessTermination]::OpenProcess(0x101001, $false, ${String(expected.pid)})
 if ($handle -eq [IntPtr]::Zero) {
   $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
   if ($code -eq 87 -or $code -eq 1168) { exit 3 }
@@ -833,10 +847,19 @@ try {
   $actualStartTime -= $actualStartTime % 10
   if ($actualStartTime -eq $expectedStartTime) {
     $matched = $true
-    if ([ZenXExpectedProcessTermination]::WaitForSingleObject($handle, 0) -ne 0) {
+${
+  identityMatchedFixture === undefined
+    ? ""
+    : `    [Console]::Out.WriteLine('ZENX_IDENTITY_MATCHED')
+    [Console]::Out.Flush()
+    if ([Console]::In.ReadLine() -ne 'continue') {
+      throw "identity-match fixture did not continue"
+    }
+`
+}    if (!(Test-ProcessExited $handle 'before termination')) {
       if (![ZenXExpectedProcessTermination]::TerminateProcess($handle, 1)) {
         $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        if ([ZenXExpectedProcessTermination]::WaitForSingleObject($handle, 0) -ne 0) {
+        if (!(Test-ProcessExited $handle 'after TerminateProcess failure')) {
           throw "TerminateProcess failed with Win32 error $code"
         }
       }
@@ -853,6 +876,8 @@ if (!$matched) { exit 3 }
     let timer: ReturnType<typeof setTimeout> | undefined;
     let killer: ReturnType<typeof spawn> | undefined;
     let stderr = "";
+    let stdout = "";
+    let identityHookStarted = false;
     const finish = (value: TerminationResult): void => {
       if (settled) return;
       settled = true;
@@ -863,12 +888,41 @@ if (!$matched) { exit 3 }
       killer = spawn(
         "powershell.exe",
         ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
-        { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] },
+        {
+          windowsHide: true,
+          stdio:
+            identityMatchedFixture === undefined
+              ? ["ignore", "ignore", "pipe"]
+              : ["pipe", "pipe", "pipe"],
+        },
       );
       killer.stderr?.setEncoding("utf8");
       killer.stderr?.on("data", (chunk: string) => {
         if (stderr.length < MAX_PROGRAM_STDERR_BYTES) stderr += chunk;
       });
+      if (identityMatchedFixture !== undefined) {
+        killer.stdout?.setEncoding("utf8");
+        killer.stdout?.on("data", (chunk: string) => {
+          if (identityHookStarted) return;
+          stdout += chunk;
+          if (!stdout.includes("ZENX_IDENTITY_MATCHED")) return;
+          identityHookStarted = true;
+          void Promise.resolve()
+            .then(identityMatchedFixture)
+            .then(
+              () => {
+                if (!settled) killer?.stdin?.end("continue\n");
+              },
+              (error: unknown) => {
+                killer?.kill("SIGKILL");
+                finish({
+                  ok: false,
+                  error: `identity-match fixture failed: ${describeError(error)}`,
+                });
+              },
+            );
+        });
+      }
     } catch (error) {
       finish({ ok: false, error: describeError(error) });
       return;

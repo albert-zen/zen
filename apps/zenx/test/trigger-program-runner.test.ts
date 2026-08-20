@@ -15,6 +15,7 @@ import test from "node:test";
 import {
   ZenXTriggerProgramRunner,
   realWindowsProcessOperations,
+  terminateWindowsProcessIdentity,
   type TriggerProgramRunInput,
   verifyAndTerminateWindowsProcessTree,
   type WindowsProcessIdentity,
@@ -141,6 +142,40 @@ test(
         await realWindowsProcessOperations.terminateProcessIdentity(identity),
         { ok: true, error: "" },
       );
+      await waitForProcessExit(child.pid);
+    } finally {
+      killFixtureProcess(child.pid);
+    }
+  },
+);
+
+test(
+  "Windows identity adapter accepts exit after matching the open handle",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    assert(child.pid !== undefined);
+    try {
+      const table = await realWindowsProcessOperations.captureProcessTable();
+      const identity = table.entries.find((entry) => entry.pid === child.pid);
+      assert(identity?.startTime !== null && identity?.startTime !== undefined);
+
+      const result = await terminateWindowsProcessIdentity(
+        identity,
+        async () => {
+          const exited = new Promise<void>((resolve, reject) => {
+            child.once("exit", () => resolve());
+            child.once("error", reject);
+          });
+          assert.equal(child.kill("SIGKILL"), true);
+          await exited;
+        },
+      );
+
+      assert.deepEqual(result, { ok: true, error: "" });
       await waitForProcessExit(child.pid);
     } finally {
       killFixtureProcess(child.pid);
