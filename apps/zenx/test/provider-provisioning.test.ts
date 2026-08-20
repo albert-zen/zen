@@ -7,9 +7,94 @@ import assert from "node:assert/strict";
 
 import {
   bindBundledProviderLaunch,
+  hashBundledDirectoryAsset,
   resolveBundledProvider,
   verifyBundledProvider,
 } from "../src/main/capabilities/provider-provisioning.js";
+
+test("packaged provisioning verifies the complete browser payload directory", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-browser-payload-"));
+  try {
+    const providers = path.join(root, "providers");
+    const browser = path.join(
+      providers,
+      "playwright-browsers",
+      "chromium-1237",
+    );
+    const executable = path.join(browser, "chrome-fixture", "chrome");
+    const provider = path.join(providers, "provider.js");
+    await mkdir(path.dirname(executable), { recursive: true });
+    await writeFile(provider, "provider");
+    await writeFile(executable, "browser executable");
+    await writeFile(path.join(browser, "resource.pak"), "browser resource");
+    const sha = (value: Buffer) =>
+      createHash("sha256").update(value).digest("hex");
+    const manifest = {
+      schemaVersion: 1,
+      providers: {
+        "playwright-cli": {
+          executable: "provider.js",
+          version: "0.1.18",
+          sha256: sha(Buffer.from("provider")),
+          platforms: ["linux"],
+          assets: [
+            {
+              path: path.relative(providers, browser),
+              sha256: await hashBundledDirectoryAsset(browser),
+              kind: "directory",
+              ignoredPaths: ["DEPENDENCIES_VALIDATED"],
+            },
+            {
+              path: path.relative(providers, executable),
+              sha256: sha(Buffer.from("browser executable")),
+            },
+          ],
+        },
+      },
+    };
+    await writeFile(
+      path.join(providers, "manifest.json"),
+      `${JSON.stringify(manifest)}\n`,
+    );
+    const resolved = await resolveBundledProvider("playwright-cli", {
+      resourcesDirectory: root,
+      platform: "linux",
+    });
+    assert.equal(resolved.provider?.assets?.[0]?.kind, "directory");
+    assert.equal(resolved.provider?.assets?.length, 2);
+
+    await writeFile(path.join(browser, "DEPENDENCIES_VALIDATED"), "");
+    await verifyBundledProvider(resolved.provider!, {
+      resourcesDirectory: root,
+      platform: "linux",
+    });
+
+    await writeFile(path.join(browser, "resource.pak"), "tampered resource");
+    await assert.rejects(
+      verifyBundledProvider(resolved.provider!, {
+        resourcesDirectory: root,
+        platform: "linux",
+      }),
+      /asset integrity mismatch|changed/u,
+    );
+    await verifyBundledProvider(resolved.provider!, {
+      resourcesDirectory: root,
+      platform: "linux",
+      verifyDirectoryAssets: false,
+    });
+    await writeFile(executable, "tampered executable");
+    await assert.rejects(
+      verifyBundledProvider(resolved.provider!, {
+        resourcesDirectory: root,
+        platform: "linux",
+        verifyDirectoryAssets: false,
+      }),
+      /asset integrity mismatch|changed/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("packaged provider provisioning requires a pinned version and matching hash", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zenx-provider-bundle-"));

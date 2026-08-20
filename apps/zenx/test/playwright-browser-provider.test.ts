@@ -9,10 +9,13 @@ import { PlaywrightCliBrowserBackend } from "../src/main/capabilities/playwright
 
 test("Playwright provider runs an isolated JSON-only observe/action slice", async () => {
   const runner = new FakePlaywrightRunner();
+  const browserPath = "/opt/verified-playwright-browsers";
   const backend = new PlaywrightCliBrowserBackend({
     executable: "/opt/playwright-cli",
     runner,
     cwd: "/tmp/zenx-playwright",
+    browser: "chromium",
+    processEnvironment: { PLAYWRIGHT_BROWSERS_PATH: browserPath },
   });
   const opened = await backend.open("research", "https://example.com/");
   assert.equal(opened.title, "Fixture");
@@ -47,6 +50,16 @@ test("Playwright provider runs an isolated JSON-only observe/action slice", asyn
     /stale or unknown/u,
   );
   assert.ok(runner.calls.every((args) => args[0] === "--json"));
+  assert.deepEqual(runner.calls.find((args) => args[2] === "open")?.slice(-2), [
+    "--browser",
+    "chromium",
+  ]);
+  assert.equal(
+    runner.environments.find(
+      (_environment, index) => runner.calls[index]?.[2] === "open",
+    )?.PLAYWRIGHT_BROWSERS_PATH,
+    browserPath,
+  );
   assert.ok(runner.calls.some((args) => args.includes("snapshot")));
   assert.ok(runner.calls.some((args) => args.includes("click")));
 });
@@ -63,6 +76,28 @@ test("Playwright tab summaries redact URL credentials and values", async () => {
   assert.equal(opened.url, "https://example.com/private");
   const listed = await backend.listTabs("research");
   assert.equal(listed[0]?.url, "https://example.com/private");
+  await backend.close();
+});
+
+test("Playwright re-hashes the browser tree only before a browser launch", async () => {
+  const runner = new FakePlaywrightRunner();
+  let browserVerifications = 0;
+  let invocationVerifications = 0;
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+    verifyBrowserBeforeLaunch: async () => {
+      browserVerifications += 1;
+    },
+    verifyExecutable: async () => {
+      invocationVerifications += 1;
+    },
+  });
+  const opened = await backend.open("research", "https://example.com/");
+  await backend.inspect("research", opened.tabId);
+  assert.equal(browserVerifications, 1);
+  assert.ok(invocationVerifications > 0);
   await backend.close();
 });
 
@@ -168,6 +203,7 @@ test("Playwright rejects unbounded or multiply-current page state before reconci
 
 class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   readonly calls: string[][] = [];
+  readonly environments: Array<NodeJS.ProcessEnv | undefined> = [];
   url = "https://example.com/";
   tabKey = "__zenx_tab_fixture";
   documentKey = "document-fixture";
@@ -195,9 +231,10 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   async run(
     _executable: string,
     args: readonly string[],
-    _options: { timeoutMs: number },
+    options: { timeoutMs: number; environment?: NodeJS.ProcessEnv },
   ): Promise<ExternalProviderProcessResult> {
     this.calls.push([...args]);
+    this.environments.push(options.environment);
     const command = args[2];
     let response: Record<string, unknown> = {};
     if (command === "open") {
