@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import {
   ZenXTriggerProgramRunner,
+  realWindowsProcessOperations,
   type TriggerProgramRunInput,
   verifyAndTerminateWindowsProcessTree,
   type WindowsProcessIdentity,
@@ -32,15 +41,20 @@ test("Windows containment never reuses stale identity evidence for a second tree
   let table: WindowsProcessTableSnapshot = {
     entries: [root, descendant],
   };
-  const taskkills: Array<[number, boolean]> = [];
+  const terminatedIdentities: string[] = [];
 
   const result = await verifyAndTerminateWindowsProcessTree(
     root.pid,
     { root, descendants: [descendant] },
     {
       captureProcessTable: async () => structuredClone(table),
-      runTaskkill: async (pid, tree) => {
-        taskkills.push([pid, tree]);
+      terminateProcessIdentity: async (expected) => {
+        const actual = table.entries.find(
+          (entry) => entry.pid === expected.pid,
+        );
+        if (actual?.startTime !== expected.startTime)
+          return { ok: false, error: "process was not found" };
+        terminatedIdentities.push(expected.startTime ?? "unknown");
         table = {
           entries: [
             {
@@ -60,8 +74,79 @@ test("Windows containment never reuses stale identity evidence for a second tree
   );
 
   assert.deepEqual(result, { ok: true, error: "" });
-  assert.deepEqual(taskkills, [[root.pid, true]]);
+  assert.deepEqual(terminatedIdentities, [root.startTime]);
 });
+
+test("Windows containment does not kill a replacement created at termination dispatch", async () => {
+  const root: WindowsProcessIdentity = {
+    pid: 101,
+    parentPid: 1,
+    processGroupId: null,
+    sessionId: null,
+    startTime: "root-original",
+  };
+  const replacement: WindowsProcessIdentity = {
+    ...root,
+    startTime: "root-reused-at-dispatch",
+  };
+  let table: WindowsProcessTableSnapshot = { entries: [root] };
+  const killedIdentities: string[] = [];
+
+  const result = await verifyAndTerminateWindowsProcessTree(
+    root.pid,
+    { root, descendants: [] },
+    {
+      captureProcessTable: async () => structuredClone(table),
+      terminateProcessIdentity: async (expected) => {
+        table = { entries: [replacement] };
+        const actual = table.entries.find(
+          (entry) => entry.pid === expected.pid,
+        );
+        if (actual?.startTime !== expected.startTime)
+          return { ok: false, error: "process was not found" };
+        if (actual.startTime !== null) killedIdentities.push(actual.startTime);
+        return { ok: true, error: "" };
+      },
+    },
+    { quiescencePollMs: 0 },
+  );
+
+  assert.deepEqual(result, { ok: true, error: "" });
+  assert.deepEqual(killedIdentities, []);
+});
+
+test(
+  "Windows identity adapter rejects a stale identity and terminates the matching handle",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    assert(child.pid !== undefined);
+    try {
+      const table = await realWindowsProcessOperations.captureProcessTable();
+      const identity = table.entries.find((entry) => entry.pid === child.pid);
+      assert(identity?.startTime !== null && identity?.startTime !== undefined);
+      const stale = await realWindowsProcessOperations.terminateProcessIdentity(
+        {
+          ...identity,
+          startTime: String(BigInt(identity.startTime) + 1n),
+        },
+      );
+      assert.deepEqual(stale, { ok: false, error: "process was not found" });
+      process.kill(child.pid, 0);
+
+      assert.deepEqual(
+        await realWindowsProcessOperations.terminateProcessIdentity(identity),
+        { ok: true, error: "" },
+      );
+      await waitForProcessExit(child.pid);
+    } finally {
+      killFixtureProcess(child.pid);
+    }
+  },
+);
 
 test("Windows containment discovers and kills a descendant born during termination", async () => {
   const root: WindowsProcessIdentity = {
@@ -86,10 +171,12 @@ test("Windows containment discovers and kills a descendant born during terminati
     { root, descendants: [] },
     {
       captureProcessTable: async () => structuredClone(table),
-      runTaskkill: async (pid, tree) => {
-        taskkills.push([pid, tree]);
+      terminateProcessIdentity: async (expected) => {
+        taskkills.push([expected.pid, true]);
         table =
-          pid === root.pid ? { entries: [lateDescendant] } : { entries: [] };
+          expected.pid === root.pid
+            ? { entries: [lateDescendant] }
+            : { entries: [] };
         return { ok: true, error: "" };
       },
     },
@@ -122,8 +209,8 @@ test("Windows containment fails when the deadline finds a non-empty tree", async
         captures += 1;
         return { entries: [root] };
       },
-      runTaskkill: async (pid, tree) => {
-        taskkills.push([pid, tree]);
+      terminateProcessIdentity: async (expected) => {
+        taskkills.push([expected.pid, true]);
         return { ok: true, error: "" };
       },
     },
@@ -359,6 +446,77 @@ test("program runner contains descendants when the direct child exits", async ()
   }
 });
 
+test(
+  "program runner rejects an overflowed process-table snapshot instead of proving false quiescence",
+  { skip: process.platform === "win32" },
+  async () => {
+    const fixture = await installProcessTableFixture("overflow");
+    const ready = path.join(fixture.directory, "ready");
+    const program = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000);`;
+    const controller = new AbortController();
+    let pid = 0;
+    try {
+      const running = runner.run(
+        { command: process.execPath, args: ["-e", program] },
+        {
+          invocationId: "overflowed-process-table",
+          stage: "action",
+          event: {},
+        },
+        controller.signal,
+      );
+      pid = Number(await waitForFile(ready));
+      controller.abort(new Error("overflow fixture"));
+      const result = await running;
+      assert.equal(result.status, "failed");
+      assert.match(
+        result.error ?? "",
+        /process-table snapshot exceeded its 128 KiB bound/u,
+      );
+      assert.doesNotMatch(
+        result.error ?? "",
+        /bounded process-tree termination deadline expired/u,
+      );
+    } finally {
+      fixture.restorePath();
+      killFixtureProcess(pid);
+      await rm(fixture.directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "program runner preserves process discovery failure instead of reporting a deadline",
+  { skip: process.platform === "win32" },
+  async () => {
+    const fixture = await installProcessTableFixture("failure");
+    const ready = path.join(fixture.directory, "ready");
+    const program = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000);`;
+    const controller = new AbortController();
+    let pid = 0;
+    try {
+      const running = runner.run(
+        { command: process.execPath, args: ["-e", program] },
+        { invocationId: "failed-process-table", stage: "action", event: {} },
+        controller.signal,
+      );
+      pid = Number(await waitForFile(ready));
+      controller.abort(new Error("discovery failure fixture"));
+      const result = await running;
+      assert.equal(result.status, "failed");
+      assert.match(result.error ?? "", /ps exited with code 7/u);
+      assert.doesNotMatch(
+        result.error ?? "",
+        /bounded process-tree termination deadline expired/u,
+      );
+    } finally {
+      fixture.restorePath();
+      killFixtureProcess(pid);
+      await rm(fixture.directory, { recursive: true, force: true });
+    }
+  },
+);
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -388,4 +546,59 @@ async function waitForProcessExit(pid: number): Promise<void> {
     await delay(10);
   }
   throw new Error(`Fixture process ${String(pid)} did not exit`);
+}
+
+async function installProcessTableFixture(
+  mode: "overflow" | "failure",
+): Promise<{
+  directory: string;
+  restorePath(): void;
+}> {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-process-table-fixture-"),
+  );
+  const state = path.join(directory, "captured-once");
+  const ready = path.join(directory, "ready");
+  const overflowOutput = path.join(directory, "overflow-output");
+  const executable = path.join(directory, "ps");
+  const originalPath = process.env.PATH;
+  const source = `#!/bin/sh
+state=${JSON.stringify(state)}
+ready=${JSON.stringify(ready)}
+if [ ! -f "$state" ]; then
+  : > "$state"
+  IFS= read -r pid < "$ready"
+  case "$*" in
+    *sid=*) printf '%s 1 %s %s Thu Jan  1 00:00:00 1970\\n' "$pid" "$pid" "$pid" ;;
+    *) printf '%s 1 %s Thu Jan  1 00:00:00 1970\\n' "$pid" "$pid" ;;
+  esac
+  exit 0
+fi
+if [ ${JSON.stringify(mode)} = failure ]; then exit 7; fi
+exec /bin/cat ${JSON.stringify(overflowOutput)}
+`;
+  await writeFile(
+    overflowOutput,
+    "900000 1 900000 900000 Thu Jan  1 00:00:00 1970\n".repeat(8_000),
+    "utf8",
+  );
+  await writeFile(executable, source, "utf8");
+  await chmod(executable, 0o755);
+  process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
+  return {
+    directory,
+    restorePath: () => {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    },
+  };
+}
+
+function killFixtureProcess(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
 }
