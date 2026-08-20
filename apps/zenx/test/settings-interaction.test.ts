@@ -84,7 +84,7 @@ test("Archived threads is a Settings section with keyboard-reachable Unarchive",
     archivedTab.focus();
     await act(async () => archivedTab.click());
     assert.match(document.body.textContent ?? "", /Archived conversation/u);
-    assert.ok(document.querySelector(".provider-logo.deepseek svg"));
+    assert.ok(document.querySelector(".provider-logo.deepseek img"));
     const unarchive = exactButton("Unarchive");
     assert.ok(unarchive);
     assert.equal(unarchive.disabled, false);

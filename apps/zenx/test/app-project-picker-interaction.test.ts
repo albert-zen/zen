@@ -67,7 +67,7 @@ test("zero-Project New thread opens the existing directory picker", async () => 
   }
 });
 
-test("archiving an active Thread opens its Settings restore entry", async () => {
+test("Sidebar archive clears the selected Chat and opens its Settings restore entry", async () => {
   let archived = false;
   let persistedPins = ["thread-1"];
   const harness = await mountApp(
@@ -115,7 +115,9 @@ test("archiving an active Thread opens its Settings restore entry", async () => 
       document.querySelector<HTMLButtonElement>(".thread-row"),
     );
     await act(async () => row.click());
-    const archive = await waitFor(() => exactButton("Archive"));
+    await waitFor(() => document.getElementById("thread-composer"));
+    await act(async () => threadMenuButton("Thread one").click());
+    const archive = await waitFor(() => exactMenuButton("Archive"));
     await act(async () => {
       archive.click();
       await Promise.resolve();
@@ -124,6 +126,8 @@ test("archiving an active Thread opens its Settings restore entry", async () => 
     assert.match(document.body.textContent ?? "", /Archived threads/u);
     assert.match(document.body.textContent ?? "", /Thread one/u);
     assert.equal(document.querySelector('[aria-label="Thread views"]'), null);
+    assert.equal(document.getElementById("thread-composer"), null);
+    assert.equal(document.querySelector(".thread-view"), null);
     assert.deepEqual(persistedPins, []);
 
     await act(async () => exactButton("Unarchive")?.click());
@@ -260,6 +264,7 @@ async function mountApp(
         currentSettings = publicSettings([...threadIds]);
         return currentSettings;
       },
+      markWorkspaceUsed: async () => currentSettings,
       onManualCodeRequested: () => () => undefined,
       addWorkspace: async () => ({ profile: { onboardingComplete: true } }),
       getDirectoryBrowser: async () => ({
@@ -388,6 +393,12 @@ function exactButton(label: string): HTMLButtonElement | undefined {
   return [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent?.trim() === label,
   );
+}
+
+function exactMenuButton(label: string): HTMLButtonElement | undefined {
+  return [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+  ].find((button) => button.textContent?.trim() === label);
 }
 
 async function waitFor<T>(read: () => T | null | undefined): Promise<T> {

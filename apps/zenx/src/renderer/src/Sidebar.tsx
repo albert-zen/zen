@@ -757,7 +757,7 @@ function ThreadRow({
       if (action !== "rename") focusThreadListHeading();
       await operation();
       if (action !== "rename" && action !== "pin" && action !== "unpin")
-        focusThreadListHeading();
+        focusThreadListHeading(false);
       closeMenu(action === "rename");
     } catch (error) {
       setMenuError(error instanceof Error ? error.message : String(error));

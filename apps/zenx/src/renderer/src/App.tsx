@@ -593,7 +593,21 @@ export function App() {
     );
   };
 
-  const performThreadLifecycle = async (summary: NativeThreadSummary) => {
+  const clearSelectedThreadForArchive = (threadId: string) => {
+    if (selectedThreadIdRef.current !== threadId) return;
+    selectionEpoch.current += 1;
+    selectedThreadIdRef.current = null;
+    setSelectedThreadId(null);
+    setThreadDetail(null);
+    setSelectedSettings(null);
+    setSettingsTab("archived");
+    openPage("settings");
+  };
+
+  const performThreadLifecycle = async (
+    summary: NativeThreadSummary,
+    clearSelectedOnArchive = false,
+  ) => {
     if (!summary.archived && threadHasActiveTurn(summary, threadDetail)) {
       throw new Error("Wait for the active Turn to finish before archiving.");
     }
@@ -602,6 +616,8 @@ export function App() {
       { threadId: summary.threadId },
     );
     if (!summary.archived) {
+      if (clearSelectedOnArchive)
+        clearSelectedThreadForArchive(summary.threadId);
       try {
         await queuePinMutation((current) =>
           current.includes(summary.threadId)
@@ -623,16 +639,7 @@ export function App() {
     setThreadLifecycleBusy(true);
     setThreadLifecycleError(null);
     try {
-      await performThreadLifecycle(selectedSummary);
-      if (!selectedSummary.archived) {
-        selectionEpoch.current += 1;
-        selectedThreadIdRef.current = null;
-        setSelectedThreadId(null);
-        setThreadDetail(null);
-        setSelectedSettings(null);
-        setSettingsTab("archived");
-        openPage("settings");
-      }
+      await performThreadLifecycle(selectedSummary, true);
     } catch (error) {
       setThreadLifecycleError(describeError(error));
     } finally {
@@ -647,7 +654,9 @@ export function App() {
         mode={sidebarMode}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        onChangeThreadLifecycle={performThreadLifecycle}
+        onChangeThreadLifecycle={(summary) =>
+          performThreadLifecycle(summary, true)
+        }
         onChangeThreadPinned={changeThreadPinned}
         onModeChange={(mode) => {
           setSidebarMode(mode);
