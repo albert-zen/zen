@@ -14,6 +14,7 @@ import type { ZenXProjectProjectionSnapshot } from "../../main/project-projectio
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import { ProviderLogo } from "./ProviderLogo.js";
+import { ZenXBrand } from "./ZenXBrand.js";
 import {
   deriveInboxSections,
   deriveProjectGroups,
@@ -136,10 +137,7 @@ export function Sidebar({
       >
         <header className="sidebar-header">
           <div className="brand-row">
-            <div className="brand" aria-label="ZenX">
-              <BrandMark />
-              <span>ZENX</span>
-            </div>
+            <ZenXBrand />
             <div className="brand-actions">
               <button
                 className="icon-button inbox-button"
@@ -1054,15 +1052,5 @@ function enabledMenuItems(container: HTMLElement | null): HTMLButtonElement[] {
     container.querySelectorAll<HTMLButtonElement>(
       'button[role="menuitem"]:not(:disabled)',
     ),
-  );
-}
-
-function BrandMark() {
-  return (
-    <span className="brand-mark" aria-hidden="true">
-      <svg viewBox="0 0 18 18">
-        <path d="M3 13.5 7 5l4 8.5L15 5" />
-      </svg>
-    </span>
   );
 }

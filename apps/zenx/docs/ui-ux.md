@@ -72,10 +72,16 @@ Thread
 
 ## 3. Product shell 与导航
 
-### 3.1 默认布局与核心导航
+### 3.1 品牌与 Logo
+
+- 产品壳必须保留正式 **ZenX logo / wordmark** 的位置。Provider logo 只用于 Thread 的 Provider / model identity，不能替代 ZenX 产品标识；原型中的合成品牌标记不是正式资产。
+- [ZenX Logo 概念参考板](assets/brand/zenx-logo-concept-board.png) 是用户制作的设计概念参考：两个相同组件在中心重叠并分别构成 Z / X，表达 symmetry、connection 与 infinite potential，同时配合 ZENX 字标。
+- 该概念板不是可直接用于产品的 production logo asset；不得从图中抠取或重编码 raster，也不得据此擅自重画。正式 UI 等待用户导出的 SVG 与适合小尺寸界面的平面单色版本；金属、发光与压印只属于品牌展示效果。
+- 当前 renderer 只保留可替换的 Logo 组件与 asset 入口，不把临时 Logo 的几何结构写入产品壳布局。
+
+### 3.2 默认布局与核心导航
 
 - 默认桌面 Agent 页面是 **Thread Sidebar + Chat** 两栏。
-- 产品壳的品牌区必须保留正式 **ZenX logo / wordmark** 的位置。Provider logo 只用于 Thread 的 Provider / model identity，不能替代 ZenX 产品标识；原型中的合成品牌标记不是正式资产。
 - Inbox 是品牌区的 icon-only 模式切换，不是 Projects / Inbox segmented control。Inbox 中每个 Thread 必须明确显示 Project 归属。
 - Sidebar 的 Thread 列表只展示 active Threads。Archived Threads 的查看与 Unarchive 统一位于 Settings，不在 Sidebar 提供 Active / Archived switch。
 - 已确认的 Sidebar anchors 是品牌区与 Inbox、Projects/active Threads，以及左下 Settings。可选 Plugin spaces 位于完整的 Projects group 之前，不能插入 Projects header 与 Project/Thread list 之间。
@@ -84,13 +90,13 @@ Thread
 
 **Experiment / TBD — New thread IA：** 是否使用独立全宽文字 row、它相对 Plugin spaces / Projects 的准确顺序，以及全局入口与 Project quick-create 的关系都尚未决定。现有原型与 issue 中的排布只能作为实验，不能据此锁定最终导航。
 
-### 3.2 Project 与 Thread 创建
+### 3.3 Project 与 Thread 创建
 
 - Projects 标题旁提供 icon-only **Add project**，具备 tooltip、accessible name、focus state 和完整 hit target。
 - Add project 使用 ZenX 只读 directory picker；Thread 创建最终必须解析为明确的 cwd，并消费同一个 canonical Project projection。
 - **Experiment / TBD：** Project quick-create 是否保留、全局 New thread 是否复用 last-used Project，以及 last-used 失效时是否直接打开 picker，均属于最终 New thread IA 的待定部分。不得把 Documents、`process.cwd()` 或隐藏默认 Project 当成已经确认的产品 fallback。
 
-### 3.3 原生应用菜单与按需面板
+### 3.4 原生应用菜单与按需面板
 
 - Packaged Windows/Linux 不安装 Electron 默认 application menu；macOS 只保留系统合规的 application、edit 和 window roles。原生菜单不得引入第二套产品导航。
 - 不提供常驻右侧 Activity rail。Tool details 留在聊天流内；Workspace/Artifact 使用按需面板。
