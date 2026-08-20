@@ -65,9 +65,12 @@
 - **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
   幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
-- **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、workspace 与
-  审批默认值；它只用于组合本机 App Server host，不包含 credential，也不覆盖已存
-  Thread 的生效设置。
+- **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、workspace、
+  审批默认值与本地产品偏好；其中 host 配置只用于组合本机 App Server，不包含
+  credential，也不覆盖已存 Thread 的生效设置。
+- **ZenXThreadPinProjection** — ZenXHostProfile 按本机 threadId 顺序持久化 Sidebar Pin，
+  renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
+  canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。
 - **ZenXCredentialVault** — ZenX 通过操作系统安全存储保护的 Provider credential
   存放点；解密后的 secret 只在主进程内存中交给 host，绝不进入 renderer、进程环境、
   App Server 协议或 canonical ItemList。

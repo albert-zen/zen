@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type {
   PublicHostSettings,
   ZenXHostProfile,
@@ -7,17 +8,31 @@ import type {
 } from "../../main/host-profile.js";
 import { CapabilitySettings } from "./CapabilitySettings.js";
 import { Icon } from "./icons.js";
+import { ProviderLogo } from "./ProviderLogo.js";
+import { threadModelIdentity, threadTitle } from "./thread-list.js";
 
-type SettingsTab = "account" | "models" | "plugins" | "general";
+export type SettingsTab =
+  "account" | "models" | "plugins" | "general" | "archived";
 
 export function SettingsView({
-  onClose,
+  archivedError,
+  archivedLoading,
+  archivedThreads,
   onOpenSidebar,
+  onRetryArchived,
+  onTabChange,
+  onUnarchive,
+  tab,
 }: {
-  onClose(): void;
+  archivedError: string | null;
+  archivedLoading: boolean;
+  archivedThreads: readonly NativeThreadSummary[];
   onOpenSidebar?(): void;
+  onRetryArchived(): void;
+  onTabChange(tab: SettingsTab): void;
+  onUnarchive(thread: NativeThreadSummary): Promise<void>;
+  tab: SettingsTab;
 }) {
-  const [tab, setTab] = useState<SettingsTab>("account");
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
   const [apiKey, setApiKey] = useState("");
@@ -77,10 +92,7 @@ export function SettingsView({
     setError(null);
     setStatus(null);
     try {
-      const modelList = models
-        .split(/[\n,]/u)
-        .map((value) => value.trim())
-        .filter(Boolean);
+      const modelList = normalizedModels(models);
       const value = await window.zenx.settings.save(
         {
           onboardingComplete: true,
@@ -94,8 +106,9 @@ export function SettingsView({
       );
       setSettings(value);
       setDraft(value.profile);
+      setModels(value.profile.models.join("\n"));
       setApiKey("");
-      setStatus("Settings saved · local host ready");
+      setStatus("Changes applied · local host restarted");
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -114,15 +127,24 @@ export function SettingsView({
     );
   }
   const provider = draft.provider;
+  const pendingProfile: ZenXHostProfile = {
+    ...draft,
+    onboardingComplete: true,
+    models: normalizedModels(models),
+  };
+  const hostDirty =
+    apiKey.trim().length > 0 ||
+    JSON.stringify(pendingProfile) !== JSON.stringify(settings.profile);
   const tabs: Array<{
     id: SettingsTab;
     label: string;
-    icon: "users" | "layers" | "trigger" | "settings";
+    icon: "users" | "layers" | "trigger" | "settings" | "archive";
   }> = [
     { id: "account", label: "Account", icon: "users" },
     { id: "models", label: "Models & provider", icon: "layers" },
     { id: "plugins", label: "Plugins", icon: "trigger" },
     { id: "general", label: "General", icon: "settings" },
+    { id: "archived", label: "Archived threads", icon: "archive" },
   ];
   return (
     <section className="product-page settings-view" aria-label="ZenX settings">
@@ -140,19 +162,6 @@ export function SettingsView({
             <h1>Settings</h1>
             <p>Account, models, plugins, and local host</p>
           </div>
-        </div>
-        <div className="page-header-actions">
-          <button className="quiet-button" type="button" onClick={onClose}>
-            Done
-          </button>
-          <button
-            className="primary-button"
-            type="button"
-            disabled={busy !== null}
-            onClick={() => void save()}
-          >
-            {busy === "save" ? "Restarting host…" : "Save and restart host"}
-          </button>
         </div>
       </header>
       <div className="page-scroll">
@@ -191,7 +200,7 @@ export function SettingsView({
               if (event.key === "End") next = buttons.length - 1;
               buttons[next]?.focus();
               const id = buttons[next]?.dataset.tab as SettingsTab | undefined;
-              if (id) setTab(id);
+              if (id) onTabChange(id);
             }}
           >
             {tabs.map((item) => (
@@ -201,7 +210,7 @@ export function SettingsView({
                 type="button"
                 role="tab"
                 aria-selected={tab === item.id}
-                onClick={() => setTab(item.id)}
+                onClick={() => onTabChange(item.id)}
               >
                 <Icon name={item.icon} />
                 <span>{item.label}</span>
@@ -248,6 +257,22 @@ export function SettingsView({
             {tab === "general" ? (
               <GeneralPanel draft={draft} setDraft={setDraft} />
             ) : null}
+            {tab === "archived" ? (
+              <ArchivedThreadsPanel
+                error={archivedError}
+                loading={archivedLoading}
+                onRetry={onRetryArchived}
+                onUnarchive={onUnarchive}
+                threads={archivedThreads}
+              />
+            ) : null}
+            {tab === "models" || tab === "general" ? (
+              <SettingsApplyBar
+                busy={busy === "save"}
+                dirty={hostDirty}
+                onApply={() => void save()}
+              />
+            ) : null}
             {error ? (
               <div className="settings-error" role="alert">
                 <Icon name="warning" />
@@ -264,6 +289,131 @@ export function SettingsView({
         </div>
       </div>
     </section>
+  );
+}
+
+export function SettingsApplyBar({
+  busy,
+  dirty,
+  onApply,
+}: {
+  busy: boolean;
+  dirty: boolean;
+  onApply(): void;
+}) {
+  return (
+    <div className={`settings-apply-bar${dirty ? " dirty" : ""}`}>
+      <div>
+        <strong>Local host configuration</strong>
+        <span>
+          {dirty
+            ? "Apply these changes when you are ready. ZenX will restart the local host."
+            : "No unapplied host changes."}
+        </span>
+      </div>
+      <button
+        className={dirty ? "primary-button" : "quiet-button"}
+        type="button"
+        disabled={!dirty || busy}
+        onClick={onApply}
+      >
+        {busy ? "Applying & restarting…" : "Apply & restart"}
+      </button>
+    </div>
+  );
+}
+
+export function ArchivedThreadsPanel({
+  error,
+  loading,
+  onRetry,
+  onUnarchive,
+  threads,
+}: {
+  error: string | null;
+  loading: boolean;
+  onRetry(): void;
+  onUnarchive(thread: NativeThreadSummary): Promise<void>;
+  threads: readonly NativeThreadSummary[];
+}) {
+  const [busyThreadId, setBusyThreadId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const unarchive = async (thread: NativeThreadSummary) => {
+    setBusyThreadId(thread.threadId);
+    setActionError(null);
+    try {
+      await onUnarchive(thread);
+    } catch (reason) {
+      setActionError(describeError(reason));
+    } finally {
+      setBusyThreadId(null);
+    }
+  };
+  return (
+    <>
+      <header>
+        <h2>Archived threads</h2>
+        <p>
+          Archived conversations remain canonical Threads. Restore one to return
+          it to the active Sidebar.
+        </p>
+      </header>
+      {loading ? (
+        <div className="settings-empty" role="status">
+          Loading archived Threads…
+        </div>
+      ) : error !== null ? (
+        <div className="settings-empty settings-error" role="alert">
+          <span>{error}</span>
+          <button className="quiet-button" type="button" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
+      ) : threads.length === 0 ? (
+        <div className="settings-empty">
+          No archived Threads. Conversations you archive will appear here.
+        </div>
+      ) : (
+        <div className="archived-thread-list">
+          {threads.map((thread) => {
+            const identity = threadModelIdentity(thread);
+            const busy = busyThreadId === thread.threadId;
+            const workspace =
+              thread.status === "systemError"
+                ? "Unavailable journal"
+                : thread.currentMetadata.cwd;
+            return (
+              <article className="archived-thread-row" key={thread.threadId}>
+                <div className="archived-thread-copy">
+                  <strong>{threadTitle(thread)}</strong>
+                  <span title={workspace}>{workspace}</span>
+                  {identity === null ? null : (
+                    <small>
+                      <ProviderLogo kind={identity.providerKind} />
+                      {identity.label}
+                    </small>
+                  )}
+                </div>
+                <button
+                  className="quiet-button"
+                  type="button"
+                  disabled={busyThreadId !== null}
+                  onClick={() => void unarchive(thread)}
+                >
+                  {busy ? "Restoring…" : "Unarchive"}
+                </button>
+              </article>
+            );
+          })}
+        </div>
+      )}
+      {actionError === null ? null : (
+        <div className="settings-error" role="alert">
+          <Icon name="warning" />
+          {actionError}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -567,8 +717,8 @@ function GeneralPanel({
           <div>
             <strong>Zen App Server</strong>
             <span>
-              Saving restarts the local host with these defaults. Existing
-              Thread settings remain authoritative.
+              Applying changes restarts the local host with these defaults.
+              Existing Thread settings remain authoritative.
             </span>
           </div>
           <span className="status-good">Local</span>
@@ -630,4 +780,11 @@ function ManualCode() {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function normalizedModels(value: string): string[] {
+  return value
+    .split(/[\n,]/u)
+    .map((model) => model.trim())
+    .filter(Boolean);
 }

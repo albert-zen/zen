@@ -15,6 +15,7 @@ export const ipcChannels = {
   workspaceRemove: "zenx:settings:workspace-remove",
   workspaceDefault: "zenx:settings:workspace-default",
   workspaceUse: "zenx:settings:workspace-use",
+  pinnedThreadsSet: "zenx:settings:pinned-threads-set",
   directorySnapshot: "zenx:directory:snapshot",
   directoryList: "zenx:directory:list",
   subscriptionLogin: "zenx:settings:subscription-login",

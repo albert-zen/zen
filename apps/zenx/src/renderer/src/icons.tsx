@@ -11,12 +11,15 @@ type IconName =
   | "folder"
   | "file"
   | "inbox"
+  | "folder-plus"
   | "layers"
   | "lock"
   | "moon"
   | "more"
   | "paperclip"
   | "panel-right"
+  | "pin"
+  | "pin-off"
   | "reasoning"
   | "restore"
   | "settings"
@@ -57,6 +60,12 @@ const paths: Record<IconName, ReactNode> = {
   folder: (
     <path d="M1.8 4.2C1.8 3.5 2.3 3 3 3h3l1.4 1.6H13c.7 0 1.2.5 1.2 1.2v6c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2V4.2Z" />
   ),
+  "folder-plus": (
+    <>
+      <path d="M1.8 4.2C1.8 3.5 2.3 3 3 3h3l1.4 1.6H13c.7 0 1.2.5 1.2 1.2v6c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2V4.2Z" />
+      <path d="M8 7v4M6 9h4" />
+    </>
+  ),
   file: (
     <>
       <path d="M4 1.8h5.2l2.8 2.8v9.6H4z" />
@@ -70,7 +79,7 @@ const paths: Record<IconName, ReactNode> = {
     </>
   ),
   moon: <path d="M13.4 9.4A5.8 5.8 0 0 1 6.6 2.6a5.8 5.8 0 1 0 6.8 6.8Z" />,
-  more: <path d="M3 8h.01M8 8h.01M13 8h.01" />,
+  more: <path d="M3 8h.01M8 8h.01M13 8h.01" strokeWidth="2.8" />,
   layers: (
     <>
       <path d="m8 2 6 3.2-6 3.2-6-3.2Z" />
@@ -90,6 +99,17 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <rect x="1.8" y="2.2" width="12.4" height="11.6" rx="1.5" />
       <path d="M10.2 2.2v11.6" />
+    </>
+  ),
+  pin: (
+    <>
+      <path d="m5 2 6 6M4.2 7.2l4.6 4.6M3 10l3 3M6.2 3.2l6.6 6.6-2.7.3-3.9-3.9.3-2.7Z" />
+      <path d="m6 12-3 3" />
+    </>
+  ),
+  "pin-off": (
+    <>
+      <path d="m4 2 10 12M6.2 3.2l6.6 6.6-2.1.2M4.2 7.2l4.6 4.6M3 10l3 3M6 12l-3 3" />
     </>
   ),
   reasoning: (

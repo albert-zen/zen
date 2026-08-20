@@ -495,6 +495,40 @@ test("workspace mutations fail after bounded identity revalidation", async () =>
   }
 });
 
+test("persists bounded local Thread Pins in explicit Sidebar order", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-pins-"));
+  try {
+    const first = settingsFor(directory, {
+      login: async () => undefined,
+      logout: async () => undefined,
+      status: async () => ({ authenticated: false, expired: false }),
+    });
+    await first.initialize({});
+    await first.setPinnedThreadIds(["thread-b", "thread-a", "thread-b"]);
+    assert.deepEqual((await first.publicSettings()).profile.pinnedThreadIds, [
+      "thread-b",
+      "thread-a",
+    ]);
+
+    const second = settingsFor(directory, {
+      login: async () => undefined,
+      logout: async () => undefined,
+      status: async () => ({ authenticated: false, expired: false }),
+    });
+    await second.initialize({});
+    assert.deepEqual((await second.publicSettings()).profile.pinnedThreadIds, [
+      "thread-b",
+      "thread-a",
+    ]);
+    assert.match(
+      await readFile(path.join(directory, "host-profile.json"), "utf8"),
+      /"pinnedThreadIds": \[\s*"thread-b",\s*"thread-a"/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("clears the OAuth concurrency guard after failure so login can retry", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-oauth-retry-"));
   let attempts = 0;

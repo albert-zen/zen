@@ -49,19 +49,17 @@ import {
 import { loadedPluginContributions } from "./plugin-contributions.js";
 import { RoomView } from "./RoomView.js";
 import { ScheduledView } from "./ScheduledView.js";
-import { SettingsView } from "./SettingsView.js";
+import { SettingsView, type SettingsTab } from "./SettingsView.js";
 import { Sidebar } from "./Sidebar.js";
 import {
+  derivePinnedThreads,
   readSidebarMode,
-  readThreadScope,
   threadHasActiveTurn,
   lastUsedProjectWorkspace,
   startProjectThread,
   threadTitle,
   writeSidebarMode,
-  writeThreadScope,
   type SidebarMode,
-  type ThreadScope,
 } from "./thread-list.js";
 import { applyThreadViewNotification } from "./thread-view-state.js";
 import { ThreadLifecycleAction } from "./ThreadLifecycleAction.js";
@@ -77,6 +75,7 @@ export function App() {
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
@@ -96,6 +95,7 @@ export function App() {
   const [threadSummaries, setThreadSummaries] = useState<NativeThreadSummary[]>(
     [],
   );
+  const [pinnedThreadIds, setPinnedThreadIds] = useState<string[]>([]);
   const [archivedThreadSummaries, setArchivedThreadSummaries] = useState<
     NativeThreadSummary[]
   >([]);
@@ -132,14 +132,6 @@ export function App() {
       return "projects";
     }
   });
-  const [threadScope, setThreadScope] = useState<ThreadScope>(() => {
-    try {
-      return readThreadScope(window.localStorage);
-    } catch {
-      return "active";
-    }
-  });
-  const threadScopeRef = useRef(threadScope);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [threadLifecycleBusy, setThreadLifecycleBusy] = useState(false);
   const [threadLifecycleError, setThreadLifecycleError] = useState<
@@ -178,12 +170,10 @@ export function App() {
     setThreadListLoaded({ active: true, archived: true });
   };
 
-  const loadProjects = async (scope = threadScopeRef.current) => {
+  const loadProjects = async () => {
     const epoch = ++projectLoadEpoch.current;
     try {
-      const snapshot = await window.zenx.projects.get({
-        archived: scope === "archived",
-      });
+      const snapshot = await window.zenx.projects.get({ archived: false });
       if (projectLoadEpoch.current === epoch) setProjects(snapshot);
     } catch (error) {
       if (projectLoadEpoch.current === epoch)
@@ -350,6 +340,7 @@ export function App() {
     void window.zenx.settings
       .get()
       .then((value) => {
+        setPinnedThreadIds(value.profile.pinnedThreadIds);
         if (!value.profile.onboardingComplete) setPage("settings");
       })
       .catch(() => undefined);
@@ -387,8 +378,7 @@ export function App() {
       ? summary
       : { ...summary, name: titleSnapshot[summary.threadId]!.title },
   );
-  const visibleSummaries =
-    threadScope === "active" ? activeSummaries : archivedSummaries;
+  const pinnedSummaries = derivePinnedThreads(activeSummaries, pinnedThreadIds);
   const selectedSummary =
     [...activeSummaries, ...archivedSummaries].find(
       (summary) => summary.threadId === selectedThreadId,
@@ -410,19 +400,12 @@ export function App() {
         (startedWorkspace) => {
           void window.zenx.settings
             .markWorkspaceUsed(startedWorkspace)
-            .then(() => loadProjects("active"))
+            .then(() => loadProjects())
             .catch((error: unknown) => setRequestError(describeError(error)));
         },
       );
       if (selectionEpoch.current !== epoch) return;
       selectedThreadIdRef.current = result.thread.id;
-      threadScopeRef.current = "active";
-      setThreadScope("active");
-      try {
-        writeThreadScope(window.localStorage, "active");
-      } catch {
-        // The view remains active for this window.
-      }
       setPage("agent");
       setSidebarOpen(false);
       setSelectedThreadId(result.thread.id);
@@ -577,6 +560,20 @@ export function App() {
     }));
   };
 
+  const changeThreadPinned = async (summary: NativeThreadSummary) => {
+    const pinned = pinnedThreadIds.includes(summary.threadId);
+    const next = pinned
+      ? pinnedThreadIds.filter((threadId) => threadId !== summary.threadId)
+      : [
+          summary.threadId,
+          ...pinnedThreadIds.filter(
+            (threadId) => threadId !== summary.threadId,
+          ),
+        ];
+    const value = await window.zenx.settings.setPinnedThreadIds(next);
+    setPinnedThreadIds(value.profile.pinnedThreadIds);
+  };
+
   const performThreadLifecycle = async (summary: NativeThreadSummary) => {
     if (!summary.archived && threadHasActiveTurn(summary, threadDetail)) {
       throw new Error("Wait for the active Turn to finish before archiving.");
@@ -585,26 +582,36 @@ export function App() {
       summary.archived ? "thread/unarchive" : "thread/archive",
       { threadId: summary.threadId },
     );
+    if (!summary.archived && pinnedThreadIds.includes(summary.threadId)) {
+      try {
+        const value = await window.zenx.settings.setPinnedThreadIds(
+          pinnedThreadIds.filter((threadId) => threadId !== summary.threadId),
+        );
+        setPinnedThreadIds(value.profile.pinnedThreadIds);
+      } catch (error) {
+        setRequestError(
+          `Thread archived, but its local Pin could not be cleared: ${describeError(error)}`,
+        );
+      }
+    }
     await loadThreadSummaries();
     await loadProjects();
   };
 
   const changeThreadLifecycle = async () => {
     if (selectedSummary === null) return;
-    const nextScope: ThreadScope = selectedSummary.archived
-      ? "active"
-      : "archived";
     setThreadLifecycleBusy(true);
     setThreadLifecycleError(null);
     try {
       await performThreadLifecycle(selectedSummary);
-      threadScopeRef.current = nextScope;
-      setThreadScope(nextScope);
-      await loadProjects(nextScope);
-      try {
-        writeThreadScope(window.localStorage, nextScope);
-      } catch {
-        // The view remains valid for this window.
+      if (!selectedSummary.archived) {
+        selectionEpoch.current += 1;
+        selectedThreadIdRef.current = null;
+        setSelectedThreadId(null);
+        setThreadDetail(null);
+        setSelectedSettings(null);
+        setSettingsTab("archived");
+        openPage("settings");
       }
     } catch (error) {
       setThreadLifecycleError(describeError(error));
@@ -621,6 +628,7 @@ export function App() {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onChangeThreadLifecycle={performThreadLifecycle}
+        onChangeThreadPinned={changeThreadPinned}
         onModeChange={(mode) => {
           setSidebarMode(mode);
           try {
@@ -650,34 +658,30 @@ export function App() {
         onRetryThreads={() => void loadThreadSummaries(true)}
         onRenameThread={renameThread}
         onSelectThread={(threadId) => void resumeThread(threadId)}
-        onThreadScopeChange={(scope) => {
-          threadScopeRef.current = scope;
-          setThreadScope(scope);
-          void loadProjects(scope);
-          try {
-            writeThreadScope(window.localStorage, scope);
-          } catch {
-            // The preference remains valid for this window.
-          }
-        }}
         pendingApprovalThreadIds={pendingThreadIds}
         pluginContributions={pluginContributions}
         selectedPage={page}
         selectedThreadId={selectedThreadId}
         serverReady={serverStatus.type === "ready"}
         projects={projects}
-        threadError={threadListErrors[threadScope]}
-        threadLoading={!threadListLoaded[threadScope]}
-        threadScope={threadScope}
-        threads={visibleSummaries}
+        pinnedThreads={pinnedSummaries}
+        threadError={threadListErrors.active}
+        threadLoading={!threadListLoaded.active}
+        threads={activeSummaries}
         triggerSnapshot={triggerSnapshot}
       />
 
       <main className="workspace">
         {page === "settings" ? (
           <SettingsView
-            onClose={() => openPage("agent")}
+            archivedError={threadListErrors.archived}
+            archivedLoading={!threadListLoaded.archived}
+            archivedThreads={archivedSummaries}
+            onRetryArchived={() => void loadThreadSummaries(true)}
+            onTabChange={setSettingsTab}
+            onUnarchive={performThreadLifecycle}
             onOpenSidebar={() => setSidebarOpen(true)}
+            tab={settingsTab}
           />
         ) : page === "triggers" ? (
           <ScheduledView
@@ -729,7 +733,7 @@ export function App() {
             onAddProject={() => setProjectPickerOpen(true)}
             onNewThread={() => {
               if (lastUsedWorkspace !== null) void newThread(lastUsedWorkspace);
-              else setSidebarOpen(true);
+              else setProjectPickerOpen(true);
             }}
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
@@ -901,7 +905,8 @@ function AgentSurface({
         </div>
         <div className="top-actions">
           {selectedSummary === null ||
-          selectedSummary.status === "systemError" ? null : (
+          selectedSummary.status === "systemError" ||
+          selectedSummary.archived ? null : (
             <ThreadLifecycleAction
               archived={selectedSummary.archived}
               busy={threadLifecycleBusy}
