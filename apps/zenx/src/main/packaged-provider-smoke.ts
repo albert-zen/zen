@@ -10,6 +10,7 @@ import {
   selectComputerProvider,
 } from "./capabilities/provider-catalog.js";
 import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
+import { packagedProviderSmokeExitCode } from "./packaged-provider-smoke-exit.js";
 
 const portServer = createServer((_request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
@@ -19,6 +20,7 @@ const portServer = createServer((_request, response) => {
 });
 
 void app.whenReady().then(async () => {
+  let failure: unknown;
   try {
     assert.equal(
       app.isPackaged,
@@ -118,11 +120,16 @@ void app.whenReady().then(async () => {
       ),
     );
   } catch (error) {
+    failure = error;
     console.error("ZenX packaged provider smoke failed", error);
-    process.exitCode = 1;
   } finally {
-    await closeServer();
-    app.quit();
+    try {
+      await closeServer();
+    } catch (error) {
+      failure ??= error;
+      console.error("ZenX packaged provider smoke cleanup failed", error);
+    }
+    app.exit(packagedProviderSmokeExitCode(failure));
   }
 });
 

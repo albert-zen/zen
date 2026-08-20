@@ -70,7 +70,14 @@ async function packageZenX(arguments_) {
         arch: process.arch,
         name: productName,
         electronVersion: "43.2.0",
-        extraResource: [path.join(resources, "providers")],
+        afterCopy: [
+          async ({ buildPath }) => {
+            await copyPackagedProviderResources({
+              buildPath,
+              sourceDirectory: path.join(resources, "providers"),
+            });
+          },
+        ],
         asar: false,
       });
       if (path.basename(packaged[0]) !== targetDirectory) {
@@ -209,6 +216,20 @@ export async function stagePackage(options) {
     });
   }
   await injectProviderManifestDigest(stagedMain, options.manifestSha256);
+}
+
+export async function copyPackagedProviderResources(options) {
+  const resourcesDirectory = path.dirname(options.buildPath);
+  const destination = path.join(
+    resourcesDirectory,
+    path.basename(options.sourceDirectory),
+  );
+  await mkdir(resourcesDirectory, { recursive: true, mode: 0o700 });
+  await cp(options.sourceDirectory, destination, {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
+  return destination;
 }
 
 export function packageManifest(target, zenxPackage) {

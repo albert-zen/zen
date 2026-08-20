@@ -4,8 +4,10 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readlink,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -13,6 +15,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  copyPackagedProviderResources,
   createBuildSnapshot,
   packageManifest,
   publishPackagedArtifact,
@@ -21,6 +24,64 @@ import {
 } from "../scripts/package-zenx-portable.mjs";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
+
+test("copies packaged provider symlinks verbatim into the platform resources directory", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-provider-resource-copy-test-"),
+  );
+  try {
+    const sourceDirectory = path.join(directory, "source", "providers");
+    const versionDirectory = path.join(
+      sourceDirectory,
+      "playwright-browsers",
+      "chromium-fixture",
+      "Chromium.app",
+      "Contents",
+      "Frameworks",
+      "Chromium Framework.framework",
+      "Versions",
+    );
+    await mkdir(path.join(versionDirectory, "fixture-version"), {
+      recursive: true,
+    });
+    await symlink("fixture-version", path.join(versionDirectory, "Current"));
+
+    const buildPath = path.join(
+      directory,
+      "build",
+      "ZenX.app",
+      "Contents",
+      "Resources",
+      "app",
+    );
+    const packagedProviders = await copyPackagedProviderResources({
+      buildPath,
+      sourceDirectory,
+    });
+    const packagedLink = path.join(
+      packagedProviders,
+      "playwright-browsers",
+      "chromium-fixture",
+      "Chromium.app",
+      "Contents",
+      "Frameworks",
+      "Chromium Framework.framework",
+      "Versions",
+      "Current",
+    );
+    const target = await readlink(packagedLink);
+    assert.equal(target, "fixture-version");
+    assert.equal(path.isAbsolute(target), false);
+    assert.equal(
+      path
+        .resolve(path.dirname(packagedLink), target)
+        .startsWith(`${packagedProviders}${path.sep}`),
+      true,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("concurrent app and smoke builds use complete private snapshots", async () => {
   const directory = await mkdtemp(
