@@ -176,6 +176,41 @@ test("serializes concurrent workspace mutations without losing either update", a
   }
 });
 
+test("persists profile-local pinned Thread ids across service instances", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-pins-"));
+  const subscription = {
+    login: async () => undefined,
+    logout: async () => undefined,
+    status: async () => ({ authenticated: false, expired: false }),
+  };
+  try {
+    const first = settingsFor(directory, subscription);
+    await first.initialize({});
+    await Promise.all([
+      first.setThreadPinned("thread-b", true),
+      first.setThreadPinned("thread-a", true),
+    ]);
+    await first.setThreadPinned("thread-b", true);
+    assert.deepEqual((await first.publicSettings()).profile.pinnedThreadIds, [
+      "thread-b",
+      "thread-a",
+    ]);
+
+    const second = settingsFor(directory, subscription);
+    await second.initialize({});
+    assert.deepEqual((await second.publicSettings()).profile.pinnedThreadIds, [
+      "thread-b",
+      "thread-a",
+    ]);
+    await second.setThreadPinned("thread-b", false);
+    assert.deepEqual((await second.publicSettings()).profile.pinnedThreadIds, [
+      "thread-a",
+    ]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test(
   "POSIX symlink aliases drive add, mark-used, default, and remove by one canonical key",
   { skip: process.platform === "win32" },

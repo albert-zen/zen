@@ -16,6 +16,7 @@ type IconName =
   | "moon"
   | "more"
   | "paperclip"
+  | "pin"
   | "panel-right"
   | "reasoning"
   | "restore"
@@ -85,6 +86,12 @@ const paths: Record<IconName, ReactNode> = {
   ),
   paperclip: (
     <path d="m13.5 7.7-6.2 6.2a3.5 3.5 0 0 1-5-5l7-7a2.4 2.4 0 0 1 3.4 3.4l-7 7a1.3 1.3 0 0 1-1.8-1.8l6.2-6.2" />
+  ),
+  pin: (
+    <>
+      <path d="m5 2 6 6M9.8 1.8l4.4 4.4-2.3 1.1-3.2 3.2-3.2-3.2 3.2-3.2 1.1-2.3Z" />
+      <path d="m6.9 9.6-4.7 4.7" />
+    </>
   ),
   "panel-right": (
     <>

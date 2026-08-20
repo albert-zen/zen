@@ -37,6 +37,15 @@ test("sidebar announces which Thread view is loading", () => {
   assert.match(html, /Loading archived Threads…/u);
 });
 
+test("active Projects view renders pinned Threads in a distinct section", () => {
+  const html = renderSidebar("active", [summary(false)], {
+    pinnedThreadIds: ["missing", "active-thread", "active-thread"],
+  });
+  assert.match(html, /class="pinned-group"/u);
+  assert.match(html, /id="pinned-heading">Pinned/u);
+  assert.match(html, /No threads yet/u);
+});
+
 test("Thread lifecycle action is reversible and honest about active Turns", () => {
   const idle = renderToStaticMarkup(
     createElement(ThreadLifecycleAction, {
@@ -78,6 +87,7 @@ test("active Thread menu offers Rename and a safely disabled Archive", () => {
       busyAction: null,
       error: null,
       hasActiveTurn: true,
+      pinned: false,
       open: true,
       renaming: false,
       renameDraft: "Active Thread",
@@ -85,12 +95,14 @@ test("active Thread menu offers Rename and a safely disabled Archive", () => {
       onBeginRename: noop,
       onCancelRename: noop,
       onDraftChange: noop,
+      onPin: noop,
       onRename: noop,
       onUnarchive: noop,
     }),
   );
   assert.match(html, /role="menu"/u);
   assert.match(html, />Rename</u);
+  assert.match(html, />Pin</u);
   assert.match(
     html,
     /role="menuitem"[^>]*disabled=""[^>]*>[\s\S]*?Archive<\/button>/u,
@@ -105,6 +117,7 @@ test("archived Thread menu offers Unarchive without inventing Delete", () => {
       busyAction: "unarchive",
       error: null,
       hasActiveTurn: false,
+      pinned: true,
       open: true,
       renaming: false,
       renameDraft: "Archived Thread",
@@ -112,11 +125,13 @@ test("archived Thread menu offers Unarchive without inventing Delete", () => {
       onBeginRename: noop,
       onCancelRename: noop,
       onDraftChange: noop,
+      onPin: noop,
       onRename: noop,
       onUnarchive: noop,
     }),
   );
   assert.match(html, />Unarchiving…</u);
+  assert.match(html, />Unpin</u);
   assert.doesNotMatch(html, />Delete</u);
   assert.doesNotMatch(html, />Rename</u);
 });
@@ -124,7 +139,11 @@ test("archived Thread menu offers Unarchive without inventing Delete", () => {
 function renderSidebar(
   scope: "active" | "archived",
   threads: NativeThreadSummary[],
-  state: { error?: string; loading?: boolean } = {},
+  state: {
+    error?: string;
+    loading?: boolean;
+    pinnedThreadIds?: string[];
+  } = {},
 ): string {
   return renderToStaticMarkup(
     createElement(Sidebar, {
@@ -140,11 +159,13 @@ function renderSidebar(
       onOpenContribution: noop,
       onOpenSettings: noop,
       onChangeThreadLifecycle: async () => undefined,
+      onChangeThreadPin: async () => undefined,
       onRenameThread: async () => undefined,
       onRetryThreads: noop,
       onSelectThread: noop,
       onThreadScopeChange: noop,
       pendingApprovalThreadIds: new Set<string>(),
+      pinnedThreadIds: state.pinnedThreadIds ?? [],
       pluginContributions: [],
       projects: {
         projects: [

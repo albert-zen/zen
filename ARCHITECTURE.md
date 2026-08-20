@@ -22,6 +22,9 @@
   Project 读模型；Windows 路径折叠大小写，POSIX 路径保留大小写，配置保留用户选择的展示路径，
   realpath 不可用时退回 lexical absolute path，最近使用项由同一 host profile 持有且失效时不隐式回退，
   它不拥有 Project、Thread 或 journal 状态。
+- **ZenXPinnedThreadProjection** — ZenX host profile 只保存本机 profile 选择的
+  Thread id，renderer 将仍存在的 id 按当前原生 summary 排序为导航分区；它不跨设备同步、
+  不进入 Core 或 canonical ItemList，也不改变 Inbox 或 runtime priority。
 - **ZenXDirectoryBrowser** — ZenX main 把 home、documents、Windows drive / POSIX root 与
   canonical 只读目录枚举投影给内部 picker；symlink/junction 只解析为目录目标，不修改文件系统。
 - **ZenXApplicationMenuPolicy** — ZenX 在 Windows/Linux 移除 Electron 默认菜单，在 macOS

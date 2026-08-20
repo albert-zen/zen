@@ -25,6 +25,7 @@ const profile = {
   workspace: path.join(os.tmpdir(), "workspace"),
   workspaces: [path.join(os.tmpdir(), "workspace")],
   lastUsedWorkspace: null,
+  pinnedThreadIds: ["thread-new", " thread-old ", "thread-new"],
   approvalPolicy: "always" as const,
 };
 
@@ -40,6 +41,7 @@ test("round-trips credential-free host settings and builds the ModelCatalog conf
       ...profile,
       workspace: path.resolve(profile.workspace),
       workspaces: [path.resolve(profile.workspace)],
+      pinnedThreadIds: ["thread-new", "thread-old"],
     });
     assert.deepEqual(
       hostConfigFromProfile(read, {
@@ -79,12 +81,14 @@ test("defaults legacy profiles to the independent Luna title model", () => {
     titleModel: _titleModel,
     workspaces: _workspaces,
     lastUsedWorkspace: _lastUsedWorkspace,
+    pinnedThreadIds: _pinnedThreadIds,
     ...legacy
   } = profile;
   const validated = validateHostProfile(legacy);
   assert.equal(validated.titleModel, "gpt-5.6-luna");
   assert.deepEqual(validated.workspaces, [path.resolve(profile.workspace)]);
   assert.equal(validated.lastUsedWorkspace, null);
+  assert.deepEqual(validated.pinnedThreadIds, []);
 });
 
 test("reports a corrupt persisted host profile instead of silently replacing it", async () => {

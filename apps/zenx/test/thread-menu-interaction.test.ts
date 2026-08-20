@@ -46,7 +46,7 @@ test("Thread menu manages keyboard focus through close and row removal", async (
         }),
       );
     });
-    assert.equal(document.activeElement?.textContent?.trim(), "Archive");
+    assert.equal(document.activeElement?.textContent?.trim(), "Pin");
 
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -67,6 +67,16 @@ test("Thread menu manages keyboard focus through close and row removal", async (
       );
     });
     assert.equal(document.activeElement?.textContent?.trim(), "Archive");
+
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          key: "ArrowUp",
+        }),
+      );
+    });
+    assert.equal(document.activeElement?.textContent?.trim(), "Pin");
 
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -101,6 +111,34 @@ test("Thread menu manages keyboard focus through close and row removal", async (
     assert.equal(document.querySelector('[role="menu"]'), null);
 
     await act(async () => trigger.click());
+    const pin = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent?.trim() === "Pin");
+    assert.ok(pin);
+    await act(async () => {
+      pin.click();
+      await Promise.resolve();
+    });
+    const pinnedTrigger = requiredElement<HTMLButtonElement>(
+      ".thread-menu-trigger",
+    );
+    assert.equal(document.activeElement, pinnedTrigger);
+    assert.equal(document.querySelector('[role="menu"]'), null);
+
+    await act(async () => pinnedTrigger.click());
+    assert.ok(
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ).some((item) => item.textContent?.trim() === "Unpin"),
+    );
+    await act(async () => {
+      document
+        .getElementById("outside")
+        ?.dispatchEvent(new dom.window.Event("pointerdown", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await act(async () => pinnedTrigger.click());
     const archive = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
     ).find((item) => item.textContent?.includes("Archive"));
@@ -127,6 +165,7 @@ function TestSidebar() {
   const [threads, setThreads] = useState<NativeThreadSummary[]>([
     activeSummary(),
   ]);
+  const [pinnedThreadIds, setPinnedThreadIds] = useState<string[]>([]);
   return createElement(Sidebar, {
     mode: "projects",
     liveThread: null,
@@ -140,11 +179,14 @@ function TestSidebar() {
     onOpenContribution: noop,
     onOpenSettings: noop,
     onChangeThreadLifecycle: async () => setThreads([]),
+    onChangeThreadPin: async (threadId: string, pinned: boolean) =>
+      setPinnedThreadIds(pinned ? [threadId] : []),
     onRenameThread: async () => undefined,
     onRetryThreads: noop,
     onSelectThread: noop,
     onThreadScopeChange: noop,
     pendingApprovalThreadIds: new Set<string>(),
+    pinnedThreadIds,
     pluginContributions: [],
     projects: {
       projects: [

@@ -4,6 +4,7 @@ import test from "node:test";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import {
   deriveInboxSections,
+  derivePinnedThreads,
   deriveProjectGroups,
   readThreadScope,
   projectThreadStartParams,
@@ -65,6 +66,39 @@ test("derives inbox groups from native summary status", () => {
       ["settled", ["settled"]],
     ],
   );
+});
+
+test("derives pinned navigation by recency while ignoring stale and duplicate ids", () => {
+  const older = summary("older", "idle", 20);
+  const newer = summary("newer", "idle", 40);
+  const inboxBefore = deriveInboxSections([older, newer]);
+  const pinned = derivePinnedThreads(
+    [older, newer],
+    ["older", "missing", "newer", "older"],
+  );
+  assert.deepEqual(
+    pinned.map((thread) => thread.threadId),
+    ["newer", "older"],
+  );
+  assert.deepEqual(deriveInboxSections([older, newer]), inboxBefore);
+  const groups = deriveProjectGroups(
+    [older, newer],
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["older", "newer"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: null,
+    },
+    new Set(pinned.map((thread) => thread.threadId)),
+  );
+  assert.deepEqual(groups[0]?.threads, []);
 });
 
 test("groups native summaries only by current cwd", () => {

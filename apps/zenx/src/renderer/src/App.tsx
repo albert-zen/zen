@@ -112,6 +112,7 @@ export function App() {
     unavailableThreadIds: [],
     lastUsedWorkspace: null,
   });
+  const [pinnedThreadIds, setPinnedThreadIds] = useState<string[]>([]);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
@@ -350,6 +351,7 @@ export function App() {
     void window.zenx.settings
       .get()
       .then((value) => {
+        setPinnedThreadIds(value.profile.pinnedThreadIds ?? []);
         if (!value.profile.onboardingComplete) setPage("settings");
       })
       .catch(() => undefined);
@@ -621,6 +623,13 @@ export function App() {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onChangeThreadLifecycle={performThreadLifecycle}
+        onChangeThreadPin={async (threadId, pinned) => {
+          const settings = await window.zenx.settings.setThreadPinned(
+            threadId,
+            pinned,
+          );
+          setPinnedThreadIds(settings.profile.pinnedThreadIds);
+        }}
         onModeChange={(mode) => {
           setSidebarMode(mode);
           try {
@@ -661,6 +670,7 @@ export function App() {
           }
         }}
         pendingApprovalThreadIds={pendingThreadIds}
+        pinnedThreadIds={pinnedThreadIds}
         pluginContributions={pluginContributions}
         selectedPage={page}
         selectedThreadId={selectedThreadId}

@@ -39,6 +39,13 @@ keeps a second Thread model. Archive is the reversible alternative to deletion.
 The UI disables Archive while a Turn is active, reports query and mutation
 failures in place, and leaves the running Turn and its settings unchanged.
 
+The experimental Pinned section is a profile-local ZenX navigation projection.
+The existing host profile stores only deduplicated Thread IDs; the renderer
+orders IDs that still resolve through the current native Thread summaries and
+silently omits unknown or stale IDs. Pinning does not sync across devices, enter
+Zen Core or the canonical ItemList, affect Inbox/runtime priority, change
+Archive semantics, or delete journals.
+
 ## Run
 
 ```sh

@@ -429,6 +429,19 @@ a:focus-visible {
 .inbox-group + .inbox-group {
   margin-top: 16px;
 }
+.pinned-group {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.pinned-group h2 {
+  margin: 4px 10px 8px;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
 .project-header {
   width: 100%;
   min-height: 36px;

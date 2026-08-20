@@ -24,6 +24,7 @@ export interface ZenXHostProfile {
   workspace: string | null;
   workspaces: string[];
   lastUsedWorkspace: string | null;
+  pinnedThreadIds: string[];
   approvalPolicy: "always" | "never";
 }
 
@@ -121,6 +122,7 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     value.lastUsedWorkspace,
     workspaces,
   );
+  const pinnedThreadIds = normalizePinnedThreadIds(value.pinnedThreadIds);
   return {
     version: 1,
     onboardingComplete: value.onboardingComplete === true,
@@ -131,8 +133,18 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     workspace,
     workspaces,
     lastUsedWorkspace,
+    pinnedThreadIds,
     approvalPolicy: value.approvalPolicy,
   };
+}
+
+function normalizePinnedThreadIds(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value))
+    throw new Error("ZenX pinned Thread list is invalid");
+  return [
+    ...new Set(value.map((entry) => nonEmpty(entry, "pinned Thread ID"))),
+  ];
 }
 
 function normalizeLastUsedWorkspace(

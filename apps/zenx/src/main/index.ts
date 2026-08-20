@@ -509,6 +509,16 @@ function installSettingsIpc(
     },
   );
   ipcMain.handle(
+    ipcChannels.threadPinSet,
+    async (_event, threadId: unknown, pinned: unknown) => {
+      if (typeof threadId !== "string" || typeof pinned !== "boolean") {
+        throw new Error("Invalid pinned Thread update");
+      }
+      await settings.setThreadPinned(threadId, pinned);
+      return await settings.publicSettings();
+    },
+  );
+  ipcMain.handle(
     ipcChannels.directorySnapshot,
     async () => await directoryBrowser.snapshot(),
   );

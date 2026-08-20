@@ -151,11 +151,24 @@ export function deriveInboxSections(
   ];
 }
 
+export function derivePinnedThreads(
+  threads: readonly NativeThreadSummary[],
+  pinnedThreadIds: readonly string[],
+): NativeThreadSummary[] {
+  const pinned = new Set(pinnedThreadIds);
+  return sortByRecency(threads.filter((thread) => pinned.has(thread.threadId)));
+}
+
 export function deriveProjectGroups(
   threads: readonly NativeThreadSummary[],
   projection: ZenXProjectProjectionSnapshot,
+  pinnedThreadIds: ReadonlySet<string> = new Set(),
 ): ProjectGroup[] {
-  const byId = new Map(threads.map((thread) => [thread.threadId, thread]));
+  const byId = new Map(
+    threads
+      .filter((thread) => !pinnedThreadIds.has(thread.threadId))
+      .map((thread) => [thread.threadId, thread]),
+  );
   const groups: ProjectGroup[] = projection.projects.map((project) => ({
     key: project.key,
     label: projectLabel(project.workspace),
