@@ -315,6 +315,61 @@ test("failed Send preserves its draft and stable id for a deliberate retry", asy
   }
 });
 
+test("host recovery refreshes the selected Thread without clearing draft or local navigation", async () => {
+  let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+  let resumeCalls = 0;
+  const harness = await mountThreadApp({
+    onStatus: (listener) => {
+      statusListener = listener;
+      return () => {
+        statusListener = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "thread/resume") {
+        resumeCalls += 1;
+        return resumed(liveThread());
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Keep this local draft");
+    const openWorkspace = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Open workspace panel"]',
+      ),
+    );
+    await act(async () => openWorkspace.click());
+    await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Close workspace"]',
+      ),
+    );
+    assert.ok(statusListener);
+
+    await act(async () => {
+      statusListener?.({ type: "reconnecting", attempt: 1, delayMs: 10 });
+      statusListener?.({ type: "ready", reconnected: true });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => resumeCalls === 2);
+    assert.ok(
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Close workspace"]',
+      ),
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
+      "Keep this local draft",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("Sidebar archive clears the selected Chat and opens its Settings restore entry", async () => {
   let archived = false;
   let persistedPins = ["thread-1"];

@@ -121,32 +121,173 @@ test("serializes concurrent capability restarts", async () => {
   }
 });
 
-test("reports a killed App Server as a terminal error without restarting", async () => {
+test("recovers a killed hosted App Server and admits one subsequent Turn", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-crash-"));
-  const manager = managerFor(directory);
+  const invocations: string[] = [];
+  const capabilityHost: ZenXCapabilityHost = {
+    hostSnapshot: () => ({
+      definitions: [
+        {
+          name: "demo_recovered",
+          description: "Prove the recovered capability bridge",
+          inputSchema: {
+            type: "object",
+            properties: { value: { type: "string" } },
+            required: ["value"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    }),
+    execute: async (invocation) => {
+      invocations.push(String(invocation.arguments.value));
+      return { output: '{"recovered":true}', exitCode: 0 };
+    },
+  };
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+    },
+    capabilityHost,
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+    recoveryDelaysMs: [10, 20, 40],
+  });
   try {
     await manager.start();
+    const thread = (await manager.request("thread/start", {})).thread;
     const statuses: AppServerHostStatus[] = [];
-    const failed = deferred<AppServerHostStatus & { type: "error" }>();
+    const recovered = deferred<void>();
+    const completed = deferred<void>();
     manager.onStatus((status) => {
       statuses.push(status);
-      if (status.type === "error") failed.resolve(status);
+      if (status.type === "ready" && status.reconnected) recovered.resolve();
     });
-    const processId = manager.processId;
-    assert.notEqual(processId, undefined);
-    process.kill(processId!, "SIGKILL");
+    manager.onNotification((method) => {
+      if (method === "turn/completed") completed.resolve();
+    });
+    const originalProcessId = manager.processId;
+    assert.notEqual(originalProcessId, undefined);
+    process.kill(originalProcessId!, "SIGKILL");
 
-    const status = await within(failed.promise);
-    assert.match(status.message, /stopped unexpectedly/u);
-    await assert.rejects(
-      manager.request("thread/list", {}),
-      /Zen App Server is not ready/u,
+    await within(recovered.promise);
+    assert.notEqual(manager.processId, originalProcessId);
+    assert.equal(
+      statuses.some((status) => status.type === "reconnecting"),
+      true,
     );
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(
+      (await manager.request("thread/resume", { threadId: thread.id })).thread
+        .id,
+      thread.id,
+    );
+    assert.equal((await manager.listThreadSummaries())[0]?.threadId, thread.id);
+    assert.equal((await manager.request("model/list", {})).data[0]?.id, "fake");
+
+    await manager.request("turn/start", {
+      threadId: thread.id,
+      input: [
+        {
+          type: "text",
+          text: '!tool demo_recovered {"value":"once"}',
+        },
+      ],
+      clientUserMessageId: "after-recovery-once",
+    });
+    await within(completed.promise);
+    assert.deepEqual(invocations, ["once"]);
+    const resumed = await manager.request("thread/read", {
+      threadId: thread.id,
+      includeTurns: true,
+    });
+    assert.equal(
+      resumed.thread.turns.filter((turn) =>
+        turn.items.some(
+          (item) =>
+            item.type === "userMessage" &&
+            item.clientId === "after-recovery-once",
+        ),
+      ).length,
+      1,
+    );
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("intentional stop does not enter automatic recovery", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-stop-"));
+  const manager = managerFor(directory);
+  const statuses: AppServerHostStatus[] = [];
+  manager.onStatus((status) => statuses.push(status));
+  try {
+    await manager.start();
+    await manager.stop();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.deepEqual(manager.status, { type: "stopped" });
     assert.equal(manager.processId, undefined);
     assert.equal(
-      statuses.some((entry) => entry.type === "starting"),
+      statuses.some((status) => status.type === "reconnecting"),
       false,
+    );
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("bounds recovery attempts after a fatal hosted startup failure", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-fatal-"));
+  const options = {
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never" as const,
+      provider: { type: "fake" as const },
+    },
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+    recoveryDelaysMs: [0, 0],
+  };
+  const manager = new AppServerManager(options);
+  const statuses: AppServerHostStatus[] = [];
+  const failed = deferred<AppServerHostStatus & { type: "error" }>();
+  manager.onStatus((status) => {
+    statuses.push(status);
+    if (status.type === "error") failed.resolve(status);
+  });
+  try {
+    await manager.start();
+    options.entryPath = path.join(directory, "missing-host.cjs");
+    process.kill(manager.processId!, "SIGKILL");
+
+    const status = await within(failed.promise);
+    assert.match(status.message, /recovery failed after 2 attempts/u);
+    assert.equal(
+      statuses.filter(
+        (entry) => entry.type === "reconnecting" && entry.delayMs === 0,
+      ).length,
+      2,
+    );
+    assert.equal(manager.processId, undefined);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(
+      statuses.filter(
+        (entry) => entry.type === "reconnecting" && entry.delayMs === 0,
+      ).length,
+      2,
     );
   } finally {
     await manager.stop();
