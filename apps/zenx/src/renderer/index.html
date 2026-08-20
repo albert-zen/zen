@@ -3,11 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self' 'sha256-6+xEKg+XzipQDXV/blE+ogL04A+OA5UXlmOIzqYgc+s='; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
+    <script>
+      (() => {
+        const stored = localStorage.getItem("zenx.appearance");
+        const preference = ["system", "light", "dark"].includes(stored)
+          ? stored
+          : "system";
+        const resolved =
+          preference === "system"
+            ? matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light"
+            : preference;
+        document.documentElement.dataset.appearance = resolved;
+        document.documentElement.style.colorScheme = resolved;
+        document
+          .querySelector('meta[name="color-scheme"]')
+          ?.setAttribute("content", resolved);
+      })();
+    </script>
     <title>ZenX</title>
   </head>
   <body>

@@ -6,6 +6,10 @@ import type {
   ZenXHostProfile,
   ZenXProviderProfile,
 } from "../../main/host-profile.js";
+import {
+  getAppearanceController,
+  type AppearancePreference,
+} from "./appearance.js";
 import { CapabilitySettings } from "./CapabilitySettings.js";
 import { Icon } from "./icons.js";
 import { ProviderLogo } from "./ProviderLogo.js";
@@ -676,12 +680,49 @@ function GeneralPanel({
   draft: ZenXHostProfile;
   setDraft(value: ZenXHostProfile): void;
 }) {
+  const appearanceController = getAppearanceController();
+  const [appearance, setAppearance] = useState<AppearancePreference>(() =>
+    appearanceController.getPreference(),
+  );
   return (
     <>
       <header>
         <h2>General</h2>
-        <p>Local workspace defaults and Zen App Server behavior.</p>
+        <p>
+          Appearance, local workspace defaults, and Zen App Server behavior.
+        </p>
       </header>
+      <div className="page-card settings-card">
+        <div className="settings-card-head">
+          <div>
+            <h3>Appearance</h3>
+            <p>Use the system appearance or keep ZenX light or dark.</p>
+          </div>
+          <span className="status-muted">Local</span>
+        </div>
+        <fieldset className="appearance-options">
+          <legend className="sr-only">Appearance</legend>
+          {(["system", "light", "dark"] as const).map((option) => (
+            <label key={option}>
+              <input
+                type="radio"
+                name="appearance"
+                value={option}
+                checked={appearance === option}
+                onChange={() => {
+                  appearanceController.setPreference(option);
+                  setAppearance(option);
+                }}
+              />
+              <span>{option[0]?.toUpperCase() + option.slice(1)}</span>
+            </label>
+          ))}
+        </fieldset>
+        <p className="settings-note">
+          Appearance changes immediately. System follows your operating system
+          setting.
+        </p>
+      </div>
       <div className="page-card settings-card">
         <div className="form-grid">
           <div className="field wide">

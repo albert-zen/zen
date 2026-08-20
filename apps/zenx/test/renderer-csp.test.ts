@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import test from "node:test";
 import { fileURLToPath } from "node:url";
+import test from "node:test";
 
 import { loadConfigFromFile } from "electron-vite";
+import { JSDOM } from "jsdom";
 import { build, createServer } from "vite";
 
 const rendererIndexPath = new URL(
@@ -56,7 +58,8 @@ test("development Vite pipeline only relaxes the renderer CSP meta", async () =>
       developmentHtml.match(/style-src 'self' 'unsafe-inline'/gu)?.length,
       1,
     );
-    assert.match(developmentHtml, /script-src 'self';/u);
+    assert.match(developmentHtml, /script-src 'self'(?: 'sha256-[^']+')*;/u);
+    assert.doesNotMatch(developmentHtml, /script-src[^;]*'unsafe-inline'/u);
 
     await assert.rejects(
       server.transformIndexHtml(
@@ -90,7 +93,6 @@ test("production Vite build keeps the renderer CSP strict", async () => {
 
   assert.match(productionHtml, /style-src 'self';/u);
   assert.doesNotMatch(productionHtml, /style-src[^;]*'unsafe-inline'/u);
-
   const loaded = await loadConfigFromFile(
     { command: "build", mode: "production" },
     configFilePath,
@@ -113,5 +115,44 @@ test("production Vite build keeps the renderer CSP strict", async () => {
   const builtHtml = String(indexHtml.source);
   assert.match(builtHtml, /style-src 'self';/u);
   assert.doesNotMatch(builtHtml, /style-src[^;]*'unsafe-inline'/u);
-  assert.match(builtHtml, /script-src 'self';/u);
+  assert.match(builtHtml, /script-src 'self'(?: 'sha256-[^']+')*;/u);
+  assert.doesNotMatch(builtHtml, /script-src[^;]*'unsafe-inline'/u);
+});
+
+test("allows only the hashed pre-paint appearance bootstrap", async () => {
+  const productionHtml = await readFile(rendererIndexPath, "utf8");
+  const script = productionHtml.match(/<script>([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+  const hash = createHash("sha256")
+    .update(script.replace(/\r\n?/gu, "\n"))
+    .digest("base64");
+  assert.ok(productionHtml.includes(`'sha256-${hash}'`));
+  assert.doesNotMatch(productionHtml, /script-src[^;]*'unsafe-inline'/u);
+
+  const isolatedHtml = productionHtml.match(
+    /<meta name="color-scheme"[^>]*>[\s\S]*?<script>[\s\S]*?<\/script>/u,
+  )?.[0];
+  assert.ok(isolatedHtml);
+  const dom = new JSDOM(
+    `<!doctype html><html><head>${isolatedHtml}</head></html>`,
+    {
+      runScripts: "dangerously",
+      url: "http://localhost",
+      beforeParse: (window) => {
+        window.localStorage.setItem("zenx.appearance", "light");
+        Object.defineProperty(window, "matchMedia", {
+          value: () => ({ matches: true }),
+        });
+      },
+    },
+  );
+  assert.equal(dom.window.document.documentElement.dataset.appearance, "light");
+  assert.equal(dom.window.document.documentElement.style.colorScheme, "light");
+  assert.equal(
+    dom.window.document
+      .querySelector('meta[name="color-scheme"]')
+      ?.getAttribute("content"),
+    "light",
+  );
+  dom.window.close();
 });

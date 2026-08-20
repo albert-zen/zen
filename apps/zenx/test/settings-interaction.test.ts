@@ -11,6 +11,7 @@ import type {
   PublicHostSettings,
   ZenXHostProfile,
 } from "../src/main/host-profile.js";
+import type { AppearancePreference } from "../src/renderer/src/appearance.js";
 import type { SettingsTab } from "../src/renderer/src/SettingsView.js";
 
 const { act, createElement, useState } = React;
@@ -99,6 +100,39 @@ test("Archived threads is a Settings section with keyboard-reachable Unarchive",
   }
 });
 
+test("General switches Appearance immediately without restarting the host", async () => {
+  const saved: ZenXHostProfile[] = [];
+  const harness = await mountSettings("general", async (profile) => {
+    saved.push(profile);
+    return { ...settings, profile };
+  });
+  try {
+    await waitFor(() => appearanceRadio("light"));
+    const system = appearanceRadio("system");
+    const light = appearanceRadio("light");
+    const dark = appearanceRadio("dark");
+    assert.ok(system);
+    assert.ok(light);
+    assert.ok(dark);
+    assert.equal(system.type, "radio");
+    assert.equal(light.type, "radio");
+    assert.equal(dark.type, "radio");
+    assert.equal(system.name, "appearance");
+    assert.equal(light.name, system.name);
+    assert.equal(dark.name, system.name);
+    await act(async () => light.click());
+    assert.equal(document.documentElement.dataset.appearance, "light");
+    assert.equal(localStorage.getItem("zenx.appearance"), "light");
+    assert.equal(light.checked, true);
+    assert.equal(system.checked, false);
+    assert.equal(dark.checked, false);
+    assert.equal(saved.length, 0);
+    assert.equal(exactButton("Apply & restart")?.disabled, true);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 interface Harness {
   dom: JSDOM;
   root: Root;
@@ -124,6 +158,8 @@ async function mountSettings(
     document: globalThis.document,
     Event: globalThis.Event,
     HTMLElement: globalThis.HTMLElement,
+    localStorage: globalThis.localStorage,
+    matchMedia: globalThis.matchMedia,
     Node: globalThis.Node,
     window: globalThis.window,
   };
@@ -131,6 +167,12 @@ async function mountSettings(
     document: dom.window.document,
     Event: dom.window.Event,
     HTMLElement: dom.window.HTMLElement,
+    localStorage: dom.window.localStorage,
+    matchMedia: () => ({
+      matches: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }),
     Node: dom.window.Node,
     window: dom.window,
     IS_REACT_ACT_ENVIRONMENT: true,
@@ -191,6 +233,14 @@ function exactButton(label: string): HTMLButtonElement | undefined {
   return [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent?.trim() === label,
   );
+}
+
+function appearanceRadio(
+  value: AppearancePreference,
+): HTMLInputElement | undefined {
+  return Array.from(
+    document.querySelectorAll<HTMLInputElement>('input[name="appearance"]'),
+  ).find((input) => input.value === value);
 }
 
 async function waitFor<T>(read: () => T | null | undefined): Promise<T> {

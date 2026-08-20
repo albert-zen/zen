@@ -68,6 +68,9 @@
 - **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、workspace、
   审批默认值与本地产品偏好；其中 host 配置只用于组合本机 App Server，不包含
   credential，也不覆盖已存 Thread 的生效设置。
+- **ZenXAppearancePreference** — ZenX renderer 在本机 app profile 保存 System / Light / Dark
+  偏好，并在首屏前把系统解析结果投影为同一套组件消费的语义色彩 token；它不进入 Core、
+  Thread、Project、host restart 或 canonical ItemList。
 - **ZenXThreadPinProjection** — ZenXHostProfile 按本机 threadId 顺序持久化 Sidebar Pin，
   renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
   canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。
