@@ -18,6 +18,7 @@ export interface ExternalProviderProcessRunner {
       timeoutMs: number;
       signal?: AbortSignal;
       maxOutputBytes?: number;
+      environment?: NodeJS.ProcessEnv;
       runtimeExecutable?: string;
       bindBeforeSpawn?: () => Promise<ProviderLaunchBinding>;
       verifyBeforeSpawn?: () => Promise<void>;
@@ -36,6 +37,7 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
       timeoutMs: number;
       signal?: AbortSignal;
       maxOutputBytes?: number;
+      environment?: NodeJS.ProcessEnv;
       runtimeExecutable?: string;
       bindBeforeSpawn?: () => Promise<ProviderLaunchBinding>;
       verifyBeforeSpawn?: () => Promise<void>;
@@ -57,7 +59,10 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
         [...invocation.argumentPrefix, ...args],
         {
           cwd: options.cwd,
-          env: providerProcessEnvironment(process.env),
+          env: providerProcessEnvironment({
+            ...process.env,
+            ...options.environment,
+          }),
           shell: false,
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,

@@ -29,11 +29,6 @@ void app.whenReady().then(async () => {
       process.resourcesPath.length > 0,
       "packaged smoke must use process.resourcesPath",
     );
-    process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(
-      process.resourcesPath,
-      "providers",
-      "playwright-browsers",
-    );
     const manifestPath = path.join(
       process.resourcesPath,
       "providers",

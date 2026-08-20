@@ -105,15 +105,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm --workspace apps/zenx run smoke:packaged
-      - name: Record reusable ZenX build output
+      - name: Confirm packaged smoke left no shared build output
         shell: pwsh
         run: |
-          $out = (Resolve-Path apps/zenx/out).Path
-          Get-ChildItem -LiteralPath $out -Recurse -File |
-            Sort-Object FullName |
-            ForEach-Object {
-              "$($_.FullName.Substring($out.Length))=$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash)"
-            } | Set-Content -LiteralPath "$env:RUNNER_TEMP/zenx-out-before.txt"
+          if (Test-Path -LiteralPath apps/zenx/out) {
+            throw "smoke:packaged wrote shared apps/zenx/out"
+          }
       - name: Package the real ZenX portable app
         run: npm --workspace apps/zenx run package:portable
       - name: Inspect the portable app without launching it
@@ -128,7 +125,9 @@ jobs:
             "$artifact/resources/app/out/preload/index.cjs",
             "$artifact/resources/app/out/renderer/index.html",
             "$artifact/resources/app/node_modules/ws/package.json",
-            "$artifact/resources/providers/manifest.json"
+            "$artifact/resources/providers/manifest.json",
+            "$artifact/resources/providers/playwright-browsers/chromium-1237/INSTALLATION_COMPLETE",
+            "$artifact/resources/providers/playwright-browsers/chromium-1237/chrome-win64/chrome.exe"
           )
           foreach ($path in $required) {
             if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -136,20 +135,14 @@ jobs:
             }
           }
 
-          $out = (Resolve-Path apps/zenx/out).Path
-          $after = Get-ChildItem -LiteralPath $out -Recurse -File |
-            Sort-Object FullName |
-            ForEach-Object {
-              "$($_.FullName.Substring($out.Length))=$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash)"
-            }
-          $before = Get-Content -LiteralPath "$env:RUNNER_TEMP/zenx-out-before.txt"
-          if (Compare-Object $before $after) {
-            throw "package:portable modified reusable apps/zenx/out"
+          if (Test-Path -LiteralPath apps/zenx/out) {
+            throw "package:portable wrote shared apps/zenx/out"
           }
-          $hasPlaceholder = Get-ChildItem -LiteralPath "$out/main" -Recurse -Filter "*.js" |
-            Select-String -SimpleMatch "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__" -Quiet
-          if (!$hasPlaceholder) {
-            throw "Reusable apps/zenx/out no longer contains the provider manifest placeholder"
+
+          $manifest = Get-Content -Raw -LiteralPath "$artifact/resources/providers/manifest.json" | ConvertFrom-Json
+          $browserAssets = @($manifest.providers.'playwright-cli'.assets)
+          if ($browserAssets.Count -lt 3 -or !($browserAssets | Where-Object { $_.kind -eq 'directory' -and $_.path -eq 'playwright-browsers\chromium-1237' })) {
+            throw "Portable ZenX manifest does not cover the browser payload"
           }
 
   zenx-windows-project-workspace-smoke:

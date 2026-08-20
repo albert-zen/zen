@@ -13,6 +13,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  createBuildSnapshot,
   packageManifest,
   publishPackagedArtifact,
   stagePackage,
@@ -20,6 +21,101 @@ import {
 } from "../scripts/package-zenx-portable.mjs";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
+
+test("concurrent app and smoke builds use complete private snapshots", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-build-snapshot-test-"),
+  );
+  let releaseApp;
+  let appStarted;
+  const started = new Promise((resolve) => {
+    appStarted = resolve;
+  });
+  const held = new Promise((resolve) => {
+    releaseApp = resolve;
+  });
+  try {
+    const appStaging = path.join(directory, "app-run");
+    const smokeStaging = path.join(directory, "smoke-run");
+    const rootDirectory = path.join(directory, "root");
+    await Promise.all([
+      mkdir(appStaging, { recursive: true }),
+      mkdir(smokeStaging, { recursive: true }),
+      mkdir(path.join(rootDirectory, "node_modules", "ws"), {
+        recursive: true,
+      }),
+    ]);
+    await writeFile(
+      path.join(rootDirectory, "node_modules", "ws", "index.js"),
+      "ws",
+    );
+    const appBuild = createBuildSnapshot(appStaging, async (output) => {
+      await writeBuildFixture(output, "app-partial");
+      appStarted();
+      await held;
+      await writeFile(path.join(output, "main", "result"), "app-complete");
+    });
+    await started;
+    const smokeBuild = await createBuildSnapshot(
+      smokeStaging,
+      async (output) => {
+        await writeBuildFixture(output, "smoke-complete");
+      },
+    );
+    const smokePackage = path.join(smokeStaging, "package");
+    await stagePackage({
+      target: "smoke",
+      outDirectory: smokeBuild,
+      rootDirectory,
+      appDirectory: smokePackage,
+      manifestSha256: "smoke-manifest",
+    });
+    assert.equal(
+      await readFile(path.join(smokePackage, "main", "result"), "utf8"),
+      "smoke-complete",
+    );
+    assert.equal(
+      await readFile(path.join(appStaging, "build", "main", "result"), "utf8"),
+      "app-partial",
+    );
+    releaseApp();
+    const appSnapshot = await appBuild;
+    const appPackage = path.join(appStaging, "package");
+    await stagePackage({
+      target: "app",
+      outDirectory: appSnapshot,
+      rootDirectory,
+      appDirectory: appPackage,
+      manifestSha256: "app-manifest",
+    });
+    assert.notEqual(appSnapshot, smokeBuild);
+    assert.equal(
+      await readFile(path.join(appPackage, "out", "main", "result"), "utf8"),
+      "app-complete",
+    );
+    assert.equal(
+      await readFile(path.join(smokePackage, "main", "result"), "utf8"),
+      "smoke-complete",
+    );
+  } finally {
+    releaseApp?.();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+async function writeBuildFixture(output, result) {
+  await Promise.all([
+    mkdir(path.join(output, "main"), { recursive: true }),
+    mkdir(path.join(output, "preload"), { recursive: true }),
+    mkdir(path.join(output, "renderer"), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(path.join(output, "main", "integrity.js"), placeholder),
+    writeFile(path.join(output, "main", "result"), result),
+    writeFile(path.join(output, "preload", "index.cjs"), "preload"),
+    writeFile(path.join(output, "renderer", "index.html"), "renderer"),
+  ]);
+}
 
 test("stages the real app without modifying reusable build output", async () => {
   const fixture = await createFixture();

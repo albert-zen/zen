@@ -268,6 +268,14 @@ export async function selectBrowserProvider(
               runtimeExecutable: bundled.provider.runtime?.path,
               bindBeforeSpawn: bundledBind,
               verifyExecutable: bundledVerify,
+              browser: "chromium",
+              processEnvironment: {
+                PLAYWRIGHT_BROWSERS_PATH: path.join(
+                  options.resourcesDirectory!,
+                  "providers",
+                  "playwright-browsers",
+                ),
+              },
             }),
       }),
       manifest: playwrightBrowserManifest(),

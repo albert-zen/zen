@@ -97,6 +97,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   readonly #verifyExecutable?: () => Promise<void>;
   readonly #runtimeExecutable?: string;
   readonly #bindBeforeSpawn?: () => Promise<() => Promise<void>>;
+  readonly #browser?: "chromium";
+  readonly #processEnvironment?: NodeJS.ProcessEnv;
   readonly #sessions = new Map<string, PlaywrightSessionState>();
   readonly #artifacts: BrowserScreenshotArtifactStore;
   #reservedOpenTabs = 0;
@@ -109,6 +111,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     verifyExecutable?: () => Promise<void>;
     runtimeExecutable?: string;
     bindBeforeSpawn?: () => Promise<() => Promise<void>>;
+    browser?: "chromium";
+    processEnvironment?: NodeJS.ProcessEnv;
   }) {
     this.#executable = options.executable;
     this.#runner = options.runner;
@@ -116,6 +120,8 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     this.#verifyExecutable = options.verifyExecutable;
     this.#runtimeExecutable = options.runtimeExecutable;
     this.#bindBeforeSpawn = options.bindBeforeSpawn;
+    this.#browser = options.browser;
+    this.#processEnvironment = options.processEnvironment;
     this.#artifacts = new BrowserScreenshotArtifactStore(
       options.artifactDirectory,
     );
@@ -417,12 +423,20 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       await this.#verifyExecutable?.();
       const result = await this.#runner.run(
         this.#executable,
-        ["--json", `-s=${session.cliSessionName}`, ...args],
+        [
+          "--json",
+          `-s=${session.cliSessionName}`,
+          ...args,
+          ...(args[0] === "open" && this.#browser !== undefined
+            ? ["--browser", this.#browser]
+            : []),
+        ],
         {
           cwd: this.#cwd,
           timeoutMs,
           signal,
           maxOutputBytes,
+          environment: this.#processEnvironment,
           runtimeExecutable: this.#runtimeExecutable,
           bindBeforeSpawn: this.#bindBeforeSpawn,
           verifyBeforeSpawn: this.#verifyExecutable,

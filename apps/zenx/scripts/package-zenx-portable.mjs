@@ -17,7 +17,6 @@ import { fileURLToPath } from "node:url";
 const run = promisify(execFile);
 const zenx = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const root = path.resolve(zenx, "..", "..");
-const out = path.join(zenx, "out");
 const packagedRoot = path.join(zenx, ".packaged");
 const runsRoot = path.join(packagedRoot, "runs");
 const artifactRoot = path.join(packagedRoot, "artifact");
@@ -33,6 +32,7 @@ async function packageZenX(arguments_) {
     await mkdir(runsRoot, { recursive: true, mode: 0o700 });
     const staging = await mkdtemp(path.join(runsRoot, "package-"));
     try {
+      const buildSnapshot = await createBuildSnapshot(staging);
       const resources = path.join(staging, "resources");
       const appDir = path.join(staging, "app");
       const stagedArtifacts = path.join(staging, "artifact");
@@ -52,7 +52,7 @@ async function packageZenX(arguments_) {
       );
       await stagePackage({
         target,
-        outDirectory: out,
+        outDirectory: buildSnapshot,
         rootDirectory: root,
         appDirectory: appDir,
         manifestSha256: assembly.manifestSha256,
@@ -104,6 +104,35 @@ async function packageZenX(arguments_) {
       await rm(staging, { recursive: true, force: true });
     }
   });
+}
+
+/** Build only into the current packaging run before anything snapshots it. */
+export async function createBuildSnapshot(
+  stagingDirectory,
+  build = runZenXBuild,
+) {
+  const buildDirectory = path.join(stagingDirectory, "build");
+  await build(buildDirectory);
+  return buildDirectory;
+}
+
+async function runZenXBuild(buildDirectory) {
+  await run(
+    process.execPath,
+    [
+      path.join(
+        root,
+        "node_modules",
+        "electron-vite",
+        "bin",
+        "electron-vite.js",
+      ),
+      "build",
+      "--outDir",
+      buildDirectory,
+    ],
+    { cwd: zenx },
+  );
 }
 
 export async function withPackagingTargetLock(

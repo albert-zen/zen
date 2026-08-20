@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { chmod, lstat, open, readFile, realpath } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import {
+  chmod,
+  lstat,
+  open,
+  readFile,
+  readdir,
+  readlink,
+  realpath,
+} from "node:fs/promises";
 import path from "node:path";
 
 import { parseWindowsNpmShimEntry } from "./external-provider.js";
@@ -15,7 +24,13 @@ export interface BundledProvider {
   manifestSha256: string;
   companion?: { path: string; sha256: string };
   runtime?: { path: string; sha256: string; version?: string };
-  assets?: Array<{ path: string; sha256: string }>;
+  assets?: BundledProviderAsset[];
+}
+
+export interface BundledProviderAsset {
+  path: string;
+  sha256: string;
+  kind?: "file" | "directory";
 }
 
 export interface BundledProviderResolution {
@@ -30,7 +45,7 @@ interface ProviderManifestEntry {
   platforms: string[];
   companion?: { path: string; sha256: string };
   runtime?: { path: string; sha256: string; version?: string };
-  assets?: Array<{ path: string; sha256: string }>;
+  assets?: BundledProviderAsset[];
 }
 
 interface ProviderManifest {
@@ -136,7 +151,7 @@ export async function resolveBundledProvider(
   let executableRealPath: string;
   let bytes: Buffer;
   let companion: { path: string; sha256: string } | undefined;
-  let assets: Array<{ path: string; sha256: string }> | undefined;
+  let assets: BundledProviderAsset[] | undefined;
   try {
     const executableStat = await lstat(executable);
     if (executableStat.isSymbolicLink() || !executableStat.isFile()) {
@@ -227,20 +242,30 @@ export async function resolveBundledProvider(
           throw new Error("asset escapes its resource directory");
         }
         const assetStat = await lstat(assetPath);
-        if (assetStat.isSymbolicLink() || !assetStat.isFile()) {
-          throw new Error("asset must be a regular, non-symlink file");
+        const kind = asset.kind ?? "file";
+        if (
+          assetStat.isSymbolicLink() ||
+          (kind === "file" && !assetStat.isFile()) ||
+          (kind === "directory" && !assetStat.isDirectory())
+        ) {
+          throw new Error(`asset must be a regular, non-symlink ${kind}`);
         }
-        if (assetStat.size > 128 * 1024 * 1024)
+        if (kind === "file" && assetStat.size > 512 * 1024 * 1024)
           throw new Error("asset exceeds its size bound");
         const assetRealPath = await realpath(assetPath);
         if (!isWithin(providerRoot, assetRealPath))
           throw new Error("asset resolves outside its resource directory");
-        const assetSha256 = createHash("sha256")
-          .update(await readFile(assetRealPath))
-          .digest("hex");
+        const assetSha256 =
+          kind === "directory"
+            ? await hashBundledDirectoryAsset(assetRealPath)
+            : await hashBundledFileAsset(assetRealPath);
         if (assetSha256 !== asset.sha256)
           throw new Error(`asset integrity mismatch: ${asset.path}`);
-        assets.push({ path: assetRealPath, sha256: assetSha256 });
+        assets.push({
+          path: assetRealPath,
+          sha256: assetSha256,
+          ...(asset.kind === undefined ? {} : { kind: asset.kind }),
+        });
       }
     } catch (error) {
       return {
@@ -333,7 +358,8 @@ export async function verifyBundledProvider(
     selected.assets?.some(
       (asset, index) =>
         asset.path !== verified.assets?.[index]?.path ||
-        asset.sha256 !== verified.assets?.[index]?.sha256,
+        asset.sha256 !== verified.assets?.[index]?.sha256 ||
+        asset.kind !== verified.assets?.[index]?.kind,
     )
   ) {
     throw new Error(
@@ -378,7 +404,9 @@ export async function bindBundledProviderLaunch(
       selected.executable,
       selected.companion?.path,
       selected.runtime?.path,
-      ...(selected.assets?.map((asset) => asset.path) ?? []),
+      ...(selected.assets
+        ?.filter((asset) => asset.kind !== "directory")
+        .map((asset) => asset.path) ?? []),
     ].filter((value): value is string => value !== undefined)) {
       handles.push(await open(candidate, "r"));
     }
@@ -395,10 +423,17 @@ export async function bindBundledProviderLaunch(
           selected.executable,
           selected.companion?.path,
           selected.runtime?.path,
-          ...(selected.assets?.map((asset) => asset.path) ?? []),
+          ...(selected.assets
+            ?.filter((asset) => asset.kind !== "directory")
+            .map((asset) => asset.path) ?? []),
         ]
           .filter((candidate): candidate is string => candidate !== undefined)
           .map((candidate) => chmod(candidate, 0o444)),
+      );
+      await Promise.all(
+        selected.assets
+          ?.filter((asset) => asset.kind === "directory")
+          .map((asset) => chmod(asset.path, 0o555)) ?? [],
       );
     } catch (error) {
       await Promise.all(handles.map((handle) => handle.close()));
@@ -410,6 +445,76 @@ export async function bindBundledProviderLaunch(
   return async () => {
     await Promise.all(handles.map((handle) => handle.close()));
   };
+}
+
+export async function hashBundledDirectoryAsset(
+  rootDirectory: string,
+): Promise<string> {
+  const maxEntries = 20_000;
+  const maxBytes = 2 * 1024 * 1024 * 1024;
+  const root = await realpath(rootDirectory);
+  const hash = createHash("sha256");
+  let entriesSeen = 0;
+  let bytesSeen = 0;
+
+  async function visit(
+    directory: string,
+    relativeDirectory: string,
+  ): Promise<void> {
+    const entries = await readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    );
+    for (const entry of entries) {
+      entriesSeen += 1;
+      if (entriesSeen > maxEntries) {
+        throw new Error("bundled directory asset exceeds the entry bound");
+      }
+      const candidate = path.join(directory, entry.name);
+      const relative = path.posix.join(relativeDirectory, entry.name);
+      const metadata = await lstat(candidate);
+      if (metadata.isDirectory()) {
+        hash.update(`directory\0${relative}\0`);
+        await visit(candidate, relative);
+        continue;
+      }
+      if (metadata.isFile()) {
+        bytesSeen += metadata.size;
+        if (bytesSeen > maxBytes) {
+          throw new Error("bundled directory asset exceeds the size bound");
+        }
+        hash.update(`file\0${relative}\0${String(metadata.size)}\0`);
+        const file = createReadStream(candidate);
+        for await (const chunk of file) hash.update(chunk);
+        hash.update("\0");
+        continue;
+      }
+      if (metadata.isSymbolicLink()) {
+        const target = await readlink(candidate);
+        const resolvedTarget = await realpath(candidate);
+        if (path.isAbsolute(target) || !isWithin(root, resolvedTarget)) {
+          throw new Error(
+            `bundled directory asset symlink escapes: ${relative}`,
+          );
+        }
+        hash.update(`symlink\0${relative}\0${target}\0`);
+        continue;
+      }
+      throw new Error(
+        `bundled directory asset contains an unsupported entry: ${relative}`,
+      );
+    }
+  }
+
+  await visit(root, "");
+  return hash.digest("hex");
+}
+
+async function hashBundledFileAsset(file: string): Promise<string> {
+  const hash = createHash("sha256");
+  const stream = createReadStream(file);
+  for await (const chunk of stream) hash.update(chunk);
+  return hash.digest("hex");
 }
 
 function parseManifest(
@@ -466,7 +571,10 @@ function parseManifest(
             asset.path.length > 0 &&
             asset.path.length <= 256 &&
             typeof asset.sha256 === "string" &&
-            /^[a-f0-9]{64}$/u.test(asset.sha256),
+            /^[a-f0-9]{64}$/u.test(asset.sha256) &&
+            (asset.kind === undefined ||
+              asset.kind === "file" ||
+              asset.kind === "directory"),
         )))
   ) {
     return undefined;
