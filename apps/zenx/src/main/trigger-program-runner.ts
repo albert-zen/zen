@@ -398,7 +398,6 @@ export interface WindowsProcessOperations {
     pid: number,
     tree: boolean,
   ): Promise<{ ok: boolean; error: string }>;
-  processIsAlive(pid: number): boolean;
 }
 
 type ProcessIdentity = WindowsProcessIdentity;
@@ -501,64 +500,74 @@ export async function verifyAndTerminateWindowsProcessTree(
   rootPid: number,
   tree: ProcessTreeSnapshot,
   operations: WindowsProcessOperations = realWindowsProcessOperations,
+  options: {
+    quiescenceTimeoutMs?: number;
+    quiescencePollMs?: number;
+  } = {},
 ): Promise<TerminationResult> {
-  const table = await operations.captureProcessTable();
   let tracked = [tree.root, ...tree.descendants];
-  const beforeExpansion = validateTrackedIdentities(tracked, table.entries);
-  if (beforeExpansion !== null) return { ok: false, error: beforeExpansion };
-  tracked = addDescendants(tracked, table.entries);
-  const identityError = validateTrackedIdentities(tracked, table.entries);
-  if (identityError !== null) return { ok: false, error: identityError };
-  const live = tracked.filter((identity) =>
-    table.entries.some((candidate) => candidate.pid === identity.pid),
+  const timeoutMs = boundedDuration(
+    options.quiescenceTimeoutMs,
+    PROGRAM_QUIESCENCE_TIMEOUT_MS,
   );
-  const currentRoot = table.entries.find(
-    (candidate) => candidate.pid === tree.root.pid,
+  const pollMs = boundedDuration(
+    options.quiescencePollMs,
+    PROGRAM_QUIESCENCE_POLL_MS,
   );
-  if (currentRoot !== undefined) {
-    if (!identityMatches(tree.root, currentRoot))
-      return {
-        ok: false,
-        error: `PID ${String(tree.root.pid)} identity changed; containment was not proven`,
-      };
-    const rootResult = await operations.runTaskkill(rootPid, true);
-    if (!rootResult.ok && rootResult.error !== "process was not found")
-      return { ok: false, error: rootResult.error };
-  }
-  for (const identity of live) {
-    if (identity.pid === rootPid) continue;
-    const freshTable = await operations.captureProcessTable();
-    const current = freshTable.entries.find(
-      (candidate) => candidate.pid === identity.pid,
-    );
-    if (!identityMatches(identity, current)) continue;
-    const result = await operations.runTaskkill(identity.pid, true);
-    if (!result.ok && result.error !== "process was not found")
-      return {
-        ok: false,
-        error: `PID ${String(identity.pid)}: ${result.error}`,
-      };
-  }
-
   let stableAbsentPasses = 0;
-  const deadline = Date.now() + PROGRAM_QUIESCENCE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const maybeAlive = tracked.filter((identity) =>
-      operations.processIsAlive(identity.pid),
+  const deadline = Date.now() + timeoutMs;
+  let firstPass = true;
+  while (firstPass || Date.now() < deadline) {
+    firstPass = false;
+    const table = await operations.captureProcessTable();
+    tracked = addWindowsDescendants(tracked, table.entries);
+    const unknownIdentity = tracked.find(
+      (identity) => identity.startTime === null,
     );
-    const originalStillAlive =
-      maybeAlive.length === 0
-        ? false
-        : await anyIdentityStillAlive(maybeAlive, operations);
-    if (!originalStillAlive) {
+    if (unknownIdentity !== undefined)
+      return {
+        ok: false,
+        error: `PID ${String(unknownIdentity.pid)} has unknown process identity; containment was not proven`,
+      };
+    const live = tracked.filter((identity) =>
+      identityMatches(
+        identity,
+        table.entries.find((candidate) => candidate.pid === identity.pid),
+      ),
+    );
+    if (live.length === 0) {
       stableAbsentPasses += 1;
       if (stableAbsentPasses >= PROGRAM_QUIESCENCE_PASSES)
         return { ok: true, error: "" };
     } else {
       stableAbsentPasses = 0;
+      for (const identity of live) {
+        if (Date.now() >= deadline) return quiescenceDeadlineFailure();
+        const freshTable = await operations.captureProcessTable();
+        const current = freshTable.entries.find(
+          (candidate) => candidate.pid === identity.pid,
+        );
+        if (!identityMatches(identity, current)) continue;
+        if (Date.now() >= deadline) return quiescenceDeadlineFailure();
+        const termination = await operations.runTaskkill(identity.pid, true);
+        if (!termination.ok && termination.error !== "process was not found")
+          return {
+            ok: false,
+            error:
+              identity.pid === rootPid
+                ? termination.error
+                : `PID ${String(identity.pid)}: ${termination.error}`,
+          };
+      }
     }
-    await delay(PROGRAM_QUIESCENCE_POLL_MS);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return quiescenceDeadlineFailure();
+    await delay(Math.min(pollMs, remainingMs));
   }
+  return quiescenceDeadlineFailure();
+}
+
+function quiescenceDeadlineFailure(): TerminationResult {
   return {
     ok: false,
     error:
@@ -566,32 +575,14 @@ export async function verifyAndTerminateWindowsProcessTree(
   };
 }
 
-async function anyIdentityStillAlive(
-  identities: readonly ProcessIdentity[],
-  operations: WindowsProcessOperations,
-): Promise<boolean> {
-  const table = await operations.captureProcessTable();
-  return identities.some((identity) =>
-    identityMatches(
-      identity,
-      table.entries.find((candidate) => candidate.pid === identity.pid),
-    ),
-  );
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
+function boundedDuration(value: number | undefined, maximum: number): number {
+  if (value === undefined || !Number.isFinite(value)) return maximum;
+  return Math.min(maximum, Math.max(0, Math.floor(value)));
 }
 
 const realWindowsProcessOperations: WindowsProcessOperations = {
   captureProcessTable,
   runTaskkill,
-  processIsAlive,
 };
 
 async function verifyAndTerminatePosix(
@@ -714,6 +705,52 @@ function addDescendants(
   return result;
 }
 
+function addWindowsDescendants(
+  tracked: readonly ProcessIdentity[],
+  entries: readonly ProcessIdentity[],
+): ProcessIdentity[] {
+  const result = [...tracked];
+  const known = new Set(result.map((identity) => identity.pid));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const entry of entries) {
+      if (known.has(entry.pid)) continue;
+      const parent = result.find(
+        (identity) => identity.pid === entry.parentPid,
+      );
+      if (parent === undefined) continue;
+      const currentParent = entries.find(
+        (candidate) => candidate.pid === parent.pid,
+      );
+      if (
+        currentParent !== undefined &&
+        !identityMatches(parent, currentParent) &&
+        !windowsIdentityPredates(entry, currentParent)
+      )
+        continue;
+      result.push(entry);
+      known.add(entry.pid);
+      changed = true;
+    }
+  }
+  return result;
+}
+
+function windowsIdentityPredates(
+  identity: ProcessIdentity,
+  other: ProcessIdentity,
+): boolean {
+  if (
+    identity.startTime === null ||
+    other.startTime === null ||
+    !/^\d+$/u.test(identity.startTime) ||
+    !/^\d+$/u.test(other.startTime)
+  )
+    return false;
+  return BigInt(identity.startTime) < BigInt(other.startTime);
+}
+
 async function runTaskkill(
   pid: number,
   tree: boolean,
@@ -790,7 +827,10 @@ async function captureProcessTable(): Promise<ProcessTableSnapshot> {
             "}",
           ].join("; "),
         ]
-      : ["-eo", "pid=,ppid=,pgid=,sid=,lstart="];
+      : process.platform === "linux"
+        ? ["-eo", "pid=,ppid=,pgid=,sid=,lstart="]
+        : // Darwin ps has no sid= keyword; session identity is not used here.
+          ["-axo", "pid=,ppid=,pgid=,lstart="];
   const output = await new Promise<string>((resolve, reject) => {
     let text = "";
     let settled = false;
@@ -829,7 +869,7 @@ async function captureProcessTable(): Promise<ProcessTableSnapshot> {
   });
   return process.platform === "win32"
     ? parseWindowsProcessTable(output)
-    : parsePosixProcessTable(output);
+    : parsePosixProcessTable(output, process.platform === "linux");
 }
 
 function parseWindowsProcessTable(output: string): ProcessTableSnapshot {
@@ -849,17 +889,22 @@ function parseWindowsProcessTable(output: string): ProcessTableSnapshot {
   return { entries };
 }
 
-function parsePosixProcessTable(output: string): ProcessTableSnapshot {
+function parsePosixProcessTable(
+  output: string,
+  includesSessionId: boolean,
+): ProcessTableSnapshot {
   const entries: ProcessIdentity[] = [];
   for (const line of output.split(/\r?\n/u)) {
-    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/u);
+    const match = includesSessionId
+      ? line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/u)
+      : line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/u);
     if (match === null) continue;
     entries.push({
       pid: Number(match[1]!),
       parentPid: Number(match[2]!),
       processGroupId: Number(match[3]!),
-      sessionId: Number(match[4]!),
-      startTime: match[5]!.trim() || null,
+      sessionId: includesSessionId ? Number(match[4]!) : null,
+      startTime: match[includesSessionId ? 5 : 4]!.trim() || null,
     });
   }
   return { entries };

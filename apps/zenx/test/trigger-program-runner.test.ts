@@ -55,15 +55,91 @@ test("Windows containment never reuses stale identity evidence for a second tree
         };
         return { ok: true, error: "" };
       },
-      processIsAlive: (pid) => table.entries.some((entry) => entry.pid === pid),
     },
+    { quiescencePollMs: 0 },
   );
 
   assert.deepEqual(result, { ok: true, error: "" });
   assert.deepEqual(taskkills, [[root.pid, true]]);
 });
 
-test("program runner passes bounded JSON input, cwd, and env", async () => {
+test("Windows containment discovers and kills a descendant born during termination", async () => {
+  const root: WindowsProcessIdentity = {
+    pid: 101,
+    parentPid: 1,
+    processGroupId: null,
+    sessionId: null,
+    startTime: "root-original",
+  };
+  const lateDescendant: WindowsProcessIdentity = {
+    pid: 303,
+    parentPid: root.pid,
+    processGroupId: null,
+    sessionId: null,
+    startTime: "late-descendant",
+  };
+  let table: WindowsProcessTableSnapshot = { entries: [root] };
+  const taskkills: Array<[number, boolean]> = [];
+
+  const result = await verifyAndTerminateWindowsProcessTree(
+    root.pid,
+    { root, descendants: [] },
+    {
+      captureProcessTable: async () => structuredClone(table),
+      runTaskkill: async (pid, tree) => {
+        taskkills.push([pid, tree]);
+        table =
+          pid === root.pid ? { entries: [lateDescendant] } : { entries: [] };
+        return { ok: true, error: "" };
+      },
+    },
+    { quiescencePollMs: 0 },
+  );
+
+  assert.deepEqual(result, { ok: true, error: "" });
+  assert.deepEqual(taskkills, [
+    [root.pid, true],
+    [lateDescendant.pid, true],
+  ]);
+});
+
+test("Windows containment fails when the deadline finds a non-empty tree", async () => {
+  const root: WindowsProcessIdentity = {
+    pid: 101,
+    parentPid: 1,
+    processGroupId: null,
+    sessionId: null,
+    startTime: "root-original",
+  };
+  let captures = 0;
+  const taskkills: Array<[number, boolean]> = [];
+
+  const result = await verifyAndTerminateWindowsProcessTree(
+    root.pid,
+    { root, descendants: [] },
+    {
+      captureProcessTable: async () => {
+        captures += 1;
+        return { entries: [root] };
+      },
+      runTaskkill: async (pid, tree) => {
+        taskkills.push([pid, tree]);
+        return { ok: true, error: "" };
+      },
+    },
+    { quiescenceTimeoutMs: 0, quiescencePollMs: 0 },
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    error:
+      "process-tree quiescence could not be proven before the bounded deadline",
+  });
+  assert.equal(captures, 1);
+  assert.deepEqual(taskkills, []);
+});
+
+test("program runner preserves a normal exit with bounded JSON input, cwd, and env", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-program-"));
   const input: TriggerProgramRunInput = {
     invocationId: "invocation-stable",
@@ -107,7 +183,7 @@ test("predicate output distinguishes match and non-match", async () => {
   assert.equal((await make(false)).status, "non_match");
 });
 
-test("program runner records malformed, nonzero, oversized, timeout, and cancellation outcomes", async () => {
+test("program runner records malformed, nonzero, and oversized outcomes", async () => {
   const malformed = await runner.run(
     { command: process.execPath, args: ["-e", "console.log('nope')"] },
     { invocationId: "malformed", stage: "action", event: {} },
@@ -139,7 +215,9 @@ test("program runner records malformed, nonzero, oversized, timeout, and cancell
     new AbortController().signal,
   );
   assert.equal(oversized.status, "oversized_output");
+});
 
+test("program runner preserves timeout and cancellation outcomes after containment", async () => {
   const timedOut = await runner.run(
     {
       command: process.execPath,
@@ -160,6 +238,62 @@ test("program runner records malformed, nonzero, oversized, timeout, and cancell
   controller.abort(new Error("fixture cancellation"));
   assert.equal((await cancelled).status, "cancelled");
 });
+
+test(
+  "program runner preserves cooperative termination",
+  { skip: process.platform === "win32" },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-program-cooperative-"),
+    );
+    const ready = path.join(directory, "ready");
+    const terminated = path.join(directory, "terminated");
+    const program = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(terminated)},'term');process.exit(0)});setInterval(()=>{},1000);`;
+    const controller = new AbortController();
+    try {
+      const running = runner.run(
+        { command: process.execPath, args: ["-e", program] },
+        { invocationId: "cooperative", stage: "action", event: {} },
+        controller.signal,
+      );
+      await waitForFile(ready);
+      controller.abort(new Error("cooperative fixture"));
+      assert.equal((await running).status, "cancelled");
+      assert.equal(await waitForFile(terminated), "term");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "program runner escalates from cooperative termination to a hard kill",
+  { skip: process.platform === "win32" },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-program-hard-kill-"),
+    );
+    const marker = path.join(directory, "late-marker");
+    const ready = path.join(directory, "ready");
+    const program = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));process.on('SIGTERM',()=>{});setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),5000);`;
+    const controller = new AbortController();
+    try {
+      const running = runner.run(
+        { command: process.execPath, args: ["-e", program] },
+        { invocationId: "hard-kill", stage: "action", event: {} },
+        controller.signal,
+      );
+      const pid = Number(await waitForFile(ready));
+      controller.abort(new Error("hard-kill fixture"));
+      assert.equal((await running).status, "cancelled");
+      await waitForProcessExit(pid);
+      await assert.rejects(stat(marker), { code: "ENOENT" });
+    } finally {
+      await assert.rejects(stat(marker), { code: "ENOENT" });
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test("program runner contains a descendant after cancellation", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-program-kill-"));
