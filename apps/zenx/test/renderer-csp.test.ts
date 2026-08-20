@@ -13,7 +13,9 @@ const rendererIndexPath = new URL(
 const rendererRootPath = fileURLToPath(
   new URL("../src/renderer", import.meta.url),
 );
-const configPath = new URL("../electron.vite.config.ts", import.meta.url);
+const configFilePath = fileURLToPath(
+  new URL("../electron.vite.config.ts", import.meta.url),
+);
 
 test("development Vite pipeline only relaxes the renderer CSP meta", async () => {
   const productionHtml = await readFile(rendererIndexPath, "utf8");
@@ -25,7 +27,7 @@ test("development Vite pipeline only relaxes the renderer CSP meta", async () =>
   );
   const loaded = await loadConfigFromFile(
     { command: "serve", mode: "development" },
-    configPath.pathname,
+    configFilePath,
   );
   const server = await createServer({
     ...loaded.config.renderer,
@@ -91,7 +93,7 @@ test("production Vite build keeps the renderer CSP strict", async () => {
 
   const loaded = await loadConfigFromFile(
     { command: "build", mode: "production" },
-    configPath.pathname,
+    configFilePath,
   );
   const result = await build({
     ...loaded.config.renderer,
