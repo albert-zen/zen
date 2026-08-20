@@ -59,7 +59,9 @@ test("ignores an older Thread summary response after a newer refresh", async () 
       }),
     },
     settings: {
-      get: async () => ({ profile: { onboardingComplete: true } }),
+      get: async () => ({
+        profile: { onboardingComplete: true, pinnedThreadIds: [] },
+      }),
     },
     titles: {
       get: async () => ({}),
