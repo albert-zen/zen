@@ -174,7 +174,7 @@ void app.whenReady().then(async () => {
       capabilityHost: capabilities,
       startupTimeoutMs: 20_000,
     });
-    port.attach(manager, workspace);
+    await port.attach(manager, workspace);
 
     await check("hosted-app-server", async () => {
       await manager!.start();

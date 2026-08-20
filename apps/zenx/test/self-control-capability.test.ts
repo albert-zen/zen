@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -40,6 +40,7 @@ import {
   type ClientRequestParams,
   type ClientRequestResults,
   type ServerNotificationParams,
+  type Thread,
 } from "../src/protocol-client/index.js";
 import { ZenXProjectProjection } from "../src/main/project-projection.js";
 
@@ -60,7 +61,7 @@ test("real ZenX host control tools make active semantics explicit", async () => 
   const requestPort = new MutableAppServerRequestPort();
   const capabilities = await grantedSelfControl(directory, requestPort);
   const manager = managerFor(directory, capabilities);
-  requestPort.attach(manager, directory);
+  await requestPort.attach(manager, directory);
   const tools = capabilityTools(capabilities);
   try {
     await manager.start();
@@ -282,7 +283,7 @@ test("an Agent drives the complete bounded tracer bullet through App Server wire
       version: "0.1.0",
     },
   });
-  requestPort.attach(client, workspace);
+  await requestPort.attach(client, workspace);
   const approvals: string[] = [];
   client.onServerRequest(
     "item/commandExecution/requestApproval",
@@ -451,6 +452,94 @@ test("bounded reads omit command output and truncate message text", async () => 
     assert.match(serialized, /"outputOmitted":true/u);
   } finally {
     await capabilities.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("self-control Project and Thread filters reconcile filesystem aliases", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-control-alias-"),
+  );
+  const physical = path.join(directory, "physical");
+  const alias = path.join(directory, "alias");
+  try {
+    await mkdir(physical);
+    await symlink(
+      physical,
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const projection = new ZenXProjectProjection();
+    await projection.updateConfiguration([alias], alias);
+    const thread: Thread = {
+      id: "thread-alias",
+      sessionId: "thread-alias",
+      forkedFromId: null,
+      parentThreadId: null,
+      preview: "Alias reconciliation",
+      ephemeral: false,
+      isPinned: false,
+      modelProvider: "fake",
+      createdAt: 1,
+      updatedAt: 2,
+      recencyAt: null,
+      status: { type: "idle" },
+      path: null,
+      cwd: physical,
+      cliVersion: "zen/0.1.0",
+      source: "appServer",
+      threadSource: null,
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: null,
+      turns: [],
+    };
+    const port: AppServerRequestPort = {
+      projectProjection: projection,
+      async request<M extends ClientRequestMethod>(
+        method: M,
+        _params: ClientRequestParams[M],
+      ): Promise<ClientRequestResults[M]> {
+        assert.equal(method, "thread/list");
+        return {
+          data: [thread],
+          nextCursor: null,
+          backwardsCursor: null,
+        } as ClientRequestResults[M];
+      },
+    };
+    const capabilities = await grantedSelfControl(directory, port);
+    try {
+      const tools = capabilityTools(capabilities);
+      const projects = await invoke(tools, "zenx_projects_list", {
+        limit: 10,
+      });
+      assert.deepEqual(projects.projects, [
+        {
+          workspace: path.resolve(alias),
+          cwd: path.resolve(alias),
+          configured: true,
+          isDefault: true,
+          threadCount: 1,
+          threadIds: [thread.id],
+          threadIdsTruncated: false,
+        },
+      ]);
+
+      const listed = await invoke(tools, "zenx_threads_list", {
+        workspace: alias,
+        cwd: physical,
+        limit: 10,
+      });
+      assert.equal(
+        (listed.threads as Array<{ threadId: string }>)[0]?.threadId,
+        thread.id,
+      );
+    } finally {
+      await capabilities.close();
+    }
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
