@@ -495,6 +495,10 @@ export function App() {
         );
       const input = [{ type: "text" as const, text: submission.text }];
       if (submission.intent === "start") {
+        if (archivingThreadIdsRef.current.has(threadId))
+          throw new Error(
+            "This Thread is being archived. Try again if archiving fails.",
+          );
         await window.zenx.protocol.request("turn/start", {
           threadId,
           input,
@@ -503,6 +507,10 @@ export function App() {
       } else if (submission.intent === "steer") {
         if (submission.expectedTurnId === null)
           throw new Error("The active turn changed before steering");
+        if (archivingThreadIdsRef.current.has(threadId))
+          throw new Error(
+            "This Thread is being archived. Try again if archiving fails.",
+          );
         await window.zenx.protocol.request("turn/steer", {
           threadId,
           expectedTurnId: submission.expectedTurnId,
@@ -512,6 +520,10 @@ export function App() {
       } else {
         if (submission.expectedTurnId === null)
           throw new Error("The active turn changed before replacement");
+        if (archivingThreadIdsRef.current.has(threadId))
+          throw new Error(
+            "This Thread is being archived. Try again if archiving fails.",
+          );
         await window.zenx.protocol.request("turn/replace", {
           threadId,
           expectedTurnId: submission.expectedTurnId,
@@ -633,6 +645,11 @@ export function App() {
       !summary.archived &&
       clearSelectedOnArchive &&
       selectedThreadIdRef.current === summary.threadId;
+    if (
+      fenceSelectedArchive &&
+      archivingThreadIdsRef.current.has(summary.threadId)
+    )
+      return;
     if (fenceSelectedArchive) setThreadArchiving(summary.threadId, true);
     try {
       await window.zenx.protocol.request(

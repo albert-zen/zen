@@ -227,6 +227,193 @@ test("selected Sidebar archive fences Send until a failed response restores Chat
   }
 });
 
+test("selected archive fences a submission already staging its title", async () => {
+  const titleResponse = deferred<undefined>();
+  const archiveResponse = deferred<unknown>();
+  let turnStartCalls = 0;
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      observeTitle: async () => await titleResponse.promise,
+      request: async (method) => {
+        if (method === "thread/resume")
+          return {
+            thread: liveThread(),
+            model: "fake",
+            modelProvider: "fake",
+          };
+        if (method === "thread/archive") return await archiveResponse.promise;
+        if (method === "turn/start") {
+          turnStartCalls += 1;
+          return {};
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+      threads: async (archived) => (archived ? [] : [summary(false)]),
+    },
+  );
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Retry after archive failure");
+    const send = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    await act(async () => {
+      send.click();
+      await Promise.resolve();
+    });
+    assert.equal(turnStartCalls, 0);
+
+    await act(async () => threadMenuButton("Thread one").click());
+    const archive = await waitFor(() => exactMenuButton("Archive"));
+    await act(async () => {
+      archive.click();
+      await Promise.resolve();
+      titleResponse.resolve(undefined);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.equal(turnStartCalls, 0);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")?.disabled,
+      true,
+    );
+
+    await act(async () => {
+      archiveResponse.reject(new Error("archive failed"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const restoredComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    assert.equal(restoredComposer.value, "Retry after archive failure");
+    const restoredSend = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    assert.equal(restoredSend.disabled, false);
+
+    await act(async () => {
+      restoredSend.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.equal(turnStartCalls, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("duplicate selected archive shares one pending fence owner", async () => {
+  const archiveResponse = deferred<unknown>();
+  let archiveCalls = 0;
+  let turnStartCalls = 0;
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      request: async (method) => {
+        if (method === "thread/resume")
+          return {
+            thread: liveThread(),
+            model: "fake",
+            modelProvider: "fake",
+          };
+        if (method === "thread/archive") {
+          archiveCalls += 1;
+          return await archiveResponse.promise;
+        }
+        if (method === "turn/start") {
+          turnStartCalls += 1;
+          return {};
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+      threads: async (archived) => (archived ? [] : [summary(false)]),
+    },
+  );
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Keep the fence");
+    const staleSend = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+
+    await act(async () => threadMenuButton("Thread one").click());
+    const archive = await waitFor(() => exactMenuButton("Archive"));
+    await act(async () => {
+      archive.click();
+      archive.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    assert.equal(archiveCalls, 1);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")?.disabled,
+      true,
+    );
+    await act(async () => {
+      staleSend.click();
+      await Promise.resolve();
+    });
+    assert.equal(turnStartCalls, 0);
+
+    await act(async () => {
+      archiveResponse.reject(new Error("archive failed"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const restoredSend = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    assert.equal(restoredSend.disabled, false);
+    await act(async () => {
+      restoredSend.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.equal(turnStartCalls, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("serializes cross-row Pin mutations against the latest confirmed order", async () => {
   const requests: Array<{
     threadIds: readonly string[];
@@ -306,6 +493,7 @@ async function mountApp(
       threadIds: readonly string[],
     ): Promise<ReturnType<typeof publicSettings>>;
     request?(method: string): Promise<unknown>;
+    observeTitle?(): Promise<undefined>;
     threads?(archived: boolean): Promise<NativeThreadSummary[]>;
   } = {},
 ): Promise<AppHarness> {
@@ -369,7 +557,7 @@ async function mountApp(
     },
     titles: {
       get: async () => ({}),
-      observe: async () => undefined,
+      observe: async () => await options.observeTitle?.(),
       onChange: () => () => undefined,
     },
     triggers: {
