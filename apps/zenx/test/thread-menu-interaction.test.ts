@@ -54,6 +54,13 @@ test("Thread menu manages keyboard focus through close and row removal", async (
 
     await act(async () => trigger.click());
     assert.equal(document.activeElement?.textContent?.trim(), "Rename");
+    let menuPresentWhenTriggerFocusRestored: boolean | undefined;
+    const focusTrigger = trigger.focus.bind(trigger);
+    trigger.focus = () => {
+      menuPresentWhenTriggerFocusRestored =
+        document.querySelector('[role="menu"]') !== null;
+      focusTrigger();
+    };
 
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -105,6 +112,7 @@ test("Thread menu manages keyboard focus through close and row removal", async (
       await Promise.resolve();
     });
     assert.equal(document.activeElement, trigger);
+    assert.equal(menuPresentWhenTriggerFocusRestored, false);
     assert.equal(document.querySelector('[role="menu"]'), null);
 
     await act(async () => trigger.click());

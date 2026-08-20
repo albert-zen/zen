@@ -680,6 +680,7 @@ function ThreadRow({
   const rowRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreMenuFocusRef = useRef(false);
   const initialMenuFocusRef = useRef<"first" | "last">("first");
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -688,13 +689,10 @@ function ThreadRow({
     "rename" | "pin" | "unpin" | "archive" | "unarchive" | null
   >(null);
   const [menuError, setMenuError] = useState<string | null>(null);
-  const restoreMenuTriggerFocus = () => {
-    queueMicrotask(() => menuTriggerRef.current?.focus());
-  };
   const closeMenu = (restoreFocus = true) => {
+    restoreMenuFocusRef.current = restoreFocus;
     setMenuOpen(false);
     setRenaming(false);
-    if (restoreFocus) restoreMenuTriggerFocus();
   };
   const focusThreadListHeading = (nextPinned = pinned) => {
     document
@@ -720,6 +718,11 @@ function ThreadRow({
       initialMenuFocusRef.current === "last" ? items.at(-1) : items.at(0);
     item?.focus();
   }, [menuOpen, renaming]);
+  useLayoutEffect(() => {
+    if (menuOpen || !restoreMenuFocusRef.current) return;
+    restoreMenuFocusRef.current = false;
+    menuTriggerRef.current?.focus();
+  }, [menuOpen]);
   const identity = threadModelIdentity(thread);
   const contents = (
     <>
