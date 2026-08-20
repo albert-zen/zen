@@ -467,32 +467,57 @@ async function readParticipant(directory, name) {
     if (error?.code !== "ENOENT" && !(error instanceof SyntaxError))
       throw error;
   }
+  const observedAt = Date.now();
   const token = name.replace(/^(?:candidate|participant)-/u, "");
-  const validOwner =
+  const ownerFieldsAreValid =
     owner?.version === 1 &&
     owner.token === token &&
     Number.isSafeInteger(owner.pid) &&
     owner.pid > 0 &&
     Number.isSafeInteger(owner.createdAt) &&
-    Number.isSafeInteger(owner.deadline);
-  const age = Date.now() - directoryMetadata.mtimeMs;
+    owner.createdAt >= 0 &&
+    Number.isSafeInteger(owner.deadline) &&
+    owner.deadline >= owner.createdAt;
+  const ownerTimeIsFuture =
+    ownerFieldsAreValid &&
+    owner.createdAt > observedAt + transactionInitializationGraceMilliseconds;
+  const validOwner = ownerFieldsAreValid && !ownerTimeIsFuture;
+  const directoryTimeIsFuture =
+    directoryMetadata.mtimeMs >
+    observedAt + transactionInitializationGraceMilliseconds;
+  const age = Math.max(0, observedAt - directoryMetadata.mtimeMs);
   if (!validOwner) {
-    return {
+    return await returnIfParticipantPathUnchanged(
       directory,
-      token,
-      choosing: true,
-      ticket: undefined,
-      stale: age >= transactionInitializationGraceMilliseconds,
-    };
+      directoryMetadata,
+      {
+        directory,
+        token,
+        choosing: true,
+        ticket: undefined,
+        // candidate-* can be observed between mkdir and owner publication.
+        // participant-* is published only after owner + choosing are present,
+        // so malformed published state is safe to quarantine immediately.
+        stale:
+          name.startsWith("participant-") ||
+          ownerTimeIsFuture ||
+          directoryTimeIsFuture ||
+          age >= transactionInitializationGraceMilliseconds,
+      },
+    );
   }
 
   const retirementDeadline = Math.min(
     owner.deadline + transactionRetirementGraceMilliseconds,
     owner.createdAt + maxTransactionLeaseMilliseconds,
   );
-  const stale = !processIsAlive(owner.pid) || Date.now() >= retirementDeadline;
+  const stale = !processIsAlive(owner.pid) || observedAt >= retirementDeadline;
   if (stale) {
-    return { directory, token, choosing: true, ticket: undefined, stale };
+    return await returnIfParticipantPathUnchanged(
+      directory,
+      directoryMetadata,
+      { directory, token, choosing: true, ticket: undefined, stale },
+    );
   }
 
   const choosing =
@@ -507,7 +532,37 @@ async function readParticipant(directory, name) {
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
-  return { directory, token, choosing, ticket, stale: false };
+  return await returnIfParticipantPathUnchanged(directory, directoryMetadata, {
+    directory,
+    token,
+    choosing,
+    ticket,
+    // A published participant without either an in-progress choosing marker or
+    // a valid ticket cannot become valid. Quarantine it instead of allowing it
+    // to reject every later acquisition.
+    stale: name.startsWith("participant-") && !choosing && ticket === undefined,
+  });
+}
+
+async function returnIfParticipantPathUnchanged(
+  directory,
+  directoryMetadata,
+  participant,
+) {
+  let currentMetadata;
+  try {
+    currentMetadata = await lstat(directory);
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (
+    !currentMetadata.isDirectory() ||
+    !sameFile(directoryMetadata, currentMetadata)
+  ) {
+    return undefined;
+  }
+  return participant;
 }
 
 async function assertTransactionOwner(transaction) {

@@ -11,6 +11,7 @@ import {
   rm,
   stat,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -292,6 +293,94 @@ test("converges cross-process contenders through one download", async () => {
   }
 });
 
+test("ignores a participant atomically retired while it is observed", async () => {
+  const bytes = Buffer.from("retirement race recovery");
+  const digest = sha256(bytes);
+  const fixture = await createFixture((_request, response) => {
+    response.end(bytes);
+  });
+  const record = await seedParticipant(fixture.cacheLocation, digest, {
+    token: "retiring-observer-fixture",
+    createdAt: Date.now(),
+    deadline: Date.now() + 30_000,
+    ticket: 1,
+  });
+  try {
+    const result = await acquireAfterRetiringObservedParticipant(
+      {
+        artifactName: "retirement observer fixture",
+        url: `${fixture.url}/retired-observer`,
+        digest,
+        deadline: Date.now() + 5_000,
+        cacheLocation: fixture.cacheLocation,
+      },
+      record,
+    );
+
+    assert.deepEqual(await readFile(result), bytes);
+    assert.deepEqual(await readdir(record.transactionRoot), []);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("quarantines a live participant with future-skewed timestamps", async () => {
+  const bytes = Buffer.from("future timestamp recovery");
+  const digest = sha256(bytes);
+  const fixture = await createFixture((_request, response) => {
+    response.end(bytes);
+  });
+  const future = Date.now() + 24 * 60 * 60_000;
+  const record = await seedParticipant(fixture.cacheLocation, digest, {
+    token: "future-owner-fixture",
+    createdAt: future,
+    deadline: future + 30_000,
+    ticket: 1,
+    modifiedAt: future,
+  });
+  try {
+    const result = await acquireVerifiedArtifact({
+      artifactName: "future owner fixture",
+      url: `${fixture.url}/future-owner`,
+      digest,
+      deadline: Date.now() + 2_000,
+      cacheLocation: fixture.cacheLocation,
+    });
+
+    assert.deepEqual(await readFile(result), bytes);
+    assert.deepEqual(await readdir(record.transactionRoot), []);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("quarantines a published participant without a ticket", async () => {
+  const bytes = Buffer.from("invalid participant recovery");
+  const digest = sha256(bytes);
+  const fixture = await createFixture((_request, response) => {
+    response.end(bytes);
+  });
+  const record = await seedParticipant(fixture.cacheLocation, digest, {
+    token: "missing-ticket-fixture",
+    createdAt: Date.now(),
+    deadline: Date.now() + 30_000,
+  });
+  try {
+    const result = await acquireVerifiedArtifact({
+      artifactName: "invalid participant fixture",
+      url: `${fixture.url}/invalid-participant`,
+      digest,
+      deadline: Date.now() + 2_000,
+      cacheLocation: fixture.cacheLocation,
+    });
+
+    assert.deepEqual(await readFile(result), bytes);
+    assert.deepEqual(await readdir(record.transactionRoot), []);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("reclaims a dead contender without leaving the digest blocked", async () => {
   const bytes = Buffer.from("recovered after dead owner");
   const digest = sha256(bytes);
@@ -544,6 +633,54 @@ async function acquireInChild(options, environment) {
   return result.stdout;
 }
 
+async function acquireAfterRetiringObservedParticipant(options, record) {
+  const source = `
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const originalReadFile = fs.promises.readFile;
+    let ownerObservations = 0;
+    fs.promises.readFile = async (...arguments_) => {
+      const result = await originalReadFile(...arguments_);
+      if (String(arguments_[0]) === process.env.ZENX_OBSERVED_OWNER) {
+        ownerObservations += 1;
+        if (ownerObservations === 2) {
+          await fs.promises.rename(
+            process.env.ZENX_OBSERVED_PARTICIPANT,
+            process.env.ZENX_RETIRED_PARTICIPANT,
+          );
+          await fs.promises.rm(process.env.ZENX_RETIRED_PARTICIPANT, {
+            recursive: true,
+            force: true,
+          });
+        }
+      }
+      return result;
+    };
+    syncBuiltinESMExports();
+    const { acquireVerifiedArtifact } = await import(${JSON.stringify(acquisitionModule)});
+    const result = await acquireVerifiedArtifact(JSON.parse(process.env.ZENX_ARTIFACT_OPTIONS));
+    process.stdout.write(result);
+  `;
+  const retiredParticipant = path.join(
+    record.transactionRoot,
+    `retired-${path.basename(record.directory)}-fixture`,
+  );
+  const result = await run(
+    process.execPath,
+    ["--input-type=module", "--eval", source],
+    {
+      env: {
+        ...process.env,
+        ZENX_ARTIFACT_OPTIONS: JSON.stringify(options),
+        ZENX_OBSERVED_OWNER: path.join(record.directory, "owner.json"),
+        ZENX_OBSERVED_PARTICIPANT: record.directory,
+        ZENX_RETIRED_PARTICIPANT: retiredParticipant,
+      },
+    },
+  );
+  return result.stdout;
+}
+
 function acquirePausedAfterCacheSnapshot(options, gate) {
   const source = `
     import fs from "node:fs";
@@ -628,6 +765,41 @@ function acquirePausedAfterCacheSnapshot(options, gate) {
   });
   completion.child = child;
   return completion;
+}
+
+async function seedParticipant(cacheLocation, digest, options) {
+  const transactionRoot = path.join(
+    cacheLocation,
+    "sha256",
+    ".transactions",
+    digest,
+  );
+  const directory = path.join(transactionRoot, `participant-${options.token}`);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await writeFile(
+    path.join(directory, "owner.json"),
+    `${JSON.stringify({
+      version: 1,
+      token: options.token,
+      pid: process.pid,
+      createdAt: options.createdAt,
+      deadline: options.deadline,
+    })}\n`,
+    { mode: 0o600 },
+  );
+  if (options.choosing === true) {
+    await writeFile(path.join(directory, "choosing"), "", { mode: 0o600 });
+  }
+  if (options.ticket !== undefined) {
+    await writeFile(path.join(directory, "ticket"), `${options.ticket}\n`, {
+      mode: 0o600,
+    });
+  }
+  if (options.modifiedAt !== undefined) {
+    const modifiedAt = new Date(options.modifiedAt);
+    await utimes(directory, modifiedAt, modifiedAt);
+  }
+  return { transactionRoot, directory };
 }
 
 async function waitForPath(file) {
