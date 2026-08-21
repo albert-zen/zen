@@ -3,12 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import {
-  createHostedAppServer,
-  redactModelOutput,
-} from "../apps/cli/src/host.js";
+import { createHostedAppServer } from "../apps/cli/src/host.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
-import type { ModelAdapter, ModelEvent } from "../src/model.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 
 test("hosted App Server routes duplicate model ids through independent profile credentials", async () => {
@@ -155,7 +151,7 @@ test("removed profiles leave history readable and require an explicit valid swit
   }
 });
 
-test("host runtime redacts every configured Provider API key from tool results", async () => {
+test("host preserves Provider-key-matching tool calls and shell results", async () => {
   const originalFetch = globalThis.fetch;
   let request = 0;
   globalThis.fetch = async () => {
@@ -171,7 +167,7 @@ test("host runtime redacts every configured Provider API key from tool results",
   };
   const host = createHostedAppServer({
     cwd: process.cwd(),
-    dataDirectory: path.join(os.tmpdir(), "zen-host-key-redaction"),
+    dataDirectory: path.join(os.tmpdir(), "zen-host-key-trace"),
     approvalPolicy: "never",
     providers: [
       compatible("profile-a", "secret-a"),
@@ -190,111 +186,28 @@ test("host runtime redacts every configured Provider API key from tool results",
       await host.startTurn(thread.id, "run")
     ).done;
     const snapshot = await host.readThread(thread.id);
-    const serialized = JSON.stringify(snapshot);
-    assert.doesNotMatch(serialized, /secret-a|secret-b/u);
-    assert.match(serialized, /\[REDACTED\]/u);
+    const toolCall = snapshot.items.find((item) => item.type === "tool_call");
+    const toolResult = snapshot.items.find(
+      (item) => item.type === "tool_result",
+    );
+    assert.deepEqual(toolCall?.arguments, {
+      command: "printf 'secret-a secret-b'",
+    });
+    assert.equal(toolResult?.output, "secret-a secret-b");
   } finally {
     await host.closeProviderTransport();
     globalThis.fetch = originalFetch;
   }
 });
 
-test("host boundary redacts split text, reasoning, and complete tool-call events", async () => {
-  const source: ModelAdapter = {
-    provider: "captured",
-    async *stream() {
-      yield { type: "text_delta", delta: "prefix se" };
-      yield { type: "reasoning", summary: "reasoning secret-b" };
-      yield { type: "text_delta", delta: "cr" };
-      yield { type: "text_delta", delta: "et-a suffix" };
-      yield {
-        type: "tool_call",
-        callId: "secret-a-call",
-        name: "secret-b-tool",
-        arguments: { nested: ["secret-a", { value: "secret-b" }] },
-      };
-    },
-  };
-
-  const events: ModelEvent[] = [];
-  for await (const event of redactModelOutput(source, [
-    "secret-a",
-    "secret-b",
-  ]).stream({
-    model: "shared-model",
-    reasoningEffort: "medium",
-    messages: [],
-    tools: [],
-    signal: new AbortController().signal,
-  })) {
-    events.push(event);
-  }
-
-  assert.doesNotMatch(JSON.stringify(events), /secret-a|secret-b/u);
-  assert.equal(
-    events
-      .filter(
-        (event): event is Extract<ModelEvent, { type: "text_delta" }> =>
-          event.type === "text_delta",
-      )
-      .map((event) => event.delta)
-      .join(""),
-    "prefix [REDACTED] suffix",
-  );
-  assert.deepEqual(
-    events.find((event) => event.type === "reasoning"),
-    {
-      type: "reasoning",
-      summary: "reasoning [REDACTED]",
-    },
-  );
-  assert.deepEqual(
-    events.find((event) => event.type === "tool_call"),
-    {
-      type: "tool_call",
-      callId: "[REDACTED]-call",
-      name: "[REDACTED]-tool",
-      arguments: {
-        nested: ["[REDACTED]", { value: "[REDACTED]" }],
-      },
-    },
-  );
-
-  for (let split = 1; split < "secret-a".length; split += 1) {
-    const splitSource: ModelAdapter = {
-      provider: "captured",
-      async *stream() {
-        yield {
-          type: "text_delta",
-          delta: `left ${"secret-a".slice(0, split)}`,
-        };
-        yield { type: "text_delta", delta: `${"secret-a".slice(split)} right` };
-      },
-    };
-    const text: string[] = [];
-    for await (const event of redactModelOutput(splitSource, [
-      "secret-a",
-    ]).stream({
-      model: "shared-model",
-      reasoningEffort: "medium",
-      messages: [],
-      tools: [],
-      signal: new AbortController().signal,
-    })) {
-      if (event.type === "text_delta") text.push(event.delta);
-    }
-    assert.equal(text.join(""), "left [REDACTED] right");
-  }
-});
-
-test("hosted App Server withholds split API keys from emitted deltas and journal", async () => {
+test("hosted App Server preserves Provider-key-matching text deltas and journal", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () =>
     modelResponseChunks(["prefix se", "cr", "et-a suffix"]);
   const journal = new InMemoryThreadJournal();
   const host = createHostedAppServer({
     cwd: process.cwd(),
-    dataDirectory: path.join(os.tmpdir(), "zen-host-split-key-redaction"),
+    dataDirectory: path.join(os.tmpdir(), "zen-host-split-key-trace"),
     approvalPolicy: "never",
     providers: [compatible("profile-a", "secret-a")],
     defaultSelection: {
@@ -314,10 +227,11 @@ test("hosted App Server withholds split API keys from emitted deltas and journal
       await host.startTurn(thread.id, "split")
     ).done;
     const snapshot = await host.readThread(thread.id);
-    assert.equal(emittedDeltas.join(""), "prefix [REDACTED] suffix");
-    assert.doesNotMatch(JSON.stringify(emittedDeltas), /secret-a/u);
-    assert.doesNotMatch(JSON.stringify(snapshot), /secret-a/u);
-    assert.match(JSON.stringify(snapshot), /\[REDACTED\]/u);
+    assert.deepEqual(emittedDeltas, ["prefix se", "cr", "et-a suffix"]);
+    assert.equal(
+      snapshot.items.find((item) => item.type === "agent_message")?.text,
+      "prefix secret-a suffix",
+    );
   } finally {
     unsubscribe();
     await host.closeProviderTransport();

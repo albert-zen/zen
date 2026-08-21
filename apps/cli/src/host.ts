@@ -136,21 +136,12 @@ export function createHostedAppServer(
     );
   }
   const fetches: ProviderFetch[] = [];
-  const redactedValues = preparedProfiles.flatMap((profile) =>
-    profile.provider.type === "openai-compatible"
-      ? [profile.provider.apiKey]
-      : [],
-  );
   const profiles = preparedProfiles.map((profile) => {
     const fetch = createProviderFetch(profile.transport);
     fetches.push(fetch);
-    const adapter = redactModelOutput(
-      createModel(profile.provider, fetch),
-      redactedValues,
-    );
     return {
       providerProfileId: profile.providerProfileId,
-      adapter,
+      adapter: createModel(profile.provider, fetch),
       modelCatalog: profile.modelCatalog,
     };
   });
@@ -163,7 +154,6 @@ export function createHostedAppServer(
         options.tools ??
         new ShellToolExecutor({
           blockedEnvironmentVariables: options.secretEnvironmentVariables ?? [],
-          redactedValues,
         }),
     }),
     providerRegistry: new ProviderRegistry(profiles),
@@ -202,74 +192,6 @@ export function createHostedAppServer(
       }
     },
   });
-}
-
-export function redactModelOutput(
-  adapter: ModelAdapter,
-  redactedValues: readonly string[],
-): ModelAdapter {
-  const secrets = [
-    ...new Set(redactedValues.filter((value) => value.length > 0)),
-  ].sort((left, right) => right.length - left.length);
-  if (secrets.length === 0) return adapter;
-  const carryLength = secrets[0]!.length - 1;
-  const redact = (value: string): string =>
-    secrets.reduce(
-      (output, secret) => output.split(secret).join("[REDACTED]"),
-      value,
-    );
-  const redactValue = (value: unknown): unknown => {
-    if (typeof value === "string") return redact(value);
-    if (Array.isArray(value)) return value.map(redactValue);
-    if (value === null || typeof value !== "object") return value;
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [
-        redact(key),
-        redactValue(entry),
-      ]),
-    );
-  };
-  return {
-    provider: adapter.provider,
-    async *stream(request) {
-      let carry = "";
-      try {
-        for await (const event of adapter.stream(request)) {
-          if (event.type === "text_delta") {
-            const redacted = redact(carry + event.delta);
-            const emitLength = Math.max(0, redacted.length - carryLength);
-            carry = redacted.slice(emitLength);
-            if (emitLength > 0) {
-              yield { ...event, delta: redacted.slice(0, emitLength) };
-            }
-            continue;
-          }
-
-          if (event.type === "reasoning") {
-            yield { ...event, summary: redact(event.summary) };
-          } else if (event.type === "tool_call") {
-            yield {
-              ...event,
-              callId: redact(event.callId),
-              name: redact(event.name),
-              arguments: redactValue(event.arguments) as Record<
-                string,
-                unknown
-              >,
-            };
-          } else {
-            yield event;
-          }
-        }
-      } catch (error) {
-        carry = "";
-        throw error;
-      }
-      if (carry.length > 0) {
-        yield { type: "text_delta", delta: redact(carry) };
-      }
-    },
-  };
 }
 
 function normalizeProviderProfiles(

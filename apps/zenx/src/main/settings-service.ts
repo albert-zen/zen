@@ -241,15 +241,12 @@ export class ZenXSettingsService {
         `Title model Provider profile ${provider.providerProfileId} has no API key`,
       );
     return {
-      adapter: redactModelText(
-        new OpenAiCompatibleModel({
-          baseUrl: provider.baseUrl,
-          apiKey,
-          provider: provider.name,
-          defaultParams: { temperature: 0.2, max_tokens: 40 },
-        }),
+      adapter: new OpenAiCompatibleModel({
+        baseUrl: provider.baseUrl,
         apiKey,
-      ),
+        provider: provider.name,
+        defaultParams: { temperature: 0.2, max_tokens: 40 },
+      }),
       model: titleReference.modelId,
     };
   }
@@ -721,22 +718,6 @@ export class ZenXSettingsService {
       throw persistenceError;
     }
   }
-}
-
-function redactModelText(adapter: ModelAdapter, secret: string): ModelAdapter {
-  return {
-    provider: adapter.provider,
-    async *stream(request) {
-      for await (const event of adapter.stream(request)) {
-        yield event.type === "text_delta"
-          ? {
-              ...event,
-              delta: event.delta.split(secret).join("[REDACTED]"),
-            }
-          : event;
-      }
-    },
-  };
 }
 
 async function normalizeCanonicalWorkspaces(

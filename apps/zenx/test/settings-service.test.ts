@@ -1006,7 +1006,7 @@ test("title inference resolves the selected profile's adapter and credential", a
     })) {
       if (event.type === "text_delta") output += event.delta;
     }
-    assert.equal(output, "Title [REDACTED]");
+    assert.equal(output, "Title second-key");
     assert.equal(configured.model, "second-model");
     assert.equal(authorization, "Bearer second-key");
     assert.match(requestUrl, /^https:\/\/second\.example\.test/u);

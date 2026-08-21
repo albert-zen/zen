@@ -91,11 +91,14 @@ provider API keys are encrypted with Electron `safeStorage` and keyed by stable
 Provider profile ID; deleting one profile clears only its key. Subscription OAuth
 uses a profile-scoped independent mode-0600 host file (the migrated
 `openai-codex` profile retains the existing path). Neither credential form is
-written to renderer settings, Thread journals, App Server protocol history, or
-shell environment. Existing v1 single-provider profile and vault files migrate
-deterministically on first start and are immediately persisted as v2; the
-migrated ID preserves the old runtime identity (`fake`, `openai-codex`, or the
-configured compatible-provider name).
+written to the Host profile, renderer settings, App Server protocol
+configuration, or shell environment. Provider, model, and tool output is trace:
+ZenX does not scan or rewrite it merely because its bytes match a credential,
+and normal Runtime rules may persist that content in Thread journals. Existing
+v1 single-provider profile and vault files migrate deterministically on first
+start and are immediately persisted as v2; the migrated ID preserves the old
+runtime identity (`fake`, `openai-codex`, or the configured compatible-provider
+name).
 
 ## Triggers and Rooms
 
