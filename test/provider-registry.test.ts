@@ -52,7 +52,12 @@ test("routes duplicate model ids and reasoning effort through the fixed Codex wi
           id: "shared-model",
           isDefault: true,
           supportedReasoningEfforts: ["low", "high"],
-          defaultReasoningEffort: "low",
+          defaultReasoningEffort: "high",
+        },
+        {
+          id: "high-only-model",
+          supportedReasoningEfforts: ["high"],
+          defaultReasoningEffort: "high",
         },
       ]),
     },
@@ -82,7 +87,7 @@ test("routes duplicate model ids and reasoning effort through the fixed Codex wi
     const listed = (await client.request("model/list", {})) as {
       data: Array<{ model: string }>;
     };
-    assert.equal(listed.data.length, 2);
+    assert.equal(listed.data.length, 3);
     assert.notEqual(listed.data[0]?.model, listed.data[1]?.model);
 
     const started = (await client.request("thread/start", {
@@ -92,9 +97,13 @@ test("routes duplicate model ids and reasoning effort through the fixed Codex wi
     await client.request("thread/settings/update", {
       threadId: started.thread.id,
       model: listed.data[1]?.model,
-      effort: "high",
     });
     await completeTurn(client, started.thread.id, "second");
+    await client.request("thread/settings/update", {
+      threadId: started.thread.id,
+      model: listed.data[2]?.model,
+    });
+    await completeTurn(client, started.thread.id, "third");
 
     assert.deepEqual(
       requestsA.map(({ model, reasoningEffort }) => ({
@@ -108,7 +117,10 @@ test("routes duplicate model ids and reasoning effort through the fixed Codex wi
         model,
         reasoningEffort,
       })),
-      [{ model: "shared-model", reasoningEffort: "high" }],
+      [
+        { model: "shared-model", reasoningEffort: "low" },
+        { model: "high-only-model", reasoningEffort: "high" },
+      ],
     );
     const snapshot = await appServer.readThread(started.thread.id);
     const change = snapshot.items.find(
@@ -118,7 +130,22 @@ test("routes duplicate model ids and reasoning effort through the fixed Codex wi
     assert("selection" in change);
     assert.deepEqual(change.selection, {
       from: selection("profile-a", "low"),
-      to: selection("profile-b", "high"),
+      to: selection("profile-b", "low"),
+    });
+    const changes = snapshot.items.filter(
+      (item) => item.type === "thread_configuration_changed",
+    );
+    assert.equal(changes.length, 2);
+    const fallback = changes[1];
+    assert(fallback?.type === "thread_configuration_changed");
+    assert("selection" in fallback);
+    assert.deepEqual(fallback.selection, {
+      from: selection("profile-b", "low"),
+      to: {
+        providerProfileId: "profile-b",
+        modelId: "high-only-model",
+        reasoningEffort: "high",
+      },
     });
     assert.deepEqual(
       snapshot.turns.map((turn) => turn.selection),
@@ -131,6 +158,11 @@ test("routes duplicate model ids and reasoning effort through the fixed Codex wi
         {
           providerProfileId: "profile-b",
           modelId: "shared-model",
+          reasoningEffort: "low",
+        },
+        {
+          providerProfileId: "profile-b",
+          modelId: "high-only-model",
           reasoningEffort: "high",
         },
       ],
@@ -139,6 +171,80 @@ test("routes duplicate model ids and reasoning effort through the fixed Codex wi
     client.close();
     await wire.close();
   }
+});
+
+test("preserves compatible effort and falls back for incompatible Core changes", async () => {
+  const requestsA: ModelRequest[] = [];
+  const requestsB: ModelRequest[] = [];
+  const server = createRegistryServer({
+    registry: new ProviderRegistry([
+      {
+        providerProfileId: "profile-a",
+        adapter: recordingAdapter("adapter-a", requestsA),
+        modelCatalog: new StaticModelCatalog([
+          {
+            id: "medium-model",
+            isDefault: true,
+            supportedReasoningEfforts: ["medium"],
+            defaultReasoningEffort: "medium",
+          },
+          {
+            id: "compatible-model",
+            supportedReasoningEfforts: ["low", "medium"],
+            defaultReasoningEffort: "low",
+          },
+        ]),
+      },
+      {
+        providerProfileId: "profile-b",
+        adapter: recordingAdapter("adapter-b", requestsB),
+        modelCatalog: new StaticModelCatalog([
+          {
+            id: "low-model",
+            isDefault: true,
+            supportedReasoningEfforts: ["low"],
+            defaultReasoningEffort: "low",
+          },
+        ]),
+      },
+    ]),
+    defaultSelection: {
+      providerProfileId: "profile-a",
+      modelId: "medium-model",
+      reasoningEffort: "medium",
+    },
+  });
+  const thread = await server.startThread();
+
+  const compatible = await server.updateThreadSettings(thread.id, {
+    model: "compatible-model",
+  });
+  assert.equal(compatible.modelId, "compatible-model");
+  assert.equal(compatible.reasoningEffort, "medium");
+  await (
+    await server.startTurn(thread.id, "preserves the compatible effort")
+  ).done;
+
+  const incompatible = await server.updateThreadSettings(thread.id, {
+    selection: {
+      providerProfileId: "profile-b",
+      modelId: "low-model",
+    },
+  });
+  assert.equal(incompatible.providerProfileId, "profile-b");
+  assert.equal(incompatible.modelId, "low-model");
+  assert.equal(incompatible.reasoningEffort, "low");
+  await (
+    await server.startTurn(thread.id, "uses the target default")
+  ).done;
+  assert.deepEqual(
+    requestsA.map(({ model, reasoningEffort }) => ({ model, reasoningEffort })),
+    [{ model: "compatible-model", reasoningEffort: "medium" }],
+  );
+  assert.deepEqual(
+    requestsB.map(({ model, reasoningEffort }) => ({ model, reasoningEffort })),
+    [{ model: "low-model", reasoningEffort: "low" }],
+  );
 });
 
 test("keeps opaque model keys stable and round-trippable", () => {

@@ -20,6 +20,7 @@ import {
   type ProviderModel,
   type ProviderRegistry,
   type ProviderSelection,
+  type ProviderSelectionInput,
 } from "./provider-registry.js";
 import { AgentRuntime, type RuntimeEvent } from "./runtime.js";
 import {
@@ -53,7 +54,7 @@ export interface AppServerDefaults {
 
 export interface StartThreadInput {
   cwd?: string;
-  selection?: ProviderSelection;
+  selection?: ProviderSelectionInput;
   /** Compatibility input for single-profile Core callers. */
   model?: string;
   reasoningEffort?: string;
@@ -132,7 +133,7 @@ export type AppServerEvent =
   | ThreadArchivedUpdatedEvent;
 
 export interface UpdateThreadSettingsInput {
-  selection?: ProviderSelection;
+  selection?: ProviderSelectionInput;
   /** Compatibility input for single-profile Core callers. */
   model?: string;
   reasoningEffort?: string;
@@ -210,6 +211,13 @@ export class ZenAppServer {
         entry.providerProfileId === this.#defaults.providerProfileId &&
         entry.model.id === this.#defaults.modelId,
     }));
+  }
+
+  completeProviderSelection(
+    current: ProviderSelection,
+    input: ProviderSelectionInput,
+  ): ProviderSelection {
+    return this.#requireSelection(input, current.reasoningEffort).selection;
   }
 
   async startThread(input: StartThreadInput = {}): Promise<ThreadSnapshot> {
@@ -365,7 +373,7 @@ export class ZenAppServer {
     text: string,
     options: {
       clientId?: string;
-      selection?: ProviderSelection;
+      selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
     } = {},
@@ -378,7 +386,7 @@ export class ZenAppServer {
     text: string,
     options: {
       clientId?: string;
-      selection?: ProviderSelection;
+      selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
     },
@@ -1162,9 +1170,12 @@ export class ZenAppServer {
     return await this.#snapshot(thread);
   }
 
-  #requireSelection(selection: ProviderSelection) {
+  #requireSelection(
+    selection: ProviderSelectionInput,
+    fallbackReasoningEffort?: string,
+  ) {
     try {
-      return this.#providerRegistry.resolve(selection);
+      return this.#providerRegistry.resolve(selection, fallbackReasoningEffort);
     } catch (error) {
       if (error instanceof ProviderRegistryError) {
         throw new AppServerError(error.code, error.message);
@@ -1176,7 +1187,7 @@ export class ZenAppServer {
   #selectionFromInput(
     current: ProviderSelection,
     input: {
-      selection?: ProviderSelection;
+      selection?: ProviderSelectionInput;
       model?: string;
       reasoningEffort?: string;
     },
@@ -1188,13 +1199,22 @@ export class ZenAppServer {
           "A provider selection cannot be combined with legacy model fields",
         );
       }
-      return structuredClone(input.selection);
+      return this.#requireSelection(input.selection, current.reasoningEffort)
+        .selection;
     }
-    return {
-      providerProfileId: current.providerProfileId,
-      modelId: input.model ?? current.modelId,
-      reasoningEffort: input.reasoningEffort ?? current.reasoningEffort,
-    };
+    if (input.model === undefined && input.reasoningEffort === undefined) {
+      return structuredClone(current);
+    }
+    return this.#requireSelection(
+      {
+        providerProfileId: current.providerProfileId,
+        modelId: input.model ?? current.modelId,
+        ...(input.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: input.reasoningEffort }),
+      },
+      current.reasoningEffort,
+    ).selection;
   }
 
   async #withThreadMutation<T>(

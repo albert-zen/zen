@@ -13,7 +13,10 @@ import type {
   ToolCallItem,
 } from "../../item.js";
 import type { ApprovalRequest } from "../../tool.js";
-import type { ProviderSelection } from "../../provider-registry.js";
+import type {
+  ProviderSelection,
+  ProviderSelectionInput,
+} from "../../provider-registry.js";
 import {
   projectCommandCompleted,
   projectCommandStarted,
@@ -253,11 +256,18 @@ export class CodexConnection {
         const threadId = requiredString(params, "threadId");
         let snapshot = await this.#appServer.readThread(threadId);
         const requestedModel = optionalNonEmptyString(params.model, "model");
-        const requestedSelection = this.#selectionForExistingThread(
+        const requestedSelectionInput = this.#selectionForExistingThread(
           snapshot,
           requestedModel,
           undefined,
         );
+        const requestedSelection =
+          requestedSelectionInput === undefined
+            ? undefined
+            : this.#appServer.completeProviderSelection(
+                snapshot,
+                requestedSelectionInput,
+              );
         validateMatchingThreadConfiguration(
           params,
           snapshot,
@@ -272,12 +282,9 @@ export class CodexConnection {
             "approvalsReviewer",
           ],
         );
-        if (
-          requestedSelection !== undefined &&
-          !sameSelection(requestedSelection, snapshot)
-        ) {
+        if (requestedSelectionInput !== undefined) {
           snapshot = await this.#appServer.updateThreadSettings(threadId, {
-            selection: requestedSelection,
+            selection: requestedSelectionInput,
           });
         }
         this.#subscribedThreads.add(threadId);
@@ -330,7 +337,11 @@ export class CodexConnection {
         const model = requiredString(params, "model");
         const effort = optionalNonEmptyString(params.effort, "effort");
         await this.#appServer.updateThreadSettings(threadId, {
-          selection: this.#selectionForWireModel(model, effort, snapshot),
+          selection: this.#selectionForWireModel(
+            model,
+            effort,
+            snapshot.providerProfileId,
+          ),
         });
         this.#send({ id: request.id, result: {} });
         return;
@@ -410,11 +421,18 @@ export class CodexConnection {
         const snapshot = await this.#appServer.readThread(threadId);
         const requestedModel = optionalNonEmptyString(params.model, "model");
         const requestedEffort = optionalNonEmptyString(params.effort, "effort");
-        const requestedSelection = this.#selectionForExistingThread(
+        const requestedSelectionInput = this.#selectionForExistingThread(
           snapshot,
           requestedModel,
           requestedEffort,
         );
+        const requestedSelection =
+          requestedSelectionInput === undefined
+            ? undefined
+            : this.#appServer.completeProviderSelection(
+                snapshot,
+                requestedSelectionInput,
+              );
         validateMatchingThreadConfiguration(
           params,
           snapshot,
@@ -441,9 +459,9 @@ export class CodexConnection {
         this.#subscribedThreads.add(threadId);
         const handle = await this.#appServer.startTurn(threadId, text, {
           ...(clientId === undefined ? {} : { clientId }),
-          ...(requestedSelection === undefined
+          ...(requestedSelectionInput === undefined
             ? {}
-            : { selection: requestedSelection }),
+            : { selection: requestedSelectionInput }),
           requestApproval: async (approval) =>
             await this.#requestApproval(approval),
         });
@@ -549,7 +567,7 @@ export class CodexConnection {
     snapshot: ThreadSnapshot,
     model: string | undefined,
     effort: string | undefined,
-  ): ProviderSelection | undefined {
+  ): ProviderSelectionInput | undefined {
     if (model === undefined) {
       return effort === undefined
         ? undefined
@@ -559,14 +577,18 @@ export class CodexConnection {
             reasoningEffort: effort,
           };
     }
-    return this.#selectionForWireModel(model, effort, snapshot);
+    return this.#selectionForWireModel(
+      model,
+      effort,
+      snapshot.providerProfileId,
+    );
   }
 
   #selectionForWireModel(
     model: string,
     effort: string | undefined,
-    fallback?: ThreadSnapshot,
-  ): ProviderSelection {
+    fallbackProviderProfileId?: string,
+  ): ProviderSelectionInput {
     let identity: ReturnType<typeof decodeModelKey>;
     if (model.startsWith("zen-model-v1:")) {
       try {
@@ -587,31 +609,16 @@ export class CodexConnection {
       identity = {
         providerProfileId:
           matched?.providerProfileId ??
-          fallback?.providerProfileId ??
+          fallbackProviderProfileId ??
           this.#appServer.listModels().find((entry) => entry.isDefault)
             ?.providerProfileId ??
           "",
         modelId: model,
       };
     }
-    const sameAsFallback =
-      fallback !== undefined &&
-      fallback.providerProfileId === identity.providerProfileId &&
-      fallback.modelId === identity.modelId;
-    const listed = this.#appServer
-      .listModels()
-      .find(
-        (entry) =>
-          entry.providerProfileId === identity.providerProfileId &&
-          entry.model.id === identity.modelId,
-      );
     return {
       ...identity,
-      reasoningEffort:
-        effort ??
-        (sameAsFallback
-          ? fallback.reasoningEffort
-          : (listed?.model.defaultReasoningEffort ?? "medium")),
+      ...(effort === undefined ? {} : { reasoningEffort: effort }),
     };
   }
 
@@ -1283,17 +1290,6 @@ function readDefaultCollaborationMode(
       "Unsupported collaborationMode; Zen accepts only T3's default envelope for the configured model",
     );
   }
-}
-
-function sameSelection(
-  left: ProviderSelection,
-  right: ProviderSelection,
-): boolean {
-  return (
-    left.providerProfileId === right.providerProfileId &&
-    left.modelId === right.modelId &&
-    left.reasoningEffort === right.reasoningEffort
-  );
 }
 
 function rejectUnsupportedValues(

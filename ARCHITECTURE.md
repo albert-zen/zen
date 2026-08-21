@@ -51,8 +51,9 @@
   一个可见默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由
   既有 Thread 或显式请求使用。
 - **ProviderRegistry** — 宿主以稳定 `providerProfileId` 把每个注入的 ModelAdapter
-  与其 ModelCatalog 绑定；canonical selection 是 `providerProfileId / modelId /
-reasoningEffort` 的原子三元组，Thread 只记录生效选择而不持有 profile 或 credential。
+  与其 ModelCatalog 绑定；canonical selection 是
+  `providerProfileId / modelId / reasoningEffort` 的原子三元组，Thread 只记录生效选择而不持有 profile 或 credential；
+  输入省略 effort 时，目标支持当前 effort 就保留，否则使用目标 model 的默认 effort。
 - **IMZenController** — IMZen 通过 IM Agent SDK typed actions，以及 SDK 明确保留
   的 App Server native Thread profile seam，组合 `/model`、`/permission` 与审批
   快捷命令的产品 UX；`/model` 是当前 typed contracts 外的 Zen native operation，

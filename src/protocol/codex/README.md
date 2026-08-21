@@ -65,8 +65,9 @@ Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，�
 
 `thread/settings/update` 与 `turn/start` 在既有 `model` / `effort` 字段内提交同一
 selection change，不增加 Zen 私有字段或第二种协议。协议 adapter 解码后只把
-canonical `providerProfileId / modelId / reasoningEffort` 交给 Core；活跃 Turn
-保留启动时 selection，更新只影响下一 Turn。
+稳定 `providerProfileId / modelId` 与可选的显式 effort 交给 Core；省略 effort 时
+Core 在目标支持当前值时保留它，否则使用目标 model 默认值，再形成 canonical
+selection。活跃 Turn 保留启动时 selection，更新只影响下一 Turn。
 
 `thread/list` 在本目录内把 ZAS 原生 `ThreadSummary` 查询结果映射为固定版本的
 Codex Thread DTO；wire DTO 不定义 ZAS 或 ZenX 的产品读取模型。它当前只接受

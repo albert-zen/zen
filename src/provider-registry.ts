@@ -4,6 +4,12 @@ import type { ModelAdapter } from "./model.js";
 
 export type ProviderSelection = CanonicalProviderSelection;
 
+export interface ProviderSelectionInput {
+  providerProfileId: string;
+  modelId: string;
+  reasoningEffort?: string;
+}
+
 export interface ProviderProfile {
   providerProfileId: string;
   adapter: ModelAdapter;
@@ -58,7 +64,10 @@ export class ProviderRegistry {
     );
   }
 
-  resolve(selection: ProviderSelection): ResolvedProviderSelection {
+  resolve(
+    selection: ProviderSelectionInput,
+    fallbackReasoningEffort?: string,
+  ): ResolvedProviderSelection {
     const profile = this.#profiles.get(selection.providerProfileId);
     if (profile === undefined) {
       throw new ProviderRegistryError(
@@ -76,14 +85,25 @@ export class ProviderRegistry {
     const supportedReasoningEfforts = model.supportedReasoningEfforts ?? [
       model.defaultReasoningEffort ?? "medium",
     ];
-    if (!supportedReasoningEfforts.includes(selection.reasoningEffort)) {
+    const reasoningEffort =
+      selection.reasoningEffort ??
+      (fallbackReasoningEffort !== undefined &&
+      supportedReasoningEfforts.includes(fallbackReasoningEffort)
+        ? fallbackReasoningEffort
+        : (model.defaultReasoningEffort ?? "medium"));
+    if (!supportedReasoningEfforts.includes(reasoningEffort)) {
       throw new ProviderRegistryError(
         "reasoning_effort_unavailable",
-        `Reasoning effort ${selection.reasoningEffort} is not available for model ${selection.modelId} from provider profile ${selection.providerProfileId}`,
+        `Reasoning effort ${reasoningEffort} is not available for model ${selection.modelId} from provider profile ${selection.providerProfileId}`,
       );
     }
+    const completedSelection: ProviderSelection = {
+      providerProfileId: selection.providerProfileId,
+      modelId: selection.modelId,
+      reasoningEffort,
+    };
     return {
-      selection: structuredClone(selection),
+      selection: completedSelection,
       adapter: profile.adapter,
       model,
     };
