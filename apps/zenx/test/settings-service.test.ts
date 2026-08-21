@@ -53,7 +53,7 @@ test("migrates legacy environment config once without persisting or inheriting i
   try {
     await first.initialize(environment);
     assert.equal(environment.MIGRATION_KEY, undefined);
-    assert.equal(await vault.readApiKey(), "migration-secret");
+    assert.equal(await vault.readApiKey("example"), "migration-secret");
     assert.doesNotMatch(
       await readFile(path.join(directory, "host-profile.json"), "utf8"),
       /migration-secret/u,
@@ -66,7 +66,7 @@ test("migrates legacy environment config once without persisting or inheriting i
     });
     await second.initialize({ ZENX_PROVIDER: "openai-compatible" });
     assert.equal(
-      (await second.publicSettings()).profile.defaultModel,
+      (await second.publicSettings()).profile.defaultModel.modelId,
       "model-a",
     );
   } finally {
@@ -294,13 +294,13 @@ test("keeps inverse-completing initialize and save writes in invocation order", 
 
     assert.equal(writesBeforeRelease, 1);
     assert.equal(
-      (await service.publicSettings()).profile.defaultModel,
+      (await service.publicSettings()).profile.defaultModel.modelId,
       "saved-model",
     );
     assert.equal(
       JSON.parse(
         await readFile(path.join(directory, "host-profile.json"), "utf8"),
-      ).defaultModel,
+      ).defaultModel.modelId,
       "saved-model",
     );
   } finally {
@@ -332,15 +332,15 @@ test("serializes initialize followed by save across vault and profile persistenc
       ["fulfilled", "fulfilled"],
     );
 
-    assert.equal(await vault.readApiKey(), "second-key");
+    assert.equal(await vault.readApiKey("second"), "second-key");
     assert.equal(
-      (await service.publicSettings()).profile.defaultModel,
+      (await service.publicSettings()).profile.defaultModel.modelId,
       "second-model",
     );
     assert.equal(
       JSON.parse(
         await readFile(path.join(directory, "host-profile.json"), "utf8"),
-      ).defaultModel,
+      ).defaultModel.modelId,
       "second-model",
     );
   } finally {
@@ -371,9 +371,9 @@ test("serializes concurrent initialize calls so the first migration remains auth
       ["fulfilled", "fulfilled"],
     );
 
-    assert.equal(await vault.readApiKey(), "first-key");
+    assert.equal(await vault.readApiKey("first"), "first-key");
     assert.equal(
-      (await service.publicSettings()).profile.defaultModel,
+      (await service.publicSettings()).profile.defaultModel.modelId,
       "first-model",
     );
   } finally {
@@ -398,12 +398,22 @@ test("merges stale Settings fields without overwriting a newer Project mutation"
 
     await service.save({
       ...stale,
-      defaultModel: "saved-model",
-      models: ["saved-model"],
+      providerProfiles: stale.providerProfiles.map((provider) => ({
+        ...provider,
+        models: ["saved-model"],
+      })),
+      defaultModel: {
+        providerProfileId: stale.defaultModel.providerProfileId,
+        modelId: "saved-model",
+      },
+      titleModel: {
+        providerProfileId: stale.defaultModel.providerProfileId,
+        modelId: "saved-model",
+      },
     });
 
     const profile = (await service.publicSettings()).profile;
-    assert.equal(profile.defaultModel, "saved-model");
+    assert.equal(profile.defaultModel.modelId, "saved-model");
     assert.equal(profile.workspace, path.resolve(workspace));
     assert.deepEqual(profile.workspaces, [path.resolve(workspace)]);
     assert.deepEqual(profile.sidebarOrder, {
@@ -440,7 +450,7 @@ test("restores the previous credential when profile persistence fails", async ()
     );
 
     assert.deepEqual((await service.publicSettings()).profile, before);
-    assert.equal(await vault.readApiKey(), "first-key");
+    assert.equal(await vault.readApiKey("first"), "first-key");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -475,7 +485,7 @@ test("reports an explicit partial save when credential compensation fails", asyn
     );
 
     assert.deepEqual((await service.publicSettings()).profile, before);
-    assert.equal(await vault.readApiKey(), "second-key");
+    assert.equal(await vault.readApiKey("second"), "second-key");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -658,15 +668,24 @@ test("title inference renews a subscription lease rejected after acquisition", a
     path.join(directory, "host-profile.json"),
   );
   await profileStore.write({
-    version: 1,
+    version: 2,
     onboardingComplete: true,
-    provider: {
-      type: "openai-subscription",
-      displayName: "OpenAI subscription",
+    providerProfiles: [
+      {
+        providerProfileId: "openai-codex",
+        type: "openai-subscription",
+        displayName: "OpenAI subscription",
+        models: ["gpt-5.6-terra", "gpt-5.6-luna"],
+      },
+    ],
+    defaultModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-terra",
     },
-    defaultModel: "gpt-5.6-terra",
-    titleModel: "gpt-5.6-luna",
-    models: ["gpt-5.6-terra"],
+    titleModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-luna",
+    },
     workspace: directory,
     workspaces: [directory],
     lastUsedWorkspace: directory,
@@ -731,6 +750,266 @@ test("title inference renews a subscription lease rejected after acquisition", a
       `Bearer ${rejected}`,
       `Bearer ${renewed}`,
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("migrates a persisted v1 profile and vault together and restarts from durable v2", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-paired-v1-"));
+  const profilePath = path.join(directory, "host-profile.json");
+  const vaultPath = path.join(directory, "credentials.vault");
+  try {
+    await writeFile(
+      profilePath,
+      JSON.stringify({
+        version: 1,
+        onboardingComplete: true,
+        provider: {
+          type: "openai-compatible",
+          name: "legacy-adapter",
+          displayName: "Legacy",
+          baseUrl: "https://legacy.example.test/v1",
+        },
+        defaultModel: "shared-model",
+        titleModel: "title-model",
+        models: ["shared-model"],
+        workspace: null,
+        workspaces: [],
+        lastUsedWorkspace: null,
+        approvalPolicy: "never",
+        pinnedThreadIds: ["old-thread"],
+        sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      vaultPath,
+      JSON.stringify({
+        version: 1,
+        apiKey: encryption.encryptString("legacy-key").toString("base64"),
+      }),
+      { mode: 0o600 },
+    );
+    const vault = new ZenXCredentialVault(vaultPath, encryption);
+    const first = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault,
+      subscription: inactiveSubscription(),
+    });
+    await first.initialize({});
+    assert.equal(await vault.readApiKey("legacy-adapter"), "legacy-key");
+    const firstProfile = await readFile(profilePath, "utf8");
+    const firstVault = await readFile(vaultPath, "utf8");
+    assert.equal(JSON.parse(firstProfile).version, 2);
+    assert.equal(JSON.parse(firstVault).version, 2);
+    assert.doesNotMatch(firstProfile + firstVault, /legacy-key/u);
+
+    const second = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(vaultPath, encryption),
+      subscription: inactiveSubscription(),
+    });
+    await second.initialize({ ZENX_PROVIDER: "fake" });
+    assert.equal(await readFile(profilePath, "utf8"), firstProfile);
+    assert.equal(await readFile(vaultPath, "utf8"), firstVault);
+    assert.equal(
+      (await second.publicSettings()).profile.defaultModel.providerProfileId,
+      "legacy-adapter",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a vault migration failure publishes no settings and succeeds on explicit restart", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-v1-restart-"));
+  const profilePath = path.join(directory, "host-profile.json");
+  const vaultPath = path.join(directory, "credentials.vault");
+  const legacyProfile = {
+    version: 1,
+    onboardingComplete: true,
+    provider: {
+      type: "openai-compatible",
+      name: "legacy",
+      displayName: "Legacy",
+      baseUrl: "https://legacy.example.test/v1",
+    },
+    defaultModel: "legacy-model",
+    titleModel: "legacy-model",
+    models: ["legacy-model"],
+    workspace: null,
+    workspaces: [],
+    lastUsedWorkspace: null,
+    approvalPolicy: "never",
+    pinnedThreadIds: [],
+    sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
+  };
+  try {
+    await writeFile(profilePath, JSON.stringify(legacyProfile), {
+      mode: 0o600,
+    });
+    await mkdir(vaultPath);
+    const failed = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(vaultPath, encryption),
+      subscription: inactiveSubscription(),
+    });
+    await assert.rejects(failed.initialize({}), /not a regular file/u);
+    await assert.rejects(failed.publicSettings(), /not initialized/u);
+    assert.equal(JSON.parse(await readFile(profilePath, "utf8")).version, 2);
+
+    await rm(vaultPath, { recursive: true });
+    await writeFile(
+      vaultPath,
+      JSON.stringify({
+        version: 1,
+        apiKey: encryption.encryptString("legacy-key").toString("base64"),
+      }),
+      { mode: 0o600 },
+    );
+    const restarted = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(vaultPath, encryption),
+      subscription: inactiveSubscription(),
+    });
+    await restarted.initialize({});
+    assert.equal((await restarted.publicSettings()).profile.version, 2);
+    assert.equal(
+      await restarted
+        .hostConfig()
+        .then((config) => config.defaultSelection?.providerProfileId),
+      "legacy",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("adds, edits, and deletes Provider profiles with atomic replacements and isolated credential clearing", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profiles-"));
+  const vault = new ZenXCredentialVault(
+    path.join(directory, "credentials.vault"),
+    encryption,
+  );
+  try {
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault,
+      subscription: inactiveSubscription(),
+    });
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const first = compatibleProfile("first").providerProfiles[0]!;
+    const second = compatibleProfile("second").providerProfiles[0]!;
+    await service.addProviderProfile(first, "first-key");
+    await service.addProviderProfile(second, "second-key");
+    await service.editProviderProfile(
+      "first",
+      { ...first, displayName: "First edited" },
+      {
+        defaultModel: { providerProfileId: "first", modelId: "first-model" },
+        titleModel: { providerProfileId: "first", modelId: "first-model" },
+      },
+    );
+    await assert.rejects(
+      service.deleteProviderProfile("first"),
+      /requires a replacement default model/u,
+    );
+    await service.deleteProviderProfile("first", {
+      defaultModel: { providerProfileId: "second", modelId: "second-model" },
+      titleModel: { providerProfileId: "second", modelId: "second-model" },
+    });
+    const reloaded = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault,
+      subscription: inactiveSubscription(),
+    });
+    await reloaded.initialize({});
+    const publicSettings = await reloaded.publicSettings();
+    assert.deepEqual(
+      publicSettings.profile.providerProfiles.map(
+        (provider) => provider.providerProfileId,
+      ),
+      ["fake", "second"],
+    );
+    assert.deepEqual(publicSettings.profile.defaultModel, {
+      providerProfileId: "second",
+      modelId: "second-model",
+    });
+    assert.equal(await vault.readApiKey("first"), undefined);
+    assert.equal(await vault.readApiKey("second"), "second-key");
+    assert.deepEqual(publicSettings.apiKeyProviderProfileIds, ["second"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("title inference resolves the selected profile's adapter and credential", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-title-profile-"),
+  );
+  const vault = new ZenXCredentialVault(
+    path.join(directory, "credentials.vault"),
+    encryption,
+  );
+  const profileStore = new ZenXHostProfileStore(
+    path.join(directory, "host-profile.json"),
+  );
+  const first = compatibleProfile("first").providerProfiles[0]!;
+  const second = compatibleProfile("second").providerProfiles[0]!;
+  const profile: ZenXHostProfile = {
+    ...fakeProfile("fake"),
+    providerProfiles: [first, second],
+    defaultModel: { providerProfileId: "first", modelId: "first-model" },
+    titleModel: { providerProfileId: "second", modelId: "second-model" },
+  };
+  const originalFetch = globalThis.fetch;
+  let authorization: string | null = null;
+  let requestUrl = "";
+  globalThis.fetch = async (input, init) => {
+    requestUrl = String(input);
+    authorization = new Headers(init?.headers).get("authorization");
+    return new Response(
+      'data: {"choices":[{"delta":{"content":"Title second-key"},"finish_reason":null}]}\n\n' +
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n' +
+        "data: [DONE]\n\n",
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  };
+  try {
+    await profileStore.write(profile);
+    await vault.writeApiKey("first", "first-key");
+    await vault.writeApiKey("second", "second-key");
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault,
+      profileStore,
+      subscription: inactiveSubscription(),
+    });
+    await service.initialize({});
+    const configured = await service.titleModel();
+    let output = "";
+    for await (const event of configured.adapter!.stream({
+      model: configured.model,
+      reasoningEffort: "medium",
+      messages: [{ role: "user", text: "title me" }],
+      tools: [],
+      signal: new AbortController().signal,
+    })) {
+      if (event.type === "text_delta") output += event.delta;
+    }
+    assert.equal(output, "Title [REDACTED]");
+    assert.equal(configured.model, "second-model");
+    assert.equal(authorization, "Bearer second-key");
+    assert.match(requestUrl, /^https:\/\/second\.example\.test/u);
   } finally {
     globalThis.fetch = originalFetch;
     await rm(directory, { recursive: true, force: true });
@@ -858,14 +1137,17 @@ class BlockingCredentialVault extends ZenXCredentialVault {
     return { started, release };
   }
 
-  override async writeApiKey(apiKey: string): Promise<void> {
+  override async writeApiKey(
+    providerProfileId: string,
+    apiKey: string,
+  ): Promise<void> {
     const blocker = this.#nextWrite;
     this.#nextWrite = undefined;
     if (blocker !== undefined) {
       blocker.started();
       await blocker.gate;
     }
-    await super.writeApiKey(apiKey);
+    await super.writeApiKey(providerProfileId, apiKey);
   }
 }
 
@@ -1005,12 +1287,18 @@ function inactiveSubscription(): Pick<
 
 function fakeProfile(model: string): ZenXHostProfile {
   return {
-    version: 1,
+    version: 2,
     onboardingComplete: true,
-    provider: { type: "fake", displayName: "Local demo" },
-    defaultModel: model,
-    titleModel: model,
-    models: [model],
+    providerProfiles: [
+      {
+        providerProfileId: "fake",
+        type: "fake",
+        displayName: "Local demo",
+        models: [model],
+      },
+    ],
+    defaultModel: { providerProfileId: "fake", modelId: model },
+    titleModel: { providerProfileId: "fake", modelId: model },
     workspace: null,
     workspaces: [],
     lastUsedWorkspace: null,
@@ -1023,12 +1311,18 @@ function fakeProfile(model: string): ZenXHostProfile {
 function compatibleProfile(name: string): ZenXHostProfile {
   return {
     ...fakeProfile(`${name}-model`),
-    provider: {
-      type: "openai-compatible",
-      name,
-      displayName: name,
-      baseUrl: `https://${name}.example.test/v1`,
-    },
+    providerProfiles: [
+      {
+        providerProfileId: name,
+        type: "openai-compatible",
+        name,
+        displayName: name,
+        baseUrl: `https://${name}.example.test/v1`,
+        models: [`${name}-model`],
+      },
+    ],
+    defaultModel: { providerProfileId: name, modelId: `${name}-model` },
+    titleModel: { providerProfileId: name, modelId: `${name}-model` },
   };
 }
 
@@ -1092,10 +1386,10 @@ class FailingCompensationVault extends ZenXCredentialVault {
     super(filePath, encryption);
   }
 
-  override async writeApiKey(apiKey: string): Promise<void> {
-    if (this.failCompensation && apiKey === "first-key") {
+  override async clearApiKey(providerProfileId: string): Promise<void> {
+    if (this.failCompensation && providerProfileId === "second") {
       throw new Error("credential compensation failed");
     }
-    await super.writeApiKey(apiKey);
+    await super.clearApiKey(providerProfileId);
   }
 }

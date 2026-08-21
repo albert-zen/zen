@@ -7,6 +7,9 @@ export async function zenXProviderTransport(
   config: ZenXHostConfig,
   resolveProxy: ProxyResolver,
 ): Promise<ProviderTransport | undefined> {
+  if (config.provider === undefined) {
+    throw new Error("Single-provider proxy resolution requires a provider");
+  }
   if (config.provider.type === "fake") return undefined;
   const endpoint =
     config.provider.type === "openai-subscription"
@@ -14,6 +17,43 @@ export async function zenXProviderTransport(
       : config.provider.baseUrl;
   const directive = await resolveProxy(endpoint);
   const proxy = proxyUrl(directive);
+  return proxy === undefined ? undefined : { proxyUrl: proxy };
+}
+
+export async function withZenXProviderTransports(
+  config: ZenXHostConfig,
+  resolveProxy: ProxyResolver,
+): Promise<ZenXHostConfig> {
+  if (config.providers === undefined) {
+    return {
+      ...config,
+      transport: await zenXProviderTransport(config, resolveProxy),
+    };
+  }
+  return {
+    ...config,
+    providers: await Promise.all(
+      config.providers.map(async (profile) => ({
+        ...profile,
+        transport:
+          profile.provider.type === "fake"
+            ? undefined
+            : await transportForProvider(profile.provider, resolveProxy),
+      })),
+    ),
+  };
+}
+
+async function transportForProvider(
+  provider: NonNullable<ZenXHostConfig["provider"]>,
+  resolveProxy: ProxyResolver,
+): Promise<ProviderTransport | undefined> {
+  if (provider.type === "fake") return undefined;
+  const endpoint =
+    provider.type === "openai-subscription"
+      ? "https://chatgpt.com/backend-api/codex/responses"
+      : provider.baseUrl;
+  const proxy = proxyUrl(await resolveProxy(endpoint));
   return proxy === undefined ? undefined : { proxyUrl: proxy };
 }
 

@@ -11,6 +11,9 @@ export type ZenXHostConfig = Omit<
   "journal" | "threadMetadata" | "threadSummaryProjection"
 >;
 
+export type ZenXSingleProviderHostConfig = ZenXHostConfig &
+  Required<Pick<ZenXHostConfig, "model" | "provider">>;
+
 export type HostCommand =
   | {
       type: "start";

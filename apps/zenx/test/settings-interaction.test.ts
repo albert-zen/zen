@@ -10,6 +10,7 @@ import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  ZenXSettingsUpdate,
 } from "../src/main/host-profile.js";
 import type { AppearancePreference } from "../src/renderer/src/appearance.js";
 import type { SettingsTab } from "../src/renderer/src/SettingsView.js";
@@ -20,12 +21,18 @@ const { SettingsView } = await import("../src/renderer/src/SettingsView.js");
 
 const settings: PublicHostSettings = {
   profile: {
-    version: 1,
+    version: 2,
     onboardingComplete: true,
-    provider: { type: "fake", displayName: "Local demo" },
-    defaultModel: "fake",
-    titleModel: "gpt-5.6-luna",
-    models: ["fake"],
+    providerProfiles: [
+      {
+        providerProfileId: "fake",
+        type: "fake",
+        displayName: "Local demo",
+        models: ["fake", "gpt-5.6-luna"],
+      },
+    ],
+    defaultModel: { providerProfileId: "fake", modelId: "fake" },
+    titleModel: { providerProfileId: "fake", modelId: "gpt-5.6-luna" },
     workspace: "/work/zen",
     workspaces: ["/work/zen"],
     lastUsedWorkspace: "/work/zen",
@@ -34,14 +41,15 @@ const settings: PublicHostSettings = {
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   },
   hasApiKey: false,
+  apiKeyProviderProfileIds: [],
   subscription: { authenticated: false, expired: false },
 };
 
 test("Settings keeps restart contextual and enables it only for edits", async () => {
-  const saved: ZenXHostProfile[] = [];
+  const saved: ZenXSettingsUpdate[] = [];
   const harness = await mountSettings("models", async (profile) => {
     saved.push(profile);
-    return { ...settings, profile };
+    return { ...settings, profile: { ...settings.profile, ...profile } };
   });
   try {
     await waitFor(() => exactButton("Apply & restart"));
@@ -61,7 +69,7 @@ test("Settings keeps restart contextual and enables it only for edits", async ()
       await Promise.resolve();
     });
     assert.equal(saved.length, 1);
-    assert.equal(saved[0]?.defaultModel, "gpt-5.4");
+    assert.equal(saved[0]?.defaultModel.modelId, "gpt-5.4");
     assert.match(document.body.textContent ?? "", /local host restarted/u);
     assert.equal(apply.disabled, true);
   } finally {
@@ -73,7 +81,10 @@ test("Archived threads is a Settings section with keyboard-reachable Unarchive",
   let restored: string | null = null;
   const harness = await mountSettings(
     "account",
-    async (profile) => ({ ...settings, profile }),
+    async (profile) => ({
+      ...settings,
+      profile: { ...settings.profile, ...profile },
+    }),
     {
       archivedThreads: [archivedSummary()],
       onUnarchive: async (thread) => {
@@ -101,10 +112,10 @@ test("Archived threads is a Settings section with keyboard-reachable Unarchive",
 });
 
 test("General switches Appearance immediately without restarting the host", async () => {
-  const saved: ZenXHostProfile[] = [];
+  const saved: ZenXSettingsUpdate[] = [];
   const harness = await mountSettings("general", async (profile) => {
     saved.push(profile);
-    return { ...settings, profile };
+    return { ...settings, profile: { ...settings.profile, ...profile } };
   });
   try {
     await waitFor(() => appearanceRadio("light"));
@@ -142,7 +153,7 @@ interface Harness {
 async function mountSettings(
   initialTab: SettingsTab,
   save: (
-    profile: ZenXHostProfile,
+    profile: ZenXSettingsUpdate,
     apiKey?: string,
   ) => Promise<PublicHostSettings>,
   options: {

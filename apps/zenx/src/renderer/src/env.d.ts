@@ -14,6 +14,9 @@ import type {
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  ZenXProviderDeleteReplacements,
+  ZenXProviderEditOptions,
+  ZenXProviderProfile,
   ZenXSidebarOrder,
   ZenXSettingsUpdate,
 } from "../../main/host-profile.js";
@@ -85,6 +88,19 @@ declare global {
         save(
           settings: ZenXSettingsUpdate,
           apiKey?: string,
+        ): Promise<PublicHostSettings>;
+        addProvider(
+          provider: ZenXProviderProfile,
+          apiKey?: string,
+        ): Promise<PublicHostSettings>;
+        editProvider(
+          providerProfileId: string,
+          provider: ZenXProviderProfile,
+          options?: ZenXProviderEditOptions,
+        ): Promise<PublicHostSettings>;
+        deleteProvider(
+          providerProfileId: string,
+          replacements?: ZenXProviderDeleteReplacements,
         ): Promise<PublicHostSettings>;
         addWorkspace(workspace: string): Promise<PublicHostSettings>;
         removeWorkspace(workspace: string): Promise<PublicHostSettings>;

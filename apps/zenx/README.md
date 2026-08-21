@@ -76,14 +76,26 @@ preserves Project marker files.
 
 ## Host configuration
 
-ZenX supports an OpenAI subscription, an OpenAI-compatible API provider, or the
-deterministic local demo. Applying relevant host-profile changes restarts the
-local host; existing Thread model settings remain authoritative in ZAS.
+ZenX host profile v2 stores multiple stable Provider profiles. Each profile owns
+its connection fields and string model catalog, while the default and title
+models are explicit `(providerProfileId, modelId)` references. The hosted App
+Server registers every configured profile, so profiles may expose the same
+model ID without sharing routing or credentials. Applying relevant host-profile
+changes restarts the local host; existing Thread model settings remain
+authoritative in ZAS. Removing a profile never scans or rewrites Threads: an old
+Thread remains readable, fails clearly when that profile is unavailable, and
+runs again only after an explicit switch to an available profile.
 
 Host profiles live under Electron `userData` without credentials. Compatible
-provider API keys are encrypted with Electron `safeStorage`; subscription OAuth
-uses Zen's independent mode-0600 host profile. Neither is written to Thread
-journals, App Server protocol history, or shell environment.
+provider API keys are encrypted with Electron `safeStorage` and keyed by stable
+Provider profile ID; deleting one profile clears only its key. Subscription OAuth
+uses a profile-scoped independent mode-0600 host file (the migrated
+`openai-codex` profile retains the existing path). Neither credential form is
+written to renderer settings, Thread journals, App Server protocol history, or
+shell environment. Existing v1 single-provider profile and vault files migrate
+deterministically on first start and are immediately persisted as v2; the
+migrated ID preserves the old runtime identity (`fake`, `openai-codex`, or the
+configured compatible-provider name).
 
 ## Triggers and Rooms
 

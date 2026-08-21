@@ -1,108 +1,227 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import {
   hostConfigFromProfile,
+  migrateLegacyHostProfile,
   validateHostProfile,
   ZenXHostProfileStore,
+  type ZenXHostProfile,
 } from "../src/main/host-profile.js";
 
-const profile = {
-  version: 1 as const,
+const profile: ZenXHostProfile = {
+  version: 2,
   onboardingComplete: true,
-  provider: {
-    type: "openai-compatible" as const,
-    name: "local",
-    displayName: "Local model",
-    baseUrl: "http://localhost:11434/v1",
-  },
-  defaultModel: "qwen3",
-  titleModel: "gpt-5.6-luna",
-  models: ["qwen3", "deepseek-r1"],
+  providerProfiles: [
+    {
+      providerProfileId: "local",
+      type: "openai-compatible",
+      name: "local",
+      displayName: "Local model",
+      baseUrl: "http://localhost:11434/v1",
+      models: ["qwen3", "deepseek-r1", "gpt-5.6-luna"],
+    },
+  ],
+  defaultModel: { providerProfileId: "local", modelId: "qwen3" },
+  titleModel: { providerProfileId: "local", modelId: "gpt-5.6-luna" },
   workspace: path.join(os.tmpdir(), "workspace"),
   workspaces: [path.join(os.tmpdir(), "workspace")],
   lastUsedWorkspace: null,
-  approvalPolicy: "always" as const,
+  approvalPolicy: "always",
   pinnedThreadIds: [],
   sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
 };
 
-test("round-trips credential-free host settings and builds the ModelCatalog config", async () => {
+test("round-trips credential-free v2 profiles and builds all host registry entries", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-"));
   try {
     const store = new ZenXHostProfileStore(
       path.join(directory, "host-profile.json"),
     );
     await store.write(profile);
-    const read = await store.read({ ...profile, defaultModel: "unused" });
+    const read = await store.read(profile);
     assert.deepEqual(read, {
       ...profile,
-      workspace: path.resolve(profile.workspace),
-      workspaces: [path.resolve(profile.workspace)],
+      workspace: path.resolve(profile.workspace!),
+      workspaces: [path.resolve(profile.workspace!)],
     });
-    assert.deepEqual(
-      hostConfigFromProfile(read, {
-        dataDirectory: path.join(os.tmpdir(), "data"),
-        subscriptionProfilePath: path.join(os.tmpdir(), "auth"),
-        fallbackWorkspace: path.join(os.tmpdir(), "fallback"),
-        apiKey: "secret",
-      }).models,
-      ["qwen3", "deepseek-r1"],
-    );
+    const config = hostConfigFromProfile(read, {
+      dataDirectory: path.join(os.tmpdir(), "data"),
+      subscriptionProfilePath: path.join(os.tmpdir(), "auth"),
+      fallbackWorkspace: path.join(os.tmpdir(), "fallback"),
+      apiKeys: { local: "secret" },
+    });
+    assert.deepEqual(config.providers?.[0]?.models, [
+      "qwen3",
+      "deepseek-r1",
+      "gpt-5.6-luna",
+    ]);
+    assert.deepEqual(config.defaultSelection, profile.defaultModel);
     assert.equal(JSON.stringify(read).includes("secret"), false);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("rejects embedded URL credentials and missing default models", () => {
+test("migrates v1 deterministically, persists v2, and preserves adapter identity and preferences", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-v1-"));
+  const file = path.join(directory, "host-profile.json");
+  try {
+    const legacy = {
+      version: 1,
+      onboardingComplete: true,
+      provider: {
+        type: "openai-compatible",
+        name: "legacy-runtime",
+        displayName: "Legacy",
+        baseUrl: "https://example.com/v1",
+      },
+      defaultModel: "shared",
+      titleModel: "title-only",
+      models: ["shared"],
+      workspace: "/tmp/work",
+      workspaces: ["/tmp/work", "/tmp/other"],
+      lastUsedWorkspace: "/tmp/other",
+      approvalPolicy: "never",
+      pinnedThreadIds: ["thread-1"],
+      sidebarOrder: { projectKeys: ["one"], threadIdsByProject: {} },
+    };
+    await writeFile(file, JSON.stringify(legacy), { mode: 0o600 });
+    const store = new ZenXHostProfileStore(file);
+    const first = await store.readOptional();
+    const persistedAfterFirst = await readFile(file, "utf8");
+    const second = await store.readOptional();
+    assert.deepEqual(second, first);
+    assert.equal(await readFile(file, "utf8"), persistedAfterFirst);
+    assert.equal(first?.version, 2);
+    assert.equal(
+      first?.providerProfiles[0]?.providerProfileId,
+      "legacy-runtime",
+    );
+    assert.deepEqual(first?.defaultModel, {
+      providerProfileId: "legacy-runtime",
+      modelId: "shared",
+    });
+    assert.deepEqual(first?.pinnedThreadIds, ["thread-1"]);
+    assert.equal(first?.lastUsedWorkspace, path.resolve("/tmp/other"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("v1 migration preserves fake and OpenAI subscription runtime identities", () => {
+  for (const [provider, expected] of [
+    [{ type: "fake", displayName: "Local demo" }, "fake"],
+    [
+      { type: "openai-subscription", displayName: "OpenAI subscription" },
+      "openai-codex",
+    ],
+  ] as const) {
+    const migrated = migrateLegacyHostProfile({
+      version: 1,
+      provider,
+      defaultModel: "model",
+      titleModel: "model",
+      models: ["model"],
+      workspace: null,
+      approvalPolicy: "never",
+    });
+    assert.equal(migrated.providerProfiles[0]?.providerProfileId, expected);
+  }
+});
+
+test("validates duplicate, dangling, missing model, bounded id, URL, and secret fields", () => {
   assert.throws(
     () =>
       validateHostProfile({
         ...profile,
-        provider: {
-          ...profile.provider,
-          baseUrl: "https://user:pass@example.com/v1",
-        },
+        providerProfiles: [
+          ...profile.providerProfiles,
+          { ...profile.providerProfiles[0] },
+        ],
+      }),
+    /ids must be unique/u,
+  );
+  assert.throws(
+    () =>
+      validateHostProfile({
+        ...profile,
+        defaultModel: { providerProfileId: "missing", modelId: "qwen3" },
+      }),
+    /unknown Provider profile/u,
+  );
+  assert.throws(
+    () =>
+      validateHostProfile({
+        ...profile,
+        titleModel: { providerProfileId: "local", modelId: "missing" },
+      }),
+    /absent/u,
+  );
+  assert.throws(
+    () =>
+      validateHostProfile({
+        ...profile,
+        providerProfiles: [
+          {
+            ...profile.providerProfiles[0],
+            providerProfileId: "x".repeat(513),
+          },
+        ],
+      }),
+    /profile id is invalid/u,
+  );
+  assert.throws(
+    () =>
+      validateHostProfile({
+        ...profile,
+        providerProfiles: [
+          {
+            ...profile.providerProfiles[0],
+            baseUrl: "https://user:pass@example.com/v1",
+          },
+        ],
       }),
     /must not contain credentials/u,
   );
   assert.throws(
-    () => validateHostProfile({ ...profile, models: ["other"] }),
-    /include the default model/u,
+    () =>
+      validateHostProfile({
+        ...profile,
+        providerProfiles: [
+          {
+            ...profile.providerProfiles[0],
+            baseUrl: "https://example.com/v1?token=forbidden",
+          },
+        ],
+      }),
+    /must not contain query or fragment/u,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(
+      validateHostProfile({
+        ...profile,
+        providerProfiles: [
+          { ...profile.providerProfiles[0], apiKey: "must-not-persist" },
+        ],
+      }),
+    ),
+    /must-not-persist/u,
   );
 });
 
-test("defaults legacy profiles to the independent Luna title model", () => {
-  const {
-    titleModel: _titleModel,
-    workspaces: _workspaces,
-    lastUsedWorkspace: _lastUsedWorkspace,
-    pinnedThreadIds: _pinnedThreadIds,
-    sidebarOrder: _sidebarOrder,
-    ...legacy
-  } = profile;
-  const validated = validateHostProfile(legacy);
-  assert.equal(validated.titleModel, "gpt-5.6-luna");
-  assert.deepEqual(validated.workspaces, [path.resolve(profile.workspace)]);
-  assert.equal(validated.lastUsedWorkspace, null);
-  assert.deepEqual(validated.pinnedThreadIds, []);
-  assert.deepEqual(validated.sidebarOrder, {
-    projectKeys: [],
-    threadIdsByProject: {},
-  });
-});
-
-test("reports a corrupt persisted host profile instead of silently replacing it", async () => {
+test("reports corrupt profile data instead of silently replacing it", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-bad-"));
   try {
     const file = path.join(directory, "host-profile.json");
     await writeFile(file, "{not-json", { mode: 0o600 });
-    const store = new ZenXHostProfileStore(file);
-    await assert.rejects(store.read(profile), /contains invalid JSON/u);
+    await assert.rejects(
+      new ZenXHostProfileStore(file).read(profile),
+      /contains invalid JSON/u,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -116,14 +235,17 @@ test("concurrent profile stores use independent atomic staging files", async () 
     const file = path.join(directory, "host-profile.json");
     const first = new ZenXHostProfileStore(file);
     const second = new ZenXHostProfileStore(file);
-
     await Promise.all([
-      first.write({ ...profile, defaultModel: "qwen3" }),
-      second.write({ ...profile, defaultModel: "deepseek-r1" }),
+      first.write(profile),
+      second.write({
+        ...profile,
+        defaultModel: { providerProfileId: "local", modelId: "deepseek-r1" },
+      }),
     ]);
-
     const persisted = await first.read(profile);
-    assert.ok(["qwen3", "deepseek-r1"].includes(persisted.defaultModel));
+    assert.ok(
+      ["qwen3", "deepseek-r1"].includes(persisted.defaultModel.modelId),
+    );
     assert.deepEqual(await readdir(directory), ["host-profile.json"]);
   } finally {
     await rm(directory, { recursive: true, force: true });

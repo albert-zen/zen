@@ -18,9 +18,15 @@ import { ipcChannels } from "../preload/ipc.js";
 import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
-import type { ZenXSettingsUpdate, ZenXSidebarOrder } from "./host-profile.js";
+import type {
+  ZenXProviderDeleteReplacements,
+  ZenXProviderEditOptions,
+  ZenXProviderProfile,
+  ZenXSettingsUpdate,
+  ZenXSidebarOrder,
+} from "./host-profile.js";
 import { ZenXSettingsService } from "./settings-service.js";
-import { zenXProviderTransport } from "./system-proxy.js";
+import { withZenXProviderTransports } from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
 import {
@@ -136,9 +142,8 @@ app.whenReady().then(async () => {
     let startupError: unknown;
     let hostConfig;
     try {
-      hostConfig = await settingsService.hostConfig();
-      hostConfig.transport = await zenXProviderTransport(
-        hostConfig,
+      hostConfig = await withZenXProviderTransports(
+        await settingsService.hostConfig(),
         async (url) => await session.defaultSession.resolveProxy(url),
       );
     } catch (error) {
@@ -201,9 +206,8 @@ app.whenReady().then(async () => {
     settingsService,
     directoryBrowser,
     async () => {
-      const hostConfig = await settingsService!.hostConfig();
-      hostConfig.transport = await zenXProviderTransport(
-        hostConfig,
+      const hostConfig = await withZenXProviderTransports(
+        await settingsService!.hostConfig(),
         async (url) => await session.defaultSession.resolveProxy(url),
       );
       if (appServerManager === undefined) {
@@ -544,6 +548,51 @@ function installSettingsIpc(
       }
       await settings.save(update, apiKey);
       await refreshProjects();
+      await restartHost();
+      return await settings.publicSettings();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.providerAdd,
+    async (_event, provider: ZenXProviderProfile, apiKey?: unknown) => {
+      if (apiKey !== undefined && typeof apiKey !== "string") {
+        throw new Error("Invalid API key");
+      }
+      await settings.addProviderProfile(provider, apiKey);
+      await restartHost();
+      return await settings.publicSettings();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.providerEdit,
+    async (
+      _event,
+      providerProfileId: unknown,
+      provider: ZenXProviderProfile,
+      options?: ZenXProviderEditOptions,
+    ) => {
+      if (typeof providerProfileId !== "string") {
+        throw new Error("Invalid Provider profile id");
+      }
+      if (options?.apiKey !== undefined && typeof options.apiKey !== "string") {
+        throw new Error("Invalid API key");
+      }
+      await settings.editProviderProfile(providerProfileId, provider, options);
+      await restartHost();
+      return await settings.publicSettings();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.providerDelete,
+    async (
+      _event,
+      providerProfileId: unknown,
+      replacements?: ZenXProviderDeleteReplacements,
+    ) => {
+      if (typeof providerProfileId !== "string") {
+        throw new Error("Invalid Provider profile id");
+      }
+      await settings.deleteProviderProfile(providerProfileId, replacements);
       await restartHost();
       return await settings.publicSettings();
     },

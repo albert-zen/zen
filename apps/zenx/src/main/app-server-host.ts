@@ -73,10 +73,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
   tools = new ZenXHostToolExecutor({
     capabilities: command.capabilities,
     blockedEnvironmentVariables: command.config.secretEnvironmentVariables,
-    redactedValues:
-      command.config.provider.type === "openai-compatible"
-        ? [command.config.provider.apiKey]
-        : [],
+    redactedValues: providerApiKeys(command.config),
     send,
   });
   appServer = createHostedAppServer({ ...command.config, tools });
@@ -87,6 +84,24 @@ async function handleCommand(command: HostCommand): Promise<void> {
     bearerToken: command.bearerToken,
   });
   send({ type: "ready", url: server.url });
+}
+
+function providerApiKeys(
+  config: Extract<HostCommand, { type: "start" }>["config"],
+): string[];
+function providerApiKeys(
+  config: Extract<HostCommand, { type: "start" }>["config"],
+): string[] {
+  if (config.providers !== undefined) {
+    return config.providers.flatMap((profile) =>
+      profile.provider.type === "openai-compatible"
+        ? [profile.provider.apiKey]
+        : [],
+    );
+  }
+  return config.provider?.type === "openai-compatible"
+    ? [config.provider.apiKey]
+    : [];
 }
 
 async function shutdown(): Promise<void> {
