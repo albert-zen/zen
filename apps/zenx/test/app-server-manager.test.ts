@@ -57,6 +57,9 @@ test("hosts a real App Server and removes its private token on shutdown", async 
     assert.deepEqual(summary, {
       threadId: started.thread.id,
       currentMetadata: {
+        providerProfileId: "fake",
+        modelId: "fake",
+        reasoningEffort: "medium",
         model: "fake",
         provider: "fake",
         cwd: process.cwd(),
@@ -189,7 +192,10 @@ test("recovers a killed hosted App Server and admits one subsequent Turn", async
       thread.id,
     );
     assert.equal((await manager.listThreadSummaries())[0]?.threadId, thread.id);
-    assert.equal((await manager.request("model/list", {})).data[0]?.id, "fake");
+    assert.equal(
+      (await manager.request("model/list", {})).data[0]?.id,
+      "zen-model-v1:WyJmYWtlIiwiZmFrZSJd",
+    );
 
     await manager.request("turn/start", {
       threadId: thread.id,
