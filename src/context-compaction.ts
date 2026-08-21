@@ -65,6 +65,25 @@ export function validateContextCompactionItem(
   items: readonly CanonicalItem[],
   item: ContextCompactionItem,
 ): void {
+  const runtimeItem = item as unknown as Record<string, unknown>;
+  requireNonEmpty(runtimeItem.id as string, "id");
+  if (runtimeItem.type !== "context_compaction") {
+    throw new Error("Context compaction type must be context_compaction");
+  }
+  if ("turnId" in runtimeItem) {
+    throw new Error("Context compaction must not belong to a Turn");
+  }
+  if (!Array.isArray(runtimeItem.retainedItemIds)) {
+    throw new Error("Context compaction retainedItemIds must be an array");
+  }
+  if (
+    typeof runtimeItem.tokenUsage !== "object" ||
+    runtimeItem.tokenUsage === null ||
+    Array.isArray(runtimeItem.tokenUsage)
+  ) {
+    throw new Error("Context compaction tokenUsage must be an object");
+  }
+
   requireNonEmpty(item.coveredThroughItemId, "coveredThroughItemId");
   requireNonEmpty(item.summary, "summary", true);
   requireNonEmpty(item.providerProfileId, "providerProfileId");

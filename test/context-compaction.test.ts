@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { AppServerError, ZenAppServer } from "../src/app-server.js";
+import { validateContextCompactionItem } from "../src/context-compaction.js";
 import type {
   CanonicalItem,
   ContextCompactionItem,
@@ -18,7 +19,7 @@ import {
 } from "../src/model.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { projectThread } from "../src/protocol/codex/mapper.js";
-import { AgentRuntime } from "../src/runtime.js";
+import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
 import { Thread } from "../src/thread.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ShellToolExecutor } from "../src/tool.js";
@@ -226,6 +227,65 @@ test("validates compaction boundaries, retained order, and complete tool lifecyc
         retainedItemIds: ["changed-after-boundary"],
       }),
     /after the compaction boundary/u,
+  );
+});
+
+test("rejects malformed compaction identity and containers before persistence", async (t) => {
+  const malformedCases: Array<{
+    name: string;
+    override: Record<string, unknown>;
+    message: RegExp;
+  }> = [
+    {
+      name: "empty stable identity",
+      override: { id: "" },
+      message: /id must be non-empty/u,
+    },
+    {
+      name: "non-array retained ids",
+      override: { retainedItemIds: "started" },
+      message: /retainedItemIds must be an array/u,
+    },
+    {
+      name: "unexpected Turn membership",
+      override: { turnId: "turn" },
+      message: /must not belong to a Turn/u,
+    },
+    {
+      name: "null token usage",
+      override: { tokenUsage: null },
+      message: /tokenUsage must be an object/u,
+    },
+    {
+      name: "array token usage",
+      override: { tokenUsage: [] },
+      message: /tokenUsage must be an object/u,
+    },
+  ];
+  for (const malformed of malformedCases) {
+    await t.test(malformed.name, async () => {
+      const journal = new InMemoryThreadJournal();
+      const runtime = new MalformedCompactionRuntime(malformed.override);
+      const server = createServer({ journal, model: echoModel(), runtime });
+      const thread = await server.startThread();
+      await assert.rejects(
+        server.startTurn(thread.id, "must not persist"),
+        malformed.message,
+      );
+      assert.deepEqual(
+        (await journal.read(thread.id)).map((item) => item.type),
+        ["thread_metadata"],
+      );
+    });
+  }
+
+  assert.throws(
+    () =>
+      validateContextCompactionItem([], {
+        ...malformedCompactionShape(),
+        type: "failure",
+      } as unknown as ContextCompactionItem),
+    /type must be context_compaction/u,
   );
 });
 
@@ -560,13 +620,15 @@ function createServer(options: {
   journal: ThreadJournal;
   model: ModelAdapter;
   modelCatalog?: ModelCatalog;
+  runtime?: AgentRuntime;
 }): ZenAppServer {
   const modelCatalog =
     options.modelCatalog ??
     new StaticModelCatalog([{ id: "recording-model", isDefault: true }]);
   return new ZenAppServer({
     journal: options.journal,
-    runtime: new AgentRuntime({ tools: new ShellToolExecutor() }),
+    runtime:
+      options.runtime ?? new AgentRuntime({ tools: new ShellToolExecutor() }),
     providerRegistry: new ProviderRegistry([
       {
         providerProfileId: options.model.provider,
@@ -585,6 +647,40 @@ function createServer(options: {
       approvalPolicy: "never",
     },
   });
+}
+
+class MalformedCompactionRuntime extends AgentRuntime {
+  readonly #override: Record<string, unknown>;
+
+  constructor(override: Record<string, unknown>) {
+    super({ tools: new ShellToolExecutor() });
+    this.#override = override;
+  }
+
+  override async runTurn(options: RunTurnOptions): Promise<void> {
+    await options.commit({
+      ...malformedCompactionShape(),
+      ...this.#override,
+      threadId: options.thread.id,
+    } as unknown as CanonicalItem);
+  }
+}
+
+function malformedCompactionShape(): Record<string, unknown> {
+  return {
+    id: "malformed-compaction",
+    threadId: "thread",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    type: "context_compaction",
+    coveredThroughItemId: "missing-boundary",
+    summary: "summary",
+    retainedItemIds: [],
+    providerProfileId: "recording",
+    modelId: "recording-model",
+    reasoningEffort: "medium",
+    algorithmVersion: "zen.context-compaction.v1",
+    tokenUsage: { inputTokens: 1, outputTokens: 1 },
+  };
 }
 
 function cloneRequest(request: ModelRequest): ModelRequest {
