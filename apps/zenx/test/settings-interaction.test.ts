@@ -231,6 +231,57 @@ test("Add custom provider submits an opaque identity, credential, and repeatable
   }
 });
 
+test("Add reconciles an applied provider when host restart rejects", async () => {
+  let authoritative = settings;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    get: async () => authoritative,
+    addProvider: async (provider) => {
+      calls += 1;
+      authoritative = {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+      };
+      throw new Error("host restart failed after add");
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add custom provider"));
+    await click(exactButtonRequired("Add custom provider"));
+    await changeControl(requiredInput("Display name"), "Committed AI");
+    await changeControl(requiredInput("Provider name"), "committed");
+    await changeControl(
+      requiredInput("Base URL"),
+      "https://committed.example/v1",
+    );
+    await changeControl(requiredInput("API key"), "committed-key");
+    await changeControl(requiredInput("Model 1"), "committed-model");
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(
+      () =>
+        calls === 1 && /Committed AI/u.test(document.body.textContent ?? ""),
+    );
+    assert.equal(
+      document.querySelector('[aria-label="Add Provider profile"]'),
+      null,
+    );
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /host restart failed after add/u,
+    );
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Provider added · local host restarted/u,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("Add provider offers known local and subscription flows without creating account lifecycle", async () => {
   let added: ZenXProviderProfile | undefined;
   const harness = await mountSettings("models", {
@@ -309,6 +360,46 @@ test("Edit keeps a blank saved credential and replaces only the edited profile k
     await waitFor(() => edits.length === 2);
     assert.equal(edits[1]?.options?.apiKey, "replacement-key");
     assert.doesNotMatch(document.body.textContent ?? "", /replacement-key/u);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Edit reconciles an applied provider when host restart rejects", async () => {
+  let authoritative = multiProviderSettings;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    get: async () => authoritative,
+    editProvider: async (id, provider) => {
+      calls += 1;
+      authoritative = {
+        ...multiProviderSettings,
+        profile: {
+          ...multiProviderSettings.profile,
+          providerProfiles: multiProviderSettings.profile.providerProfiles.map(
+            (candidate) =>
+              candidate.providerProfileId === id ? provider : candidate,
+          ),
+        },
+      };
+      throw new Error("host restart failed after edit");
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(requiredInput("Display name"), "Alpha committed");
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(
+      () =>
+        calls === 1 && /Alpha committed/u.test(document.body.textContent ?? ""),
+    );
+    assert.equal(document.querySelector('[aria-label="Edit Alpha"]'), null);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /host restart failed after edit/u,
+    );
   } finally {
     await unmount(harness);
   }
@@ -409,6 +500,48 @@ test("Delete removes an unreferenced Provider without replacement selections", a
       id: "profile-local",
       replacements: undefined,
     });
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Delete reconciles an applied provider when host restart rejects", async () => {
+  let authoritative = multiProviderSettings;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    get: async () => authoritative,
+    deleteProvider: async (id) => {
+      calls += 1;
+      authoritative = {
+        ...multiProviderSettings,
+        profile: {
+          ...multiProviderSettings.profile,
+          providerProfiles:
+            multiProviderSettings.profile.providerProfiles.filter(
+              (candidate) => candidate.providerProfileId !== id,
+            ),
+        },
+      };
+      throw new Error("host restart failed after delete");
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Delete Local demo"));
+    await click(labeledButtonRequired("Delete Local demo"));
+    await click(exactButtonRequired("Delete provider"));
+    await waitFor(
+      () => calls === 1 && !/Local demo/u.test(document.body.textContent ?? ""),
+    );
+    assert.equal(
+      document.querySelector('[aria-label="Delete Local demo"]'),
+      null,
+    );
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /host restart failed after delete/u,
+    );
+    assert.doesNotMatch(document.body.textContent ?? "", /not configured/u);
   } finally {
     await unmount(harness);
   }
@@ -536,6 +669,7 @@ async function mountSettings(
   initialTab: SettingsTab,
   options: {
     initialSettings?: PublicHostSettings;
+    get?(): Promise<PublicHostSettings>;
     save?(
       profile: ZenXSettingsUpdate,
       apiKey?: string,
@@ -587,7 +721,7 @@ async function mountSettings(
   const initialSettings = options.initialSettings ?? settings;
   const zenx = {
     settings: {
-      get: async () => initialSettings,
+      get: options.get ?? (async () => initialSettings),
       save:
         options.save ??
         (async (profile: ZenXSettingsUpdate) => ({

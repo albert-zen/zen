@@ -565,16 +565,34 @@ function ModelsPanel({
     operation: string,
     message: string,
     mutation: () => Promise<PublicHostSettings>,
-  ): Promise<boolean> => {
+    committed: (value: PublicHostSettings) => boolean,
+  ): Promise<"success" | "committed-error" | "failed"> => {
     setBusy(operation);
     setError(null);
     setStatus(null);
     try {
       acceptSettings(await mutation(), message);
-      return true;
+      return "success";
     } catch (reason) {
-      setError(describeError(reason));
-      return false;
+      const originalError = describeError(reason);
+      try {
+        const authoritative = await window.zenx.settings.get();
+        if (committed(authoritative)) {
+          setSettings(authoritative);
+          setDraft(authoritative.profile);
+          setStatus(
+            `${message.replace(/ · local host restarted$/u, "")} · saved, but local host restart failed`,
+          );
+          setError(`Settings were saved, but restart failed: ${originalError}`);
+          return "committed-error";
+        }
+        setError(originalError);
+      } catch (reconciliationReason) {
+        setError(
+          `Settings mutation failed: ${originalError}. Authoritative state could not be reconciled: ${describeError(reconciliationReason)}. Outcome is unknown.`,
+        );
+      }
+      return "failed";
     } finally {
       setBusy(null);
     }
@@ -773,8 +791,19 @@ function ModelsPanel({
                           ...(apiKey === undefined ? {} : { apiKey }),
                         },
                       ),
+                (authoritative) => {
+                  const current = authoritative.profile.providerProfiles.find(
+                    (candidate) =>
+                      candidate.providerProfileId ===
+                      provider.providerProfileId,
+                  );
+                  return (
+                    current !== undefined &&
+                    providerProfilesEquivalent(current, provider)
+                  );
+                },
               );
-              if (success) setEditor(null);
+              if (success !== "failed") setEditor(null);
               return success;
             }}
           />
@@ -821,8 +850,24 @@ function ModelsPanel({
                     deletingProvider.providerProfileId,
                     replacements,
                   ),
+                (authoritative) => {
+                  const deleted = authoritative.profile.providerProfiles.some(
+                    (candidate) =>
+                      candidate.providerProfileId ===
+                      deletingProvider.providerProfileId,
+                  );
+                  if (deleted) return false;
+                  return (
+                    (replacements?.defaultModel === undefined ||
+                      JSON.stringify(authoritative.profile.defaultModel) ===
+                        JSON.stringify(replacements.defaultModel)) &&
+                    (replacements?.titleModel === undefined ||
+                      JSON.stringify(authoritative.profile.titleModel) ===
+                        JSON.stringify(replacements.titleModel))
+                  );
+                },
               );
-              if (success) setDeletingProviderId(null);
+              if (success !== "failed") setDeletingProviderId(null);
               return success;
             }}
           />
@@ -921,7 +966,7 @@ function ProviderEditor({
     provider: ZenXProviderProfile,
     apiKey: string | undefined,
     replacements: ZenXProviderEditOptions,
-  ): Promise<boolean>;
+  ): Promise<"success" | "committed-error" | "failed">;
   provider: ZenXProviderProfile;
   titleModel: ZenXModelReference;
 }) {
@@ -1178,7 +1223,7 @@ function DeleteProviderPanel({
   onCancel(): void;
   onDelete(
     replacements: ZenXProviderDeleteReplacements | undefined,
-  ): Promise<boolean>;
+  ): Promise<"success" | "committed-error" | "failed">;
   profiles: readonly ZenXProviderProfile[];
   provider: ZenXProviderProfile;
   titleModel: ZenXModelReference;
@@ -1429,6 +1474,31 @@ function providerLogoKind(
     return "qwen";
   if (identity.includes("openai")) return "openai";
   return "generic";
+}
+
+function providerProfilesEquivalent(
+  left: ZenXProviderProfile,
+  right: ZenXProviderProfile,
+): boolean {
+  const normalize = (provider: ZenXProviderProfile): ZenXProviderProfile => {
+    if (provider.type === "openai-compatible") {
+      return {
+        ...provider,
+        providerProfileId: provider.providerProfileId.trim(),
+        displayName: provider.displayName.trim(),
+        models: provider.models.map((model) => model.trim()),
+        name: provider.name.trim(),
+        baseUrl: provider.baseUrl.trim().replace(/\/$/u, ""),
+      };
+    }
+    return {
+      ...provider,
+      providerProfileId: provider.providerProfileId.trim(),
+      displayName: provider.displayName.trim(),
+      models: provider.models.map((model) => model.trim()),
+    };
+  };
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
 function modelReferenceValue(reference: ZenXModelReference): string {
