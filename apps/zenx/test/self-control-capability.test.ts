@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { ZenAppServer } from "../../../src/app-server.js";
+import { textFromUserInput } from "../../../src/item.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
 import {
   type ModelAdapter,
@@ -719,13 +720,16 @@ class TracerBulletModel implements ModelAdapter {
     const firstUser = request.messages.find(
       (message) => message.role === "user",
     );
-    if (
-      firstUser?.role !== "user" ||
-      !firstUser.text.includes("tracer bullet")
-    ) {
+    const firstUserText =
+      firstUser?.role === "user" && "content" in firstUser
+        ? textFromUserInput(firstUser.content)
+        : firstUser?.role === "user"
+          ? firstUser.text
+          : "";
+    if (!firstUserText.includes("tracer bullet")) {
       yield {
         type: "text_delta",
-        delta: `Completed: ${firstUser?.text ?? ""}`,
+        delta: `Completed: ${firstUserText}`,
       };
       return;
     }

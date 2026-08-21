@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { png1x1 } from "./fixtures.js";
+
 import {
   OpenAiSubscriptionAuthProfile,
   SubscriptionCredentialStore,
@@ -11,12 +13,60 @@ import {
 } from "../apps/cli/src/subscription-auth.js";
 import { createHostedAppServer } from "../apps/cli/src/host.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
+import { InMemoryAttachmentStore } from "../src/attachment.js";
 import type { ModelEvent, ModelRequest, ModelTool } from "../src/model.js";
 import { OpenAiSubscriptionModel } from "../src/model/openai-subscription.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 
 const accountId = "acct_zen_test";
 const secretAccessToken = jwt(accountId);
+
+test("maps AttachmentRef input to a Responses image part", async () => {
+  const attachments = new InMemoryAttachmentStore();
+  const ref = await attachments.importBytes(png1x1());
+  let body: Record<string, unknown> = {};
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    attachments,
+    fetch: async (_input, init) => {
+      body = requestBody(init);
+      return sseResponse([
+        {
+          type: "response.completed",
+          response: { status: "completed", output: [] },
+        },
+      ]);
+    },
+  });
+
+  await collect(
+    adapter.stream(
+      request({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "describe" },
+              { type: "image", attachment: ref },
+            ],
+          },
+        ],
+      }),
+    ),
+  );
+  assert.deepEqual(body.input, [
+    {
+      role: "user",
+      content: [
+        { type: "input_text", text: "describe" },
+        {
+          type: "input_image",
+          image_url: `data:image/png;base64,${Buffer.from(png1x1()).toString("base64")}`,
+        },
+      ],
+    },
+  ]);
+});
 
 test("sends a native Codex Responses request and maps SSE output", async () => {
   let capturedUrl = "";

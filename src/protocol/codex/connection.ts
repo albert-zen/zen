@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 
+import { AttachmentStoreError, decodeImageDataUri } from "../../attachment.js";
 import {
   AppServerError,
   type AppServerEvent,
@@ -12,6 +13,7 @@ import type {
   ApprovalDecision,
   CanonicalItem,
   ToolCallItem,
+  UserInput,
 } from "../../item.js";
 import type { ApprovalRequest } from "../../tool.js";
 import type {
@@ -462,13 +464,13 @@ export class CodexConnection {
             "effort",
           ],
         );
-        const text = readTextInput(params.input);
+        const input = await readUserInput(params.input, this.#appServer);
         const clientId = optionalNonEmptyString(
           params.clientUserMessageId,
           "clientUserMessageId",
         );
         this.#subscribedThreads.add(threadId);
-        const handle = await this.#appServer.startTurn(threadId, text, {
+        const handle = await this.#appServer.startTurn(threadId, input, {
           ...(clientId === undefined ? {} : { clientId }),
           ...(requestedSelectionInput === undefined
             ? {}
@@ -506,7 +508,7 @@ export class CodexConnection {
         ]);
         const threadId = requiredString(params, "threadId");
         const expectedTurnId = requiredString(params, "expectedTurnId");
-        const text = readTextInput(params.input);
+        const input = await readUserInput(params.input, this.#appServer);
         const clientId = optionalNonEmptyString(
           params.clientUserMessageId,
           "clientUserMessageId",
@@ -515,7 +517,7 @@ export class CodexConnection {
         const handle = await this.#appServer.steerTurn(
           threadId,
           expectedTurnId,
-          text,
+          input,
           clientId === undefined ? {} : { clientId },
         );
         this.#send({ id: request.id, result: { turnId: handle.id } });
@@ -530,13 +532,13 @@ export class CodexConnection {
         ]);
         const threadId = requiredString(params, "threadId");
         const expectedTurnId = requiredString(params, "expectedTurnId");
-        const text = readTextInput(params.input);
+        const input = await readUserInput(params.input, this.#appServer);
         const clientId = requiredString(params, "clientUserMessageId");
         this.#subscribedThreads.add(threadId);
         const replacement = await this.#appServer.replaceTurn(
           threadId,
           expectedTurnId,
-          text,
+          input,
           {
             clientId,
             requestApproval: async (approval) =>
@@ -1218,22 +1220,53 @@ function readSandboxPolicy(value: unknown): "danger-full-access" | undefined {
   return "danger-full-access";
 }
 
-function readTextInput(value: unknown): string {
+async function readUserInput(
+  value: unknown,
+  appServer: ZenAppServer,
+): Promise<UserInput> {
   if (!Array.isArray(value) || value.length === 0) {
     throw new InvalidParamsError("input must be a non-empty array");
   }
-  const text: string[] = [];
+  const inputParts: UserInput[number][] = [];
   for (const input of value) {
-    if (
-      !isRecord(input) ||
-      input.type !== "text" ||
-      typeof input.text !== "string"
-    ) {
-      throw new InvalidParamsError("Zen currently supports text input only");
+    if (!isRecord(input)) {
+      throw new InvalidParamsError("input contains an invalid item");
     }
-    text.push(input.text);
+    if (input.type === "text" && typeof input.text === "string") {
+      inputParts.push({ type: "text", text: input.text });
+      continue;
+    }
+    if (input.type === "localImage" && typeof input.path === "string") {
+      inputParts.push({
+        type: "image",
+        attachment: await appServer.importLocalImage(input.path),
+      });
+      continue;
+    }
+    if (input.type === "image" && typeof input.url === "string") {
+      let decoded: ReturnType<typeof decodeImageDataUri>;
+      try {
+        decoded = decodeImageDataUri(input.url);
+      } catch (error) {
+        if (error instanceof AttachmentStoreError) {
+          throw new AppServerError(error.code, error.message);
+        }
+        throw error;
+      }
+      inputParts.push({
+        type: "image",
+        attachment: await appServer.importImageBytes(
+          decoded.bytes,
+          decoded.mediaType,
+        ),
+      });
+      continue;
+    }
+    throw new InvalidParamsError(
+      "Zen supports text, localImage, and base64 data-URI image input",
+    );
   }
-  return text.join("\n");
+  return inputParts;
 }
 
 function validateMatchingThreadConfiguration(

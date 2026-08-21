@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
+import {
+  AttachmentStoreError,
+  InMemoryAttachmentStore,
+  type AttachmentRef,
+  type AttachmentStore,
+} from "./attachment.js";
 import type {
   AgentMessageItem,
   ApprovalPolicy,
@@ -11,7 +17,14 @@ import type {
   TurnAbortedItem,
   TurnCompletedItem,
   TurnReplacementRequestedItem,
+  UserInput,
   UserMessageItem,
+} from "./item.js";
+import {
+  contentFromUserMessage,
+  normalizeUserInput,
+  previewFromUserMessage,
+  sameUserInput,
 } from "./item.js";
 import type { ThreadJournal } from "./journal.js";
 import { compileModelMessages } from "./model.js";
@@ -144,6 +157,7 @@ export interface ListedProviderModel extends ProviderModel {
 }
 
 export class ZenAppServer {
+  readonly #attachments: AttachmentStore;
   readonly #journal: ThreadJournal;
   readonly #runtime: AgentRuntime;
   readonly #providerRegistry: ProviderRegistry;
@@ -159,6 +173,7 @@ export class ZenAppServer {
       turnId: string;
       controller: AbortController;
       done: Promise<void>;
+      inputModalities: readonly string[] | null;
       deliveryAnchorId?: string;
     }
   >();
@@ -174,6 +189,7 @@ export class ZenAppServer {
 
   constructor(options: {
     journal: ThreadJournal;
+    attachments?: AttachmentStore;
     runtime: AgentRuntime;
     providerRegistry: ProviderRegistry;
     threadMetadata: ThreadMetadataStore;
@@ -183,6 +199,7 @@ export class ZenAppServer {
     now?: () => string;
   }) {
     this.#journal = options.journal;
+    this.#attachments = options.attachments ?? new InMemoryAttachmentStore();
     this.#runtime = options.runtime;
     this.#providerRegistry = options.providerRegistry;
     this.#threadMetadata = options.threadMetadata;
@@ -370,7 +387,7 @@ export class ZenAppServer {
 
   async startTurn(
     threadId: string,
-    text: string,
+    input: string | UserInput,
     options: {
       clientId?: string;
       selection?: ProviderSelectionInput;
@@ -378,12 +395,31 @@ export class ZenAppServer {
       requestApproval?: ApprovalHandler;
     } = {},
   ): Promise<TurnHandle> {
-    return await this.#launchTurn(threadId, text, options);
+    return await this.#launchTurn(threadId, input, options);
+  }
+
+  async importLocalImage(filename: string): Promise<AttachmentRef> {
+    try {
+      return await this.#attachments.importLocalImage(filename);
+    } catch (error) {
+      throw attachmentAppServerError(error);
+    }
+  }
+
+  async importImageBytes(
+    bytes: Uint8Array,
+    declaredMediaType?: string,
+  ): Promise<AttachmentRef> {
+    try {
+      return await this.#attachments.importBytes(bytes, declaredMediaType);
+    } catch (error) {
+      throw attachmentAppServerError(error);
+    }
   }
 
   async #launchTurn(
     threadId: string,
-    text: string,
+    requestedInput: string | UserInput,
     options: {
       clientId?: string;
       selection?: ProviderSelectionInput;
@@ -395,9 +431,7 @@ export class ZenAppServer {
       replacementClientId?: string;
     } = {},
   ): Promise<TurnHandle> {
-    if (text.length === 0) {
-      throw new AppServerError("invalid_request", "Turn input cannot be empty");
-    }
+    const input = normalizeAppServerInput(requestedInput, "Turn");
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
       const predecessor = this.#activeTurns.get(threadId);
@@ -426,6 +460,13 @@ export class ZenAppServer {
           `Thread ${threadId} has an unfinished replacement operation`,
         );
       }
+      const currentConfiguration = thread.effectiveConfiguration();
+      const prospectiveSelection = this.#selectionFromInput(
+        currentConfiguration,
+        options,
+      );
+      const prospective = this.#requireSelection(prospectiveSelection);
+      await this.#validateInput(input, prospective.model.inputModalities);
       if (options.selection !== undefined || options.model !== undefined) {
         await this.#updateThreadSettingsUnlocked(thread, {
           ...(options.selection === undefined
@@ -447,7 +488,7 @@ export class ZenAppServer {
               await this.#runtime.runTurn({
                 thread,
                 turnId,
-                text,
+                input,
                 ...(options.clientId === undefined
                   ? {}
                   : { clientId: options.clientId }),
@@ -511,7 +552,12 @@ export class ZenAppServer {
         });
       });
 
-      this.#activeTurns.set(threadId, { turnId, controller, done });
+      this.#activeTurns.set(threadId, {
+        turnId,
+        controller,
+        done,
+        inputModalities: resolved.model.inputModalities,
+      });
       return { handle: { id: turnId, done }, ready: ready.promise };
     });
     try {
@@ -526,15 +572,10 @@ export class ZenAppServer {
   async replaceTurn(
     threadId: string,
     expectedTurnId: string,
-    text: string,
+    requestedInput: string | UserInput,
     options: ReplaceTurnOptions,
   ): Promise<ReplaceTurnResult> {
-    if (text.length === 0) {
-      throw new AppServerError(
-        "invalid_request",
-        "Replacement input cannot be empty",
-      );
-    }
+    const input = normalizeAppServerInput(requestedInput, "Replacement");
     if (options.clientId.length === 0) {
       throw new AppServerError(
         "invalid_request",
@@ -544,6 +585,8 @@ export class ZenAppServer {
 
     const planned = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      const resolved = this.#requireSelection(thread.effectiveConfiguration());
+      await this.#validateInput(input, resolved.model.inputModalities);
       const existing = thread.items.find(
         (item): item is TurnReplacementRequestedItem =>
           item.type === "turn_replacement_requested" &&
@@ -560,7 +603,10 @@ export class ZenAppServer {
         );
       }
       if (existing !== undefined) {
-        if (existing.turnId !== expectedTurnId || existing.text !== text) {
+        if (
+          existing.turnId !== expectedTurnId ||
+          !sameUserInput(inputFromReplacement(existing), input)
+        ) {
           throw new AppServerError(
             "idempotency_conflict",
             `clientUserMessageId ${options.clientId} was already used for a different replacement`,
@@ -644,7 +690,7 @@ export class ZenAppServer {
           successorTurnId: this.#id(),
           createdAt: this.#now(),
           type: "turn_replacement_requested",
-          text,
+          input,
           clientId: options.clientId,
         };
         await this.#commit(thread, intent);
@@ -689,7 +735,7 @@ export class ZenAppServer {
         await oldDone;
         const turn = await this.#launchTurn(
           threadId,
-          replacementIntent.text,
+          inputFromReplacement(replacementIntent),
           {
             clientId: replacementIntent.clientId,
             ...(options.requestApproval === undefined
@@ -725,15 +771,10 @@ export class ZenAppServer {
   async steerTurn(
     threadId: string,
     expectedTurnId: string,
-    text: string,
+    requestedInput: string | UserInput,
     options: SteerTurnOptions = {},
   ): Promise<TurnHandle> {
-    if (text.length === 0) {
-      throw new AppServerError(
-        "invalid_request",
-        "Steer input cannot be empty",
-      );
-    }
+    const input = normalizeAppServerInput(requestedInput, "Steer");
     return await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
       if (options.clientId !== undefined) {
@@ -742,7 +783,10 @@ export class ZenAppServer {
             item.type === "user_message" && item.clientId === options.clientId,
         );
         if (duplicate !== undefined) {
-          if (duplicate.turnId === expectedTurnId && duplicate.text === text) {
+          if (
+            duplicate.turnId === expectedTurnId &&
+            sameUserInput(contentFromUserMessage(duplicate), input)
+          ) {
             const duplicateActive = this.#activeTurns.get(threadId);
             return {
               id: expectedTurnId,
@@ -782,6 +826,7 @@ export class ZenAppServer {
           `Turn ${expectedTurnId} is already terminal on thread ${threadId}`,
         );
       }
+      await this.#validateInput(input, active.inputModalities);
 
       const message: UserMessageItem = {
         id: this.#id(),
@@ -789,7 +834,7 @@ export class ZenAppServer {
         turnId: expectedTurnId,
         createdAt: this.#now(),
         type: "user_message",
-        text,
+        content: input,
         ...(options.clientId === undefined
           ? {}
           : { clientId: options.clientId }),
@@ -1099,8 +1144,7 @@ export class ZenAppServer {
         : { name: productMetadata.name }),
       createdAt: metadata.createdAt,
       updatedAt: thread.items.at(-1)?.createdAt ?? metadata.createdAt,
-      preview:
-        thread.items.find((item) => item.type === "user_message")?.text ?? "",
+      preview: firstUserMessagePreview(thread.items),
       status: thread
         .deriveTurns(
           this.#activeTurns.get(thread.id)?.turnId === undefined
@@ -1184,6 +1228,35 @@ export class ZenAppServer {
     }
   }
 
+  async #validateInput(
+    input: UserInput,
+    inputModalities: readonly string[] | null,
+  ): Promise<void> {
+    const attachments = input.flatMap((part) =>
+      part.type === "image" ? [part.attachment] : [],
+    );
+    if (attachments.length === 0) return;
+    if (inputModalities === null) {
+      throw new AppServerError(
+        "image_capability_unknown",
+        "The selected model has unknown image input capability",
+      );
+    }
+    if (!inputModalities.includes("image")) {
+      throw new AppServerError(
+        "image_input_unsupported",
+        "The selected model does not support image input",
+      );
+    }
+    for (const attachment of attachments) {
+      try {
+        await this.#attachments.read(attachment);
+      } catch (error) {
+        throw attachmentAppServerError(error);
+      }
+    }
+  }
+
   #selectionFromInput(
     current: ProviderSelection,
     input: {
@@ -1246,6 +1319,42 @@ export class ZenAppServer {
       subscriber(event);
     }
   }
+}
+
+function normalizeAppServerInput(
+  input: string | UserInput,
+  label: string,
+): UserInput {
+  try {
+    return normalizeUserInput(input);
+  } catch (error) {
+    throw new AppServerError(
+      "invalid_request",
+      `${label} input is invalid: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+function inputFromReplacement(item: TurnReplacementRequestedItem): UserInput {
+  return item.input ?? [{ type: "text", text: item.text }];
+}
+
+function firstUserMessagePreview(items: readonly CanonicalItem[]): string {
+  const item = items.find(
+    (candidate): candidate is UserMessageItem =>
+      candidate.type === "user_message",
+  );
+  return item === undefined ? "" : previewFromUserMessage(item);
+}
+
+function attachmentAppServerError(error: unknown): Error {
+  return error instanceof AttachmentStoreError
+    ? new AppServerError(error.code, error.message)
+    : error instanceof Error
+      ? error
+      : new Error(String(error));
 }
 
 export class AppServerError extends Error {

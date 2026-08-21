@@ -5,6 +5,7 @@ import type {
   ModelRequest,
   ModelTool,
 } from "../model.js";
+import type { AttachmentStore } from "../attachment.js";
 
 export interface OpenAiCompatibleModelOptions {
   baseUrl: string;
@@ -12,6 +13,7 @@ export interface OpenAiCompatibleModelOptions {
   provider?: string;
   defaultParams?: Readonly<Record<string, unknown>>;
   fetch?: typeof globalThis.fetch;
+  attachments?: Pick<AttachmentStore, "read">;
 }
 
 export type OpenAiCompatibleModelErrorKind =
@@ -52,6 +54,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
   readonly #defaultParams: Readonly<Record<string, unknown>>;
   readonly #endpoint: string;
   readonly #fetch: typeof globalThis.fetch;
+  readonly #attachments: Pick<AttachmentStore, "read"> | undefined;
 
   constructor(options: OpenAiCompatibleModelOptions) {
     this.#endpoint = chatCompletionsEndpoint(options.baseUrl);
@@ -62,16 +65,21 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     );
     this.#defaultParams = options.defaultParams ?? {};
     this.#fetch = options.fetch ?? globalThis.fetch;
+    this.#attachments = options.attachments;
   }
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     request.signal.throwIfAborted();
     const tools = request.tools.map(toChatTool);
     const allowedToolNames = new Set(tools.map((tool) => tool.function.name));
+    const messages: Readonly<Record<string, unknown>>[] = [];
+    for (const message of request.messages) {
+      messages.push(await toChatMessage(message, this.#attachments));
+    }
     const body = serializeRequest({
       ...this.#defaultParams,
       model: requiredLabel(request.model, "model"),
-      messages: request.messages.map(toChatMessage),
+      messages,
       n: 1,
       stream: true,
       tools: tools.length > 0 ? tools : undefined,
@@ -149,9 +157,10 @@ function toChatTool(tool: ModelTool): ChatTool {
   };
 }
 
-function toChatMessage(
+async function toChatMessage(
   message: ModelMessage,
-): Readonly<Record<string, unknown>> {
+  attachments: Pick<AttachmentStore, "read"> | undefined,
+): Promise<Readonly<Record<string, unknown>>> {
   if (message.role === "tool") {
     return {
       role: "tool",
@@ -173,6 +182,30 @@ function toChatMessage(
         },
       })),
     };
+  }
+
+  if ("content" in message) {
+    const content: Array<Record<string, unknown>> = [];
+    for (const part of message.content) {
+      if (part.type === "text") {
+        content.push({ type: "text", text: part.text });
+      } else {
+        if (attachments === undefined) {
+          throw modelError(
+            "configuration",
+            "OpenAI-compatible attachment reader is required for image input",
+          );
+        }
+        const bytes = await attachments.read(part.attachment);
+        content.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+          },
+        });
+      }
+    }
+    return { role: "user", content };
   }
 
   return { role: message.role, content: message.text };
