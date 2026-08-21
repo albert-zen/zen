@@ -99,7 +99,7 @@ test("packaged startup clears a transient Project failure after the App Server b
     },
   });
   try {
-    assert.match(document.body.textContent ?? "", /Connecting…/u);
+    assert.match(document.body.textContent ?? "", /Starting Zen App Server/u);
     assert.ok(statusListener);
 
     await act(async () => {
