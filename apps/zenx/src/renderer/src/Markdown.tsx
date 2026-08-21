@@ -1,4 +1,6 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Children, isValidElement, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { classifyZenXLink } from "../../external-link-policy.js";
 
 export type MarkdownBlock =
@@ -10,14 +12,78 @@ export type MarkdownBlock =
   | { type: "code"; language: string; text: string; closed: boolean };
 
 export function Markdown({ text }: { text: string }) {
+  const blocks = parseMarkdown(text);
+  const streaming = blocks.at(-1);
+  const streamingBlock =
+    streaming?.type === "code" && !streaming.closed ? streaming : null;
+  const streamingFence =
+    streamingBlock === null ? null : findUnclosedFence(text);
+
+  if (streamingFence !== null && streamingBlock !== null) {
+    return (
+      <div className="markdown-body">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={markdownComponents}
+          urlTransform={(url) => url}
+        >
+          {prepareMarkdown(streamingFence.prefix)}
+        </ReactMarkdown>
+        <CodeBlock block={streamingBlock} />
+      </div>
+    );
+  }
+
   return (
     <div className="markdown-body">
-      {parseMarkdown(text).map((block, index) => (
-        <MarkdownBlockView block={block} key={`${block.type}-${index}`} />
-      ))}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={markdownComponents}
+        urlTransform={(url) => url}
+      >
+        {prepareMarkdown(text)}
+      </ReactMarkdown>
     </div>
   );
 }
+
+const markdownComponents: Components = {
+  a({ href, children }) {
+    const target = classifyZenXLink(href ?? "");
+    if (target.kind === "rejected") return <>{children}</>;
+    if (target.kind === "anchor") return <a href={target.href}>{children}</a>;
+    return (
+      <a href={target.href} rel="noreferrer" target="_blank">
+        {children}
+      </a>
+    );
+  },
+  pre({ children }) {
+    const child = Children.only(children);
+    if (isValidElement(child)) {
+      const props = child.props as { className?: string; children?: unknown };
+      const language = props.className?.match(/language-(\S+)/u)?.[1] ?? "";
+      return (
+        <CodeBlock
+          block={{
+            type: "code",
+            language,
+            text: String(props.children ?? "").replace(/\n$/u, ""),
+            closed: true,
+          }}
+        />
+      );
+    }
+    return <pre>{children}</pre>;
+  },
+  table({ children }) {
+    return (
+      <div className="markdown-table-wrap">
+        <table>{children}</table>
+      </div>
+    );
+  },
+};
 
 export function parseMarkdown(source: string): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/gu, "\n").split("\n");
@@ -114,55 +180,6 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
   return blocks;
 }
 
-function MarkdownBlockView({ block }: { block: MarkdownBlock }) {
-  if (block.type === "heading") {
-    const Heading = `h${block.depth}` as
-      "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
-    return <Heading>{inlineMarkdown(block.text)}</Heading>;
-  }
-  if (block.type === "quote") {
-    return <blockquote>{inlineMarkdown(block.text)}</blockquote>;
-  }
-  if (block.type === "list") {
-    const List = block.ordered ? "ol" : "ul";
-    return (
-      <List>
-        {block.items.map((item, index) => (
-          <li key={index}>{inlineMarkdown(item)}</li>
-        ))}
-      </List>
-    );
-  }
-  if (block.type === "table") {
-    return (
-      <div className="markdown-table-wrap">
-        <table>
-          <thead>
-            <tr>
-              {block.header.map((cell, index) => (
-                <th key={index}>{inlineMarkdown(cell)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {block.rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>
-                {block.header.map((_header, cellIndex) => (
-                  <td key={cellIndex}>
-                    {inlineMarkdown(row[cellIndex] ?? "")}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-  if (block.type === "code") return <CodeBlock block={block} />;
-  return <p>{inlineMarkdown(block.text)}</p>;
-}
-
 function CodeBlock({
   block,
 }: {
@@ -189,41 +206,36 @@ function CodeBlock({
   );
 }
 
-function inlineMarkdown(text: string): ReactNode[] {
-  const output: ReactNode[] = [];
-  const token = /(`+)([^`]+?)\1|\[([^\]]+)\]\(([^\s)]+)(?:\s+"[^"]*")?\)/gu;
-  let cursor = 0;
+function findUnclosedFence(source: string): {
+  prefix: string;
+} | null {
+  const opening = /(^|\n)( {0,3})(`{3,}|~{3,})[^\n]*$/gmu;
+  let last: RegExpExecArray | null = null;
   let match: RegExpExecArray | null;
-  while ((match = token.exec(text)) !== null) {
-    if (match.index > cursor) output.push(text.slice(cursor, match.index));
-    if (match[2] !== undefined) {
-      output.push(<code key={`code-${match.index}`}>{match[2]}</code>);
-    } else {
-      const label = match[3] ?? "";
-      const target = classifyZenXLink(match[4] ?? "");
-      output.push(
-        target.kind === "rejected" ? (
-          <Fragment key={`link-${match.index}`}>{label}</Fragment>
-        ) : target.kind === "anchor" ? (
-          <a href={target.href} key={`link-${match.index}`}>
-            {label}
-          </a>
-        ) : (
-          <a
-            href={target.href}
-            key={`link-${match.index}`}
-            rel="noreferrer"
-            target="_blank"
-          >
-            {label}
-          </a>
-        ),
+  while ((match = opening.exec(source)) !== null) last = match;
+  if (last === null) return null;
+  const openingIndex = last.index + (last[1]?.length ?? 0);
+  return { prefix: source.slice(0, openingIndex) };
+}
+
+function prepareMarkdown(source: string): string {
+  let inFence = false;
+  return source
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")
+    .map((line) => {
+      if (/^ {0,3}(`{3,}|~{3,})/u.test(line)) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence) return line;
+      return line.replace(
+        /\[([^\]]+)\]\(([^\s)]+)(?:\s+"[^"]*")?\)/gu,
+        (match, label: string, href: string) =>
+          classifyZenXLink(href).kind === "rejected" ? label : match,
       );
-    }
-    cursor = match.index + match[0].length;
-  }
-  if (cursor < text.length) output.push(text.slice(cursor));
-  return output;
+    })
+    .join("\n");
 }
 
 function startsBlock(lines: string[], index: number): boolean {
