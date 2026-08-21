@@ -55,6 +55,34 @@ test("renders strong, emphasis, and list item inline syntax", () => {
   assert.match(html, /<li><em>second<\/em><\/li>/u);
 });
 
+test("keeps Markdown images inert and preserves fence contents", () => {
+  const source = [
+    "![remote](https://evil.example/x.png)",
+    "",
+    "````js",
+    "[bad](javascript:alert(1))",
+    "```",
+    "tail",
+    "````",
+  ].join("\n");
+  const html = renderToStaticMarkup(createElement(Markdown, { text: source }));
+  assert.doesNotMatch(html, /<img\b/u);
+  assert.match(html, /\[bad\]\(javascript:alert\(1\)\)\n```\ntail/u);
+});
+
+test("does not treat a different fence as closing an unfinished block", () => {
+  const html = renderToStaticMarkup(
+    createElement(Markdown, {
+      text: "~~~js\na\n```\nb\n```\n",
+    }),
+  );
+  assert.equal(
+    (html.match(/class="markdown-code(?: streaming)?"/g) ?? []).length,
+    1,
+  );
+  assert.match(html, /a\n```\nb/u);
+});
+
 test("keeps an unfinished streaming fence as one stable code block", () => {
   const blocks = parseMarkdown('Before\n\n```json\n{"partial": true');
   assert.deepEqual(blocks, [

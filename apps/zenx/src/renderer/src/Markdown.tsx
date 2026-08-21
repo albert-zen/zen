@@ -25,7 +25,7 @@ export function Markdown({ text }: { text: string }) {
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={markdownComponents}
-          urlTransform={(url) => url}
+          urlTransform={safeUrlTransform}
         >
           {prepareMarkdown(streamingFence.prefix)}
         </ReactMarkdown>
@@ -39,7 +39,7 @@ export function Markdown({ text }: { text: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={markdownComponents}
-        urlTransform={(url) => url}
+        urlTransform={safeUrlTransform}
       >
         {prepareMarkdown(text)}
       </ReactMarkdown>
@@ -57,6 +57,9 @@ const markdownComponents: Components = {
         {children}
       </a>
     );
+  },
+  img() {
+    return null;
   },
   pre({ children }) {
     const child = Children.only(children);
@@ -209,26 +212,64 @@ function CodeBlock({
 function findUnclosedFence(source: string): {
   prefix: string;
 } | null {
-  const opening = /(^|\n)( {0,3})(`{3,}|~{3,})[^\n]*$/gmu;
-  let last: RegExpExecArray | null = null;
-  let match: RegExpExecArray | null;
-  while ((match = opening.exec(source)) !== null) last = match;
-  if (last === null) return null;
-  const openingIndex = last.index + (last[1]?.length ?? 0);
-  return { prefix: source.slice(0, openingIndex) };
+  const normalized = source.replace(/\r\n?/gu, "\n");
+  const lines = normalized.split("\n");
+  let opening: { index: number; character: string; length: number } | null =
+    null;
+  let offset = 0;
+  for (const line of lines) {
+    const fence = /^ {0,3}(`{3,}|~{3,})(?:\s*[^ ]*)?.*$/u.exec(line);
+    if (fence !== null) {
+      const marker = fence[1] ?? "```";
+      if (opening === null) {
+        opening = {
+          index: offset,
+          character: marker[0] ?? "`",
+          length: marker.length,
+        };
+      } else if (
+        new RegExp(
+          `^ {0,3}${escapeRegExp(opening.character)}{${opening.length},}\\s*$`,
+          "u",
+        ).test(line)
+      ) {
+        opening = null;
+      }
+    }
+    offset += line.length + 1;
+  }
+  return opening === null
+    ? null
+    : { prefix: normalized.slice(0, opening.index) };
+}
+
+function safeUrlTransform(url: string): string {
+  const target = classifyZenXLink(url);
+  return target.kind === "rejected" ? "" : target.href;
 }
 
 function prepareMarkdown(source: string): string {
-  let inFence = false;
+  let opening: { character: string; length: number } | null = null;
   return source
     .replace(/\r\n?/gu, "\n")
     .split("\n")
     .map((line) => {
-      if (/^ {0,3}(`{3,}|~{3,})/u.test(line)) {
-        inFence = !inFence;
+      const fence = /^ {0,3}(`{3,}|~{3,})(?:\s*[^ ]*)?.*$/u.exec(line);
+      if (fence !== null) {
+        const marker = fence[1] ?? "```";
+        if (opening === null) {
+          opening = { character: marker[0] ?? "`", length: marker.length };
+        } else if (
+          new RegExp(
+            `^ {0,3}${escapeRegExp(opening.character)}{${opening.length},}\\s*$`,
+            "u",
+          ).test(line)
+        ) {
+          opening = null;
+        }
         return line;
       }
-      if (inFence) return line;
+      if (opening !== null) return line;
       return line.replace(
         /\[([^\]]+)\]\(([^\s)]+)(?:\s+"[^"]*")?\)/gu,
         (match, label: string, href: string) =>
