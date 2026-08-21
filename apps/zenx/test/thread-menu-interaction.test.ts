@@ -186,7 +186,7 @@ function TestSidebar() {
     },
     selectedPage: "agent",
     selectedThreadId: null,
-    serverReady: true,
+    serverStatus: { type: "ready", reconnected: false },
     threadError: null,
     threadLoading: false,
     pinnedThreads: [],

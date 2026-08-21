@@ -14,6 +14,7 @@ import type { TriggerSnapshot } from "../../main/trigger-types.js";
 import type { Thread } from "../../protocol-client/index.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 import type { ZenXSidebarOrder } from "../../main/host-profile.js";
+import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import { ProviderLogo } from "./ProviderLogo.js";
@@ -62,8 +63,7 @@ interface SidebarProps {
   pluginContributions: readonly LoadedPluginContribution[];
   selectedPage: "agent" | "triggers" | "rooms" | "settings";
   selectedThreadId: string | null;
-  serverError?: boolean;
-  serverReady: boolean;
+  serverStatus: AppServerHostStatus;
   liveThread: Thread | null;
   threadError: string | null;
   threadLoading: boolean;
@@ -96,8 +96,7 @@ export function Sidebar({
   pluginContributions,
   selectedPage,
   selectedThreadId,
-  serverError = false,
-  serverReady,
+  serverStatus,
   liveThread,
   threadError,
   threadLoading,
@@ -349,7 +348,7 @@ export function Sidebar({
               </button>
             </div>
           ) : null}
-          {!serverReady ? (
+          {serverStatus.type !== "ready" ? (
             <p className="sidebar-empty">Waiting for the local App Server.</p>
           ) : threadLoading ? (
             <p className="sidebar-empty" role="status">
@@ -427,22 +426,14 @@ export function Sidebar({
           <button
             className="settings-nav-row"
             type="button"
+            aria-label={`Settings — ${serviceStatusPresentation(serverStatus).label}`}
             aria-current={selectedPage === "settings" ? "page" : undefined}
             onClick={onOpenSettings}
           >
             <Icon name="settings" />
             <span>Settings</span>
+            <ServiceStatusDot status={serverStatus} />
           </button>
-          <div className="service-status">
-            <span className={`live-dot${serverReady ? " ready" : ""}`} />
-            <span>
-              {serverReady
-                ? "Local service ready"
-                : serverError
-                  ? "Local service stopped"
-                  : "Connecting…"}
-            </span>
-          </div>
         </footer>
       </aside>
       <button
@@ -452,6 +443,38 @@ export function Sidebar({
         onClick={onClose}
       />
     </>
+  );
+}
+
+export function serviceStatusPresentation(status: AppServerHostStatus): {
+  className: "ready" | "starting" | "reconnecting" | "error" | "stopped";
+  label: string;
+} {
+  switch (status.type) {
+    case "ready":
+      return { className: "ready", label: "Local service ready" };
+    case "starting":
+      return { className: "starting", label: "Local service starting" };
+    case "reconnecting":
+      return { className: "reconnecting", label: "Local service reconnecting" };
+    case "error":
+      return {
+        className: "error",
+        label: `Local service error: ${status.message}`,
+      };
+    case "stopped":
+      return { className: "stopped", label: "Local service stopped" };
+  }
+}
+
+function ServiceStatusDot({ status }: { status: AppServerHostStatus }) {
+  const presentation = serviceStatusPresentation(status);
+  return (
+    <span
+      className={`service-status-dot ${presentation.className}`}
+      title={presentation.label}
+      aria-hidden="true"
+    />
   );
 }
 

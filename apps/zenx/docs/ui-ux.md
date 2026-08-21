@@ -198,7 +198,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   Core / Thread / Project 状态或平行主题框架。Light 保留 ZenX 的冷中性层级、紫蓝强调色、密度与
   单色品牌资产，Dark 保持既有视觉稳定。
 - restart-required changes 必须在当前 route 明确反馈 pending、success 和 failure；具体使用顶部或内容区动作、动作名称、何时 enabled/emphasized，待 Settings action contract 确认。
-- 本地 service state 是弱状态信息，只能在相关内容区提供诊断或说明；它不得成为 Settings navigation item、挤占导航，或盖过用户可执行设置。
+- 本地 service state 是弱状态信息：Sidebar 左下 Settings row 的最右侧显示一个不单独可点击的状态点，hover tooltip 与 Settings 的 accessible name 提供具体状态；它不再占用独立文字行，也不得盖过用户可执行设置。主区仍保留 starting、reconnecting 与 error 的阻断说明。
 - 未配置 host 的首次启动进入 provider onboarding；Subscription、OpenAI-compatible API 与 local demo 的 credential/configuration 仍遵守 Host/Core 安全边界。
 - Settings → Plugins 是已安装插件的统一管理入口。Agent page 不散落插件管理 UI；Marketplace、安装、grant 与 Provider configuration 的准确 UX 仍按第 6 节标为 **TBD**。
 

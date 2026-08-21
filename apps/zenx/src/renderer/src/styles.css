@@ -197,7 +197,6 @@ a:focus-visible {
 .brand-actions,
 .sidebar-view-head,
 .sidebar-footer,
-.service-status,
 .page-header,
 .page-title,
 .page-header-actions,
@@ -893,7 +892,7 @@ a:focus-visible {
   width: 100%;
   min-height: 38px;
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 0 10px;
@@ -909,15 +908,40 @@ a:focus-visible {
   color: var(--text);
   background: var(--surface-hover);
 }
-.service-status {
-  min-width: 0;
-  gap: 7px;
-  padding: 2px 10px 0;
-  font-size: 9px;
-  opacity: 0.68;
+.service-status-dot {
+  width: 7px;
+  height: 7px;
+  margin-right: 2px;
+  border-radius: 50%;
+  background: var(--text-3);
+  pointer-events: none;
 }
-:root[data-appearance="light"] .service-status {
-  opacity: 1;
+.service-status-dot.ready {
+  background: #39b86a;
+}
+.service-status-dot.starting,
+.service-status-dot.reconnecting {
+  background: #e0a52f;
+  animation: service-status-pulse 1.8s ease-in-out infinite;
+}
+.service-status-dot.error,
+.service-status-dot.stopped {
+  background: #dc5963;
+}
+@keyframes service-status-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .service-status-dot.starting,
+  .service-status-dot.reconnecting {
+    animation: none;
+  }
 }
 .sidebar-scrim {
   display: none;

@@ -168,7 +168,7 @@ function renderSidebar(
       pinnedThreads: [],
       selectedPage: "agent",
       selectedThreadId: null,
-      serverReady: true,
+      serverStatus: { type: "ready", reconnected: false },
       threadError: state.error ?? null,
       threadLoading: state.loading ?? false,
       threads,

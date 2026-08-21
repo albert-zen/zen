@@ -374,7 +374,7 @@ function StaticSidebar({
     sidebarOrder,
     selectedPage: "agent",
     selectedThreadId: "active",
-    serverReady: true,
+    serverStatus: { type: "ready", reconnected: false },
     threadError: null,
     threadLoading: false,
     threads,

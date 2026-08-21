@@ -824,8 +824,7 @@ export function App() {
         pluginContributions={pluginContributions}
         selectedPage={page}
         selectedThreadId={selectedThreadId}
-        serverError={serverStatus.type === "error"}
-        serverReady={serverStatus.type === "ready"}
+        serverStatus={serverStatus}
         projects={projects}
         sidebarOrder={sidebarOrder}
         pinnedThreads={pinnedSummaries}

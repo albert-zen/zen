@@ -24,7 +24,7 @@ const baseProps = {
   pluginContributions: [],
   selectedPage: "agent" as const,
   selectedThreadId: null,
-  serverReady: true,
+  serverStatus: { type: "ready", reconnected: false } as const,
   threadError: null,
   threadLoading: false,
   pinnedThreads: [],

@@ -144,15 +144,8 @@ test("light semantic text, primary actions, and control boundaries meet contrast
     assert.ok(value, `missing Light opacity override for .${selector}`);
     return Number(value);
   };
-  const serviceOpacity = lightOpacity("service-status");
   const unavailableThreadOpacity = lightOpacity("thread-row\\.system-error");
-  assert.equal(serviceOpacity, 1);
   assert.equal(unavailableThreadOpacity, 1);
-  assert.ok(
-    effectiveContrastRatio(token("text-3"), token("sidebar"), serviceOpacity) >=
-      4.5,
-    "Light service status must remain readable after opacity compositing",
-  );
   for (const surface of ["sidebar", "surface-hover"]) {
     assert.ok(
       effectiveContrastRatio(
