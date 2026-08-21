@@ -939,6 +939,7 @@ function publicSettings(pinnedThreadIds: string[]) {
     },
     hasApiKey: false,
     apiKeyProviderProfileIds: [],
+    subscriptionProviderProfileId: null,
     subscription: { authenticated: false, expired: false },
   };
 }

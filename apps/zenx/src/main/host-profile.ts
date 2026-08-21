@@ -68,6 +68,8 @@ export interface PublicHostSettings {
   /** Credential presence for the profile referenced by defaultModel. */
   hasApiKey: boolean;
   apiKeyProviderProfileIds: string[];
+  /** The sole configured OpenAI subscription profile, when present. */
+  subscriptionProviderProfileId: string | null;
   subscription: {
     authenticated: boolean;
     expired: boolean;

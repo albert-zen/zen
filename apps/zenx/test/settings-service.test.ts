@@ -756,6 +756,103 @@ test("title inference renews a subscription lease rejected after acquisition", a
   }
 });
 
+test("routes subscription account operations by its configured opaque profile id", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-oauth-profile-"),
+  );
+  const profileStore = new ZenXHostProfileStore(
+    path.join(directory, "host-profile.json"),
+  );
+  const subscriptionProfileId = "subscription-opaque-7f4d";
+  await profileStore.write({
+    version: 2,
+    onboardingComplete: true,
+    providerProfiles: [
+      {
+        providerProfileId: "fake",
+        type: "fake",
+        displayName: "Local demo",
+        models: ["fake"],
+      },
+      {
+        providerProfileId: subscriptionProfileId,
+        type: "openai-subscription",
+        displayName: "Work subscription",
+        models: ["gpt-5.6-terra"],
+      },
+    ],
+    defaultModel: { providerProfileId: "fake", modelId: "fake" },
+    titleModel: { providerProfileId: "fake", modelId: "fake" },
+    workspace: null,
+    workspaces: [],
+    lastUsedWorkspace: null,
+    pinnedThreadIds: [],
+    sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
+    approvalPolicy: "never",
+  });
+  let loginCount = 0;
+  let logoutCount = 0;
+  const scopedSubscription = {
+    login: async () => {
+      loginCount += 1;
+    },
+    logout: async () => {
+      logoutCount += 1;
+    },
+    status: async () => ({ authenticated: true, expired: false }),
+  };
+  const factoryPaths: string[] = [];
+  try {
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(
+        path.join(directory, "credentials.vault"),
+        encryption,
+      ),
+      profileStore,
+      subscription: inactiveSubscription(),
+      subscriptionFactory: (profilePath) => {
+        factoryPaths.push(profilePath);
+        return scopedSubscription;
+      },
+    });
+    await service.initialize({});
+    const publicSettings = await service.publicSettings();
+    assert.equal(
+      publicSettings.subscriptionProviderProfileId,
+      subscriptionProfileId,
+    );
+    assert.equal(publicSettings.subscription.authenticated, true);
+    await service.login(
+      () => undefined,
+      () => undefined,
+    );
+    await service.logout();
+    assert.equal(loginCount, 1);
+    assert.equal(logoutCount, 1);
+    await service.deleteProviderProfile(subscriptionProfileId);
+    assert.equal(logoutCount, 2);
+    assert.ok(
+      factoryPaths.every((value) =>
+        value.includes("openai-subscription-auth."),
+      ),
+    );
+    assert.equal(
+      (await service.publicSettings()).subscriptionProviderProfileId,
+      null,
+    );
+    assert.equal(
+      (await service.publicSettings()).profile.providerProfiles.some(
+        (provider) => provider.providerProfileId === subscriptionProfileId,
+      ),
+      false,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("migrates a persisted v1 profile and vault together and restarts from durable v2", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-paired-v1-"));
   const profilePath = path.join(directory, "host-profile.json");

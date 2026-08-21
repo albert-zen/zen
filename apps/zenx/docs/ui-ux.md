@@ -192,6 +192,20 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 - Settings 是由左下导航进入的 routed page。Settings 顶部动作的最终合同仍为 **TBD**；“不提供 Done”以及“只在 dirty 时显示或强调 Apply & restart”是当前设计实验，不是 durable semantics。
 - Settings 明确管理 Archived Threads、Provider/Account 和 Plugins；General 可以承载其他 host-local preferences，但不能改变这些核心分区的所有权。
+- Settings → Models & providers 展示所有稳定 Provider profiles，并让用户以明确的
+  `Provider display name · model ID` 选择全局 Default model 与 Title model；相同 model ID
+  可以属于不同 profile，选择器不能把它们合并。Profile 内的字符串 ModelCatalog 在 Z06
+  前使用可聚焦的重复行编辑，不使用单个 textarea，也不假装支持模型发现或结构化 capabilities。
+- Known Provider 新增入口只提供当前已有生命周期的 OpenAI subscription 与 local demo；
+  custom OpenAI-compatible 入口编辑 display name、Provider name、base URL、API key replacement
+  和 model IDs。稳定 profile ID 既不展示也不可编辑；已保存 API key 永不回显，空白表示保留。
+- Z05 UI 至多配置一个 OpenAI subscription profile；Account 的登录、登出与手动 code
+  始终路由到这个 profile，而不是假定固定 ID。删除它会清理 profile-scoped OAuth credential，
+  但不会恢复或改写历史 Thread。
+- Provider row 只陈述可证明的配置/认证状态（API key 已保存、subscription 已登录、本地测试），
+  不把 credential presence 呈现成 live connectivity。删除当前 Default/Title 所属 profile 时，
+  UI 必须收集对应替换选择并通过一次 host mutation 原子提交；其他 profile 正常删除，既有
+  Thread 选择保持 ZAS 权威且不由 Settings 自动切换。
 - Settings → General 的 Appearance 提供 System / Light / Dark。它是 renderer-local app-profile
   preference，切换立即生效且不触发 host restart；System 实时跟随操作系统。解析后的 Light / Dark
   必须在首屏前写入根文档并驱动同一套语义 token、原生控件 `color-scheme` 与组件实现，不能成为

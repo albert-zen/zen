@@ -4,6 +4,9 @@ import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  ZenXModelReference,
+  ZenXProviderDeleteReplacements,
+  ZenXProviderEditOptions,
   ZenXProviderProfile,
 } from "../../main/host-profile.js";
 import {
@@ -39,8 +42,6 @@ export function SettingsView({
 }) {
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
-  const [apiKey, setApiKey] = useState("");
-  const [models, setModels] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -58,7 +59,6 @@ export function SettingsView({
         if (!active) return;
         setSettings(value);
         setDraft(value.profile);
-        setModels(defaultProvider(value.profile).models.join("\n"));
       })
       .catch((reason: unknown) => active && setError(describeError(reason)));
     return () => {
@@ -67,74 +67,21 @@ export function SettingsView({
     };
   }, []);
 
-  const setProvider = (type: ZenXProviderProfile["type"]) => {
-    if (draft === null) return;
-    const current = defaultProvider(draft);
-    const providerConnection =
-      type === "fake"
-        ? { type, displayName: "Local demo" }
-        : type === "openai-subscription"
-          ? { type, displayName: "OpenAI subscription" }
-          : {
-              type,
-              name: "openai",
-              displayName: "OpenAI compatible",
-              baseUrl: "https://api.openai.com/v1",
-            };
-    const defaultModel =
-      type === "openai-subscription"
-        ? "gpt-5.6-terra"
-        : type === "fake"
-          ? "fake"
-          : "gpt-5.4";
-    const titleModel = draft.titleModel.modelId;
-    const provider: ZenXProviderProfile = {
-      ...providerConnection,
-      providerProfileId: current.providerProfileId,
-      models:
-        titleModel === defaultModel
-          ? [defaultModel]
-          : [defaultModel, titleModel],
-    };
-    setDraft({
-      ...draft,
-      providerProfiles: draft.providerProfiles.map((candidate) =>
-        candidate.providerProfileId === current.providerProfileId
-          ? provider
-          : candidate,
-      ),
-      defaultModel: {
-        providerProfileId: current.providerProfileId,
-        modelId: defaultModel,
-      },
-      titleModel: {
-        providerProfileId: current.providerProfileId,
-        modelId: titleModel,
-      },
-    });
-    setModels(defaultModel);
-  };
-
   const save = async () => {
     if (draft === null) return;
     setBusy("save");
     setError(null);
     setStatus(null);
     try {
-      const value = await window.zenx.settings.save(
-        {
-          onboardingComplete: true,
-          providerProfiles: pendingProfile.providerProfiles,
-          defaultModel: draft.defaultModel,
-          titleModel: draft.titleModel,
-          approvalPolicy: draft.approvalPolicy,
-        },
-        apiKey.trim().length > 0 ? apiKey : undefined,
-      );
+      const value = await window.zenx.settings.save({
+        onboardingComplete: true,
+        providerProfiles: draft.providerProfiles,
+        defaultModel: draft.defaultModel,
+        titleModel: draft.titleModel,
+        approvalPolicy: draft.approvalPolicy,
+      });
       setSettings(value);
       setDraft(value.profile);
-      setModels(defaultProvider(value.profile).models.join("\n"));
-      setApiKey("");
       setStatus("Changes applied · local host restarted");
     } catch (reason) {
       setError(describeError(reason));
@@ -153,20 +100,7 @@ export function SettingsView({
       </section>
     );
   }
-  const provider = defaultProvider(draft);
-  const configuredModels = normalizedModels(models);
-  const pendingProfile: ZenXHostProfile = {
-    ...draft,
-    onboardingComplete: true,
-    providerProfiles: draft.providerProfiles.map((candidate) =>
-      candidate.providerProfileId === provider.providerProfileId
-        ? { ...candidate, models: configuredModels }
-        : candidate,
-    ),
-  };
-  const hostDirty =
-    apiKey.trim().length > 0 ||
-    JSON.stringify(pendingProfile) !== JSON.stringify(settings.profile);
+  const hostDirty = JSON.stringify(draft) !== JSON.stringify(settings.profile);
   const tabs: Array<{
     id: SettingsTab;
     label: string;
@@ -263,15 +197,16 @@ export function SettingsView({
             ) : null}
             {tab === "models" ? (
               <ModelsPanel
-                apiKey={apiKey}
+                busy={busy}
                 draft={draft}
-                models={models}
-                provider={provider}
+                error={error}
                 settings={settings}
-                setApiKey={setApiKey}
+                setBusy={setBusy}
                 setDraft={setDraft}
-                setModels={setModels}
-                setProvider={setProvider}
+                setError={setError}
+                setSettings={setSettings}
+                setStatus={setStatus}
+                status={status}
               />
             ) : null}
             {tab === "plugins" ? (
@@ -305,13 +240,13 @@ export function SettingsView({
                 onApply={() => void save()}
               />
             ) : null}
-            {error ? (
+            {error && tab !== "models" ? (
               <div className="settings-error" role="alert">
                 <Icon name="warning" />
                 {error}
               </div>
             ) : null}
-            {status ? (
+            {status && tab !== "models" ? (
               <div className="settings-success" role="status">
                 <Icon name="check" />
                 {status}
@@ -466,6 +401,8 @@ function AccountPanel({
   setManualCode(value: boolean): void;
   setSettings(value: PublicHostSettings): void;
 }) {
+  const subscriptionConfigured =
+    settings.subscriptionProviderProfileId !== null;
   const login = () => {
     setBusy("login");
     setError(null);
@@ -497,14 +434,18 @@ function AccountPanel({
           </div>
           <span
             className={
-              settings.subscription.authenticated
-                ? "status-good"
-                : "status-muted"
+              !subscriptionConfigured
+                ? "status-muted"
+                : settings.subscription.authenticated
+                  ? "status-good"
+                  : "status-muted"
             }
           >
-            {settings.subscription.authenticated
-              ? "Signed in"
-              : "Not signed in"}
+            {!subscriptionConfigured
+              ? "No profile configured"
+              : settings.subscription.authenticated
+                ? "Signed in"
+                : "Not signed in"}
           </span>
         </div>
         <div className="settings-row">
@@ -513,12 +454,15 @@ function AccountPanel({
               {settings.subscription.accountId ?? "No account connected"}
             </strong>
             <span>
-              {settings.subscription.authenticated
-                ? "Authentication is stored in the operating system credential boundary."
-                : "Connect a subscription when this provider is selected."}
+              {!subscriptionConfigured
+                ? "Add an OpenAI subscription profile from Models & providers to connect an account."
+                : settings.subscription.authenticated
+                  ? "Authentication is stored in the operating system credential boundary."
+                  : "Sign in to use the configured subscription profile."}
             </span>
           </div>
-          {settings.subscription.authenticated ? (
+          {!subscriptionConfigured ? null : settings.subscription
+              .authenticated ? (
             <button
               className="danger-button"
               type="button"
@@ -564,162 +508,955 @@ function AccountPanel({
 }
 
 function ModelsPanel({
-  apiKey,
+  busy,
   draft,
-  models,
-  provider,
+  error,
   settings,
-  setApiKey,
+  setBusy,
   setDraft,
-  setModels,
-  setProvider,
+  setError,
+  setSettings,
+  setStatus,
+  status,
 }: {
-  apiKey: string;
+  busy: string | null;
   draft: ZenXHostProfile;
-  models: string;
-  provider: ZenXProviderProfile;
+  error: string | null;
   settings: PublicHostSettings;
-  setApiKey(value: string): void;
+  setBusy(value: string | null): void;
   setDraft(value: ZenXHostProfile): void;
-  setModels(value: string): void;
-  setProvider(value: ZenXProviderProfile["type"]): void;
+  setError(value: string | null): void;
+  setSettings(value: PublicHostSettings): void;
+  setStatus(value: string | null): void;
+  status: string | null;
 }) {
+  const [showAddChoices, setShowAddChoices] = useState(false);
+  const [editor, setEditor] = useState<{
+    mode: "add" | "edit";
+    provider: ZenXProviderProfile;
+  } | null>(null);
+  const [deletingProviderId, setDeletingProviderId] = useState<string | null>(
+    null,
+  );
+
+  const acceptSettings = (value: PublicHostSettings, message: string) => {
+    setSettings(value);
+    setDraft({
+      ...value.profile,
+      approvalPolicy: draft.approvalPolicy,
+      defaultModel: modelReferenceExists(
+        draft.defaultModel,
+        value.profile.providerProfiles,
+      )
+        ? draft.defaultModel
+        : value.profile.defaultModel,
+      titleModel: modelReferenceExists(
+        draft.titleModel,
+        value.profile.providerProfiles,
+      )
+        ? draft.titleModel
+        : value.profile.titleModel,
+    });
+    setError(null);
+    setStatus(message);
+  };
+
+  const runMutation = async (
+    operation: string,
+    message: string,
+    mutation: () => Promise<PublicHostSettings>,
+  ): Promise<boolean> => {
+    setBusy(operation);
+    setError(null);
+    setStatus(null);
+    try {
+      acceptSettings(await mutation(), message);
+      return true;
+    } catch (reason) {
+      setError(describeError(reason));
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openAddEditor = (type: ZenXProviderProfile["type"]) => {
+    const providerProfileId = globalThis.crypto.randomUUID();
+    const provider: ZenXProviderProfile =
+      type === "fake"
+        ? {
+            providerProfileId,
+            type,
+            displayName: "Local demo",
+            models: ["fake"],
+          }
+        : type === "openai-subscription"
+          ? {
+              providerProfileId,
+              type,
+              displayName: "OpenAI subscription",
+              models: ["gpt-5.6-terra"],
+            }
+          : {
+              providerProfileId,
+              type,
+              name: "openai",
+              displayName: "",
+              baseUrl: "https://api.openai.com/v1",
+              models: [""],
+            };
+    setShowAddChoices(false);
+    setDeletingProviderId(null);
+    setEditor({ mode: "add", provider });
+    setError(null);
+    setStatus(null);
+  };
+
+  const deletingProvider = settings.profile.providerProfiles.find(
+    (provider) => provider.providerProfileId === deletingProviderId,
+  );
   return (
     <>
       <header>
-        <h2>Models & provider</h2>
-        <p>Choose the host adapter and models exposed to new Threads.</p>
+        <h2>Models & providers</h2>
+        <p>
+          Manage independent Provider profiles and choose which profile owns
+          each global model role.
+        </p>
       </header>
-      <div className="page-card settings-card">
-        <div
-          className="provider-tabs"
-          role="tablist"
-          aria-label="Provider type"
-        >
-          {(["openai-subscription", "openai-compatible", "fake"] as const).map(
-            (type) => (
-              <button
-                key={type}
-                type="button"
-                role="tab"
-                aria-selected={provider.type === type}
-                onClick={() => setProvider(type)}
-              >
-                {type === "openai-subscription"
-                  ? "OpenAI subscription"
-                  : type === "openai-compatible"
-                    ? "API provider"
-                    : "Local demo"}
-              </button>
-            ),
-          )}
+      {error === null ? null : (
+        <div className="settings-error" role="alert">
+          <Icon name="warning" />
+          {error}
         </div>
-        {provider.type === "openai-compatible" ? (
-          <div className="form-grid">
-            <Field
-              label="Display name"
-              value={provider.displayName}
-              onChange={(value) =>
-                setDraft({
-                  ...draft,
-                  providerProfiles: replaceProvider(draft, {
-                    ...provider,
-                    displayName: value,
-                  }),
-                })
-              }
-            />
-            <Field
-              label="Provider name"
-              value={provider.name}
-              onChange={(value) =>
-                setDraft({
-                  ...draft,
-                  providerProfiles: replaceProvider(draft, {
-                    ...provider,
-                    name: value,
-                  }),
-                })
-              }
-            />
-            <Field
-              wide
-              label="Base URL"
-              value={provider.baseUrl}
-              onChange={(value) =>
-                setDraft({
-                  ...draft,
-                  providerProfiles: replaceProvider(draft, {
-                    ...provider,
-                    baseUrl: value,
-                  }),
-                })
-              }
-            />
-            <Field
-              wide
-              secret
-              label="API key"
-              placeholder={
-                settings.hasApiKey
-                  ? "Saved securely — leave blank to keep"
-                  : "Required"
-              }
-              value={apiKey}
-              onChange={setApiKey}
-            />
+      )}
+      {status === null ? null : (
+        <div className="settings-success" role="status">
+          <Icon name="check" />
+          {status}
+        </div>
+      )}
+      <div className="page-card settings-card model-routing-card">
+        <div className="settings-card-head">
+          <div>
+            <h3>Global model routing</h3>
+            <p>
+              Provider identity is part of each selection, including when two
+              profiles use the same model ID.
+            </p>
           </div>
-        ) : provider.type === "fake" ? (
-          <p className="settings-note">
-            The deterministic local provider is for offline protocol and UI
-            testing. Thread lists present it as “Local demo,” never as a fake
-            brand.
-          </p>
-        ) : (
-          <p className="settings-note">
-            Model access uses the authenticated subscription shown in Account.
-          </p>
-        )}
-      </div>
-      <div className="page-card settings-card">
+          <span className="status-muted">New work</span>
+        </div>
         <div className="form-grid">
-          <Field
+          <ModelReferenceSelect
             label="Default model"
-            value={draft.defaultModel.modelId}
-            onChange={(value) =>
-              setDraft({
-                ...draft,
-                defaultModel: { ...draft.defaultModel, modelId: value },
-              })
-            }
+            profiles={settings.profile.providerProfiles}
+            value={draft.defaultModel}
+            onChange={(defaultModel) => setDraft({ ...draft, defaultModel })}
           />
-          <Field
+          <ModelReferenceSelect
             label="Title model"
-            value={draft.titleModel.modelId}
-            onChange={(value) =>
-              setDraft({
-                ...draft,
-                titleModel: { ...draft.titleModel, modelId: value },
-              })
-            }
+            profiles={settings.profile.providerProfiles}
+            value={draft.titleModel}
+            onChange={(titleModel) => setDraft({ ...draft, titleModel })}
           />
-          <label className="field wide">
-            <span>
-              Available models <small>one per line</small>
-            </span>
-            <textarea
-              rows={5}
-              value={models}
-              onChange={(event) => setModels(event.target.value)}
-            />
-          </label>
         </div>
         <p className="settings-note">
-          Existing Threads keep the ZAS-authoritative model until changed
-          explicitly in their Composer.
+          Existing Threads keep their ZAS-authoritative selection until you
+          change it explicitly in the Composer.
         </p>
       </div>
+      <section
+        className="provider-section"
+        aria-labelledby="provider-list-title"
+      >
+        <div className="provider-section-head">
+          <div>
+            <h3 id="provider-list-title">Provider profiles</h3>
+            <p>Credentials and model IDs stay scoped to one profile.</p>
+          </div>
+          {editor === null ? (
+            <div className="provider-section-actions">
+              <button
+                className="quiet-button"
+                type="button"
+                onClick={() => {
+                  setShowAddChoices((visible) => !visible);
+                  setDeletingProviderId(null);
+                  setError(null);
+                }}
+              >
+                Add provider
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => openAddEditor("openai-compatible")}
+              >
+                Add custom provider
+              </button>
+            </div>
+          ) : null}
+        </div>
+        {showAddChoices && editor === null ? (
+          <div className="page-card provider-add-choices">
+            <div>
+              <strong>Add a known Provider</strong>
+              <span>
+                Choose a local or subscription profile. Custom APIs use the
+                separate custom flow.
+              </span>
+            </div>
+            <button
+              type="button"
+              aria-label="Add OpenAI subscription"
+              onClick={() => openAddEditor("openai-subscription")}
+              disabled={settings.profile.providerProfiles.some(
+                (provider) => provider.type === "openai-subscription",
+              )}
+            >
+              <ProviderLogo kind="openai" />
+              <strong>OpenAI subscription</strong>
+              <span>
+                {settings.profile.providerProfiles.some(
+                  (provider) => provider.type === "openai-subscription",
+                )
+                  ? "One subscription account is already configured"
+                  : "Uses the sign-in managed in Account"}
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-label="Add Local demo"
+              onClick={() => openAddEditor("fake")}
+            >
+              <ProviderLogo kind="local" />
+              <strong>Local demo</strong>
+              <span>Deterministic fake/dev Provider for local testing</span>
+            </button>
+            <button
+              className="quiet-button provider-choice-cancel"
+              type="button"
+              onClick={() => setShowAddChoices(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
+        {editor === null ? null : (
+          <ProviderEditor
+            key={`${editor.mode}:${editor.provider.providerProfileId}`}
+            allProfiles={settings.profile.providerProfiles}
+            busy={busy !== null}
+            defaultModel={settings.profile.defaultModel}
+            hasApiKey={settings.apiKeyProviderProfileIds.includes(
+              editor.provider.providerProfileId,
+            )}
+            mode={editor.mode}
+            provider={editor.provider}
+            titleModel={settings.profile.titleModel}
+            onCancel={() => setEditor(null)}
+            onSubmit={async (provider, apiKey, replacements) => {
+              const success = await runMutation(
+                editor.mode === "add" ? "provider-add" : "provider-edit",
+                editor.mode === "add"
+                  ? "Provider added · local host restarted"
+                  : "Provider saved · local host restarted",
+                async () =>
+                  editor.mode === "add"
+                    ? await window.zenx.settings.addProvider(provider, apiKey)
+                    : await window.zenx.settings.editProvider(
+                        editor.provider.providerProfileId,
+                        provider,
+                        {
+                          ...replacements,
+                          ...(apiKey === undefined ? {} : { apiKey }),
+                        },
+                      ),
+              );
+              if (success) setEditor(null);
+              return success;
+            }}
+          />
+        )}
+        <div className="provider-profile-list">
+          {settings.profile.providerProfiles.map((provider) => (
+            <ProviderProfileCard
+              defaultModel={settings.profile.defaultModel}
+              key={provider.providerProfileId}
+              provider={provider}
+              settings={settings}
+              titleModel={settings.profile.titleModel}
+              onDelete={() => {
+                setDeletingProviderId(provider.providerProfileId);
+                setShowAddChoices(false);
+                setEditor(null);
+                setError(null);
+                setStatus(null);
+              }}
+              onEdit={() => {
+                setEditor({ mode: "edit", provider });
+                setDeletingProviderId(null);
+                setShowAddChoices(false);
+                setError(null);
+                setStatus(null);
+              }}
+            />
+          ))}
+        </div>
+        {deletingProvider === undefined ? null : (
+          <DeleteProviderPanel
+            busy={busy !== null}
+            defaultModel={settings.profile.defaultModel}
+            profiles={settings.profile.providerProfiles}
+            provider={deletingProvider}
+            titleModel={settings.profile.titleModel}
+            onCancel={() => setDeletingProviderId(null)}
+            onDelete={async (replacements) => {
+              const success = await runMutation(
+                "provider-delete",
+                "Provider deleted · local host restarted",
+                async () =>
+                  await window.zenx.settings.deleteProvider(
+                    deletingProvider.providerProfileId,
+                    replacements,
+                  ),
+              );
+              if (success) setDeletingProviderId(null);
+              return success;
+            }}
+          />
+        )}
+      </section>
     </>
+  );
+}
+
+function ProviderProfileCard({
+  defaultModel,
+  onDelete,
+  onEdit,
+  provider,
+  settings,
+  titleModel,
+}: {
+  defaultModel: ZenXModelReference;
+  onDelete(): void;
+  onEdit(): void;
+  provider: ZenXProviderProfile;
+  settings: PublicHostSettings;
+  titleModel: ZenXModelReference;
+}) {
+  const ownsDefault =
+    defaultModel.providerProfileId === provider.providerProfileId;
+  const ownsTitle = titleModel.providerProfileId === provider.providerProfileId;
+  const status = providerStatus(provider, settings);
+  return (
+    <article className="page-card provider-profile-card">
+      <div className="provider-profile-main">
+        <ProviderLogo kind={providerLogoKind(provider)} />
+        <div>
+          <div className="provider-profile-name">
+            <strong>{provider.displayName}</strong>
+            <span>{providerTypeLabel(provider)}</span>
+          </div>
+          <small className={status.className}>{status.label}</small>
+        </div>
+      </div>
+      <div
+        className="provider-model-summary"
+        aria-label={`${provider.displayName} models`}
+      >
+        {provider.models.map((model) => (
+          <span key={model}>{model}</span>
+        ))}
+      </div>
+      <div
+        className="provider-profile-roles"
+        aria-label={`${provider.displayName} global roles`}
+      >
+        {ownsDefault ? <span>Default</span> : null}
+        {ownsTitle ? <span>Title</span> : null}
+      </div>
+      <div className="provider-profile-actions">
+        <button
+          className="quiet-button"
+          type="button"
+          aria-label={`Edit ${provider.displayName}`}
+          onClick={onEdit}
+        >
+          Edit
+        </button>
+        <button
+          className="danger-button"
+          type="button"
+          aria-label={`Delete ${provider.displayName}`}
+          onClick={onDelete}
+        >
+          Delete
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function ProviderEditor({
+  allProfiles,
+  busy,
+  defaultModel,
+  hasApiKey,
+  mode,
+  onCancel,
+  onSubmit,
+  provider: initialProvider,
+  titleModel,
+}: {
+  allProfiles: readonly ZenXProviderProfile[];
+  busy: boolean;
+  defaultModel: ZenXModelReference;
+  hasApiKey: boolean;
+  mode: "add" | "edit";
+  onCancel(): void;
+  onSubmit(
+    provider: ZenXProviderProfile,
+    apiKey: string | undefined,
+    replacements: ZenXProviderEditOptions,
+  ): Promise<boolean>;
+  provider: ZenXProviderProfile;
+  titleModel: ZenXModelReference;
+}) {
+  const [provider, setProvider] = useState(initialProvider);
+  const [models, setModels] = useState([...initialProvider.models]);
+  const [apiKey, setApiKey] = useState("");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [defaultReplacement, setDefaultReplacement] = useState("");
+  const [titleReplacement, setTitleReplacement] = useState("");
+  const normalizedProvider = {
+    ...provider,
+    models: models.map((model) => model.trim()),
+  } as ZenXProviderProfile;
+  const replacementProfiles =
+    mode === "edit"
+      ? allProfiles.map((candidate) =>
+          candidate.providerProfileId === provider.providerProfileId
+            ? normalizedProvider
+            : candidate,
+        )
+      : [...allProfiles, normalizedProvider];
+  const replacesDefault =
+    mode === "edit" &&
+    defaultModel.providerProfileId === provider.providerProfileId &&
+    !normalizedProvider.models.includes(defaultModel.modelId);
+  const replacesTitle =
+    mode === "edit" &&
+    titleModel.providerProfileId === provider.providerProfileId &&
+    !normalizedProvider.models.includes(titleModel.modelId);
+
+  const updateModel = (index: number, value: string) => {
+    setModels((current) =>
+      current.map((model, candidate) => (candidate === index ? value : model)),
+    );
+    setValidationError(null);
+  };
+
+  return (
+    <section
+      className="page-card provider-editor"
+      aria-label={
+        mode === "add"
+          ? "Add Provider profile"
+          : `Edit ${initialProvider.displayName}`
+      }
+    >
+      <div className="provider-editor-head">
+        <div>
+          <strong>
+            {mode === "add"
+              ? "Add Provider profile"
+              : `Edit ${initialProvider.displayName}`}
+          </strong>
+          <span>{providerTypeLabel(provider)}</span>
+        </div>
+        <button className="quiet-button" type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          const error = validateProviderEditor(
+            normalizedProvider,
+            apiKey,
+            mode,
+            hasApiKey,
+          );
+          if (error !== null) {
+            setValidationError(error);
+            return;
+          }
+          const replacements: ZenXProviderEditOptions = {};
+          if (replacesDefault) {
+            const reference = modelReferenceFromValue(
+              defaultReplacement,
+              replacementProfiles,
+            );
+            if (reference === undefined) {
+              setValidationError("Choose a replacement default model");
+              return;
+            }
+            replacements.defaultModel = reference;
+          }
+          if (replacesTitle) {
+            const reference = modelReferenceFromValue(
+              titleReplacement,
+              replacementProfiles,
+            );
+            if (reference === undefined) {
+              setValidationError("Choose a replacement title model");
+              return;
+            }
+            replacements.titleModel = reference;
+          }
+          void onSubmit(
+            normalizedProvider,
+            apiKey.trim().length === 0 ? undefined : apiKey,
+            replacements,
+          );
+        }}
+      >
+        <div className="form-grid">
+          <Field
+            autoFocus
+            label="Display name"
+            value={provider.displayName}
+            onChange={(displayName) => {
+              setProvider({ ...provider, displayName });
+              setValidationError(null);
+            }}
+          />
+          {provider.type === "openai-compatible" ? (
+            <>
+              <Field
+                label="Provider name"
+                value={provider.name}
+                onChange={(name) => {
+                  setProvider({ ...provider, name });
+                  setValidationError(null);
+                }}
+              />
+              <Field
+                wide
+                label="Base URL"
+                value={provider.baseUrl}
+                onChange={(baseUrl) => {
+                  setProvider({ ...provider, baseUrl });
+                  setValidationError(null);
+                }}
+              />
+              <Field
+                wide
+                secret
+                label="API key"
+                placeholder={
+                  mode === "edit" && hasApiKey
+                    ? "API key saved — leave blank to keep"
+                    : "Required"
+                }
+                value={apiKey}
+                onChange={(value) => {
+                  setApiKey(value);
+                  setValidationError(null);
+                }}
+              />
+            </>
+          ) : null}
+        </div>
+        {provider.type === "openai-compatible" ? (
+          <p className="settings-note credential-note">
+            Stored keys are never shown. Enter a value only to add or replace
+            this profile&apos;s key.
+          </p>
+        ) : provider.type === "openai-subscription" ? (
+          <p className="settings-note credential-note">
+            Authentication is managed by the existing OpenAI sign-in in Account.
+          </p>
+        ) : (
+          <p className="settings-note credential-note">
+            Local demo is deterministic and does not use a network credential.
+          </p>
+        )}
+        <fieldset className="provider-model-editor">
+          <legend>Configured model IDs</legend>
+          <p>Each row is a model ID exposed by this Provider profile.</p>
+          {models.map((model, index) => (
+            <div className="provider-model-row" key={index}>
+              <label className="field">
+                <span>{`Model ${index + 1}`}</span>
+                <input
+                  value={model}
+                  onChange={(event) => updateModel(index, event.target.value)}
+                />
+              </label>
+              <button
+                className="quiet-button"
+                type="button"
+                aria-label={`Remove model ${index + 1}`}
+                disabled={models.length === 1}
+                onClick={() => {
+                  setModels((current) =>
+                    current.filter((_, candidate) => candidate !== index),
+                  );
+                  setValidationError(null);
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button
+            className="quiet-button add-model-button"
+            type="button"
+            onClick={() => setModels((current) => [...current, ""])}
+          >
+            Add model
+          </button>
+        </fieldset>
+        {replacesDefault ? (
+          <ModelReferenceSelect
+            label="Replacement default model"
+            placeholder="Select a model"
+            profiles={replacementProfiles}
+            value={defaultReplacement}
+            onChangeValue={setDefaultReplacement}
+          />
+        ) : null}
+        {replacesTitle ? (
+          <ModelReferenceSelect
+            label="Replacement title model"
+            placeholder="Select a model"
+            profiles={replacementProfiles}
+            value={titleReplacement}
+            onChangeValue={setTitleReplacement}
+          />
+        ) : null}
+        {validationError === null ? null : (
+          <div className="settings-error provider-editor-error" role="alert">
+            <Icon name="warning" />
+            {validationError}
+          </div>
+        )}
+        <div className="provider-editor-actions">
+          <button className="quiet-button" type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary-button" type="submit" disabled={busy}>
+            {busy
+              ? mode === "add"
+                ? "Adding & restarting…"
+                : "Saving & restarting…"
+              : mode === "add"
+                ? "Add provider"
+                : "Save provider"}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+function DeleteProviderPanel({
+  busy,
+  defaultModel,
+  onCancel,
+  onDelete,
+  profiles,
+  provider,
+  titleModel,
+}: {
+  busy: boolean;
+  defaultModel: ZenXModelReference;
+  onCancel(): void;
+  onDelete(
+    replacements: ZenXProviderDeleteReplacements | undefined,
+  ): Promise<boolean>;
+  profiles: readonly ZenXProviderProfile[];
+  provider: ZenXProviderProfile;
+  titleModel: ZenXModelReference;
+}) {
+  const [defaultReplacement, setDefaultReplacement] = useState("");
+  const [titleReplacement, setTitleReplacement] = useState("");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const remainingProfiles = profiles.filter(
+    (candidate) => candidate.providerProfileId !== provider.providerProfileId,
+  );
+  const replacesDefault =
+    defaultModel.providerProfileId === provider.providerProfileId;
+  const replacesTitle =
+    titleModel.providerProfileId === provider.providerProfileId;
+  const hasReplacement = remainingProfiles.length > 0;
+  return (
+    <section
+      className="page-card delete-provider-panel"
+      aria-label={`Delete ${provider.displayName}`}
+    >
+      <div>
+        <strong>Delete {provider.displayName}?</strong>
+        <p>
+          This removes its host profile and credential. Existing Threads keep
+          their recorded model selection.
+        </p>
+      </div>
+      {!hasReplacement ? (
+        <div className="settings-error" role="alert">
+          <Icon name="warning" />
+          Add another Provider before deleting the only profile.
+        </div>
+      ) : null}
+      {hasReplacement && replacesDefault ? (
+        <ModelReferenceSelect
+          autoFocus
+          label="Replacement default model"
+          placeholder="Select a model"
+          profiles={remainingProfiles}
+          value={defaultReplacement}
+          onChangeValue={(value) => {
+            setDefaultReplacement(value);
+            setValidationError(null);
+          }}
+        />
+      ) : null}
+      {hasReplacement && replacesTitle ? (
+        <ModelReferenceSelect
+          autoFocus={!replacesDefault}
+          label="Replacement title model"
+          placeholder="Select a model"
+          profiles={remainingProfiles}
+          value={titleReplacement}
+          onChangeValue={(value) => {
+            setTitleReplacement(value);
+            setValidationError(null);
+          }}
+        />
+      ) : null}
+      {validationError === null ? null : (
+        <div className="settings-error" role="alert">
+          <Icon name="warning" />
+          {validationError}
+        </div>
+      )}
+      <div className="provider-editor-actions">
+        <button className="quiet-button" type="button" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          autoFocus={!replacesDefault && !replacesTitle}
+          className="danger-button"
+          type="button"
+          disabled={busy || !hasReplacement}
+          onClick={() => {
+            const replacements: ZenXProviderDeleteReplacements = {};
+            if (replacesDefault) {
+              const reference = modelReferenceFromValue(
+                defaultReplacement,
+                remainingProfiles,
+              );
+              if (reference === undefined) {
+                setValidationError("Choose a replacement default model");
+                return;
+              }
+              replacements.defaultModel = reference;
+            }
+            if (replacesTitle) {
+              const reference = modelReferenceFromValue(
+                titleReplacement,
+                remainingProfiles,
+              );
+              if (reference === undefined) {
+                setValidationError("Choose a replacement title model");
+                return;
+              }
+              replacements.titleModel = reference;
+            }
+            void onDelete(
+              replacesDefault || replacesTitle ? replacements : undefined,
+            );
+          }}
+        >
+          {busy ? "Deleting & restarting…" : "Delete provider"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ModelReferenceSelect({
+  autoFocus = false,
+  label,
+  onChange,
+  onChangeValue,
+  placeholder,
+  profiles,
+  value,
+}: {
+  autoFocus?: boolean;
+  label: string;
+  onChange?(value: ZenXModelReference): void;
+  onChangeValue?(value: string): void;
+  placeholder?: string;
+  profiles: readonly ZenXProviderProfile[];
+  value: ZenXModelReference | string;
+}) {
+  const serialized =
+    typeof value === "string" ? value : modelReferenceValue(value);
+  return (
+    <label className="field model-reference-field">
+      <span>{label}</span>
+      <select
+        autoFocus={autoFocus}
+        value={serialized}
+        onChange={(event) => {
+          if (onChangeValue !== undefined) {
+            onChangeValue(event.target.value);
+            return;
+          }
+          const reference = modelReferenceFromValue(
+            event.target.value,
+            profiles,
+          );
+          if (reference !== undefined) onChange?.(reference);
+        }}
+      >
+        {placeholder === undefined ? null : (
+          <option value="">{placeholder}</option>
+        )}
+        {profiles.flatMap((profile) =>
+          profile.models.map((model) => {
+            const reference = {
+              providerProfileId: profile.providerProfileId,
+              modelId: model,
+            };
+            return (
+              <option
+                key={modelReferenceValue(reference)}
+                value={modelReferenceValue(reference)}
+              >
+                {profile.displayName} · {model}
+              </option>
+            );
+          }),
+        )}
+      </select>
+    </label>
+  );
+}
+
+function validateProviderEditor(
+  provider: ZenXProviderProfile,
+  apiKey: string,
+  mode: "add" | "edit",
+  hasApiKey: boolean,
+): string | null {
+  if (provider.displayName.trim().length === 0)
+    return "Display name is required";
+  if (
+    provider.models.length === 0 ||
+    provider.models.some((model) => model.length === 0)
+  ) {
+    return "Every configured model row needs a model ID";
+  }
+  if (new Set(provider.models).size !== provider.models.length) {
+    return "Model IDs must be unique within this Provider profile";
+  }
+  if (provider.type !== "openai-compatible") return null;
+  if (provider.name.trim().length === 0) return "Provider name is required";
+  if (mode === "add" && apiKey.trim().length === 0)
+    return "API key is required";
+  if (mode === "edit" && !hasApiKey && apiKey.trim().length === 0) {
+    return "API key is required because this profile has no saved key";
+  }
+  let url: URL;
+  try {
+    url = new URL(provider.baseUrl);
+  } catch {
+    return "Base URL must be a valid URL";
+  }
+  const loopbackHttp =
+    url.protocol === "http:" &&
+    (url.hostname === "127.0.0.1" || url.hostname === "localhost");
+  if (url.protocol !== "https:" && !loopbackHttp) {
+    return "Base URL must use HTTPS (loopback HTTP is allowed)";
+  }
+  if (url.username.length > 0 || url.password.length > 0) {
+    return "Base URL must not contain credentials";
+  }
+  if (url.search.length > 0 || url.hash.length > 0) {
+    return "Base URL must not contain a query or fragment";
+  }
+  return null;
+}
+
+function providerStatus(
+  provider: ZenXProviderProfile,
+  settings: PublicHostSettings,
+): { className: "status-good" | "status-muted"; label: string } {
+  if (provider.type === "fake") {
+    return { className: "status-muted", label: "Local testing" };
+  }
+  if (provider.type === "openai-subscription") {
+    return settings.subscription.authenticated
+      ? { className: "status-good", label: "Signed in" }
+      : { className: "status-muted", label: "Not signed in" };
+  }
+  return settings.apiKeyProviderProfileIds.includes(provider.providerProfileId)
+    ? { className: "status-muted", label: "API key saved" }
+    : { className: "status-muted", label: "API key not saved" };
+}
+
+function providerTypeLabel(provider: ZenXProviderProfile): string {
+  if (provider.type === "fake") return "Local demo";
+  if (provider.type === "openai-subscription") return "OpenAI subscription";
+  return "OpenAI-compatible API";
+}
+
+function providerLogoKind(
+  provider: ZenXProviderProfile,
+): "openai" | "deepseek" | "qwen" | "local" | "generic" {
+  if (provider.type === "fake") return "local";
+  if (provider.type === "openai-subscription") return "openai";
+  const identity = `${provider.name} ${provider.displayName}`.toLowerCase();
+  if (identity.includes("deepseek")) return "deepseek";
+  if (identity.includes("qwen") || identity.includes("dashscope"))
+    return "qwen";
+  if (identity.includes("openai")) return "openai";
+  return "generic";
+}
+
+function modelReferenceValue(reference: ZenXModelReference): string {
+  return JSON.stringify([reference.providerProfileId, reference.modelId]);
+}
+
+function modelReferenceFromValue(
+  value: string,
+  profiles: readonly ZenXProviderProfile[],
+): ZenXModelReference | undefined {
+  return profiles
+    .flatMap((profile) =>
+      profile.models.map((modelId) => ({
+        providerProfileId: profile.providerProfileId,
+        modelId,
+      })),
+    )
+    .find((reference) => modelReferenceValue(reference) === value);
+}
+
+function modelReferenceExists(
+  reference: ZenXModelReference,
+  profiles: readonly ZenXProviderProfile[],
+): boolean {
+  return profiles.some(
+    (profile) =>
+      profile.providerProfileId === reference.providerProfileId &&
+      profile.models.includes(reference.modelId),
   );
 }
 
@@ -819,28 +1556,8 @@ function GeneralPanel({
   );
 }
 
-function defaultProvider(profile: ZenXHostProfile): ZenXProviderProfile {
-  const provider = profile.providerProfiles.find(
-    (candidate) =>
-      candidate.providerProfileId === profile.defaultModel.providerProfileId,
-  );
-  if (provider === undefined)
-    throw new Error("Default Provider profile is unavailable");
-  return provider;
-}
-
-function replaceProvider(
-  profile: ZenXHostProfile,
-  provider: ZenXProviderProfile,
-): ZenXProviderProfile[] {
-  return profile.providerProfiles.map((candidate) =>
-    candidate.providerProfileId === provider.providerProfileId
-      ? provider
-      : candidate,
-  );
-}
-
 function Field({
+  autoFocus = false,
   label,
   value,
   onChange,
@@ -848,6 +1565,7 @@ function Field({
   secret = false,
   wide = false,
 }: {
+  autoFocus?: boolean;
   label: string;
   value: string;
   onChange(value: string): void;
@@ -859,6 +1577,7 @@ function Field({
     <label className={`field${wide ? " wide" : ""}`}>
       <span>{label}</span>
       <input
+        autoFocus={autoFocus}
         type={secret ? "password" : "text"}
         value={value}
         placeholder={placeholder}
@@ -892,11 +1611,4 @@ function ManualCode() {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function normalizedModels(value: string): string[] {
-  return value
-    .split(/[\n,]/u)
-    .map((model) => model.trim())
-    .filter(Boolean);
 }

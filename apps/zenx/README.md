@@ -100,6 +100,16 @@ start and are immediately persisted as v2; the migrated ID preserves the old
 runtime identity (`fake`, `openai-codex`, or the configured compatible-provider
 name).
 
+Settings → Models & providers exposes every profile as an independently editable
+row. Global Default and Title selectors show both Provider display name and model
+ID, custom catalogs use repeatable model-ID rows, and saved keys are represented
+only by presence—blank credential input keeps the existing key. Deleting a
+profile that owns either global model requires the corresponding replacement(s)
+and sends them with the deletion in one host mutation; Settings never changes
+historical Thread selections. ZenX exposes at most one OpenAI subscription profile
+in this UI; Account login/logout follows that profile's stable ID, and deleting it
+clears its profile-scoped OAuth credential without reviving historical Threads.
+
 ## Triggers and Rooms
 
 ZenX can register one-shot or recurring timers, `turn_completed` watches, Room
