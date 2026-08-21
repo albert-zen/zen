@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { ApprovalDecision } from "../../main/app-server-manager.js";
 import type { TriggerHistoryEntry } from "../../main/trigger-types.js";
+import type { ZenXProviderProfile } from "../../main/host-profile.js";
 import type {
   ModelSummary,
   Thread,
@@ -10,9 +11,9 @@ import type {
 } from "../../protocol-client/index.js";
 import type { ApprovalCardState } from "./approval-state.js";
 import type { ComposerIntent, ComposerState } from "./composer-state.js";
+import { ComposerModelMenu } from "./ComposerModelMenu.js";
 import { Icon } from "./icons.js";
 import { Markdown } from "./Markdown.js";
-import { modelOptions } from "./model-settings.js";
 import { activeTurn } from "./thread-view-state.js";
 import {
   commandLabel,
@@ -28,7 +29,9 @@ interface ThreadViewProps {
   modelError?: string | null;
   models?: readonly ModelSummary[];
   permissionLabel?: string;
+  providerProfiles?: readonly ZenXProviderProfile[];
   selectedModel?: string;
+  selectedReasoningEffort?: string | null;
   switchingModel?: boolean;
   thread: Thread;
   wakeups?: readonly TriggerHistoryEntry[];
@@ -36,6 +39,7 @@ interface ThreadViewProps {
   onDraftChange(draft: string): void;
   onInterrupt(turnId: string): Promise<void>;
   onModelChange?(model: string): void;
+  onReasoningChange?(effort: string): void;
   onRespondToApproval(
     requestId: string,
     decision: ApprovalDecision,
@@ -54,7 +58,9 @@ export function ThreadView({
   modelError = null,
   models = [],
   permissionLabel = "Full access",
+  providerProfiles = [],
   selectedModel,
+  selectedReasoningEffort = null,
   switchingModel = false,
   thread,
   wakeups = [],
@@ -62,6 +68,7 @@ export function ThreadView({
   onDraftChange,
   onInterrupt,
   onModelChange,
+  onReasoningChange,
   onRespondToApproval,
   onSubmit,
 }: ThreadViewProps) {
@@ -225,32 +232,17 @@ export function ThreadView({
                 <Icon name="paperclip" />
               </button>
               {selectedModel === undefined ? null : (
-                <label className="composer-model">
-                  <span className="provider-mark generic" aria-hidden="true">
-                    ◇
-                  </span>
-                  <span className="sr-only">Thread model</span>
-                  <select
-                    aria-describedby={
-                      modelError === null ? undefined : "composer-model-error"
-                    }
-                    disabled={
-                      composerDisabled || modelDisabled || switchingModel
-                    }
-                    onChange={(event) => onModelChange?.(event.target.value)}
-                    value={selectedModel}
-                  >
-                    {modelOptions(models, selectedModel).map((model) => (
-                      <option
-                        disabled={model.unavailable}
-                        key={model.id}
-                        value={model.id}
-                      >
-                        {model.displayName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <ComposerModelMenu
+                  disabled={composerDisabled || modelDisabled}
+                  modelError={modelError}
+                  models={models}
+                  onModelChange={(model) => onModelChange?.(model)}
+                  onReasoningChange={(effort) => onReasoningChange?.(effort)}
+                  providerProfiles={providerProfiles}
+                  selectedModel={selectedModel}
+                  selectedReasoningEffort={selectedReasoningEffort}
+                  switching={switchingModel}
+                />
               )}
               <button
                 className="composer-tool permission-control"
@@ -298,7 +290,11 @@ export function ThreadView({
           {composer.submission?.status === "failed" ||
           interruptError !== null ||
           modelError !== null ? (
-            <p className="composer-error" role="alert">
+            <p
+              className="composer-error"
+              id={modelError === null ? undefined : "composer-model-error"}
+              role="alert"
+            >
               {interruptError ?? composer.submission?.error ?? modelError}
             </p>
           ) : null}

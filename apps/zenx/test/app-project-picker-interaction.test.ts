@@ -9,7 +9,8 @@ import { createRoot, type Root } from "react-dom/client";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
 import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projection.js";
-import type { Thread } from "../src/protocol-client/index.js";
+import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
+import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const { App } = await import("../src/renderer/src/App.js");
@@ -187,6 +188,74 @@ test("same-event-loop duplicate Send owns one title stage and turn request", asy
 
     assert.equal(titleCalls, 1);
     assert.equal(turnStartRequests.length, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("deleted Provider history stays readable and requires an explicit model switch before Send", async () => {
+  const oldModel = encodeModelKey({
+    providerProfileId: "deleted-provider",
+    modelId: "old-model",
+  });
+  const replacement = encodeModelKey({
+    providerProfileId: "fake",
+    modelId: "gpt-5.6-luna",
+  });
+  const turnRequests: unknown[] = [];
+  const settingsRequests: unknown[] = [];
+  const harness = await mountThreadApp({
+    models: [wireModel(replacement, true, "Replacement model")],
+    request: async (method, params) => {
+      if (method === "thread/resume")
+        return {
+          ...resumed(liveThread()),
+          model: oldModel,
+          modelProvider: "deleted-provider",
+          reasoningEffort: "medium",
+        };
+      if (method === "turn/start") {
+        turnRequests.push(params);
+        return {};
+      }
+      if (method === "thread/settings/update") {
+        settingsRequests.push(params);
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    assert.match(
+      document.querySelector(".composer-error")?.textContent ?? "",
+      /deleted-provider.*Choose a model before sending/u,
+    );
+    await setTextareaValue(composer, "Do not send with a deleted Provider");
+    const send = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    await invokeButtonClick(send);
+    assert.equal(turnRequests.length, 0);
+
+    const modelTrigger = document.querySelector<HTMLButtonElement>(
+      ".composer-model-trigger",
+    );
+    assert.ok(modelTrigger);
+    await invokeButtonClick(modelTrigger);
+    const modelEntry = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((button) => button.textContent?.includes("Model"));
+    assert.ok(modelEntry);
+    await invokeButtonClick(modelEntry);
+    const replacementButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    ).find((button) => button.textContent?.includes("Replacement model"));
+    assert.ok(replacementButton);
+    await invokeButtonClick(replacementButton);
+    assert.deepEqual(settingsRequests, [
+      { threadId: "thread-1", model: replacement },
+    ]);
   } finally {
     await unmountApp(harness);
   }
@@ -809,6 +878,7 @@ async function mountApp(
     initialPinnedThreadIds?: string[];
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
+    models?: ModelSummary[];
     projectsGet?(): Promise<ZenXProjectProjectionSnapshot>;
     setPinnedThreadIds?(
       threadIds: readonly string[],
@@ -841,7 +911,11 @@ async function mountApp(
           : await options.getStatus(),
       getPendingApprovals: async () => [],
       request: async (method: string, params?: unknown) => {
-        if (method === "model/list") return { data: [] };
+        if (method === "model/list")
+          return {
+            data: options.models ?? [wireModel("fake", true)],
+            nextCursor: null,
+          };
         if (options.request !== undefined)
           return await options.request(method, params);
         throw new Error(`Unexpected protocol request: ${method}`);
@@ -955,6 +1029,29 @@ function catalogModel(id: string) {
     inputModalities: ["text" as const],
     contextWindow: null,
     source: "legacy" as const,
+  };
+}
+
+function wireModel(id: string, isDefault = false, displayName = id) {
+  return {
+    id,
+    model: id,
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName,
+    description: displayName,
+    hidden: false,
+    supportedReasoningEfforts: [
+      { reasoningEffort: "medium", description: "medium" },
+    ],
+    defaultReasoningEffort: "medium",
+    inputModalities: ["text" as const],
+    supportsPersonality: false as const,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+    isDefault,
   };
 }
 

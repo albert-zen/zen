@@ -426,6 +426,14 @@ test("keeps opaque model keys stable and round-trippable", () => {
   const key = encodeModelKey(identity);
   assert.equal(key, "zen-model-v1:WyJwcm9maWxlLWEiLCJzaGFyZWQtbW9kZWwiXQ");
   assert.deepEqual(decodeModelKey(key), identity);
+  const unicodeIdentity = {
+    providerProfileId: "本地-provider",
+    modelId: "模型/β",
+  };
+  assert.deepEqual(
+    decodeModelKey(encodeModelKey(unicodeIdentity)),
+    unicodeIdentity,
+  );
 });
 
 test("freezes an active Turn selection while a concurrent change applies to the next Turn", async () => {

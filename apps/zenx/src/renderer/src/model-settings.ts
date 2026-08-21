@@ -1,14 +1,18 @@
 import type {
+  ClientRequestParams,
   ModelSummary,
   ThreadSettingsSnapshot,
   UpdatedThreadSettings,
   Thread,
 } from "../../protocol-client/index.js";
+import type { ZenXProviderProfile } from "../../main/host-profile.js";
+import { encodeModelKey } from "../../../../../src/protocol/codex/model-key.js";
 
 export interface SelectedThreadSettings {
   threadId: string;
   model: string;
   modelProvider: string;
+  reasoningEffort: string | null;
 }
 
 export type ModelOption = Omit<
@@ -22,8 +26,14 @@ export type ModelOption = Omit<
     >
   > & { unavailable: boolean };
 
-export function canChangeThreadModel(thread: Thread): boolean {
-  return !thread.turns.some((turn) => turn.status === "inProgress");
+export interface ProviderModelGroup {
+  providerProfileId: string;
+  displayName: string;
+  models: ModelSummary[];
+}
+
+export function canChangeThreadModel(_thread: Thread): boolean {
+  return true;
 }
 
 export function settingsFromSnapshot(
@@ -34,6 +44,7 @@ export function settingsFromSnapshot(
     threadId,
     model: snapshot.model,
     modelProvider: snapshot.modelProvider,
+    reasoningEffort: snapshot.reasoningEffort,
   };
 }
 
@@ -47,6 +58,7 @@ export function applySettingsMirror(
         threadId,
         model: settings.model,
         modelProvider: settings.modelProvider,
+        reasoningEffort: settings.effort,
       }
     : current;
 }
@@ -89,4 +101,66 @@ export function modelOptions(
     ];
   }
   return [...visible, { ...selected, unavailable: true }];
+}
+
+export function groupedModelOptions(
+  models: readonly ModelSummary[],
+  providerProfiles: readonly ZenXProviderProfile[],
+): ProviderModelGroup[] {
+  const available = new Map(
+    models.filter((model) => !model.hidden).map((model) => [model.id, model]),
+  );
+  return providerProfiles.flatMap((provider) => {
+    const providerModels = provider.models.flatMap((model) => {
+      const key = encodeModelKey({
+        providerProfileId: provider.providerProfileId,
+        modelId: model.id,
+      });
+      const option = available.get(key);
+      return option === undefined ? [] : [option];
+    });
+    return providerModels.length === 0
+      ? []
+      : [
+          {
+            providerProfileId: provider.providerProfileId,
+            displayName: provider.displayName,
+            models: providerModels,
+          },
+        ];
+  });
+}
+
+export function reasoningOptions(
+  models: readonly ModelSummary[],
+  selectedModel: string,
+): ModelSummary["supportedReasoningEfforts"] {
+  const selected = models.find(
+    (model) => model.id === selectedModel && !model.hidden,
+  );
+  return selected?.supportedReasoningEfforts ?? [];
+}
+
+export function canSendWithModel(
+  models: readonly ModelSummary[],
+  selectedModel: string,
+): boolean {
+  return models.some(
+    (model) => model.id === selectedModel && model.hidden === false,
+  );
+}
+
+export function modelChangeRequest(
+  threadId: string,
+  model: string,
+): ClientRequestParams["thread/settings/update"] {
+  return { threadId, model };
+}
+
+export function reasoningChangeRequest(
+  threadId: string,
+  model: string,
+  effort: string,
+): ClientRequestParams["thread/settings/update"] {
+  return { threadId, model, effort };
 }

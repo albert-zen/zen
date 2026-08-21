@@ -7,10 +7,17 @@ import type {
   ThreadSettingsSnapshot,
   UpdatedThreadSettings,
 } from "../src/protocol-client/index.js";
+import type { ZenXProviderProfile } from "../src/main/host-profile.js";
+import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 import {
   applySettingsMirror,
+  canSendWithModel,
   canChangeThreadModel,
+  groupedModelOptions,
+  modelChangeRequest,
   modelOptions,
+  reasoningChangeRequest,
+  reasoningOptions,
   settingsFromSnapshot,
   validateModelCatalog,
 } from "../src/renderer/src/model-settings.js";
@@ -39,10 +46,11 @@ test("shows only visible models while preserving a hidden authoritative value", 
   );
 });
 
-test("initializes from resume, mirrors only ZAS events, and blocks active turns", () => {
+test("initializes from resume, mirrors only ZAS events, and allows next-turn changes", () => {
   const snapshot = settingsSnapshot("model-a");
   const selected = settingsFromSnapshot("thread-1", snapshot);
   assert.equal(selected.model, "model-a");
+  assert.equal(selected.reasoningEffort, "high");
   const ignored = applySettingsMirror(
     selected,
     "thread-2",
@@ -55,11 +63,65 @@ test("initializes from resume, mirrors only ZAS events, and blocks active turns"
     updatedSettings("model-b"),
   );
   assert.equal(mirrored?.model, "model-b");
+  assert.equal(mirrored?.reasoningEffort, "low");
 
   const idle = makeThread("completed");
   const active = makeThread("inProgress");
   assert.equal(canChangeThreadModel(idle), true);
-  assert.equal(canChangeThreadModel(active), false);
+  assert.equal(canChangeThreadModel(active), true);
+});
+
+test("groups runnable visible models by Provider and lists only selected-model efforts", () => {
+  const alphaKey = key("provider-alpha", "shared");
+  const betaKey = key("provider-beta", "shared");
+  const hiddenKey = key("provider-alpha", "hidden");
+  const models = [
+    model(alphaKey, {
+      displayName: "Alpha Shared",
+      isDefault: true,
+      supportedReasoningEfforts: efforts("low", "medium"),
+      defaultReasoningEffort: "medium",
+      inputModalities: ["text", "image"],
+    }),
+    model(betaKey, {
+      displayName: "Beta Shared",
+      supportedReasoningEfforts: efforts("high"),
+      defaultReasoningEffort: "high",
+    }),
+    model(hiddenKey, { hidden: true }),
+  ];
+  const groups = groupedModelOptions(models, [
+    provider("provider-alpha", "Alpha", ["shared", "hidden"]),
+    provider("provider-beta", "Beta", ["shared"]),
+  ]);
+
+  assert.deepEqual(
+    groups.map((group) => [
+      group.providerProfileId,
+      group.displayName,
+      group.models.map((entry) => entry.id),
+    ]),
+    [
+      ["provider-alpha", "Alpha", [alphaKey]],
+      ["provider-beta", "Beta", [betaKey]],
+    ],
+  );
+  assert.deepEqual(
+    reasoningOptions(models, alphaKey).map((entry) => entry.reasoningEffort),
+    ["low", "medium"],
+  );
+  assert.equal(canSendWithModel(models, alphaKey), true);
+  assert.equal(canSendWithModel(models, hiddenKey), false);
+  assert.equal(canSendWithModel(models, key("deleted", "old")), false);
+  assert.deepEqual(modelChangeRequest("thread-1", betaKey), {
+    threadId: "thread-1",
+    model: betaKey,
+  });
+  assert.deepEqual(reasoningChangeRequest("thread-1", alphaKey, "low"), {
+    threadId: "thread-1",
+    model: alphaKey,
+    effort: "low",
+  });
 });
 
 function model(
@@ -97,7 +159,7 @@ function settingsSnapshot(modelId: string): ThreadSettingsSnapshot {
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: { type: "dangerFullAccess" },
-    reasoningEffort: null,
+    reasoningEffort: "high",
   };
 }
 
@@ -110,13 +172,47 @@ function updatedSettings(modelId: string): UpdatedThreadSettings {
       settings: { model: modelId, reasoning_effort: "medium" },
     },
     cwd: "/workspace",
-    effort: null,
+    effort: "low",
     model: modelId,
     modelProvider: "fake",
     personality: null,
     sandboxPolicy: { type: "dangerFullAccess" },
     serviceTier: null,
     summary: null,
+  };
+}
+
+function key(providerProfileId: string, modelId: string): string {
+  return encodeModelKey({ providerProfileId, modelId });
+}
+
+function efforts(...values: string[]) {
+  return values.map((reasoningEffort) => ({
+    reasoningEffort,
+    description: reasoningEffort,
+  }));
+}
+
+function provider(
+  providerProfileId: string,
+  displayName: string,
+  modelIds: string[],
+): ZenXProviderProfile {
+  return {
+    type: "fake",
+    providerProfileId,
+    displayName,
+    models: modelIds.map((id) => ({
+      id,
+      source: "manual",
+      displayName: id,
+      description: id,
+      hidden: false,
+      contextWindow: null,
+      supportedReasoningEfforts: ["medium"],
+      defaultReasoningEffort: "medium",
+      inputModalities: ["text"],
+    })),
   };
 }
 

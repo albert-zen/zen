@@ -14,7 +14,7 @@ export function encodeModelKey(
     selection.providerProfileId,
     selection.modelId,
   ]);
-  return `${PREFIX}${Buffer.from(payload, "utf8").toString("base64url")}`;
+  return `${PREFIX}${encodeBase64Url(payload)}`;
 }
 
 export function decodeModelKey(key: string): WireModelIdentity {
@@ -27,7 +27,7 @@ export function decodeModelKey(key: string): WireModelIdentity {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    parsed = JSON.parse(decodeBase64Url(encoded));
   } catch {
     throw new Error("Malformed Zen opaque model key");
   }
@@ -46,4 +46,27 @@ export function decodeModelKey(key: string): WireModelIdentity {
     throw new Error("Malformed Zen opaque model key");
   }
   return identity;
+}
+
+function encodeBase64Url(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return globalThis
+    .btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+}
+
+function decodeBase64Url(value: string): string {
+  const standard = value.replaceAll("-", "+").replaceAll("_", "/");
+  const padded = standard.padEnd(
+    standard.length + ((4 - (standard.length % 4)) % 4),
+    "=",
+  );
+  const binary = globalThis.atob(padded);
+  return new TextDecoder("utf-8", { fatal: true }).decode(
+    Uint8Array.from(binary, (character) => character.charCodeAt(0)),
+  );
 }

@@ -11,7 +11,10 @@ import type {
 } from "../../main/capabilities/types.js";
 import type { TriggerSnapshot } from "../../main/trigger-types.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
-import type { ZenXSidebarOrder } from "../../main/host-profile.js";
+import type {
+  ZenXProviderProfile,
+  ZenXSidebarOrder,
+} from "../../main/host-profile.js";
 import type {
   ThreadTitleProjection,
   ThreadTitleSnapshot,
@@ -42,7 +45,10 @@ import { Icon } from "./icons.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
 import {
   applySettingsMirror,
+  canSendWithModel,
   canChangeThreadModel,
+  modelChangeRequest,
+  reasoningChangeRequest,
   settingsFromSnapshot,
   validateModelCatalog,
   type SelectedThreadSettings,
@@ -70,6 +76,7 @@ import { ThreadLifecycleAction } from "./ThreadLifecycleAction.js";
 import { ThreadView } from "./ThreadView.js";
 
 type ProductPage = "agent" | "settings" | "triggers" | "rooms";
+const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
 
 export function App() {
   const selectionEpoch = useRef(0);
@@ -128,6 +135,9 @@ export function App() {
   const [threadError, setThreadError] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<ApprovalCardState[]>([]);
   const [models, setModels] = useState<ModelSummary[]>([]);
+  const [providerProfiles, setProviderProfiles] = useState<
+    ZenXProviderProfile[]
+  >([]);
   const [modelCatalogError, setModelCatalogError] = useState<string | null>(
     null,
   );
@@ -268,6 +278,7 @@ export function App() {
     setThreadLifecycleError(null);
     setThreadLoading(true);
     setThreadError(null);
+    void loadComposerCatalog();
     try {
       const result = await window.zenx.protocol.request("thread/resume", {
         threadId,
@@ -287,15 +298,40 @@ export function App() {
     }
   };
 
+  const loadComposerCatalog = async () => {
+    try {
+      const [result, settings] = await Promise.all([
+        window.zenx.protocol.request("model/list", {}),
+        window.zenx.settings.get(),
+      ]);
+      validateModelCatalog(result.data);
+      setModels(result.data);
+      setProviderProfiles(settings.profile.providerProfiles);
+      setModelCatalogError(null);
+      setModelUpdateError((current) =>
+        current === MODEL_CATALOG_LOADING ? null : current,
+      );
+    } catch (error) {
+      setModelCatalogError(describeError(error));
+    }
+  };
+
   useEffect(() => {
     let active = true;
     const loadModels = async () => {
       try {
-        const result = await window.zenx.protocol.request("model/list", {});
+        const [result, settings] = await Promise.all([
+          window.zenx.protocol.request("model/list", {}),
+          window.zenx.settings.get(),
+        ]);
         validateModelCatalog(result.data);
         if (active) {
           setModels(result.data);
+          setProviderProfiles(settings.profile.providerProfiles);
           setModelCatalogError(null);
+          setModelUpdateError((current) =>
+            current === MODEL_CATALOG_LOADING ? null : current,
+          );
         }
       } catch (error) {
         if (active) setModelCatalogError(describeError(error));
@@ -519,6 +555,24 @@ export function App() {
     )
       return;
     const threadId = threadDetail.id;
+    if (intent !== "steer" && models.length === 0) {
+      setModelUpdateError(modelCatalogError ?? MODEL_CATALOG_LOADING);
+      return;
+    }
+    if (
+      intent !== "steer" &&
+      selectedSettings?.threadId === threadId &&
+      !canSendWithModel(models, selectedSettings.model)
+    ) {
+      setModelUpdateError(
+        unavailableSelectionMessage(
+          models,
+          providerProfiles,
+          selectedSettings,
+        ) ?? "Choose an available model before sending.",
+      );
+      return;
+    }
     const current = composerStatesRef.current[threadId] ?? emptyComposerState();
     const started = beginComposerSubmission(
       current,
@@ -623,17 +677,34 @@ export function App() {
       model === selectedSettings.model
     )
       return;
-    if (!canChangeThreadModel(threadDetail)) {
-      setModelUpdateError("Wait for the current turn to finish.");
-      return;
-    }
     setSwitchingModel(true);
     setModelUpdateError(null);
     try {
-      await window.zenx.protocol.request("thread/settings/update", {
-        threadId: threadDetail.id,
-        model,
-      });
+      await window.zenx.protocol.request(
+        "thread/settings/update",
+        modelChangeRequest(threadDetail.id, model),
+      );
+    } catch (error) {
+      setModelUpdateError(describeError(error));
+    } finally {
+      setSwitchingModel(false);
+    }
+  };
+
+  const changeReasoning = async (effort: string) => {
+    if (
+      threadDetail === null ||
+      selectedSettings === null ||
+      effort === selectedSettings.reasoningEffort
+    )
+      return;
+    setSwitchingModel(true);
+    setModelUpdateError(null);
+    try {
+      await window.zenx.protocol.request(
+        "thread/settings/update",
+        reasoningChangeRequest(threadDetail.id, selectedSettings.model, effort),
+      );
     } catch (error) {
       setModelUpdateError(describeError(error));
     } finally {
@@ -874,6 +945,7 @@ export function App() {
             approvals={approvals}
             composerStates={composerStates}
             models={models}
+            providerProfiles={providerProfiles}
             modelCatalogError={modelCatalogError}
             modelUpdateError={modelUpdateError}
             onDraftChange={(threadId, draft) =>
@@ -888,6 +960,7 @@ export function App() {
               });
             }}
             onModelChange={(model) => void changeModel(model)}
+            onReasoningChange={(effort) => void changeReasoning(effort)}
             onChangeThreadLifecycle={changeThreadLifecycle}
             hasProjects={projects.projects.some(
               (project) => project.configured,
@@ -969,6 +1042,7 @@ function AgentSurface({
   approvals,
   composerStates,
   models,
+  providerProfiles,
   modelCatalogError,
   modelUpdateError,
   onChangeThreadLifecycle,
@@ -978,6 +1052,7 @@ function AgentSurface({
   onAddProject,
   onInterrupt,
   onModelChange,
+  onReasoningChange,
   onNewThread,
   onOpenSidebar,
   onOpenWorkspace,
@@ -1002,6 +1077,7 @@ function AgentSurface({
   approvals: ApprovalCardState[];
   composerStates: Record<string, ComposerState>;
   models: ModelSummary[];
+  providerProfiles: ZenXProviderProfile[];
   modelCatalogError: string | null;
   modelUpdateError: string | null;
   onChangeThreadLifecycle(): Promise<void>;
@@ -1011,6 +1087,7 @@ function AgentSurface({
   onAddProject(): void;
   onInterrupt(turnId: string): Promise<void>;
   onModelChange(model: string): void;
+  onReasoningChange(effort: string): void;
   onNewThread(): void;
   onOpenSidebar(): void;
   onOpenWorkspace(): void;
@@ -1169,8 +1246,17 @@ function AgentSurface({
           composer={composerStates[threadDetail.id] ?? emptyComposerState()}
           composerDisabled={threadArchiving}
           modelDisabled={!canChangeThreadModel(threadDetail)}
-          modelError={modelUpdateError ?? modelCatalogError}
+          modelError={
+            modelUpdateError ??
+            modelCatalogError ??
+            unavailableSelectionMessage(
+              models,
+              providerProfiles,
+              selectedSettings,
+            )
+          }
           models={models}
+          providerProfiles={providerProfiles}
           permissionLabel={
             selectedSummary.status !== "systemError" &&
             selectedSummary.currentMetadata.approvalPolicy === "never"
@@ -1178,6 +1264,7 @@ function AgentSurface({
               : "Approval required"
           }
           selectedModel={selectedSettings?.model}
+          selectedReasoningEffort={selectedSettings?.reasoningEffort}
           switchingModel={switchingModel}
           thread={threadDetail}
           wakeups={triggerSnapshot.history.filter(
@@ -1189,6 +1276,7 @@ function AgentSurface({
           onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}
           onInterrupt={onInterrupt}
           onModelChange={onModelChange}
+          onReasoningChange={onReasoningChange}
           onRespondToApproval={onRespondToApproval}
           onSubmit={onSubmit}
         />
@@ -1456,4 +1544,23 @@ function ThreadTitleEditor({
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function unavailableSelectionMessage(
+  models: readonly ModelSummary[],
+  providerProfiles: readonly ZenXProviderProfile[],
+  settings: SelectedThreadSettings | null,
+): string | null {
+  if (
+    models.length === 0 ||
+    settings === null ||
+    canSendWithModel(models, settings.model)
+  )
+    return null;
+  const provider = providerProfiles.find(
+    (candidate) => candidate.providerProfileId === settings.modelProvider,
+  );
+  return provider === undefined
+    ? `Provider profile “${settings.modelProvider}” was deleted. Choose a model before sending.`
+    : `The configured model from “${provider.displayName}” is hidden or unavailable. Choose another model before sending.`;
 }
