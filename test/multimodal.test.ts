@@ -394,6 +394,91 @@ test("legacy text-only user messages still compile after restart", async () => {
   ]);
 });
 
+test("retained AttachmentRefs survive compaction projection and restart", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-compaction-image-"));
+  const journal = new JsonlThreadJournal(path.join(root, "threads"));
+  const attachments = new FileAttachmentStore(path.join(root, "attachments"));
+  const requests: ModelMessage[][] = [];
+  const model: ModelAdapter = {
+    provider: "image-provider",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      const latest = request.messages.at(-1);
+      if (
+        latest?.role === "user" &&
+        "text" in latest &&
+        latest.text.includes("ZEN_CONTEXT_COMPACTION_V1")
+      ) {
+        yield { type: "text_delta", delta: "image context summary" };
+        return;
+      }
+      requests.push(structuredClone(request.messages));
+      yield { type: "text_delta", delta: "ok" };
+    },
+  };
+  try {
+    const first = createServer({ journal, attachments, model });
+    const thread = await first.startThread();
+    const ref = await first.importImageBytes(png1x1(), "image/png");
+    await (
+      await first.startTurn(thread.id, [
+        { type: "text", text: "remember this image" },
+        { type: "image", attachment: ref },
+      ])
+    ).done;
+    await first.compactThread(thread.id);
+    const beforeRestart = await first.readThread(thread.id);
+    const projectedBefore = compileModelMessages(beforeRestart.items);
+    assert.deepEqual(projectedBefore[0], {
+      role: "user",
+      content: [
+        { type: "text", text: "remember this image" },
+        { type: "image", attachment: ref },
+      ],
+    });
+
+    const restartedAttachments = new FileAttachmentStore(
+      path.join(root, "attachments"),
+    );
+    const restarted = createServer({
+      journal: new JsonlThreadJournal(path.join(root, "threads")),
+      attachments: restartedAttachments,
+      model,
+    });
+    const replayed = await restarted.readThread(thread.id);
+    const projectedAfter = compileModelMessages(replayed.items);
+    assert.equal(
+      JSON.stringify(projectedAfter),
+      JSON.stringify(projectedBefore),
+    );
+    assert.deepEqual(
+      [...(await restartedAttachments.read(ref))],
+      [...png1x1()],
+    );
+
+    const providerBodies: Array<Record<string, unknown>> = [];
+    await drainModel(
+      capturingCompatibleModel(restartedAttachments, providerBodies),
+      projectedAfter,
+    );
+    const providerMessages = providerBodies[0]?.messages;
+    assert(Array.isArray(providerMessages));
+    assert.equal(
+      JSON.stringify(providerMessages).includes("data:image/png;base64"),
+      true,
+    );
+
+    await (
+      await restarted.startTurn(thread.id, "continue")
+    ).done;
+    assert.deepEqual(requests.at(-1), [
+      ...projectedBefore,
+      { role: "user", content: [{ type: "text", text: "continue" }] },
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function createServer(options: {
   journal: ThreadJournal;
   attachments: AttachmentStore;

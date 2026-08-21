@@ -396,6 +396,69 @@ test("switches models canonically and synchronizes thread settings", async () =>
   }
 });
 
+test("exposes manual context compaction only as the thread/compact Zen extension", async () => {
+  const appServer = testHost();
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const client = await CodexClient.connect(server.url);
+  try {
+    await client.initialize({
+      name: "compact",
+      title: "Compact",
+      version: "1",
+    });
+    const started = await client.request("thread/start", {});
+    const thread = responseResult<Record<string, unknown>>(started, "thread");
+    assert.equal(typeof thread.id, "string");
+    const threadId = String(thread.id);
+    const completed = deferred<void>();
+    client.onNotification("turn/completed", () => completed.resolve());
+    await client.request("turn/start", {
+      threadId,
+      input: [{ type: "text", text: "history to compact" }],
+    });
+    await within(completed.promise);
+
+    const result = await client.request("thread/compact", { threadId });
+    assert(isRecord(result));
+    assert.deepEqual(Object.keys(result), ["compactionItemId"]);
+    assert.equal(typeof result.compactionItemId, "string");
+    const snapshot = await appServer.readThread(threadId);
+    assert.equal(snapshot.items.at(-1)?.id, result.compactionItemId);
+    assert.equal(snapshot.items.at(-1)?.type, "context_compaction");
+
+    const read = await client.request("thread/read", {
+      threadId,
+      includeTurns: true,
+    });
+    const projected = responseResult<Record<string, unknown>>(read, "thread");
+    assert(Array.isArray(projected.turns));
+    assert.equal(projected.turns.length, 1);
+    assert.equal(
+      JSON.stringify(projected.turns).includes("context_compaction"),
+      false,
+    );
+
+    await assert.rejects(
+      client.request("thread/compact", {
+        threadId,
+        coveredThroughItemId: "not-callable",
+      }),
+      (error: unknown) => {
+        assert(error instanceof CodexClientError);
+        assert.equal(error.code, -32602);
+        return true;
+      },
+    );
+  } finally {
+    client.close();
+    await server.close();
+  }
+});
+
 test("resumes an active thread and applies an explicit model change next", async () => {
   const appServer = testHost("always", ["fake", "other"]);
   const server = await serveCodexWebSocket({

@@ -4,6 +4,10 @@ import {
   type CanonicalItem,
   type UserInput,
 } from "./item.js";
+import {
+  CONTEXT_COMPACTION_SUMMARY_PREFIX,
+  latestCompaction,
+} from "./context-compaction.js";
 
 export interface TextModelMessage {
   role: "user" | "assistant";
@@ -80,6 +84,39 @@ export interface ModelAdapter {
 }
 
 export function compileModelMessages(
+  items: readonly CanonicalItem[],
+): ModelMessage[] {
+  const compaction = latestCompaction(items);
+  if (compaction === undefined) {
+    return compileCanonicalModelMessages(items);
+  }
+  const boundaryIndex = items.findIndex(
+    (item) => item.id === compaction.coveredThroughItemId,
+  );
+  if (boundaryIndex < 0) {
+    throw new Error(
+      `Context compaction boundary does not exist: ${compaction.coveredThroughItemId}`,
+    );
+  }
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const retained = compaction.retainedItemIds.map((id) => {
+    const item = byId.get(id);
+    if (item === undefined) {
+      throw new Error(`Retained context Item does not exist: ${id}`);
+    }
+    return item;
+  });
+  return [
+    ...compileCanonicalModelMessages(retained),
+    {
+      role: "user",
+      text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${compaction.summary}`,
+    },
+    ...compileCanonicalModelMessages(items.slice(boundaryIndex + 1)),
+  ];
+}
+
+function compileCanonicalModelMessages(
   items: readonly CanonicalItem[],
 ): ModelMessage[] {
   items = orderSteeredMessagesForSampling(items);
@@ -161,6 +198,7 @@ export function compileModelMessages(
         });
         break;
       case "reasoning":
+      case "context_compaction":
       case "thread_configuration_changed":
       case "thread_metadata":
       case "turn_aborted":

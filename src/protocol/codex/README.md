@@ -28,6 +28,7 @@ Client requests：
 Zen extension：
 
 - `turn/replace`
+- `thread/compact`
 
 Client notification：`initialized`。
 
@@ -62,6 +63,13 @@ model 或 effort 明确失败。单 profile 的既有裸 model id 仅作为入�
 与 reasoning effort 必须匹配本次原子 selection；developer instructions 不进入
 Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，避免发送
 不完整的 0.146.0 类型。
+
+`thread/compact` 不是 Codex 0.146.0 方法。它只接受精确的
+`{ threadId: string }`，等待 Zen 使用 admission 时冻结的当前 Provider selection
+为最新完整 Turn 边界生成、验证并 append canonical context compaction，然后返回
+精确的 `{ compactionItemId: string }`。调用者不能指定边界或 retained Item；active /
+incomplete Turn、没有新 eligible boundary、generation / abort / validation / journal
+失败都明确返回且不隐藏重试。Z11 不发送 compaction progress notification。
 
 `model/list` 的 `supportedReasoningEfforts`、`defaultReasoningEffort` 与
 `inputModalities` 直接来自结构化 catalog，不再硬编码。固定 0.146.0 schema 要求

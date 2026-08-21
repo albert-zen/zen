@@ -7,10 +7,17 @@ import {
   type AttachmentRef,
   type AttachmentStore,
 } from "./attachment.js";
+import {
+  CONTEXT_COMPACTION_ALGORITHM_VERSION,
+  CONTEXT_COMPACTION_SUMMARY_INSTRUCTION,
+  latestCompaction,
+  latestEligibleCompactionBoundary,
+} from "./context-compaction.js";
 import type {
   AgentMessageItem,
   ApprovalPolicy,
   CanonicalItem,
+  ContextCompactionItem,
   SandboxMode,
   ThreadConfigurationChangedItem,
   ThreadMetadataItem,
@@ -27,7 +34,12 @@ import {
   sameUserInput,
 } from "./item.js";
 import type { ThreadJournal } from "./journal.js";
-import { compileModelMessages } from "./model.js";
+import {
+  compileModelMessages,
+  type ModelAdapter,
+  type ModelEvent,
+  type ModelMessage,
+} from "./model.js";
 import {
   ProviderRegistryError,
   type ProviderModel,
@@ -105,6 +117,14 @@ export type ThreadListEntry = ThreadSnapshot | UnavailableThreadSnapshot;
 export interface TurnHandle {
   id: string;
   done: Promise<void>;
+}
+
+export interface CompactThreadOptions {
+  signal?: AbortSignal;
+}
+
+export interface CompactThreadResult {
+  compactionItemId: string;
 }
 
 export interface SteerTurnOptions {
@@ -396,6 +416,93 @@ export class ZenAppServer {
     } = {},
   ): Promise<TurnHandle> {
     return await this.#launchTurn(threadId, input, options);
+  }
+
+  async compactThread(
+    threadId: string,
+    options: CompactThreadOptions = {},
+  ): Promise<CompactThreadResult> {
+    return await this.#withThreadMutation(threadId, async () => {
+      const signal = options.signal ?? new AbortController().signal;
+      if (signal.aborted) {
+        throw new AppServerError(
+          "compaction_aborted",
+          describeCompactionError(
+            signal.reason,
+            "Context compaction was aborted",
+          ),
+        );
+      }
+      const thread = await this.#requireThread(threadId);
+      if (this.#activeTurns.has(threadId)) {
+        throw new AppServerError(
+          "thread_busy",
+          `Thread ${threadId} already has a running turn`,
+        );
+      }
+
+      let boundary: ReturnType<typeof latestEligibleCompactionBoundary>;
+      try {
+        boundary = latestEligibleCompactionBoundary(thread.items);
+      } catch (error) {
+        throw new AppServerError(
+          "compaction_incomplete_turn",
+          describeCompactionError(error, "Thread has an incomplete Turn"),
+        );
+      }
+      if (boundary === undefined) {
+        throw new AppServerError(
+          "compaction_not_available",
+          `Thread ${threadId} has no eligible completed Turn boundary`,
+        );
+      }
+      const previous = latestCompaction(thread.items);
+      if (previous?.coveredThroughItemId === boundary.item.id) {
+        throw new AppServerError(
+          "compaction_not_available",
+          `Thread ${threadId} is already compacted through its latest eligible boundary`,
+        );
+      }
+
+      const configuration = thread.effectiveConfiguration();
+      const resolved = this.#requireSelection(configuration);
+      const sourceMessages = compileModelMessages(
+        thread.items.slice(0, boundary.index + 1),
+      );
+      const summary = await generateContextCompactionSummary({
+        adapter: resolved.adapter,
+        model: configuration.modelId,
+        reasoningEffort: configuration.reasoningEffort,
+        messages: sourceMessages,
+        signal,
+      });
+      const item: ContextCompactionItem = {
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+        type: "context_compaction",
+        coveredThroughItemId: boundary.item.id,
+        summary: summary.text,
+        retainedItemIds: boundary.retainedItemIds,
+        providerProfileId: configuration.providerProfileId,
+        modelId: configuration.modelId,
+        reasoningEffort: configuration.reasoningEffort,
+        algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
+        tokenUsage: summary.tokenUsage,
+      };
+      try {
+        await this.#commit(thread, item);
+      } catch (error) {
+        throw new AppServerError(
+          "compaction_persistence_failed",
+          describeCompactionError(
+            error,
+            "Context compaction could not be appended to the Thread journal",
+          ),
+        );
+      }
+      return { compactionItemId: item.id };
+    });
   }
 
   async importLocalImage(filename: string): Promise<AttachmentRef> {
@@ -1409,4 +1516,105 @@ function sameSelection(
     left.modelId === right.modelId &&
     left.reasoningEffort === right.reasoningEffort
   );
+}
+
+async function generateContextCompactionSummary(options: {
+  adapter: ModelAdapter;
+  model: string;
+  reasoningEffort: string;
+  messages: ModelMessage[];
+  signal: AbortSignal;
+}): Promise<{
+  text: string;
+  tokenUsage: { inputTokens: number; outputTokens: number };
+}> {
+  let text = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  const messages: ModelMessage[] = [
+    ...options.messages,
+    { role: "user", text: CONTEXT_COMPACTION_SUMMARY_INSTRUCTION },
+  ];
+  try {
+    for await (const event of options.adapter.stream({
+      model: options.model,
+      reasoningEffort: options.reasoningEffort,
+      messages,
+      tools: [],
+      signal: options.signal,
+    })) {
+      options.signal.throwIfAborted();
+      if (event.type === "text_delta") {
+        text += event.delta;
+      } else if (event.type === "usage") {
+        validateCompactionUsage(event);
+        inputTokens += event.inputTokens;
+        outputTokens += event.outputTokens;
+        if (
+          !Number.isSafeInteger(inputTokens) ||
+          !Number.isSafeInteger(outputTokens)
+        ) {
+          throw new CompactionSummaryValidationError(
+            "Context compaction token usage exceeded safe integer range",
+          );
+        }
+      } else if (event.type === "tool_call") {
+        throw new CompactionSummaryValidationError(
+          "Context compaction summary generation must not call tools",
+        );
+      }
+    }
+  } catch (error) {
+    if (options.signal.aborted || isCompactionAbort(error)) {
+      throw new AppServerError(
+        "compaction_aborted",
+        describeCompactionError(
+          options.signal.reason ?? error,
+          "Context compaction was aborted",
+        ),
+      );
+    }
+    if (error instanceof CompactionSummaryValidationError) {
+      throw new AppServerError("compaction_invalid_summary", error.message);
+    }
+    if (error instanceof AppServerError) throw error;
+    throw new AppServerError(
+      "compaction_generation_failed",
+      describeCompactionError(error, "Context compaction generation failed"),
+    );
+  }
+  if (text.trim().length === 0) {
+    throw new AppServerError(
+      "compaction_invalid_summary",
+      "Context compaction Provider returned an empty summary",
+    );
+  }
+  return { text, tokenUsage: { inputTokens, outputTokens } };
+}
+
+class CompactionSummaryValidationError extends Error {}
+
+function validateCompactionUsage(
+  event: Extract<ModelEvent, { type: "usage" }>,
+): void {
+  if (
+    !Number.isSafeInteger(event.inputTokens) ||
+    event.inputTokens < 0 ||
+    !Number.isSafeInteger(event.outputTokens) ||
+    event.outputTokens < 0
+  ) {
+    throw new CompactionSummaryValidationError(
+      "Context compaction Provider returned invalid token usage",
+    );
+  }
+}
+
+function isCompactionAbort(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function describeCompactionError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.length > 0) return error.message;
+  if (typeof error === "string" && error.length > 0) return error;
+  return fallback;
 }

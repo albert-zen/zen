@@ -13,6 +13,9 @@
 - **AttachmentStore** — ZAS 管理的不可变、SHA-256 内容寻址 payload store；
   canonical Item 只保存 provider-neutral `AttachmentRef`，Store 与 ItemList 合起来才足以重放输入，
   它不保存消息、Turn、引用关系或任何第二份会话状态。
+- **ContextCompactionItem** — Zen 在完整 Turn 边界生成并追加的 provider-neutral
+  context summary；它记录覆盖边界、稳定有序的保留 Item、冻结的 Provider selection、
+  版本化算法与 token usage，使后续模型上下文和重启投影都只由 append-only ItemList 推导。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
   ThreadMetadataStore 归约为可持久化、可删除重建的原生 `ThreadSummary` /
   `CurrentMetadata` 列表读取模型；它只加速产品读取，不成为新的权威状态。
@@ -279,8 +282,27 @@ Thread 的用户展示名称、置顶与归档等产品状态不改变 Agent 下
 状态；客户端当前选中的 Thread 仍是每个客户端或 conversation binding 的状态，
 ZAS 不保存全局 `currentThreadId`。
 
-首版不实现 context compaction。未来若引入，compaction 结果必须作为新的
-canonical Item 追加，已有 Item 不改写、不删除。
+手动 context compaction 只在没有 active / incomplete Turn 时取最新
+`turn_completed` 作为覆盖边界；调用者不能指定任意 Item。Zen 以 admission 时
+Thread 当前生效的 `providerProfileId / modelId / reasoningEffort` 调用所选 Provider，
+使用版本化、provider-neutral 的 summary 指令且不使用 Provider opaque compaction
+或 cache。v1 确定性保留该最新完整 Turn 的全部 canonical Item；生成、abort、验证或
+journal append 失败都明确返回且不追加 compaction Item，不隐藏重试。
+
+`context_compaction` canonical Item 记录 `coveredThroughItemId`、原样 summary、
+稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
+`algorithmVersion` 与 input/output token usage。覆盖目标必须是已存在的
+`turn_completed`；保留引用必须已存在、不重复、不晚于覆盖边界且按 journal 顺序排列，
+并完整保留同一模型响应的 tool-call 集及每个 call/result 对。相同或更早的有效边界
+不得再次追加。最新有效 compaction 决定模型投影并 supersede 更早投影状态，但所有
+compaction 与原始 Item 都继续留在 journal。
+
+模型上下文编译器先投影最新 compaction 的 retained canonical Item，再加入稳定标记的
+summary，最后加入覆盖边界后的 canonical Item；当前实现没有独立 system/developer
+message，未来若有则必须置于这些 compaction 输入之前。未包含 compaction 的 legacy
+journal 继续按原始 ItemList 编译。Thread/Turn transcript 始终从完整原始历史派生，
+默认忽略 compaction Item；保留 Item 中的 `AttachmentRef` 仍通过同一 Attachment Store
+在 Provider request boundary 解析。
 
 ## Item 的三种形态
 
@@ -321,9 +343,9 @@ protocol 兼容子集**（Thread / Turn / Item 三原语）。transport 只是�
 JSONL stdio 与 loopback WebSocket 两种承载；Unix socket 尚未实现。兼容原版
 Codex CLI、T3 Code 是收益，不是核心设计前提。
 
-Zen 只在 Codex 0.146.0 没有等价原子语义时增加一项明确命名的协议扩展：
-`turn/replace`。它不是 Codex compatibility claim，也不得复用或改变标准
-`turn/steer`；客户端必须显式调用并处理 unsupported。
+Zen 只在 Codex 0.146.0 没有等价原子语义时增加明确命名的协议扩展：
+`turn/replace` 与 `thread/compact`。它们不是 Codex compatibility claim，也不得
+复用或改变标准方法；客户端必须显式调用并处理 unsupported。
 
 规则：
 
