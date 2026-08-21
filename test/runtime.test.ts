@@ -26,6 +26,7 @@ import {
   type ModelRequest,
 } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
+import { ProviderRegistry } from "../src/provider-registry.js";
 import { projectThread } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
 import {
@@ -48,24 +49,30 @@ function createServer(
     runtime?: AgentRuntime;
   } = {},
 ): ZenAppServer {
+  const model = options.model ?? new FakeModel();
+  const modelCatalog =
+    options.modelCatalog ??
+    new StaticModelCatalog([{ id: "fake", isDefault: true }]);
   return new ZenAppServer({
     journal: options.journal ?? new InMemoryThreadJournal(),
     runtime:
       options.runtime ??
       new AgentRuntime({
-        model: options.model ?? new FakeModel(),
         tools: options.tools ?? new ShellToolExecutor(),
         ...(options.runtimeIdFactory === undefined
           ? {}
           : { idFactory: options.runtimeIdFactory }),
       }),
-    modelCatalog:
-      options.modelCatalog ??
-      new StaticModelCatalog([{ id: "fake", isDefault: true }]),
+    providerRegistry: new ProviderRegistry([
+      { providerProfileId: model.provider, adapter: model, modelCatalog },
+    ]),
     threadMetadata: options.threadMetadata ?? new InMemoryThreadMetadataStore(),
     defaults: {
       cwd: process.cwd(),
-      model: options.modelCatalog?.defaultModel().id ?? "fake",
+      providerProfileId: model.provider,
+      modelId: modelCatalog.defaultModel().id,
+      reasoningEffort:
+        modelCatalog.defaultModel().defaultReasoningEffort ?? "medium",
       sandbox: "danger-full-access",
       approvalPolicy: options.approvalPolicy ?? "never",
     },
@@ -134,8 +141,21 @@ test("derives each turn model from append-only configuration changes", async () 
   assert.deepEqual(
     changed.items
       .filter((item) => item.type === "thread_configuration_changed")
-      .map((item) => item.model),
-    [{ from: "model-one", to: "model-two" }],
+      .map((item) => ("selection" in item ? item.selection : item.model)),
+    [
+      {
+        from: {
+          providerProfileId: "recording",
+          modelId: "model-one",
+          reasoningEffort: "medium",
+        },
+        to: {
+          providerProfileId: "recording",
+          modelId: "model-two",
+          reasoningEffort: "medium",
+        },
+      },
+    ],
   );
 
   const replayed = createServer({ journal, model, modelCatalog: catalog });
@@ -147,7 +167,7 @@ test("derives each turn model from append-only configuration changes", async () 
   );
 });
 
-test("allows active-turn model no-ops but rejects real changes", async () => {
+test("freezes an active-turn model while real changes apply next", async () => {
   let releaseModel: (() => void) | undefined;
   const waiting = new Promise<void>((resolve) => {
     releaseModel = resolve;
@@ -180,14 +200,13 @@ test("allows active-turn model no-ops but rejects real changes", async () => {
     model: "fake",
   });
   assert.equal(resumed.model, "fake");
-  await assert.rejects(
-    server.updateThreadSettings(thread.id, { model: "other" }),
-    (error: unknown) =>
-      error instanceof Error && "code" in error && error.code === "thread_busy",
-  );
+  const changed = await server.updateThreadSettings(thread.id, {
+    model: "other",
+  });
+  assert.equal(changed.model, "other");
   releaseModel?.();
   await active.done;
-  assert.equal((await server.readThread(thread.id)).model, "fake");
+  assert.equal((await server.readThread(thread.id)).model, "other");
 });
 
 test("rejects archiving a Thread while its Turn is active", async () => {
@@ -770,7 +789,11 @@ test("keeps stale open turns interrupted while only the current turn is active",
       yield { type: "text_delta", delta: "done" };
     },
   };
-  const server = createServer({ journal, model: slowModel });
+  const server = createServer({
+    journal,
+    model: slowModel,
+    modelCatalog: new StaticModelCatalog([{ id: "slow", isDefault: true }]),
+  });
 
   assert.equal(
     (await server.readThread(threadId)).turns[0]?.status,
@@ -1144,7 +1167,6 @@ test("waits for a terminal predecessor handle to settle before starting its succ
     }
   }
   const runtime = new DelayedSettlementRuntime({
-    model: new FakeModel(),
     tools: new ShellToolExecutor(),
   });
   const server = createServer({ runtime });
@@ -1204,7 +1226,6 @@ test("does not let a rejected terminal predecessor handle reject successor admis
     }
   }
   const runtime = new RejectedSettlementRuntime({
-    model: new FakeModel(),
     tools: new ShellToolExecutor(),
   });
   const server = createServer({ runtime });
@@ -1337,7 +1358,7 @@ test("refuses to run a persisted thread through a different provider", async () 
     server.startTurn(threadId, "must not silently switch providers", {
       model: "other-model",
     }),
-    /requires provider original-provider, but this host provides fake/u,
+    /Provider profile is not available from this Zen host: original-provider/u,
   );
   const snapshot = await server.readThread(threadId);
   assert.deepEqual(

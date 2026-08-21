@@ -13,6 +13,10 @@ import type {
   ToolCallItem,
 } from "../../item.js";
 import type { ApprovalRequest } from "../../tool.js";
+import type {
+  ProviderSelection,
+  ProviderSelectionInput,
+} from "../../provider-registry.js";
 import {
   projectCommandCompleted,
   projectCommandStarted,
@@ -23,6 +27,7 @@ import {
   threadSettings,
   threadSettingsUpdated,
 } from "./mapper.js";
+import { decodeModelKey, encodeModelKey } from "./model-key.js";
 import {
   isNotification,
   isRecord,
@@ -177,23 +182,35 @@ export class CodexConnection {
           id: request.id,
           result: {
             data: this.#appServer.listModels().map((entry) => ({
-              id: entry.id,
-              model: entry.id,
+              id: encodeModelKey({
+                providerProfileId: entry.providerProfileId,
+                modelId: entry.model.id,
+              }),
+              model: encodeModelKey({
+                providerProfileId: entry.providerProfileId,
+                modelId: entry.model.id,
+              }),
               upgrade: null,
               upgradeInfo: null,
               availabilityNux: null,
-              displayName: entry.displayName ?? entry.id,
+              displayName: entry.model.displayName ?? entry.model.id,
               description:
-                entry.description ?? "Model configured by the Zen host",
-              hidden: entry.hidden ?? false,
-              supportedReasoningEfforts: [],
-              defaultReasoningEffort: "medium",
+                entry.model.description ?? "Model configured by the Zen host",
+              hidden: entry.model.hidden ?? false,
+              supportedReasoningEfforts: (
+                entry.model.supportedReasoningEfforts ?? []
+              ).map((reasoningEffort) => ({
+                reasoningEffort,
+                description: reasoningEffort,
+              })),
+              defaultReasoningEffort:
+                entry.model.defaultReasoningEffort ?? "medium",
               inputModalities: ["text"],
               supportsPersonality: false,
               additionalSpeedTiers: [],
               serviceTiers: [],
               defaultServiceTier: null,
-              isDefault: entry.isDefault ?? false,
+              isDefault: entry.isDefault,
             })),
             nextCursor: null,
           },
@@ -218,7 +235,9 @@ export class CodexConnection {
         }
         const snapshot = await this.#appServer.startThread({
           ...(cwd === undefined ? {} : { cwd }),
-          ...(model === undefined ? {} : { model }),
+          ...(model === undefined
+            ? {}
+            : { selection: this.#selectionForWireModel(model, undefined) }),
           ...(sandbox === undefined
             ? {}
             : { sandbox: "danger-full-access" as const }),
@@ -237,18 +256,35 @@ export class CodexConnection {
         const threadId = requiredString(params, "threadId");
         let snapshot = await this.#appServer.readThread(threadId);
         const requestedModel = optionalNonEmptyString(params.model, "model");
-        validateMatchingThreadConfiguration(params, snapshot, requestedModel, [
-          "threadId",
-          "cwd",
-          "model",
-          "approvalPolicy",
-          "sandbox",
-          "sandboxPolicy",
-          "approvalsReviewer",
-        ]);
-        if (requestedModel !== undefined) {
+        const requestedSelectionInput = this.#selectionForExistingThread(
+          snapshot,
+          requestedModel,
+          undefined,
+        );
+        const requestedSelection =
+          requestedSelectionInput === undefined
+            ? undefined
+            : this.#appServer.completeProviderSelection(
+                snapshot,
+                requestedSelectionInput,
+              );
+        validateMatchingThreadConfiguration(
+          params,
+          snapshot,
+          requestedSelection,
+          [
+            "threadId",
+            "cwd",
+            "model",
+            "approvalPolicy",
+            "sandbox",
+            "sandboxPolicy",
+            "approvalsReviewer",
+          ],
+        );
+        if (requestedSelectionInput !== undefined) {
           snapshot = await this.#appServer.updateThreadSettings(threadId, {
-            model: requestedModel,
+            selection: requestedSelectionInput,
           });
         }
         this.#subscribedThreads.add(threadId);
@@ -295,10 +331,17 @@ export class CodexConnection {
         return;
       }
       case "thread/settings/update": {
-        rejectUnsupportedValues(params, ["threadId", "model"]);
+        rejectUnsupportedValues(params, ["threadId", "model", "effort"]);
         const threadId = requiredString(params, "threadId");
+        const snapshot = await this.#appServer.readThread(threadId);
+        const model = requiredString(params, "model");
+        const effort = optionalNonEmptyString(params.effort, "effort");
         await this.#appServer.updateThreadSettings(threadId, {
-          model: requiredString(params, "model"),
+          selection: this.#selectionForWireModel(
+            model,
+            effort,
+            snapshot.providerProfileId,
+          ),
         });
         this.#send({ id: request.id, result: {} });
         return;
@@ -377,18 +420,37 @@ export class CodexConnection {
         const threadId = requiredString(params, "threadId");
         const snapshot = await this.#appServer.readThread(threadId);
         const requestedModel = optionalNonEmptyString(params.model, "model");
-        validateMatchingThreadConfiguration(params, snapshot, requestedModel, [
-          "threadId",
-          "input",
-          "cwd",
-          "model",
-          "approvalPolicy",
-          "sandbox",
-          "sandboxPolicy",
-          "approvalsReviewer",
-          "collaborationMode",
-          "clientUserMessageId",
-        ]);
+        const requestedEffort = optionalNonEmptyString(params.effort, "effort");
+        const requestedSelectionInput = this.#selectionForExistingThread(
+          snapshot,
+          requestedModel,
+          requestedEffort,
+        );
+        const requestedSelection =
+          requestedSelectionInput === undefined
+            ? undefined
+            : this.#appServer.completeProviderSelection(
+                snapshot,
+                requestedSelectionInput,
+              );
+        validateMatchingThreadConfiguration(
+          params,
+          snapshot,
+          requestedSelection,
+          [
+            "threadId",
+            "input",
+            "cwd",
+            "model",
+            "approvalPolicy",
+            "sandbox",
+            "sandboxPolicy",
+            "approvalsReviewer",
+            "collaborationMode",
+            "clientUserMessageId",
+            "effort",
+          ],
+        );
         const text = readTextInput(params.input);
         const clientId = optionalNonEmptyString(
           params.clientUserMessageId,
@@ -397,7 +459,9 @@ export class CodexConnection {
         this.#subscribedThreads.add(threadId);
         const handle = await this.#appServer.startTurn(threadId, text, {
           ...(clientId === undefined ? {} : { clientId }),
-          ...(requestedModel === undefined ? {} : { model: requestedModel }),
+          ...(requestedSelectionInput === undefined
+            ? {}
+            : { selection: requestedSelectionInput }),
           requestApproval: async (approval) =>
             await this.#requestApproval(approval),
         });
@@ -497,6 +561,65 @@ export class CodexConnection {
     if (method === "initialized" && this.#initializedRequest) {
       this.#initializedNotification = true;
     }
+  }
+
+  #selectionForExistingThread(
+    snapshot: ThreadSnapshot,
+    model: string | undefined,
+    effort: string | undefined,
+  ): ProviderSelectionInput | undefined {
+    if (model === undefined) {
+      return effort === undefined
+        ? undefined
+        : {
+            providerProfileId: snapshot.providerProfileId,
+            modelId: snapshot.modelId,
+            reasoningEffort: effort,
+          };
+    }
+    return this.#selectionForWireModel(
+      model,
+      effort,
+      snapshot.providerProfileId,
+    );
+  }
+
+  #selectionForWireModel(
+    model: string,
+    effort: string | undefined,
+    fallbackProviderProfileId?: string,
+  ): ProviderSelectionInput {
+    let identity: ReturnType<typeof decodeModelKey>;
+    if (model.startsWith("zen-model-v1:")) {
+      try {
+        identity = decodeModelKey(model);
+      } catch (error) {
+        throw new InvalidParamsError(describeError(error));
+      }
+    } else {
+      const matches = this.#appServer
+        .listModels()
+        .filter((entry) => entry.model.id === model);
+      if (matches.length > 1) {
+        throw new InvalidParamsError(
+          `Model id ${model} is ambiguous; use the opaque key from model/list`,
+        );
+      }
+      const matched = matches[0];
+      identity = {
+        providerProfileId:
+          matched?.providerProfileId ??
+          fallbackProviderProfileId ??
+          this.#appServer.listModels().find((entry) => entry.isDefault)
+            ?.providerProfileId ??
+          "",
+        modelId: model,
+      };
+    }
+    return {
+      ...identity,
+      ...(effort === undefined ? {} : { reasoningEffort: effort }),
+    };
   }
 
   async #projectEvent(event: AppServerEvent): Promise<void> {
@@ -1096,7 +1219,7 @@ function readTextInput(value: unknown): string {
 function validateMatchingThreadConfiguration(
   params: Record<string, unknown>,
   snapshot: ThreadSnapshot,
-  requestedModel: string | undefined,
+  requestedSelection: ProviderSelection | undefined,
   supportedKeys: string[],
 ): void {
   rejectUnsupportedValues(params, supportedKeys);
@@ -1136,15 +1259,13 @@ function validateMatchingThreadConfiguration(
   readApprovalsReviewer(params.approvalsReviewer);
   readDefaultCollaborationMode(
     params.collaborationMode,
-    snapshot,
-    requestedModel ?? snapshot.model,
+    requestedSelection ?? snapshot,
   );
 }
 
 function readDefaultCollaborationMode(
   value: unknown,
-  snapshot: ThreadSnapshot,
-  model: string,
+  selection: ProviderSelection,
 ): void {
   if (value === undefined || value === null) {
     return;
@@ -1160,8 +1281,9 @@ function readDefaultCollaborationMode(
         key !== "reasoning_effort" &&
         key !== "developer_instructions",
     ) ||
-    value.settings.model !== model ||
-    value.settings.reasoning_effort !== "medium" ||
+    (value.settings.model !== encodeModelKey(selection) &&
+      value.settings.model !== selection.modelId) ||
+    value.settings.reasoning_effort !== selection.reasoningEffort ||
     typeof value.settings.developer_instructions !== "string"
   ) {
     throw new InvalidParamsError(

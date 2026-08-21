@@ -5,6 +5,10 @@ import path from "node:path";
 import type { ApprovalPolicy, SandboxMode } from "./item.js";
 
 export interface CurrentMetadata {
+  providerProfileId?: string;
+  modelId?: string;
+  reasoningEffort?: string;
+  /** Compatibility projections for existing product callers. */
   model: string;
   provider: string;
   cwd: string;
@@ -151,6 +155,11 @@ export function isNativeThreadSummary(
 function isCurrentMetadata(value: unknown): value is CurrentMetadata {
   return (
     isRecord(value) &&
+    (value.providerProfileId === undefined ||
+      typeof value.providerProfileId === "string") &&
+    (value.modelId === undefined || typeof value.modelId === "string") &&
+    (value.reasoningEffort === undefined ||
+      typeof value.reasoningEffort === "string") &&
     typeof value.model === "string" &&
     typeof value.provider === "string" &&
     typeof value.cwd === "string" &&

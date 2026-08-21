@@ -1,5 +1,6 @@
 import type {
   ApprovalPolicy,
+  CanonicalProviderSelection,
   CanonicalItem,
   SandboxMode,
   ThreadMetadataItem,
@@ -12,11 +13,14 @@ export interface DerivedTurn {
   id: string;
   items: CanonicalItem[];
   status: DerivedTurnStatus;
+  selection: CanonicalProviderSelection;
+  /** Compatibility projection for callers that only display a model id. */
   model: string;
 }
 
-export interface EffectiveThreadConfiguration {
+export interface EffectiveThreadConfiguration extends CanonicalProviderSelection {
   cwd: string;
+  /** Compatibility projections; canonical identity is the selection tuple. */
   model: string;
   provider: string;
   sandbox: SandboxMode;
@@ -50,13 +54,24 @@ export class Thread {
     }
     if (item.type === "thread_configuration_changed") {
       const current = this.effectiveConfiguration();
-      if (current.model !== item.model.from) {
-        throw new Error(
-          `Stale model change from ${item.model.from}; current model is ${current.model}`,
-        );
-      }
-      if (item.model.from === item.model.to) {
-        throw new Error("Model change must change the effective model");
+      if ("selection" in item) {
+        if (!sameSelection(current, item.selection.from)) {
+          throw new Error("Stale provider selection change");
+        }
+        if (sameSelection(item.selection.from, item.selection.to)) {
+          throw new Error(
+            "Provider selection change must change configuration",
+          );
+        }
+      } else {
+        if (current.modelId !== item.model.from) {
+          throw new Error(
+            `Stale model change from ${item.model.from}; current model is ${current.modelId}`,
+          );
+        }
+        if (item.model.from === item.model.to) {
+          throw new Error("Model change must change the effective model");
+        }
       }
     }
   }
@@ -84,11 +99,16 @@ export class Thread {
         if (configuration === undefined) {
           throw new Error(`Thread ${this.id} has a Turn before metadata`);
         }
+        const turnSelection =
+          item.type === "turn_started" && item.selection !== undefined
+            ? item.selection
+            : selectionFrom(configuration);
         turn = {
           id: item.turnId,
           items: [],
           status: "inProgress",
-          model: configuration.model,
+          selection: selectionFrom(turnSelection),
+          model: turnSelection.modelId,
         };
         byId.set(item.turnId, turn);
         turns.push(turn);
@@ -146,24 +166,81 @@ function applyConfigurationItem(
   if (configuration === undefined) {
     throw new Error(`Thread ${threadId} changed configuration before metadata`);
   }
-  if (configuration.model !== item.model.from) {
+  if ("selection" in item) {
+    if (!sameSelection(configuration, item.selection.from)) {
+      throw new Error(
+        `Thread ${threadId} has a stale provider selection change`,
+      );
+    }
+    return configurationWithSelection(configuration, item.selection.to);
+  }
+  if (configuration.modelId !== item.model.from) {
     throw new Error(
       `Thread ${threadId} has a stale model change from ${item.model.from}`,
     );
   }
-  return { ...configuration, model: item.model.to };
+  return configurationWithSelection(configuration, {
+    ...selectionFrom(configuration),
+    modelId: item.model.to,
+  });
 }
 
 function configurationFromMetadata(
   item: ThreadMetadataItem,
 ): EffectiveThreadConfiguration {
+  const selection: CanonicalProviderSelection =
+    "providerProfileId" in item
+      ? {
+          providerProfileId: item.providerProfileId,
+          modelId: item.modelId,
+          reasoningEffort: item.reasoningEffort,
+        }
+      : {
+          providerProfileId: item.provider,
+          modelId: item.model,
+          reasoningEffort: "medium",
+        };
   return {
     cwd: item.cwd,
-    model: item.model,
-    provider: item.provider,
+    ...selection,
+    model: selection.modelId,
+    provider: selection.providerProfileId,
     sandbox: item.sandbox,
     approvalPolicy: item.approvalPolicy,
   };
+}
+
+function configurationWithSelection(
+  configuration: EffectiveThreadConfiguration,
+  selection: CanonicalProviderSelection,
+): EffectiveThreadConfiguration {
+  return {
+    ...configuration,
+    ...selection,
+    model: selection.modelId,
+    provider: selection.providerProfileId,
+  };
+}
+
+function selectionFrom(
+  configuration: CanonicalProviderSelection,
+): CanonicalProviderSelection {
+  return {
+    providerProfileId: configuration.providerProfileId,
+    modelId: configuration.modelId,
+    reasoningEffort: configuration.reasoningEffort,
+  };
+}
+
+function sameSelection(
+  left: CanonicalProviderSelection,
+  right: CanonicalProviderSelection,
+): boolean {
+  return (
+    left.providerProfileId === right.providerProfileId &&
+    left.modelId === right.modelId &&
+    left.reasoningEffort === right.reasoningEffort
+  );
 }
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {

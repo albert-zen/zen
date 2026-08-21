@@ -265,7 +265,7 @@ test("mirrors model updates to two clients and resumes ZAS authority", async () 
   try {
     const models = await initiating.request("model/list", {});
     assert.deepEqual(
-      models.data.map((model) => [model.id, model.isDefault]),
+      models.data.map((model) => [model.displayName, model.isDefault]),
       [
         ["fake", true],
         ["other", false],
@@ -286,17 +286,17 @@ test("mirrors model updates to two clients and resumes ZAS authority", async () 
 
     await initiating.request("thread/settings/update", {
       threadId: started.thread.id,
-      model: "other",
+      model: models.data[1]!.model,
     });
     assert.deepEqual(
       await within(Promise.all([firstUpdated.promise, secondUpdated.promise])),
-      ["other", "other"],
+      [models.data[1]!.model, models.data[1]!.model],
     );
 
     const resumed = await observing.request("thread/resume", {
       threadId: started.thread.id,
     });
-    assert.equal(resumed.model, "other");
+    assert.equal(resumed.model, models.data[1]!.model);
     assert.equal(resumed.thread.modelProvider, "fake");
   } finally {
     initiating.close();

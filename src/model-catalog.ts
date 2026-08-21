@@ -1,9 +1,13 @@
+import type { ReasoningEffort } from "./model.js";
+
 export interface ModelCatalogEntry {
   id: string;
   displayName?: string;
   description?: string;
   hidden?: boolean;
   isDefault?: boolean;
+  supportedReasoningEfforts?: readonly ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
 }
 
 export interface ModelCatalog {
@@ -68,6 +72,17 @@ function normalizeEntry(entry: ModelCatalogEntry): ModelCatalogEntry {
   }
   const displayName = entry.displayName?.trim();
   const description = entry.description?.trim();
+  const supportedReasoningEfforts = normalizeReasoningEfforts(
+    entry.supportedReasoningEfforts ?? ["medium"],
+  );
+  const defaultReasoningEffort = (
+    entry.defaultReasoningEffort ?? supportedReasoningEfforts[0]!
+  ).trim();
+  if (!supportedReasoningEfforts.includes(defaultReasoningEffort)) {
+    throw new Error(
+      `Default reasoning effort ${defaultReasoningEffort} is not supported by model ${id}`,
+    );
+  }
   return {
     id,
     ...(displayName === undefined || displayName.length === 0
@@ -78,5 +93,23 @@ function normalizeEntry(entry: ModelCatalogEntry): ModelCatalogEntry {
       : { description }),
     ...(entry.hidden === undefined ? {} : { hidden: entry.hidden }),
     ...(entry.isDefault === undefined ? {} : { isDefault: entry.isDefault }),
+    supportedReasoningEfforts: Object.freeze(supportedReasoningEfforts),
+    defaultReasoningEffort,
   };
+}
+
+function normalizeReasoningEfforts(
+  efforts: readonly ReasoningEffort[],
+): ReasoningEffort[] {
+  if (efforts.length === 0) {
+    throw new Error("A model must support at least one reasoning effort");
+  }
+  const normalized = efforts.map((effort) => effort.trim());
+  if (normalized.some((effort) => effort.length === 0)) {
+    throw new Error("Reasoning efforts must not be empty");
+  }
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error("Reasoning efforts must be unique per model");
+  }
+  return normalized;
 }

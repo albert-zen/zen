@@ -50,6 +50,10 @@
   校验它，credential 与 Provider 连接仍由宿主外部配置持有。目录必须有且仅有
   一个可见默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由
   既有 Thread 或显式请求使用。
+- **ProviderRegistry** — 宿主以稳定 `providerProfileId` 把每个注入的 ModelAdapter
+  与其 ModelCatalog 绑定；canonical selection 是
+  `providerProfileId / modelId / reasoningEffort` 的原子三元组，Thread 只记录生效选择而不持有 profile 或 credential；
+  输入省略 effort 时，目标支持当前 effort 就保留，否则使用目标 model 的默认 effort。
 - **IMZenController** — IMZen 通过 IM Agent SDK typed actions，以及 SDK 明确保留
   的 App Server native Thread profile seam，组合 `/model`、`/permission` 与审批
   快捷命令的产品 UX；`/model` 是当前 typed contracts 外的 Zen native operation，
@@ -230,12 +234,15 @@ Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派�
 
 一条记录该不该进 ItemList，判据是：**删除它之后，Agent 下一轮得到的上下文、
 或用户理解的执行历史会不会改变？** 会，就是 Item；不会，就放外侧。
-Thread 内可以保留一份不含秘密的生效配置描述（`provider / model / cwd /
-tool_policy`），记录"当时用了什么"；credential 及其引用都不进入 Thread。
-初始配置由 `thread_metadata` 记录；Turn 之间的配置变化由
-`thread_configuration_changed` canonical Item 追加记录。当前生效配置由初始
-metadata 与后续配置 Item 依次归约；每个 Turn 使用其 `turn_started` 之前最后
-一份生效配置。活跃 Turn 期间不得修改配置。
+Thread 内可以保留一份不含秘密的生效配置描述（`providerProfileId / modelId /
+`reasoningEffort / cwd / tool_policy`），记录"当时用了什么"；credential 及其引用都不进入 Thread。
+初始配置由 `thread_metadata`记录；Turn 之间的配置变化由`thread_configuration_changed`canonical Item 追加记录。当前生效配置由初始
+metadata 与后续配置 Item 依次归约。provider、model 与 effort 作为一个 selection
+原子变更；每个新 Turn 在 admission 时冻结 selection，并由`turn_started`记录，
+执行期间追加的配置变更只对下一 Turn 生效，即使两项持久化因并发交错也能从
+ItemList 恢复实际选择；旧`turn_started`没有 selection 时仍按它之前最后一份配置派生。
+既有 v1`provider / model`Items 重放为同名 profile、model 与`medium` effort，
+不重写历史 journal。
 宿主也不会把完整进程环境交给 shell tool：工具只继承运行命令所需的最小环境，
 Provider credential 即使来自环境变量也会被显式排除。
 
@@ -306,9 +313,11 @@ Zen 只在 Codex 0.146.0 没有等价原子语义时增加一项明确命名的�
   `thread/unsubscribe`、`turn/start`、`turn/steer`、`turn/interrupt`，以及 Thread / Turn /
   Item 事件流和 command item 审批请求。精确清单见
   `src/protocol/codex/README.md`。
-- `account/read`、`skills/list` 与 `model/list` 只投影宿主公开能力，不向 Zen Core 或 Thread 写入账户、skill、provider 状态。
+- `account/read`、`skills/list` 与 `model/list` 只投影宿主公开能力，不向 Zen Core 或 Thread 写入账户、skill、provider 状态；
+  `model/list` 用稳定 opaque model key 区分不同 profile 的同名 model，reasoning effort
+  仍使用固定 Codex 字段，opaque key 的编码与解析只存在于协议目录。
 - `thread/settings/update` 修改后续 Turn 使用的配置；`turn/start` 携带的模型
-  override 复用同一内部更新路径。成功变更必须先追加
+  与 effort override 复用同一内部更新路径。provider/model/effort 必须原子解析并追加；成功变更必须先追加
   `thread_configuration_changed`，再广播 `thread/settings/updated`。
 - `turn/replace` 是 fenced Hard steer：成功响应前，旧 Turn 的 `turn_aborted`、
   新 Turn 的 `turn_started` 与初始 `user_message` 均已 durable；普通客户端不得
@@ -351,6 +360,8 @@ Zen 只在 Codex 0.146.0 没有等价原子语义时增加一项明确命名的�
 - **ModelAdapter** — 模型调用；当前有 OpenAI-compatible API-key 与
   ChatGPT subscription / Codex Responses 两个 adapter，模型响应只能通过追加
   Item 改变 Thread。
+- **ProviderRegistry** — 宿主注入的 profile 路由表；Runtime 每个 Turn 只取得已冻结
+  selection 对应的 adapter，profile 缺失不阻断 Thread 读取，但新 Turn 明确失败。
 - **SubscriptionAuthProfile** — 宿主持有的 OAuth credential store 与
   request-time token resolver；它位于 Core 外，不进入 ItemList，ModelAdapter
   只拿一次请求所需的 access lease；服务端提前拒绝仍未到期的 lease 时，adapter
@@ -386,6 +397,7 @@ src/
   app-server.ts
   journal.ts
   model.ts
+  provider-registry.ts
   model/
     openai-compatible.ts
     openai-subscription.ts

@@ -20,16 +20,34 @@ export interface ItemBase {
   type: ItemType;
 }
 
-export interface ThreadMetadataItem extends ItemBase {
+interface ThreadMetadataItemBase extends ItemBase {
   type: "thread_metadata";
   cwd: string;
-  model: string;
-  provider: string;
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
 }
 
-export interface ThreadConfigurationChangedItem extends ItemBase {
+export interface LegacyThreadMetadataItem extends ThreadMetadataItemBase {
+  model: string;
+  provider: string;
+}
+
+export interface ProviderThreadMetadataItem extends ThreadMetadataItemBase {
+  providerProfileId: string;
+  modelId: string;
+  reasoningEffort: string;
+}
+
+export type ThreadMetadataItem =
+  LegacyThreadMetadataItem | ProviderThreadMetadataItem;
+
+export interface CanonicalProviderSelection {
+  providerProfileId: string;
+  modelId: string;
+  reasoningEffort: string;
+}
+
+export interface LegacyThreadConfigurationChangedItem extends ItemBase {
   type: "thread_configuration_changed";
   model: {
     from: string;
@@ -37,9 +55,22 @@ export interface ThreadConfigurationChangedItem extends ItemBase {
   };
 }
 
+export interface ProviderThreadConfigurationChangedItem extends ItemBase {
+  type: "thread_configuration_changed";
+  selection: {
+    from: CanonicalProviderSelection;
+    to: CanonicalProviderSelection;
+  };
+}
+
+export type ThreadConfigurationChangedItem =
+  LegacyThreadConfigurationChangedItem | ProviderThreadConfigurationChangedItem;
+
 export interface TurnStartedItem extends ItemBase {
   type: "turn_started";
   turnId: string;
+  /** Frozen provider selection used by this Turn; absent on legacy Items. */
+  selection?: CanonicalProviderSelection;
 }
 
 export interface TurnCompletedItem extends ItemBase {

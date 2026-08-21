@@ -11,6 +11,7 @@ import type {
 } from "../../item.js";
 import type { DerivedTurn } from "../../thread.js";
 import type { NativeThreadSummary } from "../../thread-summary.js";
+import { encodeModelKey } from "./model-key.js";
 
 export interface CodexThread {
   id: string;
@@ -115,7 +116,7 @@ export function projectThread(
       snapshot.items.find((item) => item.type === "user_message")?.text ?? "",
     ephemeral: false,
     isPinned: false,
-    modelProvider: snapshot.provider,
+    modelProvider: snapshot.providerProfileId,
     createdAt,
     updatedAt,
     recencyAt: null,
@@ -155,7 +156,9 @@ export function projectThreadSummary(
     preview: summary.preview,
     ephemeral: false,
     isPinned: false,
-    modelProvider: summary.currentMetadata.provider,
+    modelProvider:
+      summary.currentMetadata.providerProfileId ??
+      summary.currentMetadata.provider,
     createdAt: seconds(summary.createdAt),
     updatedAt: seconds(summary.updatedAt),
     recencyAt: null,
@@ -336,12 +339,17 @@ export function projectCommandCompleted(
 export function threadSettings(
   snapshot: Pick<
     ThreadSnapshot,
-    "model" | "provider" | "cwd" | "approvalPolicy" | "sandbox"
+    | "providerProfileId"
+    | "modelId"
+    | "reasoningEffort"
+    | "cwd"
+    | "approvalPolicy"
+    | "sandbox"
   >,
 ): Record<string, unknown> {
   return {
-    model: snapshot.model,
-    modelProvider: snapshot.provider,
+    model: encodeModelKey(snapshot),
+    modelProvider: snapshot.providerProfileId,
     serviceTier: null,
     cwd: snapshot.cwd,
     instructionSources: [],
@@ -349,14 +357,19 @@ export function threadSettings(
       snapshot.approvalPolicy === "never" ? "never" : "on-request",
     approvalsReviewer: "user",
     sandbox: { type: "dangerFullAccess" },
-    reasoningEffort: null,
+    reasoningEffort: snapshot.reasoningEffort,
   };
 }
 
 export function threadSettingsUpdated(
   snapshot: Pick<
     ThreadSnapshot,
-    "model" | "provider" | "cwd" | "approvalPolicy" | "sandbox"
+    | "providerProfileId"
+    | "modelId"
+    | "reasoningEffort"
+    | "cwd"
+    | "approvalPolicy"
+    | "sandbox"
   >,
 ): Record<string, unknown> {
   return {
@@ -366,14 +379,14 @@ export function threadSettingsUpdated(
     collaborationMode: {
       mode: "default",
       settings: {
-        model: snapshot.model,
-        reasoning_effort: "medium",
+        model: encodeModelKey(snapshot),
+        reasoning_effort: snapshot.reasoningEffort,
       },
     },
     cwd: snapshot.cwd,
-    effort: null,
-    model: snapshot.model,
-    modelProvider: snapshot.provider,
+    effort: snapshot.reasoningEffort,
+    model: encodeModelKey(snapshot),
+    modelProvider: snapshot.providerProfileId,
     personality: null,
     sandboxPolicy: { type: "dangerFullAccess" },
     serviceTier: null,

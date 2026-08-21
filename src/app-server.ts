@@ -14,8 +14,14 @@ import type {
   UserMessageItem,
 } from "./item.js";
 import type { ThreadJournal } from "./journal.js";
-import type { ModelCatalog, ModelCatalogEntry } from "./model-catalog.js";
 import { compileModelMessages } from "./model.js";
+import {
+  ProviderRegistryError,
+  type ProviderModel,
+  type ProviderRegistry,
+  type ProviderSelection,
+  type ProviderSelectionInput,
+} from "./provider-registry.js";
 import { AgentRuntime, type RuntimeEvent } from "./runtime.js";
 import {
   Thread,
@@ -39,14 +45,19 @@ import type { ApprovalHandler } from "./tool.js";
 
 export interface AppServerDefaults {
   cwd: string;
-  model: string;
+  providerProfileId: string;
+  modelId: string;
+  reasoningEffort: string;
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
 }
 
 export interface StartThreadInput {
   cwd?: string;
+  selection?: ProviderSelectionInput;
+  /** Compatibility input for single-profile Core callers. */
   model?: string;
+  reasoningEffort?: string;
   sandbox?: SandboxMode;
   approvalPolicy?: ApprovalPolicy;
 }
@@ -56,6 +67,10 @@ export interface ThreadSnapshot {
   items: readonly CanonicalItem[];
   turns: DerivedTurn[];
   cwd: string;
+  providerProfileId: string;
+  modelId: string;
+  reasoningEffort: string;
+  /** Compatibility projections for existing product callers. */
   model: string;
   provider: string;
   sandbox: SandboxMode;
@@ -118,13 +133,20 @@ export type AppServerEvent =
   | ThreadArchivedUpdatedEvent;
 
 export interface UpdateThreadSettingsInput {
-  model: string;
+  selection?: ProviderSelectionInput;
+  /** Compatibility input for single-profile Core callers. */
+  model?: string;
+  reasoningEffort?: string;
+}
+
+export interface ListedProviderModel extends ProviderModel {
+  isDefault: boolean;
 }
 
 export class ZenAppServer {
   readonly #journal: ThreadJournal;
   readonly #runtime: AgentRuntime;
-  readonly #modelCatalog: ModelCatalog;
+  readonly #providerRegistry: ProviderRegistry;
   readonly #threadMetadata: ThreadMetadataStore;
   readonly #threadSummaryProjection: ThreadSummaryProjection;
   readonly #defaults: AppServerDefaults;
@@ -153,7 +175,7 @@ export class ZenAppServer {
   constructor(options: {
     journal: ThreadJournal;
     runtime: AgentRuntime;
-    modelCatalog: ModelCatalog;
+    providerRegistry: ProviderRegistry;
     threadMetadata: ThreadMetadataStore;
     threadSummaryProjection?: ThreadSummaryProjection;
     defaults: AppServerDefaults;
@@ -162,7 +184,7 @@ export class ZenAppServer {
   }) {
     this.#journal = options.journal;
     this.#runtime = options.runtime;
-    this.#modelCatalog = options.modelCatalog;
+    this.#providerRegistry = options.providerRegistry;
     this.#threadMetadata = options.threadMetadata;
     this.#threadSummaryProjection =
       options.threadSummaryProjection ?? new InMemoryThreadSummaryProjection();
@@ -172,11 +194,7 @@ export class ZenAppServer {
     };
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
-    if (this.#modelCatalog.get(this.#defaults.model) === undefined) {
-      throw new Error(
-        `Default model ${this.#defaults.model} is absent from the model catalog`,
-      );
-    }
+    this.#requireSelection(this.#defaults);
   }
 
   subscribe(listener: (event: AppServerEvent) => void): () => void {
@@ -186,23 +204,34 @@ export class ZenAppServer {
     };
   }
 
-  listModels(): readonly ModelCatalogEntry[] {
-    return this.#modelCatalog.list();
+  listModels(): readonly ListedProviderModel[] {
+    return this.#providerRegistry.listModels().map((entry) => ({
+      ...entry,
+      isDefault:
+        entry.providerProfileId === this.#defaults.providerProfileId &&
+        entry.model.id === this.#defaults.modelId,
+    }));
+  }
+
+  completeProviderSelection(
+    current: ProviderSelection,
+    input: ProviderSelectionInput,
+  ): ProviderSelection {
+    return this.#requireSelection(input, current.reasoningEffort).selection;
   }
 
   async startThread(input: StartThreadInput = {}): Promise<ThreadSnapshot> {
     const threadId = this.#id();
     const thread = new Thread(threadId);
-    const model = input.model ?? this.#defaults.model;
-    this.#requireAvailableModel(model);
+    const selection = this.#selectionFromInput(this.#defaults, input);
+    this.#requireSelection(selection);
     const metadata: ThreadMetadataItem = {
       id: this.#id(),
       threadId,
       createdAt: this.#now(),
       type: "thread_metadata",
       cwd: path.resolve(input.cwd ?? this.#defaults.cwd),
-      model,
-      provider: this.#runtime.provider,
+      ...selection,
       sandbox: input.sandbox ?? this.#defaults.sandbox,
       approvalPolicy: input.approvalPolicy ?? this.#defaults.approvalPolicy,
     };
@@ -262,23 +291,16 @@ export class ZenAppServer {
   ): Promise<ThreadSnapshot> {
     return await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
-      if (input.model === thread.effectiveConfiguration().model) {
+      const current = thread.effectiveConfiguration();
+      const selection = this.#selectionFromInput(current, input);
+      if (sameSelection(selection, current)) {
         return await this.#snapshot(
           thread,
           this.#activeTurns.get(threadId)?.turnId,
         );
       }
-      this.#requireAvailableModel(input.model);
-      if (
-        this.#activeTurns.has(threadId) ||
-        this.#pendingReplacement(thread) !== undefined
-      ) {
-        throw new AppServerError(
-          "thread_busy",
-          `Thread ${threadId} already has a running turn`,
-        );
-      }
-      return await this.#updateThreadSettingsUnlocked(thread, input);
+      this.#requireSelection(selection);
+      return await this.#updateThreadSettingsUnlocked(thread, { selection });
     });
   }
 
@@ -351,6 +373,7 @@ export class ZenAppServer {
     text: string,
     options: {
       clientId?: string;
+      selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
     } = {},
@@ -363,6 +386,7 @@ export class ZenAppServer {
     text: string,
     options: {
       clientId?: string;
+      selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
     },
@@ -402,19 +426,16 @@ export class ZenAppServer {
           `Thread ${threadId} has an unfinished replacement operation`,
         );
       }
-      const initialConfiguration = thread.effectiveConfiguration();
-      if (initialConfiguration.provider !== this.#runtime.provider) {
-        throw new AppServerError(
-          "provider_unavailable",
-          `Thread ${threadId} requires provider ${initialConfiguration.provider}, but this host provides ${this.#runtime.provider}`,
-        );
-      }
-      if (options.model !== undefined) {
+      if (options.selection !== undefined || options.model !== undefined) {
         await this.#updateThreadSettingsUnlocked(thread, {
-          model: options.model,
+          ...(options.selection === undefined
+            ? {}
+            : { selection: options.selection }),
+          ...(options.model === undefined ? {} : { model: options.model }),
         });
       }
       const configuration = thread.effectiveConfiguration();
+      const resolved = this.#requireSelection(configuration);
       const turnId = internal.turnId ?? this.#id();
       const controller = new AbortController();
       const ready = deferred<void>();
@@ -432,10 +453,13 @@ export class ZenAppServer {
                   : { clientId: options.clientId }),
                 configuration: {
                   cwd: configuration.cwd,
-                  model: configuration.model,
+                  providerProfileId: configuration.providerProfileId,
+                  model: configuration.modelId,
+                  reasoningEffort: configuration.reasoningEffort,
                   sandbox: configuration.sandbox,
                   approvalPolicy: configuration.approvalPolicy,
                 },
+                modelAdapter: resolved.adapter,
                 signal: controller.signal,
                 commit: async (item) => {
                   await this.#withThreadMutation(threadId, async () => {
@@ -932,8 +956,11 @@ export class ZenAppServer {
         activeTurnId === undefined ? {} : { activeTurnId },
       ),
       cwd: configuration.cwd,
-      model: configuration.model,
-      provider: configuration.provider,
+      providerProfileId: configuration.providerProfileId,
+      modelId: configuration.modelId,
+      reasoningEffort: configuration.reasoningEffort,
+      model: configuration.modelId,
+      provider: configuration.providerProfileId,
       sandbox: configuration.sandbox,
       approvalPolicy: configuration.approvalPolicy,
       archived: productMetadata.archived ?? false,
@@ -1117,9 +1144,10 @@ export class ZenAppServer {
     thread: Thread,
     input: UpdateThreadSettingsInput,
   ): Promise<ThreadSnapshot> {
-    this.#requireAvailableModel(input.model);
     const current = thread.effectiveConfiguration();
-    if (input.model === current.model) {
+    const selection = this.#selectionFromInput(current, input);
+    this.#requireSelection(selection);
+    if (sameSelection(selection, current)) {
       return await this.#snapshot(thread);
     }
     const changed: ThreadConfigurationChangedItem = {
@@ -1127,7 +1155,10 @@ export class ZenAppServer {
       threadId: thread.id,
       createdAt: this.#now(),
       type: "thread_configuration_changed",
-      model: { from: current.model, to: input.model },
+      selection: {
+        from: selectionFrom(current),
+        to: selection,
+      },
     };
     await this.#commit(thread, changed);
     const settings = thread.effectiveConfiguration();
@@ -1139,13 +1170,51 @@ export class ZenAppServer {
     return await this.#snapshot(thread);
   }
 
-  #requireAvailableModel(model: string): void {
-    if (this.#modelCatalog.get(model) === undefined) {
-      throw new AppServerError(
-        "model_unavailable",
-        `Model is not available from this Zen host: ${model}`,
-      );
+  #requireSelection(
+    selection: ProviderSelectionInput,
+    fallbackReasoningEffort?: string,
+  ) {
+    try {
+      return this.#providerRegistry.resolve(selection, fallbackReasoningEffort);
+    } catch (error) {
+      if (error instanceof ProviderRegistryError) {
+        throw new AppServerError(error.code, error.message);
+      }
+      throw error;
     }
+  }
+
+  #selectionFromInput(
+    current: ProviderSelection,
+    input: {
+      selection?: ProviderSelectionInput;
+      model?: string;
+      reasoningEffort?: string;
+    },
+  ): ProviderSelection {
+    if (input.selection !== undefined) {
+      if (input.model !== undefined || input.reasoningEffort !== undefined) {
+        throw new AppServerError(
+          "invalid_request",
+          "A provider selection cannot be combined with legacy model fields",
+        );
+      }
+      return this.#requireSelection(input.selection, current.reasoningEffort)
+        .selection;
+    }
+    if (input.model === undefined && input.reasoningEffort === undefined) {
+      return structuredClone(current);
+    }
+    return this.#requireSelection(
+      {
+        providerProfileId: current.providerProfileId,
+        modelId: input.model ?? current.modelId,
+        ...(input.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: input.reasoningEffort }),
+      },
+      current.reasoningEffort,
+    ).selection;
   }
 
   async #withThreadMutation<T>(
@@ -1212,4 +1281,23 @@ function sameSummaries(
       first.threadId.localeCompare(second.threadId),
     );
   return JSON.stringify(sorted(left)) === JSON.stringify(sorted(right));
+}
+
+function selectionFrom(selection: ProviderSelection): ProviderSelection {
+  return {
+    providerProfileId: selection.providerProfileId,
+    modelId: selection.modelId,
+    reasoningEffort: selection.reasoningEffort,
+  };
+}
+
+function sameSelection(
+  left: ProviderSelection,
+  right: ProviderSelection,
+): boolean {
+  return (
+    left.providerProfileId === right.providerProfileId &&
+    left.modelId === right.modelId &&
+    left.reasoningEffort === right.reasoningEffort
+  );
 }

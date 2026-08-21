@@ -14,6 +14,7 @@ import {
 } from "../../../src/model.js";
 import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
 import { StaticModelCatalog } from "../../../src/model-catalog.js";
+import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { AgentRuntime } from "../../../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.js";
 import {
@@ -283,17 +284,28 @@ test("an Agent drives the complete bounded tracer bullet through App Server wire
   const requestPort = new MutableAppServerRequestPort();
   const capabilities = await grantedSelfControl(directory, requestPort);
   const tools = capabilityTools(capabilities);
+  const model = new TracerBulletModel(workspace);
+  const modelCatalog = new StaticModelCatalog([
+    { id: "tracer", isDefault: true },
+  ]);
   const appServer = new ZenAppServer({
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
-      model: new TracerBulletModel(workspace),
       tools,
     }),
-    modelCatalog: new StaticModelCatalog([{ id: "tracer", isDefault: true }]),
+    providerRegistry: new ProviderRegistry([
+      {
+        providerProfileId: model.provider,
+        adapter: model,
+        modelCatalog,
+      },
+    ]),
     threadMetadata: new InMemoryThreadMetadataStore(),
     defaults: {
       cwd: workspace,
-      model: "tracer",
+      providerProfileId: model.provider,
+      modelId: "tracer",
+      reasoningEffort: "medium",
       sandbox: "danger-full-access",
       approvalPolicy: "never",
     },
@@ -671,6 +683,7 @@ test("all hosted tool definitions serialize through the OpenAI subscription boun
 
     for await (const _event of adapter.stream({
       model: "gpt-5.6-terra",
+      reasoningEffort: "medium",
       messages: [],
       tools,
       signal: new AbortController().signal,

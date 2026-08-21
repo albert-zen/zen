@@ -25,8 +25,11 @@ export interface ToolResultModelMessage {
 export type ModelMessage =
   TextModelMessage | ToolCallModelMessage | ToolResultModelMessage;
 
+export type ReasoningEffort = string;
+
 export interface ModelRequest {
   model: string;
+  reasoningEffort: ReasoningEffort;
   messages: ModelMessage[];
   tools: ModelTool[];
   signal: AbortSignal;
