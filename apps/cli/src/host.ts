@@ -204,13 +204,17 @@ export function createHostedAppServer(
   });
 }
 
-function redactModelOutput(
+export function redactModelOutput(
   adapter: ModelAdapter,
   redactedValues: readonly string[],
 ): ModelAdapter {
-  if (redactedValues.length === 0) return adapter;
+  const secrets = [
+    ...new Set(redactedValues.filter((value) => value.length > 0)),
+  ].sort((left, right) => right.length - left.length);
+  if (secrets.length === 0) return adapter;
+  const carryLength = secrets[0]!.length - 1;
   const redact = (value: string): string =>
-    redactedValues.reduce(
+    secrets.reduce(
       (output, secret) => output.split(secret).join("[REDACTED]"),
       value,
     );
@@ -219,23 +223,50 @@ function redactModelOutput(
     if (Array.isArray(value)) return value.map(redactValue);
     if (value === null || typeof value !== "object") return value;
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, redactValue(entry)]),
+      Object.entries(value).map(([key, entry]) => [
+        redact(key),
+        redactValue(entry),
+      ]),
     );
   };
   return {
     provider: adapter.provider,
     async *stream(request) {
-      for await (const event of adapter.stream(request)) {
-        if (event.type === "text_delta") {
-          yield { ...event, delta: redact(event.delta) };
-        } else if (event.type === "tool_call") {
-          yield {
-            ...event,
-            arguments: redactValue(event.arguments) as Record<string, unknown>,
-          };
-        } else {
-          yield event;
+      let carry = "";
+      try {
+        for await (const event of adapter.stream(request)) {
+          if (event.type === "text_delta") {
+            const redacted = redact(carry + event.delta);
+            const emitLength = Math.max(0, redacted.length - carryLength);
+            carry = redacted.slice(emitLength);
+            if (emitLength > 0) {
+              yield { ...event, delta: redacted.slice(0, emitLength) };
+            }
+            continue;
+          }
+
+          if (event.type === "reasoning") {
+            yield { ...event, summary: redact(event.summary) };
+          } else if (event.type === "tool_call") {
+            yield {
+              ...event,
+              callId: redact(event.callId),
+              name: redact(event.name),
+              arguments: redactValue(event.arguments) as Record<
+                string,
+                unknown
+              >,
+            };
+          } else {
+            yield event;
+          }
         }
+      } catch (error) {
+        carry = "";
+        throw error;
+      }
+      if (carry.length > 0) {
+        yield { type: "text_delta", delta: redact(carry) };
       }
     },
   };

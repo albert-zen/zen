@@ -3,8 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createHostedAppServer } from "../apps/cli/src/host.js";
+import {
+  createHostedAppServer,
+  redactModelOutput,
+} from "../apps/cli/src/host.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
+import type { ModelAdapter, ModelEvent } from "../src/model.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 
 test("hosted App Server routes duplicate model ids through independent profile credentials", async () => {
@@ -195,6 +199,132 @@ test("host runtime redacts every configured Provider API key from tool results",
   }
 });
 
+test("host boundary redacts split text, reasoning, and complete tool-call events", async () => {
+  const source: ModelAdapter = {
+    provider: "captured",
+    async *stream() {
+      yield { type: "text_delta", delta: "prefix se" };
+      yield { type: "reasoning", summary: "reasoning secret-b" };
+      yield { type: "text_delta", delta: "cr" };
+      yield { type: "text_delta", delta: "et-a suffix" };
+      yield {
+        type: "tool_call",
+        callId: "secret-a-call",
+        name: "secret-b-tool",
+        arguments: { nested: ["secret-a", { value: "secret-b" }] },
+      };
+    },
+  };
+
+  const events: ModelEvent[] = [];
+  for await (const event of redactModelOutput(source, [
+    "secret-a",
+    "secret-b",
+  ]).stream({
+    model: "shared-model",
+    reasoningEffort: "medium",
+    messages: [],
+    tools: [],
+    signal: new AbortController().signal,
+  })) {
+    events.push(event);
+  }
+
+  assert.doesNotMatch(JSON.stringify(events), /secret-a|secret-b/u);
+  assert.equal(
+    events
+      .filter(
+        (event): event is Extract<ModelEvent, { type: "text_delta" }> =>
+          event.type === "text_delta",
+      )
+      .map((event) => event.delta)
+      .join(""),
+    "prefix [REDACTED] suffix",
+  );
+  assert.deepEqual(
+    events.find((event) => event.type === "reasoning"),
+    {
+      type: "reasoning",
+      summary: "reasoning [REDACTED]",
+    },
+  );
+  assert.deepEqual(
+    events.find((event) => event.type === "tool_call"),
+    {
+      type: "tool_call",
+      callId: "[REDACTED]-call",
+      name: "[REDACTED]-tool",
+      arguments: {
+        nested: ["[REDACTED]", { value: "[REDACTED]" }],
+      },
+    },
+  );
+
+  for (let split = 1; split < "secret-a".length; split += 1) {
+    const splitSource: ModelAdapter = {
+      provider: "captured",
+      async *stream() {
+        yield {
+          type: "text_delta",
+          delta: `left ${"secret-a".slice(0, split)}`,
+        };
+        yield { type: "text_delta", delta: `${"secret-a".slice(split)} right` };
+      },
+    };
+    const text: string[] = [];
+    for await (const event of redactModelOutput(splitSource, [
+      "secret-a",
+    ]).stream({
+      model: "shared-model",
+      reasoningEffort: "medium",
+      messages: [],
+      tools: [],
+      signal: new AbortController().signal,
+    })) {
+      if (event.type === "text_delta") text.push(event.delta);
+    }
+    assert.equal(text.join(""), "left [REDACTED] right");
+  }
+});
+
+test("hosted App Server withholds split API keys from emitted deltas and journal", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    modelResponseChunks(["prefix se", "cr", "et-a suffix"]);
+  const journal = new InMemoryThreadJournal();
+  const host = createHostedAppServer({
+    cwd: process.cwd(),
+    dataDirectory: path.join(os.tmpdir(), "zen-host-split-key-redaction"),
+    approvalPolicy: "never",
+    providers: [compatible("profile-a", "secret-a")],
+    defaultSelection: {
+      providerProfileId: "profile-a",
+      modelId: "shared-model",
+    },
+    journal,
+    threadMetadata: new InMemoryThreadMetadataStore(),
+  });
+  const emittedDeltas: string[] = [];
+  const unsubscribe = host.subscribe((event) => {
+    if (event.type === "item_delta") emittedDeltas.push(event.delta);
+  });
+  try {
+    const thread = await host.startThread();
+    await (
+      await host.startTurn(thread.id, "split")
+    ).done;
+    const snapshot = await host.readThread(thread.id);
+    assert.equal(emittedDeltas.join(""), "prefix [REDACTED] suffix");
+    assert.doesNotMatch(JSON.stringify(emittedDeltas), /secret-a/u);
+    assert.doesNotMatch(JSON.stringify(snapshot), /secret-a/u);
+    assert.match(JSON.stringify(snapshot), /\[REDACTED\]/u);
+  } finally {
+    unsubscribe();
+    await host.closeProviderTransport();
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("multi-provider host rejects duplicate profiles, catalogs, and dangling defaults", () => {
   const common = {
     cwd: process.cwd(),
@@ -264,6 +394,20 @@ function compatible(providerProfileId: string, apiKey: string) {
 function modelResponse(text: string): Response {
   return new Response(
     `data: {"choices":[{"delta":{"content":"${text}"},"finish_reason":null}]}\n\n` +
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n' +
+      "data: [DONE]\n\n",
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
+function modelResponseChunks(chunks: readonly string[]): Response {
+  return new Response(
+    chunks
+      .map(
+        (chunk) =>
+          `data: ${JSON.stringify({ choices: [{ delta: { content: chunk }, finish_reason: null }] })}\n\n`,
+      )
+      .join("") +
       'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n' +
       "data: [DONE]\n\n",
     { status: 200, headers: { "content-type": "text/event-stream" } },
