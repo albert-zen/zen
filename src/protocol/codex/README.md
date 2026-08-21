@@ -112,9 +112,11 @@ MCP `-c` 配置由 CLI remote bridge 启动边界验证后忽略，不进入 wir
 ## Soft steer
 
 `turn/start`、`turn/steer` 与 Zen `turn/replace` 的 `input` 复用固定 Codex typed
-形状：`text`、`localImage.path` 与 `image.url`。首版 `image.url` 只接受 base64
-data URI；远程 URL 不会在重放时偷偷重新下载。路径与 data URI 只在 ZAS 导入
-边界存在，校验后写入 Attachment Store，Core 只收到 typed `AttachmentRef`。
+形状：`text`、`localImage.path`、`image.url` 与 ZenX host-local 的
+`attachment.attachment`。首版 `image.url` 只接受 base64 data URI；远程 URL 不会在
+重放时偷偷重新下载。路径与 data URI 只在 ZAS 导入边界存在，校验后写入
+Attachment Store；`attachment` 直接复用已经导入的 immutable `AttachmentRef`，不会
+再次读取或导入 payload。Core 只收到 typed `AttachmentRef`。
 图片能力为 Unknown 或明确不支持时请求失败，不静默发送；Z08 的真实纵向执行以
 `turn/start` 为准，steer/replace 保留同一 typed public seam，完整中断/重试体验由
 后续切片收口。

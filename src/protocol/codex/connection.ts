@@ -1,7 +1,14 @@
 import os from "node:os";
 import path from "node:path";
 
-import { AttachmentStoreError, decodeImageDataUri } from "../../attachment.js";
+import {
+  MAX_IMAGE_BYTES,
+  MAX_IMAGE_DIMENSION,
+  MAX_IMAGE_PIXELS,
+  AttachmentStoreError,
+  decodeImageDataUri,
+  type AttachmentRef,
+} from "../../attachment.js";
 import {
   AppServerError,
   type AppServerEvent,
@@ -1270,11 +1277,39 @@ async function readUserInput(
       });
       continue;
     }
+    if (input.type === "attachment" && isAttachmentRef(input.attachment)) {
+      inputParts.push({ type: "image", attachment: input.attachment });
+      continue;
+    }
     throw new InvalidParamsError(
-      "Zen supports text, localImage, and base64 data-URI image input",
+      "Zen supports text, localImage, base64 data-URI, and AttachmentRef image input",
     );
   }
   return inputParts;
+}
+
+function isAttachmentRef(value: unknown): value is AttachmentRef {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const ref = value as Record<string, unknown>;
+  return (
+    ref.type === "attachment" &&
+    typeof ref.sha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(ref.sha256) &&
+    ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
+      String(ref.mediaType),
+    ) &&
+    Number.isSafeInteger(ref.byteLength) &&
+    Number.isSafeInteger(ref.width) &&
+    Number.isSafeInteger(ref.height) &&
+    Number(ref.byteLength) > 0 &&
+    Number(ref.byteLength) <= MAX_IMAGE_BYTES &&
+    Number(ref.width) > 0 &&
+    Number(ref.width) <= MAX_IMAGE_DIMENSION &&
+    Number(ref.height) > 0 &&
+    Number(ref.height) <= MAX_IMAGE_DIMENSION &&
+    Number(ref.width) * Number(ref.height) <= MAX_IMAGE_PIXELS
+  );
 }
 
 function validateMatchingThreadConfiguration(

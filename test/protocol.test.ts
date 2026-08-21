@@ -117,6 +117,13 @@ test("imports Codex localImage and image inputs before canonical turn/start", as
     });
     await within(turnCompleted.promise);
 
+    const firstSnapshot = await appServer.readThread(String(thread.id));
+    const retainedRef = firstSnapshot.items
+      .filter((item) => item.type === "user_message")
+      .flatMap((item) => item.content ?? [])
+      .find((part) => part.type === "image");
+    assert(retainedRef?.type === "image");
+
     turnCompleted = deferred<void>();
     await connection.receive({
       id: 5,
@@ -133,11 +140,22 @@ test("imports Codex localImage and image inputs before canonical turn/start", as
     });
     await within(turnCompleted.promise);
 
+    turnCompleted = deferred<void>();
+    await connection.receive({
+      id: 6,
+      method: "turn/start",
+      params: {
+        threadId: thread.id,
+        input: [{ type: "attachment", attachment: retainedRef.attachment }],
+      },
+    });
+    await within(turnCompleted.promise);
+
     const snapshot = await appServer.readThread(String(thread.id));
     const canonicalMessages = snapshot.items.filter(
       (item) => item.type === "user_message",
     );
-    assert.equal(canonicalMessages.length, 2);
+    assert.equal(canonicalMessages.length, 3);
     assert(
       canonicalMessages.every((item) =>
         item.content?.some((part) => part.type === "image"),

@@ -1681,19 +1681,7 @@ async function composerSubmissionInput(
   if (submission.text.length > 0)
     input.push({ type: "text", text: submission.text });
   for (const image of submission.images) {
-    const bytes = await window.zenx.imageAttachments.read(image.attachment);
-    input.push({
-      type: "image",
-      url: `data:${image.attachment.mediaType};base64,${base64(bytes)}`,
-    });
+    input.push({ type: "attachment", attachment: image.attachment });
   }
   return input;
-}
-
-function base64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
 }

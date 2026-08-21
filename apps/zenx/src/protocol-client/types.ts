@@ -4,6 +4,7 @@ import type {
   CodexThreadItem,
   CodexTurn,
 } from "../../../../src/protocol/codex/mapper.js";
+import type { AttachmentRef } from "../../../../src/attachment.js";
 
 export type Thread = CodexThread;
 export type Turn = CodexTurn;
@@ -99,7 +100,8 @@ export interface ModelSummary {
 export type UserInputPart =
   | { type: "text"; text: string }
   | { type: "localImage"; path: string }
-  | { type: "image"; url: string };
+  | { type: "image"; url: string }
+  | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
   initialize: InitializeParams;
