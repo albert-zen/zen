@@ -46,6 +46,12 @@ import type {
   DirectoryListing,
 } from "../main/directory-browser.js";
 import type { ZenXProjectProjectionSnapshot } from "../main/project-projection.js";
+import type {
+  ZenXImageDraft,
+  ZenXImageImport,
+  ZenXThreadAttachmentProjection,
+} from "../main/image-attachments.js";
+import type { AttachmentRef } from "../../../../src/attachment.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -117,6 +123,20 @@ contextBridge.exposeInMainWorld("zenx", {
       options: ThreadSummaryListOptions = {},
     ): Promise<NativeThreadSummary[]> =>
       await ipcRenderer.invoke(ipcChannels.threadSummariesList, options),
+  },
+  imageAttachments: {
+    pick: async (): Promise<ZenXImageDraft[]> =>
+      await ipcRenderer.invoke(ipcChannels.imageAttachmentsPick),
+    import: async (
+      images: readonly ZenXImageImport[],
+    ): Promise<ZenXImageDraft[]> =>
+      await ipcRenderer.invoke(ipcChannels.imageAttachmentsImport, images),
+    read: async (attachment: AttachmentRef): Promise<Uint8Array> =>
+      await ipcRenderer.invoke(ipcChannels.imageAttachmentsRead, attachment),
+    forThread: async (
+      threadId: string,
+    ): Promise<ZenXThreadAttachmentProjection> =>
+      await ipcRenderer.invoke(ipcChannels.threadAttachmentsRead, threadId),
   },
   projects: {
     get: async (

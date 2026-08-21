@@ -6,7 +6,10 @@ import type {
   Thread,
 } from "../../protocol-client/index.js";
 import type { ZenXProviderProfile } from "../../main/host-profile.js";
-import { encodeModelKey } from "../../../../../src/protocol/codex/model-key.js";
+import {
+  decodeModelKey,
+  encodeModelKey,
+} from "../../../../../src/protocol/codex/model-key.js";
 
 export interface SelectedThreadSettings {
   threadId: string;
@@ -148,6 +151,30 @@ export function canSendWithModel(
   return models.some(
     (model) => model.id === selectedModel && model.hidden === false,
   );
+}
+
+export function imageCapabilityMessage(
+  providerProfiles: readonly ZenXProviderProfile[],
+  settings: SelectedThreadSettings | null,
+): string | null {
+  if (settings === null) return "Choose a model before sending images.";
+  let identity: ReturnType<typeof decodeModelKey>;
+  try {
+    identity = decodeModelKey(settings.model);
+  } catch {
+    return "Choose a model with known image input support before sending images.";
+  }
+  const profile = providerProfiles.find(
+    (entry) => entry.providerProfileId === identity.providerProfileId,
+  );
+  const model = profile?.models.find((entry) => entry.id === identity.modelId);
+  const label = model?.displayName ?? identity.modelId;
+  if (model?.inputModalities === null || model === undefined) {
+    return `Image input capability for “${label}” is unknown. Set it in Models & providers or choose a model with image support.`;
+  }
+  return model.inputModalities.includes("image")
+    ? null
+    : `“${label}” does not support image input. Remove the images or choose a model with image support.`;
 }
 
 export function modelChangeRequest(

@@ -3,12 +3,28 @@ import test from "node:test";
 
 import {
   acceptComposerSubmission,
+  addComposerImages,
   beginComposerSubmission,
+  composerDraftHasContent,
   defaultComposerIntent,
   editComposer,
   emptyComposerState,
   failComposerSubmission,
+  removeComposerImage,
 } from "../src/renderer/src/composer-state.js";
+
+const image = (id: string) => ({
+  id,
+  name: `${id}.png`,
+  attachment: {
+    type: "attachment" as const,
+    sha256: id.padEnd(64, "0"),
+    mediaType: "image/png" as const,
+    byteLength: 68,
+    width: 1,
+    height: 1,
+  },
+});
 
 test("maps idle, active, and replacement submissions without a queue", () => {
   let ids = 0;
@@ -19,8 +35,9 @@ test("maps idle, active, and replacement submissions without a queue", () => {
     intent: "start",
     expectedTurnId: null,
     clientUserMessageId: "message-1",
-    draftAtSubmit: "first",
+    draftAtSubmit: { text: "first", images: [] },
     text: "first",
+    images: [],
     status: "pending",
     error: null,
   });
@@ -61,7 +78,7 @@ test("a pending request is a click fence, not a local queue", () => {
   );
   assert.equal(second.submission?.clientUserMessageId, "message-1");
   assert.equal(second.submission?.text, "one");
-  assert.equal(second.draft, "two");
+  assert.equal(second.draft.text, "two");
 });
 
 test("keeps the draft and stable message id across a transport retry", () => {
@@ -74,7 +91,7 @@ test("keeps the draft and stable message id across a transport retry", () => {
     createId,
   );
   state = failComposerSubmission(state, "message-1", "socket closed");
-  assert.equal(state.draft, "retry me");
+  assert.equal(state.draft.text, "retry me");
   assert.equal(state.submission?.status, "failed");
 
   state = beginComposerSubmission(state, "steer", "turn-1", createId);
@@ -107,7 +124,32 @@ test("acceptance clears only the submitted draft and never invents history", () 
   );
   state = editComposer(state, "typed while sending");
   state = acceptComposerSubmission(state, "message-1");
-  assert.equal(state.draft, "typed while sending");
+  assert.equal(state.draft.text, "typed while sending");
   assert.equal(state.submission, null);
   assert.deepEqual(Object.keys(state).sort(), ["draft", "submission"]);
+});
+
+test("ordered images form one draft, removal preserves text, and image-only drafts submit", () => {
+  let state = editComposer(emptyComposerState(), "keep this text");
+  state = addComposerImages(state, [image("a"), image("b"), image("c")]);
+  state = removeComposerImage(state, "b");
+  assert.equal(state.draft.text, "keep this text");
+  assert.deepEqual(
+    state.draft.images.map((entry) => entry.id),
+    ["a", "c"],
+  );
+
+  const imageOnly = addComposerImages(emptyComposerState(), [image("only")]);
+  assert.equal(composerDraftHasContent(imageOnly.draft), true);
+  const pending = beginComposerSubmission(
+    imageOnly,
+    "start",
+    null,
+    () => "message-image",
+  );
+  assert.equal(pending.submission?.text, "");
+  assert.deepEqual(
+    pending.submission?.images.map((entry) => entry.id),
+    ["only"],
+  );
 });

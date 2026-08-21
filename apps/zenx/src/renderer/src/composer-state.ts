@@ -1,22 +1,32 @@
 export type ComposerIntent = "start" | "steer" | "replace";
 
+import type { ZenXImageDraft } from "../../main/image-attachments.js";
+
+export type ComposerDraftImage = ZenXImageDraft;
+
+export interface ComposerDraft {
+  text: string;
+  images: readonly ComposerDraftImage[];
+}
+
 export interface ComposerSubmission {
   intent: ComposerIntent;
   expectedTurnId: string | null;
   clientUserMessageId: string;
-  draftAtSubmit: string;
+  draftAtSubmit: ComposerDraft;
   text: string;
+  images: readonly ComposerDraftImage[];
   status: "pending" | "failed";
   error: string | null;
 }
 
 export interface ComposerState {
-  draft: string;
+  draft: ComposerDraft;
   submission: ComposerSubmission | null;
 }
 
 export function emptyComposerState(): ComposerState {
-  return { draft: "", submission: null };
+  return { draft: { text: "", images: [] }, submission: null };
 }
 
 export function defaultComposerIntent(active: boolean): "start" | "steer" {
@@ -25,14 +35,41 @@ export function defaultComposerIntent(active: boolean): "start" | "steer" {
 
 export function editComposer(
   state: ComposerState,
-  draft: string,
+  text: string,
 ): ComposerState {
   const submission =
     state.submission?.status === "failed" &&
-    draft !== state.submission.draftAtSubmit
+    text !== state.submission.draftAtSubmit.text
       ? null
       : state.submission;
-  return { draft, submission };
+  return { draft: { ...state.draft, text }, submission };
+}
+
+export function addComposerImages(
+  state: ComposerState,
+  images: readonly ComposerDraftImage[],
+): ComposerState {
+  if (images.length === 0) return state;
+  return {
+    draft: { ...state.draft, images: [...state.draft.images, ...images] },
+    submission: state.submission?.status === "failed" ? null : state.submission,
+  };
+}
+
+export function removeComposerImage(
+  state: ComposerState,
+  imageId: string,
+): ComposerState {
+  const images = state.draft.images.filter((image) => image.id !== imageId);
+  if (images.length === state.draft.images.length) return state;
+  return {
+    draft: { ...state.draft, images },
+    submission: state.submission?.status === "failed" ? null : state.submission,
+  };
+}
+
+export function composerDraftHasContent(draft: ComposerDraft): boolean {
+  return draft.text.trim().length > 0 || draft.images.length > 0;
 }
 
 export function beginComposerSubmission(
@@ -42,13 +79,13 @@ export function beginComposerSubmission(
   createId: () => string,
 ): ComposerState {
   if (state.submission?.status === "pending") return state;
-  const text = state.draft.trim();
-  if (text.length === 0) return state;
+  const text = state.draft.text.trim();
+  if (!composerDraftHasContent(state.draft)) return state;
   const retry =
     state.submission?.status === "failed" &&
     state.submission.intent === intent &&
     state.submission.expectedTurnId === expectedTurnId &&
-    state.submission.draftAtSubmit === state.draft;
+    sameDraft(state.submission.draftAtSubmit, state.draft);
   return {
     ...state,
     submission: {
@@ -57,8 +94,9 @@ export function beginComposerSubmission(
       clientUserMessageId: retry
         ? state.submission!.clientUserMessageId
         : createId(),
-      draftAtSubmit: state.draft,
+      draftAtSubmit: cloneDraft(state.draft),
       text,
+      images: [...state.draft.images],
       status: "pending",
       error: null,
     },
@@ -72,9 +110,23 @@ export function acceptComposerSubmission(
   const submission = matchingSubmission(state, clientUserMessageId);
   if (submission === null) return state;
   return {
-    draft: state.draft === submission.draftAtSubmit ? "" : state.draft,
+    draft: sameDraft(state.draft, submission.draftAtSubmit)
+      ? { text: "", images: [] }
+      : state.draft,
     submission: null,
   };
+}
+
+function cloneDraft(draft: ComposerDraft): ComposerDraft {
+  return { text: draft.text, images: [...draft.images] };
+}
+
+function sameDraft(left: ComposerDraft, right: ComposerDraft): boolean {
+  return (
+    left.text === right.text &&
+    left.images.length === right.images.length &&
+    left.images.every((image, index) => image.id === right.images[index]?.id)
+  );
 }
 
 export function failComposerSubmission(

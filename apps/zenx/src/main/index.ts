@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   safeStorage,
@@ -8,6 +9,7 @@ import {
   shell,
 } from "electron";
 import { join, resolve } from "node:path";
+import { FileAttachmentStore } from "../../../../src/attachment.js";
 
 import { isAllowedZenXExternalUrl } from "../external-link-policy.js";
 import {
@@ -59,6 +61,12 @@ import {
   projectWorkspaceAcceptanceConfigPath,
   runProjectWorkspaceAcceptance,
 } from "./project-workspace-smoke.js";
+import {
+  importImageDrafts,
+  importLocalImageDrafts,
+  readAttachmentPayload,
+  type ZenXImageImport,
+} from "./image-attachments.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -113,6 +121,9 @@ app.whenReady().then(async () => {
   const tokenFile = join(userDataDirectory, "runtime", "app-server.token");
   const zenDataDirectory = resolve(
     process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
+  );
+  const imageAttachments = new FileAttachmentStore(
+    join(zenDataDirectory, "attachments"),
   );
   const directoryBrowser = new ZenXDirectoryBrowser({
     home: app.getPath("home"),
@@ -179,7 +190,12 @@ app.whenReady().then(async () => {
       },
     });
     await titleCoordinator.initialize();
-    installProtocolIpc(appServerManager, titleCoordinator, projectProjection);
+    installProtocolIpc(
+      appServerManager,
+      titleCoordinator,
+      projectProjection,
+      imageAttachments,
+    );
     installCapabilityIpc(capabilityService, appServerManager);
     installTitleIpc(titleCoordinator);
     triggerService = new ZenXTriggerService(
@@ -331,6 +347,7 @@ function installProtocolIpc(
   manager: AppServerManager,
   titles: ZenXThreadTitleCoordinator,
   projects: ZenXProjectProjection,
+  attachments: FileAttachmentStore,
 ): void {
   ipcMain.handle(ipcChannels.getStatus, () => manager.status);
   ipcMain.handle(
@@ -341,6 +358,40 @@ function installProtocolIpc(
     ipcChannels.threadSummariesList,
     async (_event, options: unknown) =>
       await manager.listThreadSummaries(readThreadSummaryListOptions(options)),
+  );
+  ipcMain.handle(ipcChannels.imageAttachmentsPick, async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options = {
+      title: "Choose images",
+      properties: ["openFile", "multiSelections"],
+      filters: [
+        { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] },
+      ],
+    } satisfies Electron.OpenDialogOptions;
+    const result =
+      owner === null
+        ? await dialog.showOpenDialog(options)
+        : await dialog.showOpenDialog(owner, options);
+    if (result.canceled) return [];
+    return await importLocalImageDrafts(attachments, result.filePaths);
+  });
+  ipcMain.handle(
+    ipcChannels.imageAttachmentsImport,
+    async (_event, value: unknown) => {
+      const images = readImageImports(value);
+      return await importImageDrafts(attachments, images);
+    },
+  );
+  ipcMain.handle(ipcChannels.imageAttachmentsRead, async (_event, value) =>
+    Uint8Array.from(await readAttachmentPayload(attachments, value)),
+  );
+  ipcMain.handle(
+    ipcChannels.threadAttachmentsRead,
+    async (_event, threadId: unknown) => {
+      if (typeof threadId !== "string" || threadId.length === 0)
+        throw new Error("Invalid Thread attachment query");
+      return await manager.readThreadAttachments(threadId);
+    },
   );
   ipcMain.handle(ipcChannels.projectsGet, async (_event, options: unknown) => {
     const threads = await manager.listThreadSummaries(
@@ -407,6 +458,23 @@ function installProtocolIpc(
   });
 }
 
+function readImageImports(value: unknown): ZenXImageImport[] {
+  if (!Array.isArray(value) || value.length === 0)
+    throw new Error("Choose at least one image");
+  return value.map((entry) => {
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      typeof (entry as { name?: unknown }).name !== "string" ||
+      typeof (entry as { mediaType?: unknown }).mediaType !== "string" ||
+      !((entry as { bytes?: unknown }).bytes instanceof Uint8Array)
+    ) {
+      throw new Error("Invalid image import payload");
+    }
+    return entry as ZenXImageImport;
+  });
+}
+
 function installTitleIpc(titles: ZenXThreadTitleCoordinator): void {
   ipcMain.handle(ipcChannels.titlesGet, () => titles.snapshot());
   ipcMain.handle(
@@ -441,6 +509,16 @@ function installFailedProtocolIpc(message: string): void {
   ipcMain.handle(ipcChannels.threadSummariesList, () => {
     throw new Error(`Zen App Server is not ready: ${message}`);
   });
+  for (const channel of [
+    ipcChannels.imageAttachmentsPick,
+    ipcChannels.imageAttachmentsImport,
+    ipcChannels.imageAttachmentsRead,
+    ipcChannels.threadAttachmentsRead,
+  ]) {
+    ipcMain.handle(channel, () => {
+      throw new Error(`Zen App Server is not ready: ${message}`);
+    });
+  }
   ipcMain.handle(ipcChannels.request, () => {
     throw new Error(`Zen App Server is not ready: ${message}`);
   });
