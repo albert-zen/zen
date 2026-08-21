@@ -4,20 +4,37 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import * as React from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type {
   PublicHostSettings,
   ZenXHostProfile,
   ZenXModelCatalogEntry,
+  ZenXProviderDeleteReplacements,
+  ZenXProviderEditOptions,
+  ZenXProviderProfile,
   ZenXSettingsUpdate,
 } from "../src/main/host-profile.js";
 import type { AppearancePreference } from "../src/renderer/src/appearance.js";
 import type { SettingsTab } from "../src/renderer/src/SettingsView.js";
+import type { ZenXProviderCatalogSnapshot } from "../src/main/settings-service.js";
 
 const { act, createElement, useState } = React;
-Object.assign(globalThis, { React });
+const bootstrapDom = new JSDOM(
+  "<!doctype html><html><body><div id=root></div></body></html>",
+  { url: "http://localhost" },
+);
+Object.assign(globalThis, {
+  React,
+  document: bootstrapDom.window.document,
+  Event: bootstrapDom.window.Event,
+  HTMLElement: bootstrapDom.window.HTMLElement,
+  localStorage: bootstrapDom.window.localStorage,
+  Node: bootstrapDom.window.Node,
+  window: bootstrapDom.window,
+});
+const { createRoot } = await import("react-dom/client");
 const { SettingsView } = await import("../src/renderer/src/SettingsView.js");
 
 const settings: PublicHostSettings = {
@@ -43,6 +60,7 @@ const settings: PublicHostSettings = {
   },
   hasApiKey: false,
   apiKeyProviderProfileIds: [],
+  subscriptionProviderProfileId: null,
   subscription: { authenticated: false, expired: false },
 };
 
@@ -60,11 +78,58 @@ function model(id: string): ZenXModelCatalogEntry {
   };
 }
 
-test("Settings keeps restart contextual and enables it only for edits", async () => {
+const multiProviderSettings: PublicHostSettings = {
+  ...settings,
+  profile: {
+    ...settings.profile,
+    providerProfiles: [
+      {
+        providerProfileId: "profile-alpha",
+        type: "openai-compatible",
+        name: "alpha-api",
+        displayName: "Alpha",
+        baseUrl: "https://alpha.example.test/v1",
+        models: [model("shared-model"), model("alpha-only")],
+      },
+      {
+        providerProfileId: "profile-beta",
+        type: "openai-compatible",
+        name: "beta-api",
+        displayName: "Beta",
+        baseUrl: "https://beta.example.test/v1",
+        models: [model("shared-model"), model("beta-only")],
+      },
+      {
+        providerProfileId: "profile-local",
+        type: "fake",
+        displayName: "Local demo",
+        models: [model("fake")],
+      },
+    ],
+    defaultModel: {
+      providerProfileId: "profile-alpha",
+      modelId: "shared-model",
+    },
+    titleModel: {
+      providerProfileId: "profile-beta",
+      modelId: "shared-model",
+    },
+  },
+  hasApiKey: true,
+  apiKeyProviderProfileIds: ["profile-alpha", "profile-beta"],
+};
+
+test("Settings saves global model routing by Provider profile identity", async () => {
   const saved: ZenXSettingsUpdate[] = [];
-  const harness = await mountSettings("models", async (profile) => {
-    saved.push(profile);
-    return { ...settings, profile: { ...settings.profile, ...profile } };
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    save: async (profile) => {
+      saved.push(profile);
+      return {
+        ...multiProviderSettings,
+        profile: { ...multiProviderSettings.profile, ...profile },
+      };
+    },
   });
   try {
     await waitFor(() => exactButton("Apply & restart"));
@@ -75,16 +140,23 @@ test("Settings keeps restart contextual and enables it only for edits", async ()
     const apply = exactButton("Apply & restart");
     assert.ok(apply);
     assert.equal(apply.disabled, true);
-    const apiProvider = exactButton("API provider");
-    assert.ok(apiProvider);
-    await act(async () => apiProvider.click());
+    const defaultModel = labeledSelect("Default model");
+    assert.ok(defaultModel);
+    const betaShared = Array.from(defaultModel.options).find(
+      (option) => option.textContent?.trim() === "Beta · shared-model",
+    );
+    assert.ok(betaShared);
+    await changeControl(defaultModel, betaShared.value);
     assert.equal(apply.disabled, false);
     await act(async () => {
       apply.click();
       await Promise.resolve();
     });
     assert.equal(saved.length, 1);
-    assert.equal(saved[0]?.defaultModel.modelId, "gpt-5.4");
+    assert.deepEqual(saved[0]?.defaultModel, {
+      providerProfileId: "profile-beta",
+      modelId: "shared-model",
+    });
     assert.match(document.body.textContent ?? "", /local host restarted/u);
     assert.equal(apply.disabled, true);
   } finally {
@@ -92,21 +164,562 @@ test("Settings keeps restart contextual and enables it only for edits", async ()
   }
 });
 
+test("Models lists every profile and keeps duplicate model IDs distinguishable and keyboard reachable", async () => {
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+  });
+  try {
+    await waitFor(() => exactButton("Add provider"));
+    assert.match(document.body.textContent ?? "", /Alpha/u);
+    assert.match(document.body.textContent ?? "", /Beta/u);
+    assert.match(document.body.textContent ?? "", /Local demo/u);
+    assert.match(document.body.textContent ?? "", /API key saved/u);
+    assert.doesNotMatch(document.body.textContent ?? "", /Connected/u);
+
+    const defaultModel = labeledSelect("Default model");
+    assert.ok(defaultModel);
+    const sharedOptions = Array.from(defaultModel.options).filter((option) =>
+      option.textContent?.includes("shared-model"),
+    );
+    assert.deepEqual(
+      sharedOptions.map((option) => option.textContent?.trim()),
+      ["Alpha · shared-model", "Beta · shared-model"],
+    );
+    assert.notEqual(sharedOptions[0]?.value, sharedOptions[1]?.value);
+
+    for (const control of [
+      exactButton("Add provider"),
+      exactButton("Add custom provider"),
+      labeledButton("Edit Alpha"),
+      labeledButton("Delete Alpha"),
+    ]) {
+      assert.ok(control);
+      assert.equal(control.tabIndex, 0);
+    }
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Provider discovery keeps unknown capabilities explicit and manual overrides persist", async () => {
+  const discovered = {
+    ...model("alpha-vision"),
+    supportedReasoningEfforts: null,
+    defaultReasoningEffort: null,
+    inputModalities: null,
+    contextWindow: null,
+    source: "discovered" as const,
+  };
+  let edited: ZenXProviderProfile | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    discoverProvider: async () => ({
+      providerProfileId: "profile-alpha",
+      models: [
+        ...multiProviderSettings.profile.providerProfiles[0]!.models,
+        discovered,
+      ],
+    }),
+    editProvider: async (_id, provider) => {
+      edited = provider;
+      return {
+        ...multiProviderSettings,
+        profile: {
+          ...multiProviderSettings.profile,
+          providerProfiles: multiProviderSettings.profile.providerProfiles.map(
+            (candidate) =>
+              candidate.providerProfileId === provider.providerProfileId
+                ? provider
+                : candidate,
+          ),
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Get available models"));
+    await waitFor(() => labelControl<HTMLInputElement>("Model 3", "input"));
+    assert.equal(requiredInput("Model 3").value, "alpha-vision");
+    assert.match(
+      document.body.textContent ?? "",
+      /reasoning unknown · input unknown · context unknown/u,
+    );
+
+    const reasoningMode = labeledSelect("Model 3 reasoning metadata");
+    const modalities = labeledSelect("Model 3 input modalities");
+    assert.ok(reasoningMode);
+    assert.ok(modalities);
+    await changeControl(reasoningMode, "configured");
+    await changeControl(
+      requiredInput("Model 3 reasoning efforts"),
+      "low, high",
+    );
+    await changeControl(
+      requiredInput("Model 3 default reasoning effort"),
+      "high",
+    );
+    await changeControl(modalities, "text-image");
+    await changeControl(requiredInput("Model 3 context window"), "128000");
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => edited);
+    const configured = edited?.models.find(
+      (entry) => entry.id === "alpha-vision",
+    );
+    assert.deepEqual(configured, {
+      ...discovered,
+      supportedReasoningEfforts: ["low", "high"],
+      defaultReasoningEffort: "high",
+      inputModalities: ["text", "image"],
+      contextWindow: 128000,
+      source: "manual",
+    });
+    assert.ok(
+      Array.from(labeledSelect("Default model")?.options ?? []).some(
+        (option) => option.textContent?.trim() === "Alpha · alpha-vision",
+      ),
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Add custom provider submits an opaque identity, credential, and repeatable model rows", async () => {
+  let added:
+    { provider: ZenXProviderProfile; apiKey: string | undefined } | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    addProvider: async (provider, apiKey) => {
+      added = { provider, apiKey };
+      return {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+        apiKeyProviderProfileIds: [provider.providerProfileId],
+      };
+    },
+  });
+  try {
+    const addCustom = await waitFor(() => exactButton("Add custom provider"));
+    await click(addCustom);
+    await changeControl(requiredInput("Display name"), "Acme AI");
+    await changeControl(requiredInput("Provider name"), "acme");
+    await changeControl(
+      requiredInput("Base URL"),
+      "https://models.acme.example/v1",
+    );
+    await changeControl(requiredInput("API key"), "secret-replacement");
+    await changeControl(requiredInput("Model 1"), "shared-model");
+    await click(exactButtonRequired("Add model"));
+    await changeControl(requiredInput("Model 2"), "acme-large");
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(() => added);
+
+    assert.equal(added?.apiKey, "secret-replacement");
+    assert.equal(added?.provider.type, "openai-compatible");
+    assert.equal(added?.provider.displayName, "Acme AI");
+    assert.deepEqual(
+      added?.provider.models.map((entry) => entry.id),
+      ["shared-model", "acme-large"],
+    );
+    assert.ok(
+      added?.provider.models.every(
+        (entry) =>
+          entry.source === "manual" &&
+          entry.supportedReasoningEfforts === null &&
+          entry.inputModalities === null &&
+          entry.contextWindow === null,
+      ),
+    );
+    assert.notEqual(added?.provider.providerProfileId, "Acme AI");
+    assert.notEqual(added?.provider.providerProfileId, "acme");
+    assert.match(added?.provider.providerProfileId ?? "", /^[0-9a-f-]{20,}$/u);
+    assert.doesNotMatch(document.body.textContent ?? "", /secret-replacement/u);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Add reconciles an applied provider when host restart rejects", async () => {
+  let authoritative = settings;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    get: async () => authoritative,
+    addProvider: async (provider) => {
+      calls += 1;
+      authoritative = {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+      };
+      throw new Error("host restart failed after add");
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add custom provider"));
+    await click(exactButtonRequired("Add custom provider"));
+    await changeControl(requiredInput("Display name"), "Committed AI");
+    await changeControl(requiredInput("Provider name"), "committed");
+    await changeControl(
+      requiredInput("Base URL"),
+      "https://committed.example/v1",
+    );
+    await changeControl(requiredInput("API key"), "committed-key");
+    await changeControl(requiredInput("Model 1"), "committed-model");
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(
+      () =>
+        calls === 1 && /Committed AI/u.test(document.body.textContent ?? ""),
+    );
+    assert.equal(
+      document.querySelector('[aria-label="Add Provider profile"]'),
+      null,
+    );
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /host restart failed after add/u,
+    );
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Provider added · local host restarted/u,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Add provider offers known local and subscription flows without creating account lifecycle", async () => {
+  let added: ZenXProviderProfile | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    addProvider: async (provider) => {
+      added = provider;
+      return {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add provider"));
+    await click(exactButtonRequired("Add provider"));
+    assert.ok(labeledButton("Add OpenAI subscription"));
+    assert.ok(labeledButton("Add Local demo"));
+    await click(labeledButtonRequired("Add Local demo"));
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(() => added);
+    assert.equal(added?.type, "fake");
+    assert.deepEqual(
+      added?.models.map((entry) => entry.id),
+      ["fake"],
+    );
+    assert.notEqual(added?.providerProfileId, "fake");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Edit keeps a blank saved credential and replaces only the edited profile key", async () => {
+  const edits: Array<{
+    id: string;
+    provider: ZenXProviderProfile;
+    options: ZenXProviderEditOptions | undefined;
+  }> = [];
+  let current = multiProviderSettings;
+  const harness = await mountSettings("models", {
+    initialSettings: current,
+    editProvider: async (id, provider, options) => {
+      edits.push({ id, provider, options });
+      current = {
+        ...current,
+        profile: {
+          ...current.profile,
+          providerProfiles: current.profile.providerProfiles.map((candidate) =>
+            candidate.providerProfileId === id ? provider : candidate,
+          ),
+        },
+      };
+      return current;
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    const key = requiredInput("API key");
+    assert.equal(key.value, "");
+    assert.match(key.placeholder, /leave blank to keep/u);
+    await changeControl(requiredInput("Display name"), "Alpha edited");
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => edits.length === 1);
+    assert.equal(edits[0]?.id, "profile-alpha");
+    assert.equal(edits[0]?.options?.apiKey, undefined);
+    assert.equal(
+      current.profile.providerProfiles.find(
+        (provider) => provider.providerProfileId === "profile-beta",
+      )?.displayName,
+      "Beta",
+    );
+
+    await click(labeledButtonRequired("Edit Alpha edited"));
+    await changeControl(requiredInput("API key"), "replacement-key");
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => edits.length === 2);
+    assert.equal(edits[1]?.options?.apiKey, "replacement-key");
+    assert.doesNotMatch(document.body.textContent ?? "", /replacement-key/u);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Edit reconciles an applied provider when host restart rejects", async () => {
+  let authoritative = multiProviderSettings;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    get: async () => authoritative,
+    editProvider: async (id, provider) => {
+      calls += 1;
+      authoritative = {
+        ...multiProviderSettings,
+        profile: {
+          ...multiProviderSettings.profile,
+          providerProfiles: multiProviderSettings.profile.providerProfiles.map(
+            (candidate) =>
+              candidate.providerProfileId === id ? provider : candidate,
+          ),
+        },
+      };
+      throw new Error("host restart failed after edit");
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await changeControl(requiredInput("Display name"), "Alpha committed");
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(
+      () =>
+        calls === 1 && /Alpha committed/u.test(document.body.textContent ?? ""),
+    );
+    assert.equal(document.querySelector('[aria-label="Edit Alpha"]'), null);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /host restart failed after edit/u,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Delete submits required default and title replacements atomically without Thread scanning", async () => {
+  const bothReferenced: PublicHostSettings = {
+    ...multiProviderSettings,
+    profile: {
+      ...multiProviderSettings.profile,
+      titleModel: multiProviderSettings.profile.defaultModel,
+    },
+  };
+  let deletion:
+    | { id: string; replacements: ZenXProviderDeleteReplacements | undefined }
+    | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: bothReferenced,
+    deleteProvider: async (id, replacements) => {
+      deletion = { id, replacements };
+      return {
+        ...bothReferenced,
+        profile: {
+          ...bothReferenced.profile,
+          providerProfiles: bothReferenced.profile.providerProfiles.filter(
+            (provider) => provider.providerProfileId !== id,
+          ),
+          defaultModel:
+            replacements?.defaultModel ?? bothReferenced.profile.defaultModel,
+          titleModel:
+            replacements?.titleModel ?? bothReferenced.profile.titleModel,
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Delete Alpha"));
+    await click(labeledButtonRequired("Delete Alpha"));
+    const defaultReplacement = labeledSelect("Replacement default model");
+    const titleReplacement = labeledSelect("Replacement title model");
+    assert.ok(defaultReplacement);
+    assert.ok(titleReplacement);
+    const beta = Array.from(defaultReplacement.options).find(
+      (option) => option.textContent?.trim() === "Beta · shared-model",
+    );
+    assert.ok(beta);
+    await changeControl(defaultReplacement, beta.value);
+    await changeControl(titleReplacement, beta.value);
+    await click(exactButtonRequired("Delete provider"));
+    await waitFor(() => deletion);
+    assert.deepEqual(deletion, {
+      id: "profile-alpha",
+      replacements: {
+        defaultModel: {
+          providerProfileId: "profile-beta",
+          modelId: "shared-model",
+        },
+        titleModel: {
+          providerProfileId: "profile-beta",
+          modelId: "shared-model",
+        },
+      },
+    });
+    assert.doesNotMatch(document.body.textContent ?? "", /scan|rewrite/u);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Delete removes an unreferenced Provider without replacement selections", async () => {
+  let deletion:
+    | { id: string; replacements: ZenXProviderDeleteReplacements | undefined }
+    | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    deleteProvider: async (id, replacements) => {
+      deletion = { id, replacements };
+      return {
+        ...multiProviderSettings,
+        profile: {
+          ...multiProviderSettings.profile,
+          providerProfiles:
+            multiProviderSettings.profile.providerProfiles.filter(
+              (provider) => provider.providerProfileId !== id,
+            ),
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Delete Local demo"));
+    await click(labeledButtonRequired("Delete Local demo"));
+    assert.equal(labeledSelect("Replacement default model"), undefined);
+    assert.equal(labeledSelect("Replacement title model"), undefined);
+    await click(exactButtonRequired("Delete provider"));
+    await waitFor(() => deletion);
+    assert.deepEqual(deletion, {
+      id: "profile-local",
+      replacements: undefined,
+    });
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Delete reconciles an applied provider when host restart rejects", async () => {
+  let authoritative = multiProviderSettings;
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    get: async () => authoritative,
+    deleteProvider: async (id) => {
+      calls += 1;
+      authoritative = {
+        ...multiProviderSettings,
+        profile: {
+          ...multiProviderSettings.profile,
+          providerProfiles:
+            multiProviderSettings.profile.providerProfiles.filter(
+              (candidate) => candidate.providerProfileId !== id,
+            ),
+        },
+      };
+      throw new Error("host restart failed after delete");
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Delete Local demo"));
+    await click(labeledButtonRequired("Delete Local demo"));
+    await click(exactButtonRequired("Delete provider"));
+    await waitFor(
+      () => calls === 1 && !/Local demo/u.test(document.body.textContent ?? ""),
+    );
+    assert.equal(
+      document.querySelector('[aria-label="Delete Local demo"]'),
+      null,
+    );
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /host restart failed after delete/u,
+    );
+    assert.doesNotMatch(document.body.textContent ?? "", /not configured/u);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Validation and mutation failures keep the provider editor recoverable", async () => {
+  let attempts = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    addProvider: async (provider) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("Host restart failed");
+      return {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add custom provider"));
+    await click(exactButtonRequired("Add custom provider"));
+    await click(exactButtonRequired("Add provider"));
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Display name is required/u,
+    );
+    assert.equal(attempts, 0);
+
+    await changeControl(requiredInput("Display name"), "Recoverable");
+    await changeControl(requiredInput("Provider name"), "recoverable");
+    await changeControl(
+      requiredInput("Base URL"),
+      "https://recover.example/v1",
+    );
+    await changeControl(requiredInput("API key"), "new-key");
+    await changeControl(requiredInput("Model 1"), "recover-model");
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(() =>
+      document
+        .querySelector('[role="alert"]')
+        ?.textContent?.includes("Host restart failed"),
+    );
+    assert.equal(attempts, 1);
+    assert.equal(requiredInput("Display name").value, "Recoverable");
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(() => attempts === 2);
+    assert.match(document.body.textContent ?? "", /Provider added/u);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("Archived threads is a Settings section with keyboard-reachable Unarchive", async () => {
   let restored: string | null = null;
-  const harness = await mountSettings(
-    "account",
-    async (profile) => ({
-      ...settings,
-      profile: { ...settings.profile, ...profile },
-    }),
-    {
-      archivedThreads: [archivedSummary()],
-      onUnarchive: async (thread) => {
-        restored = thread.threadId;
-      },
+  const harness = await mountSettings("account", {
+    archivedThreads: [archivedSummary()],
+    onUnarchive: async (thread) => {
+      restored = thread.threadId;
     },
-  );
+  });
   try {
     const archivedTab = await waitFor(() => exactButton("Archived threads"));
     archivedTab.focus();
@@ -128,9 +741,11 @@ test("Archived threads is a Settings section with keyboard-reachable Unarchive",
 
 test("General switches Appearance immediately without restarting the host", async () => {
   const saved: ZenXSettingsUpdate[] = [];
-  const harness = await mountSettings("general", async (profile) => {
-    saved.push(profile);
-    return { ...settings, profile: { ...settings.profile, ...profile } };
+  const harness = await mountSettings("general", {
+    save: async (profile) => {
+      saved.push(profile);
+      return { ...settings, profile: { ...settings.profile, ...profile } };
+    },
   });
   try {
     await waitFor(() => appearanceRadio("light"));
@@ -167,11 +782,29 @@ interface Harness {
 
 async function mountSettings(
   initialTab: SettingsTab,
-  save: (
-    profile: ZenXSettingsUpdate,
-    apiKey?: string,
-  ) => Promise<PublicHostSettings>,
   options: {
+    initialSettings?: PublicHostSettings;
+    get?(): Promise<PublicHostSettings>;
+    save?(
+      profile: ZenXSettingsUpdate,
+      apiKey?: string,
+    ): Promise<PublicHostSettings>;
+    addProvider?(
+      provider: ZenXProviderProfile,
+      apiKey?: string,
+    ): Promise<PublicHostSettings>;
+    editProvider?(
+      providerProfileId: string,
+      provider: ZenXProviderProfile,
+      options?: ZenXProviderEditOptions,
+    ): Promise<PublicHostSettings>;
+    deleteProvider?(
+      providerProfileId: string,
+      replacements?: ZenXProviderDeleteReplacements,
+    ): Promise<PublicHostSettings>;
+    discoverProvider?(
+      providerProfileId: string,
+    ): Promise<ZenXProviderCatalogSnapshot>;
     archivedThreads?: NativeThreadSummary[];
     onUnarchive?(thread: NativeThreadSummary): Promise<void>;
   } = {},
@@ -203,10 +836,36 @@ async function mountSettings(
     window: dom.window,
     IS_REACT_ACT_ENVIRONMENT: true,
   });
+  const initialSettings = options.initialSettings ?? settings;
   const zenx = {
     settings: {
-      get: async () => settings,
-      save,
+      get: options.get ?? (async () => initialSettings),
+      save:
+        options.save ??
+        (async (profile: ZenXSettingsUpdate) => ({
+          ...initialSettings,
+          profile: { ...initialSettings.profile, ...profile },
+        })),
+      addProvider:
+        options.addProvider ??
+        (async () => {
+          throw new Error("Unexpected addProvider call");
+        }),
+      editProvider:
+        options.editProvider ??
+        (async () => {
+          throw new Error("Unexpected editProvider call");
+        }),
+      deleteProvider:
+        options.deleteProvider ??
+        (async () => {
+          throw new Error("Unexpected deleteProvider call");
+        }),
+      discoverProvider:
+        options.discoverProvider ??
+        (async () => {
+          throw new Error("Unexpected discoverProvider call");
+        }),
       onManualCodeRequested: () => () => undefined,
     },
   } as unknown as Window["zenx"];
@@ -261,6 +920,74 @@ function exactButton(label: string): HTMLButtonElement | undefined {
   );
 }
 
+function exactButtonRequired(label: string): HTMLButtonElement {
+  const button = exactButton(label);
+  assert.ok(button, `Missing button: ${label}`);
+  return button;
+}
+
+function labeledButton(label: string): HTMLButtonElement | undefined {
+  return Array.from(
+    document.querySelectorAll<HTMLButtonElement>("button"),
+  ).find((button) => button.getAttribute("aria-label") === label);
+}
+
+function labeledButtonRequired(label: string): HTMLButtonElement {
+  const button = labeledButton(label);
+  assert.ok(button, `Missing button with accessible name: ${label}`);
+  return button;
+}
+
+function labelControl<T extends HTMLInputElement | HTMLSelectElement>(
+  label: string,
+  selector: string,
+): T | undefined {
+  return (
+    Array.from(document.querySelectorAll<HTMLLabelElement>("label"))
+      .find(
+        (candidate) =>
+          candidate.querySelector("span")?.textContent?.trim() === label,
+      )
+      ?.querySelector<T>(selector) ?? undefined
+  );
+}
+
+function requiredInput(label: string): HTMLInputElement {
+  const input = labelControl<HTMLInputElement>(label, "input");
+  assert.ok(input, `Missing input: ${label}`);
+  return input;
+}
+
+function labeledSelect(label: string): HTMLSelectElement | undefined {
+  return labelControl<HTMLSelectElement>(label, "select");
+}
+
+async function click(button: HTMLButtonElement): Promise<void> {
+  await act(async () => {
+    button.click();
+    await Promise.resolve();
+  });
+}
+
+async function changeControl(
+  control: HTMLInputElement | HTMLSelectElement,
+  value: string,
+): Promise<void> {
+  await act(async () => {
+    const previous = control.value;
+    control.value = value;
+    const tracker = (
+      control as HTMLInputElement & {
+        _valueTracker?: { setValue(value: string): void };
+      }
+    )._valueTracker;
+    tracker?.setValue(previous);
+    control.dispatchEvent(new window.Event("input", { bubbles: true }));
+    control.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await Promise.resolve();
+  });
+}
+
 function appearanceRadio(
   value: AppearancePreference,
 ): HTMLInputElement | undefined {
@@ -277,7 +1004,9 @@ async function waitFor<T>(read: () => T | null | undefined): Promise<T> {
       await new Promise((resolve) => setTimeout(resolve, 5));
     });
   }
-  throw new Error("Timed out waiting for Settings interaction state");
+  throw new Error(
+    `Timed out waiting for Settings interaction state: ${document.body.textContent?.replace(/\s+/gu, " ").trim()}`,
+  );
 }
 
 function archivedSummary(): NativeThreadSummary {

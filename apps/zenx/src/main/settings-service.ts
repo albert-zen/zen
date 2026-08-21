@@ -40,6 +40,17 @@ import {
 
 const MAX_WORKSPACE_IDENTITY_ATTEMPTS = 2;
 
+type SubscriptionAuth = Pick<
+  OpenAiSubscriptionAuthProfile,
+  "login" | "logout" | "status"
+> &
+  Partial<
+    Pick<
+      OpenAiSubscriptionAuthProfile,
+      "acquireAccessLease" | "renewAccessLease"
+    >
+  >;
+
 interface CanonicalWorkspaceSnapshot {
   readonly profile: ZenXHostProfile;
   readonly entries: readonly ProjectPathIdentity[];
@@ -58,16 +69,8 @@ export class ZenXSettingsService {
   readonly #dataDirectory: string;
   readonly #profilePath: string;
   readonly #profileStore: ZenXHostProfileStore;
-  readonly #subscription: Pick<
-    OpenAiSubscriptionAuthProfile,
-    "login" | "logout" | "status"
-  > &
-    Partial<
-      Pick<
-        OpenAiSubscriptionAuthProfile,
-        "acquireAccessLease" | "renewAccessLease"
-      >
-    >;
+  readonly #subscription: SubscriptionAuth;
+  readonly #subscriptionFactory: (profilePath: string) => SubscriptionAuth;
   readonly #vault: ZenXCredentialVault;
   readonly #projectPlatform: NodeJS.Platform;
   readonly #projectRealpath: ProjectRealpath | undefined;
@@ -91,16 +94,8 @@ export class ZenXSettingsService {
     zenDataDirectory: string;
     vault: ZenXCredentialVault;
     profileStore?: ZenXHostProfileStore;
-    subscription?: Pick<
-      OpenAiSubscriptionAuthProfile,
-      "login" | "logout" | "status"
-    > &
-      Partial<
-        Pick<
-          OpenAiSubscriptionAuthProfile,
-          "acquireAccessLease" | "renewAccessLease"
-        >
-      >;
+    subscription?: SubscriptionAuth;
+    subscriptionFactory?: (profilePath: string) => SubscriptionAuth;
     projectPlatform?: NodeJS.Platform;
     projectRealpath?: ProjectRealpath;
     providerFetchFactory?: (
@@ -120,6 +115,9 @@ export class ZenXSettingsService {
     this.#subscription =
       options.subscription ??
       new OpenAiSubscriptionAuthProfile(this.#profilePath);
+    this.#subscriptionFactory =
+      options.subscriptionFactory ??
+      ((profilePath) => new OpenAiSubscriptionAuthProfile(profilePath));
     this.#vault = options.vault;
     this.#projectPlatform = options.projectPlatform ?? process.platform;
     this.#projectRealpath = options.projectRealpath;
@@ -178,6 +176,8 @@ export class ZenXSettingsService {
         async (id) => [id, await this.#vault.hasApiKey(id)] as const,
       ),
     );
+    const subscriptionProviderProfileId =
+      this.#configuredSubscriptionProfileId(profile);
     return {
       profile,
       hasApiKey: await this.#vault.hasApiKey(
@@ -186,7 +186,13 @@ export class ZenXSettingsService {
       apiKeyProviderProfileIds: apiKeyPresence.flatMap(([id, present]) =>
         present ? [id] : [],
       ),
-      subscription: await this.#subscription.status(),
+      subscriptionProviderProfileId: subscriptionProviderProfileId ?? null,
+      subscription:
+        subscriptionProviderProfileId === undefined
+          ? { authenticated: false, expired: false }
+          : await this.#subscriptionForProfile(
+              subscriptionProviderProfileId,
+            ).status(),
     };
   }
 
@@ -468,6 +474,9 @@ export class ZenXSettingsService {
           `Provider profile ${providerProfileId} is not configured`,
         );
       }
+      const deletedProvider = current.providerProfiles.find(
+        (candidate) => candidate.providerProfileId === providerProfileId,
+      )!;
       const defaultReferenced =
         current.defaultModel.providerProfileId === providerProfileId;
       const titleReferenced =
@@ -492,6 +501,9 @@ export class ZenXSettingsService {
       });
       await this.#persistProfile(next, undefined, [providerProfileId]);
       this.#profile = next;
+      if (deletedProvider.type === "openai-subscription") {
+        await this.#subscriptionForProfile(providerProfileId).logout();
+      }
     });
   }
 
@@ -639,7 +651,7 @@ export class ZenXSettingsService {
       throw new Error("OpenAI login is already in progress");
     this.#loginInProgress = true;
     try {
-      await this.#subscription.login({
+      await this.#activeSubscription().login({
         notifyAuthUrl: openBrowser,
         readManualCode: async ({ signal }) =>
           await new Promise<string>((resolve, reject) => {
@@ -679,14 +691,36 @@ export class ZenXSettingsService {
   }
 
   async logout(): Promise<void> {
-    await this.#subscription.logout();
+    await this.#activeSubscription().logout();
   }
 
-  #subscriptionForProfile(providerProfileId: string) {
+  #subscriptionForProfile(providerProfileId: string): SubscriptionAuth {
     if (providerProfileId === "openai-codex") return this.#subscription;
-    return new OpenAiSubscriptionAuthProfile(
+    return this.#subscriptionFactory(
       this.#subscriptionProfilePath(providerProfileId),
     );
+  }
+
+  #configuredSubscriptionProfileId(
+    profile = this.#profile,
+  ): string | undefined {
+    if (profile === undefined) return undefined;
+    const ids = profile.providerProfiles
+      .filter((candidate) => candidate.type === "openai-subscription")
+      .map((candidate) => candidate.providerProfileId);
+    if (ids.length > 1) {
+      throw new Error(
+        "ZenX supports at most one OpenAI subscription Provider profile",
+      );
+    }
+    return ids[0];
+  }
+
+  #activeSubscription(): SubscriptionAuth {
+    const providerProfileId = this.#configuredSubscriptionProfileId();
+    return providerProfileId === undefined
+      ? this.#subscription
+      : this.#subscriptionForProfile(providerProfileId);
   }
 
   #subscriptionProfilePath(providerProfileId: string): string {
