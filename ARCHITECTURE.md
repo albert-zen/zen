@@ -292,6 +292,14 @@ Thread 当前生效的 `providerProfileId / modelId / reasoningEffort` 调用所
 或 cache。v1 确定性保留该最新完整 Turn 的全部 canonical Item；生成、abort、验证或
 journal append 失败都明确返回且不追加 compaction Item，不隐藏重试。
 
+成功 Turn 使用 admission 时冻结的 Provider adapter、selection、catalog entry 与
+`contextWindow` 判断自动 compaction；只有 Provider 实际报告的有效 `inputTokens`
+达到窗口的 80% 整数上界才执行，多次采样或 tool round 取观察到的最高 input context。
+Unknown window、缺失或无效 usage、非成功 Turn 与已覆盖边界都不猜测、不追加。
+自动生成、验证或 persistence 必须在成功 Turn handle settle 前完成；失败通过既有
+Turn execution error surface 明确返回且不重试，已完成 Turn 的原始 canonical trace
+保持不变。
+
 `context_compaction` canonical Item 记录 `coveredThroughItemId`、原样 summary、
 稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
 `algorithmVersion` 与 input/output token usage。覆盖目标必须是已存在的
