@@ -31,13 +31,56 @@ test("renders the supported GFM blocks without raw HTML", () => {
   ].join("\n");
   const html = renderToStaticMarkup(createElement(Markdown, { text: source }));
   assert.match(html, /<h1>Heading<\/h1>/u);
-  assert.match(html, /<blockquote>quoted <code>value<\/code><\/blockquote>/u);
+  assert.match(
+    html,
+    /<blockquote>\s*<p>quoted <code>value<\/code><\/p>\s*<\/blockquote>/u,
+  );
   assert.match(html, /<ul>/u);
   assert.match(html, /<table>/u);
   assert.match(html, /const ok = true;/u);
   assert.match(html, /&lt;img src=x onerror=/u);
   assert.doesNotMatch(html, /javascript:/u);
   assert.doesNotMatch(html, /<img/u);
+});
+
+test("renders strong, emphasis, and list item inline syntax", () => {
+  const html = renderToStaticMarkup(
+    createElement(Markdown, {
+      text: "**bold** and *emphasis*\n\n- **first**\n- _second_",
+    }),
+  );
+  assert.match(html, /<strong>bold<\/strong>/u);
+  assert.match(html, /<em>emphasis<\/em>/u);
+  assert.match(html, /<li><strong>first<\/strong><\/li>/u);
+  assert.match(html, /<li><em>second<\/em><\/li>/u);
+});
+
+test("keeps Markdown images inert and preserves fence contents", () => {
+  const source = [
+    "![remote](https://evil.example/x.png)",
+    "",
+    "````js",
+    "[bad](javascript:alert(1))",
+    "```",
+    "tail",
+    "````",
+  ].join("\n");
+  const html = renderToStaticMarkup(createElement(Markdown, { text: source }));
+  assert.doesNotMatch(html, /<img\b/u);
+  assert.match(html, /\[bad\]\(javascript:alert\(1\)\)\n```\ntail/u);
+});
+
+test("does not treat a different fence as closing an unfinished block", () => {
+  const html = renderToStaticMarkup(
+    createElement(Markdown, {
+      text: "~~~js\na\n```\nb\n```\n",
+    }),
+  );
+  assert.equal(
+    (html.match(/class="markdown-code(?: streaming)?"/g) ?? []).length,
+    1,
+  );
+  assert.match(html, /a\n```\nb/u);
 });
 
 test("keeps an unfinished streaming fence as one stable code block", () => {
