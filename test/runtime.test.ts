@@ -12,6 +12,7 @@ import type {
   ThreadMetadataItem,
   UserMessageItem,
 } from "../src/item.js";
+import { textFromUserMessage } from "../src/item.js";
 import {
   InMemoryThreadJournal,
   JsonlThreadJournal,
@@ -197,9 +198,9 @@ test("derives each turn model from append-only configuration changes", async () 
 
   assert.deepEqual(requestedModels, ["model-one", "model-two"]);
   assert.deepEqual(requestedMessages[1], [
-    { role: "user", text: "first" },
+    { role: "user", content: [{ type: "text", text: "first" }] },
     { role: "assistant", text: "model-one" },
-    { role: "user", text: "second" },
+    { role: "user", content: [{ type: "text", text: "second" }] },
   ]);
   assert.deepEqual(
     changed.items
@@ -1603,10 +1604,19 @@ test("soft steer stays in one Turn and forces a new sample after streamed output
 
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[1], [
-    { role: "user", text: "initial request" },
+    {
+      role: "user",
+      content: [{ type: "text", text: "initial request" }],
+    },
     { role: "assistant", text: "first answer" },
-    { role: "user", text: "follow this correction" },
-    { role: "user", text: "then preserve the tests" },
+    {
+      role: "user",
+      content: [{ type: "text", text: "follow this correction" }],
+    },
+    {
+      role: "user",
+      content: [{ type: "text", text: "then preserve the tests" }],
+    },
   ]);
   const snapshot = await server.readThread(thread.id);
   assert.equal(snapshot.turns.length, 1);
@@ -1615,7 +1625,7 @@ test("soft steer stays in one Turn and forces a new sample after streamed output
   assert.deepEqual(
     snapshot.items
       .filter((item) => item.type === "user_message")
-      .map((item) => item.text),
+      .map(textFromUserMessage),
     ["initial request", "follow this correction", "then preserve the tests"],
   );
   assert.equal(
@@ -1698,7 +1708,7 @@ test("soft steer waits behind a tool result and does not cancel approval", async
 
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[1], [
-    { role: "user", text: "use a tool" },
+    { role: "user", content: [{ type: "text", text: "use a tool" }] },
     {
       role: "assistant",
       toolCalls: [
@@ -1710,7 +1720,10 @@ test("soft steer waits behind a tool result and does not cancel approval", async
       ],
     },
     { role: "tool", callId: "steer-call", text: "tool complete", exitCode: 0 },
-    { role: "user", text: "change the final response" },
+    {
+      role: "user",
+      content: [{ type: "text", text: "change the final response" }],
+    },
   ]);
 });
 
@@ -1718,7 +1731,10 @@ test("soft steer never acknowledges a failed journal append or crosses a termina
   const backing = new InMemoryThreadJournal();
   const journal: ThreadJournal = {
     append: async (item) => {
-      if (item.type === "user_message" && item.text === "must not persist") {
+      if (
+        item.type === "user_message" &&
+        textFromUserMessage(item) === "must not persist"
+      ) {
         throw new Error("steer journal unavailable");
       }
       await backing.append(item);
@@ -1803,7 +1819,8 @@ test("an interrupt that wins the mutation fence rejects a racing soft steer", as
   assert.equal(
     snapshot.items.some(
       (item) =>
-        item.type === "user_message" && item.text === "must lose the fence",
+        item.type === "user_message" &&
+        textFromUserMessage(item) === "must lose the fence",
     ),
     false,
   );

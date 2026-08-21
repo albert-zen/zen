@@ -9,6 +9,7 @@ import type {
   ToolCallItem,
   ToolResultItem,
 } from "../../item.js";
+import { previewFromUserMessage, textFromUserMessage } from "../../item.js";
 import type { DerivedTurn } from "../../thread.js";
 import type { NativeThreadSummary } from "../../thread-summary.js";
 import { encodeModelKey } from "./model-key.js";
@@ -112,8 +113,7 @@ export function projectThread(
     sessionId: snapshot.id,
     forkedFromId: null,
     parentThreadId: null,
-    preview:
-      snapshot.items.find((item) => item.type === "user_message")?.text ?? "",
+    preview: firstUserMessagePreview(snapshot.items),
     ephemeral: false,
     isPinned: false,
     modelProvider: snapshot.providerProfileId,
@@ -262,7 +262,9 @@ export function projectCompletedItem(
         type: "userMessage",
         id: item.id,
         clientId: item.clientId ?? null,
-        content: [{ type: "text", text: item.text, text_elements: [] }],
+        content: [
+          { type: "text", text: textFromUserMessage(item), text_elements: [] },
+        ],
       };
     case "agent_message":
       return {
@@ -435,6 +437,11 @@ function metadataFor(items: readonly CanonicalItem[]): ThreadMetadataItem {
     throw new Error("Thread has no metadata item");
   }
   return metadata;
+}
+
+function firstUserMessagePreview(items: readonly CanonicalItem[]): string {
+  const message = items.find((item) => item.type === "user_message");
+  return message === undefined ? "" : previewFromUserMessage(message);
 }
 
 function seconds(timestamp: string): number {

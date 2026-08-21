@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { shellPrintCommand } from "./fixtures.js";
+import { png1x1, shellPrintCommand } from "./fixtures.js";
 
 import { createHostedAppServer } from "../apps/cli/src/host.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
@@ -34,6 +34,131 @@ function testHost(
     threadMetadata: new InMemoryThreadMetadataStore(),
   });
 }
+
+test("imports Codex localImage and image inputs before canonical turn/start", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-protocol-image-"));
+  const localPath = path.join(root, "ephemeral-local.png");
+  await writeFile(localPath, png1x1());
+  const appServer = createHostedAppServer({
+    cwd: root,
+    dataDirectory: root,
+    model: "fake-image",
+    modelCatalog: [
+      {
+        id: "fake-image",
+        isDefault: true,
+        supportedReasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
+        inputModalities: ["text", "image"],
+        source: "manual",
+      },
+    ],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+  });
+  const messages: JsonRpcMessage[] = [];
+  let turnCompleted = deferred<void>();
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(root, "home"),
+    send: (message) => {
+      messages.push(message);
+      if ("method" in message && message.method === "turn/completed") {
+        turnCompleted.resolve();
+      }
+    },
+  });
+  try {
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await connection.receive({ method: "initialized" });
+    await connection.receive({ id: 2, method: "thread/start", params: {} });
+    const started = messages.find(
+      (message) => "result" in message && String(message.id) === "2",
+    );
+    assert(
+      started !== undefined && "result" in started && isRecord(started.result),
+    );
+    const thread = responseResult<Record<string, unknown>>(
+      started.result,
+      "thread",
+    );
+    await connection.receive({
+      id: 3,
+      method: "turn/start",
+      params: {
+        threadId: thread.id,
+        input: [{ type: "image", url: "https://example.test/image.png" }],
+      },
+    });
+    const remoteImageFailure = messages.find(
+      (message) => "error" in message && String(message.id) === "3",
+    );
+    assert(remoteImageFailure !== undefined && "error" in remoteImageFailure);
+    assert(
+      isRecord(remoteImageFailure.error.data) &&
+        remoteImageFailure.error.data.zenCode === "attachment_invalid",
+    );
+    assert.deepEqual(
+      (await appServer.readThread(String(thread.id))).items.map(
+        (item) => item.type,
+      ),
+      ["thread_metadata"],
+    );
+    await connection.receive({
+      id: 4,
+      method: "turn/start",
+      params: {
+        threadId: thread.id,
+        input: [
+          { type: "text", text: "local" },
+          { type: "localImage", path: localPath },
+        ],
+      },
+    });
+    await within(turnCompleted.promise);
+
+    turnCompleted = deferred<void>();
+    await connection.receive({
+      id: 5,
+      method: "turn/start",
+      params: {
+        threadId: thread.id,
+        input: [
+          {
+            type: "image",
+            url: `data:image/png;base64,${Buffer.from(png1x1()).toString("base64")}`,
+          },
+        ],
+      },
+    });
+    await within(turnCompleted.promise);
+
+    const snapshot = await appServer.readThread(String(thread.id));
+    const canonicalMessages = snapshot.items.filter(
+      (item) => item.type === "user_message",
+    );
+    assert.equal(canonicalMessages.length, 2);
+    assert(
+      canonicalMessages.every((item) =>
+        item.content?.some((part) => part.type === "image"),
+      ),
+    );
+    const attachmentDirectories = await readdir(
+      path.join(root, "attachments", "sha256"),
+    );
+    assert.equal(attachmentDirectories.length, 1);
+    const journal = await readFile(
+      path.join(root, "threads", `${String(thread.id)}.jsonl`),
+      "utf8",
+    );
+    assert.equal(journal.includes(localPath), false);
+    assert.equal(journal.includes("base64"), false);
+  } finally {
+    connection.close();
+    await appServer.closeProviderTransport();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("enforces the Codex initialize handshake and method boundary", async () => {
   const messages: JsonRpcMessage[] = [];

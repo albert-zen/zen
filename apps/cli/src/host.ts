@@ -1,6 +1,10 @@
 import path from "node:path";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 
+import {
+  FileAttachmentStore,
+  type AttachmentStore,
+} from "../../../src/attachment.js";
 import { ZenAppServer } from "../../../src/app-server.js";
 import {
   JsonlThreadJournal,
@@ -74,6 +78,7 @@ export interface ZenHostOptions {
   threadMetadata?: ThreadMetadataStore;
   threadSummaryProjection?: ThreadSummaryProjection;
   tools?: ToolExecutor;
+  attachments?: AttachmentStore;
 }
 
 export interface ProviderTransport {
@@ -91,6 +96,9 @@ export type HostedZenAppServer = ZenAppServer & {
 export function createHostedAppServer(
   options: ZenHostOptions,
 ): HostedZenAppServer {
+  const attachments =
+    options.attachments ??
+    new FileAttachmentStore(path.join(options.dataDirectory, "attachments"));
   const configuredProfiles = normalizeProviderProfiles(options);
   const seenProfileIds = new Set<string>();
   const preparedProfiles = configuredProfiles.map((profile) => {
@@ -131,7 +139,7 @@ export function createHostedAppServer(
       safeProxyUrl(profile.transport.proxyUrl);
     // Adapter constructors are side-effect free; preflight configuration before
     // allocating any closeable proxy transport.
-    createModel(profile.provider, globalThis.fetch);
+    createModel(profile.provider, globalThis.fetch, attachments);
     return {
       ...profile,
       providerProfileId,
@@ -161,7 +169,7 @@ export function createHostedAppServer(
     fetches.push(fetch);
     return {
       providerProfileId: profile.providerProfileId,
-      adapter: createModel(profile.provider, fetch),
+      adapter: createModel(profile.provider, fetch, attachments),
       modelCatalog: profile.catalog,
     };
   });
@@ -169,6 +177,7 @@ export function createHostedAppServer(
     journal:
       options.journal ??
       new JsonlThreadJournal(path.join(options.dataDirectory, "threads")),
+    attachments,
     runtime: new AgentRuntime({
       tools:
         options.tools ??
@@ -309,6 +318,7 @@ function uniqueModels(models: readonly string[]): string[] {
 function createModel(
   provider: HostProvider,
   fetch: typeof globalThis.fetch,
+  attachments: AttachmentStore,
 ): ModelAdapter {
   if (provider.type === "fake") {
     return new FakeModel();
@@ -323,6 +333,7 @@ function createModel(
       renewAccessLease: async (rejectedAccessToken, signal) =>
         await profile.renewAccessLease(rejectedAccessToken, signal),
       fetch,
+      attachments,
     });
   }
   return new OpenAiCompatibleModel({
@@ -333,6 +344,7 @@ function createModel(
       ? {}
       : { defaultParams: provider.defaultParams }),
     fetch,
+    attachments,
   });
 }
 

@@ -13,6 +13,7 @@ import type {
   TurnAbortedItem,
   TurnCompletedItem,
   TurnStartedItem,
+  UserInput,
   UserMessageItem,
 } from "./item.js";
 import type { ModelAdapter, ModelMessage } from "./model.js";
@@ -62,7 +63,7 @@ export type RuntimeEvent =
 export interface RunTurnOptions {
   thread: Thread;
   turnId?: string;
-  text: string;
+  input: UserInput;
   clientId?: string;
   configuration: RuntimeConfiguration;
   modelAdapter: ModelAdapter;
@@ -113,6 +114,7 @@ export class AgentRuntime {
     await options.commit(started);
     options.emit({ type: "turn_started", threadId: options.thread.id, turnId });
 
+    let initialInputCommitted = false;
     try {
       this.#assertSandbox(options.configuration.sandbox);
       const userItem: UserMessageItem = {
@@ -121,12 +123,13 @@ export class AgentRuntime {
         turnId,
         createdAt: this.#now(),
         type: "user_message",
-        text: options.text,
+        content: options.input,
         ...(options.clientId === undefined
           ? {}
           : { clientId: options.clientId }),
       };
       await this.#completeItem(userItem, options);
+      initialInputCommitted = true;
       options.initialInputCommitted?.();
 
       for (let round = 0; ; round += 1) {
@@ -213,6 +216,7 @@ export class AgentRuntime {
         }
       }
     } catch (error) {
+      if (!initialInputCommitted) throw error;
       if (options.signal.aborted || isAbortError(error)) {
         const interruption: TurnAbortedItem = {
           id: this.#id(),

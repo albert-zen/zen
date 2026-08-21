@@ -10,6 +10,9 @@
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — 驱动一个 Thread 的循环：从 ItemList 编译上下文 → 调用模型 → 执行工具，把发生的一切追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
+- **AttachmentStore** — ZAS 管理的不可变、SHA-256 内容寻址 payload store；
+  canonical Item 只保存 provider-neutral `AttachmentRef`，Store 与 ItemList 合起来才足以重放输入，
+  它不保存消息、Turn、引用关系或任何第二份会话状态。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
   ThreadMetadataStore 归约为可持久化、可删除重建的原生 `ThreadSummary` /
   `CurrentMetadata` 列表读取模型；它只加速产品读取，不成为新的权威状态。
@@ -241,6 +244,21 @@ Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派�
 | 会话语义状态   | Turn 生命周期、消息、模型输出、工具调用、工具结果、失败 | Thread ItemList（唯一权威）    |
 | 外部运行配置   | API Key、Provider 账户、默认模型、workspace 配置        | Zen Core 外部的配置层          |
 | 观测与展示状态 | 流式 delta、延迟指标、debug log、UI 状态                | 临时事件 / telemetry，不持久化 |
+
+图片 payload 是 canonical Item 所引用的不可变数据，而不是可独立解释的会话状态：
+本地路径或 wire data URI 只在 ZAS 导入边界存在；导入先校验受支持的图片 MIME、格式、
+字节数与像素尺寸，再以 SHA-256 寻址并通过同目录临时文件原子发布。canonical
+`user_message` 只保存 typed text part 与 `AttachmentRef`（hash、MIME、字节数、宽高），
+不得保存 base64、临时路径或原始本地路径。Provider adapter 每次请求时从 Store
+读取并校验引用，再转换为目标 API 的图片 part；因此重启只依赖同一 journal 与
+Attachment Store，不依赖 adapter cache。
+
+首版只支持 PNG、JPEG、GIF 与 WebP 图片，单个 payload 上限 20 MiB，宽高各不超过
+16,384 像素且总像素不超过 40,000,000；不建立任意文件平台。备份与 Thread 导出必须
+包含 journal 中可达的全部附件 blob 和 refs；只复制 journal 不是完整备份。删除 Thread
+不自动删除 blob，同内容跨 Thread 去重。未来 GC 只能是显式操作：从选定的完整
+canonical journals 扫描 `AttachmentRef` 计算可达集合，先完成约定的备份/导出边界，
+再删除不可达 blob；首版不实现自动 GC。
 
 一条记录该不该进 ItemList，判据是：**删除它之后，Agent 下一轮得到的上下文、
 或用户理解的执行历史会不会改变？** 会，就是 Item；不会，就放外侧。

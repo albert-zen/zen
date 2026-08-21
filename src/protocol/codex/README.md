@@ -103,9 +103,16 @@ MCP `-c` 配置由 CLI remote bridge 启动边界验证后忽略，不进入 wir
 
 ## Soft steer
 
+`turn/start`、`turn/steer` 与 Zen `turn/replace` 的 `input` 复用固定 Codex typed
+形状：`text`、`localImage.path` 与 `image.url`。首版 `image.url` 只接受 base64
+data URI；远程 URL 不会在重放时偷偷重新下载。路径与 data URI 只在 ZAS 导入
+边界存在，校验后写入 Attachment Store，Core 只收到 typed `AttachmentRef`。
+图片能力为 Unknown 或明确不支持时请求失败，不静默发送；Z08 的真实纵向执行以
+`turn/start` 为准，steer/replace 保留同一 typed public seam，完整中断/重试体验由
+后续切片收口。
+
 `turn/steer` 对齐 Codex 0.146.0 的 same-Turn 行为。请求必须包含
-`threadId`、作为 fencing token 的 `expectedTurnId`，以及非空 `input`；Zen
-当前只接受 `[{ type: "text", text: string }]`，可选
+`threadId`、作为 fencing token 的 `expectedTurnId`，以及非空 typed `input`；可选
 `clientUserMessageId` 用于可靠重试。成功返回 `{ turnId }`，其中 id 必须仍是
 同一个 active Turn，不产生新的 `turn/started`。无 active Turn、fence 过期、
 目标已经终态或不可表示的 input 都明确失败。
@@ -120,7 +127,7 @@ steer 不取消当前 model stream、tool 或 approval，也不处理 approval�
 
 Codex 0.146.0 没有原子的 Interrupt & send 方法。Zen 因此增加明确的
 `turn/replace` 扩展；它不是标准 `turn/steer` mode，也不扩大 Codex 兼容声明。
-请求必须包含 `threadId`、`expectedTurnId`、text-only `input` 与非空
+请求必须包含 `threadId`、`expectedTurnId`、typed `input` 与非空
 `clientUserMessageId`。成功返回 `{ interruptedTurnId, turnId }`。
 
 App Server 在同一 Thread mutation boundary 内验证 active-Turn fence，先写入

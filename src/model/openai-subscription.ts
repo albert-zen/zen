@@ -5,6 +5,7 @@ import type {
   ModelRequest,
   ModelTool,
 } from "../model.js";
+import type { AttachmentStore } from "../attachment.js";
 
 const defaultEndpoint = "https://chatgpt.com/backend-api/codex/responses";
 const jwtClaim = "https://api.openai.com/auth";
@@ -28,6 +29,7 @@ export interface OpenAiSubscriptionModelOptions {
   endpoint?: string;
   fetch?: typeof globalThis.fetch;
   instructions?: string;
+  attachments?: Pick<AttachmentStore, "read">;
 }
 
 /**
@@ -44,6 +46,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
   readonly #endpoint: string;
   readonly #fetch: typeof globalThis.fetch;
   readonly #instructions: string;
+  readonly #attachments: Pick<AttachmentStore, "read"> | undefined;
 
   constructor(options: OpenAiSubscriptionModelOptions) {
     this.#acquireAccessLease = options.acquireAccessLease;
@@ -52,6 +55,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#instructions =
       options.instructions?.trim() || "You are a helpful assistant.";
+    this.#attachments = options.attachments;
   }
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
@@ -59,12 +63,18 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     const tools = request.tools.map(toResponsesTool);
     const allowedToolNames = new Set(tools.map((tool) => tool.name));
     const sessionHint = promptCacheHint(request.sessionId);
+    const input: Array<Record<string, unknown>> = [];
+    for (const [index, message] of request.messages.entries()) {
+      input.push(
+        ...(await toResponsesInput(message, index, this.#attachments)),
+      );
+    }
     const body = JSON.stringify({
       model: requiredLabel(request.model, "model"),
       store: false,
       stream: true,
       instructions: this.#instructions,
-      input: request.messages.flatMap(toResponsesInput),
+      input,
       text: { verbosity: "low" },
       tool_choice: tools.length === 0 ? "none" : "auto",
       parallel_tool_calls: true,
@@ -171,11 +181,32 @@ function toResponsesTool(tool: ModelTool): ResponsesTool {
   };
 }
 
-function toResponsesInput(
+async function toResponsesInput(
   message: ModelMessage,
   index: number,
-): Array<Record<string, unknown>> {
+  attachments: Pick<AttachmentStore, "read"> | undefined,
+): Promise<Array<Record<string, unknown>>> {
   if (message.role === "user") {
+    if ("content" in message) {
+      const content: Array<Record<string, unknown>> = [];
+      for (const part of message.content) {
+        if (part.type === "text") {
+          content.push({ type: "input_text", text: part.text });
+        } else {
+          if (attachments === undefined) {
+            throw new Error(
+              "OpenAI subscription attachment reader is required for image input",
+            );
+          }
+          const bytes = await attachments.read(part.attachment);
+          content.push({
+            type: "input_image",
+            image_url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+          });
+        }
+      }
+      return [{ role: "user", content }];
+    }
     return [
       {
         role: "user",

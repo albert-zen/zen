@@ -1,8 +1,18 @@
-import type { CanonicalItem } from "./item.js";
+import {
+  contentFromUserMessage,
+  textFromUserInput,
+  type CanonicalItem,
+  type UserInput,
+} from "./item.js";
 
 export interface TextModelMessage {
   role: "user" | "assistant";
   text: string;
+}
+
+export interface TypedUserModelMessage {
+  role: "user";
+  content: UserInput;
 }
 
 export interface ToolCallModelMessage {
@@ -23,7 +33,10 @@ export interface ToolResultModelMessage {
 }
 
 export type ModelMessage =
-  TextModelMessage | ToolCallModelMessage | ToolResultModelMessage;
+  | TextModelMessage
+  | TypedUserModelMessage
+  | ToolCallModelMessage
+  | ToolResultModelMessage;
 
 export type ReasoningEffort = string;
 
@@ -78,7 +91,14 @@ export function compileModelMessages(
     }
     switch (item.type) {
       case "user_message":
-        messages.push({ role: "user", text: item.text });
+        if (item.content === undefined) {
+          messages.push({ role: "user", text: item.text });
+        } else {
+          messages.push({
+            role: "user",
+            content: contentFromUserMessage(item),
+          });
+        }
         break;
       case "agent_message":
         if (items[index + 1]?.type === "tool_call") {
@@ -278,8 +298,16 @@ export class FakeModel implements ModelAdapter {
 
     const latestUser = [...request.messages]
       .reverse()
-      .find((message): message is TextModelMessage => message.role === "user");
-    const text = latestUser?.text ?? "";
+      .find(
+        (message): message is TextModelMessage | TypedUserModelMessage =>
+          message.role === "user",
+      );
+    const text =
+      latestUser !== undefined &&
+      "content" in latestUser &&
+      latestUser.content !== undefined
+        ? textFromUserInput(latestUser.content)
+        : ((latestUser as TextModelMessage | undefined)?.text ?? "");
     if (text.startsWith("!shell ")) {
       yield {
         type: "tool_call",
