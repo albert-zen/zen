@@ -66,6 +66,7 @@ test("service status is part of the Settings row, not a separate footer line", a
       document.querySelector<HTMLButtonElement>(".settings-nav-row");
     assert.ok(settings);
     assert.match(settings.getAttribute("aria-label") ?? "", /ready/i);
+    assert.equal(settings.getAttribute("title"), "Local service ready");
   } finally {
     await act(async () => root.unmount());
     Object.assign(globalThis, previousGlobals, {

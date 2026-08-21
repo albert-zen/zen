@@ -427,6 +427,7 @@ export function Sidebar({
             className="settings-nav-row"
             type="button"
             aria-label={`Settings — ${serviceStatusPresentation(serverStatus).label}`}
+            title={serviceStatusPresentation(serverStatus).label}
             aria-current={selectedPage === "settings" ? "page" : undefined}
             onClick={onOpenSettings}
           >
@@ -472,7 +473,6 @@ function ServiceStatusDot({ status }: { status: AppServerHostStatus }) {
   return (
     <span
       className={`service-status-dot ${presentation.className}`}
-      title={presentation.label}
       aria-hidden="true"
     />
   );
