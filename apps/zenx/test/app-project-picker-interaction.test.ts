@@ -113,7 +113,16 @@ test("packaged startup clears a transient Project failure after the App Server b
       document.body.textContent ?? "",
       /Zen App Server stopped/u,
     );
-    assert.match(document.body.textContent ?? "", /Local service ready/u);
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")?.title,
+      "Local service ready",
+    );
+    assert.match(
+      document
+        .querySelector<HTMLButtonElement>(".settings-nav-row")
+        ?.getAttribute("aria-label") ?? "",
+      /Local service ready/u,
+    );
 
     await act(async () => {
       statusListener?.({ type: "starting" });
@@ -128,7 +137,10 @@ test("packaged startup clears a transient Project failure after the App Server b
           "Zen App Server is not ready",
         ),
     );
-    assert.match(document.body.textContent ?? "", /Local service ready/u);
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")?.title,
+      "Local service ready",
+    );
     assert.match(document.body.textContent ?? "", /No thread selected/u);
 
     await act(async () => {
@@ -136,7 +148,10 @@ test("packaged startup clears a transient Project failure after the App Server b
       await Promise.resolve();
     });
     assert.match(document.body.textContent ?? "", /Zen App Server stopped/u);
-    assert.match(document.body.textContent ?? "", /Local service stopped/u);
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")?.title,
+      "Local service error: host exited",
+    );
   } finally {
     await unmountApp(harness);
   }
