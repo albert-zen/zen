@@ -63,6 +63,15 @@ model 或 effort 明确失败。单 profile 的既有裸 model id 仅作为入�
 Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，避免发送
 不完整的 0.146.0 类型。
 
+`model/list` 的 `supportedReasoningEfforts`、`defaultReasoningEffort` 与
+`inputModalities` 直接来自结构化 catalog，不再硬编码。固定 0.146.0 schema 要求
+这些字段存在；非默认的 Unknown 或已知不可运行条目在此固定 wire 投影中省略，
+不会阻断同目录内可表示、可运行的条目。manual override 补全能力后，该条目自然重新
+进入列表。Host 默认模型必须可表示且可运行，否则明确失败；不使用缺省值或 Zen 私有
+字段。context window 与 catalog source 在本切片仍是 host data，不扩展固定 wire
+schema。ID-only `GET /models` discovery 不会按名称补写这些字段，Unknown reasoning
+也不能被一次 per-Thread explicit effort 绕过。
+
 `thread/settings/update` 与 `turn/start` 在既有 `model` / `effort` 字段内提交同一
 selection change，不增加 Zen 私有字段或第二种协议。协议 adapter 解码后只把
 稳定 `providerProfileId / modelId` 与可选的显式 effort 交给 Core；省略 effort 时

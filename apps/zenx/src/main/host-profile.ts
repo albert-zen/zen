@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { legacyModelCatalogEntries } from "../../../../apps/cli/src/model-presets.js";
+import {
+  normalizeModelCatalogEntry,
+  type ModelCatalogEntry,
+  type ModelCatalogEntryInput,
+} from "../../../../src/model-catalog.js";
 import type { ZenXHostConfig } from "./host-messages.js";
 
 export type ZenXProviderConnection =
@@ -16,8 +22,10 @@ export type ZenXProviderConnection =
 
 export type ZenXProviderProfile = ZenXProviderConnection & {
   providerProfileId: string;
-  models: string[];
+  models: ZenXModelCatalogEntry[];
 };
+
+export type ZenXModelCatalogEntry = Omit<ModelCatalogEntry, "isDefault">;
 
 export interface ZenXModelReference {
   providerProfileId: string;
@@ -30,7 +38,7 @@ export interface ZenXSidebarOrder {
 }
 
 export interface ZenXHostProfile {
-  version: 2;
+  version: 3;
   onboardingComplete: boolean;
   providerProfiles: ZenXProviderProfile[];
   defaultModel: ZenXModelReference;
@@ -91,6 +99,20 @@ interface LegacyHostProfileV1 {
   sidebarOrder?: unknown;
 }
 
+interface LegacyHostProfileV2 {
+  version: 2;
+  onboardingComplete?: unknown;
+  providerProfiles: unknown;
+  defaultModel: unknown;
+  titleModel: unknown;
+  workspace: unknown;
+  workspaces?: unknown;
+  lastUsedWorkspace?: unknown;
+  approvalPolicy: unknown;
+  pinnedThreadIds?: unknown;
+  sidebarOrder?: unknown;
+}
+
 const MAX_PROVIDER_PROFILE_ID_LENGTH = 512;
 const MAX_MODEL_ID_LENGTH = 512;
 const MAX_PROVIDER_PROFILES = 128;
@@ -129,10 +151,14 @@ export class ZenXHostProfileStore {
       await handle.close();
     }
 
-    const migrated = isLegacyHostProfile(value);
-    const profile = migrated
+    const migratedV1 = isLegacyHostProfile(value);
+    const migratedV2 = isLegacyHostProfileV2(value);
+    const migrated = migratedV1 || migratedV2;
+    const profile = migratedV1
       ? migrateLegacyHostProfile(value)
-      : validateHostProfile(value);
+      : migratedV2
+        ? migrateHostProfileV2(value)
+        : validateHostProfile(value);
     if (migrated) await this.write(profile);
     return profile;
   }
@@ -157,7 +183,7 @@ export class ZenXHostProfileStore {
 }
 
 export function validateHostProfile(value: unknown): ZenXHostProfile {
-  if (!isRecord(value) || value.version !== 2) {
+  if (!isRecord(value) || value.version !== 3) {
     throw new Error("ZenX host profile is invalid");
   }
   if (
@@ -178,6 +204,18 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
   const titleModel = validateModelReference(value.titleModel, "title");
   validateModelReferenceExists(defaultModel, providerProfiles, "default");
   validateModelReferenceExists(titleModel, providerProfiles, "title");
+  const configuredDefault = providerProfiles
+    .find(
+      (profile) => profile.providerProfileId === defaultModel.providerProfileId,
+    )!
+    .models.find((model) => model.id === defaultModel.modelId)!;
+  validateRunnableModel(configuredDefault, "default");
+  const configuredTitle = providerProfiles
+    .find(
+      (profile) => profile.providerProfileId === titleModel.providerProfileId,
+    )!
+    .models.find((model) => model.id === titleModel.modelId)!;
+  validateRunnableModel(configuredTitle, "title");
   if (value.approvalPolicy !== "always" && value.approvalPolicy !== "never") {
     throw new Error("ZenX approval policy is invalid");
   }
@@ -191,7 +229,7 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     workspaces,
   );
   return {
-    version: 2,
+    version: 3,
     onboardingComplete: value.onboardingComplete === true,
     providerProfiles,
     defaultModel,
@@ -203,6 +241,30 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     pinnedThreadIds: normalizePinnedThreadIds(value.pinnedThreadIds),
     sidebarOrder: normalizeSidebarOrder(value.sidebarOrder),
   };
+}
+
+function validateRunnableModel(
+  model: ZenXModelCatalogEntry,
+  label: "default" | "title",
+): void {
+  if (model.defaultReasoningEffort === null) {
+    throw new Error(
+      `ZenX ${label} model requires a known default reasoning effort or manual override`,
+    );
+  }
+  if (model.supportedReasoningEfforts === null) {
+    throw new Error(
+      `ZenX ${label} model requires known supported reasoning efforts or manual override`,
+    );
+  }
+  if (
+    model.inputModalities === null ||
+    !model.inputModalities.includes("text")
+  ) {
+    throw new Error(
+      `ZenX ${label} model requires known text input modalities or manual override`,
+    );
+  }
 }
 
 export function migratedProviderProfileId(
@@ -232,7 +294,7 @@ export function migrateLegacyHostProfile(value: unknown): ZenXHostProfile {
   }
   // v1 allowed an independent title model outside its selectable catalog.
   if (!models.includes(titleModel)) models.push(titleModel);
-  return validateHostProfile({
+  return migrateHostProfileV2({
     version: 2,
     onboardingComplete: value.onboardingComplete === true,
     providerProfiles: [{ ...provider, providerProfileId, models }],
@@ -244,6 +306,34 @@ export function migrateLegacyHostProfile(value: unknown): ZenXHostProfile {
     approvalPolicy: value.approvalPolicy,
     pinnedThreadIds: value.pinnedThreadIds,
     sidebarOrder: value.sidebarOrder,
+  });
+}
+
+export function migrateHostProfileV2(value: unknown): ZenXHostProfile {
+  if (!isLegacyHostProfileV2(value)) {
+    throw new Error("ZenX v2 host profile is invalid");
+  }
+  if (
+    !Array.isArray(value.providerProfiles) ||
+    value.providerProfiles.length === 0 ||
+    value.providerProfiles.length > MAX_PROVIDER_PROFILES
+  ) {
+    throw new Error("ZenX Provider profile list is invalid");
+  }
+  const legacyProfiles = value.providerProfiles.map(
+    validateLegacyProviderProfileV2,
+  );
+  const profileIds = legacyProfiles.map((profile) => profile.providerProfileId);
+  if (new Set(profileIds).size !== profileIds.length) {
+    throw new Error("ZenX Provider profile ids must be unique");
+  }
+  return validateHostProfile({
+    ...value,
+    version: 3,
+    providerProfiles: legacyProfiles.map((profile) => ({
+      ...profile,
+      models: structuredLegacyModelCatalog(profile.type, profile.models),
+    })),
   });
 }
 
@@ -263,17 +353,32 @@ export function hostConfigFromProfile(
     dataDirectory: options.dataDirectory,
     approvalPolicy: validated.approvalPolicy,
     providers: validated.providerProfiles.map((providerProfile) => ({
+      ...providerRuntimeCatalog(providerProfile, validated.defaultModel),
       providerProfileId: providerProfile.providerProfileId,
       provider: hostProviderFromProfile(providerProfile, options),
-      model:
-        validated.defaultModel.providerProfileId ===
-        providerProfile.providerProfileId
-          ? validated.defaultModel.modelId
-          : providerProfile.models[0]!,
-      models: providerProfile.models,
     })),
     defaultSelection: validated.defaultModel,
     secretEnvironmentVariables: [],
+  };
+}
+
+function providerRuntimeCatalog(
+  profile: ZenXProviderProfile,
+  defaultModel: ZenXModelReference,
+): {
+  model: string;
+  modelCatalog: ModelCatalogEntryInput[];
+} {
+  const model =
+    defaultModel.providerProfileId === profile.providerProfileId
+      ? defaultModel.modelId
+      : profile.models[0]!.id;
+  return {
+    model,
+    modelCatalog: profile.models.map((entry) => ({
+      ...entry,
+      isDefault: entry.id === model,
+    })),
   };
 }
 
@@ -309,6 +414,17 @@ function hostProviderFromProfile(
 }
 
 function validateProviderProfile(value: unknown): ZenXProviderProfile {
+  if (!isRecord(value)) throw new Error("ZenX Provider profile is invalid");
+  return {
+    ...validateProviderConnection(value),
+    providerProfileId: providerProfileIdentifier(value.providerProfileId),
+    models: validateStructuredModelCatalog(value.models),
+  };
+}
+
+function validateLegacyProviderProfileV2(
+  value: unknown,
+): ZenXProviderConnection & { providerProfileId: string; models: string[] } {
   if (!isRecord(value)) throw new Error("ZenX Provider profile is invalid");
   return {
     ...validateProviderConnection(value),
@@ -377,6 +493,86 @@ function validateModelList(value: unknown): string[] {
   return models;
 }
 
+function validateStructuredModelCatalog(
+  value: unknown,
+): ZenXModelCatalogEntry[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > MAX_MODELS_PER_PROFILE
+  ) {
+    throw new Error("ZenX model catalog is invalid");
+  }
+  const models = value.map(validateStructuredModelCatalogEntry);
+  if (new Set(models.map((entry) => entry.id)).size !== models.length) {
+    throw new Error("ZenX model ids must be unique per Provider profile");
+  }
+  return models;
+}
+
+function validateStructuredModelCatalogEntry(
+  value: unknown,
+): ZenXModelCatalogEntry {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.displayName !== "string" ||
+    typeof value.description !== "string" ||
+    typeof value.hidden !== "boolean" ||
+    typeof value.source !== "string" ||
+    !(
+      value.supportedReasoningEfforts === null ||
+      (Array.isArray(value.supportedReasoningEfforts) &&
+        value.supportedReasoningEfforts.every(
+          (entry) => typeof entry === "string",
+        ))
+    ) ||
+    !(
+      value.defaultReasoningEffort === null ||
+      typeof value.defaultReasoningEffort === "string"
+    ) ||
+    !(
+      value.inputModalities === null ||
+      (Array.isArray(value.inputModalities) &&
+        value.inputModalities.every((entry) => typeof entry === "string"))
+    ) ||
+    !(value.contextWindow === null || typeof value.contextWindow === "number")
+  ) {
+    throw new Error("ZenX model catalog metadata is invalid");
+  }
+  try {
+    const normalized = normalizeModelCatalogEntry({
+      id: modelIdentifier(value.id),
+      displayName: value.displayName,
+      description: value.description,
+      hidden: value.hidden,
+      source: value.source as ModelCatalogEntryInput["source"],
+      supportedReasoningEfforts: value.supportedReasoningEfforts as
+        string[] | null,
+      defaultReasoningEffort: value.defaultReasoningEffort,
+      inputModalities: value.inputModalities as Array<"text" | "image"> | null,
+      contextWindow: value.contextWindow,
+    });
+    const { isDefault: _isDefault, ...entry } = normalized;
+    return entry;
+  } catch (error) {
+    throw new Error(
+      `ZenX model catalog metadata is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+export function structuredLegacyModelCatalog(
+  providerType: ZenXProviderConnection["type"],
+  modelIds: readonly string[],
+): ZenXModelCatalogEntry[] {
+  return legacyModelCatalogEntries(providerType, modelIds).map((entry) => {
+    const normalized = normalizeModelCatalogEntry(entry);
+    const { isDefault: _isDefault, ...model } = normalized;
+    return model;
+  });
+}
+
 function validateModelReference(
   value: unknown,
   label: "default" | "title",
@@ -401,7 +597,7 @@ function validateModelReferenceExists(
       `ZenX ${label} model references an unknown Provider profile`,
     );
   }
-  if (!profile.models.includes(reference.modelId)) {
+  if (!profile.models.some((model) => model.id === reference.modelId)) {
     throw new Error(
       `ZenX ${label} model is absent from Provider profile ${reference.providerProfileId}`,
     );
@@ -432,6 +628,10 @@ function modelIdentifier(value: unknown): string {
 
 function isLegacyHostProfile(value: unknown): value is LegacyHostProfileV1 {
   return isRecord(value) && value.version === 1 && isRecord(value.provider);
+}
+
+function isLegacyHostProfileV2(value: unknown): value is LegacyHostProfileV2 {
+  return isRecord(value) && value.version === 2;
 }
 
 function normalizeSidebarOrder(value: unknown): ZenXSidebarOrder {

@@ -10,6 +10,7 @@ import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  ZenXModelCatalogEntry,
   ZenXSettingsUpdate,
 } from "../src/main/host-profile.js";
 import type { AppearancePreference } from "../src/renderer/src/appearance.js";
@@ -21,14 +22,14 @@ const { SettingsView } = await import("../src/renderer/src/SettingsView.js");
 
 const settings: PublicHostSettings = {
   profile: {
-    version: 2,
+    version: 3,
     onboardingComplete: true,
     providerProfiles: [
       {
         providerProfileId: "fake",
         type: "fake",
         displayName: "Local demo",
-        models: ["fake", "gpt-5.6-luna"],
+        models: [model("fake"), model("gpt-5.6-luna")],
       },
     ],
     defaultModel: { providerProfileId: "fake", modelId: "fake" },
@@ -44,6 +45,20 @@ const settings: PublicHostSettings = {
   apiKeyProviderProfileIds: [],
   subscription: { authenticated: false, expired: false },
 };
+
+function model(id: string): ZenXModelCatalogEntry {
+  return {
+    id,
+    displayName: id,
+    description: "",
+    hidden: false,
+    supportedReasoningEfforts: ["medium"],
+    defaultReasoningEffort: "medium",
+    inputModalities: ["text"],
+    contextWindow: null,
+    source: "legacy",
+  };
+}
 
 test("Settings keeps restart contextual and enables it only for edits", async () => {
   const saved: ZenXSettingsUpdate[] = [];

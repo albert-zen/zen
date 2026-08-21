@@ -289,6 +289,31 @@ test("multi-provider host rejects duplicate profiles, catalogs, and dangling def
       }),
     /absent from provider profile missing/u,
   );
+  assert.throws(
+    () =>
+      createHostedAppServer({
+        ...common,
+        providers: [
+          {
+            ...compatible("profile-a", "secret-a"),
+            modelCatalog: [
+              {
+                id: "shared-model",
+                source: "manual",
+                supportedReasoningEfforts: ["medium"],
+                defaultReasoningEffort: "medium",
+                inputModalities: null,
+              },
+            ],
+          },
+        ],
+        defaultSelection: {
+          providerProfileId: "profile-a",
+          modelId: "shared-model",
+        },
+      }),
+    /input modalities.*manual capability override/iu,
+  );
 });
 
 function compatible(providerProfileId: string, apiKey: string) {

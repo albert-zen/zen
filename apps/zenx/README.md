@@ -76,15 +76,33 @@ preserves Project marker files.
 
 ## Host configuration
 
-ZenX host profile v2 stores multiple stable Provider profiles. Each profile owns
-its connection fields and string model catalog, while the default and title
-models are explicit `(providerProfileId, modelId)` references. The hosted App
-Server registers every configured profile, so profiles may expose the same
-model ID without sharing routing or credentials. Applying relevant host-profile
-changes restarts the local host; existing Thread model settings remain
-authoritative in ZAS. Removing a profile never scans or rewrites Threads: an old
-Thread remains readable, fails clearly when that profile is unavailable, and
-runs again only after an explicit switch to an available profile.
+ZenX host profile v3 stores multiple stable Provider profiles. Each profile owns
+its connection fields and structured model catalog; every model records display
+metadata, hidden state, source, reasoning efforts/default, input modalities, and
+context window. Capability `null` means Unknown while an empty array means known
+unsupported, so an ID-only discovery result is never promoted into guessed
+reasoning, image, or context-window support. Default and title models remain
+explicit `(providerProfileId, modelId)` references. The hosted App Server
+registers every configured profile, so profiles may expose the same model ID
+without sharing metadata, routing, or credentials. Applying relevant
+host-profile changes restarts the local host; existing Thread model settings
+remain authoritative in ZAS. Removing a profile never scans or rewrites Threads:
+an old Thread remains readable, fails clearly when that profile is unavailable,
+and runs again only after an explicit switch to an available profile.
+
+Built-in model metadata is versioned separately from the profile and contains
+only repository-confirmed facts. Manual entries and per-model overrides are
+stored in the profile. OpenAI-compatible profiles can optionally issue
+credential-scoped `GET <baseUrl>/models` discovery through that profile's system
+proxy transport. Discovery reads IDs only, returns all other unconfirmed
+capabilities as Unknown, does not persist credentials, and does not modify the
+configured/manual catalog on success or failure. A discovered model with no
+known reasoning capability is non-runnable even when a Thread supplies an
+explicit effort; it requires a manual catalog capability override before it can
+become the canonical selection. The fixed Codex 0.146.0 `model/list` omits such
+non-default entries while continuing to expose valid configured models, and a
+completed manual override makes the entry visible. Default and title models
+must have runnable, wire-representable reasoning and text-input metadata.
 
 Host profiles live under Electron `userData` without credentials. Compatible
 provider API keys are encrypted with Electron `safeStorage` and keyed by stable
@@ -95,10 +113,12 @@ written to the Host profile, renderer settings, App Server protocol
 configuration, or shell environment. Provider, model, and tool output is trace:
 ZenX does not scan or rewrite it merely because its bytes match a credential,
 and normal Runtime rules may persist that content in Thread journals. Existing
-v1 single-provider profile and vault files migrate deterministically on first
-start and are immediately persisted as v2; the migrated ID preserves the old
-runtime identity (`fake`, `openai-codex`, or the configured compatible-provider
-name).
+v1 single-provider profiles and v2 string-catalog profiles migrate
+deterministically on first start and are immediately persisted as v3 without
+changing the selected `(providerProfileId, modelId)` or rewriting Threads. The
+migrated ID preserves the old runtime identity (`fake`, `openai-codex`, or the
+configured compatible-provider name); legacy unknown model IDs retain the prior
+`medium`/text runtime contract so existing configurations remain runnable.
 
 ## Triggers and Rooms
 

@@ -26,7 +26,10 @@ import type {
   ZenXSidebarOrder,
 } from "./host-profile.js";
 import { ZenXSettingsService } from "./settings-service.js";
-import { withZenXProviderTransports } from "./system-proxy.js";
+import {
+  withZenXProviderTransports,
+  zenXProviderDiscoveryTransport,
+} from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
 import {
@@ -595,6 +598,31 @@ function installSettingsIpc(
       await settings.deleteProviderProfile(providerProfileId, replacements);
       await restartHost();
       return await settings.publicSettings();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.providerDiscover,
+    async (_event, providerProfileId: unknown) => {
+      if (typeof providerProfileId !== "string") {
+        throw new Error("Invalid Provider profile id");
+      }
+      const profile = (
+        await settings.publicSettings()
+      ).profile.providerProfiles.find(
+        (candidate) => candidate.providerProfileId === providerProfileId,
+      );
+      if (profile === undefined) {
+        throw new Error(
+          `Provider profile ${providerProfileId} is not configured`,
+        );
+      }
+      const transport = await zenXProviderDiscoveryTransport(
+        profile,
+        async (url) => await session.defaultSession.resolveProxy(url),
+      );
+      return await settings.discoverProviderModels(providerProfileId, {
+        ...(transport === undefined ? {} : { transport }),
+      });
     },
   );
   ipcMain.handle(ipcChannels.subscriptionLogin, async () => {

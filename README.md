@@ -51,10 +51,12 @@ Zen CLI 就只做 JSONL stdio ↔ WebSocket 薄桥；Thread 与模型执行仍�
 自动追加的 `mcp_servers.t3-code` 两项 `-c` 配置只在这个 remote bridge 模式下
 被精确识别并忽略；除此之外，bridge 只接受 `--remote` 与可选的
 `--auth-token-file`。模型、审批、workspace 等宿主配置应在中央 App Server
-启动时传入。用 `--models <model-a,model-b>` 声明完整 ModelCatalog，并用
+启动时传入。用 `--models <model-a,model-b>` 声明兼容的字符串 ModelCatalog，并用
 `--model <name>` 选择初始模型；T3、Zen CLI 与其他客户端都从同一个 App
 Server 读取目录，并在 Turn 之间切换同一 Thread 的模型。Zen 当前不宣称提供
-T3 MCP tools。
+T3 MCP tools。宿主内部使用 Provider-scoped 结构化目录；Unknown capability 与
+已知不支持严格区分，固定 `model/list` 不会根据模型名称猜测 reasoning、图片或
+context window。
 
 真实模型使用 `--provider openai-compatible`、`--model`、`--base-url` 与
 `--api-key-env`。指定的 key 只由宿主读取，不进入协议、Thread 或 shell tool
