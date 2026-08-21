@@ -353,7 +353,9 @@ Zen 只在 Codex 0.146.0 没有等价原子语义时增加一项明确命名的�
   Item 改变 Thread。
 - **SubscriptionAuthProfile** — 宿主持有的 OAuth credential store 与
   request-time token resolver；它位于 Core 外，不进入 ItemList，ModelAdapter
-  只拿一次请求所需的 access lease。provider 的 sessionId 只允许作为可丢弃的
+  只拿一次请求所需的 access lease；服务端提前拒绝仍未到期的 lease 时，adapter
+  只允许按被拒 access token 作为跨进程比较条件刷新并重试一次，避免并发刷新覆盖
+  已轮换 credential。provider 的 sessionId 只允许作为可丢弃的
   transport cache / affinity hint，不得映射或持久化第二套 Thread。
 - **工具** — shell 等工具的实际执行。
 - **审批** — 审批请求的呈现与应答（各接入端自行实现 UI）。

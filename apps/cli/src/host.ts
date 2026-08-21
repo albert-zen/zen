@@ -146,6 +146,8 @@ function createModel(
     return new OpenAiSubscriptionModel({
       acquireAccessLease: async (signal) =>
         await profile.acquireAccessLease(signal),
+      renewAccessLease: async (rejectedAccessToken, signal) =>
+        await profile.renewAccessLease(rejectedAccessToken, signal),
       fetch,
     });
   }

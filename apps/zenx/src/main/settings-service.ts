@@ -42,7 +42,12 @@ export class ZenXSettingsService {
     OpenAiSubscriptionAuthProfile,
     "login" | "logout" | "status"
   > &
-    Partial<Pick<OpenAiSubscriptionAuthProfile, "acquireAccessLease">>;
+    Partial<
+      Pick<
+        OpenAiSubscriptionAuthProfile,
+        "acquireAccessLease" | "renewAccessLease"
+      >
+    >;
   readonly #vault: ZenXCredentialVault;
   readonly #projectPlatform: NodeJS.Platform;
   readonly #projectRealpath: ProjectRealpath | undefined;
@@ -66,7 +71,13 @@ export class ZenXSettingsService {
     subscription?: Pick<
       OpenAiSubscriptionAuthProfile,
       "login" | "logout" | "status"
-    >;
+    > &
+      Partial<
+        Pick<
+          OpenAiSubscriptionAuthProfile,
+          "acquireAccessLease" | "renewAccessLease"
+        >
+      >;
     projectPlatform?: NodeJS.Platform;
     projectRealpath?: ProjectRealpath;
   }) {
@@ -149,10 +160,21 @@ export class ZenXSettingsService {
       if (acquireAccessLease === undefined) {
         throw new Error("Title model subscription is unavailable");
       }
+      const renewAccessLease = this.#subscription.renewAccessLease;
       return {
         adapter: new OpenAiSubscriptionModel({
           acquireAccessLease: async (signal) =>
             await acquireAccessLease.call(this.#subscription, signal),
+          ...(renewAccessLease === undefined
+            ? {}
+            : {
+                renewAccessLease: async (rejectedAccessToken, signal) =>
+                  await renewAccessLease.call(
+                    this.#subscription,
+                    rejectedAccessToken,
+                    signal,
+                  ),
+              }),
           instructions:
             "Return only a concise display title of at most 64 characters. Do not include quotes, IDs, labels, or punctuation boilerplate.",
         }),

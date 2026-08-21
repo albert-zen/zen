@@ -9,8 +9,11 @@ import {
   SubscriptionCredentialStore,
   type OAuthCredential,
 } from "../apps/cli/src/subscription-auth.js";
+import { createHostedAppServer } from "../apps/cli/src/host.js";
+import { InMemoryThreadJournal } from "../src/journal.js";
 import type { ModelEvent, ModelRequest, ModelTool } from "../src/model.js";
 import { OpenAiSubscriptionModel } from "../src/model/openai-subscription.js";
+import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 
 const accountId = "acct_zen_test";
 const secretAccessToken = jwt(accountId);
@@ -371,6 +374,194 @@ test("a fresh adapter rebuilds a tool round only from canonical messages", async
   ]);
 });
 
+test("renews a rejected access lease once before exposing HTTP 401", async () => {
+  const refreshedAccessToken = jwt(accountId, "refreshed");
+  const authorizations: string[] = [];
+  let renewals = 0;
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    renewAccessLease: async (rejectedAccessToken) => {
+      renewals += 1;
+      assert.equal(rejectedAccessToken, secretAccessToken);
+      return { accessToken: refreshedAccessToken };
+    },
+    fetch: async (_input, init) => {
+      authorizations.push(new Headers(init?.headers).get("authorization")!);
+      return new Response(null, { status: 401 });
+    },
+  });
+
+  await assert.rejects(
+    async () => await collect(adapter.stream(request())),
+    /request failed with HTTP 401/u,
+  );
+  assert.equal(renewals, 1);
+  assert.deepEqual(authorizations, [
+    `Bearer ${secretAccessToken}`,
+    `Bearer ${refreshedAccessToken}`,
+  ]);
+});
+
+test("independent title and Agent profiles converge after a rejected access token", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-auth-divergence-"));
+  const profilePath = path.join(root, "openai-subscription-auth.json");
+  const rejectedAccessToken = jwt(accountId, "rejected");
+  const refreshedAccessToken = jwt(accountId, "renewed");
+  const store = new SubscriptionCredentialStore(profilePath);
+  await store.modify(async () => ({
+    type: "oauth",
+    access: rejectedAccessToken,
+    refresh: "rotating-refresh",
+    expires: Date.now() + 3_600_000,
+    accountId,
+  }));
+  let refreshes = 0;
+  const tokenFetch: typeof globalThis.fetch = async (_input, init) => {
+    const body = new URLSearchParams(String(init?.body));
+    assert.equal(body.get("grant_type"), "refresh_token");
+    assert.equal(body.get("refresh_token"), "rotating-refresh");
+    refreshes += 1;
+    return Response.json({
+      access_token: refreshedAccessToken,
+      refresh_token: "renewed-refresh",
+      expires_in: 3600,
+    });
+  };
+  const titleProfile = new OpenAiSubscriptionAuthProfile(profilePath, {
+    fetch: tokenFetch,
+    tokenEndpoint: "https://example.test/oauth/token",
+  });
+  const agentProfile = new OpenAiSubscriptionAuthProfile(profilePath, {
+    fetch: tokenFetch,
+    tokenEndpoint: "https://example.test/oauth/token",
+  });
+  const completed = (): Response =>
+    sseResponse([
+      {
+        type: "response.completed",
+        response: { status: "completed", output: [] },
+      },
+    ]);
+  const title = new OpenAiSubscriptionModel({
+    acquireAccessLease: async (signal) =>
+      await titleProfile.acquireAccessLease(signal),
+    renewAccessLease: async (rejected, signal) =>
+      await titleProfile.renewAccessLease(rejected, signal),
+    fetch: async () => completed(),
+  });
+  const agentAuthorizations: string[] = [];
+  const agent = new OpenAiSubscriptionModel({
+    acquireAccessLease: async (signal) =>
+      await agentProfile.acquireAccessLease(signal),
+    renewAccessLease: async (rejected, signal) =>
+      await agentProfile.renewAccessLease(rejected, signal),
+    fetch: async (_input, init) => {
+      const authorization = new Headers(init?.headers).get("authorization")!;
+      agentAuthorizations.push(authorization);
+      return authorization === `Bearer ${rejectedAccessToken}`
+        ? new Response(null, { status: 401 })
+        : completed();
+    },
+  });
+
+  try {
+    await collect(title.stream(request({ model: "gpt-5.6-luna" })));
+    await collect(agent.stream(request({ model: "gpt-5.6-terra" })));
+
+    assert.equal(refreshes, 1);
+    assert.deepEqual(agentAuthorizations, [
+      `Bearer ${rejectedAccessToken}`,
+      `Bearer ${refreshedAccessToken}`,
+    ]);
+    assert.equal(
+      (await new SubscriptionCredentialStore(profilePath).read())?.access,
+      refreshedAccessToken,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the hosted App Server renews a rejected subscription lease", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-host-auth-renewal-"));
+  const profilePath = path.join(root, "openai-subscription-auth.json");
+  const rejectedAccessToken = jwt(accountId, "host-rejected");
+  const refreshedAccessToken = jwt(accountId, "host-renewed");
+  await new SubscriptionCredentialStore(profilePath).modify(async () => ({
+    type: "oauth",
+    access: rejectedAccessToken,
+    refresh: "host-refresh",
+    expires: Date.now() + 3_600_000,
+    accountId,
+  }));
+  const authorizations: string[] = [];
+  let refreshes = 0;
+  const providerFetch: typeof globalThis.fetch = async (input, init) => {
+    if (String(input).includes("/oauth/token")) {
+      refreshes += 1;
+      return Response.json({
+        access_token: refreshedAccessToken,
+        refresh_token: "host-renewed-refresh",
+        expires_in: 3600,
+      });
+    }
+    const authorization = new Headers(init?.headers).get("authorization")!;
+    authorizations.push(authorization);
+    return authorization === `Bearer ${rejectedAccessToken}`
+      ? new Response(null, { status: 401 })
+      : sseResponse([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { type: "message", id: "msg_host", content: [] },
+          },
+          {
+            type: "response.output_text.delta",
+            output_index: 0,
+            delta: "renewed",
+          },
+          {
+            type: "response.completed",
+            response: { status: "completed", output: [] },
+          },
+        ]);
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = providerFetch;
+  let host: ReturnType<typeof createHostedAppServer>;
+  try {
+    host = createHostedAppServer({
+      cwd: root,
+      dataDirectory: root,
+      model: "gpt-5.6-terra",
+      approvalPolicy: "never",
+      provider: { type: "openai-subscription", profilePath },
+      journal: new InMemoryThreadJournal(),
+      threadMetadata: new InMemoryThreadMetadataStore(),
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  try {
+    const thread = await host.startThread();
+    const turn = await host.startTurn(thread.id, "hello");
+    await turn.done;
+    assert.equal(
+      (await host.readThread(thread.id)).turns[0]?.status,
+      "completed",
+    );
+    assert.equal(refreshes, 1);
+    assert.deepEqual(authorizations, [
+      `Bearer ${rejectedAccessToken}`,
+      `Bearer ${refreshedAccessToken}`,
+    ]);
+  } finally {
+    await host.closeProviderTransport();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("redacts an access token if a provider error echoes it", async () => {
   const adapter = new OpenAiSubscriptionModel({
     acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
@@ -554,6 +745,54 @@ test("serializes rotating refresh across independent profile instances", async (
   assert.equal(stored.includes("single-use-refresh"), false);
 });
 
+test("serializes rejected-token renewal across independent profile instances", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-rejected-refresh-"));
+  const profilePath = path.join(root, "openai-subscription-auth.json");
+  const rejectedAccessToken = jwt(accountId, "rejected-concurrent");
+  const refreshedAccessToken = jwt(accountId, "refreshed-concurrent");
+  const store = new SubscriptionCredentialStore(profilePath);
+  await store.modify(async () => ({
+    type: "oauth",
+    access: rejectedAccessToken,
+    refresh: "single-use-rejected-refresh",
+    expires: Date.now() + 3_600_000,
+    accountId,
+  }));
+  let refreshes = 0;
+  const fetch: typeof globalThis.fetch = async (_input, init) => {
+    const body = new URLSearchParams(String(init?.body));
+    assert.equal(body.get("refresh_token"), "single-use-rejected-refresh");
+    refreshes += 1;
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    return Response.json({
+      access_token: refreshedAccessToken,
+      refresh_token: "rotated-rejected-refresh",
+      expires_in: 3600,
+    });
+  };
+  const first = new OpenAiSubscriptionAuthProfile(profilePath, {
+    fetch,
+    tokenEndpoint: "https://example.test/oauth/token",
+  });
+  const second = new OpenAiSubscriptionAuthProfile(profilePath, {
+    fetch,
+    tokenEndpoint: "https://example.test/oauth/token",
+  });
+  const signal = new AbortController().signal;
+
+  try {
+    const [left, right] = await Promise.all([
+      first.renewAccessLease(rejectedAccessToken, signal),
+      second.renewAccessLease(rejectedAccessToken, signal),
+    ]);
+    assert.equal(refreshes, 1);
+    assert.equal(left.accessToken, refreshedAccessToken);
+    assert.equal(right.accessToken, refreshedAccessToken);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("aborts promptly while another process owns the profile lock", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-lock-abort-"));
   const profilePath = path.join(root, "openai-subscription-auth.json");
@@ -627,10 +866,10 @@ function sseResponse(events: readonly Record<string, unknown>[]): Response {
   );
 }
 
-function jwt(id: string): string {
+function jwt(id: string, marker = "default"): string {
   const encode = (value: unknown): string =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
-  return `${encode({ alg: "none" })}.${encode({
+  return `${encode({ alg: "none", marker })}.${encode({
     "https://api.openai.com/auth": { chatgpt_account_id: id },
   })}.signature`;
 }
