@@ -133,6 +133,399 @@ test("manually compacts long history without changing the complete transcript", 
   );
 });
 
+test("automatically compacts exactly at 80% using the highest Provider usage sample", async () => {
+  const requests: ModelRequest[] = [];
+  let normalSamples = 0;
+  let summaryCalls = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      if (isSummaryRequest(request)) {
+        summaryCalls += 1;
+        yield { type: "text_delta", delta: "automatic summary" };
+        yield { type: "usage", inputTokens: 12, outputTokens: 3 };
+        return;
+      }
+      normalSamples += 1;
+      if (normalSamples === 1) {
+        yield {
+          type: "tool_call",
+          callId: "round-one",
+          name: "shell",
+          arguments: { command: "printf tool-bytes" },
+        };
+        yield { type: "usage", inputTokens: 80, outputTokens: 4 };
+        return;
+      }
+      yield { type: "reasoning", summary: "reasoning bytes" };
+      yield { type: "text_delta", delta: "answer bytes" };
+      yield { type: "usage", inputTokens: 79, outputTokens: 5 };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 100 },
+    ]),
+  });
+  const thread = await server.startThread();
+  const handle = await server.startTurn(thread.id, "compact me");
+  await handle.done;
+
+  const completed = await server.readThread(thread.id);
+  assert.equal(summaryCalls, 1);
+  assert.deepEqual(
+    completed.items.map((item) => item.type),
+    [
+      "thread_metadata",
+      "turn_started",
+      "user_message",
+      "tool_call",
+      "tool_result",
+      "reasoning",
+      "agent_message",
+      "turn_completed",
+      "context_compaction",
+    ],
+  );
+  assert.equal(
+    completed.items.filter((item) => item.type === "context_compaction").length,
+    1,
+  );
+  const originalTrace = completed.items.slice(0, -1);
+  assert.equal(JSON.stringify(originalTrace).includes("tool-bytes"), true);
+  assert.equal(JSON.stringify(originalTrace).includes("reasoning bytes"), true);
+  assert.equal(JSON.stringify(originalTrace).includes("answer bytes"), true);
+
+  const restarted = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 100 },
+    ]),
+  });
+  const afterRestart = await restarted.readThread(thread.id);
+  assert.equal(
+    JSON.stringify(compileModelMessages(afterRestart.items)),
+    JSON.stringify(compileModelMessages(completed.items)),
+  );
+  assert.equal(
+    JSON.stringify(projectThread(afterRestart, { includeTurns: true })),
+    JSON.stringify(projectThread(completed, { includeTurns: true })),
+  );
+  assert.equal(requests.length, 3);
+});
+
+test("automatic compaction does not guess below threshold, without usage, or with an unknown window", async (t) => {
+  const cases = [
+    {
+      name: "below threshold",
+      contextWindow: 100,
+      usage: { inputTokens: 79, outputTokens: 1 },
+    },
+    { name: "absent usage", contextWindow: 100, usage: undefined },
+    {
+      name: "invalid usage",
+      contextWindow: 100,
+      usage: { inputTokens: -1, outputTokens: 1 },
+    },
+    {
+      name: "partially invalid usage",
+      contextWindow: 100,
+      usage: { inputTokens: 80, outputTokens: -1 },
+    },
+    {
+      name: "unknown window",
+      contextWindow: null,
+      usage: { inputTokens: 80, outputTokens: 1 },
+    },
+  ] as const;
+  for (const scenario of cases) {
+    await t.test(scenario.name, async () => {
+      let summaryCalls = 0;
+      const model: ModelAdapter = {
+        provider: "recording",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          if (isSummaryRequest(request)) {
+            summaryCalls += 1;
+            yield { type: "text_delta", delta: "must not happen" };
+            return;
+          }
+          yield { type: "text_delta", delta: "answer" };
+          if (scenario.usage !== undefined) {
+            yield { type: "usage", ...scenario.usage };
+          }
+        },
+      };
+      const server = createServer({
+        journal: new InMemoryThreadJournal(),
+        model,
+        modelCatalog: new StaticModelCatalog([
+          {
+            id: "recording-model",
+            isDefault: true,
+            contextWindow: scenario.contextWindow,
+          },
+        ]),
+      });
+      const thread = await server.startThread();
+      await (
+        await server.startTurn(thread.id, "one")
+      ).done;
+      const snapshot = await server.readThread(thread.id);
+      assert.equal(summaryCalls, 0);
+      assert.equal(
+        snapshot.items.some((item) => item.type === "context_compaction"),
+        false,
+      );
+    });
+  }
+});
+
+test("automatic compaction freezes admitted selection across a concurrent settings update", async () => {
+  const normalStarted = deferred<void>();
+  const releaseNormal = deferred<void>();
+  const summaryStarted = deferred<void>();
+  const releaseSummary = deferred<void>();
+  const summarySelections: Array<{
+    model: string;
+    reasoningEffort: string;
+  }> = [];
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summarySelections.push({
+          model: request.model,
+          reasoningEffort: request.reasoningEffort,
+        });
+        summaryStarted.resolve();
+        await releaseSummary.promise;
+        yield { type: "text_delta", delta: "frozen automatic summary" };
+        return;
+      }
+      if (request.model === "recording-model") {
+        yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+        normalStarted.resolve();
+        await releaseNormal.promise;
+      }
+      yield { type: "text_delta", delta: "answer" };
+    },
+  };
+  const catalog = new StaticModelCatalog([
+    { id: "recording-model", isDefault: true, contextWindow: 100 },
+    { id: "other-model", contextWindow: 1_000 },
+  ]);
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: catalog,
+  });
+  const thread = await server.startThread();
+  const handle = await server.startTurn(thread.id, "one");
+  await normalStarted.promise;
+  const updated = await server.updateThreadSettings(thread.id, {
+    model: "other-model",
+  });
+  assert.equal(updated.modelId, "other-model");
+  releaseNormal.resolve();
+  await summaryStarted.promise;
+  let handleSettled = false;
+  void handle.done.then(() => {
+    handleSettled = true;
+  });
+  await Promise.resolve();
+  assert.equal(handleSettled, false);
+  releaseSummary.resolve();
+  await handle.done;
+
+  const snapshot = await server.readThread(thread.id);
+  const compacted = snapshot.items.find(
+    (item) => item.type === "context_compaction",
+  );
+  assert(compacted?.type === "context_compaction");
+  assert.deepEqual(summarySelections, [
+    { model: "recording-model", reasoningEffort: "medium" },
+  ]);
+  assert.equal(compacted.providerProfileId, "recording");
+  assert.equal(compacted.modelId, "recording-model");
+  assert.equal(compacted.reasoningEffort, "medium");
+});
+
+test("automatic compaction failure rejects the Turn handle once without append or retry", async () => {
+  let normalCalls = 0;
+  let summaryCalls = 0;
+  const journal = new InMemoryThreadJournal();
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summaryCalls += 1;
+        throw new Error("summary provider unavailable");
+      }
+      normalCalls += 1;
+      yield { type: "text_delta", delta: `answer-${String(normalCalls)}` };
+      yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+    },
+  };
+  const server = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 100 },
+    ]),
+  });
+  const thread = await server.startThread();
+
+  const first = await server.startTurn(thread.id, "one");
+  await expectAppServerCode(first.done, "automatic_compaction_failed");
+  let snapshot = await server.readThread(thread.id);
+  assert.equal(summaryCalls, 1);
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "turn_completed").length,
+    1,
+  );
+  assert.equal(
+    snapshot.items.some((item) => item.type === "context_compaction"),
+    false,
+  );
+
+  const second = await server.startTurn(thread.id, "two");
+  await expectAppServerCode(second.done, "automatic_compaction_failed");
+  snapshot = await server.readThread(thread.id);
+  assert.equal(summaryCalls, 2);
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "turn_completed").length,
+    2,
+  );
+  assert.equal(
+    snapshot.items.some((item) => item.type === "context_compaction"),
+    false,
+  );
+
+  const persistenceBacking = new InMemoryThreadJournal();
+  const persistenceJournal: ThreadJournal = {
+    append: async (item) => {
+      if (item.type === "context_compaction") {
+        throw new Error("journal unavailable");
+      }
+      await persistenceBacking.append(item);
+    },
+    listThreadIds: async () => await persistenceBacking.listThreadIds(),
+    read: async (threadId) => await persistenceBacking.read(threadId),
+  };
+  let persistenceSummaryCalls = 0;
+  const persistenceModel: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        persistenceSummaryCalls += 1;
+        yield { type: "text_delta", delta: "summary" };
+        return;
+      }
+      yield { type: "text_delta", delta: "answer" };
+      yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+    },
+  };
+  const persistence = createServer({
+    journal: persistenceJournal,
+    model: persistenceModel,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 100 },
+    ]),
+  });
+  const persistenceThread = await persistence.startThread();
+  const persistenceHandle = await persistence.startTurn(
+    persistenceThread.id,
+    "persist",
+  );
+  await expectAppServerCode(
+    persistenceHandle.done,
+    "automatic_compaction_failed",
+  );
+  assert.equal(persistenceSummaryCalls, 1);
+  assert.equal(
+    (await persistenceBacking.read(persistenceThread.id)).some(
+      (item) => item.type === "context_compaction",
+    ),
+    false,
+  );
+});
+
+test("automatic compaction ignores failed and interrupted Turns despite high usage", async () => {
+  let summaryCalls = 0;
+  const failing: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summaryCalls += 1;
+        yield { type: "text_delta", delta: "must not happen" };
+        return;
+      }
+      yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+      throw new Error("model failed");
+    },
+  };
+  const catalog = new StaticModelCatalog([
+    { id: "recording-model", isDefault: true, contextWindow: 100 },
+  ]);
+  const failed = createServer({
+    journal: new InMemoryThreadJournal(),
+    model: failing,
+    modelCatalog: catalog,
+  });
+  const failedThread = await failed.startThread();
+  await (
+    await failed.startTurn(failedThread.id, "fail")
+  ).done;
+  let snapshot = await failed.readThread(failedThread.id);
+  assert.equal(snapshot.turns.at(-1)?.status, "failed");
+  assert.equal(
+    snapshot.items.some((item) => item.type === "context_compaction"),
+    false,
+  );
+
+  const started = deferred<void>();
+  const blocking: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summaryCalls += 1;
+        yield { type: "text_delta", delta: "must not happen" };
+        return;
+      }
+      yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+      started.resolve();
+      await new Promise<void>((resolve) => {
+        request.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
+      });
+      request.signal.throwIfAborted();
+    },
+  };
+  const interrupted = createServer({
+    journal: new InMemoryThreadJournal(),
+    model: blocking,
+    modelCatalog: catalog,
+  });
+  const interruptedThread = await interrupted.startThread();
+  const handle = await interrupted.startTurn(interruptedThread.id, "stop");
+  await started.promise;
+  await interrupted.interruptTurn(interruptedThread.id, handle.id);
+  await handle.done;
+  snapshot = await interrupted.readThread(interruptedThread.id);
+  assert.equal(snapshot.turns.at(-1)?.status, "interrupted");
+  assert.equal(
+    snapshot.items.some((item) => item.type === "context_compaction"),
+    false,
+  );
+  assert.equal(summaryCalls, 0);
+});
+
 test("validates compaction boundaries, retained order, and complete tool lifecycles", () => {
   const items = canonicalToolHistory();
   const valid = contextCompactionItem(items);

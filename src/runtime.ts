@@ -217,6 +217,16 @@ export class AgentRuntime {
       }
     } catch (error) {
       if (!initialInputCommitted) throw error;
+      if (
+        options.thread.items.some(
+          (item) =>
+            item.type === "turn_completed" &&
+            item.turnId === turnId &&
+            item.status === "completed",
+        )
+      ) {
+        throw error;
+      }
       if (options.signal.aborted || isAbortError(error)) {
         const interruption: TurnAbortedItem = {
           id: this.#id(),

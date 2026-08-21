@@ -44,6 +44,7 @@ import {
   ProviderRegistryError,
   type ProviderModel,
   type ProviderRegistry,
+  type ResolvedProviderSelection,
   type ProviderSelection,
   type ProviderSelectionInput,
 } from "./provider-registry.js";
@@ -466,41 +467,12 @@ export class ZenAppServer {
 
       const configuration = thread.effectiveConfiguration();
       const resolved = this.#requireSelection(configuration);
-      const sourceMessages = compileModelMessages(
-        thread.items.slice(0, boundary.index + 1),
-      );
-      const summary = await generateContextCompactionSummary({
-        adapter: resolved.adapter,
-        model: configuration.modelId,
-        reasoningEffort: configuration.reasoningEffort,
-        messages: sourceMessages,
+      const item = await this.#appendContextCompaction({
+        thread,
+        boundary,
+        selection: resolved,
         signal,
       });
-      const item: ContextCompactionItem = {
-        id: this.#id(),
-        threadId,
-        createdAt: this.#now(),
-        type: "context_compaction",
-        coveredThroughItemId: boundary.item.id,
-        summary: summary.text,
-        retainedItemIds: boundary.retainedItemIds,
-        providerProfileId: configuration.providerProfileId,
-        modelId: configuration.modelId,
-        reasoningEffort: configuration.reasoningEffort,
-        algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
-        tokenUsage: summary.tokenUsage,
-      };
-      try {
-        await this.#commit(thread, item);
-      } catch (error) {
-        throw new AppServerError(
-          "compaction_persistence_failed",
-          describeCompactionError(
-            error,
-            "Context compaction could not be appended to the Thread journal",
-          ),
-        );
-      }
       return { compactionItemId: item.id };
     });
   }
@@ -587,6 +559,7 @@ export class ZenAppServer {
       const turnId = internal.turnId ?? this.#id();
       const controller = new AbortController();
       const ready = deferred<void>();
+      let highestInputTokens: number | undefined;
 
       const done = new Promise<void>((resolve, reject) => {
         setImmediate(() => {
@@ -632,11 +605,28 @@ export class ZenAppServer {
                     turnId,
                     message,
                     modelResponseId,
+                    {
+                      resolved,
+                      highestInputTokens: () => highestInputTokens,
+                      signal: controller.signal,
+                    },
                   ),
                 initialInputCommitted: () => {
                   ready.resolve();
                 },
                 emit: (event) => {
+                  if (
+                    event.type === "token_usage" &&
+                    Number.isSafeInteger(event.inputTokens) &&
+                    event.inputTokens >= 0 &&
+                    Number.isSafeInteger(event.outputTokens) &&
+                    event.outputTokens >= 0
+                  ) {
+                    highestInputTokens = Math.max(
+                      highestInputTokens ?? 0,
+                      event.inputTokens,
+                    );
+                  }
                   this.#emit(event);
                 },
                 ...(options.requestApproval === undefined
@@ -977,6 +967,11 @@ export class ZenAppServer {
     turnId: string,
     message: AgentMessageItem,
     modelResponseId: string,
+    automaticCompaction: {
+      resolved: ResolvedProviderSelection;
+      highestInputTokens: () => number | undefined;
+      signal: AbortSignal;
+    },
   ): Promise<boolean> {
     return await this.#withThreadMutation(thread.id, async () => {
       const active = this.#activeTurns.get(thread.id);
@@ -1008,8 +1003,117 @@ export class ZenAppServer {
         status: "completed",
       };
       await this.#commit(thread, completed);
+      await this.#compactCompletedTurnAutomatically({
+        thread,
+        completed,
+        ...automaticCompaction,
+      });
       return true;
     });
+  }
+
+  async #compactCompletedTurnAutomatically(options: {
+    thread: Thread;
+    completed: TurnCompletedItem;
+    resolved: ResolvedProviderSelection;
+    highestInputTokens: () => number | undefined;
+    signal: AbortSignal;
+  }): Promise<void> {
+    const contextWindow = options.resolved.model.contextWindow;
+    const inputTokens = options.highestInputTokens();
+    if (
+      contextWindow === null ||
+      inputTokens === undefined ||
+      inputTokens < automaticCompactionThreshold(contextWindow)
+    ) {
+      return;
+    }
+
+    let boundary: ReturnType<typeof latestEligibleCompactionBoundary>;
+    try {
+      boundary = latestEligibleCompactionBoundary(options.thread.items);
+    } catch (error) {
+      throw new AppServerError(
+        "automatic_compaction_failed",
+        describeCompactionError(
+          error,
+          "Automatic context compaction could not resolve the completed Turn boundary",
+        ),
+      );
+    }
+    if (boundary?.item.id !== options.completed.id) {
+      throw new AppServerError(
+        "automatic_compaction_failed",
+        `Automatic context compaction boundary did not match completed Turn ${options.completed.turnId}`,
+      );
+    }
+    if (
+      latestCompaction(options.thread.items)?.coveredThroughItemId ===
+      boundary.item.id
+    ) {
+      return;
+    }
+
+    try {
+      await this.#appendContextCompaction({
+        thread: options.thread,
+        boundary,
+        selection: options.resolved,
+        signal: options.signal,
+      });
+    } catch (error) {
+      throw new AppServerError(
+        "automatic_compaction_failed",
+        `Automatic context compaction failed: ${describeCompactionError(
+          error,
+          "unknown compaction error",
+        )}`,
+      );
+    }
+  }
+
+  async #appendContextCompaction(options: {
+    thread: Thread;
+    boundary: NonNullable<ReturnType<typeof latestEligibleCompactionBoundary>>;
+    selection: ResolvedProviderSelection;
+    signal: AbortSignal;
+  }): Promise<ContextCompactionItem> {
+    const sourceMessages = compileModelMessages(
+      options.thread.items.slice(0, options.boundary.index + 1),
+    );
+    const summary = await generateContextCompactionSummary({
+      adapter: options.selection.adapter,
+      model: options.selection.selection.modelId,
+      reasoningEffort: options.selection.selection.reasoningEffort,
+      messages: sourceMessages,
+      signal: options.signal,
+    });
+    const item: ContextCompactionItem = {
+      id: this.#id(),
+      threadId: options.thread.id,
+      createdAt: this.#now(),
+      type: "context_compaction",
+      coveredThroughItemId: options.boundary.item.id,
+      summary: summary.text,
+      retainedItemIds: options.boundary.retainedItemIds,
+      providerProfileId: options.selection.selection.providerProfileId,
+      modelId: options.selection.selection.modelId,
+      reasoningEffort: options.selection.selection.reasoningEffort,
+      algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
+      tokenUsage: summary.tokenUsage,
+    };
+    try {
+      await this.#commit(options.thread, item);
+    } catch (error) {
+      throw new AppServerError(
+        "compaction_persistence_failed",
+        describeCompactionError(
+          error,
+          "Context compaction could not be appended to the Thread journal",
+        ),
+      );
+    }
+    return item;
   }
 
   #pendingReplacement(
@@ -1516,6 +1620,12 @@ function sameSelection(
     left.modelId === right.modelId &&
     left.reasoningEffort === right.reasoningEffort
   );
+}
+
+function automaticCompactionThreshold(contextWindow: number): number {
+  const quotient = Math.floor(contextWindow / 5);
+  const remainder = contextWindow % 5;
+  return quotient * 4 + Math.ceil((remainder * 4) / 5);
 }
 
 async function generateContextCompactionSummary(options: {

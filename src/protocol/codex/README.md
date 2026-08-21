@@ -71,6 +71,13 @@ Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，�
 incomplete Turn、没有新 eligible boundary、generation / abort / validation / journal
 失败都明确返回且不隐藏重试。Z11 不发送 compaction progress notification。
 
+当 admitted catalog 的 `contextWindow` 已知时，成功 Turn 在 Provider 实际报告的
+最高 `inputTokens` 达到窗口 80% 整数上界后自动走同一生成、验证与 append 路径。
+Unknown window、缺失或无效 usage、未成功 Turn 与已覆盖边界不触发；自动失败通过
+既有 Turn execution `error`（`willRetry: false`）与失败 completion 明确投影，不增加
+wire method、后台 retry 或 compaction progress notification。手动 `thread/compact`
+语义不变。
+
 `model/list` 的 `supportedReasoningEfforts`、`defaultReasoningEffort` 与
 `inputModalities` 直接来自结构化 catalog，不再硬编码。固定 0.146.0 schema 要求
 这些字段存在；非默认的 Unknown 或已知不可运行条目在此固定 wire 投影中省略，

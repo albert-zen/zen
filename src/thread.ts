@@ -56,9 +56,18 @@ export class Thread {
     if (item.type === "context_compaction") {
       validateContextCompactionItem(this.#items, item);
       const current = this.effectiveConfiguration();
-      if (!sameSelection(current, item)) {
+      const boundaryTurn = this.deriveTurns().find((turn) =>
+        turn.items.some(
+          (candidate) => candidate.id === item.coveredThroughItemId,
+        ),
+      );
+      if (
+        !sameSelection(current, item) &&
+        (boundaryTurn === undefined ||
+          !sameSelection(boundaryTurn.selection, item))
+      ) {
         throw new Error(
-          "Context compaction selection must match the effective Thread selection",
+          "Context compaction selection must match the effective Thread or covered Turn selection",
         );
       }
     }
