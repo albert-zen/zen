@@ -21,6 +21,10 @@ export interface OpenAiSubscriptionModelOptions {
   acquireAccessLease: (
     signal: AbortSignal,
   ) => Promise<OpenAiSubscriptionAccessLease>;
+  renewAccessLease?: (
+    rejectedAccessToken: string,
+    signal: AbortSignal,
+  ) => Promise<OpenAiSubscriptionAccessLease>;
   endpoint?: string;
   fetch?: typeof globalThis.fetch;
   instructions?: string;
@@ -35,12 +39,15 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
   readonly provider = "openai-codex";
 
   readonly #acquireAccessLease: OpenAiSubscriptionModelOptions["acquireAccessLease"];
+  readonly #renewAccessLease:
+    OpenAiSubscriptionModelOptions["renewAccessLease"] | undefined;
   readonly #endpoint: string;
   readonly #fetch: typeof globalThis.fetch;
   readonly #instructions: string;
 
   constructor(options: OpenAiSubscriptionModelOptions) {
     this.#acquireAccessLease = options.acquireAccessLease;
+    this.#renewAccessLease = options.renewAccessLease;
     this.#endpoint = subscriptionEndpoint(options.endpoint ?? defaultEndpoint);
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#instructions =
@@ -49,15 +56,6 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     request.signal.throwIfAborted();
-    const lease = await this.#acquireAccessLease(request.signal);
-    const accessToken = requiredSecret(lease.accessToken);
-    const accountId = extractChatGptAccountId(accessToken);
-    const signal =
-      lease.signal === undefined
-        ? request.signal
-        : AbortSignal.any([request.signal, lease.signal]);
-    signal.throwIfAborted();
-
     const tools = request.tools.map(toResponsesTool);
     const allowedToolNames = new Set(tools.map((tool) => tool.name));
     const sessionHint = promptCacheHint(request.sessionId);
@@ -74,33 +72,18 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       ...(sessionHint === undefined ? {} : { prompt_cache_key: sessionHint }),
     });
 
-    const headers = new Headers({
-      accept: "text/event-stream",
-      authorization: `Bearer ${accessToken}`,
-      "chatgpt-account-id": accountId,
-      "content-type": "application/json",
-      "openai-beta": "responses=experimental",
-      originator: "zen",
-      "user-agent": "zen/0.1.0",
-    });
-    if (sessionHint !== undefined) {
-      headers.set("session-id", sessionHint);
-      headers.set("x-client-request-id", sessionHint);
-    }
+    let lease = await this.#acquireAccessLease(request.signal);
+    let accessToken = requiredSecret(lease.accessToken);
+    let signal = accessLeaseSignal(request.signal, lease.signal);
+    let response = await this.#request(body, sessionHint, accessToken, signal);
 
-    let response: Response;
-    try {
-      response = await this.#fetch(this.#endpoint, {
-        method: "POST",
-        body,
-        headers,
-        signal,
-      });
-    } catch {
-      signal.throwIfAborted();
-      throw new Error(
-        "OpenAI subscription model request failed before receiving a response",
-      );
+    if (response.status === 401 && this.#renewAccessLease !== undefined) {
+      await response.body?.cancel().catch(() => undefined);
+      request.signal.throwIfAborted();
+      lease = await this.#renewAccessLease(accessToken, request.signal);
+      accessToken = requiredSecret(lease.accessToken);
+      signal = accessLeaseSignal(request.signal, lease.signal);
+      response = await this.#request(body, sessionHint, accessToken, signal);
     }
 
     if (!response.ok) {
@@ -120,6 +103,53 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       accessToken,
     );
   }
+
+  async #request(
+    body: string,
+    sessionHint: string | undefined,
+    accessToken: string,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    signal.throwIfAborted();
+    const headers = new Headers({
+      accept: "text/event-stream",
+      authorization: `Bearer ${accessToken}`,
+      "chatgpt-account-id": extractChatGptAccountId(accessToken),
+      "content-type": "application/json",
+      "openai-beta": "responses=experimental",
+      originator: "zen",
+      "user-agent": "zen/0.1.0",
+    });
+    if (sessionHint !== undefined) {
+      headers.set("session-id", sessionHint);
+      headers.set("x-client-request-id", sessionHint);
+    }
+    try {
+      return await this.#fetch(this.#endpoint, {
+        method: "POST",
+        body,
+        headers,
+        signal,
+      });
+    } catch {
+      signal.throwIfAborted();
+      throw new Error(
+        "OpenAI subscription model request failed before receiving a response",
+      );
+    }
+  }
+}
+
+function accessLeaseSignal(
+  requestSignal: AbortSignal,
+  leaseSignal: AbortSignal | undefined,
+): AbortSignal {
+  const signal =
+    leaseSignal === undefined
+      ? requestSignal
+      : AbortSignal.any([requestSignal, leaseSignal]);
+  signal.throwIfAborted();
+  return signal;
 }
 
 interface ResponsesTool {

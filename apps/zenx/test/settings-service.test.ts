@@ -652,6 +652,90 @@ test("clears the OAuth concurrency guard after failure so login can retry", asyn
   }
 });
 
+test("title inference renews a subscription lease rejected after acquisition", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-title-auth-"));
+  const profileStore = new ZenXHostProfileStore(
+    path.join(directory, "host-profile.json"),
+  );
+  await profileStore.write({
+    version: 1,
+    onboardingComplete: true,
+    provider: {
+      type: "openai-subscription",
+      displayName: "OpenAI subscription",
+    },
+    defaultModel: "gpt-5.6-terra",
+    titleModel: "gpt-5.6-luna",
+    models: ["gpt-5.6-terra"],
+    workspace: directory,
+    workspaces: [directory],
+    lastUsedWorkspace: directory,
+    pinnedThreadIds: [],
+    sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
+    approvalPolicy: "never",
+  });
+  const rejected = subscriptionJwt("rejected");
+  const renewed = subscriptionJwt("renewed");
+  let renewals = 0;
+  const subscription = {
+    login: async () => undefined,
+    logout: async () => undefined,
+    status: async () => ({ authenticated: true, expired: false }),
+    acquireAccessLease: async () => ({ accessToken: rejected }),
+    renewAccessLease: async (rejectedAccessToken: string) => {
+      assert.equal(rejectedAccessToken, rejected);
+      renewals += 1;
+      return { accessToken: renewed };
+    },
+  };
+  const authorizations: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    const authorization = new Headers(init?.headers).get("authorization")!;
+    authorizations.push(authorization);
+    return authorization === `Bearer ${rejected}`
+      ? new Response(null, { status: 401 })
+      : new Response(
+          'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\r\n\r\ndata: [DONE]\r\n\r\n',
+          { status: 200 },
+        );
+  };
+  try {
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(
+        path.join(directory, "credentials.vault"),
+        encryption,
+      ),
+      profileStore,
+      subscription,
+    });
+    await service.initialize({});
+    const configured = await service.titleModel();
+    assert.equal(configured.model, "gpt-5.6-luna");
+    const adapter = configured.adapter;
+    assert.notEqual(adapter, null);
+    if (adapter === null) throw new Error("expected a title model adapter");
+    for await (const _event of adapter.stream({
+      model: configured.model,
+      messages: [{ role: "user", text: "Name this Thread" }],
+      tools: [],
+      signal: new AbortController().signal,
+    })) {
+      // Completion without content is sufficient to prove the retry boundary.
+    }
+    assert.equal(renewals, 1);
+    assert.deepEqual(authorizations, [
+      `Bearer ${rejected}`,
+      `Bearer ${renewed}`,
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 async function exerciseAliasWorkspaceMutations(
   type: "dir" | "junction",
 ): Promise<void> {
@@ -957,6 +1041,16 @@ function compatibleEnvironment(name: string): NodeJS.ProcessEnv {
     ZENX_MODEL: `${name}-model`,
     ZENX_MODELS: `${name}-model`,
   };
+}
+
+function subscriptionJwt(marker: string): string {
+  const encode = (value: unknown): string =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "none", marker })}.${encode({
+    "https://api.openai.com/auth": {
+      chatgpt_account_id: "acct_zenx_settings_test",
+    },
+  })}.signature`;
 }
 
 function deferred(): { promise: Promise<void>; resolve(): void } {

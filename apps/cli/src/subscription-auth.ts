@@ -202,6 +202,37 @@ export class OpenAiSubscriptionAuthProfile {
     }
     return { accessToken: credential.access };
   }
+
+  async renewAccessLease(
+    rejectedAccessToken: string,
+    signal: AbortSignal,
+  ): Promise<OpenAiSubscriptionAccessLease> {
+    signal.throwIfAborted();
+    const credential = await this.#store.modify(async (current) => {
+      if (current === undefined) {
+        throw new Error(
+          "OpenAI subscription is not authenticated; run `zen auth login`",
+        );
+      }
+      if (current.access !== rejectedAccessToken) {
+        return undefined;
+      }
+      return await refreshCredential(
+        current.refresh,
+        this.#fetch,
+        this.#tokenEndpoint,
+        signal,
+        this.#now,
+      );
+    }, signal);
+    signal.throwIfAborted();
+    if (credential === undefined) {
+      throw new Error(
+        "OpenAI subscription is not authenticated; run `zen auth login`",
+      );
+    }
+    return { accessToken: credential.access };
+  }
 }
 
 export class SubscriptionCredentialStore {
