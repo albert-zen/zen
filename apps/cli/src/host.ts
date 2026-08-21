@@ -37,14 +37,31 @@ export type HostProvider =
       defaultParams?: Readonly<Record<string, unknown>>;
     };
 
+export interface HostProviderProfile {
+  providerProfileId: string;
+  provider: HostProvider;
+  model: string;
+  models?: readonly string[];
+  transport?: ProviderTransport;
+}
+
+export interface HostModelSelection {
+  providerProfileId: string;
+  modelId: string;
+}
+
 export interface ZenHostOptions {
   cwd: string;
   dataDirectory: string;
-  model: string;
+  /** Compatibility input for existing single-provider CLI callers. */
+  model?: string;
   models?: readonly string[];
   approvalPolicy: "always" | "never";
-  provider: HostProvider;
+  /** Compatibility input for existing single-provider CLI callers. */
+  provider?: HostProvider;
   transport?: ProviderTransport;
+  providers?: readonly HostProviderProfile[];
+  defaultSelection?: HostModelSelection;
   secretEnvironmentVariables?: readonly string[];
   journal?: ThreadJournal;
   threadMetadata?: ThreadMetadataStore;
@@ -67,17 +84,67 @@ export type HostedZenAppServer = ZenAppServer & {
 export function createHostedAppServer(
   options: ZenHostOptions,
 ): HostedZenAppServer {
-  const fetch = createProviderFetch(options.transport);
-  const model = createModel(options.provider, fetch);
-  const modelIds = uniqueModels(options.models ?? [options.model]);
-  if (!modelIds.includes(options.model)) {
+  const configuredProfiles = normalizeProviderProfiles(options);
+  const seenProfileIds = new Set<string>();
+  const preparedProfiles = configuredProfiles.map((profile) => {
+    const providerProfileId = profile.providerProfileId.trim();
+    if (providerProfileId.length === 0) {
+      throw new Error("Provider profile ids must not be empty");
+    }
+    if (seenProfileIds.has(providerProfileId)) {
+      throw new Error(`Duplicate provider profile id: ${providerProfileId}`);
+    }
+    seenProfileIds.add(providerProfileId);
+    const configuredModels = profile.models ?? [profile.model];
+    const modelIds = uniqueModels(configuredModels);
+    if (
+      options.providers !== undefined &&
+      modelIds.length !== configuredModels.length
+    ) {
+      throw new Error(
+        `Model ids must be non-empty and unique in provider profile ${providerProfileId}`,
+      );
+    }
+    if (!modelIds.includes(profile.model)) {
+      throw new Error(
+        `Default model ${profile.model} is absent from provider profile ${providerProfileId}`,
+      );
+    }
+    if (profile.transport !== undefined)
+      safeProxyUrl(profile.transport.proxyUrl);
+    // Adapter constructors are side-effect free; preflight configuration before
+    // allocating any closeable proxy transport.
+    createModel(profile.provider, globalThis.fetch);
+    return {
+      ...profile,
+      providerProfileId,
+      modelCatalog: new StaticModelCatalog(
+        modelIds.map((id) => ({ id, isDefault: id === profile.model })),
+      ),
+    };
+  });
+  const defaultSelection = normalizeDefaultSelection(options, preparedProfiles);
+  const configuredDefault = preparedProfiles
+    .find(
+      (profile) =>
+        profile.providerProfileId === defaultSelection.providerProfileId,
+    )
+    ?.modelCatalog.get(defaultSelection.modelId);
+  if (configuredDefault === undefined) {
     throw new Error(
-      `Default model ${options.model} is absent from the configured model list`,
+      `Default model ${defaultSelection.modelId} is absent from provider profile ${defaultSelection.providerProfileId}`,
     );
   }
-  const modelCatalog = new StaticModelCatalog(
-    modelIds.map((id) => ({ id, isDefault: id === options.model })),
-  );
+  const fetches: ProviderFetch[] = [];
+  const profiles = preparedProfiles.map((profile) => {
+    const fetch = createProviderFetch(profile.transport);
+    fetches.push(fetch);
+    return {
+      providerProfileId: profile.providerProfileId,
+      adapter: createModel(profile.provider, fetch),
+      modelCatalog: profile.modelCatalog,
+    };
+  });
   const appServer = new ZenAppServer({
     journal:
       options.journal ??
@@ -87,19 +154,9 @@ export function createHostedAppServer(
         options.tools ??
         new ShellToolExecutor({
           blockedEnvironmentVariables: options.secretEnvironmentVariables ?? [],
-          redactedValues:
-            options.provider.type === "openai-compatible"
-              ? [options.provider.apiKey]
-              : [],
         }),
     }),
-    providerRegistry: new ProviderRegistry([
-      {
-        providerProfileId: model.provider,
-        adapter: model,
-        modelCatalog,
-      },
-    ]),
+    providerRegistry: new ProviderRegistry(profiles),
     threadMetadata:
       options.threadMetadata ??
       new JsonlThreadMetadataStore(
@@ -112,17 +169,73 @@ export function createHostedAppServer(
       ),
     defaults: {
       cwd: path.resolve(options.cwd),
-      providerProfileId: model.provider,
-      modelId: options.model,
-      reasoningEffort:
-        modelCatalog.get(options.model)?.defaultReasoningEffort ?? "medium",
+      providerProfileId: defaultSelection.providerProfileId,
+      modelId: defaultSelection.modelId,
+      reasoningEffort: configuredDefault.defaultReasoningEffort ?? "medium",
       sandbox: "danger-full-access",
       approvalPolicy: options.approvalPolicy,
     },
   });
   return Object.assign(appServer, {
-    closeProviderTransport: async () => await fetch.close?.(),
+    closeProviderTransport: async () => {
+      const results = await Promise.allSettled(
+        fetches.map(async (fetch) => await fetch.close?.()),
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          "Could not close provider transports",
+        );
+      }
+    },
   });
+}
+
+function normalizeProviderProfiles(
+  options: ZenHostOptions,
+): readonly HostProviderProfile[] {
+  if (options.providers !== undefined) {
+    if (options.providers.length === 0) {
+      throw new Error("At least one provider profile is required");
+    }
+    return options.providers;
+  }
+  if (options.provider === undefined || options.model === undefined) {
+    throw new Error("A provider and model are required");
+  }
+  const adapterIdentity = providerRuntimeIdentity(options.provider);
+  return [
+    {
+      providerProfileId: adapterIdentity,
+      provider: options.provider,
+      model: options.model,
+      ...(options.models === undefined ? {} : { models: options.models }),
+      ...(options.transport === undefined
+        ? {}
+        : { transport: options.transport }),
+    },
+  ];
+}
+
+function normalizeDefaultSelection(
+  options: ZenHostOptions,
+  profiles: readonly HostProviderProfile[],
+): HostModelSelection {
+  if (options.defaultSelection !== undefined) return options.defaultSelection;
+  const profile = profiles[0]!;
+  return {
+    providerProfileId: profile.providerProfileId,
+    modelId: profile.model,
+  };
+}
+
+function providerRuntimeIdentity(provider: HostProvider): string {
+  if (provider.type === "fake") return "fake";
+  if (provider.type === "openai-subscription") return "openai-codex";
+  return provider.name?.trim() || "openai-compatible";
 }
 
 function uniqueModels(models: readonly string[]): string[] {

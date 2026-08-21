@@ -73,10 +73,6 @@ async function handleCommand(command: HostCommand): Promise<void> {
   tools = new ZenXHostToolExecutor({
     capabilities: command.capabilities,
     blockedEnvironmentVariables: command.config.secretEnvironmentVariables,
-    redactedValues:
-      command.config.provider.type === "openai-compatible"
-        ? [command.config.provider.apiKey]
-        : [],
     send,
   });
   appServer = createHostedAppServer({ ...command.config, tools });

@@ -69,9 +69,10 @@
 - **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
   幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
-- **ZenXHostProfile** — ZenX 主进程持久化的 Provider、ModelCatalog、workspace、
-  审批默认值与本地产品偏好；其中 host 配置只用于组合本机 App Server，不包含
-  credential，也不覆盖已存 Thread 的生效设置。
+- **ZenXHostProfile** — ZenX 主进程以稳定 `providerProfileId` 持久化多个 Provider
+  连接及各自的字符串 ModelCatalog，并把默认/标题模型保存为
+  `providerProfileId / modelId` 引用；workspace、审批默认值与本地产品偏好仍在同一
+  host-owned 配置中，credential 不在其中，配置变更也不覆盖已存 Thread 的生效设置。
 - **ZenXAppearancePreference** — ZenX renderer 在本机 app profile 保存 System / Light / Dark
   偏好，并在首屏前把系统解析结果投影为同一套组件消费的语义色彩 token；它不进入 Core、
   Thread、Project、host restart 或 canonical ItemList。
@@ -81,9 +82,11 @@
 - **ZenXSidebarOrderPreference** — ZenXHostProfile 按 canonical Project key 与 owning
   Project 分区的 threadId preference list 持久化本机 Sidebar 顺序；未知项按稳定投影追加、
   移除项忽略，且排序不改变 cwd、Project identity、Thread state 或 canonical ItemList。
-- **ZenXCredentialVault** — ZenX 通过操作系统安全存储保护的 Provider credential
-  存放点；解密后的 secret 只在主进程内存中交给 host，绝不进入 renderer、进程环境、
-  App Server 协议或 canonical ItemList。
+- **ZenXCredentialVault** — ZenX 通过操作系统安全存储按 `providerProfileId` 保存
+  Provider credential；每个 profile 的加密 secret 可独立读取、替换和清除，Host profile、
+  renderer settings、进程环境与 App Server 协议配置字段都不主动序列化解密值。Provider、
+  模型或工具返回的内容属于 trace，即使字节与 credential 相同也不扫描或改写，并可按正常
+  Runtime 规则进入 canonical ItemList。
 - **ZenXSystemProxyProjection** — ZenX 主进程把操作系统为当前 Provider endpoint
   解析出的代理投影为 host 子进程的 Provider transport；它是可丢弃的外部连接配置，不进入
   Zen Core、Thread、journal 或 credential store。
@@ -102,7 +105,8 @@
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
 - **ZenXCapabilityRegistry** — ZenX 主进程注册 bundled/local capability package 的 manifest、
   显式权限与 provider，把已授权的结构化工具和 skill/prompt 资源组合进本机 host；执行历史仍只由
-  canonical tool call/result 投影，credential、浏览器会话和默认屏幕内容不进入 journal。
+  canonical tool call/result 投影，Host 不主动把 credential 配置、浏览器会话或默认屏幕内容写入
+  journal，但 provider 返回的工具内容属于 trace，不按 credential 字节扫描或改写。
 - **ZenXPluginContribution** — Capability package 可在 manifest 中声明受控的 sidebar/page
   contribution；registry 只投影已启用 package 的稳定 `pluginId:contributionId`，renderer 通过
   typed main/preload snapshot 消费，package 不取得 DOM、router 或核心导航的修改权。

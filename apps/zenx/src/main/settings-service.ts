@@ -1,14 +1,21 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { OpenAiSubscriptionAuthProfile } from "../../../../apps/cli/src/subscription-auth.js";
 import type { ModelAdapter } from "../../../../src/model.js";
 import { OpenAiCompatibleModel } from "../../../../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../../../../src/model/openai-subscription.js";
-import type { ZenXHostConfig } from "./host-messages.js";
+import type {
+  ZenXHostConfig,
+  ZenXSingleProviderHostConfig,
+} from "./host-messages.js";
 import {
   hostConfigFromProfile,
   type PublicHostSettings,
   type ZenXHostProfile,
+  type ZenXProviderDeleteReplacements,
+  type ZenXProviderEditOptions,
+  type ZenXProviderProfile,
   ZenXHostProfileStore,
   type ZenXSidebarOrder,
   type ZenXSettingsUpdate,
@@ -103,11 +110,20 @@ export class ZenXSettingsService {
     await this.#queueProfileOperation(async () => {
       const existing = await this.#profileStore.readOptional();
       if (existing !== undefined) {
-        this.#profile = await normalizeCanonicalWorkspaces(
+        if (existing.providerProfiles.length === 1) {
+          await this.#vault.migrateLegacyApiKey(
+            existing.providerProfiles[0]!.providerProfileId,
+          );
+        }
+        const normalized = await normalizeCanonicalWorkspaces(
           existing,
           this.#projectPlatform,
           this.#projectRealpath,
         );
+        if (JSON.stringify(normalized) !== JSON.stringify(existing)) {
+          await this.#profileStore.write(normalized);
+        }
+        this.#profile = normalized;
         return;
       }
       const configureWorkspace = environment.ZENX_CWD !== undefined;
@@ -120,7 +136,10 @@ export class ZenXSettingsService {
       await this.#persistProfile(
         fallback,
         legacy.provider.type === "openai-compatible"
-          ? legacy.provider.apiKey
+          ? {
+              providerProfileId: fallback.defaultModel.providerProfileId,
+              apiKey: legacy.provider.apiKey,
+            }
           : undefined,
       );
       this.#profile = fallback;
@@ -128,49 +147,84 @@ export class ZenXSettingsService {
   }
 
   async publicSettings(): Promise<PublicHostSettings> {
+    await this.#profileOperations;
     const profile = this.#requireProfile();
+    const compatibleIds = profile.providerProfiles
+      .filter((candidate) => candidate.type === "openai-compatible")
+      .map((candidate) => candidate.providerProfileId);
+    const apiKeyPresence = await Promise.all(
+      compatibleIds.map(
+        async (id) => [id, await this.#vault.hasApiKey(id)] as const,
+      ),
+    );
     return {
       profile,
-      hasApiKey: await this.#vault.hasApiKey(),
+      hasApiKey: await this.#vault.hasApiKey(
+        profile.defaultModel.providerProfileId,
+      ),
+      apiKeyProviderProfileIds: apiKeyPresence.flatMap(([id, present]) =>
+        present ? [id] : [],
+      ),
       subscription: await this.#subscription.status(),
     };
   }
 
   async hostConfig(): Promise<ZenXHostConfig> {
+    await this.#profileOperations;
     const profile = this.#requireProfile();
+    const apiKeyProfileIds = profile.providerProfiles
+      .filter((candidate) => candidate.type === "openai-compatible")
+      .map((candidate) => candidate.providerProfileId);
     return hostConfigFromProfile(profile, {
       dataDirectory: this.#dataDirectory,
       subscriptionProfilePath: this.#profilePath,
+      subscriptionProfilePaths: Object.fromEntries(
+        profile.providerProfiles
+          .filter((candidate) => candidate.type === "openai-subscription")
+          .map((candidate) => [
+            candidate.providerProfileId,
+            this.#subscriptionProfilePath(candidate.providerProfileId),
+          ]),
+      ),
       fallbackWorkspace: this.#dataDirectory,
-      apiKey: await this.#vault.readApiKey(),
+      apiKeys: await this.#vault.readApiKeys(apiKeyProfileIds),
     });
   }
 
   configuredTitleModel(): string {
-    return this.#requireProfile().titleModel;
+    return this.#requireProfile().titleModel.modelId;
   }
 
   async titleModel(): Promise<{ adapter: ModelAdapter | null; model: string }> {
+    await this.#profileOperations;
     const profile = this.#requireProfile();
-    if (profile.provider.type === "fake") {
-      return { adapter: null, model: profile.titleModel };
+    const titleReference = profile.titleModel;
+    const provider = profile.providerProfiles.find(
+      (candidate) =>
+        candidate.providerProfileId === titleReference.providerProfileId,
+    )!;
+    if (provider.type === "fake") {
+      return { adapter: null, model: titleReference.modelId };
     }
-    if (profile.provider.type === "openai-subscription") {
-      const acquireAccessLease = this.#subscription.acquireAccessLease;
+    if (provider.type === "openai-subscription") {
+      const subscription = this.#subscriptionForProfile(
+        provider.providerProfileId,
+      );
+      const acquireAccessLease = subscription.acquireAccessLease;
       if (acquireAccessLease === undefined) {
         throw new Error("Title model subscription is unavailable");
       }
-      const renewAccessLease = this.#subscription.renewAccessLease;
+      const renewAccessLease = subscription.renewAccessLease;
       return {
         adapter: new OpenAiSubscriptionModel({
           acquireAccessLease: async (signal) =>
-            await acquireAccessLease.call(this.#subscription, signal),
+            await acquireAccessLease.call(subscription, signal),
           ...(renewAccessLease === undefined
             ? {}
             : {
                 renewAccessLease: async (rejectedAccessToken, signal) =>
                   await renewAccessLease.call(
-                    this.#subscription,
+                    subscription,
                     rejectedAccessToken,
                     signal,
                   ),
@@ -178,20 +232,22 @@ export class ZenXSettingsService {
           instructions:
             "Return only a concise display title of at most 64 characters. Do not include quotes, IDs, labels, or punctuation boilerplate.",
         }),
-        model: profile.titleModel,
+        model: titleReference.modelId,
       };
     }
-    const apiKey = await this.#vault.readApiKey();
+    const apiKey = await this.#vault.readApiKey(provider.providerProfileId);
     if (apiKey === undefined)
-      throw new Error("Title model provider has no API key");
+      throw new Error(
+        `Title model Provider profile ${provider.providerProfileId} has no API key`,
+      );
     return {
       adapter: new OpenAiCompatibleModel({
-        baseUrl: profile.provider.baseUrl,
+        baseUrl: provider.baseUrl,
         apiKey,
-        provider: profile.provider.name,
+        provider: provider.name,
         defaultParams: { temperature: 0.2, max_tokens: 40 },
       }),
-      model: profile.titleModel,
+      model: titleReference.modelId,
     };
   }
 
@@ -203,24 +259,158 @@ export class ZenXSettingsService {
           validateHostProfile({
             ...current,
             onboardingComplete: settings.onboardingComplete,
-            provider: settings.provider,
+            providerProfiles: settings.providerProfiles,
             defaultModel: settings.defaultModel,
             titleModel: settings.titleModel,
-            models: settings.models,
             approvalPolicy: settings.approvalPolicy,
           }),
           [],
         )
       ).profile;
-      if (
-        validated.provider.type === "openai-compatible" &&
-        !(apiKey !== undefined && apiKey.length > 0) &&
-        !(await this.#vault.hasApiKey())
-      ) {
-        throw new Error("Add an API key before activating this provider");
+      const credentialProfileId = validated.defaultModel.providerProfileId;
+      for (const provider of validated.providerProfiles) {
+        if (provider.type !== "openai-compatible") continue;
+        const suppliedForProvider =
+          provider.providerProfileId === credentialProfileId &&
+          apiKey !== undefined &&
+          apiKey.length > 0;
+        if (
+          !suppliedForProvider &&
+          !(await this.#vault.hasApiKey(provider.providerProfileId))
+        ) {
+          throw new Error(
+            `Provider profile ${provider.providerProfileId} has no API key`,
+          );
+        }
       }
-      await this.#persistProfile(validated, apiKey);
+      await this.#persistProfile(
+        validated,
+        apiKey === undefined || apiKey.length === 0
+          ? undefined
+          : { providerProfileId: credentialProfileId, apiKey },
+        current.providerProfiles
+          .filter(
+            (provider) =>
+              !validated.providerProfiles.some(
+                (candidate) =>
+                  candidate.providerProfileId === provider.providerProfileId,
+              ),
+          )
+          .map((provider) => provider.providerProfileId),
+      );
       this.#profile = validated;
+    });
+  }
+
+  async addProviderProfile(
+    provider: ZenXProviderProfile,
+    apiKey?: string,
+  ): Promise<void> {
+    await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const next = validateHostProfile({
+        ...current,
+        providerProfiles: [...current.providerProfiles, provider],
+      });
+      if (
+        provider.type === "openai-compatible" &&
+        (apiKey === undefined || apiKey.length === 0)
+      ) {
+        throw new Error(
+          `Provider profile ${provider.providerProfileId} has no API key`,
+        );
+      }
+      await this.#persistProfile(
+        next,
+        apiKey === undefined
+          ? undefined
+          : { providerProfileId: provider.providerProfileId, apiKey },
+      );
+      this.#profile = next;
+    });
+  }
+
+  async editProviderProfile(
+    providerProfileId: string,
+    provider: ZenXProviderProfile,
+    options: ZenXProviderEditOptions = {},
+  ): Promise<void> {
+    await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const index = current.providerProfiles.findIndex(
+        (candidate) => candidate.providerProfileId === providerProfileId,
+      );
+      if (index < 0)
+        throw new Error(
+          `Provider profile ${providerProfileId} is not configured`,
+        );
+      if (provider.providerProfileId !== providerProfileId) {
+        throw new Error("Provider profile id cannot be changed by edit");
+      }
+      const providerProfiles = [...current.providerProfiles];
+      providerProfiles[index] = provider;
+      const next = validateHostProfile({
+        ...current,
+        providerProfiles,
+        defaultModel: options.defaultModel ?? current.defaultModel,
+        titleModel: options.titleModel ?? current.titleModel,
+      });
+      if (
+        provider.type === "openai-compatible" &&
+        (options.apiKey === undefined || options.apiKey.length === 0) &&
+        !(await this.#vault.hasApiKey(providerProfileId))
+      ) {
+        throw new Error(`Provider profile ${providerProfileId} has no API key`);
+      }
+      await this.#persistProfile(
+        next,
+        options.apiKey === undefined || options.apiKey.length === 0
+          ? undefined
+          : { providerProfileId, apiKey: options.apiKey },
+      );
+      this.#profile = next;
+    });
+  }
+
+  async deleteProviderProfile(
+    providerProfileId: string,
+    replacements: ZenXProviderDeleteReplacements = {},
+  ): Promise<void> {
+    await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      if (
+        !current.providerProfiles.some(
+          (candidate) => candidate.providerProfileId === providerProfileId,
+        )
+      ) {
+        throw new Error(
+          `Provider profile ${providerProfileId} is not configured`,
+        );
+      }
+      const defaultReferenced =
+        current.defaultModel.providerProfileId === providerProfileId;
+      const titleReferenced =
+        current.titleModel.providerProfileId === providerProfileId;
+      if (defaultReferenced && replacements.defaultModel === undefined) {
+        throw new Error(
+          "Deleting the default Provider profile requires a replacement default model",
+        );
+      }
+      if (titleReferenced && replacements.titleModel === undefined) {
+        throw new Error(
+          "Deleting the title Provider profile requires a replacement title model",
+        );
+      }
+      const next = validateHostProfile({
+        ...current,
+        providerProfiles: current.providerProfiles.filter(
+          (candidate) => candidate.providerProfileId !== providerProfileId,
+        ),
+        defaultModel: replacements.defaultModel ?? current.defaultModel,
+        titleModel: replacements.titleModel ?? current.titleModel,
+      });
+      await this.#persistProfile(next, undefined, [providerProfileId]);
+      this.#profile = next;
     });
   }
 
@@ -411,6 +601,25 @@ export class ZenXSettingsService {
     await this.#subscription.logout();
   }
 
+  #subscriptionForProfile(providerProfileId: string) {
+    if (providerProfileId === "openai-codex") return this.#subscription;
+    return new OpenAiSubscriptionAuthProfile(
+      this.#subscriptionProfilePath(providerProfileId),
+    );
+  }
+
+  #subscriptionProfilePath(providerProfileId: string): string {
+    if (providerProfileId === "openai-codex") return this.#profilePath;
+    const profileDigest = createHash("sha256")
+      .update(providerProfileId)
+      .digest("hex")
+      .slice(0, 24);
+    return path.join(
+      path.dirname(this.#profilePath),
+      `openai-subscription-auth.${profileDigest}.json`,
+    );
+  }
+
   #requireProfile(): ZenXHostProfile {
     if (this.#profile === undefined)
       throw new Error("ZenX settings are not initialized");
@@ -461,24 +670,49 @@ export class ZenXSettingsService {
 
   async #persistProfile(
     profile: ZenXHostProfile,
-    apiKey?: string,
+    credential?: { providerProfileId: string; apiKey: string },
+    clearCredentialProfileIds: readonly string[] = [],
   ): Promise<void> {
-    const rotatesCredential = apiKey !== undefined && apiKey.length > 0;
-    const previousApiKey = rotatesCredential
-      ? await this.#vault.readApiKey()
-      : undefined;
-    if (rotatesCredential) await this.#vault.writeApiKey(apiKey);
+    const affectedProfileIds = [
+      ...new Set([
+        ...clearCredentialProfileIds,
+        ...(credential === undefined ? [] : [credential.providerProfileId]),
+      ]),
+    ];
+    const previousApiKeys = new Map<string, string | undefined>();
+    for (const providerProfileId of affectedProfileIds) {
+      previousApiKeys.set(
+        providerProfileId,
+        await this.#vault.readApiKey(providerProfileId),
+      );
+    }
     try {
+      for (const providerProfileId of clearCredentialProfileIds) {
+        await this.#vault.clearApiKey(providerProfileId);
+      }
+      if (credential !== undefined) {
+        await this.#vault.writeApiKey(
+          credential.providerProfileId,
+          credential.apiKey,
+        );
+      }
       await this.#profileStore.write(profile);
     } catch (persistenceError) {
-      if (!rotatesCredential) throw persistenceError;
-      try {
-        if (previousApiKey === undefined) await this.#vault.clearApiKey();
-        else await this.#vault.writeApiKey(previousApiKey);
-      } catch (compensationError) {
+      const compensationErrors: unknown[] = [];
+      for (const providerProfileId of affectedProfileIds) {
+        try {
+          const previousApiKey = previousApiKeys.get(providerProfileId);
+          if (previousApiKey === undefined)
+            await this.#vault.clearApiKey(providerProfileId);
+          else await this.#vault.writeApiKey(providerProfileId, previousApiKey);
+        } catch (compensationError) {
+          compensationErrors.push(compensationError);
+        }
+      }
+      if (compensationErrors.length > 0) {
         throw new AggregateError(
-          [persistenceError, compensationError],
-          "ZenX settings were partially saved: host profile persistence failed and the previous credential could not be restored",
+          [persistenceError, ...compensationErrors],
+          "ZenX settings were partially saved: persistence failed and the previous credential state could not be restored",
         );
       }
       throw persistenceError;
@@ -557,10 +791,10 @@ async function canonicalWorkspaceSnapshot(
 }
 
 function profileFromLegacy(
-  config: ZenXHostConfig,
+  config: ZenXSingleProviderHostConfig,
   configureWorkspace: boolean,
 ): ZenXHostProfile {
-  const provider =
+  const providerConnection =
     config.provider.type === "fake"
       ? { type: "fake" as const, displayName: "Local demo" }
       : config.provider.type === "openai-subscription"
@@ -574,13 +808,27 @@ function profileFromLegacy(
             displayName: config.provider.name ?? "OpenAI compatible",
             baseUrl: config.provider.baseUrl,
           };
+  const providerProfileId =
+    config.provider.type === "fake"
+      ? "fake"
+      : config.provider.type === "openai-subscription"
+        ? "openai-codex"
+        : (config.provider.name ?? "openai-compatible");
+  const models = [...(config.models ?? [config.model])];
+  const titleModel = "gpt-5.6-luna";
+  if (!models.includes(titleModel)) models.push(titleModel);
   return {
-    version: 1,
+    version: 2,
     onboardingComplete: false,
-    provider,
-    defaultModel: config.model,
-    titleModel: "gpt-5.6-luna",
-    models: [...(config.models ?? [config.model])],
+    providerProfiles: [
+      {
+        ...providerConnection,
+        providerProfileId,
+        models,
+      },
+    ],
+    defaultModel: { providerProfileId, modelId: config.model },
+    titleModel: { providerProfileId, modelId: titleModel },
     workspace: configureWorkspace ? config.cwd : null,
     workspaces: configureWorkspace ? [config.cwd] : [],
     lastUsedWorkspace: null,

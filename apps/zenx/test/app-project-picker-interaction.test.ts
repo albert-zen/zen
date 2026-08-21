@@ -915,12 +915,21 @@ async function mountApp(
 function publicSettings(pinnedThreadIds: string[]) {
   return {
     profile: {
-      version: 1 as const,
+      version: 2 as const,
       onboardingComplete: true,
-      provider: { type: "fake" as const, displayName: "Local demo" },
-      defaultModel: "fake",
-      titleModel: "gpt-5.6-luna",
-      models: ["fake"],
+      providerProfiles: [
+        {
+          providerProfileId: "fake",
+          type: "fake" as const,
+          displayName: "Local demo",
+          models: ["fake", "gpt-5.6-luna"],
+        },
+      ],
+      defaultModel: { providerProfileId: "fake", modelId: "fake" },
+      titleModel: {
+        providerProfileId: "fake",
+        modelId: "gpt-5.6-luna",
+      },
       workspace: "/work/zen",
       workspaces: ["/work/zen"],
       lastUsedWorkspace: "/work/zen",
@@ -929,6 +938,7 @@ function publicSettings(pinnedThreadIds: string[]) {
       sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
     },
     hasApiKey: false,
+    apiKeyProviderProfileIds: [],
     subscription: { authenticated: false, expired: false },
   };
 }

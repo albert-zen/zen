@@ -102,6 +102,69 @@ test("requires one visible default while hidden models remain addressable", () =
   assert.equal(catalog.get("model-hidden")?.hidden, true);
 });
 
+test("preserves credential-matching model and tool trace strings verbatim", async () => {
+  const credentialBytes = "credential-bytes";
+  const model: ModelAdapter = {
+    provider: "trace-provider",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (request.messages.some((message) => message.role === "tool")) {
+        yield { type: "text_delta", delta: credentialBytes };
+        return;
+      }
+      yield { type: "text_delta", delta: credentialBytes };
+      yield { type: "reasoning", summary: credentialBytes };
+      yield {
+        type: "tool_call",
+        callId: credentialBytes,
+        name: credentialBytes,
+        arguments: { [credentialBytes]: credentialBytes },
+      };
+    },
+  };
+  const tools: ToolExecutor = {
+    definitions: [
+      {
+        name: credentialBytes,
+        description: "Return captured trace bytes.",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async () => ({ output: credentialBytes, exitCode: 0 }),
+  };
+  const emittedDeltas: string[] = [];
+  const server = createServer({ model, tools });
+  server.subscribe((event) => {
+    if (event.type === "item_delta") emittedDeltas.push(event.delta);
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "preserve trace")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.deepEqual(emittedDeltas, [credentialBytes, credentialBytes]);
+  assert.deepEqual(
+    snapshot.items
+      .filter((item) => item.type === "agent_message")
+      .map((item) => item.text),
+    [credentialBytes, credentialBytes],
+  );
+  assert.equal(
+    snapshot.items.find((item) => item.type === "reasoning")?.summary,
+    credentialBytes,
+  );
+  const toolCall = snapshot.items.find((item) => item.type === "tool_call");
+  assert.equal(toolCall?.callId, credentialBytes);
+  assert.equal(toolCall?.name, credentialBytes);
+  assert.deepEqual(toolCall?.arguments, {
+    [credentialBytes]: credentialBytes,
+  });
+  assert.equal(
+    snapshot.items.find((item) => item.type === "tool_result")?.output,
+    credentialBytes,
+  );
+});
+
 test("derives each turn model from append-only configuration changes", async () => {
   const journal = new InMemoryThreadJournal();
   const requestedModels: string[] = [];
@@ -876,7 +939,7 @@ test("declined shell call is explicit and is not executed", async () => {
   assertEveryToolCallHasOneResult(snapshot.items);
 });
 
-test("provider credentials are absent from shell output and canonical items", async () => {
+test("explicit shell redaction removes caller-designated values", async () => {
   const providerKey = "sk-provider-key-must-not-enter-the-thread";
   const blockedPath = "/provider-secret/path";
   const temporaryDirectory = await mkdtemp(

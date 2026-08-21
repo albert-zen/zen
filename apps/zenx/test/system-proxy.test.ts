@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { proxyUrl, zenXProviderTransport } from "../src/main/system-proxy.js";
+import {
+  proxyUrl,
+  withZenXProviderTransports,
+  zenXProviderTransport,
+} from "../src/main/system-proxy.js";
 
 test("projects the resolved system proxy into provider child host configuration", async () => {
   const transport = await zenXProviderTransport(
@@ -41,6 +45,47 @@ test("projects DIRECT without a transport", async () => {
     async () => "DIRECT",
   );
   assert.equal(transport, undefined);
+});
+
+test("resolves a separate transport for every configured Provider profile", async () => {
+  const endpoints: string[] = [];
+  const config = await withZenXProviderTransports(
+    {
+      cwd: "/tmp/work",
+      dataDirectory: "/tmp/data",
+      approvalPolicy: "never",
+      providers: [
+        {
+          providerProfileId: "a",
+          provider: {
+            type: "openai-compatible",
+            baseUrl: "https://a.example/v1",
+            apiKey: "a-key",
+          },
+          model: "shared",
+        },
+        {
+          providerProfileId: "b",
+          provider: {
+            type: "openai-compatible",
+            baseUrl: "https://b.example/v1",
+            apiKey: "b-key",
+          },
+          model: "shared",
+        },
+      ],
+      defaultSelection: { providerProfileId: "a", modelId: "shared" },
+    },
+    async (endpoint) => {
+      endpoints.push(endpoint);
+      return endpoint.includes("a.example") ? "PROXY a.proxy:80" : "DIRECT";
+    },
+  );
+  assert.deepEqual(endpoints, ["https://a.example/v1", "https://b.example/v1"]);
+  assert.deepEqual(
+    config.providers?.map((profile) => profile.transport),
+    [{ proxyUrl: "http://a.proxy:80" }, undefined],
+  );
 });
 
 test("accepts direct, HTTP and IPv6 proxy directives without credentials", () => {

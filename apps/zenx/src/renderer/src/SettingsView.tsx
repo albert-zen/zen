@@ -58,7 +58,7 @@ export function SettingsView({
         if (!active) return;
         setSettings(value);
         setDraft(value.profile);
-        setModels(value.profile.models.join("\n"));
+        setModels(defaultProvider(value.profile).models.join("\n"));
       })
       .catch((reason: unknown) => active && setError(describeError(reason)));
     return () => {
@@ -69,7 +69,8 @@ export function SettingsView({
 
   const setProvider = (type: ZenXProviderProfile["type"]) => {
     if (draft === null) return;
-    const provider: ZenXProviderProfile =
+    const current = defaultProvider(draft);
+    const providerConnection =
       type === "fake"
         ? { type, displayName: "Local demo" }
         : type === "openai-subscription"
@@ -86,7 +87,31 @@ export function SettingsView({
         : type === "fake"
           ? "fake"
           : "gpt-5.4";
-    setDraft({ ...draft, provider, defaultModel, models: [defaultModel] });
+    const titleModel = draft.titleModel.modelId;
+    const provider: ZenXProviderProfile = {
+      ...providerConnection,
+      providerProfileId: current.providerProfileId,
+      models:
+        titleModel === defaultModel
+          ? [defaultModel]
+          : [defaultModel, titleModel],
+    };
+    setDraft({
+      ...draft,
+      providerProfiles: draft.providerProfiles.map((candidate) =>
+        candidate.providerProfileId === current.providerProfileId
+          ? provider
+          : candidate,
+      ),
+      defaultModel: {
+        providerProfileId: current.providerProfileId,
+        modelId: defaultModel,
+      },
+      titleModel: {
+        providerProfileId: current.providerProfileId,
+        modelId: titleModel,
+      },
+    });
     setModels(defaultModel);
   };
 
@@ -96,21 +121,19 @@ export function SettingsView({
     setError(null);
     setStatus(null);
     try {
-      const modelList = normalizedModels(models);
       const value = await window.zenx.settings.save(
         {
           onboardingComplete: true,
-          provider: draft.provider,
+          providerProfiles: pendingProfile.providerProfiles,
           defaultModel: draft.defaultModel,
           titleModel: draft.titleModel,
-          models: modelList,
           approvalPolicy: draft.approvalPolicy,
         },
         apiKey.trim().length > 0 ? apiKey : undefined,
       );
       setSettings(value);
       setDraft(value.profile);
-      setModels(value.profile.models.join("\n"));
+      setModels(defaultProvider(value.profile).models.join("\n"));
       setApiKey("");
       setStatus("Changes applied · local host restarted");
     } catch (reason) {
@@ -130,11 +153,16 @@ export function SettingsView({
       </section>
     );
   }
-  const provider = draft.provider;
+  const provider = defaultProvider(draft);
+  const configuredModels = normalizedModels(models);
   const pendingProfile: ZenXHostProfile = {
     ...draft,
     onboardingComplete: true,
-    models: normalizedModels(models),
+    providerProfiles: draft.providerProfiles.map((candidate) =>
+      candidate.providerProfileId === provider.providerProfileId
+        ? { ...candidate, models: configuredModels }
+        : candidate,
+    ),
   };
   const hostDirty =
     apiKey.trim().length > 0 ||
@@ -594,7 +622,10 @@ function ModelsPanel({
               onChange={(value) =>
                 setDraft({
                   ...draft,
-                  provider: { ...provider, displayName: value },
+                  providerProfiles: replaceProvider(draft, {
+                    ...provider,
+                    displayName: value,
+                  }),
                 })
               }
             />
@@ -602,7 +633,13 @@ function ModelsPanel({
               label="Provider name"
               value={provider.name}
               onChange={(value) =>
-                setDraft({ ...draft, provider: { ...provider, name: value } })
+                setDraft({
+                  ...draft,
+                  providerProfiles: replaceProvider(draft, {
+                    ...provider,
+                    name: value,
+                  }),
+                })
               }
             />
             <Field
@@ -612,7 +649,10 @@ function ModelsPanel({
               onChange={(value) =>
                 setDraft({
                   ...draft,
-                  provider: { ...provider, baseUrl: value },
+                  providerProfiles: replaceProvider(draft, {
+                    ...provider,
+                    baseUrl: value,
+                  }),
                 })
               }
             />
@@ -645,13 +685,23 @@ function ModelsPanel({
         <div className="form-grid">
           <Field
             label="Default model"
-            value={draft.defaultModel}
-            onChange={(value) => setDraft({ ...draft, defaultModel: value })}
+            value={draft.defaultModel.modelId}
+            onChange={(value) =>
+              setDraft({
+                ...draft,
+                defaultModel: { ...draft.defaultModel, modelId: value },
+              })
+            }
           />
           <Field
             label="Title model"
-            value={draft.titleModel}
-            onChange={(value) => setDraft({ ...draft, titleModel: value })}
+            value={draft.titleModel.modelId}
+            onChange={(value) =>
+              setDraft({
+                ...draft,
+                titleModel: { ...draft.titleModel, modelId: value },
+              })
+            }
           />
           <label className="field wide">
             <span>
@@ -766,6 +816,27 @@ function GeneralPanel({
         </div>
       </div>
     </>
+  );
+}
+
+function defaultProvider(profile: ZenXHostProfile): ZenXProviderProfile {
+  const provider = profile.providerProfiles.find(
+    (candidate) =>
+      candidate.providerProfileId === profile.defaultModel.providerProfileId,
+  );
+  if (provider === undefined)
+    throw new Error("Default Provider profile is unavailable");
+  return provider;
+}
+
+function replaceProvider(
+  profile: ZenXHostProfile,
+  provider: ZenXProviderProfile,
+): ZenXProviderProfile[] {
+  return profile.providerProfiles.map((candidate) =>
+    candidate.providerProfileId === provider.providerProfileId
+      ? provider
+      : candidate,
   );
 }
 

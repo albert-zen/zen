@@ -3,11 +3,11 @@ import path from "node:path";
 
 import type { HostProvider } from "../../../../apps/cli/src/host.js";
 import { DEFAULT_OPENAI_SUBSCRIPTION_MODEL } from "../../../../src/model/openai-subscription.js";
-import type { ZenXHostConfig } from "./host-messages.js";
+import type { ZenXSingleProviderHostConfig } from "./host-messages.js";
 
 export function resolveZenXHostConfig(
   environment: NodeJS.ProcessEnv = process.env,
-): ZenXHostConfig {
+): ZenXSingleProviderHostConfig {
   const providerName = environment["ZENX_PROVIDER"] ?? "fake";
   const dataDirectory = path.resolve(
     environment["ZENX_DATA_DIR"] ?? path.join(os.homedir(), ".zen"),

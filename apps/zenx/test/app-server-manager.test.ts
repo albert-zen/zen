@@ -366,6 +366,7 @@ test("bridges a granted structured capability through the real App Server host",
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-capability-host-"),
   );
+  const credentialBytes = "provider-key-trace";
   const invocations: string[] = [];
   const capabilityHost: ZenXCapabilityHost = {
     hostSnapshot: () => ({
@@ -386,7 +387,7 @@ test("bridges a granted structured capability through the real App Server host",
       invocations.push(
         `${invocation.name}:${String(invocation.arguments.target)}`,
       );
-      return { output: '{"visible":"bounded"}', exitCode: 0 };
+      return { output: credentialBytes, exitCode: 0 };
     },
   };
   const manager = new AppServerManager({
@@ -395,10 +396,26 @@ test("bridges a granted structured capability through the real App Server host",
     hostConfig: {
       cwd: process.cwd(),
       dataDirectory: path.join(directory, "data"),
-      model: "fake",
-      models: ["fake"],
       approvalPolicy: "always",
-      provider: { type: "fake" },
+      providers: [
+        {
+          providerProfileId: "fake",
+          provider: { type: "fake" },
+          model: "fake",
+          models: ["fake"],
+        },
+        {
+          providerProfileId: "compatible",
+          provider: {
+            type: "openai-compatible",
+            baseUrl: "https://compatible.example.test/v1",
+            apiKey: credentialBytes,
+          },
+          model: "compatible-model",
+          models: ["compatible-model"],
+        },
+      ],
+      defaultSelection: { providerProfileId: "fake", modelId: "fake" },
     },
     capabilityHost,
     execArgv: ["--import", "tsx"],
@@ -441,7 +458,7 @@ test("bridges a granted structured capability through the real App Server host",
     assert.equal(command?.type, "commandExecution");
     if (command?.type === "commandExecution") {
       assert.match(command.command, /^demo_inspect /u);
-      assert.equal(command.aggregatedOutput, '{"visible":"bounded"}');
+      assert.equal(command.aggregatedOutput, credentialBytes);
       assert.equal(command.status, "completed");
     }
   } finally {

@@ -16,6 +16,9 @@ import type {
 import { ipcChannels } from "./ipc.js";
 import type {
   PublicHostSettings,
+  ZenXProviderDeleteReplacements,
+  ZenXProviderEditOptions,
+  ZenXProviderProfile,
   ZenXSidebarOrder,
   ZenXSettingsUpdate,
 } from "../main/host-profile.js";
@@ -128,6 +131,31 @@ contextBridge.exposeInMainWorld("zenx", {
       apiKey?: string,
     ): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.settingsSave, settings, apiKey),
+    addProvider: async (
+      provider: ZenXProviderProfile,
+      apiKey?: string,
+    ): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(ipcChannels.providerAdd, provider, apiKey),
+    editProvider: async (
+      providerProfileId: string,
+      provider: ZenXProviderProfile,
+      options?: ZenXProviderEditOptions,
+    ): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(
+        ipcChannels.providerEdit,
+        providerProfileId,
+        provider,
+        options,
+      ),
+    deleteProvider: async (
+      providerProfileId: string,
+      replacements?: ZenXProviderDeleteReplacements,
+    ): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(
+        ipcChannels.providerDelete,
+        providerProfileId,
+        replacements,
+      ),
     addWorkspace: async (workspace: string): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.workspaceAdd, workspace),
     removeWorkspace: async (workspace: string): Promise<PublicHostSettings> =>
