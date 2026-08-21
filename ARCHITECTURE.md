@@ -325,7 +325,9 @@ Zen 只在 Codex 0.146.0 没有等价原子语义时增加一项明确命名的�
   `src/protocol/codex/README.md`。
 - `account/read`、`skills/list` 与 `model/list` 只投影宿主公开能力，不向 Zen Core 或 Thread 写入账户、skill、provider 状态；
   `model/list` 用稳定 opaque model key 区分不同 profile 的同名 model，reasoning effort
-  仍使用固定 Codex 字段，opaque key 的编码与解析只存在于协议目录。
+  仍使用固定 Codex 字段；固定 schema 无法表达的非默认 Unknown/不可运行条目只从
+  wire 投影省略，不从 Host/Core catalog 删除，默认模型则必须可表示且可运行。
+  opaque key 的编码与解析只存在于协议目录。
 - `thread/settings/update` 修改后续 Turn 使用的配置；`turn/start` 携带的模型
   与 effort override 复用同一内部更新路径。provider/model/effort 必须原子解析并追加；成功变更必须先追加
   `thread_configuration_changed`，再广播 `thread/settings/updated`。

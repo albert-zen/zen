@@ -260,7 +260,7 @@ test("preserves compatible effort and falls back for incompatible Core changes",
   );
 });
 
-test("keeps unknown model capabilities distinct and refuses to guess in fixed model/list", async () => {
+test("fixed model/list omits unknown and non-runnable entries without hiding valid models", async () => {
   const registry = new ProviderRegistry([
     {
       providerProfileId: "profile-a",
@@ -309,17 +309,75 @@ test("keeps unknown model capabilities distinct and refuses to guess in fixed mo
         .supportedReasoningEfforts,
       [],
     );
-    await assert.rejects(
-      client.request("model/list", {}),
-      isRpcError(-32603, "cannot represent"),
-    );
+    const listed = (await client.request("model/list", {})) as {
+      data: Array<{ model: string }>;
+    };
+    assert.equal(listed.data.length, 1);
+    assert.deepEqual(decodeModelKey(listed.data[0]!.model), {
+      providerProfileId: "profile-a",
+      modelId: "shared-model",
+    });
   } finally {
     client.close();
     await wire.close();
   }
 });
 
-test("requires an explicit effort for an unknown discovered model without changing canonical selection", async () => {
+test("manual capability override makes an otherwise unknown model visible in fixed model/list", async () => {
+  const registry = new ProviderRegistry([
+    {
+      providerProfileId: "profile-a",
+      adapter: recordingAdapter("adapter-a", []),
+      modelCatalog: new StaticModelCatalog([
+        { id: "shared-model", isDefault: true },
+        {
+          id: "discovered-only",
+          source: "manual",
+          supportedReasoningEfforts: ["low", "high"],
+          defaultReasoningEffort: "high",
+          inputModalities: ["text", "image"],
+          contextWindow: null,
+        },
+      ]),
+    },
+  ]);
+  const appServer = createRegistryServer({
+    registry,
+    defaultSelection: selection("profile-a", "medium"),
+  });
+  const wire = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-manual-model-capability-projection"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const client = await CodexClient.connect(wire.url);
+  try {
+    await client.initialize({ name: "test", title: "Test", version: "1" });
+    const listed = (await client.request("model/list", {})) as {
+      data: Array<{
+        model: string;
+        supportedReasoningEfforts: Array<{ reasoningEffort: string }>;
+        defaultReasoningEffort: string;
+        inputModalities: string[];
+      }>;
+    };
+    const manual = listed.data.find(
+      (entry) => decodeModelKey(entry.model).modelId === "discovered-only",
+    );
+    assert(manual !== undefined);
+    assert.deepEqual(
+      manual.supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
+      ["low", "high"],
+    );
+    assert.equal(manual.defaultReasoningEffort, "high");
+    assert.deepEqual(manual.inputModalities, ["text", "image"]);
+  } finally {
+    client.close();
+    await wire.close();
+  }
+});
+
+test("rejects an explicit effort for unknown reasoning without mutating the Thread or invoking the adapter", async () => {
   const requests: ModelRequest[] = [];
   const server = createRegistryServer({
     registry: new ProviderRegistry([
@@ -342,30 +400,22 @@ test("requires an explicit effort for an unknown discovered model without changi
     defaultSelection: selection("profile-a", "medium"),
   });
   const thread = await server.startThread();
+  const before = await server.readThread(thread.id);
   await assert.rejects(
-    server.updateThreadSettings(thread.id, { model: "discovered-only" }),
-    hasZenCode("reasoning_effort_unknown"),
-  );
-  assert.equal((await server.readThread(thread.id)).modelId, "shared-model");
-
-  const selectionWithExplicitEffort = await server.updateThreadSettings(
-    thread.id,
-    {
+    server.startTurn(thread.id, "must not run", {
       selection: {
         providerProfileId: "profile-a",
         modelId: "discovered-only",
-        reasoningEffort: "user-confirmed-effort",
+        reasoningEffort: "user-supplied-effort",
       },
-    },
+    }),
+    hasZenCode("reasoning_effort_unknown"),
   );
-  assert.equal(
-    selectionWithExplicitEffort.reasoningEffort,
-    "user-confirmed-effort",
-  );
-  await (
-    await server.startTurn(thread.id, "explicit")
-  ).done;
-  assert.equal(requests[0]?.reasoningEffort, "user-confirmed-effort");
+  const after = await server.readThread(thread.id);
+  assert.equal(after.modelId, "shared-model");
+  assert.equal(after.reasoningEffort, "medium");
+  assert.deepEqual(after.items, before.items);
+  assert.equal(requests.length, 0);
 });
 
 test("keeps opaque model keys stable and round-trippable", () => {

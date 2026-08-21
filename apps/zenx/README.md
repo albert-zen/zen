@@ -97,8 +97,12 @@ credential-scoped `GET <baseUrl>/models` discovery through that profile's system
 proxy transport. Discovery reads IDs only, returns all other unconfirmed
 capabilities as Unknown, does not persist credentials, and does not modify the
 configured/manual catalog on success or failure. A discovered model with no
-known default reasoning effort requires an explicit effort or a manual override
-before it can become the canonical selection.
+known reasoning capability is non-runnable even when a Thread supplies an
+explicit effort; it requires a manual catalog capability override before it can
+become the canonical selection. The fixed Codex 0.146.0 `model/list` omits such
+non-default entries while continuing to expose valid configured models, and a
+completed manual override makes the entry visible. Default and title models
+must have runnable, wire-representable reasoning and text-input metadata.
 
 Host profiles live under Electron `userData` without credentials. Compatible
 provider API keys are encrypted with Electron `safeStorage` and keyed by stable

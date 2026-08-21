@@ -209,21 +209,13 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
       (profile) => profile.providerProfileId === defaultModel.providerProfileId,
     )!
     .models.find((model) => model.id === defaultModel.modelId)!;
-  if (configuredDefault.defaultReasoningEffort === null) {
-    throw new Error(
-      "ZenX default model requires a known default reasoning effort or manual override",
-    );
-  }
+  validateRunnableModel(configuredDefault, "default");
   const configuredTitle = providerProfiles
     .find(
       (profile) => profile.providerProfileId === titleModel.providerProfileId,
     )!
     .models.find((model) => model.id === titleModel.modelId)!;
-  if (configuredTitle.defaultReasoningEffort === null) {
-    throw new Error(
-      "ZenX title model requires a known default reasoning effort or manual override",
-    );
-  }
+  validateRunnableModel(configuredTitle, "title");
   if (value.approvalPolicy !== "always" && value.approvalPolicy !== "never") {
     throw new Error("ZenX approval policy is invalid");
   }
@@ -249,6 +241,30 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
     pinnedThreadIds: normalizePinnedThreadIds(value.pinnedThreadIds),
     sidebarOrder: normalizeSidebarOrder(value.sidebarOrder),
   };
+}
+
+function validateRunnableModel(
+  model: ZenXModelCatalogEntry,
+  label: "default" | "title",
+): void {
+  if (model.defaultReasoningEffort === null) {
+    throw new Error(
+      `ZenX ${label} model requires a known default reasoning effort or manual override`,
+    );
+  }
+  if (model.supportedReasoningEfforts === null) {
+    throw new Error(
+      `ZenX ${label} model requires known supported reasoning efforts or manual override`,
+    );
+  }
+  if (
+    model.inputModalities === null ||
+    !model.inputModalities.includes("text")
+  ) {
+    throw new Error(
+      `ZenX ${label} model requires known text input modalities or manual override`,
+    );
+  }
 }
 
 export function migratedProviderProfileId(

@@ -282,6 +282,26 @@ test("validates duplicate, dangling, missing model, bounded id, URL, and secret 
     () =>
       validateHostProfile({
         ...profile,
+        titleModel: profile.defaultModel,
+        providerProfiles: [
+          {
+            ...profile.providerProfiles[0],
+            models: [
+              {
+                ...profile.providerProfiles[0]!.models[0],
+                inputModalities: null,
+                source: "manual",
+              },
+            ],
+          },
+        ],
+      }),
+    /default model requires known text input modalities/u,
+  );
+  assert.throws(
+    () =>
+      validateHostProfile({
+        ...profile,
         providerProfiles: [
           {
             ...profile.providerProfiles[0],

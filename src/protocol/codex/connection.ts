@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   AppServerError,
   type AppServerEvent,
+  type ListedProviderModel,
   type ThreadSnapshot,
   ZenAppServer,
 } from "../../app-server.js";
@@ -178,18 +179,16 @@ export class CodexConnection {
         if (params.cursor !== undefined && params.cursor !== null) {
           throw new InvalidParamsError("model/list cursor is not supported");
         }
-        const models = this.#appServer.listModels();
-        for (const entry of models) {
-          if (
-            entry.model.supportedReasoningEfforts === null ||
-            entry.model.defaultReasoningEffort === null ||
-            entry.model.inputModalities === null
-          ) {
-            throw new Error(
-              `Model ${entry.model.id} from provider profile ${entry.providerProfileId} has Unknown capability metadata that codex-cli 0.146.0 model/list cannot represent; configure a manual override`,
-            );
-          }
+        const catalog = this.#appServer.listModels();
+        const unavailableDefault = catalog.find(
+          (entry) => entry.isDefault && !isCodexModelListRunnable(entry),
+        );
+        if (unavailableDefault !== undefined) {
+          throw new Error(
+            `Default model ${unavailableDefault.model.id} from provider profile ${unavailableDefault.providerProfileId} cannot be represented as a runnable codex-cli 0.146.0 model/list entry; configure a manual capability override`,
+          );
         }
+        const models = catalog.filter(isCodexModelListRunnable);
         this.#send({
           id: request.id,
           result: {
@@ -1027,6 +1026,15 @@ export class CodexConnection {
       },
     });
   }
+}
+
+function isCodexModelListRunnable(entry: ListedProviderModel): boolean {
+  return (
+    entry.model.supportedReasoningEfforts !== null &&
+    entry.model.defaultReasoningEffort !== null &&
+    entry.model.inputModalities !== null &&
+    entry.model.inputModalities.includes("text")
+  );
 }
 
 class MethodNotFoundError extends Error {

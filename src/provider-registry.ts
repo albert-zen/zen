@@ -84,9 +84,14 @@ export class ProviderRegistry {
     }
     const supportedReasoningEfforts = model.supportedReasoningEfforts;
     const explicitReasoningEffort = selection.reasoningEffort;
+    if (supportedReasoningEfforts === null) {
+      throw new ProviderRegistryError(
+        "reasoning_effort_unknown",
+        `Reasoning capability is unknown for model ${selection.modelId} from provider profile ${selection.providerProfileId}; configure a manual capability override`,
+      );
+    }
     if (
       explicitReasoningEffort !== undefined &&
-      supportedReasoningEfforts !== null &&
       !supportedReasoningEfforts.includes(explicitReasoningEffort)
     ) {
       throw new ProviderRegistryError(
@@ -96,9 +101,7 @@ export class ProviderRegistry {
     }
     const canPreserveFallback =
       fallbackReasoningEffort !== undefined &&
-      (supportedReasoningEfforts === null
-        ? fallbackReasoningEffort === model.defaultReasoningEffort
-        : supportedReasoningEfforts.includes(fallbackReasoningEffort));
+      supportedReasoningEfforts.includes(fallbackReasoningEffort);
     const reasoningEffort =
       explicitReasoningEffort ??
       (canPreserveFallback
@@ -106,12 +109,8 @@ export class ProviderRegistry {
         : model.defaultReasoningEffort);
     if (reasoningEffort === null || reasoningEffort === undefined) {
       throw new ProviderRegistryError(
-        supportedReasoningEfforts === null
-          ? "reasoning_effort_unknown"
-          : "reasoning_effort_unavailable",
-        supportedReasoningEfforts === null
-          ? `Reasoning capability and default effort are unknown for model ${selection.modelId} from provider profile ${selection.providerProfileId}; choose an explicit effort or configure a manual override`
-          : `Model ${selection.modelId} from provider profile ${selection.providerProfileId} has no supported default reasoning effort`,
+        "reasoning_effort_unavailable",
+        `Model ${selection.modelId} from provider profile ${selection.providerProfileId} has no supported default reasoning effort`,
       );
     }
     const completedSelection: ProviderSelection = {

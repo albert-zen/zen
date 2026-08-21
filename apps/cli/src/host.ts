@@ -250,6 +250,19 @@ function requiredDefaultReasoningEffort(
   model: ReturnType<StaticModelCatalog["defaultModel"]>,
   selection: HostModelSelection,
 ): string {
+  if (model.supportedReasoningEfforts === null) {
+    throw new Error(
+      `Supported reasoning efforts are unknown for default model ${selection.modelId} from provider profile ${selection.providerProfileId}; configure a manual capability override`,
+    );
+  }
+  if (
+    model.inputModalities === null ||
+    !model.inputModalities.includes("text")
+  ) {
+    throw new Error(
+      `Input modalities for default model ${selection.modelId} from provider profile ${selection.providerProfileId} do not confirm text support; configure a manual capability override`,
+    );
+  }
   if (model.defaultReasoningEffort !== null) {
     return model.defaultReasoningEffort;
   }
