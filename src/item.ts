@@ -3,6 +3,7 @@ import type { AttachmentRef } from "./attachment.js";
 export type ItemType =
   | "thread_metadata"
   | "thread_configuration_changed"
+  | "context_compaction"
   | "turn_started"
   | "turn_completed"
   | "turn_aborted"
@@ -181,9 +182,25 @@ export interface FailureItem extends ItemBase {
   message: string;
 }
 
+export interface ContextCompactionItem extends ItemBase {
+  type: "context_compaction";
+  coveredThroughItemId: string;
+  summary: string;
+  retainedItemIds: string[];
+  providerProfileId: string;
+  modelId: string;
+  reasoningEffort: string;
+  algorithmVersion: string;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+}
+
 export type CanonicalItem =
   | ThreadMetadataItem
   | ThreadConfigurationChangedItem
+  | ContextCompactionItem
   | TurnStartedItem
   | TurnCompletedItem
   | TurnAbortedItem

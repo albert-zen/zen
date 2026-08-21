@@ -5,6 +5,7 @@ import type {
   SandboxMode,
   ThreadMetadataItem,
 } from "./item.js";
+import { validateContextCompactionItem } from "./context-compaction.js";
 
 export type DerivedTurnStatus =
   "inProgress" | "completed" | "failed" | "interrupted";
@@ -51,6 +52,15 @@ export class Thread {
     }
     if (this.#items.some((existing) => existing.id === item.id)) {
       throw new Error(`Duplicate item id ${item.id}`);
+    }
+    if (item.type === "context_compaction") {
+      validateContextCompactionItem(this.#items, item);
+      const current = this.effectiveConfiguration();
+      if (!sameSelection(current, item)) {
+        throw new Error(
+          "Context compaction selection must match the effective Thread selection",
+        );
+      }
     }
     if (item.type === "thread_configuration_changed") {
       const current = this.effectiveConfiguration();

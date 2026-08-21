@@ -359,6 +359,14 @@ export class CodexConnection {
         this.#send({ id: request.id, result: {} });
         return;
       }
+      case "thread/compact": {
+        rejectUnsupportedValues(params, ["threadId"]);
+        const result = await this.#appServer.compactThread(
+          requiredString(params, "threadId"),
+        );
+        this.#send({ id: request.id, result });
+        return;
+      }
       case "thread/read": {
         const snapshot = await this.#appServer.readThread(
           requiredString(params, "threadId"),

@@ -284,6 +284,7 @@ export function projectCompletedItem(
     case "tool_call":
       return projectCommandStarted(item, "");
     case "failure":
+    case "context_compaction":
     case "thread_configuration_changed":
     case "thread_metadata":
     case "tool_result":
