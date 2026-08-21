@@ -43,6 +43,7 @@ import type {
   DirectoryListing,
 } from "../../main/directory-browser.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
+import type { ZenXProviderCatalogSnapshot } from "../../main/settings-service.js";
 
 declare global {
   interface Window {
@@ -102,6 +103,9 @@ declare global {
           providerProfileId: string,
           replacements?: ZenXProviderDeleteReplacements,
         ): Promise<PublicHostSettings>;
+        discoverProvider(
+          providerProfileId: string,
+        ): Promise<ZenXProviderCatalogSnapshot>;
         addWorkspace(workspace: string): Promise<PublicHostSettings>;
         removeWorkspace(workspace: string): Promise<PublicHostSettings>;
         setDefaultWorkspace(workspace: string): Promise<PublicHostSettings>;

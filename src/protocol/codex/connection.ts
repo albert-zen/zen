@@ -178,10 +178,22 @@ export class CodexConnection {
         if (params.cursor !== undefined && params.cursor !== null) {
           throw new InvalidParamsError("model/list cursor is not supported");
         }
+        const models = this.#appServer.listModels();
+        for (const entry of models) {
+          if (
+            entry.model.supportedReasoningEfforts === null ||
+            entry.model.defaultReasoningEffort === null ||
+            entry.model.inputModalities === null
+          ) {
+            throw new Error(
+              `Model ${entry.model.id} from provider profile ${entry.providerProfileId} has Unknown capability metadata that codex-cli 0.146.0 model/list cannot represent; configure a manual override`,
+            );
+          }
+        }
         this.#send({
           id: request.id,
           result: {
-            data: this.#appServer.listModels().map((entry) => ({
+            data: models.map((entry) => ({
               id: encodeModelKey({
                 providerProfileId: entry.providerProfileId,
                 modelId: entry.model.id,
@@ -195,17 +207,17 @@ export class CodexConnection {
               availabilityNux: null,
               displayName: entry.model.displayName ?? entry.model.id,
               description:
-                entry.model.description ?? "Model configured by the Zen host",
+                entry.model.description || "Model configured by the Zen host",
               hidden: entry.model.hidden ?? false,
-              supportedReasoningEfforts: (
-                entry.model.supportedReasoningEfforts ?? []
-              ).map((reasoningEffort) => ({
-                reasoningEffort,
-                description: reasoningEffort,
-              })),
-              defaultReasoningEffort:
-                entry.model.defaultReasoningEffort ?? "medium",
-              inputModalities: ["text"],
+              supportedReasoningEfforts:
+                entry.model.supportedReasoningEfforts!.map(
+                  (reasoningEffort) => ({
+                    reasoningEffort,
+                    description: reasoningEffort,
+                  }),
+                ),
+              defaultReasoningEffort: entry.model.defaultReasoningEffort!,
+              inputModalities: entry.model.inputModalities!,
               supportsPersonality: false,
               additionalSpeedTiers: [],
               serviceTiers: [],

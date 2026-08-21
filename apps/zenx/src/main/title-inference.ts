@@ -34,7 +34,7 @@ export class ZenXConfiguredTitleInference implements ThreadTitleInference {
     let text = "";
     for await (const event of configured.adapter.stream({
       model,
-      reasoningEffort: "medium",
+      reasoningEffort: configured.reasoningEffort,
       messages: [
         {
           role: "user",

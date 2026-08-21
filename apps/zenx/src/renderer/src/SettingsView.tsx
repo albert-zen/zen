@@ -4,6 +4,7 @@ import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type {
   PublicHostSettings,
   ZenXHostProfile,
+  ZenXModelCatalogEntry,
   ZenXProviderProfile,
 } from "../../main/host-profile.js";
 import {
@@ -58,7 +59,7 @@ export function SettingsView({
         if (!active) return;
         setSettings(value);
         setDraft(value.profile);
-        setModels(defaultProvider(value.profile).models.join("\n"));
+        setModels(modelIds(defaultProvider(value.profile)).join("\n"));
       })
       .catch((reason: unknown) => active && setError(describeError(reason)));
     return () => {
@@ -91,10 +92,12 @@ export function SettingsView({
     const provider: ZenXProviderProfile = {
       ...providerConnection,
       providerProfileId: current.providerProfileId,
-      models:
-        titleModel === defaultModel
-          ? [defaultModel]
-          : [defaultModel, titleModel],
+      models: [
+        legacyModelCatalogEntry(defaultModel),
+        ...(titleModel === defaultModel
+          ? []
+          : [legacyModelCatalogEntry(titleModel)]),
+      ],
     };
     setDraft({
       ...draft,
@@ -133,7 +136,7 @@ export function SettingsView({
       );
       setSettings(value);
       setDraft(value.profile);
-      setModels(defaultProvider(value.profile).models.join("\n"));
+      setModels(modelIds(defaultProvider(value.profile)).join("\n"));
       setApiKey("");
       setStatus("Changes applied · local host restarted");
     } catch (reason) {
@@ -160,7 +163,10 @@ export function SettingsView({
     onboardingComplete: true,
     providerProfiles: draft.providerProfiles.map((candidate) =>
       candidate.providerProfileId === provider.providerProfileId
-        ? { ...candidate, models: configuredModels }
+        ? {
+            ...candidate,
+            models: configuredModelCatalog(candidate, configuredModels),
+          }
         : candidate,
     ),
   };
@@ -838,6 +844,35 @@ function replaceProvider(
       ? provider
       : candidate,
   );
+}
+
+function modelIds(provider: ZenXProviderProfile): string[] {
+  return provider.models.map((model) => model.id);
+}
+
+function configuredModelCatalog(
+  provider: ZenXProviderProfile,
+  ids: readonly string[],
+): ZenXModelCatalogEntry[] {
+  return ids.map(
+    (id) =>
+      provider.models.find((model) => model.id === id) ??
+      legacyModelCatalogEntry(id),
+  );
+}
+
+function legacyModelCatalogEntry(id: string): ZenXModelCatalogEntry {
+  return {
+    id,
+    displayName: id,
+    description: "",
+    hidden: false,
+    supportedReasoningEfforts: ["medium"],
+    defaultReasoningEffort: "medium",
+    inputModalities: ["text"],
+    contextWindow: null,
+    source: "legacy",
+  };
 }
 
 function Field({

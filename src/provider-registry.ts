@@ -82,19 +82,36 @@ export class ProviderRegistry {
         `Model ${selection.modelId} is not available from provider profile ${selection.providerProfileId}`,
       );
     }
-    const supportedReasoningEfforts = model.supportedReasoningEfforts ?? [
-      model.defaultReasoningEffort ?? "medium",
-    ];
-    const reasoningEffort =
-      selection.reasoningEffort ??
-      (fallbackReasoningEffort !== undefined &&
-      supportedReasoningEfforts.includes(fallbackReasoningEffort)
-        ? fallbackReasoningEffort
-        : (model.defaultReasoningEffort ?? "medium"));
-    if (!supportedReasoningEfforts.includes(reasoningEffort)) {
+    const supportedReasoningEfforts = model.supportedReasoningEfforts;
+    const explicitReasoningEffort = selection.reasoningEffort;
+    if (
+      explicitReasoningEffort !== undefined &&
+      supportedReasoningEfforts !== null &&
+      !supportedReasoningEfforts.includes(explicitReasoningEffort)
+    ) {
       throw new ProviderRegistryError(
         "reasoning_effort_unavailable",
-        `Reasoning effort ${reasoningEffort} is not available for model ${selection.modelId} from provider profile ${selection.providerProfileId}`,
+        `Reasoning effort ${explicitReasoningEffort} is not available for model ${selection.modelId} from provider profile ${selection.providerProfileId}`,
+      );
+    }
+    const canPreserveFallback =
+      fallbackReasoningEffort !== undefined &&
+      (supportedReasoningEfforts === null
+        ? fallbackReasoningEffort === model.defaultReasoningEffort
+        : supportedReasoningEfforts.includes(fallbackReasoningEffort));
+    const reasoningEffort =
+      explicitReasoningEffort ??
+      (canPreserveFallback
+        ? fallbackReasoningEffort
+        : model.defaultReasoningEffort);
+    if (reasoningEffort === null || reasoningEffort === undefined) {
+      throw new ProviderRegistryError(
+        supportedReasoningEfforts === null
+          ? "reasoning_effort_unknown"
+          : "reasoning_effort_unavailable",
+        supportedReasoningEfforts === null
+          ? `Reasoning capability and default effort are unknown for model ${selection.modelId} from provider profile ${selection.providerProfileId}; choose an explicit effort or configure a manual override`
+          : `Model ${selection.modelId} from provider profile ${selection.providerProfileId} has no supported default reasoning effort`,
       );
     }
     const completedSelection: ProviderSelection = {
@@ -114,7 +131,8 @@ export class ProviderRegistryError extends Error {
   readonly code:
     | "provider_unavailable"
     | "model_unavailable"
-    | "reasoning_effort_unavailable";
+    | "reasoning_effort_unavailable"
+    | "reasoning_effort_unknown";
 
   constructor(code: ProviderRegistryError["code"], message: string) {
     super(message);

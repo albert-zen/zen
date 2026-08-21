@@ -6,7 +6,10 @@ import {
   JsonlThreadJournal,
   type ThreadJournal,
 } from "../../../src/journal.js";
-import { StaticModelCatalog } from "../../../src/model-catalog.js";
+import {
+  StaticModelCatalog,
+  type ModelCatalogEntryInput,
+} from "../../../src/model-catalog.js";
 import { FakeModel, type ModelAdapter } from "../../../src/model.js";
 import { OpenAiCompatibleModel } from "../../../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
@@ -22,6 +25,7 @@ import {
 } from "../../../src/thread-summary.js";
 import { ShellToolExecutor, type ToolExecutor } from "../../../src/tool.js";
 import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
+import { legacyModelCatalogEntries } from "./model-presets.js";
 
 export type HostProvider =
   | { type: "fake" }
@@ -41,6 +45,8 @@ export interface HostProviderProfile {
   providerProfileId: string;
   provider: HostProvider;
   model: string;
+  modelCatalog?: readonly ModelCatalogEntryInput[];
+  /** Compatibility input for existing string-only host callers. */
   models?: readonly string[];
   transport?: ProviderTransport;
 }
@@ -55,6 +61,7 @@ export interface ZenHostOptions {
   dataDirectory: string;
   /** Compatibility input for existing single-provider CLI callers. */
   model?: string;
+  modelCatalog?: readonly ModelCatalogEntryInput[];
   models?: readonly string[];
   approvalPolicy: "always" | "never";
   /** Compatibility input for existing single-provider CLI callers. */
@@ -96,10 +103,20 @@ export function createHostedAppServer(
     }
     seenProfileIds.add(providerProfileId);
     const configuredModels = profile.models ?? [profile.model];
-    const modelIds = uniqueModels(configuredModels);
+    const modelEntries =
+      profile.modelCatalog ??
+      legacyModelCatalogEntries(
+        profile.provider.type,
+        options.providers === undefined
+          ? uniqueModels(configuredModels)
+          : configuredModels,
+      );
+    const modelIds = modelEntries.map((entry) => entry.id.trim());
     if (
+      profile.modelCatalog === undefined &&
       options.providers !== undefined &&
-      modelIds.length !== configuredModels.length
+      (modelIds.some((id) => id.length === 0) ||
+        new Set(modelIds).size !== modelIds.length)
     ) {
       throw new Error(
         `Model ids must be non-empty and unique in provider profile ${providerProfileId}`,
@@ -118,8 +135,11 @@ export function createHostedAppServer(
     return {
       ...profile,
       providerProfileId,
-      modelCatalog: new StaticModelCatalog(
-        modelIds.map((id) => ({ id, isDefault: id === profile.model })),
+      catalog: new StaticModelCatalog(
+        modelEntries.map((entry) => ({
+          ...entry,
+          isDefault: entry.id.trim() === profile.model,
+        })),
       ),
     };
   });
@@ -129,7 +149,7 @@ export function createHostedAppServer(
       (profile) =>
         profile.providerProfileId === defaultSelection.providerProfileId,
     )
-    ?.modelCatalog.get(defaultSelection.modelId);
+    ?.catalog.get(defaultSelection.modelId);
   if (configuredDefault === undefined) {
     throw new Error(
       `Default model ${defaultSelection.modelId} is absent from provider profile ${defaultSelection.providerProfileId}`,
@@ -142,7 +162,7 @@ export function createHostedAppServer(
     return {
       providerProfileId: profile.providerProfileId,
       adapter: createModel(profile.provider, fetch),
-      modelCatalog: profile.modelCatalog,
+      modelCatalog: profile.catalog,
     };
   });
   const appServer = new ZenAppServer({
@@ -171,7 +191,10 @@ export function createHostedAppServer(
       cwd: path.resolve(options.cwd),
       providerProfileId: defaultSelection.providerProfileId,
       modelId: defaultSelection.modelId,
-      reasoningEffort: configuredDefault.defaultReasoningEffort ?? "medium",
+      reasoningEffort: requiredDefaultReasoningEffort(
+        configuredDefault,
+        defaultSelection,
+      ),
       sandbox: "danger-full-access",
       approvalPolicy: options.approvalPolicy,
     },
@@ -212,6 +235,9 @@ function normalizeProviderProfiles(
       providerProfileId: adapterIdentity,
       provider: options.provider,
       model: options.model,
+      ...(options.modelCatalog === undefined
+        ? {}
+        : { modelCatalog: options.modelCatalog }),
       ...(options.models === undefined ? {} : { models: options.models }),
       ...(options.transport === undefined
         ? {}
@@ -220,9 +246,21 @@ function normalizeProviderProfiles(
   ];
 }
 
+function requiredDefaultReasoningEffort(
+  model: ReturnType<StaticModelCatalog["defaultModel"]>,
+  selection: HostModelSelection,
+): string {
+  if (model.defaultReasoningEffort !== null) {
+    return model.defaultReasoningEffort;
+  }
+  throw new Error(
+    `Default reasoning effort is unknown for model ${selection.modelId} from provider profile ${selection.providerProfileId}; configure a manual capability override`,
+  );
+}
+
 function normalizeDefaultSelection(
   options: ZenHostOptions,
-  profiles: readonly HostProviderProfile[],
+  profiles: readonly Pick<HostProviderProfile, "providerProfileId" | "model">[],
 ): HostModelSelection {
   if (options.defaultSelection !== undefined) return options.defaultSelection;
   const profile = profiles[0]!;

@@ -11,6 +11,17 @@ export interface SelectedThreadSettings {
   modelProvider: string;
 }
 
+export type ModelOption = Omit<
+  ModelSummary,
+  "supportedReasoningEfforts" | "defaultReasoningEffort" | "inputModalities"
+> &
+  Partial<
+    Pick<
+      ModelSummary,
+      "supportedReasoningEfforts" | "defaultReasoningEffort" | "inputModalities"
+    >
+  > & { unavailable: boolean };
+
 export function canChangeThreadModel(thread: Thread): boolean {
   return !thread.turns.some((turn) => turn.status === "inProgress");
 }
@@ -50,7 +61,7 @@ export function validateModelCatalog(models: readonly ModelSummary[]): void {
 export function modelOptions(
   models: readonly ModelSummary[],
   selectedModel: string,
-): Array<ModelSummary & { unavailable: boolean }> {
+): ModelOption[] {
   const visible = models
     .filter((model) => !model.hidden)
     .map((model) => ({ ...model, unavailable: false }));
@@ -68,9 +79,6 @@ export function modelOptions(
         displayName: selectedModel,
         description: "Configured by the App Server",
         hidden: true,
-        supportedReasoningEfforts: [],
-        defaultReasoningEffort: "medium",
-        inputModalities: ["text"],
         supportsPersonality: false,
         additionalSpeedTiers: [],
         serviceTiers: [],

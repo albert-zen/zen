@@ -17,6 +17,7 @@ import {
   type LocalEncryption,
 } from "../src/main/credential-vault.js";
 import {
+  structuredLegacyModelCatalog,
   type ZenXHostProfile,
   ZenXHostProfileStore,
 } from "../src/main/host-profile.js";
@@ -400,7 +401,7 @@ test("merges stale Settings fields without overwriting a newer Project mutation"
       ...stale,
       providerProfiles: stale.providerProfiles.map((provider) => ({
         ...provider,
-        models: ["saved-model"],
+        models: structuredLegacyModelCatalog(provider.type, ["saved-model"]),
       })),
       defaultModel: {
         providerProfileId: stale.defaultModel.providerProfileId,
@@ -668,14 +669,17 @@ test("title inference renews a subscription lease rejected after acquisition", a
     path.join(directory, "host-profile.json"),
   );
   await profileStore.write({
-    version: 2,
+    version: 3,
     onboardingComplete: true,
     providerProfiles: [
       {
         providerProfileId: "openai-codex",
         type: "openai-subscription",
         displayName: "OpenAI subscription",
-        models: ["gpt-5.6-terra", "gpt-5.6-luna"],
+        models: structuredLegacyModelCatalog("openai-subscription", [
+          "gpt-5.6-terra",
+          "gpt-5.6-luna",
+        ]),
       },
     ],
     defaultModel: {
@@ -756,7 +760,7 @@ test("title inference renews a subscription lease rejected after acquisition", a
   }
 });
 
-test("migrates a persisted v1 profile and vault together and restarts from durable v2", async () => {
+test("migrates a persisted v1 profile and vault together and restarts from durable v3", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-paired-v1-"));
   const profilePath = path.join(directory, "host-profile.json");
   const vaultPath = path.join(directory, "credentials.vault");
@@ -803,7 +807,7 @@ test("migrates a persisted v1 profile and vault together and restarts from durab
     assert.equal(await vault.readApiKey("legacy-adapter"), "legacy-key");
     const firstProfile = await readFile(profilePath, "utf8");
     const firstVault = await readFile(vaultPath, "utf8");
-    assert.equal(JSON.parse(firstProfile).version, 2);
+    assert.equal(JSON.parse(firstProfile).version, 3);
     assert.equal(JSON.parse(firstVault).version, 2);
     assert.doesNotMatch(firstProfile + firstVault, /legacy-key/u);
 
@@ -861,7 +865,7 @@ test("a vault migration failure publishes no settings and succeeds on explicit r
     });
     await assert.rejects(failed.initialize({}), /not a regular file/u);
     await assert.rejects(failed.publicSettings(), /not initialized/u);
-    assert.equal(JSON.parse(await readFile(profilePath, "utf8")).version, 2);
+    assert.equal(JSON.parse(await readFile(profilePath, "utf8")).version, 3);
 
     await rm(vaultPath, { recursive: true });
     await writeFile(
@@ -879,7 +883,7 @@ test("a vault migration failure publishes no settings and succeeds on explicit r
       subscription: inactiveSubscription(),
     });
     await restarted.initialize({});
-    assert.equal((await restarted.publicSettings()).profile.version, 2);
+    assert.equal((await restarted.publicSettings()).profile.version, 3);
     assert.equal(
       await restarted
         .hostConfig()
@@ -963,7 +967,16 @@ test("title inference resolves the selected profile's adapter and credential", a
     path.join(directory, "host-profile.json"),
   );
   const first = compatibleProfile("first").providerProfiles[0]!;
-  const second = compatibleProfile("second").providerProfiles[0]!;
+  const secondBase = compatibleProfile("second").providerProfiles[0]!;
+  const second = {
+    ...secondBase,
+    models: secondBase.models.map((model) => ({
+      ...model,
+      source: "manual" as const,
+      supportedReasoningEfforts: ["high"],
+      defaultReasoningEffort: "high",
+    })),
+  };
   const profile: ZenXHostProfile = {
     ...fakeProfile("fake"),
     providerProfiles: [first, second],
@@ -996,6 +1009,7 @@ test("title inference resolves the selected profile's adapter and credential", a
     });
     await service.initialize({});
     const configured = await service.titleModel();
+    assert.equal(configured.reasoningEffort, "high");
     let output = "";
     for await (const event of configured.adapter!.stream({
       model: configured.model,
@@ -1287,14 +1301,14 @@ function inactiveSubscription(): Pick<
 
 function fakeProfile(model: string): ZenXHostProfile {
   return {
-    version: 2,
+    version: 3,
     onboardingComplete: true,
     providerProfiles: [
       {
         providerProfileId: "fake",
         type: "fake",
         displayName: "Local demo",
-        models: [model],
+        models: structuredLegacyModelCatalog("fake", [model]),
       },
     ],
     defaultModel: { providerProfileId: "fake", modelId: model },
@@ -1318,7 +1332,9 @@ function compatibleProfile(name: string): ZenXHostProfile {
         name,
         displayName: name,
         baseUrl: `https://${name}.example.test/v1`,
-        models: [`${name}-model`],
+        models: structuredLegacyModelCatalog("openai-compatible", [
+          `${name}-model`,
+        ]),
       },
     ],
     defaultModel: { providerProfileId: name, modelId: `${name}-model` },

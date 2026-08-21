@@ -88,7 +88,7 @@ export interface ModelSummary {
     description: string;
   }>;
   defaultReasoningEffort: string;
-  inputModalities: ["text"];
+  inputModalities: Array<"text" | "image">;
   supportsPersonality: false;
   additionalSpeedTiers: unknown[];
   serviceTiers: unknown[];

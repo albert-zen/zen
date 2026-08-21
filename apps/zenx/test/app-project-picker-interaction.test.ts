@@ -915,14 +915,14 @@ async function mountApp(
 function publicSettings(pinnedThreadIds: string[]) {
   return {
     profile: {
-      version: 2 as const,
+      version: 3 as const,
       onboardingComplete: true,
       providerProfiles: [
         {
           providerProfileId: "fake",
           type: "fake" as const,
           displayName: "Local demo",
-          models: ["fake", "gpt-5.6-luna"],
+          models: [catalogModel("fake"), catalogModel("gpt-5.6-luna")],
         },
       ],
       defaultModel: { providerProfileId: "fake", modelId: "fake" },
@@ -940,6 +940,20 @@ function publicSettings(pinnedThreadIds: string[]) {
     hasApiKey: false,
     apiKeyProviderProfileIds: [],
     subscription: { authenticated: false, expired: false },
+  };
+}
+
+function catalogModel(id: string) {
+  return {
+    id,
+    displayName: id,
+    description: "",
+    hidden: false,
+    supportedReasoningEfforts: ["medium"],
+    defaultReasoningEffort: "medium",
+    inputModalities: ["text" as const],
+    contextWindow: null,
+    source: "legacy" as const,
   };
 }
 

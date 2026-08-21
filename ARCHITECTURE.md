@@ -46,10 +46,13 @@
 - **UnavailableThreadSnapshot** — ZAS 在列举 Thread 时对无法重放的 canonical
   journal 生成的只读故障投影；它只暴露 threadId、可用的产品名称和
   `systemError`，不伪造或跳过权威会话历史。
-- **ModelCatalog** — 宿主公开的可选模型与默认模型目录；App Server 只投影和
-  校验它，credential 与 Provider 连接仍由宿主外部配置持有。目录必须有且仅有
-  一个可见默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由
-  既有 Thread 或显式请求使用。
+- **ModelCatalog** — 宿主按 Provider profile 公开的结构化模型目录；每项 capability
+  以 `null` 保留 Unknown、以空集合表达已知不支持，App Server 只投影和校验它，
+  credential 与 Provider 连接仍由宿主外部配置持有。目录必须有且仅有一个可见
+  默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由既有 Thread
+  或显式请求使用。
+- **ModelCatalogPreset** — 宿主版本化维护的内建 catalog 数据层，只记录仓库已确认的
+  Provider/model metadata，并由手工配置覆盖、由 discovery 仅补充未知 capability 的 id。
 - **ProviderRegistry** — 宿主以稳定 `providerProfileId` 把每个注入的 ModelAdapter
   与其 ModelCatalog 绑定；canonical selection 是
   `providerProfileId / modelId / reasoningEffort` 的原子三元组，Thread 只记录生效选择而不持有 profile 或 credential；
@@ -69,10 +72,13 @@
 - **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
   幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
-- **ZenXHostProfile** — ZenX 主进程以稳定 `providerProfileId` 持久化多个 Provider
-  连接及各自的字符串 ModelCatalog，并把默认/标题模型保存为
+- **ZenXHostProfile** — ZenX 主进程用 v3 配置以稳定 `providerProfileId` 持久化多个 Provider
+  连接及各自的结构化 ModelCatalog，并把默认/标题模型保存为
   `providerProfileId / modelId` 引用；workspace、审批默认值与本地产品偏好仍在同一
   host-owned 配置中，credential 不在其中，配置变更也不覆盖已存 Thread 的生效设置。
+- **ZenXModelDiscovery** — ZenX 主进程用所选 OpenAI-compatible profile 的 endpoint、
+  credential 与 transport 发起一次无持久状态的 `GET /models`，只把响应 id 与
+  Unknown capability 投影给 host catalog；失败明确返回且不修改已配置条目。
 - **ZenXAppearancePreference** — ZenX renderer 在本机 app profile 保存 System / Light / Dark
   偏好，并在首屏前把系统解析结果投影为同一套组件消费的语义色彩 token；它不进入 Core、
   Thread、Project、host restart 或 canonical ItemList。

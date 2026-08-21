@@ -1,5 +1,6 @@
 import type { ProviderTransport } from "../../../../apps/cli/src/host.js";
 import type { ZenXHostConfig } from "./host-messages.js";
+import type { ZenXProviderProfile } from "./host-profile.js";
 
 type ProxyResolver = (url: string) => Promise<string>;
 
@@ -42,6 +43,15 @@ export async function withZenXProviderTransports(
       })),
     ),
   };
+}
+
+export async function zenXProviderDiscoveryTransport(
+  profile: ZenXProviderProfile,
+  resolveProxy: ProxyResolver,
+): Promise<ProviderTransport | undefined> {
+  if (profile.type !== "openai-compatible") return undefined;
+  const proxy = proxyUrl(await resolveProxy(profile.baseUrl));
+  return proxy === undefined ? undefined : { proxyUrl: proxy };
 }
 
 async function transportForProvider(

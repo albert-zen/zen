@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
+import {
+  createProviderFetch,
+  type ProviderFetch,
+  type ProviderTransport,
+} from "../../../../apps/cli/src/host.js";
 import { OpenAiSubscriptionAuthProfile } from "../../../../apps/cli/src/subscription-auth.js";
 import type { ModelAdapter } from "../../../../src/model.js";
 import { OpenAiCompatibleModel } from "../../../../src/model/openai-compatible.js";
@@ -13,15 +18,18 @@ import {
   hostConfigFromProfile,
   type PublicHostSettings,
   type ZenXHostProfile,
+  type ZenXModelCatalogEntry,
   type ZenXProviderDeleteReplacements,
   type ZenXProviderEditOptions,
   type ZenXProviderProfile,
   ZenXHostProfileStore,
   type ZenXSidebarOrder,
   type ZenXSettingsUpdate,
+  structuredLegacyModelCatalog,
   validateHostProfile,
 } from "./host-profile.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
+import { discoverOpenAiCompatibleModels } from "./model-discovery.js";
 import { resolveZenXHostConfig } from "./host-config.js";
 import {
   type ProjectPathIdentity,
@@ -41,6 +49,11 @@ interface CanonicalWorkspaceSnapshot {
   readonly lastUsedKey: string | null;
 }
 
+export interface ZenXProviderCatalogSnapshot {
+  providerProfileId: string;
+  models: ZenXModelCatalogEntry[];
+}
+
 export class ZenXSettingsService {
   readonly #dataDirectory: string;
   readonly #profilePath: string;
@@ -58,6 +71,9 @@ export class ZenXSettingsService {
   readonly #vault: ZenXCredentialVault;
   readonly #projectPlatform: NodeJS.Platform;
   readonly #projectRealpath: ProjectRealpath | undefined;
+  readonly #providerFetchFactory: (
+    transport: ProviderTransport | undefined,
+  ) => ProviderFetch;
   #profile: ZenXHostProfile | undefined;
   #profileOperations: Promise<void> = Promise.resolve();
   #loginInProgress = false;
@@ -87,6 +103,9 @@ export class ZenXSettingsService {
       >;
     projectPlatform?: NodeJS.Platform;
     projectRealpath?: ProjectRealpath;
+    providerFetchFactory?: (
+      transport: ProviderTransport | undefined,
+    ) => ProviderFetch;
   }) {
     this.#dataDirectory = options.zenDataDirectory;
     this.#profilePath = path.join(
@@ -104,6 +123,8 @@ export class ZenXSettingsService {
     this.#vault = options.vault;
     this.#projectPlatform = options.projectPlatform ?? process.platform;
     this.#projectRealpath = options.projectRealpath;
+    this.#providerFetchFactory =
+      options.providerFetchFactory ?? createProviderFetch;
   }
 
   async initialize(environment: NodeJS.ProcessEnv): Promise<void> {
@@ -191,11 +212,60 @@ export class ZenXSettingsService {
     });
   }
 
+  async discoverProviderModels(
+    providerProfileId: string,
+    options: { transport?: ProviderTransport; signal?: AbortSignal } = {},
+  ): Promise<ZenXProviderCatalogSnapshot> {
+    await this.#profileOperations;
+    const provider = this.#requireProfile().providerProfiles.find(
+      (candidate) => candidate.providerProfileId === providerProfileId,
+    );
+    if (provider === undefined) {
+      throw new Error(
+        `Provider profile ${providerProfileId} is not configured`,
+      );
+    }
+    if (provider.type !== "openai-compatible") {
+      throw new Error(
+        `Provider profile ${providerProfileId} does not support GET /models discovery`,
+      );
+    }
+    const apiKey = await this.#vault.readApiKey(provider.providerProfileId);
+    if (apiKey === undefined) {
+      throw new Error(
+        `Provider profile ${provider.providerProfileId} has no API key`,
+      );
+    }
+    const fetch = this.#providerFetchFactory(options.transport);
+    try {
+      const discovered = await discoverOpenAiCompatibleModels({
+        baseUrl: provider.baseUrl,
+        apiKey,
+        fetch,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      const configuredIds = new Set(provider.models.map((entry) => entry.id));
+      return {
+        providerProfileId: provider.providerProfileId,
+        models: [
+          ...provider.models,
+          ...discovered.filter((entry) => !configuredIds.has(entry.id)),
+        ],
+      };
+    } finally {
+      await fetch.close?.();
+    }
+  }
+
   configuredTitleModel(): string {
     return this.#requireProfile().titleModel.modelId;
   }
 
-  async titleModel(): Promise<{ adapter: ModelAdapter | null; model: string }> {
+  async titleModel(): Promise<{
+    adapter: ModelAdapter | null;
+    model: string;
+    reasoningEffort: string;
+  }> {
     await this.#profileOperations;
     const profile = this.#requireProfile();
     const titleReference = profile.titleModel;
@@ -203,8 +273,17 @@ export class ZenXSettingsService {
       (candidate) =>
         candidate.providerProfileId === titleReference.providerProfileId,
     )!;
+    const modelMetadata = provider.models.find(
+      (model) => model.id === titleReference.modelId,
+    )!;
+    const reasoningEffort = modelMetadata.defaultReasoningEffort;
+    if (reasoningEffort === null) {
+      throw new Error(
+        `Title model ${titleReference.modelId} from Provider profile ${provider.providerProfileId} requires a manual default reasoning effort override`,
+      );
+    }
     if (provider.type === "fake") {
-      return { adapter: null, model: titleReference.modelId };
+      return { adapter: null, model: titleReference.modelId, reasoningEffort };
     }
     if (provider.type === "openai-subscription") {
       const subscription = this.#subscriptionForProfile(
@@ -233,6 +312,7 @@ export class ZenXSettingsService {
             "Return only a concise display title of at most 64 characters. Do not include quotes, IDs, labels, or punctuation boilerplate.",
         }),
         model: titleReference.modelId,
+        reasoningEffort,
       };
     }
     const apiKey = await this.#vault.readApiKey(provider.providerProfileId);
@@ -248,6 +328,7 @@ export class ZenXSettingsService {
         defaultParams: { temperature: 0.2, max_tokens: 40 },
       }),
       model: titleReference.modelId,
+      reasoningEffort,
     };
   }
 
@@ -818,13 +899,13 @@ function profileFromLegacy(
   const titleModel = "gpt-5.6-luna";
   if (!models.includes(titleModel)) models.push(titleModel);
   return {
-    version: 2,
+    version: 3,
     onboardingComplete: false,
     providerProfiles: [
       {
         ...providerConnection,
         providerProfileId,
-        models,
+        models: structuredLegacyModelCatalog(providerConnection.type, models),
       },
     ],
     defaultModel: { providerProfileId, modelId: config.model },

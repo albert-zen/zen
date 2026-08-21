@@ -1,13 +1,43 @@
 import type { ReasoningEffort } from "./model.js";
 
-export interface ModelCatalogEntry {
+export const MODEL_CATALOG_SOURCES = [
+  "preset",
+  "discovered",
+  "manual",
+  "legacy",
+] as const;
+
+export type ModelCatalogSource = (typeof MODEL_CATALOG_SOURCES)[number];
+export type ModelInputModality = "text" | "image";
+
+export interface ModelCatalogEntryInput {
   id: string;
   displayName?: string;
   description?: string;
   hidden?: boolean;
   isDefault?: boolean;
-  supportedReasoningEfforts?: readonly ReasoningEffort[];
-  defaultReasoningEffort?: ReasoningEffort;
+  supportedReasoningEfforts?: readonly ReasoningEffort[] | null;
+  defaultReasoningEffort?: ReasoningEffort | null;
+  inputModalities?: readonly ModelInputModality[] | null;
+  contextWindow?: number | null;
+  source?: ModelCatalogSource;
+}
+
+export interface ModelCatalogEntry {
+  id: string;
+  displayName: string;
+  description: string;
+  hidden: boolean;
+  isDefault: boolean;
+  /** null means Unknown; [] means known to support no selectable effort. */
+  supportedReasoningEfforts: readonly ReasoningEffort[] | null;
+  /** null means the Provider default is Unknown or absent. */
+  defaultReasoningEffort: ReasoningEffort | null;
+  /** null means Unknown; [] means known to accept no supported input modality. */
+  inputModalities: readonly ModelInputModality[] | null;
+  /** null means Unknown. */
+  contextWindow: number | null;
+  source: ModelCatalogSource;
 }
 
 export interface ModelCatalog {
@@ -21,11 +51,13 @@ export class StaticModelCatalog implements ModelCatalog {
   readonly #byId: ReadonlyMap<string, ModelCatalogEntry>;
   readonly #default: ModelCatalogEntry;
 
-  constructor(entries: readonly ModelCatalogEntry[]) {
+  constructor(entries: readonly ModelCatalogEntryInput[]) {
     if (entries.length === 0) {
       throw new Error("Model catalog must contain at least one model");
     }
-    const normalized = entries.map((entry) => normalizeEntry(entry));
+    const normalized = entries.map((entry) =>
+      normalizeModelCatalogEntry(entry),
+    );
     const byId = new Map<string, ModelCatalogEntry>();
     for (const entry of normalized) {
       if (byId.has(entry.id)) {
@@ -33,23 +65,17 @@ export class StaticModelCatalog implements ModelCatalog {
       }
       byId.set(entry.id, entry);
     }
-    const defaults = normalized.filter((entry) => entry.isDefault === true);
+    const defaults = normalized.filter((entry) => entry.isDefault);
     if (defaults.length !== 1) {
       throw new Error("Model catalog must contain exactly one default model");
     }
     const defaultEntry = defaults[0]!;
-    if (defaultEntry.hidden === true) {
+    if (defaultEntry.hidden) {
       throw new Error("Model catalog default must be visible");
     }
-    const frozenEntries = normalized.map((entry) =>
-      Object.freeze({
-        ...entry,
-        isDefault: entry.id === defaultEntry.id,
-      }),
-    );
-    this.#entries = Object.freeze(frozenEntries);
-    this.#byId = new Map(this.#entries.map((entry) => [entry.id, entry]));
-    this.#default = this.#byId.get(defaultEntry.id)!;
+    this.#entries = Object.freeze(normalized);
+    this.#byId = byId;
+    this.#default = defaultEntry;
   }
 
   list(): readonly ModelCatalogEntry[] {
@@ -65,51 +91,108 @@ export class StaticModelCatalog implements ModelCatalog {
   }
 }
 
-function normalizeEntry(entry: ModelCatalogEntry): ModelCatalogEntry {
+export function normalizeModelCatalogEntry(
+  entry: ModelCatalogEntryInput,
+): ModelCatalogEntry {
   const id = entry.id.trim();
   if (id.length === 0) {
     throw new Error("Model catalog ids must not be empty");
   }
-  const displayName = entry.displayName?.trim();
-  const description = entry.description?.trim();
+  const source = entry.source ?? "legacy";
+  if (!(MODEL_CATALOG_SOURCES as readonly unknown[]).includes(source)) {
+    throw new Error(`Model catalog source is invalid for model ${id}`);
+  }
+  const legacy = source === "legacy";
   const supportedReasoningEfforts = normalizeReasoningEfforts(
-    entry.supportedReasoningEfforts ?? ["medium"],
+    entry.supportedReasoningEfforts === undefined
+      ? legacy
+        ? ["medium"]
+        : null
+      : entry.supportedReasoningEfforts,
   );
-  const defaultReasoningEffort = (
-    entry.defaultReasoningEffort ?? supportedReasoningEfforts[0]!
-  ).trim();
-  if (!supportedReasoningEfforts.includes(defaultReasoningEffort)) {
+  const defaultReasoningEffort = normalizeOptionalText(
+    entry.defaultReasoningEffort === undefined
+      ? legacy
+        ? "medium"
+        : null
+      : entry.defaultReasoningEffort,
+    "Default reasoning effort",
+  );
+  if (
+    defaultReasoningEffort !== null &&
+    supportedReasoningEfforts !== null &&
+    !supportedReasoningEfforts.includes(defaultReasoningEffort)
+  ) {
     throw new Error(
-      `Default reasoning effort ${defaultReasoningEffort} is not supported by model ${id}`,
+      `Model ${id} default reasoning effort ${defaultReasoningEffort} is not supported`,
     );
   }
-  return {
+  const inputModalities = normalizeInputModalities(
+    entry.inputModalities === undefined
+      ? legacy
+        ? ["text"]
+        : null
+      : entry.inputModalities,
+  );
+  const contextWindow = entry.contextWindow ?? null;
+  if (
+    contextWindow !== null &&
+    (!Number.isSafeInteger(contextWindow) || contextWindow <= 0)
+  ) {
+    throw new Error(`Model ${id} context window must be a positive integer`);
+  }
+  const displayName = entry.displayName?.trim() || id;
+  const description = entry.description?.trim() ?? "";
+  return Object.freeze({
     id,
-    ...(displayName === undefined || displayName.length === 0
-      ? {}
-      : { displayName }),
-    ...(description === undefined || description.length === 0
-      ? {}
-      : { description }),
-    ...(entry.hidden === undefined ? {} : { hidden: entry.hidden }),
-    ...(entry.isDefault === undefined ? {} : { isDefault: entry.isDefault }),
-    supportedReasoningEfforts: Object.freeze(supportedReasoningEfforts),
+    displayName,
+    description,
+    hidden: entry.hidden ?? false,
+    isDefault: entry.isDefault ?? false,
+    supportedReasoningEfforts,
     defaultReasoningEffort,
-  };
+    inputModalities,
+    contextWindow,
+    source,
+  });
 }
 
 function normalizeReasoningEfforts(
-  efforts: readonly ReasoningEffort[],
-): ReasoningEffort[] {
-  if (efforts.length === 0) {
-    throw new Error("A model must support at least one reasoning effort");
-  }
-  const normalized = efforts.map((effort) => effort.trim());
-  if (normalized.some((effort) => effort.length === 0)) {
-    throw new Error("Reasoning efforts must not be empty");
-  }
+  efforts: readonly ReasoningEffort[] | null,
+): readonly ReasoningEffort[] | null {
+  if (efforts === null) return null;
+  const normalized = efforts.map((effort) => {
+    const value = effort.trim();
+    if (value.length === 0) {
+      throw new Error("Reasoning efforts must not be empty");
+    }
+    return value;
+  });
   if (new Set(normalized).size !== normalized.length) {
     throw new Error("Reasoning efforts must be unique per model");
   }
+  return Object.freeze(normalized);
+}
+
+function normalizeInputModalities(
+  modalities: readonly ModelInputModality[] | null,
+): readonly ModelInputModality[] | null {
+  if (modalities === null) return null;
+  if (modalities.some((value) => value !== "text" && value !== "image")) {
+    throw new Error("Model input modalities contain an unsupported value");
+  }
+  if (new Set(modalities).size !== modalities.length) {
+    throw new Error("Model input modalities must be unique");
+  }
+  return Object.freeze([...modalities]);
+}
+
+function normalizeOptionalText(
+  value: string | null,
+  label: string,
+): string | null {
+  if (value === null) return null;
+  const normalized = value.trim();
+  if (normalized.length === 0) throw new Error(`${label} must not be empty`);
   return normalized;
 }

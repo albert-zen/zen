@@ -22,6 +22,7 @@ import type {
   ZenXSidebarOrder,
   ZenXSettingsUpdate,
 } from "../main/host-profile.js";
+import type { ZenXProviderCatalogSnapshot } from "../main/settings-service.js";
 import type {
   CreateRoomInput,
   CreateTriggerInput,
@@ -156,6 +157,10 @@ contextBridge.exposeInMainWorld("zenx", {
         providerProfileId,
         replacements,
       ),
+    discoverProvider: async (
+      providerProfileId: string,
+    ): Promise<ZenXProviderCatalogSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.providerDiscover, providerProfileId),
     addWorkspace: async (workspace: string): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.workspaceAdd, workspace),
     removeWorkspace: async (workspace: string): Promise<PublicHostSettings> =>
