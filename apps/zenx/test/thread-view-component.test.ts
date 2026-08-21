@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createElement } from "react";
+import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
@@ -10,7 +10,9 @@ import {
   emptyComposerState,
   type ComposerState,
 } from "../src/renderer/src/composer-state.js";
-import { ThreadView } from "../src/renderer/src/ThreadView.js";
+const { createElement } = React;
+Object.assign(globalThis, { React });
+const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
 
 const noop = async () => undefined;
 
@@ -87,6 +89,29 @@ test("assistant messages retain running reasoning and tool disclosure affordance
   );
 });
 
+test("resumed user messages expose canonical attachments with accessible preview names", () => {
+  const html = renderTurns(
+    [turnWithItems("completed", [user(""), agent("Seen")])],
+    [],
+    emptyComposerState(),
+    {
+      "user-1": [
+        {
+          type: "attachment",
+          sha256: "a".repeat(64),
+          mediaType: "image/png",
+          byteLength: 68,
+          width: 1,
+          height: 1,
+        },
+      ],
+    },
+  );
+  assert.match(html, /aria-label="Attached images"/u);
+  assert.match(html, /aria-label="Preview Attached image 1"/u);
+  assert.doesNotMatch(html, /base64|\/tmp\//u);
+});
+
 function render(
   active: boolean,
   approvals: readonly ApprovalCardState[],
@@ -99,12 +124,14 @@ function renderTurns(
   turns: Turn[],
   approvals: readonly ApprovalCardState[] = [],
   composer: ComposerState = emptyComposerState(),
+  threadAttachments: Parameters<typeof ThreadView>[0]["threadAttachments"] = {},
 ) {
   return renderToStaticMarkup(
     createElement(ThreadView, {
       approvals,
       composer,
       thread: thread(turns),
+      threadAttachments,
       onDraftChange: () => undefined,
       onInterrupt: noop,
       onRespondToApproval: noop,

@@ -12,6 +12,7 @@ import {
   type HostEvent,
 } from "./host-messages.js";
 import { ZenXHostToolExecutor } from "./capability-tool-executor.js";
+import { projectThreadAttachments } from "./image-attachments.js";
 
 let server: CodexWebSocketServer | undefined;
 let appServer: HostedZenAppServer | undefined;
@@ -61,6 +62,32 @@ async function handleCommand(command: HostCommand): Promise<void> {
     } catch (error) {
       send({
         type: "thread-summary/result",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+  if (command.type === "thread-attachments/read") {
+    if (appServer === undefined) {
+      send({
+        type: "thread-attachments/result",
+        requestId: command.requestId,
+        error: "Zen App Server is not ready",
+      });
+      return;
+    }
+    try {
+      send({
+        type: "thread-attachments/result",
+        requestId: command.requestId,
+        attachments: projectThreadAttachments(
+          await appServer.readThread(command.threadId),
+        ),
+      });
+    } catch (error) {
+      send({
+        type: "thread-attachments/result",
         requestId: command.requestId,
         error: error instanceof Error ? error.message : String(error),
       });

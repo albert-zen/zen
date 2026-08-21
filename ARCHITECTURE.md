@@ -20,6 +20,9 @@
   原生 summary 映射为兼容的 Codex Thread DTO，不反向定义 Zen 产品模型。
 - **ZenXThreadSummaryAdapter** — ZenX Electron main 通过既有 host-local 进程边界查询
   ZAS 原生 summary，并以 typed IPC 暴露给产品层，不拥有 Thread 语义或新增 wire method。
+- **ZenXImageAttachmentProjection** — ZenX Electron main 通过既有 host-local 边界从 canonical
+  `user_message` 投影按 Item 顺序排列的 `AttachmentRef`，并以只接受这些引用的 typed preload IPC
+  导入和读取 Attachment Store payload；renderer 只持有草稿引用与短时 object URL，不取得任意文件读取权。
 - **ZenXProjectProjection** — ZenX main 的同一个实例把 host-profile workspace 与 ZAS
   原生 Thread cwd 按最近存在祖先的异步 realpath 归一为 UI 和 Agent self-control 共用的
   Project 读模型；Windows 路径折叠大小写，POSIX 路径保留大小写，配置保留用户选择的展示路径，

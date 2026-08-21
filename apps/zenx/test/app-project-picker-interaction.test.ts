@@ -931,6 +931,12 @@ async function mountApp(
       list: async ({ archived }: { archived: boolean }) =>
         options.threads === undefined ? [] : await options.threads(archived),
     },
+    imageAttachments: {
+      pick: async () => [],
+      import: async () => [],
+      read: async () => new Uint8Array(),
+      forThread: async () => ({}),
+    },
     projects: {
       get: async () =>
         options.projectsGet === undefined

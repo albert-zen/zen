@@ -44,6 +44,12 @@ import type {
 } from "../../main/directory-browser.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 import type { ZenXProviderCatalogSnapshot } from "../../main/settings-service.js";
+import type {
+  ZenXImageDraft,
+  ZenXImageImport,
+  ZenXThreadAttachmentProjection,
+} from "../../main/image-attachments.js";
+import type { AttachmentRef } from "../../../../../src/attachment.js";
 
 declare global {
   interface Window {
@@ -78,6 +84,12 @@ declare global {
         list(
           options?: ThreadSummaryListOptions,
         ): Promise<NativeThreadSummary[]>;
+      };
+      imageAttachments: {
+        pick(): Promise<ZenXImageDraft[]>;
+        import(images: readonly ZenXImageImport[]): Promise<ZenXImageDraft[]>;
+        read(attachment: AttachmentRef): Promise<Uint8Array>;
+        forThread(threadId: string): Promise<ZenXThreadAttachmentProjection>;
       };
       projects: {
         get(

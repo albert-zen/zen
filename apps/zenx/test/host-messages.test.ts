@@ -145,6 +145,50 @@ test("rejects malformed native Thread summaries at the host boundary", () => {
   );
 });
 
+test("validates exclusive canonical Thread attachment projections", () => {
+  const ref = {
+    type: "attachment",
+    sha256: "a".repeat(64),
+    mediaType: "image/png",
+    byteLength: 68,
+    width: 1,
+    height: 1,
+  };
+  assert.equal(
+    isHostEvent({
+      type: "thread-attachments/result",
+      requestId: "success",
+      attachments: { "message-1": [ref] },
+    }),
+    true,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-attachments/result",
+      requestId: "error",
+      error: "missing",
+    }),
+    true,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-attachments/result",
+      requestId: "path",
+      attachments: { "message-1": [{ path: "/tmp/image.png" }] },
+    }),
+    false,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-attachments/result",
+      requestId: "ambiguous",
+      attachments: {},
+      error: "unexpected",
+    }),
+    false,
+  );
+});
+
 test("host event validation is total for hostile object access", () => {
   const hostile = new Proxy(
     {},

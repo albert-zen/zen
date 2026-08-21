@@ -247,7 +247,11 @@ test("explicit cyclic relay is stable, sourceful, auditable, and stops after can
     assert.equal(firstRelay?.sourceThreadId, "thread-b");
     assert.equal(firstRelay?.sourceTurnId, "source-b-1");
     assert.match(firstRelay?.clientUserMessageId ?? "", /^zenx-wakeup:/u);
-    assert.match(manager.requests[0]?.input[0]?.text ?? "", /first brief/u);
+    const firstInput = manager.requests[0]?.input[0];
+    assert.match(
+      firstInput?.type === "text" ? firstInput.text : "",
+      /first brief/u,
+    );
 
     manager.complete("thread-b", completedTurn("source-b-1", "first brief"));
     await settle();

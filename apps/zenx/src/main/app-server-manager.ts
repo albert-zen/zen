@@ -23,6 +23,7 @@ import type {
   NativeThreadSummary,
   ThreadSummaryListOptions,
 } from "../../../../src/thread-summary.js";
+import type { ZenXThreadAttachmentProjection } from "./image-attachments.js";
 
 export type AppServerHostStatus =
   | { type: "starting" }
@@ -90,6 +91,13 @@ export class AppServerManager {
       reject(error: Error): void;
     }
   >();
+  readonly #pendingThreadAttachmentRequests = new Map<
+    string,
+    {
+      resolve(attachments: ZenXThreadAttachmentProjection): void;
+      reject(error: Error): void;
+    }
+  >();
   #status: AppServerHostStatus = { type: "stopped" };
   #child: ChildProcess | undefined;
   #client: ZenXProtocolClient | undefined;
@@ -100,6 +108,7 @@ export class AppServerManager {
   #recoveryPromise: Promise<void> | undefined;
   #lifecycle = 0;
   #nextThreadSummaryRequest = 1;
+  #nextThreadAttachmentRequest = 1;
   #capabilityRestartTail: Promise<void> = Promise.resolve();
 
   constructor(options: AppServerManagerOptions) {
@@ -267,6 +276,41 @@ export class AppServerManager {
     });
   }
 
+  async readThreadAttachments(
+    threadId: string,
+  ): Promise<ZenXThreadAttachmentProjection> {
+    if (
+      this.#status.type !== "ready" ||
+      this.#child === undefined ||
+      !this.#child.connected
+    ) {
+      const detail =
+        this.#status.type === "error" ? `: ${this.#status.message}` : "";
+      throw new Error(`Zen App Server is not ready${detail}`);
+    }
+    const requestId = `thread-attachments-${String(this.#nextThreadAttachmentRequest++)}`;
+    return await new Promise<ZenXThreadAttachmentProjection>(
+      (resolve, reject) => {
+        this.#pendingThreadAttachmentRequests.set(requestId, {
+          resolve,
+          reject,
+        });
+        this.#child!.send(
+          {
+            type: "thread-attachments/read",
+            requestId,
+            threadId,
+          } satisfies HostCommand,
+          (error) => {
+            if (error === null) return;
+            this.#pendingThreadAttachmentRequests.delete(requestId);
+            reject(error);
+          },
+        );
+      },
+    );
+  }
+
   onStatus(listener: (status: AppServerHostStatus) => void): () => void {
     this.#statusListeners.add(listener);
     return () => this.#statusListeners.delete(listener);
@@ -328,6 +372,9 @@ export class AppServerManager {
   async #performStop(): Promise<void> {
     this.#cancelPendingApprovals();
     this.#rejectPendingThreadSummaryRequests(
+      new Error("Zen App Server host stopped"),
+    );
+    this.#rejectPendingThreadAttachmentRequests(
       new Error("Zen App Server host stopped"),
     );
     await this.#cancelAndSettleCapabilityInvocations();
@@ -447,6 +494,9 @@ export class AppServerManager {
     this.#rejectPendingThreadSummaryRequests(
       new Error("Zen App Server stopped before returning Thread summaries"),
     );
+    this.#rejectPendingThreadAttachmentRequests(
+      new Error("Zen App Server stopped before returning Thread attachments"),
+    );
     this.#client?.close();
     this.#client = undefined;
     if (!this.#stopping && this.#recoverUnexpectedExits) {
@@ -522,6 +572,18 @@ export class AppServerManager {
         }
         return;
       }
+      if (hostEvent?.type === "thread-attachments/result") {
+        const pending = this.#pendingThreadAttachmentRequests.get(
+          hostEvent.requestId,
+        );
+        if (pending !== undefined) {
+          this.#pendingThreadAttachmentRequests.delete(hostEvent.requestId);
+          if (hostEvent.error !== undefined)
+            pending.reject(new Error(hostEvent.error));
+          else pending.resolve(hostEvent.attachments);
+        }
+        return;
+      }
       if (hostEvent === undefined) {
         const threadSummaryRequestId = readHostMessageRequestId(message);
         if (threadSummaryRequestId !== undefined) {
@@ -532,6 +594,17 @@ export class AppServerManager {
             this.#pendingThreadSummaryRequests.delete(threadSummaryRequestId);
             pending.reject(
               new Error("Malformed native Thread summary response"),
+            );
+          }
+          const attachmentPending = this.#pendingThreadAttachmentRequests.get(
+            threadSummaryRequestId,
+          );
+          if (attachmentPending !== undefined) {
+            this.#pendingThreadAttachmentRequests.delete(
+              threadSummaryRequestId,
+            );
+            attachmentPending.reject(
+              new Error("Malformed native Thread attachment response"),
             );
           }
         }
@@ -634,6 +707,13 @@ export class AppServerManager {
       pending.reject(error);
     }
     this.#pendingThreadSummaryRequests.clear();
+  }
+
+  #rejectPendingThreadAttachmentRequests(error: Error): void {
+    for (const pending of this.#pendingThreadAttachmentRequests.values()) {
+      pending.reject(error);
+    }
+    this.#pendingThreadAttachmentRequests.clear();
   }
 }
 

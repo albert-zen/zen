@@ -5,6 +5,7 @@ import type {
   AppServerHostStatus,
   ApprovalDecision,
 } from "../../main/app-server-manager.js";
+import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
 import type {
   ZenXCapabilitySnapshot,
   ZenXPluginSnapshot,
@@ -34,12 +35,15 @@ import {
 } from "./approval-state.js";
 import {
   acceptComposerSubmission,
+  addComposerImages,
   beginComposerSubmission,
   editComposer,
   emptyComposerState,
   failComposerSubmission,
+  removeComposerImage,
   type ComposerIntent,
   type ComposerState,
+  type ComposerSubmission,
 } from "./composer-state.js";
 import { Icon } from "./icons.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
@@ -48,6 +52,7 @@ import {
   canSendWithModel,
   canChangeThreadModel,
   modelChangeRequest,
+  imageCapabilityMessage,
   reasoningChangeRequest,
   settingsFromSnapshot,
   validateModelCatalog,
@@ -164,6 +169,8 @@ export function App() {
   const [composerStates, setComposerStates] = useState<
     Record<string, ComposerState>
   >({});
+  const [threadAttachments, setThreadAttachments] =
+    useState<ZenXThreadAttachmentProjection>({});
 
   const confirmPinnedThreadIds = (threadIds: readonly string[]) => {
     const confirmed = [...threadIds];
@@ -273,6 +280,7 @@ export function App() {
     }
     setSelectedThreadId(threadId);
     setThreadDetail(null);
+    setThreadAttachments({});
     setSelectedSettings(null);
     setModelUpdateError(null);
     setThreadLifecycleError(null);
@@ -280,11 +288,13 @@ export function App() {
     setThreadError(null);
     void loadComposerCatalog();
     try {
-      const result = await window.zenx.protocol.request("thread/resume", {
-        threadId,
-      });
+      const [result, attachments] = await Promise.all([
+        window.zenx.protocol.request("thread/resume", { threadId }),
+        window.zenx.imageAttachments.forThread(threadId),
+      ]);
       if (selectionEpoch.current !== epoch) return;
       setThreadDetail(result.thread);
+      setThreadAttachments(attachments);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
       void window.zenx.settings
         .markWorkspaceUsed(result.thread.cwd)
@@ -299,14 +309,17 @@ export function App() {
   };
 
   const loadComposerCatalog = async () => {
+    const [result, settings] = await Promise.allSettled([
+      window.zenx.protocol.request("model/list", {}),
+      window.zenx.settings.get(),
+    ]);
+    if (settings.status === "fulfilled")
+      setProviderProfiles(settings.value.profile.providerProfiles);
     try {
-      const [result, settings] = await Promise.all([
-        window.zenx.protocol.request("model/list", {}),
-        window.zenx.settings.get(),
-      ]);
-      validateModelCatalog(result.data);
-      setModels(result.data);
-      setProviderProfiles(settings.profile.providerProfiles);
+      if (settings.status === "rejected") throw settings.reason;
+      if (result.status === "rejected") throw result.reason;
+      validateModelCatalog(result.value.data);
+      setModels(result.value.data);
       setModelCatalogError(null);
       setModelUpdateError((current) =>
         current === MODEL_CATALOG_LOADING ? null : current,
@@ -319,15 +332,18 @@ export function App() {
   useEffect(() => {
     let active = true;
     const loadModels = async () => {
+      const [result, settings] = await Promise.allSettled([
+        window.zenx.protocol.request("model/list", {}),
+        window.zenx.settings.get(),
+      ]);
+      if (active && settings.status === "fulfilled")
+        setProviderProfiles(settings.value.profile.providerProfiles);
       try {
-        const [result, settings] = await Promise.all([
-          window.zenx.protocol.request("model/list", {}),
-          window.zenx.settings.get(),
-        ]);
-        validateModelCatalog(result.data);
+        if (settings.status === "rejected") throw settings.reason;
+        if (result.status === "rejected") throw result.reason;
+        validateModelCatalog(result.value.data);
         if (active) {
-          setModels(result.data);
-          setProviderProfiles(settings.profile.providerProfiles);
+          setModels(result.value.data);
           setModelCatalogError(null);
           setModelUpdateError((current) =>
             current === MODEL_CATALOG_LOADING ? null : current,
@@ -365,6 +381,25 @@ export function App() {
             ? null
             : applyThreadViewNotification(current, method, params),
         );
+        if (method === "item/completed") {
+          const event = params as ServerNotificationParams["item/completed"];
+          if (
+            event.item.type === "userMessage" &&
+            selectedThreadIdRef.current === event.threadId
+          ) {
+            void window.zenx.imageAttachments
+              .forThread(event.threadId)
+              .then((attachments) => {
+                if (selectedThreadIdRef.current === event.threadId)
+                  setThreadAttachments(attachments);
+              })
+              .catch((error: unknown) =>
+                setRequestError(
+                  `Thread images could not be loaded: ${describeError(error)}`,
+                ),
+              );
+          }
+        }
         if (method === "thread/settings/updated") {
           const event =
             params as ServerNotificationParams["thread/settings/updated"];
@@ -519,6 +554,7 @@ export function App() {
       setSidebarOpen(false);
       setSelectedThreadId(result.thread.id);
       setThreadDetail(result.thread);
+      setThreadAttachments({});
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
       await loadThreadSummaries();
     } catch (error) {
@@ -555,6 +591,17 @@ export function App() {
     )
       return;
     const threadId = threadDetail.id;
+    const current = composerStatesRef.current[threadId] ?? emptyComposerState();
+    if (current.draft.images.length > 0) {
+      const capabilityError = imageCapabilityMessage(
+        providerProfiles,
+        selectedSettings,
+      );
+      if (capabilityError !== null) {
+        setModelUpdateError(capabilityError);
+        return;
+      }
+    }
     if (intent !== "steer" && models.length === 0) {
       setModelUpdateError(modelCatalogError ?? MODEL_CATALOG_LOADING);
       return;
@@ -573,7 +620,6 @@ export function App() {
       );
       return;
     }
-    const current = composerStatesRef.current[threadId] ?? emptyComposerState();
     const started = beginComposerSubmission(
       current,
       intent,
@@ -589,21 +635,22 @@ export function App() {
     const submission = started.submission;
     if (submission === null || submission.status !== "pending") return;
     try {
-      await window.zenx.titles
-        .observe(threadId, submission.text)
-        .then((projection) => {
-          if (projection !== undefined)
-            setTitleSnapshot((current) => ({
-              ...current,
-              [threadId]: projection,
-            }));
-        })
-        .catch((error: unknown) =>
-          setRequestError(
-            `Thread title could not be staged: ${describeError(error)}`,
-          ),
-        );
-      const input = [{ type: "text" as const, text: submission.text }];
+      if (submission.text.length > 0)
+        await window.zenx.titles
+          .observe(threadId, submission.text)
+          .then((projection) => {
+            if (projection !== undefined)
+              setTitleSnapshot((current) => ({
+                ...current,
+                [threadId]: projection,
+              }));
+          })
+          .catch((error: unknown) =>
+            setRequestError(
+              `Thread title could not be staged: ${describeError(error)}`,
+            ),
+          );
+      const input = await composerSubmissionInput(submission);
       if (submission.intent === "start") {
         if (archivingThreadIdsRef.current.has(threadId))
           throw new Error(
@@ -644,6 +691,19 @@ export function App() {
       updateComposer(threadId, (state) =>
         acceptComposerSubmission(state, submission.clientUserMessageId),
       );
+      if (selectedThreadIdRef.current === threadId) {
+        void window.zenx.imageAttachments
+          .forThread(threadId)
+          .then((attachments) => {
+            if (selectedThreadIdRef.current === threadId)
+              setThreadAttachments(attachments);
+          })
+          .catch((error: unknown) =>
+            setRequestError(
+              `Thread images could not be loaded: ${describeError(error)}`,
+            ),
+          );
+      }
     } catch (error) {
       updateComposer(threadId, (state) =>
         failComposerSubmission(
@@ -944,12 +1004,40 @@ export function App() {
           <AgentSurface
             approvals={approvals}
             composerStates={composerStates}
+            threadAttachments={threadAttachments}
             models={models}
             providerProfiles={providerProfiles}
             modelCatalogError={modelCatalogError}
             modelUpdateError={modelUpdateError}
             onDraftChange={(threadId, draft) =>
               updateComposer(threadId, (state) => editComposer(state, draft))
+            }
+            onImportImages={async (threadId, files) => {
+              const imports = await Promise.all(
+                files.map(async (file) => ({
+                  name: file.name,
+                  mediaType: file.type,
+                  bytes: new Uint8Array(await file.arrayBuffer()),
+                })),
+              );
+              const images = await window.zenx.imageAttachments.import(imports);
+              updateComposer(threadId, (state) =>
+                addComposerImages(state, images),
+              );
+            }}
+            onPickImages={async (threadId) => {
+              const images = await window.zenx.imageAttachments.pick();
+              updateComposer(threadId, (state) =>
+                addComposerImages(state, images),
+              );
+            }}
+            onRemoveImage={(threadId, imageId) =>
+              updateComposer(threadId, (state) =>
+                removeComposerImage(state, imageId),
+              )
+            }
+            onReadAttachment={(attachment) =>
+              window.zenx.imageAttachments.read(attachment)
             }
             onInterrupt={async (turnId) => {
               if (threadDetail === null)
@@ -1041,12 +1129,17 @@ export function App() {
 function AgentSurface({
   approvals,
   composerStates,
+  threadAttachments,
   models,
   providerProfiles,
   modelCatalogError,
   modelUpdateError,
   onChangeThreadLifecycle,
   onDraftChange,
+  onImportImages,
+  onPickImages,
+  onReadAttachment,
+  onRemoveImage,
   hasProjects,
   hasLastUsedProject,
   onAddProject,
@@ -1076,12 +1169,19 @@ function AgentSurface({
 }: {
   approvals: ApprovalCardState[];
   composerStates: Record<string, ComposerState>;
+  threadAttachments: ZenXThreadAttachmentProjection;
   models: ModelSummary[];
   providerProfiles: ZenXProviderProfile[];
   modelCatalogError: string | null;
   modelUpdateError: string | null;
   onChangeThreadLifecycle(): Promise<void>;
   onDraftChange(threadId: string, draft: string): void;
+  onImportImages(threadId: string, files: readonly File[]): Promise<void>;
+  onPickImages(threadId: string): Promise<void>;
+  onReadAttachment(
+    attachment: import("../../../../../src/attachment.js").AttachmentRef,
+  ): Promise<Uint8Array>;
+  onRemoveImage(threadId: string, imageId: string): void;
   hasProjects: boolean;
   hasLastUsedProject: boolean;
   onAddProject(): void;
@@ -1245,6 +1345,10 @@ function AgentSurface({
           )}
           composer={composerStates[threadDetail.id] ?? emptyComposerState()}
           composerDisabled={threadArchiving}
+          imageCapabilityError={imageCapabilityMessage(
+            providerProfiles,
+            selectedSettings,
+          )}
           modelDisabled={!canChangeThreadModel(threadDetail)}
           modelError={
             modelUpdateError ??
@@ -1267,6 +1371,7 @@ function AgentSurface({
           selectedReasoningEffort={selectedSettings?.reasoningEffort}
           switchingModel={switchingModel}
           thread={threadDetail}
+          threadAttachments={threadAttachments}
           wakeups={triggerSnapshot.history.filter(
             (entry) => entry.threadId === threadDetail.id,
           )}
@@ -1274,6 +1379,10 @@ function AgentSurface({
             (trigger) => trigger.active && trigger.threadId === threadDetail.id,
           )}
           onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}
+          onImportImages={(files) => onImportImages(threadDetail.id, files)}
+          onPickImages={() => onPickImages(threadDetail.id)}
+          onReadAttachment={onReadAttachment}
+          onRemoveImage={(imageId) => onRemoveImage(threadDetail.id, imageId)}
           onInterrupt={onInterrupt}
           onModelChange={onModelChange}
           onReasoningChange={onReasoningChange}
@@ -1563,4 +1672,28 @@ function unavailableSelectionMessage(
   return provider === undefined
     ? `Provider profile “${settings.modelProvider}” was deleted. Choose a model before sending.`
     : `The configured model from “${provider.displayName}” is hidden or unavailable. Choose another model before sending.`;
+}
+
+async function composerSubmissionInput(
+  submission: ComposerSubmission,
+): Promise<import("../../protocol-client/index.js").UserInputPart[]> {
+  const input: import("../../protocol-client/index.js").UserInputPart[] = [];
+  if (submission.text.length > 0)
+    input.push({ type: "text", text: submission.text });
+  for (const image of submission.images) {
+    const bytes = await window.zenx.imageAttachments.read(image.attachment);
+    input.push({
+      type: "image",
+      url: `data:${image.attachment.mediaType};base64,${base64(bytes)}`,
+    });
+  }
+  return input;
+}
+
+function base64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
 }

@@ -96,6 +96,11 @@ export interface ModelSummary {
   isDefault: boolean;
 }
 
+export type UserInputPart =
+  | { type: "text"; text: string }
+  | { type: "localImage"; path: string }
+  | { type: "image"; url: string };
+
 export interface ClientRequestParams {
   initialize: InitializeParams;
   "account/read": Record<string, never>;
@@ -120,20 +125,20 @@ export interface ClientRequestParams {
   "thread/unsubscribe": { threadId: string };
   "turn/start": {
     threadId: string;
-    input: Array<{ type: "text"; text: string }>;
+    input: UserInputPart[];
     clientUserMessageId?: string;
     effort?: string | null;
   } & ThreadConfigurationParams;
   "turn/steer": {
     threadId: string;
     expectedTurnId: string;
-    input: Array<{ type: "text"; text: string }>;
+    input: UserInputPart[];
     clientUserMessageId?: string;
   };
   "turn/replace": {
     threadId: string;
     expectedTurnId: string;
-    input: Array<{ type: "text"; text: string }>;
+    input: UserInputPart[];
     clientUserMessageId: string;
   };
   "turn/interrupt": { threadId: string; turnId: string };

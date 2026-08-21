@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { shellPrintCommand } from "./fixtures/shell-command.js";
+import { png1x1 } from "../../../test/fixtures.js";
 
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import type { Thread } from "../src/protocol-client/index.js";
@@ -130,6 +131,72 @@ test("drives soft steer and atomic Interrupt & send through the hosted App Serve
     );
     disposeApproval();
     disposeResolved();
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("imports image-only input and resumes canonical AttachmentRefs without journal payloads", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-image-view-"));
+  const dataDirectory = path.join(directory, "data");
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory,
+      model: "fake-image",
+      modelCatalog: [
+        {
+          id: "fake-image",
+          isDefault: true,
+          source: "manual",
+          supportedReasoningEfforts: ["medium"],
+          defaultReasoningEffort: "medium",
+          inputModalities: ["text", "image"],
+        },
+      ],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+    },
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    const started = await manager.request("thread/start", {});
+    const complete = deferred<void>();
+    const dispose = manager.onNotification((method) => {
+      if (method === "turn/completed") complete.resolve();
+    });
+    await manager.request("turn/start", {
+      threadId: started.thread.id,
+      input: [
+        {
+          type: "image",
+          url: `data:image/png;base64,${Buffer.from(png1x1()).toString("base64")}`,
+        },
+      ],
+      clientUserMessageId: "image-only",
+    });
+    await within(complete.promise);
+    dispose();
+    const projection = await manager.readThreadAttachments(started.thread.id);
+    const attachments = Object.values(projection).flat();
+    assert.equal(attachments.length, 1);
+    assert.equal(attachments[0]?.mediaType, "image/png");
+
+    const journals = await readdir(path.join(dataDirectory, "threads"));
+    const journal = await readFile(
+      path.join(dataDirectory, "threads", journals[0]!),
+      "utf8",
+    );
+    assert.equal(journal.includes("base64"), false);
+    assert.equal(
+      journal.includes(Buffer.from(png1x1()).toString("base64")),
+      false,
+    );
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });

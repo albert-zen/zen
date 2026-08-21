@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import type { AttachmentRef } from "../../../../../src/attachment.js";
+
 import type { ApprovalDecision } from "../../main/app-server-manager.js";
 import type { TriggerHistoryEntry } from "../../main/trigger-types.js";
 import type { ZenXProviderProfile } from "../../main/host-profile.js";
@@ -10,7 +12,13 @@ import type {
   Turn,
 } from "../../protocol-client/index.js";
 import type { ApprovalCardState } from "./approval-state.js";
-import type { ComposerIntent, ComposerState } from "./composer-state.js";
+import {
+  composerDraftHasContent,
+  type ComposerDraftImage,
+  type ComposerIntent,
+  type ComposerState,
+} from "./composer-state.js";
+import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
 import { ComposerModelMenu } from "./ComposerModelMenu.js";
 import { Icon } from "./icons.js";
 import { Markdown } from "./Markdown.js";
@@ -27,6 +35,7 @@ interface ThreadViewProps {
   composerDisabled?: boolean;
   modelDisabled?: boolean;
   modelError?: string | null;
+  imageCapabilityError?: string | null;
   models?: readonly ModelSummary[];
   permissionLabel?: string;
   providerProfiles?: readonly ZenXProviderProfile[];
@@ -34,9 +43,14 @@ interface ThreadViewProps {
   selectedReasoningEffort?: string | null;
   switchingModel?: boolean;
   thread: Thread;
+  threadAttachments?: ZenXThreadAttachmentProjection;
   wakeups?: readonly TriggerHistoryEntry[];
   watching?: boolean;
   onDraftChange(draft: string): void;
+  onImportImages?(files: readonly File[]): Promise<void>;
+  onPickImages?(): Promise<void>;
+  onRemoveImage?(imageId: string): void;
+  onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
   onInterrupt(turnId: string): Promise<void>;
   onModelChange?(model: string): void;
   onReasoningChange?(effort: string): void;
@@ -56,6 +70,7 @@ export function ThreadView({
   composerDisabled = false,
   modelDisabled = false,
   modelError = null,
+  imageCapabilityError = null,
   models = [],
   permissionLabel = "Full access",
   providerProfiles = [],
@@ -63,9 +78,16 @@ export function ThreadView({
   selectedReasoningEffort = null,
   switchingModel = false,
   thread,
+  threadAttachments = {},
   wakeups = [],
   watching = false,
   onDraftChange,
+  onImportImages = async () => undefined,
+  onPickImages = async () => undefined,
+  onRemoveImage = () => undefined,
+  onReadAttachment = async () => {
+    throw new Error("Image payload reader is unavailable");
+  },
   onInterrupt,
   onModelChange,
   onReasoningChange,
@@ -74,6 +96,13 @@ export function ThreadView({
 }: ThreadViewProps) {
   const [interrupting, setInterrupting] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [draggingImages, setDraggingImages] = useState(false);
+  const [preview, setPreview] = useState<{
+    attachment: AttachmentRef;
+    name: string;
+    trigger: HTMLButtonElement;
+  } | null>(null);
   const [atLive, setAtLive] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldFollowRef = useRef(true);
@@ -82,7 +111,9 @@ export function ThreadView({
     (approval) => approval.status === "pending",
   );
   const submitting = composer.submission?.status === "pending";
-  const draft = composer.draft.trim();
+  const hasDraft = composerDraftHasContent(composer.draft);
+  const blockedByImageCapability =
+    composer.draft.images.length > 0 && imageCapabilityError !== null;
 
   useEffect(() => {
     const scroll = scrollRef.current;
@@ -93,7 +124,8 @@ export function ThreadView({
   }, [thread.turns, approvals]);
 
   const submit = (intent: ComposerIntent) => {
-    if (composerDisabled || draft.length === 0 || submitting) return;
+    if (composerDisabled || !hasDraft || submitting || blockedByImageCapability)
+      return;
     if (intent === "start" && runningTurn !== null) return;
     if (intent !== "start" && runningTurn === null) return;
     void onSubmit(intent, runningTurn?.id ?? null);
@@ -114,7 +146,7 @@ export function ThreadView({
   };
 
   const primaryMode =
-    runningTurn === null ? "send" : draft.length === 0 ? "stop" : "replace";
+    runningTurn === null ? "send" : !hasDraft ? "stop" : "replace";
   const primaryLabel =
     primaryMode === "send"
       ? "Send"
@@ -127,7 +159,35 @@ export function ThreadView({
   };
 
   return (
-    <div className="thread-view">
+    <div
+      className={`thread-view${draggingImages ? " image-dragging" : ""}`}
+      onDragEnter={(event) => {
+        if (composerDisabled || submitting) return;
+        if (hasImageFiles(event.dataTransfer.files)) setDraggingImages(true);
+      }}
+      onDragOver={(event) => {
+        if (composerDisabled || submitting) return;
+        if (!hasImageFiles(event.dataTransfer.files)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setDraggingImages(true);
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+          setDraggingImages(false);
+      }}
+      onDrop={(event) => {
+        if (composerDisabled || submitting) return;
+        const files = imageFiles(event.dataTransfer.files);
+        setDraggingImages(false);
+        if (files.length === 0) return;
+        event.preventDefault();
+        setAttachmentError(null);
+        void onImportImages(files).catch((error: unknown) =>
+          setAttachmentError(describeError(error)),
+        );
+      }}
+    >
       <div
         className="messages"
         ref={scrollRef}
@@ -158,6 +218,11 @@ export function ThreadView({
                 key={turn.id}
                 turn={turn}
                 wakeups={wakeups}
+                attachments={threadAttachments}
+                onOpenImage={(attachment, name, trigger) =>
+                  setPreview({ attachment, name, trigger })
+                }
+                onReadAttachment={onReadAttachment}
               />
             ))
           )}
@@ -204,6 +269,16 @@ export function ThreadView({
             aria-label="Message"
             disabled={composerDisabled}
             onChange={(event) => onDraftChange(event.target.value)}
+            onPaste={(event) => {
+              if (composerDisabled || submitting) return;
+              const files = imageFiles(event.clipboardData.files);
+              if (files.length === 0) return;
+              event.preventDefault();
+              setAttachmentError(null);
+              void onImportImages(files).catch((error: unknown) =>
+                setAttachmentError(describeError(error)),
+              );
+            }}
             onKeyDown={(event) => {
               if (event.key !== "Enter" || event.shiftKey) return;
               if (event.nativeEvent.isComposing) return;
@@ -219,15 +294,41 @@ export function ThreadView({
                 : "Steer the current run…"
             }
             rows={1}
-            value={composer.draft}
+            value={composer.draft.text}
           />
+          {composer.draft.images.length === 0 ? null : (
+            <div className="composer-images" aria-label="Images to send">
+              {composer.draft.images.map((image) => (
+                <DraftImage
+                  image={image}
+                  key={image.id}
+                  onOpen={(trigger) =>
+                    setPreview({
+                      attachment: image.attachment,
+                      name: image.name,
+                      trigger,
+                    })
+                  }
+                  onReadAttachment={onReadAttachment}
+                  onRemove={() => onRemoveImage(image.id)}
+                />
+              ))}
+            </div>
+          )}
           <div className="composer-rail">
             <div className="composer-tools">
               <button
                 className="composer-tool icon-only"
                 type="button"
-                aria-label="Attachments are not available in this build"
-                disabled
+                aria-label="Add images"
+                title="Add images"
+                disabled={composerDisabled || submitting}
+                onClick={() => {
+                  setAttachmentError(null);
+                  void onPickImages().catch((error: unknown) =>
+                    setAttachmentError(describeError(error)),
+                  );
+                }}
               >
                 <Icon name="paperclip" />
               </button>
@@ -255,11 +356,13 @@ export function ThreadView({
               </button>
             </div>
             <div className="composer-actions">
-              {runningTurn !== null && draft.length > 0 ? (
+              {runningTurn !== null && hasDraft ? (
                 <button
                   className="steer-button"
                   type="button"
-                  disabled={composerDisabled || submitting}
+                  disabled={
+                    composerDisabled || submitting || blockedByImageCapability
+                  }
                   onClick={() => submit("steer")}
                 >
                   {submitting && composer.submission?.intent === "steer"
@@ -276,7 +379,8 @@ export function ThreadView({
                   composerDisabled ||
                   interrupting ||
                   submitting ||
-                  (primaryMode === "send" && draft.length === 0)
+                  (primaryMode === "send" && !hasDraft) ||
+                  blockedByImageCapability
                 }
                 onClick={primary}
               >
@@ -289,17 +393,32 @@ export function ThreadView({
           </div>
           {composer.submission?.status === "failed" ||
           interruptError !== null ||
+          attachmentError !== null ||
+          blockedByImageCapability ||
           modelError !== null ? (
             <p
               className="composer-error"
               id={modelError === null ? undefined : "composer-model-error"}
               role="alert"
             >
-              {interruptError ?? composer.submission?.error ?? modelError}
+              {interruptError ??
+                attachmentError ??
+                (blockedByImageCapability ? imageCapabilityError : null) ??
+                composer.submission?.error ??
+                modelError}
             </p>
           ) : null}
         </form>
       </div>
+      {preview === null ? null : (
+        <ImagePreview
+          attachment={preview.attachment}
+          name={preview.name}
+          onClose={() => setPreview(null)}
+          onReadAttachment={onReadAttachment}
+          trigger={preview.trigger}
+        />
+      )}
     </div>
   );
 }
@@ -308,10 +427,20 @@ function TurnBlock({
   turn,
   index,
   wakeups,
+  attachments,
+  onOpenImage,
+  onReadAttachment,
 }: {
   turn: Turn;
   index: number;
   wakeups: readonly TriggerHistoryEntry[];
+  attachments: ZenXThreadAttachmentProjection;
+  onOpenImage(
+    attachment: AttachmentRef,
+    name: string,
+    trigger: HTMLButtonElement,
+  ): void;
+  onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
 }) {
   const projection = useMemo(() => projectTurn(turn), [turn]);
   const [expanded, setExpanded] = useState(false);
@@ -323,7 +452,13 @@ function TurnBlock({
           (entry) => entry.clientUserMessageId === item.clientId,
         );
         return wakeup === undefined ? (
-          <UserMessage item={item} key={item.id} />
+          <UserMessage
+            attachments={attachments[item.id] ?? []}
+            item={item}
+            key={item.id}
+            onOpenImage={onOpenImage}
+            onReadAttachment={onReadAttachment}
+          />
         ) : (
           <WakeupCard entry={wakeup} key={item.id} />
         );
@@ -474,18 +609,218 @@ function TraceDetail({ item }: { item: ThreadItem }) {
 
 function UserMessage({
   item,
+  attachments,
+  onOpenImage,
+  onReadAttachment,
 }: {
   item: Extract<ThreadItem, { type: "userMessage" }>;
+  attachments: readonly AttachmentRef[];
+  onOpenImage(
+    attachment: AttachmentRef,
+    name: string,
+    trigger: HTMLButtonElement,
+  ): void;
+  onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
 }) {
+  const text = item.content.map((content) => content.text).join("\n");
   return (
     <article className="user-row">
       <div className="user-bubble">
-        <Markdown
-          text={item.content.map((content) => content.text).join("\n")}
-        />
+        {attachments.length === 0 ? null : (
+          <div className="message-images" aria-label="Attached images">
+            {attachments.map((attachment, index) => (
+              <AttachmentImage
+                attachment={attachment}
+                key={`${attachment.sha256}-${String(index)}`}
+                name={`Attached image ${String(index + 1)}`}
+                onOpen={onOpenImage}
+                onReadAttachment={onReadAttachment}
+              />
+            ))}
+          </div>
+        )}
+        {text.length === 0 ? null : <Markdown text={text} />}
       </div>
     </article>
   );
+}
+
+function DraftImage({
+  image,
+  onOpen,
+  onReadAttachment,
+  onRemove,
+}: {
+  image: ComposerDraftImage;
+  onOpen(trigger: HTMLButtonElement): void;
+  onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
+  onRemove(): void;
+}) {
+  return (
+    <div className="draft-image">
+      <AttachmentImage
+        attachment={image.attachment}
+        name={image.name}
+        onOpen={(_attachment, _name, trigger) => onOpen(trigger)}
+        onReadAttachment={onReadAttachment}
+      />
+      <button
+        className="remove-draft-image"
+        type="button"
+        aria-label={`Remove ${image.name}`}
+        title={`Remove ${image.name}`}
+        onClick={onRemove}
+      >
+        <Icon name="x" size={12} />
+      </button>
+    </div>
+  );
+}
+
+function AttachmentImage({
+  attachment,
+  name,
+  onOpen,
+  onReadAttachment,
+}: {
+  attachment: AttachmentRef;
+  name: string;
+  onOpen(
+    attachment: AttachmentRef,
+    name: string,
+    trigger: HTMLButtonElement,
+  ): void;
+  onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
+}) {
+  const { url, error } = useAttachmentUrl(attachment, onReadAttachment);
+  return (
+    <button
+      className="image-thumbnail"
+      type="button"
+      aria-label={`Preview ${name}`}
+      disabled={url === null}
+      onClick={(event) => onOpen(attachment, name, event.currentTarget)}
+    >
+      {url === null ? (
+        <span className="image-placeholder" role={error ? "alert" : undefined}>
+          {error ? "Image unavailable" : "Loading image"}
+        </span>
+      ) : (
+        <img alt={name} src={url} />
+      )}
+    </button>
+  );
+}
+
+function ImagePreview({
+  attachment,
+  name,
+  onClose,
+  onReadAttachment,
+  trigger,
+}: {
+  attachment: AttachmentRef;
+  name: string;
+  onClose(): void;
+  onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
+  trigger: HTMLButtonElement;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const { url, error } = useAttachmentUrl(attachment, onReadAttachment);
+  useEffect(() => {
+    closeRef.current?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      } else if (event.key === "Tab") {
+        event.preventDefault();
+        closeRef.current?.focus();
+      }
+    };
+    document.addEventListener("keydown", keydown);
+    return () => {
+      document.removeEventListener("keydown", keydown);
+      trigger.focus();
+    };
+  }, [onClose, trigger]);
+  return (
+    <div
+      className="image-preview-layer"
+      role="presentation"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="image-preview"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="image-preview-title"
+      >
+        <header>
+          <strong id="image-preview-title">{name}</strong>
+          <button
+            ref={closeRef}
+            className="icon-button"
+            type="button"
+            aria-label="Close image preview"
+            onClick={onClose}
+          >
+            <Icon name="x" />
+          </button>
+        </header>
+        <div className="image-preview-content">
+          {url === null ? (
+            <p role={error ? "alert" : "status"}>{error ?? "Loading image…"}</p>
+          ) : (
+            <img alt={name} src={url} />
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function useAttachmentUrl(
+  attachment: AttachmentRef,
+  read: (attachment: AttachmentRef) => Promise<Uint8Array>,
+): { url: string | null; error: string | null } {
+  const [state, setState] = useState<{
+    url: string | null;
+    error: string | null;
+  }>({ url: null, error: null });
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    setState({ url: null, error: null });
+    void read(attachment)
+      .then((bytes) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(
+          new Blob([bytes.slice().buffer], { type: attachment.mediaType }),
+        );
+        setState({ url: objectUrl, error: null });
+      })
+      .catch((error: unknown) => {
+        if (active) setState({ url: null, error: describeError(error) });
+      });
+    return () => {
+      active = false;
+      if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachment, read]);
+  return state;
+}
+
+function imageFiles(files: FileList): File[] {
+  return Array.from(files).filter((file) =>
+    ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type),
+  );
+}
+
+function hasImageFiles(files: FileList): boolean {
+  return imageFiles(files).length > 0;
 }
 
 function AgentMessage({

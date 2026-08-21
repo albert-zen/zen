@@ -14,6 +14,7 @@ import {
   canSendWithModel,
   canChangeThreadModel,
   groupedModelOptions,
+  imageCapabilityMessage,
   modelChangeRequest,
   modelOptions,
   reasoningChangeRequest,
@@ -21,6 +22,39 @@ import {
   settingsFromSnapshot,
   validateModelCatalog,
 } from "../src/renderer/src/model-settings.js";
+
+test("reports unsupported and Unknown image capability precisely", () => {
+  const selected = {
+    threadId: "thread-1",
+    model: key("provider", "vision"),
+    modelProvider: "provider",
+    reasoningEffort: "medium",
+  };
+  const unsupported = provider("provider", "Provider", ["vision"]);
+  assert.match(
+    imageCapabilityMessage([unsupported], selected) ?? "",
+    /does not support image input/u,
+  );
+  const unknown = {
+    ...unsupported,
+    models: unsupported.models.map((entry) => ({
+      ...entry,
+      inputModalities: null,
+    })),
+  };
+  assert.match(
+    imageCapabilityMessage([unknown], selected) ?? "",
+    /capability.*unknown/u,
+  );
+  const supported = {
+    ...unsupported,
+    models: unsupported.models.map((entry) => ({
+      ...entry,
+      inputModalities: ["text", "image"] as const,
+    })),
+  };
+  assert.equal(imageCapabilityMessage([supported], selected), null);
+});
 
 test("shows only visible models while preserving a hidden authoritative value", () => {
   const visible = model("visible", { isDefault: true });

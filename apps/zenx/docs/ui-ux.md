@@ -1,6 +1,6 @@
 # ZenX UI/UX decisions
 
-更新日期：2026-08-20
+更新日期：2026-08-22
 
 ## 1. 文档权威与规则等级
 
@@ -191,7 +191,20 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Back to live 返回实时底部后才恢复自动跟随。流式 patch 不得丢失 disclosure、焦点或草稿。
 - Tool completion 与 Final Message / Turn completion 的到达顺序可能不同；UI 等到可展示终态后再切换完成态投影。
 
-### 4.5 Settings 与 onboarding
+### 4.5 图片草稿与预览
+
+- Composer 的 typed draft 同时保存文字与有序图片引用；可以只发送图片。picker、clipboard paste 与 drop
+  均支持一次加入多张 PNG / JPEG / GIF / WebP，顺序与用户选择或系统提供的文件顺序一致。
+- picker 与 payload 读取只经 Electron main/preload 的 typed image boundary；renderer 草稿和 canonical journal
+  不以 base64 或源文件路径为权威。导入或读取失败在 Composer 附近明确显示并保留现有草稿。
+- 每张待发送图片显示紧凑、有稳定占位尺寸和 accessible name 的缩略图；删除一张不得清除文字或其他图片。
+  picker、paste、drop 与 thumbnail 更新不得改变既有 Enter / Shift+Enter、Model / Reasoning menu 或 primary action 语义。
+- 已选模型的 image capability 为 Unknown 或明确不支持时，Send / Interrupt & Send 在进入 Provider 前阻断，说明
+  Unknown、unsupported 各自的原因与恢复方式，并保留完整草稿。文字草稿的普通发送行为不受影响。
+- transcript 从 canonical `user_message` 的 `AttachmentRef` 投影图片；send 后与 resume 后使用同一渲染路径。
+  缩略图可用鼠标或键盘打开应用内 modal preview；Escape、关闭按钮和 backdrop 可关闭，关闭后焦点返回触发缩略图。
+
+### 4.6 Settings 与 onboarding
 
 - Settings 是由左下导航进入的 routed page。Settings 顶部动作的最终合同仍为 **TBD**；“不提供 Done”以及“只在 dirty 时显示或强调 Apply & restart”是当前设计实验，不是 durable semantics。
 - Settings 明确管理 Archived Threads、Provider/Account 和 Plugins；General 可以承载其他 host-local preferences，但不能改变这些核心分区的所有权。
@@ -315,6 +328,9 @@ ThreadView
 - [ ] Agent Message 不嵌套在 Trace Group；连续 Thinking/Tool Items 保持顺序并被轻量聚合。
 - [ ] Composer 的 Steer、Stop、Interrupt & Send、Send 和 disabled 均语义明确；primary action 切换时几何稳定。
 - [ ] Composer primary action 的可见圆更小但图标和 hit target 不随之大幅缩小；底部 toolbar 更靠近容器底边。
+- [ ] picker、paste 与 drop 可按稳定顺序加入多张受支持图片；图片-only draft 可发送，单张删除不改变文字或其他图片。
+- [ ] Unknown / unsupported image capability 在 Provider 前显示精确阻断并保留草稿；text-only 与既有 pending action 不回归。
+- [ ] send / resume 后 transcript 从 canonical AttachmentRef 渲染；preview 可由鼠标/键盘打开，以 Escape/关闭/backdrop 关闭并归还焦点。
 - [ ] 离开实时底部后显示 Back to live，streaming 不破坏 scroll、focus、draft 或 disclosure。
 - [ ] 不同宽度下无页面级横向滚动或 action/title overlap；不假定最终 breakpoint 或 mobile drawer contract。
 - [ ] Enter、Space、Escape、outside-click、focus return 和 reduced motion 行为正确。
