@@ -8,6 +8,7 @@ import { ZenAppServer } from "../src/app-server.js";
 import { JsonlThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import { FakeModel } from "../src/model.js";
+import { ProviderRegistry } from "../src/provider-registry.js";
 import { projectThreadSummary } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { JsonlThreadMetadataStore } from "../src/thread-metadata.js";
@@ -15,15 +16,22 @@ import { JsonThreadSummaryProjection } from "../src/thread-summary.js";
 import { ShellToolExecutor } from "../src/tool.js";
 
 function createServer(directory: string): ZenAppServer {
+  const model = new FakeModel();
+  const modelCatalog = new StaticModelCatalog([
+    { id: "fake", isDefault: true },
+    { id: "other" },
+  ]);
   return new ZenAppServer({
     journal: new JsonlThreadJournal(path.join(directory, "threads")),
     runtime: new AgentRuntime({
-      model: new FakeModel(),
       tools: new ShellToolExecutor(),
     }),
-    modelCatalog: new StaticModelCatalog([
-      { id: "fake", isDefault: true },
-      { id: "other" },
+    providerRegistry: new ProviderRegistry([
+      {
+        providerProfileId: model.provider,
+        adapter: model,
+        modelCatalog,
+      },
     ]),
     threadMetadata: new JsonlThreadMetadataStore(
       path.join(directory, "thread-metadata.jsonl"),
@@ -33,7 +41,9 @@ function createServer(directory: string): ZenAppServer {
     ),
     defaults: {
       cwd: directory,
-      model: "fake",
+      providerProfileId: model.provider,
+      modelId: "fake",
+      reasoningEffort: "medium",
       sandbox: "danger-full-access",
       approvalPolicy: "never",
     },
@@ -54,6 +64,9 @@ test("rebuilds native summaries and follows canonical and product metadata chang
     assert.deepEqual(archived[0], {
       threadId: started.id,
       currentMetadata: {
+        providerProfileId: "fake",
+        modelId: "other",
+        reasoningEffort: "medium",
         model: "other",
         provider: "fake",
         cwd: directory,

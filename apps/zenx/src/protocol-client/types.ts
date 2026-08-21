@@ -39,7 +39,7 @@ export interface ThreadConfigurationParams {
     mode: "default";
     settings: {
       model: string;
-      reasoning_effort: "medium";
+      reasoning_effort: string;
       developer_instructions: string;
     };
   };
@@ -54,7 +54,7 @@ export interface ThreadSettingsSnapshot {
   approvalPolicy: "on-request" | "never";
   approvalsReviewer: "user";
   sandbox: { type: "dangerFullAccess" };
-  reasoningEffort: null;
+  reasoningEffort: string | null;
 }
 
 export interface UpdatedThreadSettings {
@@ -62,10 +62,10 @@ export interface UpdatedThreadSettings {
   approvalsReviewer: "user";
   collaborationMode: {
     mode: "default";
-    settings: { model: string; reasoning_effort: "medium" };
+    settings: { model: string; reasoning_effort: string };
   };
   cwd: string;
-  effort: null;
+  effort: string | null;
   model: string;
   modelProvider: string;
   personality: null;
@@ -83,8 +83,11 @@ export interface ModelSummary {
   displayName: string;
   description: string;
   hidden: boolean;
-  supportedReasoningEfforts: unknown[];
-  defaultReasoningEffort: "medium";
+  supportedReasoningEfforts: Array<{
+    reasoningEffort: string;
+    description: string;
+  }>;
+  defaultReasoningEffort: string;
   inputModalities: ["text"];
   supportsPersonality: false;
   additionalSpeedTiers: unknown[];
@@ -109,12 +112,17 @@ export interface ClientRequestParams {
   "thread/name/set": { threadId: string; name: string };
   "thread/archive": { threadId: string };
   "thread/unarchive": { threadId: string };
-  "thread/settings/update": { threadId: string; model: string };
+  "thread/settings/update": {
+    threadId: string;
+    model: string;
+    effort?: string;
+  };
   "thread/unsubscribe": { threadId: string };
   "turn/start": {
     threadId: string;
     input: Array<{ type: "text"; text: string }>;
     clientUserMessageId?: string;
+    effort?: string | null;
   } & ThreadConfigurationParams;
   "turn/steer": {
     threadId: string;

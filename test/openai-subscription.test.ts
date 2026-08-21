@@ -823,6 +823,7 @@ test("aborts promptly while another process owns the profile lock", async () => 
 function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
   return {
     model: "gpt-5.6-terra",
+    reasoningEffort: "medium",
     messages: [],
     tools: [],
     signal: new AbortController().signal,

@@ -14,6 +14,7 @@ import {
   responseResult,
 } from "../src/protocol/codex/client.js";
 import { CodexConnection } from "../src/protocol/codex/connection.js";
+import { encodeModelKey } from "../src/protocol/codex/model-key.js";
 import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { isRecord, type JsonRpcMessage } from "../src/protocol/codex/wire.js";
@@ -119,15 +120,17 @@ test("projects the exact T3 Code provider bootstrap from host configuration", as
     result: {
       data: [
         {
-          id: "gpt-5.6-terra",
-          model: "gpt-5.6-terra",
+          id: wireModel("gpt-5.6-terra"),
+          model: wireModel("gpt-5.6-terra"),
           upgrade: null,
           upgradeInfo: null,
           availabilityNux: null,
           displayName: "gpt-5.6-terra",
           description: "Model configured by the Zen host",
           hidden: false,
-          supportedReasoningEfforts: [],
+          supportedReasoningEfforts: [
+            { reasoningEffort: "medium", description: "medium" },
+          ],
           defaultReasoningEffort: "medium",
           inputModalities: ["text"],
           supportsPersonality: false,
@@ -137,15 +140,17 @@ test("projects the exact T3 Code provider bootstrap from host configuration", as
           isDefault: true,
         },
         {
-          id: "gpt-5.6-sol",
-          model: "gpt-5.6-sol",
+          id: wireModel("gpt-5.6-sol"),
+          model: wireModel("gpt-5.6-sol"),
           upgrade: null,
           upgradeInfo: null,
           availabilityNux: null,
           displayName: "gpt-5.6-sol",
           description: "Model configured by the Zen host",
           hidden: false,
-          supportedReasoningEfforts: [],
+          supportedReasoningEfforts: [
+            { reasoningEffort: "medium", description: "medium" },
+          ],
           defaultReasoningEffort: "medium",
           inputModalities: ["text"],
           supportsPersonality: false,
@@ -208,7 +213,7 @@ test("switches models canonically and synchronizes thread settings", async () =>
     assert.equal(notification.threadId, thread.id);
     assert(
       isRecord(notification.threadSettings) &&
-        notification.threadSettings.model === "other",
+        notification.threadSettings.model === wireModel("other"),
     );
 
     const snapshot = await appServer.readThread(thread.id);
@@ -258,7 +263,7 @@ test("switches models canonically and synchronizes thread settings", async () =>
       appServer.updateThreadSettings(String(thread.id), { model: "fake" }),
     ]);
     await within(rapidUpdates.promise);
-    assert.deepEqual(rapidModels, ["other", "fake"]);
+    assert.deepEqual(rapidModels, [wireModel("other"), wireModel("fake")]);
   } finally {
     initiating.close();
     observing.close();
@@ -266,7 +271,7 @@ test("switches models canonically and synchronizes thread settings", async () =>
   }
 });
 
-test("resumes an active thread when T3 repeats its effective model", async () => {
+test("resumes an active thread and applies an explicit model change next", async () => {
   const appServer = testHost("always", ["fake", "other"]);
   const server = await serveCodexWebSocket({
     appServer,
@@ -327,13 +332,13 @@ test("resumes an active thread when T3 repeats its effective model", async () =>
     );
     assert.equal((await appServer.readThread(String(thread.id))).model, "fake");
 
-    await assert.rejects(
-      resuming.request("thread/resume", {
-        threadId: thread.id,
-        model: "other",
-      }),
-      (error: unknown) =>
-        error instanceof CodexClientError && error.code === -32000,
+    await resuming.request("thread/resume", {
+      threadId: thread.id,
+      model: "other",
+    });
+    assert.equal(
+      (await appServer.readThread(String(thread.id))).model,
+      "other",
     );
 
     const completed = deferred<void>();
@@ -1166,7 +1171,6 @@ test("rejects mismatched or unsupported T3 thread configuration", async () => {
       { sandboxPolicy: { type: "workspaceWrite" } },
       { approvalsReviewer: "auto_review" },
       { serviceTier: "fast" },
-      { effort: "high" },
       { collaborationMode: { mode: "plan", settings: {} } },
       {
         collaborationMode: {
@@ -1189,6 +1193,15 @@ test("rejects mismatched or unsupported T3 thread configuration", async () => {
           error instanceof CodexClientError && error.code === -32602,
       );
     }
+    await assert.rejects(
+      client.request("turn/start", {
+        threadId: thread.id,
+        input,
+        effort: "high",
+      }),
+      (error: unknown) =>
+        error instanceof CodexClientError && error.code === -32000,
+    );
   } finally {
     client.close();
     await server.close();
@@ -1782,6 +1795,10 @@ async function threadListPage(
     nextCursor: result.nextCursor,
     backwardsCursor: result.backwardsCursor,
   };
+}
+
+function wireModel(modelId: string): string {
+  return encodeModelKey({ providerProfileId: "fake", modelId });
 }
 
 function deferred<T>(): {

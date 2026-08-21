@@ -21,7 +21,9 @@ import type { ApprovalHandler, ToolExecutor } from "./tool.js";
 
 export interface RuntimeConfiguration {
   cwd: string;
+  providerProfileId: string;
   model: string;
+  reasoningEffort: string;
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
 }
@@ -63,6 +65,7 @@ export interface RunTurnOptions {
   text: string;
   clientId?: string;
   configuration: RuntimeConfiguration;
+  modelAdapter: ModelAdapter;
   signal: AbortSignal;
   commit: (item: CanonicalItem) => Promise<void>;
   prepareModelSample: (modelResponseId: string) => Promise<ModelMessage[]>;
@@ -76,28 +79,21 @@ export interface RunTurnOptions {
 }
 
 export class AgentRuntime {
-  readonly #model: ModelAdapter;
   readonly #tools: ToolExecutor;
   readonly #id: () => string;
   readonly #now: () => string;
   readonly #maxToolRounds: number;
 
   constructor(options: {
-    model: ModelAdapter;
     tools: ToolExecutor;
     idFactory?: () => string;
     now?: () => string;
     maxToolRounds?: number;
   }) {
-    this.#model = options.model;
     this.#tools = options.tools;
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#maxToolRounds = options.maxToolRounds ?? 8;
-  }
-
-  get provider(): string {
-    return this.#model.provider;
   }
 
   async runTurn(options: RunTurnOptions): Promise<void> {
@@ -108,6 +104,11 @@ export class AgentRuntime {
       turnId,
       createdAt: this.#now(),
       type: "turn_started",
+      selection: {
+        providerProfileId: options.configuration.providerProfileId,
+        modelId: options.configuration.model,
+        reasoningEffort: options.configuration.reasoningEffort,
+      },
     };
     await options.commit(started);
     options.emit({ type: "turn_started", threadId: options.thread.id, turnId });
@@ -285,8 +286,9 @@ export class AgentRuntime {
 
     const messages = await options.prepareModelSample(itemId);
 
-    for await (const event of this.#model.stream({
+    for await (const event of options.modelAdapter.stream({
       model: options.configuration.model,
+      reasoningEffort: options.configuration.reasoningEffort,
       messages,
       tools: this.#tools.definitions,
       signal: options.signal,

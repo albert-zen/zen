@@ -10,6 +10,7 @@ import { StaticModelCatalog } from "../../../src/model-catalog.js";
 import { FakeModel, type ModelAdapter } from "../../../src/model.js";
 import { OpenAiCompatibleModel } from "../../../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
+import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { AgentRuntime } from "../../../src/runtime.js";
 import {
   JsonlThreadMetadataStore,
@@ -74,12 +75,14 @@ export function createHostedAppServer(
       `Default model ${options.model} is absent from the configured model list`,
     );
   }
+  const modelCatalog = new StaticModelCatalog(
+    modelIds.map((id) => ({ id, isDefault: id === options.model })),
+  );
   const appServer = new ZenAppServer({
     journal:
       options.journal ??
       new JsonlThreadJournal(path.join(options.dataDirectory, "threads")),
     runtime: new AgentRuntime({
-      model,
       tools:
         options.tools ??
         new ShellToolExecutor({
@@ -90,9 +93,13 @@ export function createHostedAppServer(
               : [],
         }),
     }),
-    modelCatalog: new StaticModelCatalog(
-      modelIds.map((id) => ({ id, isDefault: id === options.model })),
-    ),
+    providerRegistry: new ProviderRegistry([
+      {
+        providerProfileId: model.provider,
+        adapter: model,
+        modelCatalog,
+      },
+    ]),
     threadMetadata:
       options.threadMetadata ??
       new JsonlThreadMetadataStore(
@@ -105,7 +112,10 @@ export function createHostedAppServer(
       ),
     defaults: {
       cwd: path.resolve(options.cwd),
-      model: options.model,
+      providerProfileId: model.provider,
+      modelId: options.model,
+      reasoningEffort:
+        modelCatalog.get(options.model)?.defaultReasoningEffort ?? "medium",
       sandbox: "danger-full-access",
       approvalPolicy: options.approvalPolicy,
     },

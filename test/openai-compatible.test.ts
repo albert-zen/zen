@@ -493,6 +493,7 @@ function adapterReturning(response: Response): OpenAiCompatibleModel {
 function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
   return {
     model: "test-model",
+    reasoningEffort: "medium",
     messages: [],
     tools: [],
     signal: new AbortController().signal,

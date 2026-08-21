@@ -719,6 +719,7 @@ test("title inference renews a subscription lease rejected after acquisition", a
     if (adapter === null) throw new Error("expected a title model adapter");
     for await (const _event of adapter.stream({
       model: configured.model,
+      reasoningEffort: "medium",
       messages: [{ role: "user", text: "Name this Thread" }],
       tools: [],
       signal: new AbortController().signal,

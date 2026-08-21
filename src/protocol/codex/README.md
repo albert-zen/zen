@@ -51,12 +51,22 @@ Server request：`item/commandExecution/requestApproval`。
 
 其他方法返回 JSON-RPC `-32601`。当前只接受 `danger-full-access` sandbox；
 approval 只接受 `on-request` 与 `never`，二者是不同维度。resume 与 turn
-携带配置时，只有和 Thread metadata 等价的值会被接受；service tier、effort、
-plan collaboration mode 等未实现配置返回 `-32602`。T3 总会发送的
+携带 cwd、sandbox 或 approval 时只接受和 Thread metadata 等价的值；model 与
+`turn/start` 的标准 effort 则走同一 canonical selection update。service tier 与 plan collaboration mode 等
+未实现配置返回 `-32602`。`model/list` 为每个
+`providerProfileId / modelId` 投影稳定 opaque key，
+标准 `effort` / `reasoningEffort` 字段表达 catalog 支持的 effort；未知 profile、
+model 或 effort 明确失败。单 profile 的既有裸 model id 仅作为入站兼容输入接受，
+同名 model 跨 profile 时必须使用 opaque key。T3 总会发送的
 `default` collaboration envelope 只作为接入端 UI 元数据接受：其中 model
-必须匹配宿主，reasoning effort 必须为默认值；developer instructions 不进入
+与 reasoning effort 必须匹配本次原子 selection；developer instructions 不进入
 Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，避免发送
 不完整的 0.146.0 类型。
+
+`thread/settings/update` 与 `turn/start` 在既有 `model` / `effort` 字段内提交同一
+selection change，不增加 Zen 私有字段或第二种协议。协议 adapter 解码后只把
+canonical `providerProfileId / modelId / reasoningEffort` 交给 Core；活跃 Turn
+保留启动时 selection，更新只影响下一 Turn。
 
 `thread/list` 在本目录内把 ZAS 原生 `ThreadSummary` 查询结果映射为固定版本的
 Codex Thread DTO；wire DTO 不定义 ZAS 或 ZenX 的产品读取模型。它当前只接受
