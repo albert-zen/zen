@@ -120,6 +120,26 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     assert.deepEqual(reasoningChanges, ["low"]);
     assert.equal(document.activeElement, reasoningTrigger);
 
+    await act(async () => reasoningTrigger.click());
+    await act(async () =>
+      document.activeElement?.dispatchEvent(keydown(dom, "Escape")),
+    );
+    assert.equal(document.activeElement, reasoningTrigger);
+
+    trigger.focus();
+    await act(async () => trigger.dispatchEvent(keydown(dom, "ArrowDown")));
+    await act(async () =>
+      document.activeElement?.dispatchEvent(keydown(dom, "Escape")),
+    );
+    assert.equal(document.activeElement, trigger);
+
+    trigger.focus();
+    await act(async () => trigger.dispatchEvent(keydown(dom, "ArrowUp")));
+    await act(async () =>
+      document.activeElement?.dispatchEvent(keydown(dom, "Escape")),
+    );
+    assert.equal(document.activeElement, trigger);
+
     await act(async () => trigger.click());
     const reasoning = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),

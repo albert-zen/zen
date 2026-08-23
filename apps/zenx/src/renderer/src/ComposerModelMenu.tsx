@@ -116,6 +116,7 @@ export function ComposerModelMenu({
         onKeyDown={(event) => {
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
           event.preventDefault();
+          activeTriggerRef.current = triggerRef;
           setPanel("root");
         }}
       >
