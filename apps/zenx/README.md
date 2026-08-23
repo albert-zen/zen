@@ -75,6 +75,8 @@ its canonical Items. The Generic UI Host now projects the `ui` group into versio
 trusted or isolated renderer bundles and owned surfaces. Both receive the same logical
 theme/context, opaque handle, navigation, and command API; isolated HTML runs in a
 sandboxed iframe without same-origin authority and talks only through validated messages.
+Sidebar contributions use the bounded product icon keys `clock`, `layers`, `plug`,
+`settings`, `terminal`, `trigger`, or `users`; package validation rejects any other key.
 
 This is not yet the completed Plugin Platform: complete
 product install/update entry points, and structured result renderers remain future nodes.

@@ -33,6 +33,7 @@ import type {
 import {
   MAX_CAPABILITY_OUTPUT_BYTES,
   MIN_CAPABILITY_OUTPUT_BYTES,
+  ZENX_PLUGIN_ICON_NAMES,
 } from "./types.js";
 import type { PluginDiscoveryCatalog } from "../plugin-discovery.js";
 
@@ -1386,13 +1387,12 @@ function validateManifest(
     if (
       typeof contribution.label !== "string" ||
       contribution.label.trim().length === 0 ||
-      typeof contribution.icon !== "string" ||
-      contribution.icon.trim().length === 0 ||
+      !ZENX_PLUGIN_ICON_NAMES.includes(contribution.icon) ||
       (contribution.order !== undefined &&
         !Number.isSafeInteger(contribution.order))
     ) {
       throw new Error(
-        `Capability ${manifest.id} sidebar ${contribution.id} is invalid`,
+        `Capability ${manifest.id} sidebar ${contribution.id} has an invalid icon or metadata`,
       );
     }
     sidebarIds.add(contribution.id);

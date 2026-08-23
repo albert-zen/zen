@@ -1,6 +1,8 @@
 import type { ReactNode, SVGProps } from "react";
+import type { ZenXPluginIconName } from "../../main/capabilities/types.js";
 
-type IconName =
+export type IconName =
+  | ZenXPluginIconName
   | "arrow-down"
   | "archive"
   | "check"
@@ -49,6 +51,12 @@ const paths: Record<IconName, ReactNode> = {
     </>
   ),
   check: <path d="m2.4 8.4 3.4 3.4 7.8-7.8" />,
+  clock: (
+    <>
+      <circle cx="8" cy="8" r="5.7" />
+      <path d="M8 4.5V8l2.5 1.5" />
+    </>
+  ),
   "chevron-down": <path d="m3.6 6 4.4 4.4L12.4 6" />,
   "chevron-left": <path d="m10 3.6-4.4 4.4 4.4 4.4" />,
   "chevron-right": <path d="m6 3.6 4.4 4.4L6 12.4" />,
@@ -116,6 +124,12 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="m5 2 6 6M4.2 7.2l4.6 4.6M3 10l3 3M6.2 3.2l6.6 6.6-2.7.3-3.9-3.9.3-2.7Z" />
       <path d="m6 12-3 3" />
+    </>
+  ),
+  plug: (
+    <>
+      <path d="M5.2 2.2v3M10.8 2.2v3M3.8 5.2h8.4v1.5A4.2 4.2 0 0 1 8 10.9 4.2 4.2 0 0 1 3.8 6.7V5.2Z" />
+      <path d="M8 10.9v2.9" />
     </>
   ),
   "pin-off": (
@@ -191,6 +205,7 @@ export function Icon({ name, size = 16, ...props }: IconProps) {
   return (
     <svg
       aria-hidden="true"
+      data-icon={name}
       fill="none"
       height={size}
       viewBox="0 0 16 16"

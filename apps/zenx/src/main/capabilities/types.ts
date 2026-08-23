@@ -8,6 +8,17 @@ import type { ZenXPluginHostSdkV1 } from "../plugin-host-sdk.js";
 export const MIN_CAPABILITY_OUTPUT_BYTES = 1024;
 export const MAX_CAPABILITY_OUTPUT_BYTES = 1024 * 1024;
 
+export const ZENX_PLUGIN_ICON_NAMES = [
+  "clock",
+  "layers",
+  "plug",
+  "settings",
+  "terminal",
+  "trigger",
+  "users",
+] as const;
+export type ZenXPluginIconName = (typeof ZENX_PLUGIN_ICON_NAMES)[number];
+
 export type ZenXCapabilityPermissionScope =
   "browser-session" | "local-device" | "workspace";
 
@@ -39,7 +50,7 @@ export interface ZenXCapabilityResource {
 export interface ZenXPluginSidebarContribution {
   id: string;
   label: string;
-  icon: string;
+  icon: ZenXPluginIconName;
   pageId: string;
   order?: number;
 }

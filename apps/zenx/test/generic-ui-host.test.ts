@@ -442,4 +442,11 @@ test("manifest validation rejects dangling surfaces and commands deterministical
     registry.install(duplicateCommand, "bundled"),
     /dangling command refresh/u,
   );
+
+  const invalidIcon = new ZenXWorkbenchFixturePackage();
+  invalidIcon.manifest.contributions!.sidebar![0]!.icon = "sparkles" as never;
+  await assert.rejects(
+    registry.install(invalidIcon, "bundled"),
+    /invalid icon/u,
+  );
 });

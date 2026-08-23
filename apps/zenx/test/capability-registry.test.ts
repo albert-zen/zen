@@ -81,7 +81,7 @@ const pluginManifest: ZenXCapabilityManifest = {
       {
         id: "fixture",
         label: "Fixture",
-        icon: "fixture",
+        icon: "plug",
         pageId: "fixture",
         order: 20,
       },
@@ -104,7 +104,7 @@ test("projects enabled plugin contributions and removes tools and UI when disabl
       key: "fixture:fixture",
       pluginId: "fixture",
       label: "Fixture",
-      icon: "fixture",
+      icon: "plug",
       pageId: "fixture",
       order: 20,
     },

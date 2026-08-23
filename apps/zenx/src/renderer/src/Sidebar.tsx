@@ -207,30 +207,11 @@ export function Sidebar({
             </div>
           </div>
 
-          {pluginContributions.length === 0 ? null : (
-            <section
-              className="plugin-spaces"
-              aria-label="Enabled plugin spaces"
-            >
-              <strong>Plugin spaces</strong>
-              {pluginContributions.map((contribution) => (
-                <button
-                  className="plugin-space-link"
-                  type="button"
-                  aria-current={
-                    selectedPage === contribution.page.route
-                      ? "page"
-                      : undefined
-                  }
-                  key={contribution.key}
-                  onClick={() => onOpenContribution(contribution.page.route)}
-                >
-                  <Icon name="trigger" />
-                  <span>{contribution.label}</span>
-                </button>
-              ))}
-            </section>
-          )}
+          <PluginSpaces
+            contributions={pluginContributions}
+            onOpen={onOpenContribution}
+            selectedPage={selectedPage}
+          />
 
           <div className="new-thread-control">
             <button
@@ -437,6 +418,37 @@ export function Sidebar({
         onClick={onClose}
       />
     </>
+  );
+}
+
+export function PluginSpaces({
+  contributions,
+  onOpen,
+  selectedPage,
+}: {
+  contributions: readonly LoadedPluginContribution[];
+  onOpen(route: string): void;
+  selectedPage: string;
+}) {
+  if (contributions.length === 0) return null;
+  return (
+    <section className="plugin-spaces" aria-label="Enabled plugin spaces">
+      <strong>Plugin spaces</strong>
+      {contributions.map((contribution) => (
+        <button
+          className="plugin-space-link"
+          type="button"
+          aria-current={
+            selectedPage === contribution.page.route ? "page" : undefined
+          }
+          key={contribution.key}
+          onClick={() => onOpen(contribution.page.route)}
+        >
+          <Icon name={contribution.icon} />
+          <span>{contribution.label}</span>
+        </button>
+      ))}
+    </section>
   );
 }
 
