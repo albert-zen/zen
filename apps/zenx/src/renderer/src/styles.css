@@ -1595,10 +1595,10 @@ a:focus-visible {
 }
 .composer-images {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 0 14px 8px;
-  overflow-x: auto;
-  overscroll-behavior-inline: contain;
+  overflow: hidden;
 }
 .draft-image {
   position: relative;
