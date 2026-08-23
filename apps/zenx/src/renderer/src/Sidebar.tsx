@@ -851,6 +851,73 @@ function ProjectRows({
   threadReorder?: ThreadReorderHandlers;
 }) {
   const [open, setOpen] = useState(true);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const restoreMenuFocusRef = useRef(false);
+  const initialMenuFocusRef = useRef<"first" | "last">("first");
+  const projectMenuId = `project-menu-${encodeURIComponent(group.key)}`;
+  const openMenu = (initialFocus: "first" | "last") => {
+    initialMenuFocusRef.current = initialFocus;
+    setMenuOpen(true);
+  };
+  const closeMenu = (restoreFocus = true) => {
+    restoreMenuFocusRef.current = restoreFocus;
+    setMenuOpen(false);
+  };
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOnOutsidePointer = (event: MouseEvent) => {
+      if (
+        menuRef.current !== null &&
+        !menuRef.current.contains(event.target as Node)
+      ) {
+        closeMenu();
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeMenu();
+    };
+    document.addEventListener("mousedown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuOpen]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const items = enabledMenuItems(menuRef.current);
+    const item =
+      initialMenuFocusRef.current === "last" ? items.at(-1) : items.at(0);
+    item?.focus();
+  }, [menuOpen]);
+  useLayoutEffect(() => {
+    if (menuOpen || !restoreMenuFocusRef.current) return;
+    restoreMenuFocusRef.current = false;
+    moreRef.current?.focus();
+  }, [menuOpen]);
+  const toggleMenu = () => {
+    if (menuOpen) {
+      closeMenu();
+      return;
+    }
+    openMenu("first");
+  };
+  const handleMoreKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (!["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) return;
+    event.preventDefault();
+    if (menuOpen) {
+      closeMenu();
+      return;
+    }
+    openMenu(event.key === "ArrowUp" ? "last" : "first");
+  };
+  const projectSelected = group.threads.some(
+    (thread) => thread.threadId === selectedThreadId,
+  );
   return (
     <section
       className="project-group"
@@ -858,7 +925,7 @@ function ProjectRows({
       onDragOver={projectReorder?.onDragOver}
       onDrop={projectReorder?.onDrop}
     >
-      <div className="project-header">
+      <div className={`project-header${projectSelected ? " selected" : ""}`}>
         {projectReorder === undefined ? null : (
           <button
             className="reorder-handle project-reorder-handle"
@@ -885,14 +952,9 @@ function ProjectRows({
           <Icon name="folder" size={14} />
           <span>{group.label}</span>
           {group.isDefault ? <small>Default</small> : null}
-          <Icon
-            className={open ? "expanded" : undefined}
-            name="chevron-down"
-            size={14}
-          />
         </button>
         {group.workspace === null || !group.configured ? null : (
-          <div className="project-actions">
+          <div className="project-actions" ref={menuRef}>
             <button
               type="button"
               aria-label={`New thread in ${group.label}`}
@@ -901,24 +963,89 @@ function ProjectRows({
             >
               <Icon name="compose" size={13} />
             </button>
-            {!group.isDefault ? (
-              <button
-                type="button"
-                aria-label={`Make ${group.label} the default project`}
-                title="Set as default"
-                onClick={() => onSetDefaultProject(group.workspace!)}
-              >
-                <Icon name="check" size={13} />
-              </button>
-            ) : null}
             <button
+              ref={moreRef}
+              className="project-more-trigger"
               type="button"
-              aria-label={`Remove ${group.label} from ZenX`}
-              title="Remove from ZenX (files stay on disk)"
-              onClick={() => onRemoveProject(group.workspace!)}
+              id={`project-more-trigger-${encodeURIComponent(group.key)}`}
+              aria-label={`More actions for ${group.label}`}
+              aria-expanded={menuOpen}
+              aria-haspopup="menu"
+              aria-controls={menuOpen ? projectMenuId : undefined}
+              title="More actions"
+              onClick={toggleMenu}
+              onKeyDown={handleMoreKeyDown}
             >
-              <Icon name="x" size={13} />
+              <Icon name="more" size={15} />
             </button>
+            {menuOpen ? (
+              <div
+                className="project-menu"
+                id={projectMenuId}
+                role="menu"
+                aria-labelledby={`project-more-trigger-${encodeURIComponent(group.key)}`}
+                aria-label={`${group.label} project actions`}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    closeMenu();
+                    return;
+                  }
+                  if (
+                    !["ArrowDown", "ArrowUp", "Home", "End"].includes(
+                      event.key,
+                    )
+                  ) {
+                    return;
+                  }
+                  const items = enabledMenuItems(event.currentTarget);
+                  if (items.length === 0) return;
+                  event.preventDefault();
+                  const currentIndex = items.indexOf(
+                    document.activeElement as HTMLButtonElement,
+                  );
+                  const nextIndex =
+                    event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? items.length - 1
+                        : currentIndex === -1
+                          ? event.key === "ArrowUp"
+                            ? items.length - 1
+                            : 0
+                          : event.key === "ArrowUp"
+                            ? (currentIndex - 1 + items.length) % items.length
+                            : (currentIndex + 1) % items.length;
+                  items[nextIndex]?.focus();
+                }}
+              >
+                {!group.isDefault ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      onSetDefaultProject(group.workspace!);
+                      closeMenu();
+                    }}
+                  >
+                    <Icon name="check" size={13} />
+                    <span>Set as default</span>
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onRemoveProject(group.workspace!);
+                    closeMenu();
+                  }}
+                >
+                  <Icon name="x" size={13} />
+                  <span>Remove from ZenX</span>
+                </button>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
