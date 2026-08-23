@@ -33,6 +33,10 @@ import {
   MAX_CAPABILITY_OUTPUT_BYTES,
   MIN_CAPABILITY_OUTPUT_BYTES,
 } from "./types.js";
+import type {
+  AvailablePlugin,
+  PluginDiscoveryCatalog,
+} from "../plugin-discovery.js";
 
 export const CAPABILITY_RESOURCE_TOOL = "zenx_capability_resource";
 const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024;
@@ -52,7 +56,9 @@ interface ActiveCapabilityInvocation {
   resolveSettled(): void;
 }
 
-export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
+export class ZenXCapabilityRegistry
+  implements ZenXCapabilityHost, PluginDiscoveryCatalog
+{
   readonly #configurationStore: ZenXCapabilityConfigurationStore;
   readonly #registered = new Map<string, RegisteredZenXCapability>();
   readonly #catalogPackages = new Map<string, RegisteredZenXCapability>();
@@ -632,6 +638,36 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
           left.key.localeCompare(right.key),
       );
     return { plugins, sidebar, pages };
+  }
+
+  availablePlugins(): AvailablePlugin[] {
+    return [...this.#registered.values()]
+      .flatMap((registration) => {
+        const manifest = registration.package.manifest;
+        if (
+          manifest.schemaVersion !== 2 ||
+          this.#disabled.has(manifest.id) ||
+          this.#uninstalled.has(manifest.id) ||
+          !this.#isProviderAvailable(manifest)
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: manifest.id,
+            name: manifest.name,
+            description: manifest.description,
+            status: "enabled" as const,
+            mainDocument: manifest.mainDocument,
+            tools: manifest.tools.map(({ name, description, inputSchema }) => ({
+              name,
+              description,
+              inputSchema: structuredClone(inputSchema),
+            })),
+          },
+        ];
+      })
+      .sort((left, right) => left.id.localeCompare(right.id));
   }
 
   async setEnabled(capabilityId: string, enabled: boolean): Promise<void> {
@@ -1278,6 +1314,33 @@ function validatePluginManifestV2(manifest: ZenXPluginManifestV2): void {
   }
   if (manifest.mainDocument.trim().length === 0) {
     throw new Error(`Plugin ${manifest.id} has no main document`);
+  }
+  if (manifest.description.trim().length === 0) {
+    throw new Error(`Plugin ${manifest.id} has no short description`);
+  }
+  if (manifest.tools.length === 0) {
+    throw new Error(`Plugin ${manifest.id} declares no tools`);
+  }
+  const toolPrefix = `${manifest.id.replaceAll("-", "_")}_`;
+  for (const tool of manifest.tools) {
+    if (!tool.name.startsWith(toolPrefix)) {
+      throw new Error(
+        `Plugin tool ${tool.name} must be namespaced with ${toolPrefix}`,
+      );
+    }
+    if (
+      typeof tool.description !== "string" ||
+      tool.description.trim().length === 0
+    ) {
+      throw new Error(`Plugin tool ${tool.name} has no description`);
+    }
+    if (
+      typeof tool.inputSchema !== "object" ||
+      tool.inputSchema === null ||
+      Array.isArray(tool.inputSchema)
+    ) {
+      throw new Error(`Plugin tool ${tool.name} has no input schema`);
+    }
   }
   if (
     (manifest.runtime.type === "http"

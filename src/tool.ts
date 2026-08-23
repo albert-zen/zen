@@ -116,6 +116,11 @@ interface ProviderRegistration {
   definitions: readonly ModelTool[];
 }
 
+export interface ToolDefinitionEntry {
+  provider: ToolProviderIdentity;
+  definition: ModelTool;
+}
+
 interface PreparedProviderRegistration {
   provider: ToolProvider;
   release: (() => void) | undefined;
@@ -168,6 +173,16 @@ export class ToolEnvironment {
   get definitions(): ModelTool[] {
     return [...this.#providers.values()].flatMap((registration) =>
       registration.definitions.map((definition) => structuredClone(definition)),
+    );
+  }
+
+  /** Fresh provider-aware definitions for request-time capability projection. */
+  get definitionEntries(): ToolDefinitionEntry[] {
+    return [...this.#providers.values()].flatMap((registration) =>
+      registration.definitions.map((definition) => ({
+        provider: { ...registration.identity },
+        definition: structuredClone(definition),
+      })),
     );
   }
 

@@ -16,7 +16,7 @@ import type {
   UserInput,
   UserMessageItem,
 } from "./item.js";
-import type { ModelAdapter, ModelMessage } from "./model.js";
+import type { ModelAdapter, ModelMessage, ModelTool } from "./model.js";
 import type { Thread } from "./thread.js";
 import {
   ToolEnvironment,
@@ -85,11 +85,16 @@ export interface RunTurnOptions {
   requestApproval?: ApprovalHandler;
 }
 
+export type ToolDefinitionProjection = (
+  items: readonly CanonicalItem[],
+) => readonly ModelTool[];
+
 export class AgentRuntime {
   readonly #tools: ToolEnvironment;
   readonly #id: () => string;
   readonly #now: () => string;
   readonly #maxToolRounds: number;
+  readonly #toolDefinitionProjection: ToolDefinitionProjection | undefined;
 
   constructor(options: {
     tools?: ToolExecutor;
@@ -97,6 +102,7 @@ export class AgentRuntime {
     idFactory?: () => string;
     now?: () => string;
     maxToolRounds?: number;
+    toolDefinitionProjection?: ToolDefinitionProjection;
   }) {
     if (options.tools !== undefined && options.toolEnvironment !== undefined) {
       throw new Error("Provide tools or toolEnvironment, not both");
@@ -113,6 +119,7 @@ export class AgentRuntime {
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#maxToolRounds = options.maxToolRounds ?? 8;
+    this.#toolDefinitionProjection = options.toolDefinitionProjection;
   }
 
   async runTurn(options: RunTurnOptions): Promise<void> {
@@ -322,7 +329,10 @@ export class AgentRuntime {
       model: options.configuration.model,
       reasoningEffort: options.configuration.reasoningEffort,
       messages,
-      tools: this.#tools.definitions,
+      tools: (
+        this.#toolDefinitionProjection?.(options.thread.items) ??
+        this.#tools.definitions
+      ).map((definition) => structuredClone(definition)),
       signal: options.signal,
       sessionId: options.thread.id,
     })) {

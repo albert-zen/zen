@@ -275,7 +275,9 @@ request/result；三者只看 SDK operation，不取得 Project、storage 或 Ap
 `actions.threads.startTurn` 调用既有 AppServer port。每个 plugin namespace 的 JSON storage 使用
 1..1000 的版本 metadata、1 MiB 文档上限、串行 mutation 与同目录临时文件 rename；package/runtime
 提供的 `n -> n+1` migration 按顺序只在需要时运行，migration 或写入失败保留此前 durable/in-memory
-state，且不建立恢复状态机。当前 `ToolResultItem` 仍只有 text output 与 exit code；渐进发现、完整产品
+state，且不建立恢复状态机。常驻 `zenx_plugin` provider、provider-aware definition projection 与 AgentRuntime
+采样 seam 已实现：披露集合只从完整 canonical ItemList 的成功普通 `read` call/result 对归约，并在每次
+采样与当前 Catalog / Tool Environment 求交集。当前 `ToolResultItem` 仍只有 text output 与 exit code；完整产品
 安装入口、Generic UI Host 与 structured result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
 connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
 
@@ -291,6 +293,13 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - `discover`、`read` 与后续插件调用全部使用既有普通 `tool_call` / `tool_result`。
   不新增 `PluginCatalogSnapshotItem`、`ToolDisclosureItem` 或任何其他 canonical Item；
   重放时从 ItemList 中已有调用与结果派生后续投影。
+- 只有参数合法、`exitCode = 0`、结果 envelope 与请求 plugin id 一致的普通 `read`
+  call/result 对才形成披露事实；`discover`、失败、malformed 或不匹配结果不披露。披露事实对
+  Thread 持续存在，但 disabled、uninstalled 或当前 provider 缺失的插件不进入后续 schema 投影，
+  重新可用时可由同一历史事实再次投影，历史 Item 不变。
+- Plugin Package v2 为发现提供的最小 metadata 是稳定 `id`、非空 `name` / short
+  `description` / `mainDocument`，以及普通 namespaced tool 的 `name` / `description` /
+  `inputSchema`。v1 capability 缺少这个完整合同，继续走既有兼容 seam，不伪装成可发现 v2 plugin。
 - 插件 main document 是首要模型说明；独立 Skills 平台暂缓，现有固定协议
   `skills/list` 不因此获得新的会话语义。
 - 同一模型响应产生的多个工具调用当前仍按顺序执行；同一 Turn 的真正并行执行

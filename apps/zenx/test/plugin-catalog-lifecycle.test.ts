@@ -196,9 +196,11 @@ test("registration and persistence failures leave lifecycle and projections unch
 
   failSave = false;
   await registry.uninstall("fixture");
-  await registry.install(plugin(manifest("other", "fixture_run")), "local");
   const uninstalled = registry.pluginSnapshot();
-  await assert.rejects(registry.reinstall("fixture"), /already registered/u);
+  await assert.rejects(
+    registry.install(plugin(manifest("other", "fixture_run")), "local"),
+    /must be namespaced with other_/u,
+  );
   assert.deepEqual(registry.pluginSnapshot(), uninstalled);
 
   const closeFailure = new ZenXCapabilityRegistry({

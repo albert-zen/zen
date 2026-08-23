@@ -49,9 +49,9 @@ propagates abort/close, drains prepared and executing admitted calls during revo
 and performs no retry or restart. Catalog install/enable stages runtime readiness without
 publishing tools until persistence commits; disable/uninstall closes new admission first
 and restores the enabled provider on persistence failure. Disabled reinstall stays disabled.
-The existing startup capability child-host composition
-has not yet migrated to it. Human product calls may route directly through the
-Supervisor without creating an AppServer Turn.
+The existing startup capability child-host composition has not yet migrated to
+it. Human product calls may route directly through the Supervisor without
+creating an AppServer Turn.
 
 Plugin Host SDK v1 is the public `query / actions / ui / storage` contract injected
 into each runtime. `query.projects.list` consumes the existing main-process Project
@@ -67,9 +67,14 @@ queries, storage, and UI commands do not create Turns. Only the explicit
 its canonical Items. The `ui` group currently defines opaque handles and commands for
 ZP6; it does not implement a renderer or surface.
 
-This is not yet the completed Plugin Platform: progressive discovery, complete
-product install/update entry points, generic UI hosting, and structured result
-renderers remain future nodes.
+The ZP4 discovery seam now provides
+one persistent `zenx_plugin` provider plus a request-time schema projection for
+AgentRuntime. Successful ordinary `read` call/result history discloses only that
+plugin from the next sample, and the projection is rebuilt from the journal after
+restart while current availability still gates it. This is not yet the completed
+Plugin Platform: startup child-host composition, complete
+product install/update entry points, generic UI SDK, and structured result renderers
+remain future nodes.
 `ToolResultItem` currently stores only text output and an exit code. The app-owned
 Host already publishes its one ZAS authority through a private authenticated
 loopback descriptor that survives window closure.
@@ -93,6 +98,10 @@ The target contract is:
   tool-disclosure canonical Item is added. Existing model text, reasoning,
   tool/title trace remains byte-for-byte unchanged; capability changes affect
   only future projection or future call results.
+- Only a well-formed `read` call followed by an exit-code-zero result envelope
+  for the same plugin id discloses schemas. Discover, malformed/failed calls,
+  and mismatched results do not. Disable or uninstall removes the plugin from
+  new discovery and later schema projections without editing journal history.
 - The target tool policy is only default `full_access` and optional
   `ask_unknown`. The latter keeps Host-owned `approvedTools` / `deniedTools` by
   stable tool name and asks once for an unknown tool. The current capability
@@ -511,6 +520,12 @@ Local Plugin Package v2 manifests are placed in Electron
 stay inside that package directory. Schema v1 capability manifests remain
 readable for migration, but new packages use v2 and declare stable identity,
 compatibility, runtime, main document, tools, and controlled UI descriptors:
+
+Progressive discovery requires a stable id, non-empty name, short description,
+main document, and each ordinary namespaced tool's name, description, and input
+schema. Schema v1 remains readable through the existing capability compatibility
+path, but it is not presented as a discoverable v2 plugin because it has no honest
+main-document contract.
 
 ```json
 {
