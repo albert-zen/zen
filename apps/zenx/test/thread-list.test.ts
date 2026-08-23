@@ -345,7 +345,7 @@ test("shows only logo category and friendly model identity", () => {
   assert.equal(threadModelIdentity(deepseek)?.providerKind, "deepseek");
   const qwen = summary("qwen", "idle", 20);
   qwen.currentMetadata.model = "qwen-max";
-  qwen.currentMetadata.provider = "dashscope";
+  qwen.currentMetadata.provider = "qwen";
   assert.equal(threadModelIdentity(qwen)?.providerKind, "qwen");
   for (const [provider, model, expected] of [
     ["siliconflow", "Qwen2.5-72B", "siliconflow"],

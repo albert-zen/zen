@@ -24,10 +24,14 @@ Retrieved 2026-08-20.
   ([siliconflow.cn/logo-new.svg](https://siliconflow.cn/logo-new.svg)), retrieved
   2026-08-23. The asset is used unchanged; SiliconFlow retains all trademark
   rights.
-- `dashscope.png`: official Alibaba Cloud Bailian/DashScope social image from
-  the DashScope product page ([dashscope.aliyun.com](https://dashscope.aliyun.com)),
-  retrieved 2026-08-23. It is used as a local identity asset; Alibaba retains
-  all trademark rights. DashScope is intentionally not mapped to Qwen.
+- `dashscope.png`: the square Bailian/DashScope symbol cropped from the left
+  mark of the official 640×640 product image served as the DashScope page's
+  `og:image` ([source image](https://img.alicdn.com/imgextra/i1/O1CN012QgtoH1c1Mu70xD3w_!!6000000003540-2-tps-640-640.png),
+  linked by [dashscope.aliyun.com](https://dashscope.aliyun.com)), retrieved
+  2026-08-23. The crop is the unchanged official mark (source crop rectangle
+  x=20..260, y=220..420), resized only by the browser into the 14px slot;
+  Alibaba retains all trademark rights. DashScope is intentionally not mapped
+  to Qwen.
 - `moonshot.ico`: official Moonshot/Kimi site favicon from
   [moonshot.cn](https://www.moonshot.cn/favicon.ico), retrieved 2026-08-23.
   It is used unchanged as the compact Moonshot/Kimi identity asset; Moonshot AI
