@@ -179,7 +179,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 不拆成常驻 Stop、Steer 和 Send 三个按钮。
 - 运行中有草稿时，**Steer** 是保留当前 Turn 的显式次要动作；稳定 primary action 同时切换为 **Interrupt & Send**，用于中断当前路径并发送草稿。两者不得静默互相降级，也不得隐藏用户选择的是 soft steer 还是 hard steer。
 - 状态切换不引发 Composer 几何跳动；按钮保持清晰图标、准确 `aria-label` / tooltip 和适合当前输入方式的 hit target。
-- Composer 用独立的 **Model ›** 与 **Reasoning ›** 菜单管理 Thread 的下一次执行配置：Model 按 Provider profile 分组且只列可见、能力明确、可运行的模型，Reasoning 只列当前模型明确支持的 effort。
+- Composer toolbar 直接显示独立的 **Model** 与 **Reasoning** 控件；Reasoning 显示当前 effort（例如 Medium），并通过可达的键盘菜单只列当前 `(providerProfileId, modelId)` 在 `model/list` 中明确支持的 effort。已知空能力显示 unavailable；当前模型不在可运行目录或能力未知时显示 Unknown / unavailable，不猜测选项。两项配置都只影响下一次 Turn，运行中的 Turn 保持启动时 selection。
 - 模型切换复用 App Server 的原子 Thread settings 更新；当前 effort 被目标支持时保留，否则使用目标模型的 default effort。运行中的 Turn 保持启动时冻结的 selection，变更从下一 Turn 生效。
 - 已删除 Provider 或 hidden / Unknown / 不可运行模型的历史 Thread 仍可阅读，但 Composer 在开始或替换 Turn 前明确要求用户选择可运行模型，不自动改写或切换；当前 Turn 的 Steer 仍沿用其冻结 selection。
 - 已确认的视觉校准是缩小 primary action 的**可见圆形轮廓**，但不随之大幅缩小内部图标，也不缩小完整交互 hit target。
