@@ -8,6 +8,7 @@ import type {
   UpdatedThreadSettings,
 } from "../src/protocol-client/index.js";
 import type { ZenXProviderProfile } from "../src/main/host-profile.js";
+import { structuredLegacyModelCatalog } from "../src/main/host-profile.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 import {
   applySettingsMirror,
@@ -54,6 +55,32 @@ test("reports unsupported and Unknown image capability precisely", () => {
     })),
   };
   assert.equal(imageCapabilityMessage([supported], selected), null);
+});
+
+test("the built-in Terra subscription preset passes the image send gate", () => {
+  const providerProfileId = "openai-codex";
+  const terra = structuredLegacyModelCatalog("openai-subscription", [
+    "gpt-5.6-terra",
+  ]);
+  assert.equal(
+    imageCapabilityMessage(
+      [
+        {
+          providerProfileId,
+          type: "openai-subscription",
+          displayName: "OpenAI subscription",
+          models: terra,
+        },
+      ],
+      {
+        threadId: "thread-terra",
+        model: key(providerProfileId, "gpt-5.6-terra"),
+        modelProvider: providerProfileId,
+        reasoningEffort: "medium",
+      },
+    ),
+    null,
+  );
 });
 
 test("shows only visible models while preserving a hidden authoritative value", () => {

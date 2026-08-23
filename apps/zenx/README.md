@@ -104,6 +104,14 @@ non-default entries while continuing to expose valid configured models, and a
 completed manual override makes the entry visible. Default and title models
 must have runnable, wire-representable reasoning and text-input metadata.
 
+The OpenAI subscription preset exposes the five models confirmed by the current
+host: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, and `gpt-5.4`.
+Sol and Terra expose `low / medium / high / xhigh / max / ultra`; Luna exposes
+those efforts through `max`; 5.5 and 5.4 expose `low / medium / high / xhigh`.
+All default to `medium`. Terra additionally has confirmed text and image input;
+the other fixed entries claim text input only, and all context windows remain
+Unknown.
+
 Host profiles live under Electron `userData` without credentials. Compatible
 provider API keys are encrypted with Electron `safeStorage` and keyed by stable
 Provider profile ID; deleting one profile clears only its key. Subscription OAuth
@@ -131,6 +139,12 @@ and sends them with the deletion in one host mutation; Settings never changes
 historical Thread selections. ZenX exposes at most one OpenAI subscription profile
 in this UI; Account login/logout follows that profile's stable ID, and deleting it
 clears its profile-scoped OAuth credential without reviving historical Threads.
+
+Add provider also offers stable OpenAI-compatible connection presets for
+SiliconFlow（硅基流动）, DashScope, DeepSeek, Kimi, and Zhipu（智谱）. Their
+host-owned profiles still use the same adapter, credential vault, manual catalog
+editor, and `GET /models` discovery path as a custom Provider; the presets add no
+Provider-specific protocol or inferred model capabilities.
 
 ## Triggers and Rooms
 

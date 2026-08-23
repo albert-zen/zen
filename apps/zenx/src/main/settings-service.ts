@@ -15,6 +15,7 @@ import type {
   ZenXSingleProviderHostConfig,
 } from "./host-messages.js";
 import {
+  applyBuiltInModelCatalogPresets,
   hostConfigFromProfile,
   type PublicHostSettings,
   type ZenXHostProfile,
@@ -932,7 +933,7 @@ function profileFromLegacy(
   const models = [...(config.models ?? [config.model])];
   const titleModel = "gpt-5.6-luna";
   if (!models.includes(titleModel)) models.push(titleModel);
-  return {
+  return applyBuiltInModelCatalogPresets({
     version: 3,
     onboardingComplete: false,
     providerProfiles: [
@@ -950,5 +951,5 @@ function profileFromLegacy(
     approvalPolicy: config.approvalPolicy,
     pinnedThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
-  };
+  });
 }

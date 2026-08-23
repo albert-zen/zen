@@ -414,6 +414,15 @@ test("Add provider offers known local and subscription flows without creating ac
     await click(exactButtonRequired("Add provider"));
     assert.ok(labeledButton("Add OpenAI subscription"));
     assert.ok(labeledButton("Add Local demo"));
+    for (const name of [
+      "SiliconFlow（硅基流动）",
+      "DashScope",
+      "DeepSeek",
+      "Kimi",
+      "Zhipu（智谱）",
+    ]) {
+      assert.ok(labeledButton(`Add ${name}`));
+    }
     await click(labeledButtonRequired("Add Local demo"));
     await click(exactButtonRequired("Add provider"));
     await waitFor(() => added);
@@ -423,6 +432,88 @@ test("Add provider offers known local and subscription flows without creating ac
       ["fake"],
     );
     assert.notEqual(added?.providerProfileId, "fake");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("known Provider choice pre-fills its stable profile identity and connection", async () => {
+  let added:
+    { provider: ZenXProviderProfile; apiKey: string | undefined } | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    addProvider: async (provider, apiKey) => {
+      added = { provider, apiKey };
+      return {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add provider"));
+    await click(exactButtonRequired("Add provider"));
+    await click(labeledButtonRequired("Add DeepSeek"));
+    assert.equal(requiredInput("Display name").value, "DeepSeek");
+    assert.equal(requiredInput("Provider name").value, "deepseek");
+    assert.equal(requiredInput("Base URL").value, "https://api.deepseek.com");
+    await changeControl(requiredInput("API key"), "deepseek-key");
+    await changeControl(requiredInput("Model 1"), "deepseek-chat");
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(() => added);
+    assert.equal(added?.provider.providerProfileId, "deepseek");
+    assert.equal(added?.apiKey, "deepseek-key");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("OpenAI subscription choice exposes the five host-confirmed models", async () => {
+  let added: ZenXProviderProfile | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    addProvider: async (provider) => {
+      added = provider;
+      return {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add provider"));
+    await click(exactButtonRequired("Add provider"));
+    await click(labeledButtonRequired("Add OpenAI subscription"));
+    for (const [index, id] of [
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4",
+    ].entries()) {
+      assert.equal(requiredInput(`Model ${index + 1}`).value, id);
+    }
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(() => added);
+    assert.deepEqual(
+      added?.models.map((entry) => entry.id),
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
+    );
+    assert.deepEqual(added?.models[1]?.inputModalities, ["text", "image"]);
+    assert.deepEqual(added?.models[1]?.supportedReasoningEfforts, [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
   } finally {
     await unmount(harness);
   }

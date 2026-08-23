@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { builtInModelCatalogPreset } from "../../../../cli/src/model-presets.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type {
   PublicHostSettings,
@@ -10,6 +11,10 @@ import type {
   ZenXProviderEditOptions,
   ZenXProviderProfile,
 } from "../../main/host-profile.js";
+import {
+  KNOWN_PROVIDER_PRESETS,
+  type ZenXKnownProviderPreset,
+} from "../../main/provider-presets.js";
 import {
   getAppearanceController,
   type AppearancePreference,
@@ -614,10 +619,7 @@ function ModelsPanel({
               providerProfileId,
               type,
               displayName: "OpenAI subscription",
-              models: [
-                legacyModelCatalogEntry("gpt-5.6-terra"),
-                legacyModelCatalogEntry("gpt-5.6-luna"),
-              ],
+              models: subscriptionModelCatalogEntries(),
             }
           : {
               providerProfileId,
@@ -630,6 +632,24 @@ function ModelsPanel({
     setShowAddChoices(false);
     setDeletingProviderId(null);
     setEditor({ mode: "add", provider });
+    setError(null);
+    setStatus(null);
+  };
+
+  const openKnownProviderEditor = (preset: ZenXKnownProviderPreset) => {
+    setShowAddChoices(false);
+    setDeletingProviderId(null);
+    setEditor({
+      mode: "add",
+      provider: {
+        providerProfileId: preset.providerProfileId,
+        type: "openai-compatible",
+        name: preset.name,
+        displayName: preset.displayName,
+        baseUrl: preset.baseUrl,
+        models: [manualModelCatalogEntry("")],
+      },
+    });
     setError(null);
     setStatus(null);
   };
@@ -725,7 +745,7 @@ function ModelsPanel({
             <div>
               <strong>Add a known Provider</strong>
               <span>
-                Choose a local or subscription profile. Custom APIs use the
+                Choose a built-in connection preset. Custom APIs use the
                 separate custom flow.
               </span>
             </div>
@@ -747,6 +767,29 @@ function ModelsPanel({
                   : "Uses the sign-in managed in Account"}
               </span>
             </button>
+            {KNOWN_PROVIDER_PRESETS.map((preset) => {
+              const configured = settings.profile.providerProfiles.some(
+                (provider) =>
+                  provider.providerProfileId === preset.providerProfileId,
+              );
+              return (
+                <button
+                  key={preset.providerProfileId}
+                  type="button"
+                  aria-label={`Add ${preset.displayName}`}
+                  onClick={() => openKnownProviderEditor(preset)}
+                  disabled={configured}
+                >
+                  <ProviderLogo kind="generic" />
+                  <strong>{preset.displayName}</strong>
+                  <span>
+                    {configured
+                      ? "This built-in Provider is already configured"
+                      : "OpenAI-compatible API preset"}
+                  </span>
+                </button>
+              );
+            })}
             <button
               type="button"
               aria-label="Add Local demo"
@@ -1870,6 +1913,20 @@ function legacyModelCatalogEntry(id: string): ZenXModelCatalogEntry {
     contextWindow: null,
     source: "legacy",
   };
+}
+
+function subscriptionModelCatalogEntries(): ZenXModelCatalogEntry[] {
+  return builtInModelCatalogPreset("openai-subscription").map((entry) => ({
+    id: entry.id,
+    displayName: entry.displayName ?? entry.id,
+    description: entry.description ?? "",
+    hidden: entry.hidden ?? false,
+    supportedReasoningEfforts: entry.supportedReasoningEfforts ?? null,
+    defaultReasoningEffort: entry.defaultReasoningEffort ?? null,
+    inputModalities: entry.inputModalities ?? null,
+    contextWindow: entry.contextWindow ?? null,
+    source: entry.source ?? "preset",
+  }));
 }
 
 function manualModelCatalogEntry(id: string): ZenXModelCatalogEntry {

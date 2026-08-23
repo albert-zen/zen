@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { legacyModelCatalogEntries } from "../../../../apps/cli/src/model-presets.js";
+import {
+  builtInModelCatalogPreset,
+  legacyModelCatalogEntries,
+} from "../../../../apps/cli/src/model-presets.js";
 import {
   normalizeModelCatalogEntry,
   type ModelCatalogEntry,
@@ -156,12 +159,15 @@ export class ZenXHostProfileStore {
     const migratedV1 = isLegacyHostProfile(value);
     const migratedV2 = isLegacyHostProfileV2(value);
     const migrated = migratedV1 || migratedV2;
-    const profile = migratedV1
+    const decoded = migratedV1
       ? migrateLegacyHostProfile(value)
       : migratedV2
         ? migrateHostProfileV2(value)
         : validateHostProfile(value);
-    if (migrated) await this.write(profile);
+    const profile = applyBuiltInModelCatalogPresets(decoded);
+    if (migrated || JSON.stringify(profile) !== JSON.stringify(decoded)) {
+      await this.write(profile);
+    }
     return profile;
   }
 
@@ -573,6 +579,33 @@ export function structuredLegacyModelCatalog(
     const { isDefault: _isDefault, ...model } = normalized;
     return model;
   });
+}
+
+export function applyBuiltInModelCatalogPresets(
+  profile: ZenXHostProfile,
+): ZenXHostProfile {
+  const validated = validateHostProfile(profile);
+  const providerProfiles = validated.providerProfiles.map((provider) => {
+    if (provider.type !== "openai-subscription") return provider;
+    const existingById = new Map(
+      provider.models.map((model) => [model.id, model]),
+    );
+    const presetModels = builtInModelCatalogPreset("openai-subscription").map(
+      (preset) => {
+        const existing = existingById.get(preset.id);
+        if (existing !== undefined) existingById.delete(preset.id);
+        if (existing?.source === "manual") return existing;
+        const normalized = normalizeModelCatalogEntry(preset);
+        const { isDefault: _isDefault, ...model } = normalized;
+        return model;
+      },
+    );
+    return {
+      ...provider,
+      models: [...presetModels, ...existingById.values()],
+    };
+  });
+  return validateHostProfile({ ...validated, providerProfiles });
 }
 
 function validateModelReference(

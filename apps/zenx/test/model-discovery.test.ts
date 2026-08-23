@@ -11,6 +11,7 @@ import {
   ZenXHostProfileStore,
 } from "../src/main/host-profile.js";
 import { discoverOpenAiCompatibleModels } from "../src/main/model-discovery.js";
+import { KNOWN_PROVIDER_PRESETS } from "../src/main/provider-presets.js";
 import { ZenXSettingsService } from "../src/main/settings-service.js";
 
 test("GET /models discovers ids with unknown capabilities and routes the selected credential", async () => {
@@ -188,6 +189,93 @@ test("Host discovery failure is explicit and leaves configured catalog entries i
       /HTTP 502/u,
     );
     assert.deepEqual((await service.publicSettings()).profile, before);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("all known Provider presets create with profile-scoped keys and discover Unknown model ids", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-presets-"));
+  const profileStore = new ZenXHostProfileStore(
+    path.join(directory, "host-profile.json"),
+  );
+  const vault = new ZenXCredentialVault(
+    path.join(directory, "credentials.vault"),
+    encryption,
+  );
+  const seed = structuredLegacyModelCatalog("fake", ["fake"])[0]!;
+  const requests: Array<{ url: string; authorization: string | null }> = [];
+  try {
+    await profileStore.write({
+      version: 3,
+      onboardingComplete: true,
+      providerProfiles: [
+        {
+          providerProfileId: "fake",
+          type: "fake",
+          displayName: "Local demo",
+          models: [seed],
+        },
+      ],
+      defaultModel: { providerProfileId: "fake", modelId: "fake" },
+      titleModel: { providerProfileId: "fake", modelId: "fake" },
+      workspace: null,
+      workspaces: [],
+      lastUsedWorkspace: null,
+      approvalPolicy: "never",
+      pinnedThreadIds: [],
+      sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
+    });
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      profileStore,
+      vault,
+      subscription: inactiveSubscription,
+      providerFetchFactory: () =>
+        Object.assign(
+          async (input: URL | RequestInfo, init?: RequestInit) => {
+            const url = String(input);
+            requests.push({
+              url,
+              authorization: new Headers(init?.headers).get("authorization"),
+            });
+            return Response.json({ data: [{ id: "discovered-model" }] });
+          },
+          { close: async () => undefined },
+        ),
+    });
+    await service.initialize({});
+    for (const preset of KNOWN_PROVIDER_PRESETS) {
+      await service.addProviderProfile(
+        {
+          ...preset,
+          type: "openai-compatible",
+          models: structuredLegacyModelCatalog("openai-compatible", [
+            "manual-seed",
+          ]),
+        },
+        `${preset.providerProfileId}-key`,
+      );
+      const snapshot = await service.discoverProviderModels(
+        preset.providerProfileId,
+      );
+      assert.deepEqual(
+        snapshot.models.map((model) => model.id),
+        ["manual-seed", "discovered-model"],
+      );
+      assert.equal(snapshot.models[1]?.supportedReasoningEfforts, null);
+      assert.equal(snapshot.models[1]?.defaultReasoningEffort, null);
+      assert.equal(snapshot.models[1]?.inputModalities, null);
+      assert.equal(snapshot.models[1]?.contextWindow, null);
+    }
+    assert.deepEqual(
+      requests,
+      KNOWN_PROVIDER_PRESETS.map((preset) => ({
+        url: `${preset.baseUrl}/models`,
+        authorization: `Bearer ${preset.providerProfileId}-key`,
+      })),
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
