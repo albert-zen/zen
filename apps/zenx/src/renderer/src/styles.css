@@ -584,13 +584,8 @@ a:focus-visible {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.project-toggle > svg:last-child {
-  transition: transform 180ms ease;
-}
-.project-toggle > svg:last-child:not(.expanded) {
-  transform: rotate(-90deg);
-}
 .project-actions {
+  position: relative;
   display: flex;
   align-items: center;
   opacity: 0;
@@ -598,6 +593,7 @@ a:focus-visible {
 }
 .project-header:hover .project-actions,
 .project-header:focus-within .project-actions,
+.project-header.selected .project-actions,
 .project-actions:focus-within {
   opacity: 1;
 }
@@ -615,6 +611,42 @@ a:focus-visible {
 .project-actions button:hover {
   color: var(--text);
   background: var(--surface-3);
+}
+.project-more-trigger[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.project-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 172px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  box-shadow: 0 12px 28px var(--shadow-color);
+}
+.project-menu button {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: 11px;
+  text-align: left;
+}
+.project-menu button:hover,
+.project-menu button:focus-visible {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.project-menu button svg {
+  flex: 0 0 auto;
 }
 .project-empty {
   margin: 4px 10px 10px 29px;
@@ -3440,6 +3472,9 @@ a:focus-visible {
   }
   .sidebar-header {
     padding-inline: 9px;
+  }
+  .project-actions {
+    opacity: 1;
   }
   .thread-row {
     padding: 10px 46px 10px 10px;
