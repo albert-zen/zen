@@ -50,6 +50,7 @@ import type {
 } from "./trigger-types.js";
 import { ZenXCapabilityService } from "./capability-service.js";
 import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
+import { ZenXWorkbenchFixturePackage } from "./capabilities/workbench-fixture-package.js";
 import {
   MutableAppServerRequestPort,
   ZenXSelfControlCapabilityPackage,
@@ -76,6 +77,7 @@ import {
   runExternalZasAcceptance,
 } from "./external-zas-smoke.js";
 import { secondInstanceDisposition } from "./desktop-lifecycle.js";
+import { validatePluginHostSdkRequest } from "./plugin-host-sdk.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -245,6 +247,10 @@ app.whenReady().then(async () => {
     );
     await capabilityService.install(
       new ZenXRoomsCapabilityPackage(triggerService),
+      "bundled",
+    );
+    await capabilityService.install(
+      new ZenXWorkbenchFixturePackage(),
       "bundled",
     );
     await triggerService.start();
@@ -965,6 +971,41 @@ function installCapabilityIpc(
       await capabilities.setEnabled(pluginId, enabled);
       await manager.restartCapabilities();
       return capabilities.pluginSnapshot();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.pluginsExecuteCommand,
+    async (_event, pluginId: unknown, commandId: unknown, input: unknown) => {
+      if (typeof pluginId !== "string" || typeof commandId !== "string") {
+        throw new Error("Invalid plugin command request");
+      }
+      const request = validatePluginHostSdkRequest({
+        operation: "ui.commands.execute",
+        commandId,
+        input,
+      });
+      if (request.operation !== "ui.commands.execute")
+        throw new Error("Invalid plugin command request");
+      return await capabilities.executePluginCommand(
+        pluginId,
+        request.commandId,
+        request.input,
+      );
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.pluginsReadHandle,
+    async (_event, pluginId: unknown, handleId: unknown) => {
+      if (typeof pluginId !== "string" || typeof handleId !== "string") {
+        throw new Error("Invalid plugin handle request");
+      }
+      const request = validatePluginHostSdkRequest({
+        operation: "ui.handles.read",
+        handleId,
+      });
+      if (request.operation !== "ui.handles.read")
+        throw new Error("Invalid plugin handle request");
+      return await capabilities.readPluginUiHandle(pluginId, request.handleId);
     },
   );
   capabilities.onChange((snapshot) => {

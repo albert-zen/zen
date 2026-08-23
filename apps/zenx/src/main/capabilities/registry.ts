@@ -372,15 +372,20 @@ export class ZenXCapabilityRegistry
         throw new Error(`Capability tool ${tool.name} is already registered`);
       }
     }
-    for (const page of manifest.contributions?.pages ?? []) {
+    for (const route of [
+      ...(manifest.contributions?.pages ?? []),
+      ...(manifest.contributions?.subroutes ?? []),
+    ]) {
       for (const registered of this.#registered.values()) {
+        const contributions = registered.package.manifest.contributions;
         if (
-          registered.package.manifest.contributions?.pages?.some(
-            (candidate) => candidate.route === page.route,
-          ) === true
+          [
+            ...(contributions?.pages ?? []),
+            ...(contributions?.subroutes ?? []),
+          ].some((candidate) => candidate.route === route.route)
         ) {
           throw new Error(
-            `Plugin page route ${page.route} is already registered`,
+            `Plugin page route ${route.route} is already registered`,
           );
         }
       }
@@ -601,7 +606,12 @@ export class ZenXCapabilityRegistry
         available: entry.available,
         contributionCount:
           (manifest.contributions?.sidebar?.length ?? 0) +
-          (manifest.contributions?.pages?.length ?? 0),
+          (manifest.contributions?.pages?.length ?? 0) +
+          (manifest.contributions?.subroutes?.length ?? 0) +
+          (manifest.contributions?.settings?.length ?? 0) +
+          (manifest.contributions?.panels?.length ?? 0) +
+          (manifest.contributions?.commands?.length ?? 0) +
+          (manifest.contributions?.menus?.length ?? 0),
       };
     });
     const enabled = [...this.#registered.values()].filter(
@@ -635,7 +645,51 @@ export class ZenXCapabilityRegistry
           (left.order ?? 0) - (right.order ?? 0) ||
           left.key.localeCompare(right.key),
       );
-    return { plugins, sidebar, pages };
+    const project = <T extends { id: string }>(
+      select: (manifest: ZenXCapabilityManifest) => readonly T[] | undefined,
+    ) =>
+      enabled.flatMap((registered) => {
+        const pluginId = registered.package.manifest.id;
+        return (select(registered.package.manifest) ?? []).map((value) => ({
+          ...structuredClone(value),
+          key: `${pluginId}:${value.id}`,
+          pluginId,
+        }));
+      });
+    const bundles = enabled.flatMap((registered) => {
+      const pluginId = registered.package.manifest.id;
+      const manifest = registered.package.manifest;
+      return manifest.schemaVersion === 2
+        ? (manifest.ui?.bundles ?? []).map((bundle) => ({
+            ...structuredClone(bundle),
+            key: `${pluginId}:${bundle.id}`,
+            pluginId,
+          }))
+        : [];
+    });
+    const surfaces = enabled.flatMap((registered) => {
+      const pluginId = registered.package.manifest.id;
+      const manifest = registered.package.manifest;
+      return manifest.schemaVersion === 2
+        ? (manifest.ui?.surfaces ?? []).map((surface) => ({
+            ...structuredClone(surface),
+            key: `${pluginId}:${surface.id}`,
+            pluginId,
+          }))
+        : [];
+    });
+    return {
+      plugins,
+      bundles,
+      surfaces,
+      sidebar,
+      pages,
+      subroutes: project((manifest) => manifest.contributions?.subroutes),
+      settings: project((manifest) => manifest.contributions?.settings),
+      panels: project((manifest) => manifest.contributions?.panels),
+      commands: project((manifest) => manifest.contributions?.commands),
+      menus: project((manifest) => manifest.contributions?.menus),
+    };
   }
 
   availablePlugins(): ZenXAvailablePlugin[] {
@@ -827,6 +881,53 @@ export class ZenXCapabilityRegistry
     } finally {
       this.#browserInvocationSequences.delete(invocation.callId);
     }
+  }
+
+  async executePluginCommand(
+    pluginId: string,
+    commandId: string,
+    input?: unknown,
+  ): Promise<unknown> {
+    await this.#configurationMutationTail;
+    const registered = this.#registered.get(pluginId);
+    if (
+      registered === undefined ||
+      this.#disabled.has(pluginId) ||
+      this.#uninstalled.has(pluginId)
+    ) {
+      throw new Error(`Plugin UI is not enabled: ${pluginId}`);
+    }
+    const command = registered.package.manifest.contributions?.commands?.find(
+      (candidate) => candidate.id === commandId,
+    );
+    if (command === undefined) {
+      throw new Error(`Unknown plugin command: ${pluginId}:${commandId}`);
+    }
+    const result = await this.execute({
+      callId: `ui-${randomUUID()}`,
+      name: command.tool,
+      arguments: {
+        ...(command.input ?? {}),
+        ...(input === undefined ? {} : { input: structuredClone(input) }),
+      },
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+    });
+    return JSON.parse(result.output) as unknown;
+  }
+
+  async readPluginUiHandle(
+    pluginId: string,
+    handleId: string,
+  ): Promise<unknown> {
+    await this.#configurationMutationTail;
+    if (!this.#registered.has(pluginId) || this.#disabled.has(pluginId)) {
+      throw new Error(`Plugin UI is not enabled: ${pluginId}`);
+    }
+    if (handleId !== `${pluginId}:context`) {
+      throw new Error(`Unknown plugin UI handle: ${handleId}`);
+    }
+    return Object.freeze({ pluginId, lifecycle: "enabled" });
   }
 
   onChange(listener: (snapshot: ZenXCapabilitySnapshot) => void): () => void {
@@ -1202,6 +1303,12 @@ function validateManifest(
   );
   const pages = manifest.contributions?.pages ?? [];
   const pageIds = new Set<string>();
+  const routeIds = new Set<string>();
+  const surfaceIds = new Set(
+    manifest.schemaVersion === 2
+      ? (manifest.ui?.surfaces ?? []).map((surface) => surface.id)
+      : [],
+  );
   for (const page of pages) {
     if (
       typeof page.id !== "string" ||
@@ -1214,6 +1321,7 @@ function validateManifest(
     }
     if (
       typeof page.route !== "string" ||
+      routeIds.has(page.route) ||
       !new RegExp(
         `^/plugins/${manifest.id}/[a-z][a-z0-9-]*(?:/[a-z][a-z0-9-]*)*$`,
         "u",
@@ -1226,7 +1334,35 @@ function validateManifest(
     if (typeof page.title !== "string" || page.title.trim().length === 0) {
       throw new Error(`Capability ${manifest.id} page ${page.id} has no title`);
     }
+    if (page.surfaceId !== undefined && !surfaceIds.has(page.surfaceId)) {
+      throw new Error(
+        `Capability ${manifest.id} page ${page.id} targets unknown UI surface ${page.surfaceId}`,
+      );
+    }
     pageIds.add(page.id);
+    routeIds.add(page.route);
+  }
+  const subrouteIds = new Set<string>();
+  for (const subroute of manifest.contributions?.subroutes ?? []) {
+    if (
+      !isContributionId(subroute.id) ||
+      subrouteIds.has(subroute.id) ||
+      !pageIds.has(subroute.pageId) ||
+      routeIds.has(subroute.route) ||
+      !new RegExp(
+        `^/plugins/${manifest.id}/[a-z][a-z0-9-]*(?:/[a-z][a-z0-9-]*)+$`,
+        "u",
+      ).test(subroute.route) ||
+      !surfaceIds.has(subroute.surfaceId ?? "") ||
+      typeof subroute.title !== "string" ||
+      subroute.title.trim().length === 0
+    ) {
+      throw new Error(
+        `Capability ${manifest.id} has invalid or dangling subroute ${subroute.id}`,
+      );
+    }
+    subrouteIds.add(subroute.id);
+    routeIds.add(subroute.route);
   }
   const sidebarIds = new Set<string>();
   for (const contribution of manifest.contributions?.sidebar ?? []) {
@@ -1260,6 +1396,66 @@ function validateManifest(
       );
     }
     sidebarIds.add(contribution.id);
+  }
+  const validateSurfaceContributions = (
+    kind: "settings" | "panel",
+    values: readonly {
+      id: string;
+      title: string;
+      surfaceId: string;
+      order?: number;
+    }[],
+  ) => {
+    const ids = new Set<string>();
+    for (const value of values) {
+      if (
+        !isContributionId(value.id) ||
+        ids.has(value.id) ||
+        value.title.trim().length === 0 ||
+        !surfaceIds.has(value.surfaceId) ||
+        (value.order !== undefined && !Number.isSafeInteger(value.order))
+      ) {
+        throw new Error(
+          `Capability ${manifest.id} has invalid or dangling ${kind} contribution ${value.id}`,
+        );
+      }
+      ids.add(value.id);
+    }
+  };
+  validateSurfaceContributions(
+    "settings",
+    manifest.contributions?.settings ?? [],
+  );
+  validateSurfaceContributions("panel", manifest.contributions?.panels ?? []);
+  const commandIds = new Set<string>();
+  for (const command of manifest.contributions?.commands ?? []) {
+    if (
+      !isContributionId(command.id) ||
+      commandIds.has(command.id) ||
+      command.title.trim().length === 0 ||
+      !manifest.tools.some((tool) => tool.name === command.tool)
+    ) {
+      throw new Error(
+        `Capability ${manifest.id} has invalid or dangling command ${command.id}`,
+      );
+    }
+    commandIds.add(command.id);
+  }
+  const menuIds = new Set<string>();
+  for (const menu of manifest.contributions?.menus ?? []) {
+    if (
+      !isContributionId(menu.id) ||
+      menuIds.has(menu.id) ||
+      menu.label.trim().length === 0 ||
+      !commandIds.has(menu.commandId) ||
+      !["page", "panel", "settings"].includes(menu.location) ||
+      (menu.order !== undefined && !Number.isSafeInteger(menu.order))
+    ) {
+      throw new Error(
+        `Capability ${manifest.id} has invalid or dangling menu ${menu.id}`,
+      );
+    }
+    menuIds.add(menu.id);
   }
   if (permissionIds.size !== manifest.permissions.length) {
     throw new Error(`Capability ${manifest.id} has duplicate permissions`);
@@ -1354,6 +1550,37 @@ function validatePluginManifestV2(manifest: ZenXPluginManifestV2): void {
     throw new Error(
       `Plugin ${manifest.id} has no runtime ${manifest.runtime.type === "http" ? "URL" : "entry"}`,
     );
+  }
+  const bundleIds = new Set<string>();
+  for (const bundle of manifest.ui?.bundles ?? []) {
+    if (
+      !isContributionId(bundle.id) ||
+      bundleIds.has(bundle.id) ||
+      bundle.apiVersion !== 1 ||
+      (bundle.kind !== "trusted" && bundle.kind !== "isolated") ||
+      typeof bundle.entry !== "string" ||
+      bundle.entry.trim().length === 0
+    ) {
+      throw new Error(
+        `Plugin ${manifest.id} has invalid UI bundle ${bundle.id}`,
+      );
+    }
+    bundleIds.add(bundle.id);
+  }
+  const surfaceIds = new Set<string>();
+  for (const surface of manifest.ui?.surfaces ?? []) {
+    if (
+      !isContributionId(surface.id) ||
+      surfaceIds.has(surface.id) ||
+      !bundleIds.has(surface.bundleId) ||
+      typeof surface.exportName !== "string" ||
+      !isContributionId(surface.exportName)
+    ) {
+      throw new Error(
+        `Plugin ${manifest.id} has invalid or dangling UI surface ${surface.id}`,
+      );
+    }
+    surfaceIds.add(surface.id);
   }
 }
 

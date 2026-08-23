@@ -48,11 +48,62 @@ export interface ZenXPluginPageContribution {
   id: string;
   title: string;
   route: string;
+  surfaceId?: string;
+}
+
+export interface ZenXPluginSubrouteContribution extends ZenXPluginPageContribution {
+  pageId: string;
+}
+
+export interface ZenXPluginSurfaceContribution {
+  id: string;
+  title: string;
+  surfaceId: string;
+  order?: number;
+}
+
+export interface ZenXPluginCommandContribution {
+  id: string;
+  title: string;
+  tool: string;
+  input?: Readonly<Record<string, unknown>>;
+}
+
+export interface ZenXPluginMenuContribution {
+  id: string;
+  label: string;
+  commandId: string;
+  location: "page" | "panel" | "settings";
+  order?: number;
 }
 
 export interface ZenXPluginContributions {
   sidebar?: ZenXPluginSidebarContribution[];
   pages?: ZenXPluginPageContribution[];
+  subroutes?: ZenXPluginSubrouteContribution[];
+  settings?: ZenXPluginSurfaceContribution[];
+  panels?: ZenXPluginSurfaceContribution[];
+  commands?: ZenXPluginCommandContribution[];
+  menus?: ZenXPluginMenuContribution[];
+}
+
+export interface ZenXPluginUiBundle {
+  id: string;
+  apiVersion: 1;
+  kind: "trusted" | "isolated";
+  /** Trusted module registry key, or isolated iframe HTML document. */
+  entry: string;
+}
+
+export interface ZenXPluginUiSurface {
+  id: string;
+  bundleId: string;
+  exportName: string;
+}
+
+export interface ZenXPluginUiManifest {
+  bundles: ZenXPluginUiBundle[];
+  surfaces: ZenXPluginUiSurface[];
 }
 
 export interface ZenXCapabilityManifestV1 {
@@ -95,13 +146,14 @@ export type ZenXPluginRuntimeDescriptor =
 
 export interface ZenXPluginManifestV2 extends Omit<
   ZenXCapabilityManifestV1,
-  "schemaVersion" | "displayName"
+  "schemaVersion" | "displayName" | "ui"
 > {
   schemaVersion: 2;
   name: string;
   compatibility: ZenXPluginCompatibility;
   runtime: ZenXPluginRuntimeDescriptor;
   mainDocument: string;
+  ui?: ZenXPluginUiManifest;
 }
 
 export type ZenXCapabilityManifest =
@@ -191,6 +243,24 @@ export interface ZenXPluginSidebarProjection
 export interface ZenXPluginPageProjection
   extends ZenXPluginPageContribution, ZenXPluginContributionProjection {}
 
+export interface ZenXPluginSubrouteProjection
+  extends ZenXPluginSubrouteContribution, ZenXPluginContributionProjection {}
+
+export interface ZenXPluginSurfaceProjection
+  extends ZenXPluginSurfaceContribution, ZenXPluginContributionProjection {}
+
+export interface ZenXPluginCommandProjection
+  extends ZenXPluginCommandContribution, ZenXPluginContributionProjection {}
+
+export interface ZenXPluginMenuProjection
+  extends ZenXPluginMenuContribution, ZenXPluginContributionProjection {}
+
+export interface ZenXPluginUiBundleProjection
+  extends ZenXPluginUiBundle, ZenXPluginContributionProjection {}
+
+export interface ZenXPluginUiSurfaceProjection
+  extends ZenXPluginUiSurface, ZenXPluginContributionProjection {}
+
 export interface ZenXPluginSummary {
   id: string;
   displayName: string;
@@ -204,8 +274,15 @@ export interface ZenXPluginSummary {
 
 export interface ZenXPluginSnapshot {
   plugins: ZenXPluginSummary[];
+  bundles: ZenXPluginUiBundleProjection[];
+  surfaces: ZenXPluginUiSurfaceProjection[];
   sidebar: ZenXPluginSidebarProjection[];
   pages: ZenXPluginPageProjection[];
+  subroutes: ZenXPluginSubrouteProjection[];
+  settings: ZenXPluginSurfaceProjection[];
+  panels: ZenXPluginSurfaceProjection[];
+  commands: ZenXPluginCommandProjection[];
+  menus: ZenXPluginMenuProjection[];
 }
 
 export interface ZenXCapabilitySnapshot {

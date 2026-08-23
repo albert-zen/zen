@@ -54,14 +54,14 @@ interface SidebarProps {
   onAddProject(): void;
   onRemoveProject(workspace: string): void;
   onSetDefaultProject(workspace: string): void;
-  onOpenContribution(page: "triggers" | "rooms"): void;
+  onOpenContribution(route: string): void;
   onOpenSettings(): void;
   onRetryThreads(): void;
   onRenameThread(threadId: string, title: string): Promise<void>;
   onSelectThread(threadId: string): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   pluginContributions: readonly LoadedPluginContribution[];
-  selectedPage: "agent" | "triggers" | "rooms" | "settings";
+  selectedPage: string;
   selectedThreadId: string | null;
   serverStatus: AppServerHostStatus;
   liveThread: Thread | null;
@@ -218,22 +218,15 @@ export function Sidebar({
                   className="plugin-space-link"
                   type="button"
                   aria-current={
-                    selectedPage === contribution.page ? "page" : undefined
+                    selectedPage === contribution.page.route
+                      ? "page"
+                      : undefined
                   }
                   key={contribution.key}
-                  onClick={() => onOpenContribution(contribution.page)}
+                  onClick={() => onOpenContribution(contribution.page.route)}
                 >
-                  <Icon
-                    name={contribution.icon === "rooms" ? "users" : "trigger"}
-                  />
+                  <Icon name="trigger" />
                   <span>{contribution.label}</span>
-                  <small>
-                    {contribution.page === "triggers"
-                      ? triggerSnapshot.triggers.filter(
-                          (trigger) => trigger.active,
-                        ).length
-                      : triggerSnapshot.rooms.length}
-                  </small>
                 </button>
               ))}
             </section>

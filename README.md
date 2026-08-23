@@ -15,6 +15,7 @@ Provider 账户和 workspace 配置由宿主持有，不进入 Thread。
 - codex-cli 0.146.0 App Server 协议子集（JSONL stdio / loopback WebSocket）
 - `run`、`chat`、`threads`、`app-server` 薄 CLI
 - 独立 IMZen（QQ / Telegram / Feishu / Weixin channel adapters）
+- ZenX Plugin Package lifecycle、Host SDK 与 Generic UI Host（sidebar、page/subroute、settings、panel、command/menu；第三方 iframe 隔离）
 
 ## 快速验证
 

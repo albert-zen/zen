@@ -191,6 +191,12 @@ declare global {
           pluginId: string,
           enabled: boolean,
         ): Promise<ZenXPluginSnapshot>;
+        executeCommand(
+          pluginId: string,
+          commandId: string,
+          input?: unknown,
+        ): Promise<unknown>;
+        readHandle(pluginId: string, handleId: string): Promise<unknown>;
         onChange(listener: (snapshot: ZenXPluginSnapshot) => void): () => void;
       };
     };

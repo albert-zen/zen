@@ -61,6 +61,47 @@
   font-synthesis: none;
 }
 
+.plugin-page-scroll {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  gap: 18px;
+  padding: 22px;
+}
+
+.plugin-primary-surface,
+.workbench-card,
+.workbench-panel {
+  min-width: 0;
+}
+
+.workbench-card,
+.workbench-panel {
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: var(--surface-2);
+  padding: 20px;
+}
+
+.plugin-action-row,
+.plugin-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plugin-product-page iframe {
+  width: 100%;
+  min-height: 360px;
+  border: 0;
+}
+
+@media (max-width: 760px) {
+  .plugin-page-scroll {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 14px;
+  }
+}
+
 :root[data-appearance="light"] {
   color-scheme: light;
   --canvas: #e8eaf1;

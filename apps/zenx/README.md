@@ -71,12 +71,13 @@ object directly; JSONL process and HTTP adapters expose the same operations thro
 bounded SDK request/result envelopes and never expose internal stores. Ordinary SDK
 queries, storage, and UI commands do not create Turns. Only the explicit
 `actions.threads.startTurn` operation reaches the existing AppServer port and returns
-its canonical Items. The `ui` group currently defines opaque handles and commands for
-ZP6; it does not implement a renderer or surface.
+its canonical Items. The Generic UI Host now projects the `ui` group into versioned
+trusted or isolated renderer bundles and owned surfaces. Both receive the same logical
+theme/context, opaque handle, navigation, and command API; isolated HTML runs in a
+sandboxed iframe without same-origin authority and talks only through validated messages.
 
 This is not yet the completed Plugin Platform: complete
-product install/update entry points, generic UI SDK, and structured result renderers
-remain future nodes.
+product install/update entry points, and structured result renderers remain future nodes.
 `ToolResultItem` currently stores only text output and an exit code. The app-owned
 Host already publishes its one ZAS authority through a private authenticated
 loopback descriptor that survives window closure.
@@ -321,9 +322,9 @@ Capability grants, per-call approval, and the execution sandbox remain separate
 concepts. A host may impose a background-only execution policy without treating
 that restriction as a missing grant.
 
-Capability packages currently supply the plugin catalog/enablement skeleton; they
-are not the target installed-plugin lifecycle. A manifest may declare only
-controlled `pages` and `sidebar` contributions; the main-process registry
+Capability packages supply the installed-plugin lifecycle and UI projection. A v2
+manifest may declare controlled sidebar, page/subroute, settings, panel,
+command/menu, versioned bundle and surface contributions; the main-process registry
 projects enabled contributions through the typed `window.zenx.plugins` preload
 API and never gives a package DOM or router access. Enablement is persisted next
 to grants in the same atomic capability configuration document, but remains a
@@ -563,12 +564,30 @@ main-document contract.
     }
   ],
   "resources": [],
+  "ui": {
+    "bundles": [
+      {
+        "id": "main",
+        "apiVersion": 1,
+        "kind": "isolated",
+        "entry": "<main id='app'>Local example</main>"
+      }
+    ],
+    "surfaces": [
+      {
+        "id": "home",
+        "bundleId": "main",
+        "exportName": "home"
+      }
+    ]
+  },
   "contributions": {
     "pages": [
       {
         "id": "home",
         "title": "Local example",
-        "route": "/plugins/local-example/home"
+        "route": "/plugins/local-example/home",
+        "surfaceId": "home"
       }
     ],
     "sidebar": [

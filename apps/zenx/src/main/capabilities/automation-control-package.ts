@@ -410,6 +410,7 @@ function automationPluginManifest(
   const {
     schemaVersion: _schemaVersion,
     displayName: _displayName,
+    ui: _legacyUi,
     ...capability
   } = source.schemaVersion === 1
     ? source

@@ -11,6 +11,7 @@ import type {
   ZenXProviderEditOptions,
   ZenXProviderProfile,
 } from "../../main/host-profile.js";
+import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import {
   KNOWN_PROVIDER_PRESETS,
   type ZenXKnownProviderPreset,
@@ -23,6 +24,7 @@ import { CapabilitySettings } from "./CapabilitySettings.js";
 import { Icon } from "./icons.js";
 import { ProviderLogo, providerLogoKindForIdentity } from "./ProviderLogo.js";
 import { threadModelIdentity, threadTitle } from "./thread-list.js";
+import { PluginSettingsSurfaces } from "./PluginProductPage.js";
 
 export type SettingsTab =
   "account" | "models" | "plugins" | "general" | "archived";
@@ -36,6 +38,7 @@ export function SettingsView({
   onTabChange,
   onUnarchive,
   tab,
+  pluginSnapshot = null,
 }: {
   archivedError: string | null;
   archivedLoading: boolean;
@@ -45,6 +48,7 @@ export function SettingsView({
   onTabChange(tab: SettingsTab): void;
   onUnarchive(thread: NativeThreadSummary): Promise<void>;
   tab: SettingsTab;
+  pluginSnapshot?: ZenXPluginSnapshot | null;
 }) {
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
@@ -225,6 +229,9 @@ export function SettingsView({
                   </p>
                 </header>
                 <CapabilitySettings />
+                {pluginSnapshot === null ? null : (
+                  <PluginSettingsSurfaces snapshot={pluginSnapshot} />
+                )}
               </>
             ) : null}
             {tab === "general" ? (

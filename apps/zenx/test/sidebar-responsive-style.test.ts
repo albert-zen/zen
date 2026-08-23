@@ -69,3 +69,15 @@ test("reorder handles stay visually quiet with keyboard and narrow-width access"
     /\.thread-reorder-handle,\s*\.project-reorder-handle,\s*\.thread-item-menu > button\s*\{\s*min-width: 44px;\s*min-height: 44px;/su,
   );
 });
+
+test("plugin page and panel collapse to one usable narrow desktop column", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const narrow = styles.slice(styles.indexOf("@media (max-width: 760px)"));
+  assert.match(
+    narrow,
+    /\.plugin-page-scroll\s*\{\s*grid-template-columns: minmax\(0, 1fr\);\s*padding: 14px;/su,
+  );
+});

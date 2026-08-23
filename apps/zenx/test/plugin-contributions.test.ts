@@ -4,10 +4,40 @@ import test from "node:test";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { loadedPluginContributions } from "../src/renderer/src/plugin-contributions.js";
 
-test("mounts only supported pages projected by the typed plugin snapshot", () => {
+test("mounts arbitrary plugin pages projected by the typed plugin snapshot", () => {
   const snapshot: ZenXPluginSnapshot = {
     plugins: [],
-    pages: [],
+    bundles: [],
+    surfaces: [],
+    pages: [
+      {
+        id: "rooms",
+        key: "zenx-rooms:rooms",
+        pluginId: "zenx-rooms",
+        title: "Rooms",
+        route: "/plugins/zenx-rooms/rooms",
+      },
+      {
+        id: "unknown",
+        key: "fixture:unknown",
+        pluginId: "fixture",
+        title: "Unknown",
+        route: "/plugins/fixture/unknown",
+        surfaceId: "home",
+      },
+      {
+        id: "triggers",
+        key: "zenx-triggers:triggers",
+        pluginId: "zenx-triggers",
+        title: "Triggers",
+        route: "/plugins/zenx-triggers/triggers",
+      },
+    ],
+    subroutes: [],
+    settings: [],
+    panels: [],
+    commands: [],
+    menus: [],
     sidebar: [
       {
         id: "rooms",
@@ -40,8 +70,9 @@ test("mounts only supported pages projected by the typed plugin snapshot", () =>
   };
 
   assert.deepEqual(
-    loadedPluginContributions(snapshot).map(({ key, page }) => [key, page]),
+    loadedPluginContributions(snapshot).map(({ key, page }) => [key, page.id]),
     [
+      ["fixture:unknown", "unknown"],
       ["zenx-triggers:triggers", "triggers"],
       ["zenx-rooms:rooms", "rooms"],
     ],

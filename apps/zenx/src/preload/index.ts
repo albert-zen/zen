@@ -334,6 +334,23 @@ contextBridge.exposeInMainWorld("zenx", {
         pluginId,
         enabled,
       ),
+    executeCommand: async (
+      pluginId: string,
+      commandId: string,
+      input?: unknown,
+    ): Promise<unknown> =>
+      await ipcRenderer.invoke(
+        ipcChannels.pluginsExecuteCommand,
+        pluginId,
+        commandId,
+        input,
+      ),
+    readHandle: async (pluginId: string, handleId: string): Promise<unknown> =>
+      await ipcRenderer.invoke(
+        ipcChannels.pluginsReadHandle,
+        pluginId,
+        handleId,
+      ),
     onChange: (
       listener: (snapshot: ZenXPluginSnapshot) => void,
     ): (() => void) => {

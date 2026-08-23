@@ -32,6 +32,7 @@ import type {
   ZenXCapabilityManifest,
   ZenXPluginSnapshot,
 } from "./capabilities/types.js";
+import type { PluginHostUiPort } from "./plugin-host-sdk.js";
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #registry: ZenXCapabilityRegistry;
@@ -271,6 +272,30 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       return await this.#pluginToolEnvironment.execute(prepared);
     }
     return await this.#registry.execute(invocation);
+  }
+
+  async executePluginCommand(
+    pluginId: string,
+    commandId: string,
+    input?: unknown,
+  ): Promise<unknown> {
+    return await this.#pluginUiPort(pluginId).executeCommand(commandId, input);
+  }
+
+  async readPluginUiHandle(
+    pluginId: string,
+    handleId: string,
+  ): Promise<unknown> {
+    return await this.#pluginUiPort(pluginId).readHandle(handleId);
+  }
+
+  #pluginUiPort(pluginId: string): PluginHostUiPort {
+    return Object.freeze({
+      executeCommand: async (commandId: string, input?: unknown) =>
+        await this.#registry.executePluginCommand(pluginId, commandId, input),
+      readHandle: async (handleId: string) =>
+        await this.#registry.readPluginUiHandle(pluginId, handleId),
+    });
   }
 
   async grant(

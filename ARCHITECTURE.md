@@ -146,11 +146,10 @@
   `turn/start` 所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
 - **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
-- **ZenXCapabilityRegistry** — 当前 ZenX 骨架在主进程注册 bundled/local capability manifest、
-  细粒度 grant、provider、结构化工具与 sidebar/page snapshot；它证明 host-to-Agent bridge 可行，
-  但不是目标 Plugin Host、完整生命周期、渐进发现或通用 UI SDK。
-- **ZenXPluginContribution** — 当前 capability 骨架从 manifest 投影已启用 package 的受控
-  sidebar/page contribution；它不授予 DOM/router 权限，也不能被描述为已经实现 Generic UI Host。
+- **ZenXCapabilityRegistry** — ZenX 主进程注册 bundled/local capability manifest、生命周期、
+  provider、结构化工具与完整 UI contribution snapshot；它仍保留旧细粒度 grant 兼容数据。
+- **ZenXPluginContribution** — Plugin Catalog 从 enabled package 原子投影受控 sidebar、page/subroute、
+  settings、panel、command/menu 与 versioned bundle/surface；它不授予插件 DOM/router 权限。
 - **ZenXCapabilityConfiguration** — 当前骨架在同一原子配置文档中持久化 enablement 与细粒度
   permission grants，并按顺序重启 capability host；这些 grants 是现状而非目标权限合同，后续
   Plugin Host 只保留 `full_access` 与可选 `ask_unknown`。
@@ -279,8 +278,11 @@ request/result；三者只看 SDK operation，不取得 Project、storage 或 Ap
 `actions.threads.startTurn` 调用既有 AppServer port。每个 plugin namespace 的 JSON storage 使用
 1..1000 的版本 metadata、1 MiB 文档上限、串行 mutation 与同目录临时文件 rename；package/runtime
 提供的 `n -> n+1` migration 按顺序只在需要时运行，migration 或写入失败保留此前 durable/in-memory
-state，且不建立恢复状态机。当前 `ToolResultItem` 仍只有 text output 与 exit code；完整产品
-安装入口、Generic UI Host 与 structured result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
+state，且不建立恢复状态机。Generic UI Host 已按同一 v1 逻辑 SDK 装载 registry-backed trusted
+bundled surface 或无 `allow-same-origin` 的 sandboxed iframe；两者只获得 theme/context、opaque handle、
+navigation 与经 Host SDK UI port 校验的 command dispatch。disable/uninstall 直接撤销 Catalog projection，
+已挂载 surface/listener 随 React lifecycle 清理。当前 `ToolResultItem` 仍只有 text output 与 exit code；
+完整产品安装入口与 structured result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
 connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
 
 ### 工具执行与发现

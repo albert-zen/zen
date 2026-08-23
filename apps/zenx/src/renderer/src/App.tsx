@@ -60,6 +60,7 @@ import {
   type SelectedThreadSettings,
 } from "./model-settings.js";
 import { loadedPluginContributions } from "./plugin-contributions.js";
+import { PluginProductPage } from "./PluginProductPage.js";
 import { RoomView } from "./RoomView.js";
 import { ScheduledView } from "./ScheduledView.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
@@ -81,7 +82,7 @@ import { applyThreadViewNotification } from "./thread-view-state.js";
 import { ThreadLifecycleAction } from "./ThreadLifecycleAction.js";
 import { ThreadView } from "./ThreadView.js";
 
-type ProductPage = "agent" | "settings" | "triggers" | "rooms";
+type ProductPage = string;
 const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
 
 export function App() {
@@ -530,6 +531,20 @@ export function App() {
     ) ?? null;
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
   const pluginContributions = loadedPluginContributions(pluginSnapshot);
+  const genericPluginTarget =
+    (pluginSnapshot?.pages ?? []).find(
+      (candidate) =>
+        candidate.route === page && candidate.surfaceId !== undefined,
+    ) ??
+    (pluginSnapshot?.subroutes ?? []).find(
+      (candidate) =>
+        candidate.route === page && candidate.surfaceId !== undefined,
+    );
+  const selectedSidebarPage =
+    genericPluginTarget?.route ??
+    pluginContributions.find((contribution) => contribution.page.id === page)
+      ?.page.route ??
+    page;
   const lastUsedWorkspace = lastUsedProjectWorkspace(projects);
 
   const newThread = async (workspace: string) => {
@@ -782,6 +797,19 @@ export function App() {
       setSelectedRoomId(triggerSnapshot.rooms[0]?.id ?? null);
   };
 
+  useEffect(() => {
+    if (!page.startsWith("/plugins/")) return;
+    const stillMounted = [
+      ...(pluginSnapshot?.pages ?? []),
+      ...(pluginSnapshot?.subroutes ?? []),
+    ].some((candidate) => candidate.route === page);
+    if (stillMounted) return;
+    setPage("agent");
+    window.requestAnimationFrame(() =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.focus(),
+    );
+  }, [page, pluginSnapshot]);
+
   const renameThread = async (threadId: string, title: string) => {
     const projection = await window.zenx.titles.rename(threadId, title);
     setTitleSnapshot((current) => ({
@@ -952,14 +980,21 @@ export function App() {
             .then(async () => await loadProjects())
             .catch((error: unknown) => setRequestError(describeError(error)));
         }}
-        onOpenContribution={(target) => openPage(target)}
+        onOpenContribution={(route) => {
+          const target = pluginSnapshot?.pages.find(
+            (candidate) => candidate.route === route,
+          );
+          if (target?.surfaceId !== undefined) openPage(route);
+          else if (target?.id === "rooms") openPage("rooms");
+          else if (target?.id === "triggers") openPage("triggers");
+        }}
         onOpenSettings={() => openPage("settings")}
         onRetryThreads={() => void loadThreadSummaries(true)}
         onRenameThread={renameThread}
         onSelectThread={(threadId) => void resumeThread(threadId)}
         pendingApprovalThreadIds={pendingThreadIds}
         pluginContributions={pluginContributions}
-        selectedPage={page}
+        selectedPage={selectedSidebarPage}
         selectedThreadId={selectedThreadId}
         serverStatus={serverStatus}
         projects={projects}
@@ -982,11 +1017,19 @@ export function App() {
             onUnarchive={performThreadLifecycle}
             onOpenSidebar={() => setSidebarOpen(true)}
             tab={settingsTab}
+            pluginSnapshot={pluginSnapshot}
+          />
+        ) : genericPluginTarget !== undefined && pluginSnapshot !== null ? (
+          <PluginProductPage
+            snapshot={pluginSnapshot}
+            route={page}
+            navigate={openPage}
+            onOpenSidebar={() => setSidebarOpen(true)}
           />
         ) : page === "triggers" ? (
           <ScheduledView
             roomsAvailable={pluginContributions.some(
-              (contribution) => contribution.page === "rooms",
+              (contribution) => contribution.page.id === "rooms",
             )}
             snapshot={triggerSnapshot}
             threads={activeSummaries}

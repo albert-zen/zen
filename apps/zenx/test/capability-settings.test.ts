@@ -6,6 +6,13 @@ import { pluginSpacesForSettings } from "../src/renderer/src/CapabilitySettings.
 
 test("Plugin Settings does not offer enable for an uninstalled catalog package", () => {
   const plugins: ZenXPluginSnapshot = {
+    bundles: [],
+    surfaces: [],
+    subroutes: [],
+    settings: [],
+    panels: [],
+    commands: [],
+    menus: [],
     plugins: [
       {
         id: "uninstalled-fixture",

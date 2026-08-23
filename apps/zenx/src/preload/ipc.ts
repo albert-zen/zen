@@ -52,5 +52,7 @@ export const ipcChannels = {
   capabilitiesChanged: "zenx:capabilities:changed",
   pluginsGet: "zenx:plugins:get",
   pluginsSetEnabled: "zenx:plugins:set-enabled",
+  pluginsExecuteCommand: "zenx:plugins:execute-command",
+  pluginsReadHandle: "zenx:plugins:read-handle",
   pluginsChanged: "zenx:plugins:changed",
 } as const;
