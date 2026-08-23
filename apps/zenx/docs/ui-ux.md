@@ -22,7 +22,7 @@
 ### 2.1 权威数据与产品投影
 
 - Zen App Server（ZAS / `AppServer`）是按 `threadId` 路由 Thread、驱动 `AgentRuntime` 并广播 Item events 的唯一服务入口；它拥有 ZenX Agent / Thread / Turn 主流程的 authority。
-- ZenX 是围绕同一个 ZAS 构建的 Electron 产品。Electron main 托管并组合本机 ZAS host，同时持有 desktop-only host profile、capability、Trigger / Room 等外层产品状态；renderer 经 main/preload typed IPC 消费产品投影。
+- ZenX 是围绕同一个 ZAS 构建的 Electron 产品。Electron main 托管并组合本机 ZAS host 与 Plugin Host；desktop-only host profile 仍由宿主持有，Trigger / Room 状态则由各自 Plugin Package 的 namespaced storage/service 持有，renderer 只经 Generic UI Host SDK 消费其 contribution，不存在产品专用 Trigger / Room IPC。
 - 目标 ZenX Host 同时拥有并列的 ZAS/AppServer 与 Plugin Host 服务。Plugin Host 负责插件生命周期、UI/tool 注册与 Runtime 路由，但不拥有 Agent、Thread、Turn 或 transcript；人类直接操作插件 UI 不创建 Turn，只有显式 **Run Agent** 才调用 AppServer。
 - ZenX Host 通过稳定的私有 descriptor 暴露唯一 ZAS 的带认证 loopback endpoint。关闭最后一个窗口只关闭 UI，不停止 ZenX Host、active Turn 或外部连接；activation 重建窗口，显式 Quit 在 macOS、Windows、Linux 都撤销发现入口并停止 Host / ZAS。本阶段仍不做 OS daemon。
 - Renderer、native IPC 与外层产品功能不复制 ZAS 的 Agent、Thread、Turn、transcript 或 scheduler authority。Codex protocol 是同一 ZAS 面向兼容客户端的 wire adapter；Codex DTO 不反向定义 ZenX 产品模型，也不是 renderer 的产品读取路径。

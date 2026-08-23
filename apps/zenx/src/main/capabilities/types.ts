@@ -191,6 +191,8 @@ export interface ZenXCapabilityPackage {
     migrations?: readonly PluginStorageMigration[];
     initialValue?: PluginStorageValue;
   };
+  /** Called whenever a v2 bundled runtime is admitted. */
+  start?(hostSdk: ZenXPluginHostSdkV1): Promise<void> | void;
   invoke(
     toolName: string,
     invocation: ToolInvocation,

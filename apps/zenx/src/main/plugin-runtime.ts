@@ -1026,8 +1026,10 @@ export function bundledPackageRegistration(
       description,
       inputSchema,
     })),
-    start: async (sdk) =>
-      new BundledModulePluginRuntime(
+    start: async (sdk) => {
+      const hostSdk = sdk ?? unavailableHostSdk(manifest.id);
+      await registration.package.start?.(hostSdk);
+      return new BundledModulePluginRuntime(
         { pluginId: manifest.id, packageVersion: manifest.version },
         {
           invoke: async (invocation, hostSdk) =>
@@ -1045,8 +1047,9 @@ export function bundledPackageRegistration(
               ),
             ),
         },
-        sdk ?? unavailableHostSdk(manifest.id),
-      ),
+        hostSdk,
+      );
+    },
   };
 }
 

@@ -1332,6 +1332,11 @@ export class ZenXCapabilityRegistry
   }
 
   #hasPermissions(capabilityId: string, required: readonly string[]): boolean {
+    if (
+      this.#catalogPackages.get(capabilityId)?.package.manifest
+        .schemaVersion === 2
+    )
+      return true;
     const granted = new Set(
       (this.#grants[capabilityId] ?? []).map((grant) => grant.permissionId),
     );

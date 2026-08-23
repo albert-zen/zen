@@ -157,7 +157,6 @@ function PinSidebar() {
     threadError: null,
     threadLoading: false,
     threads,
-    triggerSnapshot: { triggers: [], history: [], rooms: [] },
   });
 }
 
@@ -202,7 +201,6 @@ function ArchivePinnedSidebar() {
     threadError: null,
     threadLoading: false,
     threads,
-    triggerSnapshot: { triggers: [], history: [], rooms: [] },
   });
 }
 

@@ -27,12 +27,6 @@ import type {
   ZenXProviderCatalogSnapshot,
 } from "../main/settings-service.js";
 import type {
-  CreateRoomInput,
-  CreateTriggerInput,
-  RoomMember,
-  TriggerSnapshot,
-} from "../main/trigger-types.js";
-import type {
   ZenXCapabilitySnapshot,
   ZenXPluginSnapshot,
   ZenXPluginPackageSelectionResult,
@@ -253,42 +247,6 @@ contextBridge.exposeInMainWorld("zenx", {
       ) => listener(snapshot);
       ipcRenderer.on(ipcChannels.titlesChanged, wrapped);
       return () => ipcRenderer.off(ipcChannels.titlesChanged, wrapped);
-    },
-  },
-  triggers: {
-    get: async (): Promise<TriggerSnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.triggersGet),
-    create: async (input: CreateTriggerInput): Promise<TriggerSnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.triggersCreate, input),
-    cancel: async (triggerId: string): Promise<TriggerSnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.triggersCancel, triggerId),
-    signal: async (name: string, detail: string): Promise<TriggerSnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.triggersSignal, name, detail),
-    createRoom: async (input: CreateRoomInput): Promise<TriggerSnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.roomsCreate, input),
-    addRoomMember: async (
-      roomId: string,
-      member: RoomMember,
-    ): Promise<TriggerSnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.roomsAddMember, roomId, member),
-    removeRoomMember: async (
-      roomId: string,
-      threadId: string,
-    ): Promise<TriggerSnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.roomsRemoveMember, roomId, threadId),
-    postRoomMessage: async (
-      roomId: string,
-      author: string,
-      text: string,
-    ): Promise<TriggerSnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.roomsPost, roomId, author, text),
-    onChange: (listener: (snapshot: TriggerSnapshot) => void): (() => void) => {
-      const wrapped = (
-        _event: Electron.IpcRendererEvent,
-        snapshot: TriggerSnapshot,
-      ) => listener(snapshot);
-      ipcRenderer.on(ipcChannels.triggersChanged, wrapped);
-      return () => ipcRenderer.off(ipcChannels.triggersChanged, wrapped);
     },
   },
   capabilities: {

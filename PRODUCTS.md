@@ -23,7 +23,7 @@ Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / 
 以及可显式授权的 bundled/local capability registry 已形成可运行 vertical slice。
 这套 capability package / registry、child-host bridge、Tool Environment 与 Generic UI Host
 已经形成可运行的 Plugin Platform 纵向切片；渐进发现与 structured result renderer 已完成，
-完整安装产品入口仍未完成。
+安装、启停、卸载、重装与独立删除数据的产品入口已经完成。
 ZenX 的产品读取模型来自 ZAS 原生 `ThreadSummary` 查询，并经 Electron main/preload
 typed IPC 暴露；Codex Thread DTO 只属于兼容协议 adapter，不定义 ZenX 产品模型。
 高保真 renderer 的当前 UI/UX 合同单独维护在 `apps/zenx/docs/ui-ux.md`，本文件不重复
@@ -35,6 +35,10 @@ Plugin Package v2 manifest 与 Host-owned Catalog 已建立 installed / enabled 
 Triggers/Rooms 与本地 v2 process package 使用同一 install/lifecycle API；disable/uninstall 会撤销
 当前 runtime/tool/sidebar/page 注册，bundled package 可从应用提供的 package 重装。Uninstall 默认
 保留 namespaced plugin data，显式 delete-data 只删除目标 namespace。
+Triggers 与 Rooms 的人类 CRUD 已经由 manifest-contributed Generic UI page 经 Plugin Host command
+直接到 package service，不再经过产品专用 renderer route/IPC，也不会创建 Turn；两者从旧
+`trigger-registry.json` 确定性、幂等初始化各自 namespace 且保留旧文件。只有 timer/predicate、Room mention
+等明确 Agent 唤醒继续走同一个 AppServer authority 并追加既有 canonical Items。
 
 Plugin Runtime Supervisor 与统一 ABI 现已实现为 ZenX Host seam：trusted bundled module、持续 child
 process 和 HTTP service 都归约为同一个 namespaced tool invocation/result、取消和 close 合同，并作为

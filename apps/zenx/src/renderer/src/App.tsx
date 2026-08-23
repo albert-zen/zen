@@ -10,7 +10,6 @@ import type {
   ZenXCapabilitySnapshot,
   ZenXPluginSnapshot,
 } from "../../main/capabilities/types.js";
-import type { TriggerSnapshot } from "../../main/trigger-types.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 import type {
   ZenXProviderProfile,
@@ -60,9 +59,11 @@ import {
   type SelectedThreadSettings,
 } from "./model-settings.js";
 import { loadedPluginContributions } from "./plugin-contributions.js";
-import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
-import { RoomView } from "./RoomView.js";
-import { ScheduledView } from "./ScheduledView.js";
+import {
+  PluginAgentPanels,
+  PluginProductPage,
+  pluginUiRegistry,
+} from "./PluginProductPage.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
 import { Sidebar } from "./Sidebar.js";
 import {
@@ -100,12 +101,6 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
-  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
-  const [triggerSnapshot, setTriggerSnapshot] = useState<TriggerSnapshot>({
-    triggers: [],
-    history: [],
-    rooms: [],
-  });
   const [capabilitySnapshot, setCapabilitySnapshot] =
     useState<ZenXCapabilitySnapshot | null>(null);
   const [pluginSnapshot, setPluginSnapshot] =
@@ -462,17 +457,6 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const dispose = window.zenx.triggers.onChange(setTriggerSnapshot);
-    void window.zenx.triggers
-      .get()
-      .then(setTriggerSnapshot)
-      .catch((error: unknown) =>
-        setRequestError(`ZenX automation data failed: ${describeError(error)}`),
-      );
-    return dispose;
-  }, []);
-
-  useEffect(() => {
     const dispose = window.zenx.capabilities.onChange(setCapabilitySnapshot);
     void window.zenx.capabilities
       .get()
@@ -793,8 +777,6 @@ export function App() {
     setPage(next);
     setSidebarOpen(false);
     setWorkspaceOpen(false);
-    if (next === "rooms" && selectedRoomId === null)
-      setSelectedRoomId(triggerSnapshot.rooms[0]?.id ?? null);
   };
 
   useEffect(() => {
@@ -985,8 +967,6 @@ export function App() {
             (candidate) => candidate.route === route,
           );
           if (target?.surfaceId !== undefined) openPage(route);
-          else if (target?.id === "rooms") openPage("rooms");
-          else if (target?.id === "triggers") openPage("triggers");
         }}
         onOpenSettings={() => openPage("settings")}
         onRetryThreads={() => void loadThreadSummaries(true)}
@@ -1003,7 +983,6 @@ export function App() {
         threadError={threadListErrors.active}
         threadLoading={!threadListLoaded.active}
         threads={activeSummaries}
-        triggerSnapshot={triggerSnapshot}
       />
 
       <main className="workspace">
@@ -1025,29 +1004,6 @@ export function App() {
             route={page}
             navigate={openPage}
             onOpenSidebar={() => setSidebarOpen(true)}
-          />
-        ) : page === "triggers" ? (
-          <ScheduledView
-            roomsAvailable={pluginContributions.some(
-              (contribution) => contribution.page.id === "rooms",
-            )}
-            snapshot={triggerSnapshot}
-            threads={activeSummaries}
-            onOpenThread={(id) => void resumeThread(id)}
-            onOpenRoom={(id) => {
-              setSelectedRoomId(id);
-              openPage("rooms");
-            }}
-            onOpenSidebar={() => setSidebarOpen(true)}
-          />
-        ) : page === "rooms" ? (
-          <RoomView
-            roomId={selectedRoomId}
-            snapshot={triggerSnapshot}
-            threads={activeSummaries}
-            onOpenThread={(id) => void resumeThread(id)}
-            onOpenSidebar={() => setSidebarOpen(true)}
-            onSelectRoom={setSelectedRoomId}
           />
         ) : (
           <AgentSurface
@@ -1145,7 +1101,6 @@ export function App() {
                 ? undefined
                 : titleSnapshot[selectedSummary.threadId]
             }
-            triggerSnapshot={triggerSnapshot}
           />
         )}
       </main>
@@ -1216,7 +1171,6 @@ function AgentSurface({
   threadError,
   threadLoading,
   titleProjection,
-  triggerSnapshot,
 }: {
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
@@ -1265,7 +1219,6 @@ function AgentSurface({
   threadError: string | null;
   threadLoading: boolean;
   titleProjection: ThreadTitleProjection | undefined;
-  triggerSnapshot: TriggerSnapshot;
 }) {
   return (
     <section className="agent-surface">
@@ -1391,62 +1344,66 @@ function AgentSurface({
           actionIcon={hasProjects ? "compose" : "folder"}
         />
       ) : (
-        <ThreadView
-          approvals={approvals.filter(
-            (approval) => approval.params.threadId === threadDetail.id,
-          )}
-          composer={composerStates[threadDetail.id] ?? emptyComposerState()}
-          composerDisabled={threadArchiving}
-          imageCapabilityError={imageCapabilityMessage(
-            providerProfiles,
-            selectedSettings,
-          )}
-          imageCapabilityNotice={imageCapabilityNotice(
-            providerProfiles,
-            selectedSettings,
-          )}
-          modelDisabled={!canChangeThreadModel(threadDetail)}
-          modelError={
-            modelUpdateError ??
-            modelCatalogError ??
-            unavailableSelectionMessage(
-              models,
+        <>
+          <ThreadView
+            approvals={approvals.filter(
+              (approval) => approval.params.threadId === threadDetail.id,
+            )}
+            composer={composerStates[threadDetail.id] ?? emptyComposerState()}
+            composerDisabled={threadArchiving}
+            imageCapabilityError={imageCapabilityMessage(
               providerProfiles,
               selectedSettings,
-            )
-          }
-          models={models}
-          providerProfiles={providerProfiles}
-          permissionLabel={
-            selectedSummary.status !== "systemError" &&
-            selectedSummary.currentMetadata.approvalPolicy === "never"
-              ? "Full access"
-              : "Approval required"
-          }
-          selectedModel={selectedSettings?.model}
-          selectedReasoningEffort={selectedSettings?.reasoningEffort}
-          switchingModel={switchingModel}
-          thread={threadDetail}
-          pluginSnapshot={pluginSnapshot}
-          pluginUiRegistry={pluginUiRegistry}
-          threadAttachments={threadAttachments}
-          wakeups={triggerSnapshot.history.filter(
-            (entry) => entry.threadId === threadDetail.id,
+            )}
+            imageCapabilityNotice={imageCapabilityNotice(
+              providerProfiles,
+              selectedSettings,
+            )}
+            modelDisabled={!canChangeThreadModel(threadDetail)}
+            modelError={
+              modelUpdateError ??
+              modelCatalogError ??
+              unavailableSelectionMessage(
+                models,
+                providerProfiles,
+                selectedSettings,
+              )
+            }
+            models={models}
+            providerProfiles={providerProfiles}
+            permissionLabel={
+              selectedSummary.status !== "systemError" &&
+              selectedSummary.currentMetadata.approvalPolicy === "never"
+                ? "Full access"
+                : "Approval required"
+            }
+            selectedModel={selectedSettings?.model}
+            selectedReasoningEffort={selectedSettings?.reasoningEffort}
+            switchingModel={switchingModel}
+            thread={threadDetail}
+            pluginSnapshot={pluginSnapshot}
+            pluginUiRegistry={pluginUiRegistry}
+            threadAttachments={threadAttachments}
+            wakeups={[]}
+            watching={false}
+            onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}
+            onImportImages={(files) => onImportImages(threadDetail.id, files)}
+            onPickImages={() => onPickImages(threadDetail.id)}
+            onReadAttachment={onReadAttachment}
+            onRemoveImage={(imageId) => onRemoveImage(threadDetail.id, imageId)}
+            onInterrupt={onInterrupt}
+            onModelChange={onModelChange}
+            onReasoningChange={onReasoningChange}
+            onRespondToApproval={onRespondToApproval}
+            onSubmit={onSubmit}
+          />
+          {pluginSnapshot === null ? null : (
+            <PluginAgentPanels
+              snapshot={pluginSnapshot}
+              threadId={threadDetail.id}
+            />
           )}
-          watching={triggerSnapshot.triggers.some(
-            (trigger) => trigger.active && trigger.threadId === threadDetail.id,
-          )}
-          onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}
-          onImportImages={(files) => onImportImages(threadDetail.id, files)}
-          onPickImages={() => onPickImages(threadDetail.id)}
-          onReadAttachment={onReadAttachment}
-          onRemoveImage={(imageId) => onRemoveImage(threadDetail.id, imageId)}
-          onInterrupt={onInterrupt}
-          onModelChange={onModelChange}
-          onReasoningChange={onReasoningChange}
-          onRespondToApproval={onRespondToApproval}
-          onSubmit={onSubmit}
-        />
+        </>
       )}
     </section>
   );

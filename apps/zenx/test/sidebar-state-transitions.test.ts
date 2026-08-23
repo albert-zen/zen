@@ -95,7 +95,6 @@ function ActiveSidebar() {
     threadLoading: false,
     pinnedThreads: [],
     threads,
-    triggerSnapshot: { triggers: [], history: [], rooms: [] },
   });
 }
 

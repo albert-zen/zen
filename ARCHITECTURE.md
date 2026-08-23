@@ -135,9 +135,9 @@
   Zen Core、Thread、journal 或 credential store。
 - **ProviderTransport** — 宿主为 Provider HTTP 请求注入的显式连接策略；首版只接受
   无 credential 的 HTTP(S) proxy URL，并保证 abort 与脱敏错误，不进入 Agent Runtime 状态。
-- **ZenXTriggerRegistry** — ZenX 外层产品持久化的可审计唤醒条件与命中历史；每次
-  命中只以稳定幂等 key 通过 App Server 发起普通新 Turn，失败明确记录且不自动补偿。
-- **ZenXRoom** — ZenX 外层产品持有的共享协作转录与 Thread 路由表面；Room 本身不是
+- **ZenXTriggerRegistry** — `zenx-triggers` Plugin Package 在自身 storage namespace 持久化的可审计
+  唤醒条件与命中历史；每次命中只以稳定幂等 key 通过 App Server 发起普通新 Turn，失败明确记录且不自动补偿。
+- **ZenXRoom** — `zenx-rooms` Plugin Package 在自身 storage namespace 持有的共享协作转录与 Thread 路由表面；Room 本身不是
   Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread。
 - **ZenXWakeupProjection** — ZenX 把 Trigger 命中的 `clientUserMessageId` 与外部审计记录
   关联成系统级唤醒卡片，并把有界、带明确来源的 completed Turn / Room 上下文作为
@@ -241,10 +241,10 @@
 - **ZenXTransientProcessContainment** — ZenX 本地程序 runner 以 OS-specific process identity、
   bounded termination 与反复 quiescence 证明约束瞬时子进程树；它不进入 durable state、scheduler 或 retry system，
   无法证明 containment 时只产生明确失败。
-- **ZenXAutomationControlCapability** — Triggers 与 Rooms 作为两个 bundled capability package，
-  分别声明自己的工具、页面和 Sidebar contribution；二者仍只调用同一个现有 Trigger/Room store 与
-  App Server port，不拥有 Agent、Thread、Turn 或 transcript 语义。
-- **ZenXTriggerRoomRetention** — Trigger/Room canonical registry 在单次 mutation 中执行显式数量、字段与
+- **ZenXBundledAutomationPluginService** — 两个 bundled Plugin Package 共享仅承载 Room mention、reply route
+  与 Trigger wakeup 真实交叉约束的第一方 domain service；Catalog runtime admission 分别控制各 package，
+  Trigger/Room durable document 分居各自 namespace，只有显式唤醒继续调用既有 App Server port。
+- **ZenXTriggerRoomRetention** — Trigger/Room plugin data 在 domain mutation 中执行显式数量、字段与
   UTF-8 字节上限；保留全部非 terminal wakeup，并只保留 bounded terminal audit 与 Room 消息，同时保留
   admission-failure audit，确保 65th admission-failure 事实不会被同一 mutation 淘汰。
 

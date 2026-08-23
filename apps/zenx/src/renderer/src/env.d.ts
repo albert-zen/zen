@@ -21,12 +21,6 @@ import type {
   ZenXSettingsUpdate,
 } from "../../main/host-profile.js";
 import type {
-  CreateRoomInput,
-  CreateTriggerInput,
-  RoomMember,
-  TriggerSnapshot,
-} from "../../main/trigger-types.js";
-import type {
   ZenXCapabilitySnapshot,
   ZenXPluginSnapshot,
   ZenXPluginPackageSelectionResult,
@@ -150,27 +144,6 @@ declare global {
         rename(threadId: string, title: string): Promise<ThreadTitleProjection>;
         retry(threadId: string): Promise<ThreadTitleProjection>;
         onChange(listener: (snapshot: ThreadTitleSnapshot) => void): () => void;
-      };
-      triggers: {
-        get(): Promise<TriggerSnapshot>;
-        create(input: CreateTriggerInput): Promise<TriggerSnapshot>;
-        cancel(triggerId: string): Promise<TriggerSnapshot>;
-        signal(name: string, detail: string): Promise<TriggerSnapshot>;
-        createRoom(input: CreateRoomInput): Promise<TriggerSnapshot>;
-        addRoomMember(
-          roomId: string,
-          member: RoomMember,
-        ): Promise<TriggerSnapshot>;
-        removeRoomMember(
-          roomId: string,
-          threadId: string,
-        ): Promise<TriggerSnapshot>;
-        postRoomMessage(
-          roomId: string,
-          author: string,
-          text: string,
-        ): Promise<TriggerSnapshot>;
-        onChange(listener: (snapshot: TriggerSnapshot) => void): () => void;
       };
       capabilities: {
         get(): Promise<ZenXCapabilitySnapshot>;

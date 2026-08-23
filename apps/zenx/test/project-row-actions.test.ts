@@ -80,7 +80,6 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
           },
           pinnedThreads: [],
           threads: [],
-          triggerSnapshot: { triggers: [], history: [], rooms: [] },
         }),
       );
     });

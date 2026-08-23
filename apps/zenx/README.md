@@ -300,12 +300,17 @@ mentions, and named signal conditions. A hit persists an auditable occurrence
 with a stable client message ID, then starts a normal App Server Turn. Failures
 remain visible and are never silently retried.
 
-The bundled `zenx-triggers` and `zenx-rooms` capability packages expose their
-own separately permissioned read and write tools for Trigger
+The bundled `zenx-triggers` and `zenx-rooms` v2 Plugin Packages expose their
+own namespaced ordinary tools for Trigger
 list/create/update/cancel/delete and Room list/create/rename/delete/member/post
-operations. Both use the same Trigger/Room store and the same ordinary App
-Server `turn/start` path; they add no protocol methods, Core Items, queue, or
-transcript. A wakeup owns its original Room reply route, and Room deletion is
+operations. Their generic manifest-contributed pages execute human CRUD directly
+through the Plugin Host command/service path and do not create a Turn. Trigger
+definitions/history and Rooms/messages persist in their respective plugin storage
+namespaces; first startup imports the validated legacy `trigger-registry.json`
+deterministically without deleting it. The packages share only the domain service
+needed for mention/reply-route constraints and use the same ordinary App Server
+`turn/start` path for explicit Agent wakeups; they add no protocol methods, Core
+Items, queue, or transcript. A wakeup owns its original Room reply route, and Room deletion is
 rejected while that route is nonterminal. Admission is bounded to 64 nonterminal
 wakeups; the next wakeup produces one failed audit and no dispatch, while each
 terminal outcome releases one slot.
@@ -346,12 +351,14 @@ enablement mutations share one ordered configuration boundary, so concurrent UI
 requests cannot lose the last operation. Permission grants are retained and do
 not imply enablement. Tool-only packages are valid and simply contribute no UI.
 
-Triggers (`zenx-triggers`) and Rooms (`zenx-rooms`) are currently separate
-bundled capability packages over the existing Trigger/Room service. Each exposes
-only its own controlled product contributions. Their migration to complete
-Plugin Packages is future work. Disabling either package removes only its own
-projection and tools; the Trigger/Room data model and canonical Turn delivery
-remain unchanged.
+Triggers (`zenx-triggers`) and Rooms (`zenx-rooms`) are complete bundled v2 Plugin
+Packages. Catalog manifests own their generic pages, commands and ordinary
+namespaced tools; Runtime Supervisor admission starts/stops the shared first-party
+domain seam, while durable Trigger and Room documents remain in separate package
+namespaces. Disable/uninstall synchronously removes that package's UI/tool/runtime
+admission and retains its data; reinstall reloads the retained namespace. Historical
+canonical Items and structured-result text/JSON fallback remain readable independently
+of current plugin lifecycle.
 
 ### Bundled self-control provider
 

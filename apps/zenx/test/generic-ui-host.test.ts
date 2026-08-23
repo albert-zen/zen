@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
 import React from "react";
 import { createRoot } from "react-dom/client";
@@ -340,7 +341,7 @@ test("product composition renders page, panel, menu and keyboard-operable subrou
   await act(async () => root.unmount());
 });
 
-test("normal bundled product composition contains no fixture UI or command", async () => {
+test("normal bundled product composition owns real Trigger and Room generic UI", async () => {
   assert.equal(pluginUiRegistry.resolveTrusted(WORKBENCH_UI_ENTRY), undefined);
   const registry = new ZenXCapabilityRegistry({
     load: async () => ({
@@ -362,11 +363,21 @@ test("normal bundled product composition contains no fixture UI or command", asy
     "zenx-rooms",
     "zenx-triggers",
   ]);
-  assert.deepEqual(normal.bundles, []);
-  assert.deepEqual(normal.surfaces, []);
+  assert.deepEqual(normal.bundles.map((bundle) => bundle.pluginId).sort(), [
+    "zenx-rooms",
+    "zenx-triggers",
+  ]);
+  assert.deepEqual(normal.surfaces.map((surface) => surface.pluginId).sort(), [
+    "zenx-rooms",
+    "zenx-triggers",
+    "zenx-triggers",
+  ]);
   assert.deepEqual(normal.settings, []);
-  assert.deepEqual(normal.panels, []);
-  assert.deepEqual(normal.commands, []);
+  assert.equal(normal.commands.length, 13);
+  assert.deepEqual(
+    normal.panels.map((panel) => panel.pluginId),
+    ["zenx-triggers"],
+  );
   assert.deepEqual(normal.menus, []);
   assert.deepEqual(normal.sidebar.map((item) => item.pluginId).sort(), [
     "zenx-rooms",
@@ -377,6 +388,18 @@ test("normal bundled product composition contains no fixture UI or command", asy
     "zenx-triggers",
   ]);
   assert.equal(JSON.stringify(normal).includes("workbench"), false);
+});
+
+test("product shell contains no Trigger or Room ID routing or product IPC", async () => {
+  const [app, preload, ipc] = await Promise.all([
+    readFile(new URL("../src/renderer/src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/preload/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/preload/ipc.ts", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(app, /target\?\.id === ["'](?:triggers|rooms)["']/u);
+  assert.doesNotMatch(app, /page === ["'](?:triggers|rooms)["']/u);
+  assert.doesNotMatch(preload, /\btriggers\s*:/u);
+  assert.doesNotMatch(ipc, /zenx:(?:triggers|rooms):/u);
 });
 
 test("product fixture projects every UI surface and revokes command admission across lifecycle", async () => {

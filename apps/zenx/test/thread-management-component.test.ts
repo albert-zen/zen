@@ -172,7 +172,6 @@ function renderSidebar(
       threadError: state.error ?? null,
       threadLoading: state.loading ?? false,
       threads,
-      triggerSnapshot: { triggers: [], history: [], rooms: [] },
     }),
   );
 }

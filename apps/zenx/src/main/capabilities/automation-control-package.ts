@@ -39,6 +39,7 @@ import type {
   ZenXPluginSidebarContribution,
   ZenXPluginManifestV2,
 } from "./types.js";
+import type { ZenXPluginHostSdkV1 } from "../plugin-host-sdk.js";
 
 export const ZENX_AUTOMATION_CONTROL_CAPABILITY_ID = "zenx-automation-control";
 export const ZENX_TRIGGERS_CAPABILITY_ID = "zenx-triggers";
@@ -56,12 +57,16 @@ export interface ZenXAutomationControlPort {
   update(input: UpdateTriggerInput): Promise<ZenXTrigger>;
   cancel(triggerId: string): Promise<void>;
   delete(triggerId: string): Promise<void>;
+  signal(name: string, detail: string): Promise<void>;
   createRoom(input: CreateRoomInput): Promise<ZenXRoom>;
   renameRoom(roomId: string, name: string): Promise<void>;
   deleteRoom(roomId: string): Promise<void>;
   addRoomMember(roomId: string, member: RoomMember): Promise<void>;
   removeRoomMember(roomId: string, threadId: string): Promise<void>;
   postAgentRoomMessage(roomId: string, text: string): Promise<void>;
+  postRoomMessage?(roomId: string, author: string, text: string): Promise<void>;
+  startPlugin?(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void>;
+  stopPlugin?(pluginId: string): Promise<void>;
 }
 
 const programSpecSchema = {
@@ -181,6 +186,15 @@ const manifest: ZenXCapabilityManifest = {
       ["triggerId"],
     ),
     tool(
+      "zenx_triggers_signal",
+      "Emit an explicit named signal; matching Triggers may start ordinary Agent Turns.",
+      {
+        name: { type: "string", maxLength: MAX_ID_BYTES },
+        detail: { type: "string" },
+      },
+      ["name", "detail"],
+    ),
+    tool(
       "zenx_rooms_list",
       "List Rooms, members, and bounded recent messages.",
       {},
@@ -255,13 +269,15 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
     if (name !== invocation.name)
       throw new Error("Automation tool name mismatch");
     invocation.signal.throwIfAborted();
-    const args = invocation.arguments;
+    const uiInput = record(invocation.arguments.input);
+    const args = uiInput ?? invocation.arguments;
     switch (name) {
       case "zenx_triggers_list": {
         const snapshot = this.#port.snapshot();
         return {
           triggers: snapshot.triggers.map(readSafeTrigger),
           history: snapshot.history.slice(0, 50).map(readSafeHistory),
+          rooms: snapshot.rooms.map(readSafeRoom),
         };
       }
       case "zenx_triggers_create":
@@ -277,6 +293,12 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
       case "zenx_triggers_delete":
         await this.#port.delete(string(args, "triggerId", MAX_ID_BYTES));
         return { deleted: true };
+      case "zenx_triggers_signal":
+        await this.#port.signal(
+          string(args, "name", MAX_ID_BYTES),
+          string(args, "detail", MAX_MESSAGE_TEXT_BYTES),
+        );
+        return { emitted: true };
       case "zenx_rooms_list":
         return {
           rooms: this.#port.snapshot().rooms.map(readSafeRoom),
@@ -308,10 +330,18 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
         );
         return { removed: true };
       case "zenx_rooms_post_message":
-        await this.#port.postAgentRoomMessage(
-          string(args, "roomId", MAX_ID_BYTES),
-          string(args, "text", MAX_MESSAGE_TEXT_BYTES),
-        );
+        if (uiInput !== null && this.#port.postRoomMessage !== undefined) {
+          await this.#port.postRoomMessage(
+            string(args, "roomId", MAX_ID_BYTES),
+            "You",
+            string(args, "text", MAX_MESSAGE_TEXT_BYTES),
+          );
+        } else {
+          await this.#port.postAgentRoomMessage(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "text", MAX_MESSAGE_TEXT_BYTES),
+          );
+        }
         return { posted: true };
       default:
         throw new Error(`Unsupported ZenX automation tool: ${name}`);
@@ -321,9 +351,15 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
 
 export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
   readonly #delegate: ZenXAutomationControlCapabilityPackage;
+  readonly #port: ZenXAutomationControlPort;
   readonly manifest: ZenXCapabilityManifest;
+  readonly storage = {
+    version: 1,
+    initialValue: { triggers: [], history: [] },
+  } as const;
 
   constructor(port: ZenXAutomationControlPort) {
+    this.#port = port;
     this.#delegate = new ZenXAutomationControlCapabilityPackage(port);
     this.manifest = automationPluginManifest(this.#delegate.manifest, {
       id: ZENX_TRIGGERS_CAPABILITY_ID,
@@ -337,6 +373,7 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
         id: "triggers",
         title: "Triggers",
         route: "/plugins/zenx-triggers/triggers",
+        surfaceId: "triggers-page",
       },
       sidebar: {
         id: "triggers",
@@ -345,7 +382,18 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
         pageId: "triggers",
         order: 10,
       },
+      uiEntry: "zenx/bundled/triggers-ui",
+      surfaceId: "triggers-page",
+      panel: {
+        id: "thread-wakeups",
+        title: "Trigger wakeups",
+        surfaceId: "trigger-panel",
+      },
     });
+  }
+
+  async start(sdk: ZenXPluginHostSdkV1): Promise<void> {
+    await this.#port.startPlugin?.(ZENX_TRIGGERS_CAPABILITY_ID, sdk);
   }
 
   async invoke(name: string, invocation: ToolInvocation): Promise<unknown> {
@@ -354,13 +402,20 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
     }
     return await this.#delegate.invoke(name, invocation);
   }
+
+  async close(): Promise<void> {
+    await this.#port.stopPlugin?.(ZENX_TRIGGERS_CAPABILITY_ID);
+  }
 }
 
 export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
   readonly #delegate: ZenXAutomationControlCapabilityPackage;
+  readonly #port: ZenXAutomationControlPort;
   readonly manifest: ZenXCapabilityManifest;
+  readonly storage = { version: 1, initialValue: { rooms: [] } } as const;
 
   constructor(port: ZenXAutomationControlPort) {
+    this.#port = port;
     this.#delegate = new ZenXAutomationControlCapabilityPackage(port);
     this.manifest = automationPluginManifest(this.#delegate.manifest, {
       id: ZENX_ROOMS_CAPABILITY_ID,
@@ -374,6 +429,7 @@ export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
         id: "rooms",
         title: "Rooms",
         route: "/plugins/zenx-rooms/rooms",
+        surfaceId: "rooms-page",
       },
       sidebar: {
         id: "rooms",
@@ -382,7 +438,13 @@ export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
         pageId: "rooms",
         order: 20,
       },
+      uiEntry: "zenx/bundled/rooms-ui",
+      surfaceId: "rooms-page",
     });
+  }
+
+  async start(sdk: ZenXPluginHostSdkV1): Promise<void> {
+    await this.#port.startPlugin?.(ZENX_ROOMS_CAPABILITY_ID, sdk);
   }
 
   async invoke(name: string, invocation: ToolInvocation): Promise<unknown> {
@@ -390,6 +452,10 @@ export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
       throw new Error(`Unsupported Rooms tool: ${name}`);
     }
     return await this.#delegate.invoke(name, invocation);
+  }
+
+  async close(): Promise<void> {
+    await this.#port.stopPlugin?.(ZENX_ROOMS_CAPABILITY_ID);
   }
 }
 
@@ -414,6 +480,9 @@ function automationPluginManifest(
     writePermission: string;
     page: ZenXPluginPageContribution;
     sidebar: ZenXPluginSidebarContribution;
+    uiEntry: string;
+    surfaceId: string;
+    panel?: { id: string; title: string; surfaceId: string };
   },
 ): ZenXPluginManifestV2 {
   const {
@@ -467,9 +536,44 @@ function automationPluginManifest(
             : plugin.writePermission,
         ),
       })),
+    ui: {
+      bundles: [
+        {
+          id: "main",
+          apiVersion: 1,
+          kind: "trusted",
+          entry: plugin.uiEntry,
+        },
+      ],
+      surfaces: [
+        {
+          id: plugin.surfaceId,
+          bundleId: "main",
+          exportName:
+            plugin.displayName === "Triggers" ? "triggers-page" : "rooms-page",
+        },
+        ...(plugin.panel === undefined
+          ? []
+          : [
+              {
+                id: plugin.panel.surfaceId,
+                bundleId: "main",
+                exportName: "trigger-panel",
+              },
+            ]),
+      ],
+    },
     contributions: {
       pages: [plugin.page],
       sidebar: [plugin.sidebar],
+      commands: source.tools
+        .filter((tool) => tool.name.startsWith(plugin.toolPrefix))
+        .map((tool) => ({
+          id: tool.name.slice(plugin.toolPrefix.length).replaceAll("_", "-"),
+          title: tool.description,
+          tool: tool.name,
+        })),
+      ...(plugin.panel === undefined ? {} : { panels: [plugin.panel] }),
     },
   };
 }
@@ -840,6 +944,12 @@ function string(
   )
     throw new Error(`${key} must be a non-empty string`);
   return value.trim();
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function number(args: Record<string, unknown>, key: string): number {

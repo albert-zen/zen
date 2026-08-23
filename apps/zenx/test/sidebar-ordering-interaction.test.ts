@@ -378,7 +378,6 @@ function StaticSidebar({
     threadError: null,
     threadLoading: false,
     threads,
-    triggerSnapshot: { triggers: [], history: [], rooms: [] },
   });
 }
 

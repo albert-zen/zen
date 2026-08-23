@@ -10,7 +10,6 @@ import {
 } from "react";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
-import type { TriggerSnapshot } from "../../main/trigger-types.js";
 import type { Thread } from "../../protocol-client/index.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 import type { ZenXSidebarOrder } from "../../main/host-profile.js";
@@ -71,7 +70,6 @@ interface SidebarProps {
   sidebarOrder?: ZenXSidebarOrder;
   pinnedThreads: readonly NativeThreadSummary[];
   threads: readonly NativeThreadSummary[];
-  triggerSnapshot: TriggerSnapshot;
 }
 
 export function Sidebar({
@@ -104,7 +102,6 @@ export function Sidebar({
   sidebarOrder = EMPTY_SIDEBAR_ORDER,
   pinnedThreads,
   threads,
-  triggerSnapshot,
 }: SidebarProps) {
   const [sidebarOrderError, setSidebarOrderError] = useState<string | null>(
     null,
@@ -169,15 +166,7 @@ export function Sidebar({
     target.focus();
     setPendingPinFocus(null);
   }, [mode, pendingPinFocus, pinnedThreads]);
-  const watchingThreadIds = useMemo(
-    () =>
-      new Set(
-        triggerSnapshot.triggers
-          .filter((trigger) => trigger.active)
-          .map((trigger) => trigger.threadId),
-      ),
-    [triggerSnapshot.triggers],
-  );
+  const watchingThreadIds = new Set<string>();
   return (
     <>
       <aside

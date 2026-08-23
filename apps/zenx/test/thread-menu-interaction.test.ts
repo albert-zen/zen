@@ -191,7 +191,6 @@ function TestSidebar() {
     threadLoading: false,
     pinnedThreads: [],
     threads,
-    triggerSnapshot: { triggers: [], history: [], rooms: [] },
   });
 }
 

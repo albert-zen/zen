@@ -162,6 +162,10 @@ test("automation tools route Trigger CRUD and every Room operation", async () =>
   });
   await invoke(capability, "zenx_triggers_cancel", { triggerId: "trigger-1" });
   await invoke(capability, "zenx_triggers_delete", { triggerId: "trigger-1" });
+  await invoke(capability, "zenx_triggers_signal", {
+    name: "deploy",
+    detail: "ready",
+  });
   await invoke(capability, "zenx_rooms_list", {});
   await invoke(capability, "zenx_rooms_create", {
     name: "release",
@@ -192,6 +196,7 @@ test("automation tools route Trigger CRUD and every Room operation", async () =>
       "update",
       "cancel",
       "delete",
+      "signal",
       "createRoom",
       "renameRoom",
       "addRoomMember",
@@ -327,6 +332,9 @@ class FakePort implements ZenXAutomationControlPort {
   }
   async delete(id: string): Promise<void> {
     this.calls.push(["delete", id]);
+  }
+  async signal(name: string, detail: string): Promise<void> {
+    this.calls.push(["signal", { name, detail }]);
   }
   async createRoom(input: CreateRoomInput): Promise<ZenXRoom> {
     this.calls.push(["createRoom", input]);

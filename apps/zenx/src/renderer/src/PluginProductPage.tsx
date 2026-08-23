@@ -7,8 +7,10 @@ import {
   createPluginUiRegistry,
   type PluginUiRegistry,
 } from "./plugin-ui-host.js";
+import { registerBundledAutomationUi } from "./bundled-automation-ui.js";
 
 export const pluginUiRegistry = createPluginUiRegistry();
+registerBundledAutomationUi(pluginUiRegistry);
 
 export function PluginProductPage({
   snapshot,
@@ -153,6 +155,31 @@ export function PluginSettingsSurfaces({
   ));
 }
 
+export function PluginAgentPanels({
+  snapshot,
+  threadId,
+  registry = pluginUiRegistry,
+}: {
+  snapshot: ZenXPluginSnapshot;
+  threadId: string;
+  registry?: PluginUiRegistry;
+}) {
+  const theme = useAppearance();
+  return (snapshot.panels ?? []).map((panel) => (
+    <GenericPluginUiHost
+      key={panel.key}
+      registry={registry}
+      snapshot={snapshot}
+      pluginId={panel.pluginId}
+      surfaceId={panel.surfaceId}
+      context={{ route: "agent", threadId }}
+      theme={theme}
+      executeCommand={window.zenx.plugins.executeCommand}
+      readHandle={window.zenx.plugins.readHandle}
+    />
+  ));
+}
+
 function PluginMenu({
   snapshot,
   pluginId,
@@ -197,6 +224,7 @@ function useAppearance(): "light" | "dark" {
     document.documentElement.dataset.appearance === "dark" ? "dark" : "light";
   const [theme, setTheme] = useState<"light" | "dark">(read);
   useEffect(() => {
+    if (typeof MutationObserver === "undefined") return;
     const observer = new MutationObserver(() => setTheme(read()));
     observer.observe(document.documentElement, {
       attributes: true,

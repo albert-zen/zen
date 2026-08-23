@@ -252,6 +252,15 @@ function snapshotFrom(value: StoredState): TriggerSnapshot {
   };
 }
 
+export function canonicalTriggerSnapshot(value: unknown): TriggerSnapshot {
+  const candidate = record(value);
+  if (candidate === null) throw new Error("Plugin automation data is invalid");
+  const stored = { version: 3, ...candidate };
+  if (!isStoredState(stored))
+    throw new Error("Plugin automation data has an invalid entry shape");
+  return snapshotFrom(stored);
+}
+
 function canonicalTrigger(
   trigger: ZenXTrigger,
   version: "v1" | "v2" | "v3",

@@ -32,19 +32,13 @@ import {
   withZenXProviderTransports,
   zenXProviderDiscoveryTransport,
 } from "./system-proxy.js";
-import { ZenXTriggerService } from "./trigger-service.js";
-import { ZenXTriggerStore } from "./trigger-store.js";
 import { zenXBundledAutomationPackages } from "./capabilities/automation-control-package.js";
+import { createBundledAutomationPluginService } from "./automation-plugin-service.js";
 import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
 import { normalizeTitleOwnershipFailure } from "./thread-title-failure.js";
 import { ZenXThreadTitleStore } from "./thread-title-store.js";
 import { observeCompletedUserMessageTitle } from "./thread-title-notification.js";
 import { ZenXConfiguredTitleInference } from "./title-inference.js";
-import type {
-  CreateRoomInput,
-  CreateTriggerInput,
-  RoomMember,
-} from "./trigger-types.js";
 import { ZenXCapabilityService } from "./capability-service.js";
 import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
 import {
@@ -77,7 +71,6 @@ import { validatePluginHostSdkRequest } from "./plugin-host-sdk.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
-let triggerService: ZenXTriggerService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
 const projectProjection = new ZenXProjectProjection();
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
@@ -232,18 +225,16 @@ app.whenReady().then(async () => {
     );
     installCapabilityIpc(capabilityService, appServerManager);
     installTitleIpc(titleCoordinator);
-    triggerService = new ZenXTriggerService(
-      appServerManager,
-      new ZenXTriggerStore(join(userDataDirectory, "trigger-registry.json")),
-      { titles: titleCoordinator },
-    );
+    const automationService = await createBundledAutomationPluginService({
+      userDataDirectory,
+      appServer: appServerManager,
+      titles: titleCoordinator,
+    });
     for (const capabilityPackage of zenXBundledAutomationPackages(
-      triggerService,
+      automationService,
     )) {
       await capabilityService.install(capabilityPackage, "bundled");
     }
-    await triggerService.start();
-    installTriggerIpc(triggerService);
     if (startupError === undefined) await appServerManager.start();
     else appServerManager.reportStartupError(startupError);
   } catch (error) {
@@ -393,7 +384,6 @@ app.on("second-instance", () => {
 async function stopZenXHost(): Promise<void> {
   const errors: Error[] = [];
   try {
-    await triggerService?.stop();
   } catch (error) {
     errors.push(normalizeTitleOwnershipFailure(error));
   }
@@ -857,76 +847,6 @@ async function syncProjectProjection(
   );
 }
 
-function installTriggerIpc(triggers: ZenXTriggerService): void {
-  ipcMain.handle(ipcChannels.triggersGet, () => triggers.snapshot());
-  ipcMain.handle(
-    ipcChannels.triggersCreate,
-    async (_event, input: CreateTriggerInput) => {
-      await triggers.create(input);
-      return triggers.snapshot();
-    },
-  );
-  ipcMain.handle(
-    ipcChannels.triggersCancel,
-    async (_event, triggerId: unknown) => {
-      if (typeof triggerId !== "string") throw new Error("Invalid trigger ID");
-      await triggers.cancel(triggerId);
-      return triggers.snapshot();
-    },
-  );
-  ipcMain.handle(
-    ipcChannels.triggersSignal,
-    async (_event, name: unknown, detail: unknown) => {
-      if (typeof name !== "string" || typeof detail !== "string")
-        throw new Error("Invalid signal");
-      await triggers.signal(name, detail);
-      return triggers.snapshot();
-    },
-  );
-  ipcMain.handle(
-    ipcChannels.roomsCreate,
-    async (_event, input: CreateRoomInput) => {
-      await triggers.createRoom(input);
-      return triggers.snapshot();
-    },
-  );
-  ipcMain.handle(
-    ipcChannels.roomsAddMember,
-    async (_event, roomId: unknown, member: unknown) => {
-      if (typeof roomId !== "string" || !isRoomMember(member))
-        throw new Error("Invalid Room member");
-      await triggers.addRoomMember(roomId, member);
-      return triggers.snapshot();
-    },
-  );
-  ipcMain.handle(
-    ipcChannels.roomsRemoveMember,
-    async (_event, roomId: unknown, threadId: unknown) => {
-      if (typeof roomId !== "string" || typeof threadId !== "string")
-        throw new Error("Invalid Room member removal");
-      await triggers.removeRoomMember(roomId, threadId);
-      return triggers.snapshot();
-    },
-  );
-  ipcMain.handle(
-    ipcChannels.roomsPost,
-    async (_event, roomId: unknown, author: unknown, text: unknown) => {
-      if (
-        typeof roomId !== "string" ||
-        typeof author !== "string" ||
-        typeof text !== "string"
-      )
-        throw new Error("Invalid Room message");
-      await triggers.postRoomMessage(roomId, author, text);
-      return triggers.snapshot();
-    },
-  );
-  triggers.onChange((snapshot) => {
-    for (const window of BrowserWindow.getAllWindows())
-      window.webContents.send(ipcChannels.triggersChanged, snapshot);
-  });
-}
-
 function installCapabilityIpc(
   capabilities: ZenXCapabilityService,
   manager: AppServerManager,
@@ -1094,14 +1014,5 @@ function isApprovalDecision(value: unknown): value is ApprovalDecision {
     value === "acceptForSession" ||
     value === "decline" ||
     value === "cancel"
-  );
-}
-
-function isRoomMember(value: unknown): value is RoomMember {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as Partial<RoomMember>).name === "string" &&
-    typeof (value as Partial<RoomMember>).threadId === "string"
   );
 }

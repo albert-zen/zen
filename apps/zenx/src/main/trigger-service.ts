@@ -41,7 +41,6 @@ import {
   utf8Bytes,
   withinBytes,
 } from "./trigger-limits.js";
-import { ZenXTriggerStore } from "./trigger-store.js";
 import type {
   CreateRoomInput,
   CreateTriggerInput,
@@ -72,6 +71,11 @@ export interface ZenXTriggerAppServerPort {
 
 export interface ZenXTriggerTitlePort {
   observe(threadId: string, input: string): Promise<unknown>;
+}
+
+export interface ZenXTriggerStorePort {
+  read(): Promise<TriggerSnapshot>;
+  write(snapshot: TriggerSnapshot): Promise<void>;
 }
 
 const MAX_WAKEUPS = 64;
@@ -125,6 +129,7 @@ interface TriggerGeneration {
   active: boolean;
   retiring: boolean;
   storeUnavailable: boolean;
+  wakeupAdmission: boolean;
   timers: Map<string, unknown>;
   completedTurnItems: Map<string, CompletedItemBuffer>;
   pendingCompletedTurns: Map<string, PendingCompletion>;
@@ -135,7 +140,7 @@ interface TriggerGeneration {
 
 export class ZenXTriggerService {
   readonly #manager: ZenXTriggerAppServerPort;
-  readonly #store: ZenXTriggerStore;
+  readonly #store: ZenXTriggerStorePort;
   readonly #titles: ZenXTriggerTitlePort | undefined;
   readonly #programs: TriggerProgramRunner;
   readonly #listeners = new Set<(snapshot: TriggerSnapshot) => void>();
@@ -148,7 +153,7 @@ export class ZenXTriggerService {
 
   constructor(
     manager: ZenXTriggerAppServerPort,
-    store: ZenXTriggerStore,
+    store: ZenXTriggerStorePort,
     options: {
       now?: () => number;
       schedule?: (callback: () => void, delayMs: number) => unknown;
@@ -168,9 +173,9 @@ export class ZenXTriggerService {
       ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   }
 
-  async start(): Promise<void> {
+  async start(wakeupAdmission = true): Promise<void> {
     if (this.#generation !== null) await this.stop();
-    const generation = newGeneration();
+    const generation = newGeneration(wakeupAdmission);
     this.#generation = generation;
     try {
       await this.#mutation;
@@ -205,27 +210,7 @@ export class ZenXTriggerService {
       this.#snapshot = snapshot;
       this.#notify();
       this.#rescheduleTimers(generation);
-      generation.disposeNotifications = this.#manager.onNotification(
-        (method, params) => {
-          if (!this.#isOperational(generation)) return;
-          if (method === "item/completed") {
-            this.#handleItemCompleted(
-              generation,
-              params as ServerNotificationParams["item/completed"],
-            );
-          } else if (method === "turn/completed") {
-            void this.#handleTurnCompleted(
-              generation,
-              params as ServerNotificationParams["turn/completed"],
-            ).catch((error: unknown) => {
-              if (this.#isOperational(generation))
-                console.warn(
-                  `Could not process Trigger completion: ${describeError(error)}`,
-                );
-            });
-          }
-        },
-      );
+      this.#subscribeWakeups(generation);
     } catch (error) {
       generation.active = false;
       if (this.#generation === generation) this.#generation = null;
@@ -233,6 +218,52 @@ export class ZenXTriggerService {
       generation.disposeNotifications = undefined;
       throw error;
     }
+  }
+
+  resumeWakeups(): void {
+    const generation = this.#runningGeneration();
+    if (generation.wakeupAdmission) return;
+    generation.wakeupAdmission = true;
+    this.#subscribeWakeups(generation);
+    this.#rescheduleTimers(generation);
+  }
+
+  suspendWakeups(): void {
+    const generation = this.#runningGeneration();
+    if (!generation.wakeupAdmission) return;
+    generation.wakeupAdmission = false;
+    generation.disposeNotifications?.();
+    generation.disposeNotifications = undefined;
+    for (const timer of generation.timers.values())
+      this.#cancelScheduled(timer);
+    generation.timers.clear();
+    for (const controller of generation.programControllers.values())
+      controller.abort();
+  }
+
+  #subscribeWakeups(generation: TriggerGeneration): void {
+    if (!this.#isWakeupOperational(generation)) return;
+    generation.disposeNotifications = this.#manager.onNotification(
+      (method, params) => {
+        if (!this.#isWakeupOperational(generation)) return;
+        if (method === "item/completed") {
+          this.#handleItemCompleted(
+            generation,
+            params as ServerNotificationParams["item/completed"],
+          );
+        } else if (method === "turn/completed") {
+          void this.#handleTurnCompleted(
+            generation,
+            params as ServerNotificationParams["turn/completed"],
+          ).catch((error: unknown) => {
+            if (this.#isOperational(generation))
+              console.warn(
+                `Could not process Trigger completion: ${describeError(error)}`,
+              );
+          });
+        }
+      },
+    );
   }
 
   async stop(): Promise<void> {
@@ -714,7 +745,7 @@ export class ZenXTriggerService {
     triggerId: string,
     wakeup: WakeupEvent,
   ): Promise<void> {
-    if (!this.#isOperational(generation)) return;
+    if (!this.#isWakeupOperational(generation)) return;
     let committed: WakeupCommitResult;
     try {
       committed = await this.#mutate(generation, async (snapshot) =>
@@ -1179,7 +1210,7 @@ export class ZenXTriggerService {
   }
 
   #rescheduleTimers(generation: TriggerGeneration): void {
-    if (!this.#isOperational(generation)) return;
+    if (!this.#isWakeupOperational(generation)) return;
     for (const timer of generation.timers.values())
       this.#cancelScheduled(timer);
     generation.timers.clear();
@@ -1199,7 +1230,7 @@ export class ZenXTriggerService {
       Math.min(2_147_000_000, scheduledAt - this.#now()),
     );
     const timer = this.#schedule(() => {
-      if (!this.#isOperational(generation)) return;
+      if (!this.#isWakeupOperational(generation)) return;
       generation.timers.delete(triggerId);
       if (this.#now() < scheduledAt) {
         this.#scheduleTimer(generation, triggerId, scheduledAt);
@@ -1210,7 +1241,7 @@ export class ZenXTriggerService {
         occurrenceKey: `timer:${scheduledAt}`,
         scheduledAt,
       }).catch((error: unknown) => {
-        if (this.#isOperational(generation))
+        if (this.#isWakeupOperational(generation))
           console.warn(`Could not fire Timer: ${describeError(error)}`);
       });
     }, delay);
@@ -1259,6 +1290,10 @@ export class ZenXTriggerService {
       !generation.storeUnavailable &&
       this.#generation === generation
     );
+  }
+
+  #isWakeupOperational(generation: TriggerGeneration): boolean {
+    return generation.wakeupAdmission && this.#isOperational(generation);
   }
 
   #assertMutationGeneration(
@@ -1343,12 +1378,13 @@ class StaleGenerationError extends Error {
   }
 }
 
-function newGeneration(): TriggerGeneration {
+function newGeneration(wakeupAdmission = true): TriggerGeneration {
   return {
     id: randomUUID(),
     active: true,
     retiring: false,
     storeUnavailable: false,
+    wakeupAdmission,
     timers: new Map(),
     completedTurnItems: new Map(),
     pendingCompletedTurns: new Map(),

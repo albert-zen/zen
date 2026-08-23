@@ -29,7 +29,6 @@ const baseProps = {
   threadLoading: false,
   pinnedThreads: [],
   threads: [],
-  triggerSnapshot: { triggers: [], history: [], rooms: [] },
 };
 
 test("no-project sidebar keeps explicit Add project and non-creating New thread guidance", async () => {
