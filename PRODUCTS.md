@@ -50,8 +50,10 @@ child process、本地服务或远程服务。模型初始只看到 builtin tool
 才调用 AppServer。现有 `ToolResultItem` 后续只增加可选 structured content；renderer 缺失时使用
 text/JSON fallback，历史文本、reasoning、tool/title trace 永不扫描或改写。
 
-ZAS 与 Plugin Host 是 ZenX Host 下的并列服务。目标 ZAS 仍由 ZenX Host 拥有，但向其他应用暴露
-稳定、带认证的 endpoint；关闭窗口不停止 Host，显式 Quit 才停止。本阶段不做 OS daemon。
+ZAS 与 Plugin Host 是 ZenX Host 下的并列服务。ZenX Host 已通过稳定的私有 descriptor
+向其他应用暴露唯一 ZAS 的带认证 loopback endpoint；ZenX renderer 与外部客户端因此观察
+同一 Thread / ItemList authority。关闭全部窗口保留 Host 与 active Turn，activation 重建 UI，
+显式 Quit 撤销发现入口并停止 ZAS。本阶段仍不做 OS daemon。
 首批 browser provider 默认优先复用 Playwright CLI 的跨平台 headless 隔离 session，缺失或不兼容时
 回落到 bundled Electron/CDP 临时 profile；用户也可显式选择 loopback CDP user-session
 provider 附着到自己预先开启的 Chrome/Edge/Chromium，原位使用认证状态而不导出 cookie、

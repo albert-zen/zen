@@ -19,6 +19,7 @@
     "package:portable": "node ./scripts/package-zenx-portable.mjs --app",
     "smoke:packaged": "node ./scripts/package-zenx-portable.mjs",
     "smoke:real": "npm run build && electron ./out/main/real-smoke.js",
+    "smoke:external-zas": "tsx ./scripts/smoke-packaged-external-zas.ts",
     "smoke:windows-computer": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-winapp-smoke.ps1",
     "smoke:windows-projects": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-project-workspace-smoke.ps1",
     "smoke:windows-user-browser": "tsx src/main/user-browser-smoke.ts",

@@ -24,6 +24,7 @@ import type {
   ThreadSummaryListOptions,
 } from "../../../../src/thread-summary.js";
 import type { ZenXThreadAttachmentProjection } from "./image-attachments.js";
+import { AppServerConnectionPublisher } from "./app-server-connection.js";
 
 export type AppServerHostStatus =
   | { type: "starting" }
@@ -35,6 +36,8 @@ export type AppServerHostStatus =
 export interface AppServerManagerOptions {
   entryPath: string;
   tokenFile: string;
+  descriptorFile?: string;
+  reclaimStaleConnectionDescriptor?: boolean;
   hostConfig: ZenXHostConfig;
   execPath?: string;
   execArgv?: string[];
@@ -110,6 +113,9 @@ export class AppServerManager {
   #nextThreadSummaryRequest = 1;
   #nextThreadAttachmentRequest = 1;
   #capabilityRestartTail: Promise<void> = Promise.resolve();
+  #connectionPublisher: AppServerConnectionPublisher | undefined;
+  #bearerToken: string | undefined;
+  #authorityUrl: string | undefined;
 
   constructor(options: AppServerManagerOptions) {
     this.#options = options;
@@ -139,10 +145,31 @@ export class AppServerManager {
     const lifecycle = ++this.#lifecycle;
     this.#setStatus({ type: "starting" });
     try {
+      if (
+        this.#options.descriptorFile !== undefined &&
+        this.#connectionPublisher === undefined
+      ) {
+        const publisher = new AppServerConnectionPublisher(
+          this.#options.descriptorFile,
+        );
+        await publisher.acquire({
+          reclaimStale: this.#options.reclaimStaleConnectionDescriptor,
+        });
+        this.#connectionPublisher = publisher;
+      }
       await this.#startHost(lifecycle);
       this.#setStatus({ type: "ready", reconnected: false });
     } catch (error) {
       const message = asError(error).message;
+      if (
+        this.#options.descriptorFile === undefined ||
+        this.#connectionPublisher !== undefined
+      ) {
+        await removeTokenFile(this.#options.tokenFile);
+        this.#bearerToken = undefined;
+        this.#authorityUrl = undefined;
+      }
+      await this.#releaseConnectionPublisher();
       if (lifecycle === this.#lifecycle && !this.#stopping) {
         this.#setStatus({ type: "error", message });
       }
@@ -152,7 +179,10 @@ export class AppServerManager {
 
   async #startHost(lifecycle: number): Promise<void> {
     this.#acceptingCapabilityInvocations = false;
-    const bearerToken = await createPrivateTokenFile(this.#options.tokenFile);
+    const bearerToken =
+      this.#bearerToken ??
+      (await createPrivateTokenFile(this.#options.tokenFile));
+    this.#bearerToken = bearerToken;
     if (lifecycle !== this.#lifecycle || this.#stopping) {
       await removeTokenFile(this.#options.tokenFile);
       throw new Error("Zen App Server startup was cancelled");
@@ -185,11 +215,16 @@ export class AppServerManager {
           type: "start",
           config: this.#options.hostConfig,
           bearerToken,
+          listen: this.#authorityUrl ?? "ws://127.0.0.1:0",
           capabilities: this.#options.capabilityHost?.hostSnapshot() ?? {
             definitions: [],
           },
         },
       );
+      if (this.#authorityUrl !== undefined && url !== this.#authorityUrl) {
+        throw new Error("Zen App Server changed its published authority");
+      }
+      this.#authorityUrl = url;
       this.#installCapabilityBridge(child);
       const client = await ZenXProtocolClient.connect({
         url,
@@ -202,23 +237,33 @@ export class AppServerManager {
       }
       this.#client = client;
       this.#forwardNotifications(client);
+      await this.#connectionPublisher?.publish({
+        version: 1,
+        transport: "websocket",
+        url,
+        authentication: {
+          type: "bearer-file",
+          tokenFile: path.resolve(this.#options.tokenFile),
+        },
+      });
       this.#acceptingCapabilityInvocations = true;
       this.#recoverUnexpectedExits = true;
     } catch (error) {
       this.#acceptingCapabilityInvocations = false;
+      this.#client?.close();
+      this.#client = undefined;
       if (this.#child === child) this.#child = undefined;
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");
-      }
-      if (lifecycle === this.#lifecycle) {
-        await removeTokenFile(this.#options.tokenFile);
       }
       throw error;
     }
   }
 
   async restart(hostConfig: ZenXHostConfig): Promise<void> {
-    await this.stop();
+    if (this.#status.type !== "stopped" || this.#child !== undefined) {
+      await this.stop({ preserveConnectionAuthority: true });
+    }
     this.#options.hostConfig = hostConfig;
     await this.start();
   }
@@ -351,16 +396,26 @@ export class AppServerManager {
     pending.resolve({ decision });
   }
 
-  async stop(): Promise<void> {
+  async stop(
+    options: { preserveConnectionAuthority?: boolean } = {},
+  ): Promise<void> {
     if (this.#stopPromise !== undefined) {
       await this.#stopPromise;
+      if (
+        options.preserveConnectionAuthority !== true &&
+        this.#connectionPublisher !== undefined
+      ) {
+        await this.stop();
+      }
       return;
     }
     this.#stopping = true;
     this.#recoverUnexpectedExits = false;
     ++this.#lifecycle;
     this.#acceptingCapabilityInvocations = false;
-    const stopping = this.#performStop();
+    const stopping = this.#performStop(
+      options.preserveConnectionAuthority === true,
+    );
     this.#stopPromise = stopping;
     try {
       await stopping;
@@ -369,7 +424,10 @@ export class AppServerManager {
     }
   }
 
-  async #performStop(): Promise<void> {
+  async #performStop(preserveConnectionAuthority: boolean): Promise<void> {
+    if (!preserveConnectionAuthority) {
+      await this.#connectionPublisher?.revoke();
+    }
     this.#cancelPendingApprovals();
     this.#rejectPendingThreadSummaryRequests(
       new Error("Zen App Server host stopped"),
@@ -398,8 +456,19 @@ export class AppServerManager {
     }
     this.#child = undefined;
     await this.#recoveryPromise;
-    await removeTokenFile(this.#options.tokenFile);
+    if (!preserveConnectionAuthority) {
+      await removeTokenFile(this.#options.tokenFile);
+      this.#bearerToken = undefined;
+      this.#authorityUrl = undefined;
+      await this.#releaseConnectionPublisher();
+    }
     this.#setStatus({ type: "stopped" });
+  }
+
+  async #releaseConnectionPublisher(): Promise<void> {
+    const publisher = this.#connectionPublisher;
+    this.#connectionPublisher = undefined;
+    await publisher?.release();
   }
 
   #forwardNotifications(client: ZenXProtocolClient): void {
@@ -530,6 +599,10 @@ export class AppServerManager {
       }
       if (lifecycle === this.#lifecycle && !this.#stopping) {
         this.#recoverUnexpectedExits = false;
+        await this.#connectionPublisher?.revoke();
+        await removeTokenFile(this.#options.tokenFile);
+        this.#bearerToken = undefined;
+        this.#authorityUrl = undefined;
         this.#setStatus({
           type: "error",
           message: `Zen App Server recovery failed after ${String(delays.length)} attempts: ${lastError.message}`,

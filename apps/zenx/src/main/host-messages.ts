@@ -23,6 +23,7 @@ export type HostCommand =
       type: "start";
       config: ZenXHostConfig;
       bearerToken: string;
+      listen?: string;
       capabilities: ZenXCapabilityHostSnapshot;
     }
   | { type: "shutdown" }

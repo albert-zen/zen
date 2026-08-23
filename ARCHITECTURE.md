@@ -253,8 +253,9 @@ Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派�
 `AgentRuntime` 的普通 tool loop、builtin `shell`、静态 `ToolExecutor`，以及 ZenX
 capability package / registry / child-host bridge / sidebar-page projection 骨架。
 当前 `ToolResultItem` 也只有 text output 与 exit code；Plugin Host、动态 Tool
-Environment、渐进发现、完整 install/uninstall、Generic UI Host、structured result
-content 和独立于窗口的稳定 ZAS endpoint 都仍是后续节点。
+Environment、渐进发现、完整 install/uninstall、Generic UI Host 与 structured result
+content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
+connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
 
 ### 工具执行与发现
 

@@ -106,7 +106,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
   server = await serveCodexWebSocket({
     appServer,
     zenHome: command.config.dataDirectory,
-    listen: "ws://127.0.0.1:0",
+    listen: command.listen ?? "ws://127.0.0.1:0",
     bearerToken: command.bearerToken,
   });
   send({ type: "ready", url: server.url });

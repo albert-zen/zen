@@ -36,9 +36,9 @@ capability packages, snapshot a static tool set into the child App Server host,
 bridge calls back to the main process, persist enabled/disabled state plus
 fine-grained grants, and project controlled sidebar/pages. It does not yet have
 the target dynamic Tool Environment, progressive discovery, complete
-install/uninstall lifecycle, generic UI SDK, structured result renderers, or a
-window-independent stable ZAS endpoint. `ToolResultItem` currently stores only
-text output and an exit code.
+install/uninstall lifecycle, generic UI SDK, or structured result renderers.
+`ToolResultItem` currently stores only text output and an exit code. The
+window-independent external ZAS endpoint is implemented by the app-owned Host.
 
 The target contract is:
 
@@ -77,9 +77,10 @@ The target contract is:
   `ToolResultItem`, not a new Item type. Missing or disabled renderers fall back
   to text/JSON without changing historical trace. Standalone Skills are
   deferred; a plugin's main document is its primary model instruction.
-- ZenX Host will expose its single ZAS through a stable authenticated endpoint
-  that other apps can connect to. Closing every window keeps the Host running;
-  explicit Quit stops it. This phase does not create an OS daemon.
+- ZenX Host exposes its single ZAS through a stable authenticated loopback
+  endpoint that other apps can connect to. Closing every window keeps the Host
+  and active Turns running; activation recreates the UI, while explicit Quit
+  revokes discovery and stops the endpoint. This does not create an OS daemon.
 
 Marketplace, signing, dependency solving, same-Turn parallel tool execution,
 and unrelated Provider/image/attachment/compaction refactors are outside this
@@ -122,6 +123,26 @@ AppUserModelID; the macOS packager default bundle ID is `com.electron.zenx`.
 Packaging does not migrate, delete, or redirect either profile. Pass
 `--user-data-dir=<new-path>` when you deliberately need an isolated profile for
 testing; never point that option at an existing browser or ZenX profile.
+
+## External App Server clients
+
+While ZenX is running, its app-owned Host publishes
+`<Electron userData>/runtime/app-server.json`. The private version-1 descriptor
+contains the loopback WebSocket URL and the absolute path of a separate private
+bearer-token file; it never embeds the token. A client reads the descriptor,
+loads that bearer file, and performs the fixed Codex App Server 0.146.0
+`initialize` / `initialized` handshake over the existing WebSocket transport.
+ZenX's renderer uses the same ZAS instance, so either side can create, resume,
+read, or continue the same Thread.
+
+The runtime directory, descriptor, and token are owner-private on POSIX;
+Windows uses the current user's Electron profile boundary. A second ZenX
+process defers to the process holding Electron's single-instance lock and cannot
+publish a competing authority. Closing the last window leaves the descriptor,
+connection, Host, and active Turn intact. Explicit Quit first revokes the
+descriptor, then stops the one child Host, closes clients clearly, and removes
+the token. These files are Host connection configuration: they are not renderer
+settings, protocol payloads, logs, model trace, or canonical journal data.
 
 The Windows packaged Project acceptance (`smoke:windows-projects`) launches the
 real packaged ZenX shell and exercises the Project workspace lifecycle through a
@@ -508,6 +529,7 @@ or distribution layer.
 npm --workspace apps/zenx run check
 npm run check
 npm --workspace apps/zenx run smoke:capabilities
+npm --workspace apps/zenx run smoke:external-zas # packaged macOS app + external client
 # Windows only, after installing Microsoft WinApp CLI:
 npm --workspace apps/zenx run smoke:windows-computer
 npm --workspace apps/zenx run smoke:windows-user-browser

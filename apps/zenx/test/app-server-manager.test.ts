@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,6 +8,10 @@ import {
   AppServerManager,
   type AppServerHostStatus,
 } from "../src/main/app-server-manager.js";
+import {
+  readZenXConnectionDescriptor,
+  ZenXProtocolClient,
+} from "../src/protocol-client/index.js";
 import type { ZenXCapabilityHost } from "../src/main/capabilities/types.js";
 import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
 import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
@@ -96,6 +100,126 @@ test("hosts a real App Server and removes its private token on shutdown", async 
     await manager.stop();
     await assert.rejects(stat(tokenFile), { code: "ENOENT" });
   } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an external Codex-compatible client attaches through the public descriptor to the same Thread authority", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-external-"));
+  const descriptorFile = path.join(directory, "runtime", "zas-connection.json");
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    descriptorFile,
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+    },
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  let external: ZenXProtocolClient | undefined;
+  try {
+    await manager.start();
+    const descriptor = await readZenXConnectionDescriptor(descriptorFile);
+    external = await ZenXProtocolClient.connect({
+      url: descriptor.url,
+      bearerTokenFile: descriptor.authentication.tokenFile,
+      clientInfo: {
+        name: "zx1-external-client",
+        title: "ZX1 external client",
+        version: "0.1.0",
+      },
+    });
+
+    const rendererThread = (await manager.request("thread/start", {})).thread;
+    await external.request("thread/resume", { threadId: rendererThread.id });
+    const externalCompleted = deferred<void>();
+    external.onNotification("turn/completed", ({ threadId }) => {
+      if (threadId === rendererThread.id) externalCompleted.resolve();
+    });
+    await external.request("turn/start", {
+      threadId: rendererThread.id,
+      input: [{ type: "text", text: "continued outside ZenX" }],
+      clientUserMessageId: "zx1-external-continuation",
+    });
+    await within(externalCompleted.promise);
+    const rendered = await manager.request("thread/read", {
+      threadId: rendererThread.id,
+      includeTurns: true,
+    });
+    assert.equal(
+      rendered.thread.turns.some((turn) =>
+        turn.items.some(
+          (item) =>
+            item.type === "userMessage" &&
+            item.clientId === "zx1-external-continuation",
+        ),
+      ),
+      true,
+    );
+
+    const externalThread = (await external.request("thread/start", {})).thread;
+    const rendererCompleted = deferred<void>();
+    manager.onNotification((method, params) => {
+      if (
+        method === "turn/completed" &&
+        (params as { threadId?: string }).threadId === externalThread.id
+      )
+        rendererCompleted.resolve();
+    });
+    await manager.request("turn/start", {
+      threadId: externalThread.id,
+      input: [{ type: "text", text: "continued inside ZenX" }],
+      clientUserMessageId: "zx1-renderer-continuation",
+    });
+    await within(rendererCompleted.promise);
+    const externallyRead = await external.request("thread/read", {
+      threadId: externalThread.id,
+      includeTurns: true,
+    });
+    assert.equal(
+      externallyRead.thread.turns.some((turn) =>
+        turn.items.some(
+          (item) =>
+            item.type === "userMessage" &&
+            item.clientId === "zx1-renderer-continuation",
+        ),
+      ),
+      true,
+    );
+
+    const token = (
+      await readFile(descriptor.authentication.tokenFile, "utf8")
+    ).trim();
+    assert.equal(JSON.stringify(manager.status).includes(token), false);
+    assert.equal(
+      (await readFile(descriptorFile, "utf8")).includes(token),
+      false,
+    );
+
+    external.close();
+    external = undefined;
+    await manager.stop();
+    await assert.rejects(readFile(descriptorFile), { code: "ENOENT" });
+    await assert.rejects(
+      ZenXProtocolClient.connect({
+        url: descriptor.url,
+        bearerTokenFile: descriptor.authentication.tokenFile,
+        clientInfo: {
+          name: "zx1-after-quit",
+          title: "ZX1 after quit",
+          version: "0.1.0",
+        },
+      }),
+    );
+  } finally {
+    external?.close();
     await manager.stop();
     await rm(directory, { recursive: true, force: true });
   }

@@ -67,6 +67,15 @@ import {
   readAttachmentPayload,
   type ZenXImageImport,
 } from "./image-attachments.js";
+import {
+  ZenXHostLifecycle,
+  type ZenXDesktopPlatform,
+} from "./host-lifecycle.js";
+import {
+  externalZasAcceptanceConfigPath,
+  runExternalZasAcceptance,
+} from "./external-zas-smoke.js";
+import { secondInstanceDisposition } from "./desktop-lifecycle.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -75,13 +84,32 @@ let capabilityService: ZenXCapabilityService | undefined;
 const projectProjection = new ZenXProjectProjection();
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
-let quitting = false;
+const ownsSingleInstance =
+  secondInstanceDisposition(app.requestSingleInstanceLock()) ===
+  "own-authority";
+const hostLifecycle = new ZenXHostLifecycle({
+  platform: desktopPlatform(process.platform),
+  windowCount: () => BrowserWindow.getAllWindows().length,
+  createWindow,
+  stopHost: stopZenXHost,
+  finishQuit: () => app.quit(),
+  reportStopFailure: (error) =>
+    console.error("Could not fully stop ZenX before quit", error),
+});
+if (!ownsSingleInstance) app.quit();
 const projectWorkspaceAcceptanceEnvironment =
   process.env["ZENX_PROJECT_ACCEPTANCE_CONFIG"];
 delete process.env["ZENX_PROJECT_ACCEPTANCE_CONFIG"];
+const externalZasAcceptanceEnvironment =
+  process.env["ZENX_EXTERNAL_ZAS_ACCEPTANCE_CONFIG"];
+delete process.env["ZENX_EXTERNAL_ZAS_ACCEPTANCE_CONFIG"];
 const projectWorkspaceAcceptancePath = projectWorkspaceAcceptanceConfigPath(
   process.argv,
   projectWorkspaceAcceptanceEnvironment,
+);
+const externalZasAcceptancePath = externalZasAcceptanceConfigPath(
+  process.argv,
+  externalZasAcceptanceEnvironment,
 );
 
 function createWindow(): BrowserWindow {
@@ -116,9 +144,15 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(async () => {
+  if (!ownsSingleInstance) return;
   const userDataDirectory = app.getPath("userData");
   const entryPath = join(__dirname, "app-server-host.js");
   const tokenFile = join(userDataDirectory, "runtime", "app-server.token");
+  const connectionDescriptorFile = join(
+    userDataDirectory,
+    "runtime",
+    "app-server.json",
+  );
   const zenDataDirectory = resolve(
     process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
   );
@@ -174,6 +208,8 @@ app.whenReady().then(async () => {
     appServerManager = new AppServerManager({
       entryPath,
       tokenFile,
+      descriptorFile: connectionDescriptorFile,
+      reclaimStaleConnectionDescriptor: true,
       hostConfig,
       execPath: process.execPath,
       capabilityHost: capabilityService,
@@ -233,6 +269,8 @@ app.whenReady().then(async () => {
         appServerManager = new AppServerManager({
           entryPath,
           tokenFile,
+          descriptorFile: connectionDescriptorFile,
+          reclaimStaleConnectionDescriptor: true,
           hostConfig,
           execPath: process.execPath,
           capabilityHost: capabilityService,
@@ -244,7 +282,7 @@ app.whenReady().then(async () => {
         const restartErrors: Error[] = [];
         let hostStopped = false;
         try {
-          await appServerManager.stop();
+          await appServerManager.stop({ preserveConnectionAuthority: true });
           hostStopped = true;
         } catch (error) {
           restartErrors.push(normalizeTitleOwnershipFailure(error));
@@ -255,6 +293,7 @@ app.whenReady().then(async () => {
           restartErrors.push(normalizeTitleOwnershipFailure(error));
         }
         let capabilitiesReset = false;
+        let hostRestarted = false;
         if (hostStopped) {
           try {
             await capabilityService?.resetTransient();
@@ -266,6 +305,7 @@ app.whenReady().then(async () => {
         if (hostStopped && capabilitiesReset) {
           try {
             await appServerManager.restart(hostConfig);
+            hostRestarted = true;
           } catch (error) {
             restartErrors.push(normalizeTitleOwnershipFailure(error));
           }
@@ -274,6 +314,13 @@ app.whenReady().then(async () => {
           await titleCoordinator?.restart();
         } catch (error) {
           restartErrors.push(normalizeTitleOwnershipFailure(error));
+        }
+        if (hostStopped && !hostRestarted) {
+          try {
+            await appServerManager.stop();
+          } catch (error) {
+            restartErrors.push(normalizeTitleOwnershipFailure(error));
+          }
         }
         if (restartErrors.length > 0)
           throw new AggregateError(
@@ -285,6 +332,15 @@ app.whenReady().then(async () => {
     async () => await syncProjectProjection(settingsService!),
   );
   const mainWindow = createWindow();
+  if (
+    projectWorkspaceAcceptancePath !== null &&
+    externalZasAcceptancePath !== null
+  ) {
+    console.error("Only one packaged ZenX acceptance hook may run at a time");
+    process.exitCode = 1;
+    app.quit();
+    return;
+  }
   if (projectWorkspaceAcceptancePath !== null) {
     void runProjectWorkspaceAcceptance({
       window: mainWindow,
@@ -298,50 +354,77 @@ app.whenReady().then(async () => {
         app.quit();
       });
   }
+  if (externalZasAcceptancePath !== null && appServerManager !== undefined) {
+    void runExternalZasAcceptance({
+      configPath: externalZasAcceptancePath,
+      manager: appServerManager,
+      window: mainWindow,
+      createWindow,
+    })
+      .then(() => app.quit())
+      .catch((error: unknown) => {
+        console.error("Packaged external ZAS acceptance failed", error);
+        process.exitCode = 1;
+        app.quit();
+      });
+  }
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    hostLifecycle.activate();
   });
 });
 
 app.on("before-quit", (event) => {
-  if (quitting || appServerManager === undefined) return;
-  event.preventDefault();
-  quitting = true;
-  void (async () => {
-    const errors: unknown[] = [];
-    try {
-      await triggerService?.stop();
-    } catch (error) {
-      errors.push(normalizeTitleOwnershipFailure(error));
-    }
-    try {
-      await titleCoordinator?.close();
-    } catch (error) {
-      errors.push(normalizeTitleOwnershipFailure(error));
-    }
-    try {
-      await appServerManager!.stop();
-    } catch (error) {
-      errors.push(normalizeTitleOwnershipFailure(error));
-    }
-    try {
-      selfControlPort.detach();
-      await capabilityService?.close();
-    } catch (error) {
-      errors.push(normalizeTitleOwnershipFailure(error));
-    }
-    if (errors.length > 0)
-      console.error(
-        "Could not fully stop ZenX before quit",
-        new AggregateError(errors),
-      );
-  })().finally(() => app.quit());
+  if (!ownsSingleInstance) return;
+  hostLifecycle.beforeQuit(() => event.preventDefault());
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (ownsSingleInstance) hostLifecycle.windowAllClosed();
 });
+
+app.on("second-instance", () => {
+  if (!ownsSingleInstance) return;
+  hostLifecycle.activate();
+  const window = BrowserWindow.getAllWindows()[0];
+  if (window?.isMinimized()) window.restore();
+  window?.focus();
+});
+
+async function stopZenXHost(): Promise<void> {
+  const errors: Error[] = [];
+  try {
+    await triggerService?.stop();
+  } catch (error) {
+    errors.push(normalizeTitleOwnershipFailure(error));
+  }
+  try {
+    await titleCoordinator?.close();
+  } catch (error) {
+    errors.push(normalizeTitleOwnershipFailure(error));
+  }
+  try {
+    await appServerManager?.stop();
+  } catch (error) {
+    errors.push(normalizeTitleOwnershipFailure(error));
+  }
+  try {
+    selfControlPort.detach();
+    await capabilityService?.close();
+  } catch (error) {
+    errors.push(normalizeTitleOwnershipFailure(error));
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Could not fully stop ZenX before quit");
+  }
+}
+
+function desktopPlatform(platform: NodeJS.Platform): ZenXDesktopPlatform {
+  if (platform === "darwin" || platform === "win32" || platform === "linux") {
+    return platform;
+  }
+  throw new Error(`ZenX does not support desktop platform ${platform}`);
+}
 
 function installProtocolIpc(
   manager: AppServerManager,
