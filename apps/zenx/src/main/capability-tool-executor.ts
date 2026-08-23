@@ -4,8 +4,13 @@ import type {
   ToolProvider,
 } from "../../../../src/tool.js";
 import { ShellToolExecutor, ToolEnvironment } from "../../../../src/tool.js";
+import type { ToolDefinitionProjection } from "../../../../src/runtime.js";
 import type { CapabilityResultCommand, HostEvent } from "./host-messages.js";
 import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
+import {
+  PluginDiscoveryProjection,
+  PluginDiscoveryToolProvider,
+} from "./plugin-discovery.js";
 
 interface PendingInvocation {
   resolve(result: ToolExecutionResult): void;
@@ -102,21 +107,31 @@ export function createZenXHostToolEnvironment(options: {
 }): {
   capabilityProvider: ZenXHostToolExecutor;
   toolEnvironment: ToolEnvironment;
+  toolDefinitionProjection: ToolDefinitionProjection;
 } {
   const capabilityProvider = new ZenXHostToolExecutor({
     capabilities: options.capabilities,
     send: options.send,
   });
+  const toolEnvironment = new ToolEnvironment({
+    providers: [
+      new ShellToolExecutor({
+        blockedEnvironmentVariables: options.blockedEnvironmentVariables,
+        redactedValues: options.redactedValues,
+      }),
+      capabilityProvider,
+    ],
+  });
+  const catalog = {
+    availablePlugins: () => structuredClone(options.capabilities.plugins ?? []),
+  };
+  toolEnvironment.registerProvider(
+    new PluginDiscoveryToolProvider(catalog, toolEnvironment),
+  );
+  const projection = new PluginDiscoveryProjection(toolEnvironment, catalog);
   return {
     capabilityProvider,
-    toolEnvironment: new ToolEnvironment({
-      providers: [
-        new ShellToolExecutor({
-          blockedEnvironmentVariables: options.blockedEnvironmentVariables,
-          redactedValues: options.redactedValues,
-        }),
-        capabilityProvider,
-      ],
-    }),
+    toolEnvironment,
+    toolDefinitionProjection: (items) => projection.definitions(items),
   };
 }

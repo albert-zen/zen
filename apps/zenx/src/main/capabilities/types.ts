@@ -219,6 +219,17 @@ export interface ZenXCapabilitySnapshot {
 
 export interface ZenXCapabilityHostSnapshot {
   definitions: ModelTool[];
+  /** Current v2 discovery catalog projected into the hosted App Server. */
+  plugins?: ZenXAvailablePlugin[];
+}
+
+export interface ZenXAvailablePlugin {
+  id: string;
+  name: string;
+  description: string;
+  status: "enabled";
+  mainDocument: string;
+  tools: ModelTool[];
 }
 
 export interface ZenXCapabilityHost {

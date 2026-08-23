@@ -6,17 +6,11 @@ import type {
   ToolProvider,
 } from "../../../../src/tool.js";
 import { ToolEnvironment } from "../../../../src/tool.js";
+import type { ZenXAvailablePlugin } from "./capabilities/types.js";
 
 export const ZENX_PLUGIN_TOOL = "zenx_plugin";
 
-export interface AvailablePlugin {
-  id: string;
-  name: string;
-  description: string;
-  status: "enabled";
-  mainDocument: string;
-  tools: readonly ModelTool[];
-}
+export type AvailablePlugin = ZenXAvailablePlugin;
 
 /** Current Host-owned catalog view; lifecycle state stays outside the Thread. */
 export interface PluginDiscoveryCatalog {
@@ -123,13 +117,22 @@ export class PluginDiscoveryProjection {
     const byName = new Map(
       entries.map((entry) => [entry.definition.name, entry.definition]),
     );
-    const builtins = entries
-      .filter((entry) => entry.provider.kind === "builtin")
-      .map((entry) => structuredClone(entry.definition));
-    const pluginTools = currentAvailablePlugins(
+    const currentPlugins = currentAvailablePlugins(
       this.#catalog,
       this.#environment,
-    )
+    );
+    const allPluginTools = new Set(
+      currentPlugins.flatMap((plugin) => plugin.tools.map((tool) => tool.name)),
+    );
+    const baseTools = entries
+      .filter(
+        (entry) =>
+          entry.provider.kind === "builtin" ||
+          (entry.provider.kind === "external" &&
+            !allPluginTools.has(entry.definition.name)),
+      )
+      .map((entry) => structuredClone(entry.definition));
+    const pluginTools = currentPlugins
       .filter((plugin) => disclosed.has(plugin.id))
       .flatMap((plugin) =>
         plugin.tools.flatMap((tool) => {
@@ -137,7 +140,7 @@ export class PluginDiscoveryProjection {
           return definition === undefined ? [] : [structuredClone(definition)];
         }),
       );
-    return [...builtins, ...pluginTools];
+    return [...baseTools, ...pluginTools];
   }
 }
 

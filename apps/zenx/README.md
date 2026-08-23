@@ -49,9 +49,16 @@ propagates abort/close, drains prepared and executing admitted calls during revo
 and performs no retry or restart. Catalog install/enable stages runtime readiness without
 publishing tools until persistence commits; disable/uninstall closes new admission first
 and restores the enabled provider on persistence failure. Disabled reinstall stays disabled.
-The existing startup capability child-host composition has not yet migrated to
-it. Human product calls may route directly through the Supervisor without
-creating an AppServer Turn.
+The desktop composition connects that authority to the hosted AppServer: the
+main-process CapabilityService owns the Catalog, Registry, Supervisor, and plugin
+Tool Environment, while the child host combines its current snapshot with builtin
+`shell`, still-compatible external capabilities, and one persistent `zenx_plugin`
+provider. Its request-time projection discloses only the selected plugin after
+successful ordinary `read` call/result history, rebuilding the same set from the
+journal after restart and intersecting it with current availability. Disclosed
+calls cross the existing private capability bridge and execute through the main
+Supervisor's stable plugin provider. Human product calls may still route directly
+through the Supervisor without creating an AppServer Turn.
 
 Plugin Host SDK v1 is the public `query / actions / ui / storage` contract injected
 into each runtime. `query.projects.list` consumes the existing main-process Project
@@ -67,12 +74,7 @@ queries, storage, and UI commands do not create Turns. Only the explicit
 its canonical Items. The `ui` group currently defines opaque handles and commands for
 ZP6; it does not implement a renderer or surface.
 
-The ZP4 discovery seam now provides
-one persistent `zenx_plugin` provider plus a request-time schema projection for
-AgentRuntime. Successful ordinary `read` call/result history discloses only that
-plugin from the next sample, and the projection is rebuilt from the journal after
-restart while current availability still gates it. This is not yet the completed
-Plugin Platform: startup child-host composition, complete
+This is not yet the completed Plugin Platform: complete
 product install/update entry points, generic UI SDK, and structured result renderers
 remain future nodes.
 `ToolResultItem` currently stores only text output and an exit code. The app-owned

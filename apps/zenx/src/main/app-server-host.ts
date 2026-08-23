@@ -109,6 +109,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
   appServer = createHostedAppServer({
     ...command.config,
     toolEnvironment: toolComposition.toolEnvironment,
+    toolDefinitionProjection: toolComposition.toolDefinitionProjection,
   });
   server = await serveCodexWebSocket({
     appServer,

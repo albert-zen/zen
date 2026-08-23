@@ -18,7 +18,10 @@ import { FakeModel, type ModelAdapter } from "../../../src/model.js";
 import { OpenAiCompatibleModel } from "../../../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
 import { ProviderRegistry } from "../../../src/provider-registry.js";
-import { AgentRuntime } from "../../../src/runtime.js";
+import {
+  AgentRuntime,
+  type ToolDefinitionProjection,
+} from "../../../src/runtime.js";
 import {
   JsonlThreadMetadataStore,
   type ThreadMetadataStore,
@@ -83,6 +86,7 @@ export interface ZenHostOptions {
   threadMetadata?: ThreadMetadataStore;
   threadSummaryProjection?: ThreadSummaryProjection;
   toolEnvironment?: ToolEnvironment;
+  toolDefinitionProjection?: ToolDefinitionProjection;
   /** Compatibility input for callers that still provide one static executor. */
   tools?: ToolExecutor;
   attachments?: AttachmentStore;
@@ -202,6 +206,9 @@ export function createHostedAppServer(
             ),
           ],
         }),
+      ...(options.toolDefinitionProjection === undefined
+        ? {}
+        : { toolDefinitionProjection: options.toolDefinitionProjection }),
     }),
     providerRegistry: new ProviderRegistry(profiles),
     threadMetadata:

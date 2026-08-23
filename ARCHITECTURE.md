@@ -266,18 +266,20 @@ module、bounded JSONL child process 与 HTTP service 提供统一 ABI。install
 启动并验证 runtime，Catalog 持久化与内存提交后才把 enabled plugin 作为独立 provider 注入 Tool
 Environment；任一步失败都会撤销该临时 runtime/provider。disable/uninstall 先撤销新调用，再等待
 已 prepare/执行的调用结算和 close，持久化失败则恢复原 enabled provider；人类产品侧可经 Supervisor
-直接调用而不创建 Turn。现有 capability registry / child-host
-bridge 仍以启动时快照作为一个独立 external provider 注入 Tool Environment，尚未迁移到新的
-runtime composition root。Plugin Runtime 现在由 Host 注入同一个 versioned Host SDK v1：bundled module
+直接调用而不创建 Turn。ZenX 的实际桌面 composition root 由主进程 `CapabilityService` 持有 Catalog、
+Registry、Plugin Runtime Supervisor 与动态 Tool Environment；child-host 继续通过既有私有 bridge 接收
+当前 capability snapshot，把 shell、仍需兼容的 external capability 与常驻 `zenx_plugin` 组合进唯一
+AgentRuntime。provider-aware definition projection 在每次采样从完整 canonical ItemList 的成功普通
+`read` call/result 对归约披露集合，并与当前 snapshot / Tool Environment 求交集；已披露的 ordinary
+plugin 调用通过 bridge 回到主进程，由 Supervisor 的稳定 plugin provider lease 执行。
+Plugin Runtime 由 Host 注入同一个 versioned Host SDK v1：bundled module
 直接接收公共对象，JSONL process 使用双向 request/result，HTTP service 使用有界 continuation
 request/result；三者只看 SDK operation，不取得 Project、storage 或 AppServer 的内部实现。SDK 的 Project
 查询消费既有 ZenXProjectProjection，普通领域读写与 UI command 不创建 Turn，只有显式
 `actions.threads.startTurn` 调用既有 AppServer port。每个 plugin namespace 的 JSON storage 使用
 1..1000 的版本 metadata、1 MiB 文档上限、串行 mutation 与同目录临时文件 rename；package/runtime
 提供的 `n -> n+1` migration 按顺序只在需要时运行，migration 或写入失败保留此前 durable/in-memory
-state，且不建立恢复状态机。常驻 `zenx_plugin` provider、provider-aware definition projection 与 AgentRuntime
-采样 seam 已实现：披露集合只从完整 canonical ItemList 的成功普通 `read` call/result 对归约，并在每次
-采样与当前 Catalog / Tool Environment 求交集。当前 `ToolResultItem` 仍只有 text output 与 exit code；完整产品
+state，且不建立恢复状态机。当前 `ToolResultItem` 仍只有 text output 与 exit code；完整产品
 安装入口、Generic UI Host 与 structured result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
 connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
 

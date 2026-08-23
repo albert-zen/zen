@@ -12,7 +12,10 @@ import {
 
 export type ZenXHostConfig = Omit<
   ZenHostOptions,
-  "journal" | "threadMetadata" | "threadSummaryProjection"
+  | "journal"
+  | "threadMetadata"
+  | "threadSummaryProjection"
+  | "toolDefinitionProjection"
 >;
 
 export type ZenXSingleProviderHostConfig = ZenXHostConfig &

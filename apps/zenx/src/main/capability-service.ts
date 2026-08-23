@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { ToolInvocation } from "../../../../src/tool.js";
+import { ToolEnvironment, type ToolInvocation } from "../../../../src/tool.js";
 import {
   BrowserZenXCapabilityPackage,
   type ZenXBrowserBackend,
@@ -17,6 +17,11 @@ import {
   selectComputerProvider,
 } from "./capabilities/provider-catalog.js";
 import { WinAppCliComputerBackend } from "./capabilities/windows-computer-provider.js";
+import {
+  bundledPackageRegistration,
+  CatalogPluginRuntimeLifecycle,
+  PluginRuntimeSupervisor,
+} from "./plugin-runtime.js";
 import type {
   ZenXCapabilityDisposer,
   ZenXCapabilityGrantStore,
@@ -30,6 +35,8 @@ import type {
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #registry: ZenXCapabilityRegistry;
+  readonly #pluginToolEnvironment: ToolEnvironment;
+  readonly #pluginRuntimeSupervisor: PluginRuntimeSupervisor;
   readonly #userDataDirectory: string;
   readonly #localDirectory: string;
   readonly #browserBackend?: ZenXBrowserBackend;
@@ -52,6 +59,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     resourcesDirectory?: string;
     bundledManifestSha256?: string;
   }) {
+    this.#pluginToolEnvironment = new ToolEnvironment();
+    this.#pluginRuntimeSupervisor = new PluginRuntimeSupervisor(
+      this.#pluginToolEnvironment,
+    );
     this.#registry = new ZenXCapabilityRegistry(
       options.grantStore ??
         new JsonZenXCapabilityGrantStore(
@@ -62,6 +73,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           options.userDataDirectory,
           "plugin-data",
         ),
+        pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
+          supervisor: this.#pluginRuntimeSupervisor,
+          registrationFor: bundledPackageRegistration,
+        }),
       },
     );
     this.#userDataDirectory = options.userDataDirectory;
@@ -246,6 +261,15 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   async execute(invocation: ToolInvocation) {
+    const plugin = this.#registry
+      .availablePlugins()
+      .find((candidate) =>
+        candidate.tools.some((tool) => tool.name === invocation.name),
+      );
+    if (plugin !== undefined) {
+      const prepared = this.#pluginToolEnvironment.prepare(invocation);
+      return await this.#pluginToolEnvironment.execute(prepared);
+    }
     return await this.#registry.execute(invocation);
   }
 
@@ -280,6 +304,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   async close(): Promise<void> {
     await this.#unmountBrowser();
     await this.#registry.close();
+    await this.#pluginRuntimeSupervisor.close();
     if (!this.#computerRegistered) await this.#computerBackend?.close();
   }
 }

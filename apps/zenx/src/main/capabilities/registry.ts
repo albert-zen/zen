@@ -9,6 +9,7 @@ import type {
 } from "../../../../../src/tool.js";
 import type {
   RegisteredZenXCapability,
+  ZenXAvailablePlugin,
   ZenXCapabilityAuditRecord,
   ZenXCapabilityDisposer,
   ZenXCapabilityGrant,
@@ -33,10 +34,7 @@ import {
   MAX_CAPABILITY_OUTPUT_BYTES,
   MIN_CAPABILITY_OUTPUT_BYTES,
 } from "./types.js";
-import type {
-  AvailablePlugin,
-  PluginDiscoveryCatalog,
-} from "../plugin-discovery.js";
+import type { PluginDiscoveryCatalog } from "../plugin-discovery.js";
 
 export const CAPABILITY_RESOURCE_TOOL = "zenx_capability_resource";
 const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024;
@@ -640,7 +638,7 @@ export class ZenXCapabilityRegistry
     return { plugins, sidebar, pages };
   }
 
-  availablePlugins(): AvailablePlugin[] {
+  availablePlugins(): ZenXAvailablePlugin[] {
     return [...this.#registered.values()]
       .flatMap((registration) => {
         const manifest = registration.package.manifest;
@@ -652,6 +650,14 @@ export class ZenXCapabilityRegistry
         ) {
           return [];
         }
+        const tools = manifest.tools
+          .filter((tool) => this.#isToolExposed(manifest.id, tool))
+          .map(({ name, description, inputSchema }) => ({
+            name,
+            description,
+            inputSchema: structuredClone(inputSchema),
+          }));
+        if (tools.length === 0) return [];
         return [
           {
             id: manifest.id,
@@ -659,11 +665,7 @@ export class ZenXCapabilityRegistry
             description: manifest.description,
             status: "enabled" as const,
             mainDocument: manifest.mainDocument,
-            tools: manifest.tools.map(({ name, description, inputSchema }) => ({
-              name,
-              description,
-              inputSchema: structuredClone(inputSchema),
-            })),
+            tools,
           },
         ];
       })
@@ -754,6 +756,7 @@ export class ZenXCapabilityRegistry
         }
       }
       if (
+        manifest.schemaVersion === 1 &&
         manifest.resources.length > 0 &&
         this.#hasPermissions(
           manifest.id,
@@ -783,7 +786,7 @@ export class ZenXCapabilityRegistry
         },
       });
     }
-    return { definitions };
+    return { definitions, plugins: this.availablePlugins() };
   }
 
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {

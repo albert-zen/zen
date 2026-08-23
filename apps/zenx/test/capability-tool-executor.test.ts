@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { CanonicalItem } from "../../../src/item.js";
 import {
   createZenXHostToolEnvironment,
   ZenXHostToolExecutor,
@@ -10,8 +11,8 @@ import { shellPrintCommand } from "./fixtures/shell-command.js";
 
 test("real ZenX host composition preserves builtin and capability provider identities", async () => {
   const events: HostEvent[] = [];
-  const { capabilityProvider, toolEnvironment } = createZenXHostToolEnvironment(
-    {
+  const { capabilityProvider, toolEnvironment, toolDefinitionProjection } =
+    createZenXHostToolEnvironment({
       capabilities: {
         definitions: [
           {
@@ -22,7 +23,10 @@ test("real ZenX host composition preserves builtin and capability provider ident
         ],
       },
       send: (event) => events.push(event),
-    },
+    });
+  assert.deepEqual(
+    toolDefinitionProjection([]).map((definition) => definition.name),
+    ["shell", "fixture_inspect", "zenx_plugin"],
   );
   const signal = new AbortController().signal;
   const shell = toolEnvironment.prepare({
@@ -62,6 +66,78 @@ test("real ZenX host composition preserves builtin and capability provider ident
     exitCode: 0,
   });
   assert.deepEqual(await execution, { output: "bounded", exitCode: 0 });
+});
+
+test("real ZenX child-host projection hides v2 schemas until canonical read history", () => {
+  const pluginTool = {
+    name: "fixture_echo",
+    description: "Echo exact bytes",
+    inputSchema: {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
+    },
+  };
+  const { toolDefinitionProjection } = createZenXHostToolEnvironment({
+    capabilities: {
+      definitions: [pluginTool],
+      plugins: [
+        {
+          id: "fixture",
+          name: "Fixture",
+          description: "Desktop fixture plugin",
+          status: "enabled",
+          mainDocument: "Use fixture_echo for exact desktop fixture bytes.",
+          tools: [pluginTool],
+        },
+      ],
+    },
+    send: () => undefined,
+  });
+
+  const initial = toolDefinitionProjection([]);
+  assert.deepEqual(
+    initial.map((tool) => tool.name),
+    ["shell", "zenx_plugin"],
+  );
+  assert.deepEqual(initial.at(-1), {
+    name: "zenx_plugin",
+    description:
+      "Discover available ZenX plugins or read one plugin's main document and tool index.",
+    inputSchema: {
+      oneOf: [
+        {
+          type: "object",
+          properties: { operation: { const: "discover" } },
+          required: ["operation"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            operation: { const: "read" },
+            pluginId: { type: "string" },
+          },
+          required: ["operation", "pluginId"],
+          additionalProperties: false,
+        },
+      ],
+    },
+  });
+
+  const items = canonicalReadPair({
+    operation: "read",
+    plugin: {
+      id: "fixture",
+      name: "Fixture",
+      description: "Desktop fixture plugin",
+      status: "enabled",
+      mainDocument: "Use fixture_echo for exact desktop fixture bytes.",
+      tools: [{ name: "fixture_echo", description: "Echo exact bytes" }],
+    },
+  });
+  assert.deepEqual(toolDefinitionProjection(items), [...initial, pluginTool]);
 });
 
 test("exposes capability definitions and resolves main-process execution", async () => {
@@ -128,3 +204,29 @@ test("propagates cancellation to the main-process provider", async () => {
   await assert.rejects(execution, /stop/u);
   assert.equal(events.at(-1)?.type, "capability/cancel");
 });
+
+function canonicalReadPair(result: unknown): CanonicalItem[] {
+  const common = {
+    threadId: "thread",
+    turnId: "turn",
+    createdAt: "2026-08-24T00:00:00.000Z",
+  };
+  return [
+    {
+      ...common,
+      id: "call-item",
+      type: "tool_call",
+      callId: "read-fixture",
+      name: "zenx_plugin",
+      arguments: { operation: "read", pluginId: "fixture" },
+    },
+    {
+      ...common,
+      id: "result-item",
+      type: "tool_result",
+      callId: "read-fixture",
+      output: JSON.stringify(result),
+      exitCode: 0,
+    },
+  ];
+}
