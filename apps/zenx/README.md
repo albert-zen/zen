@@ -28,6 +28,63 @@ DTOs remain compatibility-only protocol types; they do not define ZenX's product
 model. The renderer and Agent self-control consume the same main-process Project
 projection instance.
 
+## Plugin platform contract and current status
+
+The checked-in capability system is a working skeleton, not the completed
+Plugin Platform. Today ZenX can register bundled modules and local process-backed
+capability packages, snapshot a static tool set into the child App Server host,
+bridge calls back to the main process, persist enabled/disabled state plus
+fine-grained grants, and project controlled sidebar/pages. It does not yet have
+the target dynamic Tool Environment, progressive discovery, complete
+install/uninstall lifecycle, generic UI SDK, structured result renderers, or a
+window-independent stable ZAS endpoint. `ToolResultItem` currently stores only
+text output and an exit code.
+
+The target contract is:
+
+- Zen's provider-neutral `AgentRuntime` owns the agent loop and the canonical
+  `tool_call` / `tool_result` lifecycle. Its Tool Environment combines builtin
+  providers such as `shell`, plugin providers, and external providers. Zen
+  resolves names, applies Host policy, routes, cancels, and writes results;
+  plugins or external services own their domain execution.
+- A Plugin Runtime may be a bundled module, child process, local service, or
+  remote service. Plugin Host and ZAS/AppServer are sibling services owned by
+  ZenX Host; neither plugin UI nor runtime owns Agent, Thread, Turn, or
+  transcript semantics.
+- The model initially sees builtin tools plus one stable `zenx_plugin` tool.
+  `discover` returns plugin id, name, short description, and status. `read`
+  returns the main document and tool index. Later model samples expose the
+  selected plugin's ordinary namespaced structured tool schemas.
+- Discovery uses ordinary existing tool calls/results. No plugin catalog or
+  tool-disclosure canonical Item is added. Existing model text, reasoning,
+  tool/title trace remains byte-for-byte unchanged; capability changes affect
+  only future projection or future call results.
+- The target tool policy is only default `full_access` and optional
+  `ask_unknown`. The latter keeps Host-owned `approvedTools` / `deniedTools` by
+  stable tool name and asks once for an unknown tool. The current capability
+  grants are implementation facts, not the target permission model; there is no
+  risk scoring, scope graph, or argument-level rules engine.
+- Plugin lifecycle is `installed` / `enabled` / `uninstalled`. Bundled plugins
+  can also be uninstalled and later reinstalled. Uninstall removes runtime, UI,
+  and tool registrations but retains plugin data by default; deleting data is a
+  separate explicit action.
+- Generic UI Host supports sidebar, pages/subroutes, settings, panel,
+  commands/menu, and result renderers. First-party and third-party plugins use
+  the same logical UI SDK, while third-party code runs isolated. Human plugin UI
+  actions do not create a Turn; only an explicit **Run Agent** action calls
+  AppServer.
+- Result renderers consume optional structured content on the existing
+  `ToolResultItem`, not a new Item type. Missing or disabled renderers fall back
+  to text/JSON without changing historical trace. Standalone Skills are
+  deferred; a plugin's main document is its primary model instruction.
+- ZenX Host will expose its single ZAS through a stable authenticated endpoint
+  that other apps can connect to. Closing every window keeps the Host running;
+  explicit Quit stops it. This phase does not create an OS daemon.
+
+Marketplace, signing, dependency solving, same-Turn parallel tool execution,
+and unrelated Provider/image/attachment/compaction refactors are outside this
+phase.
+
 ## Run
 
 ```sh
@@ -187,7 +244,7 @@ bounded recent context window. Agent replies in the Room link back to their
 source Thread and Turn. Thread watches similarly inject a bounded completed-Turn
 snapshot rather than copying a second authoritative transcript.
 
-## Capabilities
+## Current capability skeleton
 
 ZenX owns a capability registry outside Zen Core. It records bundled or local
 package provider/platform metadata, requested permission scopes, tool
@@ -198,21 +255,23 @@ Capability grants, per-call approval, and the execution sandbox remain separate
 concepts. A host may impose a background-only execution policy without treating
 that restriction as a missing grant.
 
-Capability packages are also the installed-plugin unit. A manifest may declare
-only controlled `pages` and `sidebar` contributions; the main-process registry
+Capability packages currently supply the plugin catalog/enablement skeleton; they
+are not the target installed-plugin lifecycle. A manifest may declare only
+controlled `pages` and `sidebar` contributions; the main-process registry
 projects enabled contributions through the typed `window.zenx.plugins` preload
 API and never gives a package DOM or router access. Enablement is persisted next
 to grants in the same atomic capability configuration document, but remains a
 separate field and meaning: disabling removes UI contributions and host tools,
-then aborts and settles already accepted package executions before the serialized
-App Server capability restart completes. Grant, revoke, and enablement mutations
-share one ordered configuration boundary, so concurrent UI requests cannot lose
-the last operation. Permission grants are retained and do not imply enablement.
-Tool-only packages are valid and simply contribute no UI.
+then aborts and settles already accepted package executions before the
+serialized App Server capability restart completes. Grant, revoke, and
+enablement mutations share one ordered configuration boundary, so concurrent UI
+requests cannot lose the last operation. Permission grants are retained and do
+not imply enablement. Tool-only packages are valid and simply contribute no UI.
 
-Triggers (`zenx-triggers`) and Rooms (`zenx-rooms`) are separate bundled
-packages over the existing Trigger/Room service. Each exposes only its own
-controlled product contributions. Disabling either package removes only its own
+Triggers (`zenx-triggers`) and Rooms (`zenx-rooms`) are currently separate
+bundled capability packages over the existing Trigger/Room service. Each exposes
+only its own controlled product contributions. Their migration to complete
+Plugin Packages is future work. Disabling either package removes only its own
 projection and tools; the Trigger/Room data model and canonical Turn delivery
 remain unchanged.
 
@@ -392,10 +451,12 @@ mature external implementations while retaining a runnable bundled baseline:
   VMware/VirtualBox/Docker/cloud is a useful reference, but no VM lifecycle is
   implemented in this PR. See <https://github.com/xlang-ai/OSWorld>.
 
-Local packages are JSON manifests placed in Electron `userData/capabilities`.
-They use schema version 1, declare permissions, structured tools and optional
-`skill`/`prompt` resources, and point at an executable inside the same package
-directory:
+Current local capability packages are JSON manifests placed in Electron
+`userData/capabilities`. They use schema version 1, declare permissions,
+structured tools and optional legacy `skill`/`prompt` instruction resources,
+and point at an executable inside the same package directory. This process-only
+loader is a skeleton; it is not the target bundled/process/local-service/remote-
+service Plugin Runtime contract or a standalone Skills platform:
 
 ```json
 {

@@ -1,6 +1,6 @@
 # ZenX UI/UX decisions
 
-更新日期：2026-08-22
+更新日期：2026-08-23
 
 ## 1. 文档权威与规则等级
 
@@ -23,6 +23,8 @@
 
 - Zen App Server（ZAS / `AppServer`）是按 `threadId` 路由 Thread、驱动 `AgentRuntime` 并广播 Item events 的唯一服务入口；它拥有 ZenX Agent / Thread / Turn 主流程的 authority。
 - ZenX 是围绕同一个 ZAS 构建的 Electron 产品。Electron main 托管并组合本机 ZAS host，同时持有 desktop-only host profile、capability、Trigger / Room 等外层产品状态；renderer 经 main/preload typed IPC 消费产品投影。
+- 目标 ZenX Host 同时拥有并列的 ZAS/AppServer 与 Plugin Host 服务。Plugin Host 负责插件生命周期、UI/tool 注册与 Runtime 路由，但不拥有 Agent、Thread、Turn 或 transcript；人类直接操作插件 UI 不创建 Turn，只有显式 **Run Agent** 才调用 AppServer。
+- 目标 ZAS 暴露稳定、带认证、可供其他应用连接的 endpoint。关闭最后一个窗口只关闭 UI，不停止 ZenX Host；显式 Quit 才停止 Host 和 ZAS。本阶段不做 OS daemon。当前实现仍使用 child-host 临时 loopback endpoint，且 Windows/Linux 关闭所有窗口会退出，因此这项是目标合同而非已完成行为。
 - Renderer、native IPC 与外层产品功能不复制 ZAS 的 Agent、Thread、Turn、transcript 或 scheduler authority。Codex protocol 是同一 ZAS 面向兼容客户端的 wire adapter；Codex DTO 不反向定义 ZenX 产品模型，也不是 renderer 的产品读取路径。
 - Thread 会话内容与执行结果来自 append-only canonical ItemList。流式 delta 只用于实时显示，不能被 UI 当作第二份 durable history。
 - Thread 列表产品数据来自 ZAS native `ThreadSummary` / `CurrentMetadata` read model，经 Electron main/preload typed IPC 投影。
@@ -234,7 +236,8 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - restart-required changes 必须在当前 route 明确反馈 pending、success 和 failure；具体使用顶部或内容区动作、动作名称、何时 enabled/emphasized，待 Settings action contract 确认。
 - 本地 service state 是弱状态信息：Sidebar 左下 Settings row 的最右侧显示一个不单独可点击的状态点，hover tooltip 与 Settings 的 accessible name 提供具体状态；它不再占用独立文字行，也不得盖过用户可执行设置。主区仍保留 starting、reconnecting 与 error 的阻断说明。
 - 未配置 host 的首次启动进入 provider onboarding；Subscription、OpenAI-compatible API 与 local demo 的 credential/configuration 仍遵守 Host/Core 安全边界。
-- Settings → Plugins 是已安装插件的统一管理入口。Agent page 不散落插件管理 UI；Marketplace、安装、grant 与 Provider configuration 的准确 UX 仍按第 6 节标为 **TBD**。
+- Settings → Plugins 是已安装插件的统一管理入口。Agent page 不散落插件管理 UI；它必须表达 `installed` / `enabled` / `uninstalled` 生命周期。Bundled plugin 也可卸载并以后重装；卸载默认保留数据，“删除数据”是独立显式动作。
+- 插件工具策略只呈现默认 `full_access` 与可选 `ask_unknown`。后者按稳定 tool name 展示 Host-owned approved/denied 结果；未知工具只询问一次。不为现有 capability grants 延续 risk level、scope graph、参数权限矩阵或复杂 grant UX。
 
 ## 5. Responsive 与 accessibility guidance
 
@@ -263,23 +266,25 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 ### 6.1 已确认的 contribution 边界
 
-- Trigger 与 Room 是两个同级 plugin，不是 ZenX 核心导航；插件统一在 Settings 管理。
-- 已启用 plugin 可以向受控 Plugin spaces 与受控 page surface 贡献入口，但不取得 DOM、router、Chat、Composer、Thread Item 层级或核心导航的修改权。
+- 当前 capability registry、typed plugin snapshot 与 sidebar/page projection 只是可运行骨架，不代表 Generic UI Host、Plugin UI SDK、隔离第三方 renderer 或完整 install/uninstall 已实现。Triggers 与 Rooms 当前是两个 bundled capability packages，目标是迁移为同级 Plugin Packages，而不是 ZenX 核心导航。
+- 目标 Generic UI Host 支持 sidebar、pages/subroutes、settings、panel、commands/menu 与 namespaced result renderers。第一方 bundled plugin 与隔离运行的第三方 plugin 使用同一逻辑 Plugin UI SDK，不建立两套 contribution 语义。
+- 已启用 plugin 可以使用这些受控 surfaces，但不取得核心 DOM、router、Chat、Composer、Thread Item 层级或导航 authority。第三方 UI/runtime 必须隔离；第一方信任边界不同也不允许绕过逻辑 SDK。
 - Sidebar 的 Plugin spaces 位于**整个 Projects group 之前**。Plugin contribution 不能插入 Projects header 与 Project/Thread list 之间，也不能把这个 group 拆成两段。
-- 禁用 plugin 后，它当前激活的 Sidebar/page contributions、routes 和 host tools 不再可达；禁用不等于卸载或删除，已安装 implementation 与既有 plugin data 必须保留。
+- 人类使用插件页面、settings、panel、command/menu 或普通领域 action 不创建 Turn；只有标为 **Run Agent** 的显式动作才调用 AppServer 并产生普通 canonical Turn。
+- Plugin 生命周期只有 `installed`、`enabled`、`uninstalled`。Disable 撤销 active UI/tools 但保留安装；Uninstall 撤销 runtime/UI/tool 注册并默认保留 data。Bundled plugin 也可卸载和重装；删除 data 必须是独立动作。
+- Result renderer 只读取既有 `ToolResultItem` 上的可选 structured content；它缺失、disabled 或 uninstalled 时使用 text/JSON fallback。历史模型文本、reasoning、tool call/result 与 title trace 保持原样，不能为 renderer 或能力变化扫描、脱敏或重写。
 
 ### 6.2 Experiment / guidance / TBD
 
 以下内容尚未获得最终产品确认，不能作为 durable UI contract：
 
-- manifest、version、signature、integrity 与 Provider diagnostics 的用户呈现；
+- manifest、version 与 Provider diagnostics 的准确用户呈现；
 - Plugin contributions 的准确数量、label、排序、稳定 key、次级 routes 与冲突处理；
-- enablement 的持久化范围、禁用时 in-flight calls 的 UI，以及跨 plugin dependency 缺失或禁用时的准确 UX；
-- Marketplace / catalog 的安装、更新、信任、回滚与远端分发流程；
-- grant、revoke、approval、sandbox 与 restart-required changes 在 Settings 中的准确 controls 和 action contract；
+- 禁用/卸载时 in-flight calls 的准确 UI，以及安装、更新、重装的具体 controls 和 action contract；
+- `ask_unknown` 首次询问、approved/denied 管理与 restart-required changes 的准确 controls；
 - Triggers / Rooms 的准确 page layout、Trigger 类型展示、Room dependency 提示、Source Thread 跳转、Signal simulator 与 error/retry 文案。
 
-Architecture 与当前实现可以定义 package、grant、runtime 和 Trigger/Room 数据边界，但这些事实不会自动决定最终 UI。确认前，原型与 issue 中的具体表现只作为实验或工程 guidance。
+Marketplace、签名、dependency solver、risk scoring 与复杂 permission/sandbox 框架明确不在本阶段，不能以 TBD 名义预埋。Architecture 与当前实现可以定义 package、runtime 和 Trigger/Room 数据边界，但这些事实不会自动决定最终 UI。确认前，原型与 issue 中的具体表现只作为实验或工程 guidance。
 
 ## 7. Implementation acceptance
 
@@ -303,7 +308,7 @@ ThreadView
 
 ### 7.2 数据与失败边界
 
-- 正式实现绑定 canonical Item、ZAS events、Host plugin manifests、grants、approval、provider config 和 runtime state，不复制 prototype data model。
+- 正式实现绑定 canonical Item、ZAS events、Host plugin manifests、`full_access` / `ask_unknown` policy、approval、provider config 和 runtime state，不复制 prototype data model，也不把当前 capability grants 当成目标插件权限模型。
 - Item streaming、tool status 与 disclosure 更新同一稳定 identity，避免 DOM 重建造成 focus/scroll loss。
 - Query、mutation、provider、archive 和 restart failure 都在相关页面明确告知用户；不得建立 UI durable repair state machine。
 - Stale async reads 不能覆盖较新 selection；active-Turn gating 不能因切换 Thread 或 summary refresh 丢失。
@@ -337,7 +342,11 @@ ThreadView
 - [ ] 不同宽度下无页面级横向滚动或 action/title overlap；不假定最终 breakpoint 或 mobile drawer contract。
 - [ ] Enter、Space、Escape、outside-click、focus return 和 reduced motion 行为正确。
 - [ ] Plugin contributions 只能出现在 Plugin spaces / controlled pages，不能重排核心导航或拆开 Projects group。
-- [ ] 禁用 plugin 撤销 active contributions/routes/tools，同时保留已安装 implementation 与既有 data。
+- [ ] Generic UI Host 覆盖 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderers；第一方和隔离第三方使用同一逻辑 SDK。
+- [ ] 普通 plugin UI action 不创建 Turn；只有显式 Run Agent 经 AppServer 创建普通 Turn。
+- [ ] Disable 撤销 active UI/routes/tools 并保留安装；Uninstall 对 bundled/third-party 都撤销注册、允许重装且默认保留 data；Delete data 是独立动作。
+- [ ] Plugin result renderer 不可用时历史 ToolResult 使用 text/JSON fallback，canonical trace 不被改写。
+- [ ] 关闭最后一个窗口后 Host/ZAS 继续服务稳定认证 endpoint；显式 Quit 才停止，且不依赖 OS daemon。
 - [ ] Browser console 无由上述交互产生的 warning/error。
 
 ## 8. Prototype boundary

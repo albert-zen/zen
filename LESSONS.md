@@ -14,6 +14,21 @@
 - 把多 agent 委派做成持久化领域模型（委派是模型和 runtime 的运行时能力，
   不是 Zen 的数据模型）
 - 把流式 delta 逐条持久化（delta 只用于实时显示，journal 只收完整的 Item）
+- 为插件发现或能力披露新增 `PluginCatalogSnapshotItem`、`ToolDisclosureItem`
+  等 canonical Item（发现继续使用普通 tool call/result，从 ItemList 推导）
+- 为每个插件建立 AgentRuntime、Thread、Turn、transcript 或 durable recovery
+  state machine（Plugin Runtime 只拥有领域执行）
+- 扫描、脱敏、重写模型文本、reasoning、tool call/result、title 等既有 trace；
+  provider/plugin 能力变化只影响后续投影与调用结果
+- risk scoring、参数级 scope graph、permission rules engine 或复杂 sandbox 产品矩阵；
+  工具策略只保留默认 `full_access` 与可选 `ask_unknown`
+- Plugin marketplace、签名 PKI、跨插件 dependency solver；bundled/local 安装生命周期
+  先完整成立，再讨论分发体系
+- OS daemon、launch agent、云端 Plugin/ZAS service；本阶段 ZenX Host 只在应用进程中
+  跨窗口存活，显式 Quit 后停止
+- 独立 Skills 平台；本阶段插件以 main document 提供首要模型说明
+- 同一 Turn 的并行工具执行，以及借 Plugin Platform 顺带进行 Provider、图片、
+  attachment 或 compaction 重构
 - 覆盖率门禁、按层重复跑的测试矩阵
 - 与 zen-legacy 的数据、协议、接口兼容
 

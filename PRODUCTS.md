@@ -21,16 +21,37 @@ stub App Server 记录真实调用，在不污染 Zen Core 的前提下扩展协
 host、Thread 列表与恢复、流式 Item、审批、模型切换、soft steer、interrupt 与
 Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / Room，
 以及可显式授权的 bundled/local capability registry 已形成可运行 vertical slice。
+这套 capability package / registry、child-host bridge 与 sidebar/page snapshot 是
+Plugin Platform 的**当前骨架**，不是已经完成的 Plugin Host、Tool Environment 或
+Generic UI Host。
 ZenX 的产品读取模型来自 ZAS 原生 `ThreadSummary` 查询，并经 Electron main/preload
 typed IPC 暴露；Codex Thread DTO 只属于兼容协议 adapter，不定义 ZenX 产品模型。
 高保真 renderer 的当前 UI/UX 合同单独维护在 `apps/zenx/docs/ui-ux.md`，本文件不重复
 具体布局。Thread 的重命名、归档与取消归档全部通过既有 App Server 操作；Archive
 作为可逆的安全删除替代，不提供永久删除，也不在活动 Turn 期间暗改 Thread 设置。
-Capability package 同时是首期插件安装单元：main/preload 提供 typed plugin snapshot，Host 只从
-manifest 投影已启用 package 的受控 Sidebar/page contribution。Triggers 与 Rooms 已拆成两个
-独立 bundled plugins；任一关闭后，其 contribution 与 host tools 同时撤销，并通过既有 Capability
-restart 路径更新运行时。Package enablement 与 permission grant
-保存在同一原子 capability 配置文档的不同字段；grant、per-call approval 与 sandbox 仍是独立状态。
+当前 capability package 暂时承担插件骨架：main/preload 提供 typed plugin snapshot，Host 只从
+manifest 投影已启用 package 的受控 Sidebar/page contribution。Triggers 与 Rooms 当前是两个
+bundled capability packages；任一关闭后，其 contribution 与 host tools 同时撤销，并通过既有
+Capability restart 路径更新运行时。Package enablement 与细粒度 permission grants 保存在同一
+原子配置文档的不同字段；这准确描述当前实现，但不是目标生命周期或权限合同。
+
+目标 Plugin Platform 保持 Zen `AgentRuntime` 拥有 provider-neutral agent loop 和 canonical
+tool call/result；混合 Tool Environment 组合 builtin、plugin 与 external providers，Zen 负责解析、
+Host policy、路由和回写，插件或外部服务拥有实际领域执行。Plugin Runtime 可以是 bundled module、
+child process、本地服务或远程服务。模型初始只看到 builtin tools 与 `zenx_plugin`：`discover`
+返回 id/name/short description/status，`read` 返回 main document/tool index，随后采样才披露所选
+插件的普通 namespaced schemas。整个过程只使用既有 tool call/result，不新增 discovery Item。
+
+目标插件生命周期只有 installed / enabled / uninstalled；bundled plugin 同样可卸载、以后重装，
+卸载默认保留数据，删除数据是独立动作。目标权限只有默认 `full_access` 与可选 `ask_unknown`；后者
+由 Host 按稳定 tool name 维护 approved/denied 集合，不保留现有细粒度 grant UX，也不增加风险引擎。
+通用 UI Host 将支持 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderers，
+第一方/第三方共用逻辑 UI SDK且第三方隔离运行。直接操作插件 UI 不创建 Turn，只有显式 Run Agent
+才调用 AppServer。现有 `ToolResultItem` 后续只增加可选 structured content；renderer 缺失时使用
+text/JSON fallback，历史文本、reasoning、tool/title trace 永不扫描或改写。
+
+ZAS 与 Plugin Host 是 ZenX Host 下的并列服务。目标 ZAS 仍由 ZenX Host 拥有，但向其他应用暴露
+稳定、带认证的 endpoint；关闭窗口不停止 Host，显式 Quit 才停止。本阶段不做 OS daemon。
 首批 browser provider 默认优先复用 Playwright CLI 的跨平台 headless 隔离 session，缺失或不兼容时
 回落到 bundled Electron/CDP 临时 profile；用户也可显式选择 loopback CDP user-session
 provider 附着到自己预先开启的 Chrome/Edge/Chromium，原位使用认证状态而不导出 cookie、
@@ -39,7 +60,8 @@ storage 或 auth header，连接失败时绝不回落到隔离登录态；三者
 当前 macOS provider 优先复用 Peekaboo 3.x 的 background-first 操作，缺失或不兼容时以 bundled
 AX/窗口定向截图和明确提示、可取消的前台输入形成基线；
 后续 Windows provider 可用 UIA/Windows Graphics Capture/SendInput 接入同一 seam；manifest、权限、
-provider 与 skill/prompt 均由 ZenX 持有，不进入 Zen Core 或 Codex 协议。上述外层配置
+provider 与当前 capability instruction resources 均由 ZenX 持有，不进入 Zen Core 或 Codex 协议；
+独立 Skills 平台暂缓，目标插件以 main document 承担首要说明。上述外层配置
 和调度状态不进入 Zen Core，命中 Trigger 仍只通过 App Server 发起普通 Turn；在真实
 桌面验收完成前不夸大为稳定发布。
 
@@ -93,17 +115,18 @@ presenter；其他扩展位置缺席，因此保持 SDK 默认行为。
 
 ## 里程碑
 
-| 阶段 | 当前结果                                                                  | 状态                                 |
-| ---- | ------------------------------------------------------------------------- | ------------------------------------ |
-| 1    | VISION / ARCHITECTURE / LESSONS / PRODUCTS 定义当前产品边界               | 完成                                 |
-| 2    | 协议钉在 codex-cli 0.146.0；精确子集记录在 `src/protocol/codex/README.md` | 完成                                 |
-| 3    | 内存 ItemList → Runtime → App Server → FakeModel 事件链                   | 完成                                 |
-| 4    | 每 Thread 一个 append-only JSONL；stale open Turn 派生为 interrupted      | 完成                                 |
-| 5    | shell + command item 瞬态审批；accept / decline / cancel / interrupt      | 完成                                 |
-| 6    | 薄 Zen CLI；stdio 与 loopback WebSocket                                   | 完成                                 |
-| 7    | OpenAI-compatible 与 ChatGPT subscription adapters；两轮 tool-call        | 实现完成；订阅真实网络闭环已通过     |
-| 8    | 独立 IMZen；组合固定提交的 IM Agent SDK                                   | SDK/本地闭环通过；真实 QQ 需频道凭证 |
-| 9    | ZenX 桌面 vertical slice；Provider、Markdown、Trigger / Watching / Room   | 开发中                               |
+| 阶段 | 当前结果                                                                          | 状态                                 |
+| ---- | --------------------------------------------------------------------------------- | ------------------------------------ |
+| 1    | VISION / ARCHITECTURE / LESSONS / PRODUCTS 定义当前产品边界                       | 完成                                 |
+| 2    | 协议钉在 codex-cli 0.146.0；精确子集记录在 `src/protocol/codex/README.md`         | 完成                                 |
+| 3    | 内存 ItemList → Runtime → App Server → FakeModel 事件链                           | 完成                                 |
+| 4    | 每 Thread 一个 append-only JSONL；stale open Turn 派生为 interrupted              | 完成                                 |
+| 5    | shell + command item 瞬态审批；accept / decline / cancel / interrupt              | 完成                                 |
+| 6    | 薄 Zen CLI；stdio 与 loopback WebSocket                                           | 完成                                 |
+| 7    | OpenAI-compatible 与 ChatGPT subscription adapters；两轮 tool-call                | 实现完成；订阅真实网络闭环已通过     |
+| 8    | 独立 IMZen；组合固定提交的 IM Agent SDK                                           | SDK/本地闭环通过；真实 QQ 需频道凭证 |
+| 9    | ZenX 桌面 vertical slice；Provider、Markdown、Trigger / Watching / Room           | 开发中                               |
+| 10   | ZenX Plugin Platform：Tool Environment、Plugin Host/Runtime、通用 UI/ZAS 生命周期 | 合同已确认；当前仅 capability 骨架   |
 
 原版 `codex --remote` 0.146.0 还会调用账户、模型、配置、hooks 等 bootstrap
 方法，Zen 当前明确返回 unsupported，因此不宣称兼容原版 TUI。这不阻塞 Zen CLI，

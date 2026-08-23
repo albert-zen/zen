@@ -8,8 +8,21 @@
   工具调用、工具结果与失败，都是 Item。
 - **Thread** — 一个 agent 上下文，权威状态是一条 append-only 的 Item list。
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
-- **AgentRuntime** — 驱动一个 Thread 的循环：从 ItemList 编译上下文 → 调用模型 → 执行工具，把发生的一切追加为 Item。
+- **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
+- **Tool Environment** — AgentRuntime 面向的混合工具执行环境，统一解析、投影、Host policy、取消、路由与结果回写，但不要求 Zen 自己实现每个工具的领域行为。
+- **Builtin Tool Provider** — Zen 内建并直接执行的工具 provider，例如 `shell`，其执行仍经同一个 Tool Environment 和 canonical call/result 生命周期。
+- **Plugin Tool Provider** — Tool Environment 把 namespaced plugin tool 调用路由到 Plugin Runtime 的 provider，领域执行由插件拥有，Zen 只负责 admission、路由和结果回写。
+- **External Tool Provider** — Tool Environment 把调用路由到 Zen/ZenX 之外服务的 provider，外部服务拥有领域执行，Zen 仍保留 Host policy 与 canonical settlement。
+- **ZenX Host** — 独立于窗口生命周期的桌面宿主进程所有权边界，同时组合 Plugin Host 与 ZAS/AppServer 两项并列服务；关闭窗口不停止 Host，只有显式 Quit 才停止它。
+- **Plugin Host** — ZenX Host 中负责插件 catalog、生命周期、UI/工具注册、Host policy 与 Runtime 路由的服务；它与 ZAS/AppServer 并列，不拥有 Agent、Thread、Turn 或 transcript。
+- **Plugin Runtime** — 实际执行插件领域行为的运行边界，可以是 bundled module、child process、本地服务或远程服务，失败由调用明确返回且不建立自动修复状态机。
+- **Plugin Package** — 使用统一 manifest、main document、tools、UI contributions 与数据 namespace 的安装单元，生命周期只有 `installed`、`enabled`、`uninstalled`，bundled 与第三方 package 遵守同一合同。
+- **Plugin Discovery Projection** — 常驻 `zenx_plugin` 工具用普通 `discover` / `read` 调用选择后续模型可见插件能力；选择事实只由既有 tool call/result 推导，不新增 catalog/disclosure Item。
+- **Generic UI Host** — ZenX 为插件提供 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer 的受控宿主 surface，不允许插件直接接管核心 DOM、router 或 Agent 页面语义。
+- **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
+- **Tool Result Renderer** — 按 namespaced content type 渲染既有 `ToolResultItem` 可选 structured content 的插件 UI contribution；renderer 缺失时必须回退 text/JSON，且不得改写历史 Item。
+- **ZenX ZAS Endpoint** — ZenX Host 拥有的稳定、带认证、可供其他应用连接的固定 Codex App Server endpoint；它不创建第二个 AppServer authority，也不要求 OS daemon。
 - **AttachmentStore** — ZAS 管理的不可变、SHA-256 内容寻址 payload store；
   canonical Item 只保存 provider-neutral `AttachmentRef`，Store 与 ItemList 合起来才足以重放输入，
   它不保存消息、Turn、引用关系或任何第二份会话状态。
@@ -125,18 +138,14 @@
   `turn/start` 所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
 - **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
-- **ZenXCapabilityRegistry** — ZenX 主进程注册 bundled/local capability package 的 manifest、
-  显式权限与 provider，把已授权的结构化工具和 skill/prompt 资源组合进本机 host；执行历史仍只由
-  canonical tool call/result 投影，Host 不主动把 credential 配置、浏览器会话或默认屏幕内容写入
-  journal，但 provider 返回的工具内容属于 trace，不按 credential 字节扫描或改写。
-- **ZenXPluginContribution** — Capability package 可在 manifest 中声明受控的 sidebar/page
-  contribution；registry 只投影已启用 package 的稳定 `pluginId:contributionId`，renderer 通过
-  typed main/preload snapshot 消费，package 不取得 DOM、router 或核心导航的修改权。
-- **ZenXCapabilityConfiguration** — ZenX 主进程在同一原子配置文档中分别持久化 package
-  enablement 与 permission grants；enablement 决定 package 的 host/UI 投影，grant 只决定工具和
-  resource 权限，二者的 mutation 按调用顺序线性化且都不进入 Core、Thread 或 canonical ItemList；
-  disable 持久化成功后 registry 先关闭新调用接纳与 host/UI projection，再 abort 并等待该 package
-  已接纳 invocation 归约，App Server capability restart 同样串行执行。
+- **ZenXCapabilityRegistry** — 当前 ZenX 骨架在主进程注册 bundled/local capability manifest、
+  细粒度 grant、provider、结构化工具与 sidebar/page snapshot；它证明 host-to-Agent bridge 可行，
+  但不是目标 Plugin Host、完整生命周期、渐进发现或通用 UI SDK。
+- **ZenXPluginContribution** — 当前 capability 骨架从 manifest 投影已启用 package 的受控
+  sidebar/page contribution；它不授予 DOM/router 权限，也不能被描述为已经实现 Generic UI Host。
+- **ZenXCapabilityConfiguration** — 当前骨架在同一原子配置文档中持久化 enablement 与细粒度
+  permission grants，并按顺序重启 capability host；这些 grants 是现状而非目标权限合同，后续
+  Plugin Host 只保留 `full_access` 与可选 `ask_unknown`。
 - **ZenXCapabilityInteractionMode** — ZenX 把工具声明为不改变全局输入/焦点的 `background_safe`
   、必须接管前台的 `foreground_required` 或在独立桌面执行的 `isolated`，让产品提示、调度和 host policy
   协商实际影响且禁止静默降级。
@@ -237,6 +246,70 @@
 转交 Runtime；credential 只由宿主的外部配置解析，不进入协议或 Thread。
 Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派生的分组视图，
 不是运行时容器。
+
+## Plugin Platform 与 Tool Environment 目标合同
+
+本节描述目标架构，不声称已经实现。当前代码只有 provider-neutral
+`AgentRuntime` 的普通 tool loop、builtin `shell`、静态 `ToolExecutor`，以及 ZenX
+capability package / registry / child-host bridge / sidebar-page projection 骨架。
+当前 `ToolResultItem` 也只有 text output 与 exit code；Plugin Host、动态 Tool
+Environment、渐进发现、完整 install/uninstall、Generic UI Host、structured result
+content 和独立于窗口的稳定 ZAS endpoint 都仍是后续节点。
+
+### 工具执行与发现
+
+- AgentRuntime 始终拥有模型采样、provider-neutral tool loop，以及 canonical
+  `tool_call` / `tool_result` 的编译和记录；Plugin Runtime 不能拥有自己的 AgentRuntime。
+- Tool Environment 同时组合 Builtin、Plugin 与 External Tool Providers。Zen 解析
+  stable tool name、执行 Host policy、路由与回写；插件或外部服务可以拥有实际领域执行。
+- 模型初始只看到 builtin tools 与一个稳定入口 `zenx_plugin`。`discover` 只返回
+  plugin id、name、short description、status；`read` 返回 main document 与 tool index。
+  读取后，从后续模型采样开始披露该插件普通、namespaced structured tool schemas。
+- `discover`、`read` 与后续插件调用全部使用既有普通 `tool_call` / `tool_result`。
+  不新增 `PluginCatalogSnapshotItem`、`ToolDisclosureItem` 或任何其他 canonical Item；
+  重放时从 ItemList 中已有调用与结果派生后续投影。
+- 插件 main document 是首要模型说明；独立 Skills 平台暂缓，现有固定协议
+  `skills/list` 不因此获得新的会话语义。
+- 同一模型响应产生的多个工具调用当前仍按顺序执行；同一 Turn 的真正并行执行
+  是后续效率优化，不属于本阶段。
+
+### 历史、结果与能力变化
+
+- 已写入的模型文本、reasoning、tool calls/results、title 与其他 trace 必须逐字保持。
+  Zen/ZenX 不扫描、改写或按 credential 字节脱敏历史 trace；能力变化只影响后续
+  模型投影或后续调用结果。
+- structured result content 将作为既有 `ToolResultItem` 的可选字段进入同一
+  canonical Item，不新增 result Item 类型。Plugin result renderer 只决定展示；
+  renderer 不可用、插件 disabled/uninstalled 或版本变化时，历史仍以 text/JSON
+  fallback 可读，原始 trace 不变。
+
+### 权限与 Host policy
+
+- 目标工具策略只有两档：默认 `full_access` 直接执行；可选 `ask_unknown` 由 Host
+  按稳定 tool name 维护 `approvedTools` / `deniedTools`。未知工具只询问一次，允许后
+  加入 approved，拒绝后加入 denied。
+- 不引入 risk scoring、参数级 scope graph、权限矩阵、rules engine 或复杂 sandbox
+  产品框架。当前 capability registry 的 permission scopes/grants 是骨架现状，不能
+  反向定义目标 Plugin Platform。
+
+### 插件生命周期、UI 与 ZAS
+
+- Plugin Package 生命周期只有 `installed`、`enabled`、`uninstalled`。Bundled plugin
+  也可以卸载并在以后重装；卸载撤销 runtime/UI/tool 注册但默认保留 plugin data，
+  “删除数据”是独立显式动作。
+- Plugin Runtime 可为 bundled module、child process、本地服务或远程服务，并拥有
+  实际领域执行。Plugin Host 负责解析、admission、路由、取消与显式失败，不做
+  durable 自动恢复。
+- Generic UI Host 支持 sidebar、pages/subroutes、settings、panel、commands/menu 与
+  result renderers。第一方和第三方使用同一逻辑 Plugin UI SDK；第三方在隔离边界运行。
+- 人类直接操作插件 UI 不创建 Turn。只有插件提供的显式 **Run Agent** 动作才通过
+  AppServer 发起普通 Turn；插件的查询、存储与领域 mutation 不得绕出 Plugin Host
+  或复制 Thread/Turn authority。
+- Plugin Host 与 ZAS/AppServer 是 ZenX Host 下的并列服务。ZAS 继续由 ZenX Host
+  拥有并暴露稳定、带认证的可连接 endpoint；关闭所有窗口不停止 Host，显式 Quit
+  才停止。当前阶段不实现 OS daemon、launch agent 或云端 service。
+- 本阶段不建设 marketplace、签名 PKI、dependency solver，也不顺带重构 Provider、
+  图片、attachment 或 compaction。
 
 ## 不变量
 
@@ -438,11 +511,12 @@ Zen 只在 Codex 0.146.0 没有等价原子语义时增加明确命名的协议�
   只允许按被拒 access token 作为跨进程比较条件刷新并重试一次，避免并发刷新覆盖
   已轮换 credential。provider 的 sessionId 只允许作为可丢弃的
   transport cache / affinity hint，不得映射或持久化第二套 Thread。
-- **工具** — shell 等工具的实际执行。
+- **工具** — AgentRuntime 只依赖 Tool Environment；builtin `shell` 由 Zen 执行，plugin / external
+  tools 分别路由到拥有领域行为的 Plugin Runtime 或外部服务。
 - **审批** — 审批请求的呈现与应答（各接入端自行实现 UI）。
-- **接入端权限预设** — `Full Access` / `Approval Required` 只是接入端对新
-  Thread 的显示与配置预设，分别投影为独立的 sandbox 与 approval policy
-  协议字段；它不修改已有 Thread，也不进入 Zen Core。
+- **接入端权限预设** — 当前固定 Codex wire 仍分别携带 sandbox 与 approval 字段；
+  Plugin Platform 的目标产品策略只把它们归约为默认 `full_access` 与可选
+  `ask_unknown`，不由接入端扩展新的 risk/scope 权限模型。
 
 ## 并发
 
