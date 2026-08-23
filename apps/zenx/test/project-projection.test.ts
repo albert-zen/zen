@@ -82,6 +82,25 @@ test("does not invent a Project when host configuration is empty", async () => {
   assert.equal(await projection.configuredWorkspace("C:\\unconfigured"), null);
 });
 
+test("a valid Thread cwd derives an actionable configured Project", async () => {
+  const projection = new ZenXProjectProjection("linux");
+  await projection.updateConfiguration([], null);
+
+  const snapshot = await projection.project([
+    { id: "historical-thread", cwd: "/work/historical" },
+  ]);
+
+  assert.deepEqual(snapshot.projects, [
+    {
+      key: "/work/historical",
+      workspace: "/work/historical",
+      configured: true,
+      isDefault: false,
+      threadIds: ["historical-thread"],
+    },
+  ]);
+});
+
 test("drops a last-used workspace that is no longer configured", async () => {
   const projection = new ZenXProjectProjection("linux");
   await projection.updateConfiguration(

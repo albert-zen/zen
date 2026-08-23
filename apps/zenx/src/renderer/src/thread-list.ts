@@ -79,9 +79,11 @@ export function projectThreadStartParams(workspace: string | null): {
 
 export async function startProjectThread<T>(
   workspace: string,
+  configure: (workspace: string) => Promise<unknown>,
   start: (params: { cwd: string }) => Promise<T>,
   onStarted: (workspace: string) => void,
 ): Promise<T> {
+  await configure(workspace);
   const result = await start(projectThreadStartParams(workspace));
   onStarted(workspace);
   return result;

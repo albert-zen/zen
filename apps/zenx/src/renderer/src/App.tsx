@@ -540,6 +540,7 @@ export function App() {
     try {
       const result = await startProjectThread(
         workspace,
+        async (candidate) => await window.zenx.settings.addWorkspace(candidate),
         async (params) =>
           await window.zenx.protocol.request("thread/start", params),
         (startedWorkspace) => {
@@ -943,7 +944,11 @@ export function App() {
         }}
         onSetDefaultProject={(workspace) => {
           void window.zenx.settings
-            .setDefaultWorkspace(workspace)
+            .addWorkspace(workspace)
+            .then(
+              async () =>
+                await window.zenx.settings.setDefaultWorkspace(workspace),
+            )
             .then(async () => await loadProjects())
             .catch((error: unknown) => setRequestError(describeError(error)));
         }}

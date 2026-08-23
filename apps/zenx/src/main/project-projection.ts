@@ -170,7 +170,7 @@ export class ZenXProjectProjection {
       const project = projects.get(identity.key) ?? {
         key: identity.key,
         workspace: identity.displayPath,
-        configured: false,
+        configured: true,
         isDefault: identity.key === defaultKey,
         threadIds: [],
       };

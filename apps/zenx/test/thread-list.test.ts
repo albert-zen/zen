@@ -287,6 +287,7 @@ test("records last-used only after Project Thread creation succeeds", async () =
   await assert.rejects(
     startProjectThread(
       "/work/failing",
+      async () => undefined,
       async () => {
         throw new Error("start failed");
       },
@@ -298,6 +299,7 @@ test("records last-used only after Project Thread creation succeeds", async () =
 
   const result = await startProjectThread(
     "/work/created",
+    async () => undefined,
     async (params) => ({ id: "thread-created", ...params }),
     (workspace) => remembered.push(workspace),
   );
@@ -306,6 +308,28 @@ test("records last-used only after Project Thread creation succeeds", async () =
     cwd: "/work/created",
   });
   assert.deepEqual(remembered, ["/work/created"]);
+});
+
+test("configures a derived Project before starting its Thread", async () => {
+  const events: string[] = [];
+
+  await startProjectThread(
+    "/work/derived",
+    async (workspace) => {
+      events.push(`configure:${workspace}`);
+    },
+    async ({ cwd }) => {
+      events.push(`start:${cwd}`);
+      return { id: "thread-derived" };
+    },
+    (workspace) => events.push(`started:${workspace}`),
+  );
+
+  assert.deepEqual(events, [
+    "configure:/work/derived",
+    "start:/work/derived",
+    "started:/work/derived",
+  ]);
 });
 
 test("presents trigger wakeups without leaking raw system prompts", () => {
