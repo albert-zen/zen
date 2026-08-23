@@ -34,8 +34,16 @@ Plugin Package v2 manifest 与 Host-owned Catalog 已建立 installed / enabled 
 安装事实与独立 enablement；旧 capability grants 原样迁移保留但不再定义目标权限 UX。Bundled
 Triggers/Rooms 与本地 v2 process package 使用同一 install/lifecycle API；disable/uninstall 会撤销
 当前 runtime/tool/sidebar/page 注册，bundled package 可从应用提供的 package 重装。Uninstall 默认
-保留 namespaced plugin data，显式 delete-data 只删除目标 namespace。Plugin Runtime Supervisor、
-完整 SDK/migrations 与 Generic UI Host 仍未实现。
+保留 namespaced plugin data，显式 delete-data 只删除目标 namespace。
+
+Plugin Runtime Supervisor 与统一 ABI 现已实现为 ZenX Host seam：trusted bundled module、持续 child
+process 和 HTTP service 都归约为同一个 namespaced tool invocation/result、取消和 close 合同，并作为
+独立 plugin provider 注入 Tool Environment。Catalog 的异步 install/enable/disable/uninstall seam 会在
+持久化或注册失败时撤销 runtime/provider；disable/uninstall 对新调用立即不可见，已经执行的调用仍在其
+admitted runtime 上结算后再 close。runtime crash、malformed/oversized process message 与 HTTP failure
+都显式失败且不重试。人类产品侧可以直接经 Supervisor 调用 runtime，不创建 AppServer Turn；只有 Agent
+Tool Environment 路径产生既有 canonical tool call/result。现有 capability child-host composition 尚未整体
+迁移到该 seam，渐进发现、完整产品入口、SDK/migrations 与 Generic UI Host 仍未实现。
 
 目标 Plugin Platform 保持 Zen `AgentRuntime` 拥有 provider-neutral agent loop 和 canonical
 tool call/result；混合 Tool Environment 组合 builtin、plugin 与 external providers，Zen 负责解析、

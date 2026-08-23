@@ -85,6 +85,11 @@ export type ZenXPluginRuntimeDescriptor =
       entry: string;
       args?: string[];
       timeoutMs?: number;
+    }
+  | {
+      type: "http";
+      url: string;
+      timeoutMs?: number;
     };
 
 export interface ZenXPluginManifestV2 extends Omit<
@@ -239,4 +244,10 @@ export interface ZenXPluginPackageDescriptor {
 export interface RegisteredZenXCapability {
   package: ZenXCapabilityPackage;
   source: "bundled" | "local";
+}
+
+/** Optional ZP3 bridge used by the Catalog to publish/revoke a runtime provider. */
+export interface ZenXPluginRuntimeLifecycle {
+  start(registration: RegisteredZenXCapability): Promise<void>;
+  stop(pluginId: string): Promise<void>;
 }

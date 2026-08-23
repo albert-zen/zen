@@ -19,6 +19,9 @@
 - **Plugin Host** — ZenX Host 中负责插件 catalog、生命周期、UI/工具注册、Host policy 与 Runtime 路由的服务；它与 ZAS/AppServer 并列，不拥有 Agent、Thread、Turn 或 transcript。
 - **Plugin Catalog** — Plugin Host 对 package descriptor 与安装事实的唯一权威；它把 enabled 作为已安装 package 的独立运行开关，按 Host mutation 顺序原子持久化 lifecycle，并让 bundled/local package 使用同一合同。
 - **Plugin Runtime** — 实际执行插件领域行为的运行边界，可以是 bundled module、child process、本地服务或远程服务，失败由调用明确返回且不建立自动修复状态机。
+- **Plugin Runtime ABI** — bundled module、child process 与 HTTP service 共享的 provider-neutral invocation/result、取消与 close 合同；它只传递稳定 package identity、namespaced tool、参数和一次调用上下文，不拥有 Agent 或会话语义。
+- **Plugin Runtime Supervisor** — ZenX Host 持有的瞬时 runtime/provider registry，启动或附着 enabled runtime、向 Tool Environment 原子发布其 tool ownership，并在 disable/uninstall/quit 时先撤销新 admission、再等待已执行调用并关闭 runtime。
+- **Plugin Runtime Adapter** — 把 trusted module 调用、bounded JSONL child process 或单次 HTTP request 映射到同一 Plugin Runtime ABI；transport 失败显式返回且不重试或重启。
 - **Plugin Package** — 使用统一 manifest、main document、tools、UI contributions 与数据 namespace 的安装单元，生命周期只有 `installed`、`enabled`、`uninstalled`，bundled 与第三方 package 遵守同一合同。
 - **Plugin Discovery Projection** — 常驻 `zenx_plugin` 工具用普通 `discover` / `read` 调用选择后续模型可见插件能力；选择事实只由既有 tool call/result 推导，不新增 catalog/disclosure Item。
 - **Generic UI Host** — ZenX 为插件提供 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer 的受控宿主 surface，不允许插件直接接管核心 DOM、router 或 Agent 页面语义。
@@ -255,10 +258,13 @@ Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派�
 `AgentRuntime` 的普通 tool loop，以及组合 builtin / plugin / external identity、动态 definitions、
 prepare、Host policy、取消与执行的 Tool Environment；builtin `shell` 与可注入 provider 走同一边界。
 Plugin Package v2、Catalog 和 installed/enabled/uninstalled 基础生命周期已经落在现有
-capability runtime seam 上；ZenX capability registry / child-host bridge 仍以启动时快照作为一个
-独立 external provider 注入 Tool Environment。当前 `ToolResultItem` 仍只有 text output 与 exit
-code；Plugin Runtime Supervisor、渐进发现、完整产品安装入口、Generic UI Host 与 structured
-result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
+capability runtime seam 上；Plugin Runtime Supervisor 通过同一 Catalog mutation seam 为 bundled
+module、bounded JSONL child process 与 HTTP service 提供统一 ABI，并把每个 enabled plugin 作为
+独立 plugin provider 注入 Tool Environment。disable/uninstall 先撤销新调用再等待已执行调用和
+close；人类产品侧可经 Supervisor 直接调用而不创建 Turn。现有 capability registry / child-host
+bridge 仍以启动时快照作为一个独立 external provider 注入 Tool Environment，尚未迁移到新的
+runtime composition root。当前 `ToolResultItem` 仍只有 text output 与 exit code；渐进发现、完整产品
+安装入口、Generic UI Host 与 structured result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
 connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
 
 ### 工具执行与发现

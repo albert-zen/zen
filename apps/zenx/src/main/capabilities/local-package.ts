@@ -93,7 +93,7 @@ export class ProcessZenXCapabilityPackage implements ZenXCapabilityPackage {
     const requestedCommand = path.resolve(
       directory,
       definition.schemaVersion === 2
-        ? definition.runtime.entry
+        ? processRuntimeEntry(definition.runtime)
         : definition.runtime.command,
     );
     const resolvedDirectory = await realpath(directory);
@@ -208,6 +208,15 @@ export class ProcessZenXCapabilityPackage implements ZenXCapabilityPackage {
       );
     });
   }
+}
+
+function processRuntimeEntry(
+  runtime: Extract<ZenXCapabilityManifest, { schemaVersion: 2 }>["runtime"],
+): string {
+  if (runtime.type !== "process") {
+    throw new Error("Local plugin runtime must be process-backed");
+  }
+  return runtime.entry;
 }
 
 function isLocalCapabilityFile(value: unknown): value is LocalCapabilityFile {

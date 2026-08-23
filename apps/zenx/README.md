@@ -42,9 +42,17 @@ for builtin, plugin, and external provider identities, including Host policy,
 prepared-call stability, execution, and cancellation. ZenX injects builtin
 `shell` and its startup capability snapshot as distinct providers; registry
 changes still require the existing Host refresh instead of live provider updates.
-This is not yet the completed Plugin Platform: Runtime Supervisor, progressive
-discovery, Host SDK and migrations, complete product install/update entry points,
-generic UI SDK, and structured result renderers remain future nodes.
+The ZP3 Host seam now provides one Plugin Runtime Supervisor and ABI for trusted
+bundled modules, persistent child processes, and HTTP services. It registers each
+enabled plugin as its own Tool Environment provider, routes exact namespaced tools,
+propagates abort/close, drains already executing admitted calls during revocation,
+and performs no retry or restart. Catalog install/enable/disable/uninstall can bind
+to this seam transactionally; the existing startup capability child-host composition
+has not yet migrated to it. Human product calls may route directly through the
+Supervisor without creating an AppServer Turn. This is not yet the completed Plugin
+Platform: progressive discovery, Host SDK and migrations, complete product
+install/update entry points, generic UI SDK, and structured result renderers remain
+future nodes.
 `ToolResultItem` currently stores only text output and an exit code. The app-owned
 Host already publishes its one ZAS authority through a private authenticated
 loopback descriptor that survives window closure.
@@ -542,13 +550,19 @@ compatibility, runtime, main document, tools, and controlled UI descriptors:
 }
 ```
 
-The executable receives one JSON request on stdin and returns one JSON value on
-stdout. It runs without a shell, with a minimal environment and bounded
-transport/output. Tool `maxOutputBytes` must be an integer from 1 KiB through
-1 MiB, and the result envelope still honors that bound when provider metadata is
-large. Discovery failures stay visible; ZenX does not retry them with
-a durable repair workflow. There is no marketplace, signing, remote discovery,
-or distribution layer.
+The legacy local-capability discovery seam currently launches its executable once
+per request, without a shell, using one bounded JSON stdin/stdout value. The ZP3
+Plugin Runtime process adapter instead keeps one child attached through a bounded
+version-1 JSONL protocol: the child first reports `ready` with exact plugin/package
+identity, then handles `invoke`, `cancel`, and `close` messages and returns matching
+`result` or `error` messages. Malformed, oversized, timed-out, or crashed transports
+fail all affected calls explicitly and are never retried or restarted. The HTTP
+adapter sends the same identity/invocation envelope as one abortable POST and
+validates a bounded matching result envelope; close detaches and aborts outstanding
+requests without asking ZenX to own the remote service lifecycle. Tool
+`maxOutputBytes` remains an integer from 1 KiB through 1 MiB on the capability
+projection. Discovery failures stay visible; there is no durable repair workflow,
+marketplace, signing, remote discovery, or distribution layer.
 
 ## Verification
 
