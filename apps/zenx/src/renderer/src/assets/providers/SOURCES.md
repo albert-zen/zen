@@ -20,5 +20,28 @@ Retrieved 2026-08-20.
   at repository commit `313f19115014be37f133fafb4a74829468beb5ba`
   (blob `bd100cf394ed156832734cb4b16b903949c6f232`). Its path and
   view box are unchanged.
+- `siliconflow.svg`: copied from SiliconFlow's official homepage logo
+  ([siliconflow.cn/logo-new.svg](https://siliconflow.cn/logo-new.svg)), retrieved
+  2026-08-23. The local asset extracts the complete first symbol path from the
+  official 156×32 wordmark; its path geometry is unchanged and only the
+  viewBox is tightened around that symbol. SiliconFlow retains all trademark
+  rights.
+- `dashscope.png`: the square Bailian/DashScope symbol cropped from the left
+  mark of the official 640×640 product image served as the DashScope page's
+  `og:image` ([source image](https://img.alicdn.com/imgextra/i1/O1CN012QgtoH1c1Mu70xD3w_!!6000000003540-2-tps-640-640.png),
+  linked by [dashscope.aliyun.com](https://dashscope.aliyun.com)), retrieved
+  2026-08-23. The crop is the unchanged official mark (source crop rectangle
+  x=20..260, y=220..420), resized only by the browser into the 14px slot;
+  Alibaba retains all trademark rights. DashScope is intentionally not mapped
+  to Qwen.
+- `moonshot.ico`: official Moonshot/Kimi site favicon from
+  [moonshot.cn](https://www.moonshot.cn/favicon.ico), retrieved 2026-08-23.
+  It is used unchanged as the compact Moonshot/Kimi identity asset; Moonshot AI
+  retains all trademark rights.
+- `zhipu.svg`: copied from Zhipu AI's official homepage logo
+  ([zhipuai.cn/logo.svg](https://www.zhipuai.cn/logo.svg)), retrieved 2026-08-23.
+  The local asset extracts the complete three-path symbol at x=0..31.5 from
+  the official 95×27 wordmark; path geometry is unchanged and only the viewBox
+  is tightened around that symbol. Zhipu AI retains all trademark rights.
 
 Do not substitute these Provider marks for the independent ZenX product logo.

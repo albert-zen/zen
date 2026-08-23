@@ -865,8 +865,20 @@ a:focus-visible {
 .provider-logo.openai {
   background: #f2f2f2;
 }
+.provider-logo.siliconflow {
+  background: #e9f7ff;
+}
+.provider-logo.dashscope {
+  background: #fff3e8;
+}
 .provider-logo.deepseek {
   background: #eef1ff;
+}
+.provider-logo.moonshot {
+  background: #eef0ff;
+}
+.provider-logo.zhipu {
+  background: #f2edff;
 }
 .provider-logo.qwen {
   background: #f1eeff;

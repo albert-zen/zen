@@ -345,8 +345,19 @@ test("shows only logo category and friendly model identity", () => {
   assert.equal(threadModelIdentity(deepseek)?.providerKind, "deepseek");
   const qwen = summary("qwen", "idle", 20);
   qwen.currentMetadata.model = "qwen-max";
-  qwen.currentMetadata.provider = "dashscope";
+  qwen.currentMetadata.provider = "qwen";
   assert.equal(threadModelIdentity(qwen)?.providerKind, "qwen");
+  for (const [provider, model, expected] of [
+    ["siliconflow", "Qwen2.5-72B", "siliconflow"],
+    ["dashscope", "qwen-max", "dashscope"],
+    ["moonshot", "kimi-k2", "moonshot"],
+    ["zhipu", "glm-4.5", "zhipu"],
+  ] as const) {
+    const known = summary(provider, "idle", 20);
+    known.currentMetadata.model = model;
+    known.currentMetadata.provider = provider;
+    assert.equal(threadModelIdentity(known)?.providerKind, expected);
+  }
   const unknown = summary("unknown", "idle", 20);
   unknown.currentMetadata.model = "custom-model";
   unknown.currentMetadata.provider = "private-provider";

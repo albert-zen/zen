@@ -7,8 +7,14 @@ const providerLogoSource = await readFile(
   "utf8",
 );
 
-test("known Provider logos use recorded local formal SVG assets", async () => {
-  for (const name of ["openai", "deepseek", "qwen"]) {
+test("known Provider logos use recorded local formal assets", async () => {
+  for (const name of [
+    "openai",
+    "siliconflow",
+    "deepseek",
+    "qwen",
+    "zhipu",
+  ]) {
     const asset = await readFile(
       new URL(
         `../src/renderer/src/assets/providers/${name}.svg`,
@@ -17,7 +23,28 @@ test("known Provider logos use recorded local formal SVG assets", async () => {
       "utf8",
     );
     assert.match(asset, /^<svg[^>]+viewBox=/u);
+    if (name === "siliconflow" || name === "zhipu") {
+      const viewBox = asset.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/u);
+      assert.ok(viewBox, `${name} must expose a normalized symbol viewBox`);
+      const width = Number(viewBox[1]);
+      const height = Number(viewBox[2]);
+      assert.ok(
+        Math.max(width, height) / Math.min(width, height) < 2.2,
+        `${name} symbol must fit a small square slot without cropping`,
+      );
+      assert.equal(
+        (asset.match(/<path\b/gu) ?? []).length,
+        name === "siliconflow" ? 1 : 3,
+        `${name} asset must retain the complete official symbol paths`,
+      );
+    }
     assert.match(providerLogoSource, new RegExp(`${name}\\.svg`, "u"));
+  }
+  for (const name of ["dashscope.png", "moonshot.ico"]) {
+    await readFile(
+      new URL(`../src/renderer/src/assets/providers/${name}`, import.meta.url),
+    );
+    assert.match(providerLogoSource, new RegExp(name.replace(".", "\\."), "u"));
   }
 
   const sources = await readFile(
@@ -27,8 +54,14 @@ test("known Provider logos use recorded local formal SVG assets", async () => {
   assert.match(sources, /openai\.com\/brand/u);
   assert.match(sources, /deepseek-ai\/DeepSeek-VL/u);
   assert.match(sources, /QwenLM\/qwen-code/u);
+  assert.match(sources, /siliconflow\.cn/u);
+  assert.match(sources, /dashscope\.aliyun\.com/u);
+  assert.match(sources, /moonshot\.cn/u);
+  assert.match(sources, /zhipuai\.cn/u);
   assert.match(providerLogoSource, /<img/u);
   assert.match(providerLogoSource, /kind === "local"/u);
-  assert.match(providerLogoSource, /kind === "generic"/u);
+  assert.match(providerLogoSource, /name="layers"/u);
+  assert.doesNotMatch(providerLogoSource, /object-fit:\s*cover/u);
+  assert.doesNotMatch(providerLogoSource, /<svg viewBox="18 18"/u);
   assert.doesNotMatch(providerLogoSource, /M9 2\.7|M3 10\.5|M9 2\.8/u);
 });
