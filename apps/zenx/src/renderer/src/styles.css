@@ -880,11 +880,6 @@ a:focus-visible {
 .provider-logo.zhipu {
   background: #f2edff;
 }
-.provider-logo.siliconflow img,
-.provider-logo.zhipu img {
-  object-fit: cover;
-  object-position: left center;
-}
 .provider-logo.qwen {
   background: #f1eeff;
 }

@@ -22,7 +22,9 @@ Retrieved 2026-08-20.
   view box are unchanged.
 - `siliconflow.svg`: copied from SiliconFlow's official homepage logo
   ([siliconflow.cn/logo-new.svg](https://siliconflow.cn/logo-new.svg)), retrieved
-  2026-08-23. The asset is used unchanged; SiliconFlow retains all trademark
+  2026-08-23. The local asset extracts the complete first symbol path from the
+  official 156×32 wordmark; its path geometry is unchanged and only the
+  viewBox is tightened around that symbol. SiliconFlow retains all trademark
   rights.
 - `dashscope.png`: the square Bailian/DashScope symbol cropped from the left
   mark of the official 640×640 product image served as the DashScope page's
@@ -38,6 +40,8 @@ Retrieved 2026-08-20.
   retains all trademark rights.
 - `zhipu.svg`: copied from Zhipu AI's official homepage logo
   ([zhipuai.cn/logo.svg](https://www.zhipuai.cn/logo.svg)), retrieved 2026-08-23.
-  The asset is used unchanged; Zhipu AI retains all trademark rights.
+  The local asset extracts the complete three-path symbol at x=0..31.5 from
+  the official 95×27 wordmark; path geometry is unchanged and only the viewBox
+  is tightened around that symbol. Zhipu AI retains all trademark rights.
 
 Do not substitute these Provider marks for the independent ZenX product logo.
