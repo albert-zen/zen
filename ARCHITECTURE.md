@@ -16,6 +16,7 @@
 - **External Tool Provider** — Tool Environment 把调用路由到 Zen/ZenX 之外服务的 provider，外部服务拥有领域执行，Zen 仍保留 Host policy 与 canonical settlement。
 - **ZenX Host** — 独立于窗口生命周期的桌面宿主进程所有权边界，同时组合 Plugin Host 与 ZAS/AppServer 两项并列服务；关闭窗口不停止 Host，只有显式 Quit 才停止它。
 - **Plugin Host** — ZenX Host 中负责插件 catalog、生命周期、UI/工具注册、Host policy 与 Runtime 路由的服务；它与 ZAS/AppServer 并列，不拥有 Agent、Thread、Turn 或 transcript。
+- **Plugin Catalog** — Plugin Host 对 package descriptor 与安装事实的唯一权威；它把 enabled 作为已安装 package 的独立运行开关，按 Host mutation 顺序原子持久化 lifecycle，并让 bundled/local package 使用同一合同。
 - **Plugin Runtime** — 实际执行插件领域行为的运行边界，可以是 bundled module、child process、本地服务或远程服务，失败由调用明确返回且不建立自动修复状态机。
 - **Plugin Package** — 使用统一 manifest、main document、tools、UI contributions 与数据 namespace 的安装单元，生命周期只有 `installed`、`enabled`、`uninstalled`，bundled 与第三方 package 遵守同一合同。
 - **Plugin Discovery Projection** — 常驻 `zenx_plugin` 工具用普通 `discover` / `read` 调用选择后续模型可见插件能力；选择事实只由既有 tool call/result 推导，不新增 catalog/disclosure Item。
@@ -252,10 +253,11 @@ Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派�
 本节描述目标架构，不声称已经实现。当前代码只有 provider-neutral
 `AgentRuntime` 的普通 tool loop、builtin `shell`、静态 `ToolExecutor`，以及 ZenX
 capability package / registry / child-host bridge / sidebar-page projection 骨架。
-当前 `ToolResultItem` 也只有 text output 与 exit code；Plugin Host、动态 Tool
-Environment、渐进发现、完整 install/uninstall、Generic UI Host 与 structured result
-content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
-connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
+Plugin Package v2、Catalog 和 installed/enabled/uninstalled 基础生命周期已经落在现有
+capability runtime seam 上；当前 `ToolResultItem` 仍只有 text output 与 exit code。动态
+Tool Environment、Plugin Runtime Supervisor、渐进发现、完整产品安装入口、Generic UI Host
+与 structured result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的
+loopback connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
 
 ### 工具执行与发现
 

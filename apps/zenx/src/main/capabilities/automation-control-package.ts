@@ -37,6 +37,7 @@ import type {
   ZenXCapabilityPackage,
   ZenXPluginPageContribution,
   ZenXPluginSidebarContribution,
+  ZenXPluginManifestV2,
 } from "./types.js";
 
 export const ZENX_AUTOMATION_CONTROL_CAPABILITY_ID = "zenx-automation-control";
@@ -405,11 +406,28 @@ function automationPluginManifest(
     page: ZenXPluginPageContribution;
     sidebar: ZenXPluginSidebarContribution;
   },
-): ZenXCapabilityManifest {
+): ZenXPluginManifestV2 {
+  const {
+    schemaVersion: _schemaVersion,
+    displayName: _displayName,
+    ...capability
+  } = source.schemaVersion === 1
+    ? source
+    : { ...source, displayName: source.name };
   return {
-    ...structuredClone(source),
+    ...structuredClone(capability),
+    schemaVersion: 2,
     id: plugin.id,
-    displayName: plugin.displayName,
+    name: plugin.displayName,
+    compatibility: { zenx: ">=0.1.0 <0.2.0" },
+    runtime: {
+      type: "bundled",
+      entry: `zenx/automation/${plugin.id}`,
+    },
+    mainDocument:
+      plugin.displayName === "Triggers"
+        ? "Use Triggers to schedule and inspect auditable ZenX wakeups."
+        : "Use Rooms to manage shared collaboration and explicit member routing.",
     description: plugin.description,
     provider: {
       ...structuredClone(source.provider),

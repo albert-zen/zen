@@ -29,11 +29,13 @@ typed IPC 暴露；Codex Thread DTO 只属于兼容协议 adapter，不定义 Ze
 高保真 renderer 的当前 UI/UX 合同单独维护在 `apps/zenx/docs/ui-ux.md`，本文件不重复
 具体布局。Thread 的重命名、归档与取消归档全部通过既有 App Server 操作；Archive
 作为可逆的安全删除替代，不提供永久删除，也不在活动 Turn 期间暗改 Thread 设置。
-当前 capability package 暂时承担插件骨架：main/preload 提供 typed plugin snapshot，Host 只从
-manifest 投影已启用 package 的受控 Sidebar/page contribution。Triggers 与 Rooms 当前是两个
-bundled capability packages；任一关闭后，其 contribution 与 host tools 同时撤销，并通过既有
-Capability restart 路径更新运行时。Package enablement 与细粒度 permission grants 保存在同一
-原子配置文档的不同字段；这准确描述当前实现，但不是目标生命周期或权限合同。
+Plugin Package v2 manifest 与 Host-owned Catalog 已建立 installed / enabled / uninstalled
+基础生命周期，并继续复用现有 capability runtime seam。Catalog 原子持久化 package descriptor、
+安装事实与独立 enablement；旧 capability grants 原样迁移保留但不再定义目标权限 UX。Bundled
+Triggers/Rooms 与本地 v2 process package 使用同一 install/lifecycle API；disable/uninstall 会撤销
+当前 runtime/tool/sidebar/page 注册，bundled package 可从应用提供的 package 重装。Uninstall 默认
+保留 namespaced plugin data，显式 delete-data 只删除目标 namespace。Plugin Runtime Supervisor、
+完整 SDK/migrations 与 Generic UI Host 仍未实现。
 
 目标 Plugin Platform 保持 Zen `AgentRuntime` 拥有 provider-neutral agent loop 和 canonical
 tool call/result；混合 Tool Environment 组合 builtin、plugin 与 external providers，Zen 负责解析、

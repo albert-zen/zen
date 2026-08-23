@@ -57,6 +57,12 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         new JsonZenXCapabilityGrantStore(
           path.join(options.userDataDirectory, "capability-grants.json"),
         ),
+      {
+        pluginDataDirectory: path.join(
+          options.userDataDirectory,
+          "plugin-data",
+        ),
+      },
     );
     this.#userDataDirectory = options.userDataDirectory;
     this.#localDirectory =
@@ -79,7 +85,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     );
     for (const capabilityPackage of discovered.packages) {
       try {
-        this.#registry.register(capabilityPackage, "local");
+        if (capabilityPackage.manifest.schemaVersion === 2) {
+          await this.#registry.install(capabilityPackage, "local");
+        } else {
+          this.#registry.register(capabilityPackage, "local");
+        }
       } catch (error) {
         this.#registry.recordDiscoveryError(describeError(error));
       }
@@ -194,6 +204,28 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     source: "bundled" | "local" = "bundled",
   ): ZenXCapabilityDisposer {
     return this.#registry.register(capabilityPackage, source);
+  }
+
+  async install(
+    capabilityPackage: ZenXCapabilityPackage,
+    source: "bundled" | "local" = "local",
+  ): Promise<ZenXPluginSnapshot> {
+    await this.#registry.install(capabilityPackage, source);
+    return this.pluginSnapshot();
+  }
+
+  async uninstall(pluginId: string): Promise<ZenXPluginSnapshot> {
+    await this.#registry.uninstall(pluginId);
+    return this.pluginSnapshot();
+  }
+
+  async reinstall(pluginId: string): Promise<ZenXPluginSnapshot> {
+    await this.#registry.reinstall(pluginId);
+    return this.pluginSnapshot();
+  }
+
+  async deletePluginData(pluginId: string): Promise<void> {
+    await this.#registry.deleteData(pluginId);
   }
 
   async unregister(capabilityId: string): Promise<void> {

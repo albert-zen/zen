@@ -239,10 +239,14 @@ app.whenReady().then(async () => {
       new ZenXTriggerStore(join(userDataDirectory, "trigger-registry.json")),
       { titles: titleCoordinator },
     );
-    capabilityService.register(
+    await capabilityService.install(
       new ZenXTriggersCapabilityPackage(triggerService),
+      "bundled",
     );
-    capabilityService.register(new ZenXRoomsCapabilityPackage(triggerService));
+    await capabilityService.install(
+      new ZenXRoomsCapabilityPackage(triggerService),
+      "bundled",
+    );
     await triggerService.start();
     installTriggerIpc(triggerService);
     if (startupError === undefined) await appServerManager.start();

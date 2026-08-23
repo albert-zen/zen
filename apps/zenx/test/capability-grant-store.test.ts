@@ -11,7 +11,12 @@ test("persists permission grants and distinct plugin enablement atomically", asy
   const filePath = path.join(directory, "grants.json");
   const store = new JsonZenXCapabilityGrantStore(filePath);
   try {
-    assert.deepEqual(await store.load(), { grants: {}, disabled: [] });
+    assert.deepEqual(await store.load(), {
+      grants: {},
+      disabled: [],
+      uninstalled: [],
+      packages: {},
+    });
     await store.save({
       grants: {
         browser: [
@@ -19,6 +24,8 @@ test("persists permission grants and distinct plugin enablement atomically", asy
         ],
       },
       disabled: ["zenx-rooms"],
+      uninstalled: [],
+      packages: {},
     });
     assert.deepEqual(await store.load(), {
       grants: {
@@ -27,6 +34,8 @@ test("persists permission grants and distinct plugin enablement atomically", asy
         ],
       },
       disabled: ["zenx-rooms"],
+      uninstalled: [],
+      packages: {},
     });
     const raw = await readFile(filePath, "utf8");
     assert.doesNotMatch(raw, /cookie|credential|token/iu);
@@ -58,6 +67,8 @@ test("migrates the version 1 grants document with every plugin enabled", async (
         ],
       },
       disabled: [],
+      uninstalled: [],
+      packages: {},
     });
   } finally {
     await rm(directory, { recursive: true, force: true });

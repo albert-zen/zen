@@ -30,15 +30,20 @@ projection instance.
 
 ## Plugin platform contract and current status
 
-The checked-in capability system is a working skeleton, not the completed
-Plugin Platform. Today ZenX can register bundled modules and local process-backed
-capability packages, snapshot a static tool set into the child App Server host,
-bridge calls back to the main process, persist enabled/disabled state plus
-fine-grained grants, and project controlled sidebar/pages. It does not yet have
-the target dynamic Tool Environment, progressive discovery, complete
-install/uninstall lifecycle, generic UI SDK, or structured result renderers.
-`ToolResultItem` currently stores only text output and an exit code. The
-window-independent external ZAS endpoint is implemented by the app-owned Host.
+The checked-in implementation now has Plugin Package v2 descriptors and a
+Host-owned Catalog for the `installed` / `enabled` / `uninstalled` lifecycle.
+Bundled Triggers/Rooms and local process packages use the same lifecycle API;
+disable and uninstall revoke their current runtime/tool/sidebar/page
+registration, bundled packages can be reinstalled from the app-supplied
+package, and uninstall preserves namespaced plugin data unless deletion is
+requested separately. Existing capability grants are migrated and retained as
+compatibility data. This is still not the completed Plugin Platform: dynamic
+Tool Environment, Runtime Supervisor, progressive discovery, Host SDK and
+migrations, complete product install/update entry points, generic UI SDK, and
+structured result renderers remain future nodes. `ToolResultItem` currently stores
+only text output and an exit code. The app-owned Host already publishes its one
+ZAS authority through a private authenticated loopback descriptor that survives
+window closure.
 
 The target contract is:
 
@@ -472,20 +477,21 @@ mature external implementations while retaining a runnable bundled baseline:
   VMware/VirtualBox/Docker/cloud is a useful reference, but no VM lifecycle is
   implemented in this PR. See <https://github.com/xlang-ai/OSWorld>.
 
-Current local capability packages are JSON manifests placed in Electron
-`userData/capabilities`. They use schema version 1, declare permissions,
-structured tools and optional legacy `skill`/`prompt` instruction resources,
-and point at an executable inside the same package directory. This process-only
-loader is a skeleton; it is not the target bundled/process/local-service/remote-
-service Plugin Runtime contract or a standalone Skills platform:
+Local Plugin Package v2 manifests are placed in Electron
+`userData/capabilities`. The current process runtime seam requires the entry to
+stay inside that package directory. Schema v1 capability manifests remain
+readable for migration, but new packages use v2 and declare stable identity,
+compatibility, runtime, main document, tools, and controlled UI descriptors:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "local-example",
-  "displayName": "Local example",
+  "name": "Local example",
   "version": "1.0.0",
   "description": "One narrow local operation",
+  "compatibility": { "zenx": ">=0.1.0 <0.2.0" },
+  "mainDocument": "Use local_example_run for the narrow local operation.",
   "provider": {
     "id": "local-example-process",
     "platforms": ["darwin", "win32"],
@@ -511,7 +517,24 @@ service Plugin Runtime contract or a standalone Skills platform:
     }
   ],
   "resources": [],
-  "runtime": { "type": "process", "command": "./provider" }
+  "contributions": {
+    "pages": [
+      {
+        "id": "home",
+        "title": "Local example",
+        "route": "/plugins/local-example/home"
+      }
+    ],
+    "sidebar": [
+      {
+        "id": "home",
+        "label": "Local example",
+        "icon": "plug",
+        "pageId": "home"
+      }
+    ]
+  },
+  "runtime": { "type": "process", "entry": "./provider" }
 }
 ```
 

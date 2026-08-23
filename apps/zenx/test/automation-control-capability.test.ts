@@ -61,6 +61,13 @@ test("Triggers and Rooms are independent bundled plugin manifests", () => {
   const rooms = new ZenXRoomsCapabilityPackage(port);
 
   assert.equal(triggers.manifest.id, ZENX_TRIGGERS_CAPABILITY_ID);
+  assert.equal(triggers.manifest.schemaVersion, 2);
+  assert.equal(
+    triggers.manifest.schemaVersion === 2
+      ? triggers.manifest.compatibility.zenx
+      : undefined,
+    ">=0.1.0 <0.2.0",
+  );
   assert.ok(
     triggers.manifest.tools.every((tool) =>
       tool.name.startsWith("zenx_triggers_"),
@@ -87,14 +94,14 @@ test("Triggers and Rooms are independent bundled plugin manifests", () => {
   );
 });
 
-test("real Triggers and Rooms manifests project and disable independently", async () => {
+test("real Triggers and Rooms use the same disable/uninstall/reinstall lifecycle", async () => {
   const registry = new ZenXCapabilityRegistry(
     new MemoryZenXCapabilityGrantStore(),
   );
   const port = new FakePort();
   await registry.initialize();
-  registry.register(new ZenXTriggersCapabilityPackage(port));
-  registry.register(new ZenXRoomsCapabilityPackage(port));
+  await registry.install(new ZenXTriggersCapabilityPackage(port), "bundled");
+  await registry.install(new ZenXRoomsCapabilityPackage(port), "bundled");
   await registry.grant(ZENX_TRIGGERS_CAPABILITY_ID);
   await registry.grant(ZENX_ROOMS_CAPABILITY_ID);
 
@@ -114,9 +121,21 @@ test("real Triggers and Rooms manifests project and disable independently", asyn
   );
   await assert.rejects(
     registry.execute(invocation("zenx_triggers_list", {})),
-    /disabled/u,
+    /Unsupported ZenX capability tool/u,
   );
   await registry.execute(invocation("zenx_rooms_list", {}));
+
+  await registry.setEnabled(ZENX_TRIGGERS_CAPABILITY_ID, true);
+  await registry.uninstall(ZENX_TRIGGERS_CAPABILITY_ID);
+  await registry.uninstall(ZENX_ROOMS_CAPABILITY_ID);
+  assert.deepEqual(registry.hostSnapshot().definitions, []);
+  assert.deepEqual(registry.pluginSnapshot().sidebar, []);
+  await registry.reinstall(ZENX_TRIGGERS_CAPABILITY_ID);
+  await registry.reinstall(ZENX_ROOMS_CAPABILITY_ID);
+  assert.deepEqual(
+    registry.pluginSnapshot().sidebar.map((item) => item.pluginId),
+    [ZENX_TRIGGERS_CAPABILITY_ID, ZENX_ROOMS_CAPABILITY_ID],
+  );
 });
 
 test("automation tools route Trigger CRUD and every Room operation", async () => {

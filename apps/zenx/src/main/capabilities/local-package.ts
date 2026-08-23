@@ -10,14 +10,16 @@ import {
   type ZenXCapabilityPackage,
 } from "./types.js";
 
-interface LocalCapabilityFile extends ZenXCapabilityManifest {
-  runtime: {
-    type: "process";
-    command: string;
-    args?: string[];
-    timeoutMs?: number;
-  };
-}
+type LocalCapabilityFile =
+  | (Extract<ZenXCapabilityManifest, { schemaVersion: 1 }> & {
+      runtime: {
+        type: "process";
+        command: string;
+        args?: string[];
+        timeoutMs?: number;
+      };
+    })
+  | Extract<ZenXCapabilityManifest, { schemaVersion: 2 }>;
 
 export async function discoverLocalCapabilityPackages(
   directory: string,
@@ -81,10 +83,18 @@ export class ProcessZenXCapabilityPackage implements ZenXCapabilityPackage {
     definition: LocalCapabilityFile,
     manifestPath: string,
   ): Promise<ProcessZenXCapabilityPackage> {
+    if (
+      definition.schemaVersion === 2 &&
+      definition.runtime.type !== "process"
+    ) {
+      throw new Error("Local plugin runtime must be process-backed");
+    }
     const directory = path.dirname(manifestPath);
     const requestedCommand = path.resolve(
       directory,
-      definition.runtime.command,
+      definition.schemaVersion === 2
+        ? definition.runtime.entry
+        : definition.runtime.command,
     );
     const resolvedDirectory = await realpath(directory);
     const resolvedCommand = await realpath(requestedCommand);
@@ -96,13 +106,21 @@ export class ProcessZenXCapabilityPackage implements ZenXCapabilityPackage {
         "local capability command must stay inside its package directory",
       );
     }
-    const { runtime: _runtime, ...manifest } = definition;
+    const manifest: ZenXCapabilityManifest =
+      definition.schemaVersion === 2
+        ? definition
+        : (({ runtime: _runtime, ...capabilityManifest }) =>
+            capabilityManifest)(definition);
+    const runtime = definition.runtime;
+    const runtimeArgs = "args" in runtime ? (runtime.args ?? []) : [];
+    const runtimeTimeoutMs =
+      "timeoutMs" in runtime ? (runtime.timeoutMs ?? 30_000) : 30_000;
     return new ProcessZenXCapabilityPackage(
       manifest,
       resolvedCommand,
-      definition.runtime.args ?? [],
+      runtimeArgs,
       resolvedDirectory,
-      Math.min(Math.max(definition.runtime.timeoutMs ?? 30_000, 100), 120_000),
+      Math.min(Math.max(runtimeTimeoutMs, 100), 120_000),
     );
   }
 
@@ -196,9 +214,14 @@ function isLocalCapabilityFile(value: unknown): value is LocalCapabilityFile {
   if (!isRecord(value) || !isRecord(value.runtime) || !isRecord(value.provider))
     return false;
   return (
-    value.schemaVersion === 1 &&
+    (value.schemaVersion === 1 || value.schemaVersion === 2) &&
     typeof value.id === "string" &&
-    typeof value.displayName === "string" &&
+    (value.schemaVersion === 2
+      ? typeof value.name === "string" &&
+        isRecord(value.compatibility) &&
+        typeof value.compatibility.zenx === "string" &&
+        typeof value.mainDocument === "string"
+      : typeof value.displayName === "string") &&
     typeof value.version === "string" &&
     typeof value.description === "string" &&
     Array.isArray(value.permissions) &&
@@ -225,7 +248,9 @@ function isLocalCapabilityFile(value: unknown): value is LocalCapabilityFile {
     Array.isArray(value.provider.capabilities) &&
     value.provider.capabilities.every((entry) => typeof entry === "string") &&
     value.runtime.type === "process" &&
-    typeof value.runtime.command === "string" &&
+    (value.schemaVersion === 2
+      ? typeof value.runtime.entry === "string"
+      : typeof value.runtime.command === "string") &&
     (value.runtime.args === undefined ||
       (Array.isArray(value.runtime.args) &&
         value.runtime.args.every((entry) => typeof entry === "string")))

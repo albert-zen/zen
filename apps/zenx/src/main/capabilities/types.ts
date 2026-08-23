@@ -54,7 +54,7 @@ export interface ZenXPluginContributions {
   pages?: ZenXPluginPageContribution[];
 }
 
-export interface ZenXCapabilityManifest {
+export interface ZenXCapabilityManifestV1 {
   schemaVersion: 1;
   id: string;
   displayName: string;
@@ -73,6 +73,33 @@ export interface ZenXCapabilityManifest {
   settings?: Readonly<Record<string, unknown>>;
   ui?: { settingsSection?: string };
 }
+
+export interface ZenXPluginCompatibility {
+  zenx: string;
+}
+
+export type ZenXPluginRuntimeDescriptor =
+  | { type: "bundled"; entry: string }
+  | {
+      type: "process";
+      entry: string;
+      args?: string[];
+      timeoutMs?: number;
+    };
+
+export interface ZenXPluginManifestV2 extends Omit<
+  ZenXCapabilityManifestV1,
+  "schemaVersion" | "displayName"
+> {
+  schemaVersion: 2;
+  name: string;
+  compatibility: ZenXPluginCompatibility;
+  runtime: ZenXPluginRuntimeDescriptor;
+  mainDocument: string;
+}
+
+export type ZenXCapabilityManifest =
+  ZenXCapabilityManifestV1 | ZenXPluginManifestV2;
 
 export interface ZenXCapabilityPackage {
   manifest: ZenXCapabilityManifest;
@@ -127,9 +154,13 @@ export interface ZenXCapabilityProviderDiagnostic {
 }
 
 export interface ZenXCapabilitySummary {
-  manifest: Omit<ZenXCapabilityManifest, "resources"> & {
-    resources: Array<Omit<ZenXCapabilityResource, "content">>;
-  };
+  manifest:
+    | (Omit<ZenXCapabilityManifestV1, "resources"> & {
+        resources: Array<Omit<ZenXCapabilityResource, "content">>;
+      })
+    | (Omit<ZenXPluginManifestV2, "resources"> & {
+        resources: Array<Omit<ZenXCapabilityResource, "content">>;
+      });
   source: "bundled" | "local";
   enabled: boolean;
   available: boolean;
@@ -155,7 +186,9 @@ export interface ZenXPluginSummary {
   displayName: string;
   version: string;
   source: "bundled" | "local";
+  lifecycle: "installed" | "enabled" | "uninstalled";
   enabled: boolean;
+  available: boolean;
   contributionCount: number;
 }
 
@@ -194,6 +227,13 @@ export type ZenXCapabilityGrantStore = ZenXCapabilityConfigurationStore;
 export interface ZenXCapabilityConfiguration {
   grants: Record<string, ZenXCapabilityGrant[]>;
   disabled: string[];
+  uninstalled?: string[];
+  packages?: Record<string, ZenXPluginPackageDescriptor>;
+}
+
+export interface ZenXPluginPackageDescriptor {
+  manifest: ZenXPluginManifestV2;
+  source: "bundled" | "local";
 }
 
 export interface RegisteredZenXCapability {

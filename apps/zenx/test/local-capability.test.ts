@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { discoverLocalCapabilityPackages } from "../src/main/capabilities/local-package.js";
-import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
+import { JsonZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
 import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
 
 test("discovers and executes a local process package with a minimal JSON contract", async () => {
@@ -36,11 +36,13 @@ process.stdout.write(JSON.stringify({ tool: request.tool, value: request.argumen
     await writeFile(
       path.join(directory, "fixture.json"),
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         id: "local-fixture",
-        displayName: "Local fixture",
+        name: "Local fixture",
         version: "1.0.0",
         description: "Local process fixture",
+        compatibility: { zenx: ">=0.1.0 <0.2.0" },
+        mainDocument: "Run the local fixture through local_fixture_run.",
         provider: {
           id: "fixture-process",
           platforms: [process.platform],
@@ -66,9 +68,26 @@ process.stdout.write(JSON.stringify({ tool: request.tool, value: request.argumen
           },
         ],
         resources: [],
+        contributions: {
+          pages: [
+            {
+              id: "home",
+              title: "Local fixture",
+              route: "/plugins/local-fixture/home",
+            },
+          ],
+          sidebar: [
+            {
+              id: "home",
+              label: "Local fixture",
+              icon: "plug",
+              pageId: "home",
+            },
+          ],
+        },
         runtime: {
           type: "process",
-          command:
+          entry:
             process.platform === "win32"
               ? "./provider-node.exe"
               : "./provider.mjs",
@@ -82,10 +101,11 @@ process.stdout.write(JSON.stringify({ tool: request.tool, value: request.argumen
     assert.deepEqual(discovered.errors, []);
     assert.equal(discovered.packages.length, 1);
     const registry = new ZenXCapabilityRegistry(
-      new MemoryZenXCapabilityGrantStore(),
+      new JsonZenXCapabilityGrantStore(path.join(directory, "catalog.json")),
+      { pluginDataDirectory: path.join(directory, "plugin-data") },
     );
     await registry.initialize();
-    registry.register(discovered.packages[0]!, "local");
+    await registry.install(discovered.packages[0]!, "local");
     await registry.grant("local-fixture");
     const result = await registry.execute({
       callId: "call-local",
@@ -97,6 +117,19 @@ process.stdout.write(JSON.stringify({ tool: request.tool, value: request.argumen
     assert.match(result.output, /"value":"ok"/u);
     assert.match(result.output, /"leakedEnvironment":null/u);
     assert.doesNotMatch(result.output, /must-not-cross-boundary/u);
+
+    await registry.setEnabled("local-fixture", false);
+    assert.deepEqual(registry.hostSnapshot().definitions, []);
+    assert.deepEqual(registry.pluginSnapshot().sidebar, []);
+    await registry.setEnabled("local-fixture", true);
+    await registry.uninstall("local-fixture");
+    assert.deepEqual(registry.hostSnapshot().definitions, []);
+    assert.deepEqual(registry.pluginSnapshot().pages, []);
+    await registry.reinstall("local-fixture");
+    assert.equal(
+      registry.hostSnapshot().definitions[0]?.name,
+      "local_fixture_run",
+    );
   } finally {
     delete process.env.OPENAI_API_KEY;
     await rm(directory, { recursive: true, force: true });

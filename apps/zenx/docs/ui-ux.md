@@ -266,7 +266,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 ### 6.1 已确认的 contribution 边界
 
-- 当前 capability registry、typed plugin snapshot 与 sidebar/page projection 只是可运行骨架，不代表 Generic UI Host、Plugin UI SDK、隔离第三方 renderer 或完整 install/uninstall 已实现。Triggers 与 Rooms 当前是两个 bundled capability packages，目标是迁移为同级 Plugin Packages，而不是 ZenX 核心导航。
+- 当前 Plugin Package v2、Host Catalog、typed plugin snapshot 与 installed/enabled/uninstalled 基础生命周期已经实现；bundled Triggers/Rooms 与本地 process package 使用同一 lifecycle API。它们仍不代表 Generic UI Host、Plugin UI SDK、隔离第三方 renderer、Runtime Supervisor 或完整产品安装界面已经实现。
 - 目标 Generic UI Host 支持 sidebar、pages/subroutes、settings、panel、commands/menu 与 namespaced result renderers。第一方 bundled plugin 与隔离运行的第三方 plugin 使用同一逻辑 Plugin UI SDK，不建立两套 contribution 语义。
 - 已启用 plugin 可以使用这些受控 surfaces，但不取得核心 DOM、router、Chat、Composer、Thread Item 层级或导航 authority。第三方 UI/runtime 必须隔离；第一方信任边界不同也不允许绕过逻辑 SDK。
 - Sidebar 的 Plugin spaces 位于**整个 Projects group 之前**。Plugin contribution 不能插入 Projects header 与 Project/Thread list 之间，也不能把这个 group 拆成两段。

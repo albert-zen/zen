@@ -8,9 +8,11 @@ import type {
 } from "./types.js";
 
 interface CapabilityConfigurationFile {
-  version: 2;
+  version: 3;
   grants: Record<string, ZenXCapabilityGrant[]>;
   disabled: string[];
+  uninstalled: string[];
+  packages: ZenXCapabilityConfiguration["packages"];
 }
 
 export class JsonZenXCapabilityGrantStore implements ZenXCapabilityConfigurationStore {
@@ -26,7 +28,7 @@ export class JsonZenXCapabilityGrantStore implements ZenXCapabilityConfiguration
       raw = await readFile(this.#filePath, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return { grants: {}, disabled: [] };
+        return { grants: {}, disabled: [], uninstalled: [], packages: {} };
       }
       throw error;
     }
@@ -35,11 +37,18 @@ export class JsonZenXCapabilityGrantStore implements ZenXCapabilityConfiguration
       throw new Error("ZenX capability grant file is invalid");
     }
     if (parsed.version === 1) {
-      return { grants: structuredClone(parsed.grants), disabled: [] };
+      return {
+        grants: structuredClone(parsed.grants),
+        disabled: [],
+        uninstalled: [],
+        packages: {},
+      };
     }
     return {
       grants: structuredClone(parsed.grants),
       disabled: [...parsed.disabled],
+      uninstalled: parsed.version === 3 ? [...parsed.uninstalled] : [],
+      packages: parsed.version === 3 ? structuredClone(parsed.packages) : {},
     };
   }
 
@@ -53,9 +62,11 @@ export class JsonZenXCapabilityGrantStore implements ZenXCapabilityConfiguration
       temporary,
       `${JSON.stringify(
         {
-          version: 2,
+          version: 3,
           grants: configuration.grants,
           disabled: configuration.disabled,
+          uninstalled: configuration.uninstalled ?? [],
+          packages: configuration.packages ?? {},
         } satisfies CapabilityConfigurationFile,
         null,
         2,
@@ -67,7 +78,12 @@ export class JsonZenXCapabilityGrantStore implements ZenXCapabilityConfiguration
 }
 
 export class MemoryZenXCapabilityGrantStore implements ZenXCapabilityConfigurationStore {
-  #configuration: ZenXCapabilityConfiguration = { grants: {}, disabled: [] };
+  #configuration: ZenXCapabilityConfiguration = {
+    grants: {},
+    disabled: [],
+    uninstalled: [],
+    packages: {},
+  };
 
   async load(): Promise<ZenXCapabilityConfiguration> {
     return structuredClone(this.#configuration);
@@ -85,15 +101,25 @@ function isCapabilityConfigurationFile(
   | CapabilityConfigurationFile {
   if (
     !isRecord(value) ||
-    (value.version !== 1 && value.version !== 2) ||
+    (value.version !== 1 && value.version !== 2 && value.version !== 3) ||
     !isRecord(value.grants)
   ) {
     return false;
   }
   if (
-    value.version === 2 &&
+    (value.version === 2 || value.version === 3) &&
     (!Array.isArray(value.disabled) ||
       value.disabled.some((id) => typeof id !== "string" || id.length === 0))
+  ) {
+    return false;
+  }
+  if (
+    value.version === 3 &&
+    (!Array.isArray(value.uninstalled) ||
+      value.uninstalled.some(
+        (id) => typeof id !== "string" || id.length === 0,
+      ) ||
+      !isRecord(value.packages))
   ) {
     return false;
   }

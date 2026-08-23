@@ -163,7 +163,11 @@ export function CapabilitySettings() {
                   <Icon name={pluginIcon(capability.manifest.id)} />
                 </span>
                 <div>
-                  <strong>{capability.manifest.displayName}</strong>
+                  <strong>
+                    {capability.manifest.schemaVersion === 2
+                      ? capability.manifest.name
+                      : capability.manifest.displayName}
+                  </strong>
                   <span>
                     {capability.source} · v{capability.manifest.version} ·{" "}
                     {capability.enabled ? "enabled" : "disabled"} ·{" "}

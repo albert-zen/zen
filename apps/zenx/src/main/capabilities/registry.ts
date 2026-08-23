@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import path from "node:path";
 
 import type { ModelTool } from "../../../../../src/model.js";
 import type {
@@ -21,6 +23,9 @@ import type {
   ZenXCapabilityTool,
   ZenXCapabilityInteractionMode,
   ZenXPluginSnapshot,
+  ZenXPluginSummary,
+  ZenXPluginPackageDescriptor,
+  ZenXPluginManifestV2,
 } from "./types.js";
 import {
   MAX_CAPABILITY_OUTPUT_BYTES,
@@ -34,6 +39,7 @@ const MAX_AUDIT_RECORDS = 100;
 export interface ZenXCapabilityRegistryOptions {
   allowForegroundRequired: boolean;
   platform: string;
+  pluginDataDirectory?: string;
 }
 
 interface ActiveCapabilityInvocation {
@@ -46,6 +52,7 @@ interface ActiveCapabilityInvocation {
 export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   readonly #configurationStore: ZenXCapabilityConfigurationStore;
   readonly #registered = new Map<string, RegisteredZenXCapability>();
+  readonly #catalogPackages = new Map<string, RegisteredZenXCapability>();
   readonly #toolOwners = new Map<
     string,
     { capabilityId: string; tool: ZenXCapabilityTool }
@@ -60,6 +67,8 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   readonly #options: ZenXCapabilityRegistryOptions;
   #grants: Record<string, ZenXCapabilityGrant[]> = {};
   #disabled = new Set<string>();
+  #uninstalled = new Set<string>();
+  #packageDescriptors: Record<string, ZenXPluginPackageDescriptor> = {};
   #configurationMutationTail: Promise<void> = Promise.resolve();
   readonly #activeInvocations = new Set<ActiveCapabilityInvocation>();
 
@@ -79,6 +88,22 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     const configuration = await this.#configurationStore.load();
     this.#grants = configuration.grants;
     this.#disabled = new Set(configuration.disabled);
+    this.#uninstalled = new Set(configuration.uninstalled ?? []);
+    this.#packageDescriptors = structuredClone(configuration.packages ?? {});
+    for (const [pluginId, descriptor] of Object.entries(
+      this.#packageDescriptors,
+    )) {
+      if (
+        descriptor.manifest.id !== pluginId ||
+        descriptor.manifest.schemaVersion !== 2 ||
+        (descriptor.source !== "bundled" && descriptor.source !== "local")
+      ) {
+        throw new Error(
+          `ZenX plugin catalog descriptor ${pluginId} is invalid`,
+        );
+      }
+      validateManifest(descriptor.manifest);
+    }
   }
 
   register(
@@ -86,9 +111,176 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     source: "bundled" | "local" = "bundled",
   ): ZenXCapabilityDisposer {
     const manifest = validateManifest(capabilityPackage.manifest);
-    if (this.#registered.has(manifest.id)) {
+    if (this.#catalogPackages.has(manifest.id)) {
       throw new Error(`Capability ${manifest.id} is already registered`);
     }
+    const registration = { package: capabilityPackage, source } as const;
+    this.#catalogPackages.set(manifest.id, registration);
+    if (
+      this.#uninstalled.has(manifest.id) ||
+      (manifest.schemaVersion === 2 && this.#disabled.has(manifest.id))
+    ) {
+      return async () => {
+        if (this.#catalogPackages.get(manifest.id) === registration) {
+          this.#catalogPackages.delete(manifest.id);
+        }
+      };
+    }
+    try {
+      this.#validateRegistration(manifest);
+      this.#activateRegistration(registration);
+    } catch (error) {
+      this.#catalogPackages.delete(manifest.id);
+      throw error;
+    }
+    let disposing: Promise<void> | undefined;
+    return () => {
+      disposing ??= this.#removeSuppliedPackage(manifest.id, registration);
+      return disposing;
+    };
+  }
+
+  async install(
+    capabilityPackage: ZenXCapabilityPackage,
+    source: "bundled" | "local" = "local",
+  ): Promise<void> {
+    await this.#serializeConfigurationMutation(async () => {
+      const manifest = validateManifest(capabilityPackage.manifest);
+      if (manifest.schemaVersion !== 2) {
+        throw new Error(`Plugin install requires a manifest v2 package`);
+      }
+      if (this.#catalogPackages.has(manifest.id)) {
+        throw new Error(`Capability ${manifest.id} is already registered`);
+      }
+      const stored = this.#packageDescriptors[manifest.id];
+      if (stored !== undefined) {
+        if (
+          stored.source !== source ||
+          JSON.stringify(stored.manifest) !== JSON.stringify(manifest)
+        ) {
+          throw new Error(
+            `Plugin ${manifest.id} does not match its installed package descriptor`,
+          );
+        }
+        const registration = { package: capabilityPackage, source } as const;
+        this.#catalogPackages.set(manifest.id, registration);
+        if (
+          !this.#uninstalled.has(manifest.id) &&
+          !this.#disabled.has(manifest.id)
+        ) {
+          this.#validateRegistration(manifest);
+          this.#activateRegistration(registration);
+        }
+        return;
+      }
+      this.#validateRegistration(manifest);
+      const registration = { package: capabilityPackage, source } as const;
+      const descriptor = {
+        manifest: structuredClone(manifest),
+        source,
+      } satisfies ZenXPluginPackageDescriptor;
+      const nextPackages = {
+        ...this.#packageDescriptors,
+        [manifest.id]: descriptor,
+      };
+      const nextUninstalled = new Set(this.#uninstalled);
+      nextUninstalled.delete(manifest.id);
+      await this.#configurationStore.save(
+        this.#configuration({
+          packages: nextPackages,
+          uninstalled: nextUninstalled,
+        }),
+      );
+      this.#packageDescriptors = nextPackages;
+      this.#uninstalled = nextUninstalled;
+      this.#catalogPackages.set(manifest.id, registration);
+      this.#activateRegistration(registration);
+    });
+  }
+
+  async uninstall(pluginId: string): Promise<void> {
+    await this.#serializeConfigurationMutation(async () => {
+      const supplied = this.#catalogPackages.get(pluginId);
+      if (
+        supplied === undefined &&
+        this.#packageDescriptors[pluginId] === undefined
+      ) {
+        throw new Error(`Unknown ZenX capability: ${pluginId}`);
+      }
+      if (this.#uninstalled.has(pluginId)) return;
+      const nextUninstalled = new Set(this.#uninstalled);
+      nextUninstalled.add(pluginId);
+      await this.#configurationStore.save(
+        this.#configuration({ uninstalled: nextUninstalled }),
+      );
+      const previousUninstalled = this.#uninstalled;
+      this.#uninstalled = nextUninstalled;
+      this.#emit();
+      try {
+        const registered = this.#registered.get(pluginId);
+        if (registered !== undefined) {
+          await this.#unregisterRegistration(pluginId, registered);
+        }
+      } catch (error) {
+        await this.#configurationStore.save(
+          this.#configuration({ uninstalled: previousUninstalled }),
+        );
+        this.#uninstalled = previousUninstalled;
+        if (supplied !== undefined && !this.#registered.has(pluginId)) {
+          this.#validateRegistration(supplied.package.manifest);
+          this.#activateRegistration(supplied);
+        }
+        throw error;
+      }
+    });
+  }
+
+  async reinstall(pluginId: string): Promise<void> {
+    await this.#serializeConfigurationMutation(async () => {
+      if (!this.#uninstalled.has(pluginId)) return;
+      const supplied = this.#catalogPackages.get(pluginId);
+      if (supplied === undefined) {
+        throw new Error(
+          `Plugin package ${pluginId} is not available to reinstall`,
+        );
+      }
+      this.#validateRegistration(supplied.package.manifest);
+      const nextUninstalled = new Set(this.#uninstalled);
+      nextUninstalled.delete(pluginId);
+      await this.#configurationStore.save(
+        this.#configuration({ uninstalled: nextUninstalled }),
+      );
+      this.#uninstalled = nextUninstalled;
+      if (!this.#disabled.has(pluginId)) this.#activateRegistration(supplied);
+    });
+  }
+
+  async deleteData(pluginId: string): Promise<void> {
+    if (!/^[a-z][a-z0-9-]{1,62}$/u.test(pluginId)) {
+      throw new Error(`Invalid plugin id: ${pluginId}`);
+    }
+    if (this.#options.pluginDataDirectory === undefined) {
+      throw new Error("Plugin data directory is not configured");
+    }
+    await rm(path.join(this.#options.pluginDataDirectory, pluginId), {
+      recursive: true,
+      force: true,
+    });
+  }
+
+  async #removeSuppliedPackage(
+    capabilityId: string,
+    registration: RegisteredZenXCapability,
+  ): Promise<void> {
+    if (this.#catalogPackages.get(capabilityId) !== registration) return;
+    this.#catalogPackages.delete(capabilityId);
+    const active = this.#registered.get(capabilityId);
+    if (active === registration) {
+      await this.#unregisterRegistration(capabilityId, registration);
+    }
+  }
+
+  #validateRegistration(manifest: ZenXCapabilityManifest): void {
     for (const tool of manifest.tools) {
       if (
         tool.name === CAPABILITY_RESOURCE_TOOL ||
@@ -110,17 +302,15 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         }
       }
     }
-    const registration = { package: capabilityPackage, source } as const;
+  }
+
+  #activateRegistration(registration: RegisteredZenXCapability): void {
+    const manifest = registration.package.manifest;
     this.#registered.set(manifest.id, registration);
     for (const tool of manifest.tools) {
       this.#toolOwners.set(tool.name, { capabilityId: manifest.id, tool });
     }
     this.#emit();
-    let disposing: Promise<void> | undefined;
-    return () => {
-      disposing ??= this.#unregisterRegistration(manifest.id, registration);
-      return disposing;
-    };
   }
 
   async unregister(capabilityId: string): Promise<void> {
@@ -203,8 +393,8 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         [capabilityId]: [...existing.values()],
       };
       await this.#configurationStore.save({
+        ...this.#configuration(),
         grants: structuredClone(nextGrants),
-        disabled: [...this.#disabled],
       });
       this.#grants = nextGrants;
       this.#emit();
@@ -231,8 +421,8 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         };
       }
       await this.#configurationStore.save({
+        ...this.#configuration(),
         grants: structuredClone(nextGrants),
-        disabled: [...this.#disabled],
       });
       this.#grants = nextGrants;
       if (capabilityId === "browser") this.#clearBrowserProjection();
@@ -284,21 +474,55 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   }
 
   pluginSnapshot(): ZenXPluginSnapshot {
-    const plugins = [...this.#registered.values()].map((registered) => {
-      const manifest = registered.package.manifest;
+    const catalog = new Map<
+      string,
+      {
+        manifest: ZenXCapabilityManifest;
+        source: "bundled" | "local";
+        available: boolean;
+      }
+    >();
+    for (const descriptor of Object.values(this.#packageDescriptors)) {
+      catalog.set(descriptor.manifest.id, {
+        ...descriptor,
+        available: this.#catalogPackages.has(descriptor.manifest.id),
+      });
+    }
+    for (const registered of this.#catalogPackages.values()) {
+      if (!catalog.has(registered.package.manifest.id)) {
+        catalog.set(registered.package.manifest.id, {
+          manifest: registered.package.manifest,
+          source: registered.source,
+          available: true,
+        });
+      }
+    }
+    const plugins = [...catalog.values()].map((entry) => {
+      const manifest = entry.manifest;
+      const uninstalled = this.#uninstalled.has(manifest.id);
+      const enabled = !uninstalled && !this.#disabled.has(manifest.id);
+      const lifecycle: ZenXPluginSummary["lifecycle"] = uninstalled
+        ? "uninstalled"
+        : enabled
+          ? "enabled"
+          : "installed";
       return {
         id: manifest.id,
-        displayName: manifest.displayName,
+        displayName: manifestName(manifest),
         version: manifest.version,
-        source: registered.source,
-        enabled: !this.#disabled.has(manifest.id),
+        source: entry.source,
+        lifecycle,
+        enabled,
+        available: entry.available,
         contributionCount:
           (manifest.contributions?.sidebar?.length ?? 0) +
           (manifest.contributions?.pages?.length ?? 0),
       };
     });
     const enabled = [...this.#registered.values()].filter(
-      (registered) => !this.#disabled.has(registered.package.manifest.id),
+      (registered) =>
+        !this.#uninstalled.has(registered.package.manifest.id) &&
+        !this.#disabled.has(registered.package.manifest.id),
     );
     const pages = enabled.flatMap((registered) => {
       const pluginId = registered.package.manifest.id;
@@ -331,21 +555,51 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
 
   async setEnabled(capabilityId: string, enabled: boolean): Promise<void> {
     await this.#serializeConfigurationMutation(async () => {
-      this.#requireCapability(capabilityId);
+      const supplied = this.#requireCapability(capabilityId);
+      if (this.#uninstalled.has(capabilityId)) {
+        throw new Error(`Plugin ${capabilityId} is uninstalled`);
+      }
       if (enabled === !this.#disabled.has(capabilityId)) return;
+      if (enabled && supplied.package.manifest.schemaVersion === 2) {
+        this.#validateRegistration(supplied.package.manifest);
+      }
       const nextDisabled = new Set(this.#disabled);
       if (enabled) nextDisabled.delete(capabilityId);
       else nextDisabled.add(capabilityId);
-      await this.#configurationStore.save({
-        grants: structuredClone(this.#grants),
-        disabled: [...nextDisabled],
-      });
+      await this.#configurationStore.save(
+        this.#configuration({ disabled: nextDisabled }),
+      );
+      const previousDisabled = this.#disabled;
       this.#disabled = nextDisabled;
       if (!enabled && capabilityId === "browser") {
         this.#clearBrowserProjection();
       }
       this.#emit();
-      if (!enabled) await this.#cancelAndSettle(capabilityId);
+      if (supplied.package.manifest.schemaVersion !== 2) {
+        if (!enabled) await this.#cancelAndSettle(capabilityId);
+        return;
+      }
+      try {
+        if (enabled) {
+          this.#activateRegistration(supplied);
+        } else {
+          await this.#cancelAndSettle(capabilityId);
+          const registered = this.#registered.get(capabilityId);
+          if (registered !== undefined) {
+            await this.#unregisterRegistration(capabilityId, registered);
+          }
+        }
+      } catch (error) {
+        await this.#configurationStore.save(
+          this.#configuration({ disabled: previousDisabled }),
+        );
+        this.#disabled = previousDisabled;
+        if (!this.#registered.has(capabilityId)) {
+          this.#validateRegistration(supplied.package.manifest);
+          this.#activateRegistration(supplied);
+        }
+        throw error;
+      }
     });
   }
 
@@ -447,6 +701,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     for (const capabilityId of [...this.#registered.keys()]) {
       await this.unregister(capabilityId);
     }
+    this.#catalogPackages.clear();
   }
 
   async resetTransient(): Promise<void> {
@@ -672,7 +927,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   }
 
   #requireCapability(capabilityId: string): RegisteredZenXCapability {
-    const registered = this.#registered.get(capabilityId);
+    const registered = this.#catalogPackages.get(capabilityId);
     if (registered === undefined) {
       throw new Error(`Unknown ZenX capability: ${capabilityId}`);
     }
@@ -727,16 +982,32 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     const snapshot = this.snapshot();
     for (const listener of this.#listeners) listener(snapshot);
   }
+
+  #configuration(
+    overrides: {
+      disabled?: Set<string>;
+      uninstalled?: Set<string>;
+      packages?: Record<string, ZenXPluginPackageDescriptor>;
+    } = {},
+  ) {
+    return {
+      grants: structuredClone(this.#grants),
+      disabled: [...(overrides.disabled ?? this.#disabled)],
+      uninstalled: [...(overrides.uninstalled ?? this.#uninstalled)],
+      packages: structuredClone(overrides.packages ?? this.#packageDescriptors),
+    };
+  }
 }
 
 function validateManifest(
   manifest: ZenXCapabilityManifest,
 ): ZenXCapabilityManifest {
-  if (manifest.schemaVersion !== 1) {
+  if (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2) {
     throw new Error(
-      `Unsupported capability manifest version: ${String(manifest.schemaVersion)}`,
+      `Unsupported capability manifest version: ${String((manifest as { schemaVersion?: unknown }).schemaVersion)}`,
     );
   }
+  if (manifest.schemaVersion === 2) validatePluginManifestV2(manifest);
   if (!/^[a-z][a-z0-9-]{1,62}$/u.test(manifest.id)) {
     throw new Error(`Invalid capability id: ${manifest.id}`);
   }
@@ -847,6 +1118,27 @@ function validateManifest(
     }
   }
   return manifest;
+}
+
+function validatePluginManifestV2(manifest: ZenXPluginManifestV2): void {
+  if (manifest.name.trim().length === 0) {
+    throw new Error(`Plugin ${manifest.id} has no name`);
+  }
+  if (manifest.compatibility.zenx !== ">=0.1.0 <0.2.0") {
+    throw new Error(
+      `Plugin ${manifest.id} is incompatible with this ZenX host`,
+    );
+  }
+  if (manifest.mainDocument.trim().length === 0) {
+    throw new Error(`Plugin ${manifest.id} has no main document`);
+  }
+  if (manifest.runtime.entry.trim().length === 0) {
+    throw new Error(`Plugin ${manifest.id} has no runtime entry`);
+  }
+}
+
+function manifestName(manifest: ZenXCapabilityManifest): string {
+  return manifest.schemaVersion === 2 ? manifest.name : manifest.displayName;
 }
 
 function isContributionId(value: string): boolean {
