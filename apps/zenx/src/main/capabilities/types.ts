@@ -3,6 +3,7 @@ import type {
   ToolExecutionResult,
   ToolInvocation,
 } from "../../../../../src/tool.js";
+import type { ZenXPluginHostSdkV1 } from "../plugin-host-sdk.js";
 
 export const MIN_CAPABILITY_OUTPUT_BYTES = 1024;
 export const MAX_CAPABILITY_OUTPUT_BYTES = 1024 * 1024;
@@ -108,7 +109,11 @@ export type ZenXCapabilityManifest =
 
 export interface ZenXCapabilityPackage {
   manifest: ZenXCapabilityManifest;
-  invoke(toolName: string, invocation: ToolInvocation): Promise<unknown>;
+  invoke(
+    toolName: string,
+    invocation: ToolInvocation,
+    hostSdk?: ZenXPluginHostSdkV1,
+  ): Promise<unknown>;
   close?(): Promise<void> | void;
 }
 

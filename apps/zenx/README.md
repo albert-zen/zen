@@ -51,10 +51,25 @@ publishing tools until persistence commits; disable/uninstall closes new admissi
 and restores the enabled provider on persistence failure. Disabled reinstall stays disabled.
 The existing startup capability child-host composition
 has not yet migrated to it. Human product calls may route directly through the
-Supervisor without creating an AppServer Turn. This is not yet the completed Plugin
-Platform: progressive discovery, Host SDK and migrations, complete product
-install/update entry points, generic UI SDK, and structured result renderers remain
-future nodes.
+Supervisor without creating an AppServer Turn.
+
+Plugin Host SDK v1 is the public `query / actions / ui / storage` contract injected
+into each runtime. `query.projects.list` consumes the existing main-process Project
+projection. Plugin storage is a 1 MiB bounded JSON document under the plugin-id
+namespace with versions 1..1000; package/runtime migrations must advance one version
+at a time and run only when the durable version is behind. Writes and migrations use
+serialized atomic replacement, so failure leaves the prior state visible. Disabling
+or uninstalling a plugin does not remove that data. Bundled modules receive the SDK
+object directly; JSONL process and HTTP adapters expose the same operations through
+bounded SDK request/result envelopes and never expose internal stores. Ordinary SDK
+queries, storage, and UI commands do not create Turns. Only the explicit
+`actions.threads.startTurn` operation reaches the existing AppServer port and returns
+its canonical Items. The `ui` group currently defines opaque handles and commands for
+ZP6; it does not implement a renderer or surface.
+
+This is not yet the completed Plugin Platform: progressive discovery, complete
+product install/update entry points, generic UI hosting, and structured result
+renderers remain future nodes.
 `ToolResultItem` currently stores only text output and an exit code. The app-owned
 Host already publishes its one ZAS authority through a private authenticated
 loopback descriptor that survives window closure.

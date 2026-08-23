@@ -14,6 +14,12 @@ import type {
   ZenXPluginRuntimeLifecycle,
   ZenXPluginRuntimeStage,
 } from "./capabilities/types.js";
+import {
+  executePluginHostSdkRequest,
+  validatePluginHostSdkRequest,
+  ZENX_PLUGIN_HOST_SDK_VERSION,
+  type ZenXPluginHostSdkV1,
+} from "./plugin-host-sdk.js";
 
 const PLUGIN_RUNTIME_PROTOCOL_VERSION = 1;
 const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -45,7 +51,7 @@ export interface PluginRuntime {
 export interface PluginRuntimeRegistration {
   identity: PluginRuntimeIdentity;
   definitions: readonly ModelTool[];
-  start(): Promise<PluginRuntime>;
+  start(sdk?: ZenXPluginHostSdkV1): Promise<PluginRuntime>;
 }
 
 interface ActiveRuntime {
@@ -65,12 +71,20 @@ interface StagedRuntime {
  */
 export class PluginRuntimeSupervisor {
   readonly #toolEnvironment: ToolEnvironment;
+  readonly #hostSdkFor: (pluginId: string) => Promise<ZenXPluginHostSdkV1>;
   readonly #active = new Map<string, ActiveRuntime>();
   readonly #staged = new Map<string, StagedRuntime>();
   #mutationTail: Promise<void> = Promise.resolve();
 
-  constructor(toolEnvironment: ToolEnvironment) {
+  constructor(
+    toolEnvironment: ToolEnvironment,
+    options: {
+      hostSdkFor?(pluginId: string): Promise<ZenXPluginHostSdkV1>;
+    } = {},
+  ) {
     this.#toolEnvironment = toolEnvironment;
+    this.#hostSdkFor =
+      options.hostSdkFor ?? (async (pluginId) => unavailableHostSdk(pluginId));
   }
 
   async start(registration: PluginRuntimeRegistration): Promise<void> {
@@ -97,7 +111,14 @@ export class PluginRuntimeSupervisor {
         throw new Error(`Plugin runtime is already registered: ${pluginId}`);
       }
 
-      const runtime = await registration.start();
+      const sdk = await this.#hostSdkFor(pluginId);
+      if (
+        sdk.version !== ZENX_PLUGIN_HOST_SDK_VERSION ||
+        sdk.pluginId !== pluginId
+      ) {
+        throw new Error(`Plugin Host SDK identity mismatch for ${pluginId}`);
+      }
+      const runtime = await registration.start(sdk);
       if (!sameIdentity(runtime.identity, registration.identity)) {
         await closeAfterStartFailure(runtime);
         throw new Error(`Plugin runtime identity mismatch for ${pluginId}`);
@@ -300,18 +321,27 @@ class SupervisedPluginProvider implements ToolProvider {
 }
 
 export interface BundledPluginModule {
-  invoke(invocation: PluginRuntimeInvocation): Promise<ToolExecutionResult>;
+  invoke(
+    invocation: PluginRuntimeInvocation,
+    sdk: ZenXPluginHostSdkV1,
+  ): Promise<ToolExecutionResult>;
   close?(): Promise<void> | void;
 }
 
 export class BundledModulePluginRuntime implements PluginRuntime {
   readonly identity: PluginRuntimeIdentity;
   readonly #module: BundledPluginModule;
+  readonly #sdk: ZenXPluginHostSdkV1;
   #closed = false;
 
-  constructor(identity: PluginRuntimeIdentity, module: BundledPluginModule) {
+  constructor(
+    identity: PluginRuntimeIdentity,
+    module: BundledPluginModule,
+    sdk?: ZenXPluginHostSdkV1,
+  ) {
     this.identity = Object.freeze({ ...identity });
     this.#module = module;
+    this.#sdk = sdk ?? unavailableHostSdk(identity.pluginId);
   }
 
   async invoke(
@@ -319,7 +349,7 @@ export class BundledModulePluginRuntime implements PluginRuntime {
   ): Promise<ToolExecutionResult> {
     if (this.#closed)
       throw new Error(`Plugin runtime is closed: ${this.identity.pluginId}`);
-    return await this.#module.invoke(invocation);
+    return await this.#module.invoke(invocation, this.#sdk);
   }
 
   async close(): Promise<void> {
@@ -344,8 +374,10 @@ export class ProcessPluginRuntime implements PluginRuntime {
   readonly #requestTimeoutMs: number;
   readonly #closeTimeoutMs: number;
   readonly #maxPendingRequests: number;
+  readonly #sdk: ZenXPluginHostSdkV1;
   readonly #pending = new Map<string, PendingProcessRequest>();
   readonly #cancelled = new Set<string>();
+  readonly #hostRequests = new Set<string>();
   #buffer = Buffer.alloc(0);
   #failure: Error | undefined;
   #closed = false;
@@ -362,6 +394,7 @@ export class ProcessPluginRuntime implements PluginRuntime {
         | "maxPendingRequests"
       >
     >,
+    sdk: ZenXPluginHostSdkV1,
   ) {
     this.identity = Object.freeze({ ...identity });
     this.#child = child;
@@ -369,6 +402,7 @@ export class ProcessPluginRuntime implements PluginRuntime {
     this.#requestTimeoutMs = options.requestTimeoutMs;
     this.#closeTimeoutMs = options.closeTimeoutMs;
     this.#maxPendingRequests = options.maxPendingRequests;
+    this.#sdk = sdk;
     child.stderr.resume();
     child.stdout.on("data", (chunk: Buffer) => this.#onData(chunk));
     child.once("error", (error) =>
@@ -396,13 +430,19 @@ export class ProcessPluginRuntime implements PluginRuntime {
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const runtime = new ProcessPluginRuntime(identity, child, {
-      maxMessageBytes: options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES,
-      requestTimeoutMs: options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      closeTimeoutMs: options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS,
-      maxPendingRequests:
-        options.maxPendingRequests ?? DEFAULT_MAX_PENDING_REQUESTS,
-    });
+    const runtime = new ProcessPluginRuntime(
+      identity,
+      child,
+      {
+        maxMessageBytes: options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES,
+        requestTimeoutMs:
+          options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        closeTimeoutMs: options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS,
+        maxPendingRequests:
+          options.maxPendingRequests ?? DEFAULT_MAX_PENDING_REQUESTS,
+      },
+      options.hostSdk ?? unavailableHostSdk(identity.pluginId),
+    );
     try {
       await runtime.#waitForReady(
         options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS,
@@ -465,6 +505,7 @@ export class ProcessPluginRuntime implements PluginRuntime {
     const message = encodeMessage(
       {
         version: PLUGIN_RUNTIME_PROTOCOL_VERSION,
+        hostSdkVersion: ZENX_PLUGIN_HOST_SDK_VERSION,
         type: "invoke",
         id: invocation.invocationId,
         tool: invocation.tool,
@@ -601,11 +642,62 @@ export class ProcessPluginRuntime implements PluginRuntime {
       );
       return;
     }
+    if (value.type === "host_request") {
+      if (
+        value.hostSdkVersion !== ZENX_PLUGIN_HOST_SDK_VERSION ||
+        typeof value.id !== "string" ||
+        typeof value.invocationId !== "string" ||
+        !this.#pending.has(value.invocationId)
+      ) {
+        throw new Error("invalid Host SDK request envelope");
+      }
+      const requestId = value.id;
+      const invocationId = value.invocationId;
+      const hostRequestKey = `${invocationId}\0${requestId}`;
+      if (
+        this.#hostRequests.has(hostRequestKey) ||
+        this.#hostRequests.size >= this.#maxPendingRequests
+      ) {
+        throw new Error("Plugin Runtime exceeded its Host SDK request limit");
+      }
+      const request = validatePluginHostSdkRequest(value.request);
+      this.#hostRequests.add(hostRequestKey);
+      void executePluginHostSdkRequest(this.#sdk, request)
+        .then(
+          (result) =>
+            this.#write({
+              version: PLUGIN_RUNTIME_PROTOCOL_VERSION,
+              hostSdkVersion: ZENX_PLUGIN_HOST_SDK_VERSION,
+              type: "host_result",
+              id: requestId,
+              invocationId,
+              result,
+            }),
+          (error: unknown) =>
+            this.#write({
+              version: PLUGIN_RUNTIME_PROTOCOL_VERSION,
+              hostSdkVersion: ZENX_PLUGIN_HOST_SDK_VERSION,
+              type: "host_result",
+              id: requestId,
+              invocationId,
+              error: describeError(error),
+            }),
+        )
+        .finally(() => this.#hostRequests.delete(hostRequestKey));
+      return;
+    }
     if (
       (value.type !== "result" && value.type !== "error") ||
       typeof value.id !== "string"
     ) {
       throw new Error("unexpected message");
+    }
+    if (
+      [...this.#hostRequests].some((key) => key.startsWith(`${value.id}\0`))
+    ) {
+      throw new Error(
+        `Plugin runtime ${value.id} settled before its Host SDK requests`,
+      );
     }
     if (value.id === "__ready__") {
       throw new Error("reserved invocation id");
@@ -679,6 +771,7 @@ export interface ProcessPluginRuntimeOptions {
   closeTimeoutMs?: number;
   maxMessageBytes?: number;
   maxPendingRequests?: number;
+  hostSdk?: ZenXPluginHostSdkV1;
 }
 
 export class HttpPluginRuntime implements PluginRuntime {
@@ -688,6 +781,7 @@ export class HttpPluginRuntime implements PluginRuntime {
   readonly #maxMessageBytes: number;
   readonly #maxPendingRequests: number;
   readonly #controllers = new Map<string, AbortController>();
+  readonly #sdk: ZenXPluginHostSdkV1;
   #closed = false;
 
   constructor(
@@ -706,6 +800,7 @@ export class HttpPluginRuntime implements PluginRuntime {
       options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
     this.#maxPendingRequests =
       options.maxPendingRequests ?? DEFAULT_MAX_PENDING_REQUESTS;
+    this.#sdk = options.hostSdk ?? unavailableHostSdk(identity.pluginId);
   }
 
   async invoke(
@@ -738,51 +833,90 @@ export class HttpPluginRuntime implements PluginRuntime {
     );
     this.#controllers.set(invocation.invocationId, controller);
     try {
-      const body = encodeJson(
-        {
-          version: PLUGIN_RUNTIME_PROTOCOL_VERSION,
-          id: invocation.invocationId,
-          plugin: this.identity,
-          tool: invocation.tool,
-          arguments: invocation.arguments,
-          context: invocation.context,
-        },
-        this.#maxMessageBytes,
-      );
-      const response = await fetch(this.#url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body,
-        signal: controller.signal,
-      });
-      const bytes = Buffer.from(await response.arrayBuffer());
-      if (bytes.length > this.#maxMessageBytes)
-        throw new Error(
-          `Plugin HTTP runtime ${this.identity.pluginId} exceeded its response limit`,
-        );
-      if (!response.ok)
-        throw new Error(
-          `Plugin HTTP runtime ${this.identity.pluginId} failed with HTTP ${String(response.status)}`,
-        );
-      let value: unknown;
-      try {
-        value = JSON.parse(bytes.toString("utf8")) as unknown;
-      } catch (error) {
-        throw new Error(
-          `Plugin HTTP runtime ${this.identity.pluginId} returned malformed JSON: ${describeError(error)}`,
-        );
+      let requestBody: unknown = {
+        version: PLUGIN_RUNTIME_PROTOCOL_VERSION,
+        hostSdkVersion: ZENX_PLUGIN_HOST_SDK_VERSION,
+        id: invocation.invocationId,
+        plugin: this.identity,
+        tool: invocation.tool,
+        arguments: invocation.arguments,
+        context: invocation.context,
+      };
+      for (let hostCall = 0; ; hostCall += 1) {
+        if (hostCall > this.#maxPendingRequests)
+          throw new Error(
+            `Plugin HTTP runtime ${this.identity.pluginId} exceeded its Host SDK call limit`,
+          );
+        const response = await fetch(this.#url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: encodeJson(requestBody, this.#maxMessageBytes),
+          signal: controller.signal,
+        });
+        const bytes = Buffer.from(await response.arrayBuffer());
+        if (bytes.length > this.#maxMessageBytes)
+          throw new Error(
+            `Plugin HTTP runtime ${this.identity.pluginId} exceeded its response limit`,
+          );
+        if (!response.ok)
+          throw new Error(
+            `Plugin HTTP runtime ${this.identity.pluginId} failed with HTTP ${String(response.status)}`,
+          );
+        let value: unknown;
+        try {
+          value = JSON.parse(bytes.toString("utf8")) as unknown;
+        } catch (error) {
+          throw new Error(
+            `Plugin HTTP runtime ${this.identity.pluginId} returned malformed JSON: ${describeError(error)}`,
+          );
+        }
+        if (
+          !isRecord(value) ||
+          value.version !== PLUGIN_RUNTIME_PROTOCOL_VERSION ||
+          value.id !== invocation.invocationId
+        ) {
+          throw new Error(
+            `Plugin HTTP runtime ${this.identity.pluginId} returned an invalid envelope`,
+          );
+        }
+        if (isRecord(value.hostRequest)) {
+          if (value.hostSdkVersion !== ZENX_PLUGIN_HOST_SDK_VERSION) {
+            throw new Error(
+              `Plugin HTTP runtime ${this.identity.pluginId} returned an incompatible Host SDK request`,
+            );
+          }
+          const hostRequestId = value.hostRequest.id;
+          if (typeof hostRequestId !== "string")
+            throw new Error(
+              `Plugin HTTP runtime ${this.identity.pluginId} returned an invalid Host SDK request`,
+            );
+          let hostResult: unknown;
+          let hostError: string | undefined;
+          try {
+            hostResult = await executePluginHostSdkRequest(
+              this.#sdk,
+              validatePluginHostSdkRequest(value.hostRequest.request),
+            );
+          } catch (error) {
+            hostError = describeError(error);
+          }
+          requestBody = {
+            version: PLUGIN_RUNTIME_PROTOCOL_VERSION,
+            hostSdkVersion: ZENX_PLUGIN_HOST_SDK_VERSION,
+            id: invocation.invocationId,
+            plugin: this.identity,
+            hostResult: {
+              id: hostRequestId,
+              ...(hostError === undefined
+                ? { result: hostResult }
+                : { error: hostError }),
+            },
+          };
+          continue;
+        }
+        if (typeof value.error === "string") throw new Error(value.error);
+        return validateResult(value.result, this.identity.pluginId);
       }
-      if (
-        !isRecord(value) ||
-        value.version !== PLUGIN_RUNTIME_PROTOCOL_VERSION ||
-        value.id !== invocation.invocationId
-      ) {
-        throw new Error(
-          `Plugin HTTP runtime ${this.identity.pluginId} returned an invalid envelope`,
-        );
-      }
-      if (typeof value.error === "string") throw new Error(value.error);
-      return validateResult(value.result, this.identity.pluginId);
     } finally {
       clearTimeout(timer);
       invocation.signal.removeEventListener("abort", forwardAbort);
@@ -806,6 +940,7 @@ export interface HttpPluginRuntimeOptions {
   requestTimeoutMs?: number;
   maxMessageBytes?: number;
   maxPendingRequests?: number;
+  hostSdk?: ZenXPluginHostSdkV1;
 }
 
 /** Bridges Catalog lifecycle mutations to a supervisor without owning lifecycle state. */
@@ -852,21 +987,26 @@ export function bundledPackageRegistration(
       description,
       inputSchema,
     })),
-    start: async () =>
+    start: async (sdk) =>
       new BundledModulePluginRuntime(
         { pluginId: manifest.id, packageVersion: manifest.version },
         {
-          invoke: async (invocation) =>
+          invoke: async (invocation, hostSdk) =>
             normalizePackageResult(
-              await registration.package.invoke(invocation.tool, {
-                callId: invocation.context.callId,
-                name: invocation.tool,
-                arguments: invocation.arguments,
-                cwd: invocation.context.cwd,
-                signal: invocation.signal,
-              }),
+              await registration.package.invoke(
+                invocation.tool,
+                {
+                  callId: invocation.context.callId,
+                  name: invocation.tool,
+                  arguments: invocation.arguments,
+                  cwd: invocation.context.cwd,
+                  signal: invocation.signal,
+                },
+                hostSdk,
+              ),
             ),
         },
+        sdk ?? unavailableHostSdk(manifest.id),
       ),
   };
 }
@@ -985,4 +1125,23 @@ export function manifestRuntimeIdentity(
   manifest: ZenXPluginManifestV2,
 ): PluginRuntimeIdentity {
   return { pluginId: manifest.id, packageVersion: manifest.version };
+}
+
+function unavailableHostSdk(pluginId: string): ZenXPluginHostSdkV1 {
+  const unavailable = async (): Promise<never> => {
+    throw new Error(`Plugin Host SDK is not configured: ${pluginId}`);
+  };
+  return Object.freeze({
+    version: ZENX_PLUGIN_HOST_SDK_VERSION,
+    pluginId,
+    query: Object.freeze({ projects: Object.freeze({ list: unavailable }) }),
+    actions: Object.freeze({
+      threads: Object.freeze({ startTurn: unavailable }),
+    }),
+    ui: Object.freeze({
+      handles: Object.freeze({ read: unavailable }),
+      commands: Object.freeze({ execute: unavailable }),
+    }),
+    storage: Object.freeze({ version: 1, get: unavailable, set: unavailable }),
+  });
 }

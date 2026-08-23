@@ -43,8 +43,13 @@ process 和 HTTP service 都归约为同一个 namespaced tool invocation/result
 先关闭新 admission，已 prepare/执行的调用仍在其 admitted runtime 上结算后再 close，持久化失败则恢复
 原 enabled provider；disabled plugin 重装后仍保持 disabled。runtime crash、malformed/oversized process message 与 HTTP failure
 都显式失败且不重试。人类产品侧可以直接经 Supervisor 调用 runtime，不创建 AppServer Turn；只有 Agent
-Tool Environment 路径产生既有 canonical tool call/result。现有 capability child-host composition 尚未整体
-迁移到该 seam，渐进发现、完整产品入口、SDK/migrations 与 Generic UI Host 仍未实现。
+Tool Environment 路径产生既有 canonical tool call/result。versioned Plugin Host SDK v1 现以
+`query / actions / ui / storage` 四组公共能力注入 runtime：Project 查询复用 main 的既有 projection，
+namespaced JSON storage 串行原子写入并执行 package-owned 逐版本 migration，disable/uninstall 保留数据；
+只有显式 `actions.threads.startTurn` 经 AppServer port 产生 canonical Items。bundled module 直接拿 SDK，
+process/HTTP 只经既有 ABI 的 SDK request/result 边界访问同一逻辑操作，不取得内部 store。`ui` 当前只
+定义 opaque handle/command 合同，Generic UI Host 仍由 ZP6 实现。现有 capability child-host composition
+尚未整体迁移到该 seam，渐进发现和完整产品入口仍未实现。
 
 目标 Plugin Platform 保持 Zen `AgentRuntime` 拥有 provider-neutral agent loop 和 canonical
 tool call/result；混合 Tool Environment 组合 builtin、plugin 与 external providers，Zen 负责解析、

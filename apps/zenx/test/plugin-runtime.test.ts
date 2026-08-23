@@ -908,9 +908,9 @@ function countingRegistrationFor(onStart: () => void) {
     const runtime = bundledPackageRegistration(registration);
     return {
       ...runtime,
-      start: async () => {
+      start: async (sdk) => {
         onStart();
-        return await runtime.start();
+        return await runtime.start(sdk);
       },
     };
   };

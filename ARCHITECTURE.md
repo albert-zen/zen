@@ -21,7 +21,10 @@
 - **Plugin Runtime** — 实际执行插件领域行为的运行边界，可以是 bundled module、child process、本地服务或远程服务，失败由调用明确返回且不建立自动修复状态机。
 - **Plugin Runtime ABI** — bundled module、child process 与 HTTP service 共享的 provider-neutral invocation/result、取消与 close 合同；它只传递稳定 package identity、namespaced tool、参数和一次调用上下文，不拥有 Agent 或会话语义。
 - **Plugin Runtime Supervisor** — ZenX Host 持有的瞬时 runtime/provider registry，启动或附着 enabled runtime、向 Tool Environment 原子发布其 tool ownership，并在 disable/uninstall/quit 时先撤销新 admission、再等待已执行调用并关闭 runtime。
-- **Plugin Runtime Adapter** — 把 trusted module 调用、bounded JSONL child process 或单次 HTTP request 映射到同一 Plugin Runtime ABI；transport 失败显式返回且不重试或重启。
+- **Plugin Runtime Adapter** — 把 trusted module 调用、bounded JSONL child process 或有界 HTTP request/continuation 映射到同一 Plugin Runtime ABI；transport 失败显式返回且不重试或重启。
+- **ZenX Plugin Host SDK v1** — Plugin Host 按 package identity 注入的 provider-neutral 公共合同，以 `query / actions / ui / storage` 四组能力让 bundled 与隔离 runtime 使用相同产品语义，而不取得 ZenX 内部 store authority。
+- **ZenX Plugin Storage** — Plugin Host 在 plugin id namespace 下原子持久化一个有界版本化 JSON document，按 package 提供的逐版本 migration 串行前移，disable/uninstall 不删除数据且失败不发布半状态。
+- **ZenX Plugin AppServer Port** — Host SDK 唯一允许修改 Thread 的显式 `actions.threads.startTurn` 边界；它调用既有 AppServer 并返回该 authority 产生的 canonical Item 投影，不复制 Turn 或 transcript。
 - **Plugin Package** — 使用统一 manifest、main document、tools、UI contributions 与数据 namespace 的安装单元，生命周期只有 `installed`、`enabled`、`uninstalled`，bundled 与第三方 package 遵守同一合同。
 - **Plugin Discovery Projection** — 常驻 `zenx_plugin` 工具用普通 `discover` / `read` 调用选择后续模型可见插件能力；选择事实只由既有 tool call/result 推导，不新增 catalog/disclosure Item。
 - **Generic UI Host** — ZenX 为插件提供 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer 的受控宿主 surface，不允许插件直接接管核心 DOM、router 或 Agent 页面语义。
@@ -265,7 +268,14 @@ Environment；任一步失败都会撤销该临时 runtime/provider。disable/un
 已 prepare/执行的调用结算和 close，持久化失败则恢复原 enabled provider；人类产品侧可经 Supervisor
 直接调用而不创建 Turn。现有 capability registry / child-host
 bridge 仍以启动时快照作为一个独立 external provider 注入 Tool Environment，尚未迁移到新的
-runtime composition root。当前 `ToolResultItem` 仍只有 text output 与 exit code；渐进发现、完整产品
+runtime composition root。Plugin Runtime 现在由 Host 注入同一个 versioned Host SDK v1：bundled module
+直接接收公共对象，JSONL process 使用双向 request/result，HTTP service 使用有界 continuation
+request/result；三者只看 SDK operation，不取得 Project、storage 或 AppServer 的内部实现。SDK 的 Project
+查询消费既有 ZenXProjectProjection，普通领域读写与 UI command 不创建 Turn，只有显式
+`actions.threads.startTurn` 调用既有 AppServer port。每个 plugin namespace 的 JSON storage 使用
+1..1000 的版本 metadata、1 MiB 文档上限、串行 mutation 与同目录临时文件 rename；package/runtime
+提供的 `n -> n+1` migration 按顺序只在需要时运行，migration 或写入失败保留此前 durable/in-memory
+state，且不建立恢复状态机。当前 `ToolResultItem` 仍只有 text output 与 exit code；渐进发现、完整产品
 安装入口、Generic UI Host 与 structured result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
 connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
 
