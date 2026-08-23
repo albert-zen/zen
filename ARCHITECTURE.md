@@ -259,9 +259,11 @@ Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派�
 prepare、Host policy、取消与执行的 Tool Environment；builtin `shell` 与可注入 provider 走同一边界。
 Plugin Package v2、Catalog 和 installed/enabled/uninstalled 基础生命周期已经落在现有
 capability runtime seam 上；Plugin Runtime Supervisor 通过同一 Catalog mutation seam 为 bundled
-module、bounded JSONL child process 与 HTTP service 提供统一 ABI，并把每个 enabled plugin 作为
-独立 plugin provider 注入 Tool Environment。disable/uninstall 先撤销新调用再等待已执行调用和
-close；人类产品侧可经 Supervisor 直接调用而不创建 Turn。现有 capability registry / child-host
+module、bounded JSONL child process 与 HTTP service 提供统一 ABI。install/enable 先在未发布状态
+启动并验证 runtime，Catalog 持久化与内存提交后才把 enabled plugin 作为独立 provider 注入 Tool
+Environment；任一步失败都会撤销该临时 runtime/provider。disable/uninstall 先撤销新调用，再等待
+已 prepare/执行的调用结算和 close，持久化失败则恢复原 enabled provider；人类产品侧可经 Supervisor
+直接调用而不创建 Turn。现有 capability registry / child-host
 bridge 仍以启动时快照作为一个独立 external provider 注入 Tool Environment，尚未迁移到新的
 runtime composition root。当前 `ToolResultItem` 仍只有 text output 与 exit code；渐进发现、完整产品
 安装入口、Generic UI Host 与 structured result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback

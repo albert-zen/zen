@@ -12,6 +12,7 @@ import type {
   RegisteredZenXCapability,
   ZenXPluginManifestV2,
   ZenXPluginRuntimeLifecycle,
+  ZenXPluginRuntimeStage,
 } from "./capabilities/types.js";
 
 const PLUGIN_RUNTIME_PROTOCOL_VERSION = 1;
@@ -48,8 +49,14 @@ export interface PluginRuntimeRegistration {
 }
 
 interface ActiveRuntime {
+  token: object;
   provider: SupervisedPluginProvider;
   unregisterProvider(): void;
+}
+
+interface StagedRuntime {
+  token: object;
+  provider: SupervisedPluginProvider;
 }
 
 /**
@@ -59,6 +66,7 @@ interface ActiveRuntime {
 export class PluginRuntimeSupervisor {
   readonly #toolEnvironment: ToolEnvironment;
   readonly #active = new Map<string, ActiveRuntime>();
+  readonly #staged = new Map<string, StagedRuntime>();
   #mutationTail: Promise<void> = Promise.resolve();
 
   constructor(toolEnvironment: ToolEnvironment) {
@@ -66,47 +74,85 @@ export class PluginRuntimeSupervisor {
   }
 
   async start(registration: PluginRuntimeRegistration): Promise<void> {
-    await this.#serializeMutation(async () => {
-      await this.#start(registration);
+    const staged = await this.stage(registration);
+    try {
+      await staged.publish();
+    } catch (error) {
+      await staged.rollback();
+      throw error;
+    }
+  }
+
+  async stage(
+    registration: PluginRuntimeRegistration,
+  ): Promise<ZenXPluginRuntimeStage> {
+    return await this.#serializeMutation(async () => {
+      validateIdentity(registration.identity);
+      validateNamespacedDefinitions(
+        registration.identity.pluginId,
+        registration.definitions,
+      );
+      const pluginId = registration.identity.pluginId;
+      if (this.#active.has(pluginId) || this.#staged.has(pluginId)) {
+        throw new Error(`Plugin runtime is already registered: ${pluginId}`);
+      }
+
+      const runtime = await registration.start();
+      if (!sameIdentity(runtime.identity, registration.identity)) {
+        await closeAfterStartFailure(runtime);
+        throw new Error(`Plugin runtime identity mismatch for ${pluginId}`);
+      }
+      const token = Object.freeze({});
+      const provider = new SupervisedPluginProvider(
+        registration.identity,
+        registration.definitions,
+        runtime,
+      );
+      this.#staged.set(pluginId, { token, provider });
+      return {
+        publish: async () => {
+          await this.#publish(pluginId, token);
+        },
+        rollback: async () => {
+          await this.#rollback(pluginId, token);
+        },
+      };
     });
   }
 
-  async #start(registration: PluginRuntimeRegistration): Promise<void> {
-    validateIdentity(registration.identity);
-    validateNamespacedDefinitions(
-      registration.identity.pluginId,
-      registration.definitions,
-    );
-    if (this.#active.has(registration.identity.pluginId)) {
-      throw new Error(
-        `Plugin runtime is already registered: ${registration.identity.pluginId}`,
+  async #publish(pluginId: string, token: object): Promise<void> {
+    await this.#serializeMutation(async () => {
+      const staged = this.#staged.get(pluginId);
+      if (staged?.token !== token) {
+        if (this.#active.get(pluginId)?.token === token) return;
+        throw new Error(
+          `Plugin runtime stage is no longer current: ${pluginId}`,
+        );
+      }
+      const unregisterProvider = this.#toolEnvironment.registerProvider(
+        staged.provider,
       );
-    }
-
-    const runtime = await registration.start();
-    if (!sameIdentity(runtime.identity, registration.identity)) {
-      await closeAfterStartFailure(runtime);
-      throw new Error(
-        `Plugin runtime identity mismatch for ${registration.identity.pluginId}`,
-      );
-    }
-    const provider = new SupervisedPluginProvider(
-      registration.identity,
-      registration.definitions,
-      runtime,
-    );
-    let unregisterProvider: (() => void) | undefined;
-    try {
-      unregisterProvider = this.#toolEnvironment.registerProvider(provider);
-      this.#active.set(registration.identity.pluginId, {
-        provider,
+      this.#staged.delete(pluginId);
+      this.#active.set(pluginId, {
+        token,
+        provider: staged.provider,
         unregisterProvider,
       });
-    } catch (error) {
-      unregisterProvider?.();
-      await closeAfterStartFailure(runtime);
-      throw error;
-    }
+    });
+  }
+
+  async #rollback(pluginId: string, token: object): Promise<void> {
+    await this.#serializeMutation(async () => {
+      const staged = this.#staged.get(pluginId);
+      if (staged?.token === token) {
+        this.#staged.delete(pluginId);
+        await staged.provider.retire();
+        return;
+      }
+      const active = this.#active.get(pluginId);
+      if (active?.token !== token) return;
+      await this.#stop(pluginId);
+    });
   }
 
   async stop(pluginId: string): Promise<void> {
@@ -129,6 +175,14 @@ export class PluginRuntimeSupervisor {
       for (const pluginId of [...this.#active.keys()]) {
         try {
           await this.#stop(pluginId);
+        } catch (error) {
+          failures.push(asError(error));
+        }
+      }
+      for (const [pluginId, staged] of [...this.#staged]) {
+        this.#staged.delete(pluginId);
+        try {
+          await staged.provider.retire();
         } catch (error) {
           failures.push(asError(error));
         }
@@ -172,6 +226,8 @@ class SupervisedPluginProvider implements ToolProvider {
   readonly #runtime: PluginRuntime;
   readonly #toolNames: Set<string>;
   readonly #active = new Set<Promise<unknown>>();
+  readonly #drainWaiters = new Set<() => void>();
+  #prepared = 0;
   #closePromise: Promise<void> | undefined;
 
   constructor(
@@ -197,6 +253,17 @@ class SupervisedPluginProvider implements ToolProvider {
     });
   }
 
+  retainPreparedInvocation(): () => void {
+    this.#prepared += 1;
+    let retained = true;
+    return () => {
+      if (!retained) return;
+      retained = false;
+      this.#prepared -= 1;
+      this.#notifyDrain();
+    };
+  }
+
   async invoke(
     invocation: PluginRuntimeInvocation,
   ): Promise<ToolExecutionResult> {
@@ -212,20 +279,23 @@ class SupervisedPluginProvider implements ToolProvider {
       return validateResult(await operation, this.identity.id);
     } finally {
       this.#active.delete(operation);
+      this.#notifyDrain();
     }
   }
 
   async retire(): Promise<void> {
-    for (;;) {
-      // A ToolEnvironment call prepared before provider revocation may enter
-      // execute in the next microtask. Let it join this runtime's drain.
-      await Promise.resolve();
-      const active = [...this.#active];
-      if (active.length === 0) break;
-      await Promise.allSettled(active);
+    while (this.#prepared > 0 || this.#active.size > 0) {
+      await new Promise<void>((resolve) => {
+        this.#drainWaiters.add(resolve);
+      });
     }
     this.#closePromise ??= this.#runtime.close();
     await this.#closePromise;
+  }
+
+  #notifyDrain(): void {
+    for (const resolve of this.#drainWaiters) resolve();
+    this.#drainWaiters.clear();
   }
 }
 
@@ -755,9 +825,13 @@ export class CatalogPluginRuntimeLifecycle implements ZenXPluginRuntimeLifecycle
     this.#registrationFor = options.registrationFor;
   }
 
-  async start(registration: RegisteredZenXCapability): Promise<void> {
-    if (registration.package.manifest.schemaVersion !== 2) return;
-    await this.#supervisor.start(this.#registrationFor(registration));
+  async stage(
+    registration: RegisteredZenXCapability,
+  ): Promise<ZenXPluginRuntimeStage> {
+    if (registration.package.manifest.schemaVersion !== 2) {
+      throw new Error("Plugin Runtime requires manifest v2");
+    }
+    return await this.#supervisor.stage(this.#registrationFor(registration));
   }
 
   async stop(pluginId: string): Promise<void> {

@@ -30,6 +30,8 @@ export interface ToolProviderIdentity {
 
 export interface ToolProvider extends ToolExecutor {
   readonly identity: ToolProviderIdentity;
+  /** Optional lifecycle lease held from prepare through terminal admission/execution. */
+  retainPreparedInvocation?(): () => void;
 }
 
 export type ToolPolicy = "full_access" | "ask_unknown";
@@ -114,6 +116,12 @@ interface ProviderRegistration {
   definitions: readonly ModelTool[];
 }
 
+interface PreparedProviderRegistration {
+  provider: ToolProvider;
+  release: (() => void) | undefined;
+  released: boolean;
+}
+
 /**
  * Dynamic provider projection and invocation boundary. Preparing captures the
  * exact provider so later registration changes affect only future calls.
@@ -123,7 +131,7 @@ export class ToolEnvironment {
   readonly #tools = new Map<string, ProviderRegistration>();
   readonly #preparedProviders = new WeakMap<
     PreparedToolInvocation,
-    ToolProvider
+    PreparedProviderRegistration
   >();
   readonly #policyStore: ToolPolicyStore;
   readonly #pendingAdmissions = new Map<string, Promise<void>>();
@@ -241,7 +249,11 @@ export class ToolEnvironment {
         arguments: Object.freeze(structuredClone(invocation.arguments)),
       }),
     });
-    this.#preparedProviders.set(prepared, registration.provider);
+    this.#preparedProviders.set(prepared, {
+      provider: registration.provider,
+      release: registration.provider.retainPreparedInvocation?.(),
+      released: false,
+    });
     return prepared;
   }
 
@@ -253,60 +265,85 @@ export class ToolEnvironment {
     if (options.policy === "full_access") return "accept";
 
     const toolName = prepared.invocation.name;
-    for (;;) {
-      const stored = await this.#policyStore.get(toolName);
-      if (stored === "approved") return "accept";
-      if (stored === "denied") return "decline";
-      const pending = this.#pendingAdmissions.get(toolName);
-      if (pending !== undefined) {
-        await waitForToolAbort(pending, prepared.invocation.signal);
-        continue;
-      }
-      if (options.requestApproval === undefined) {
-        throw new Error(
-          "Approval is required, but this client cannot answer approval requests",
-        );
-      }
+    try {
+      for (;;) {
+        const stored = await this.#policyStore.get(toolName);
+        if (stored === "approved") return "accept";
+        if (stored === "denied") {
+          this.#releasePrepared(prepared);
+          return "decline";
+        }
+        const pending = this.#pendingAdmissions.get(toolName);
+        if (pending !== undefined) {
+          await waitForToolAbort(pending, prepared.invocation.signal);
+          continue;
+        }
+        if (options.requestApproval === undefined) {
+          throw new Error(
+            "Approval is required, but this client cannot answer approval requests",
+          );
+        }
 
-      let release!: () => void;
-      const admission = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      this.#pendingAdmissions.set(toolName, admission);
-      try {
-        const decision = await waitForToolAbort(
-          options.requestApproval(options.approvalRequest),
-          prepared.invocation.signal,
-        );
-        if (decision === "accept") {
-          await this.#policyStore.set(toolName, "approved");
-        } else if (decision === "decline") {
-          await this.#policyStore.set(toolName, "denied");
+        let release!: () => void;
+        const admission = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        this.#pendingAdmissions.set(toolName, admission);
+        try {
+          const decision = await waitForToolAbort(
+            options.requestApproval(options.approvalRequest),
+            prepared.invocation.signal,
+          );
+          if (decision === "accept") {
+            await this.#policyStore.set(toolName, "approved");
+          } else if (decision === "decline") {
+            await this.#policyStore.set(toolName, "denied");
+          }
+          if (decision === "decline" || decision === "cancel") {
+            this.#releasePrepared(prepared);
+          }
+          return decision;
+        } finally {
+          if (this.#pendingAdmissions.get(toolName) === admission) {
+            this.#pendingAdmissions.delete(toolName);
+          }
+          release();
         }
-        return decision;
-      } finally {
-        if (this.#pendingAdmissions.get(toolName) === admission) {
-          this.#pendingAdmissions.delete(toolName);
-        }
-        release();
       }
+    } catch (error) {
+      this.#releasePrepared(prepared);
+      throw error;
     }
   }
 
   async execute(
     prepared: PreparedToolInvocation,
   ): Promise<ToolExecutionResult> {
-    const provider = this.#requirePrepared(prepared);
-    prepared.invocation.signal.throwIfAborted();
-    return await provider.execute(prepared.invocation);
+    const provider = this.#requirePrepared(prepared).provider;
+    try {
+      prepared.invocation.signal.throwIfAborted();
+      return await provider.execute(prepared.invocation);
+    } finally {
+      this.#releasePrepared(prepared);
+    }
   }
 
-  #requirePrepared(prepared: PreparedToolInvocation): ToolProvider {
-    const provider = this.#preparedProviders.get(prepared);
-    if (provider === undefined) {
+  #requirePrepared(
+    prepared: PreparedToolInvocation,
+  ): PreparedProviderRegistration {
+    const registration = this.#preparedProviders.get(prepared);
+    if (registration === undefined) {
       throw new Error("Tool invocation was not prepared by this environment");
     }
-    return provider;
+    return registration;
+  }
+
+  #releasePrepared(prepared: PreparedToolInvocation): void {
+    const registration = this.#preparedProviders.get(prepared);
+    if (registration === undefined || registration.released) return;
+    registration.released = true;
+    this.#preparedProviders.delete(prepared);
+    registration.release?.();
   }
 }
 

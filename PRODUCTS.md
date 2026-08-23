@@ -38,9 +38,10 @@ Triggers/Rooms 与本地 v2 process package 使用同一 install/lifecycle API�
 
 Plugin Runtime Supervisor 与统一 ABI 现已实现为 ZenX Host seam：trusted bundled module、持续 child
 process 和 HTTP service 都归约为同一个 namespaced tool invocation/result、取消和 close 合同，并作为
-独立 plugin provider 注入 Tool Environment。Catalog 的异步 install/enable/disable/uninstall seam 会在
-持久化或注册失败时撤销 runtime/provider；disable/uninstall 对新调用立即不可见，已经执行的调用仍在其
-admitted runtime 上结算后再 close。runtime crash、malformed/oversized process message 与 HTTP failure
+独立 plugin provider 注入 Tool Environment。Catalog 的异步 install/enable 先启动未发布 runtime，
+持久化与内存提交后才开放 Tool Environment admission；失败会撤销 runtime/provider。disable/uninstall
+先关闭新 admission，已 prepare/执行的调用仍在其 admitted runtime 上结算后再 close，持久化失败则恢复
+原 enabled provider；disabled plugin 重装后仍保持 disabled。runtime crash、malformed/oversized process message 与 HTTP failure
 都显式失败且不重试。人类产品侧可以直接经 Supervisor 调用 runtime，不创建 AppServer Turn；只有 Agent
 Tool Environment 路径产生既有 canonical tool call/result。现有 capability child-host composition 尚未整体
 迁移到该 seam，渐进发现、完整产品入口、SDK/migrations 与 Generic UI Host 仍未实现。

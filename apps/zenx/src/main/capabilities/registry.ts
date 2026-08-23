@@ -27,6 +27,7 @@ import type {
   ZenXPluginPackageDescriptor,
   ZenXPluginManifestV2,
   ZenXPluginRuntimeLifecycle,
+  ZenXPluginRuntimeStage,
 } from "./types.js";
 import {
   MAX_CAPABILITY_OUTPUT_BYTES,
@@ -178,13 +179,15 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
           !this.#uninstalled.has(manifest.id) &&
           !this.#disabled.has(manifest.id)
         ) {
+          let runtimeStage: ZenXPluginRuntimeStage | undefined;
           try {
             this.#validateRegistration(manifest);
-            await this.#startPluginRuntime(registration);
+            runtimeStage = await this.#stagePluginRuntime(registration);
+            await runtimeStage?.publish();
             this.#activateRegistration(registration);
           } catch (error) {
             this.#catalogPackages.delete(manifest.id);
-            await this.#stopPluginRuntime(manifest.id);
+            await runtimeStage?.rollback();
             throw error;
           }
         }
@@ -202,7 +205,11 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
       };
       const nextUninstalled = new Set(this.#uninstalled);
       nextUninstalled.delete(manifest.id);
-      await this.#startPluginRuntime(registration);
+      const previousConfiguration = this.#configuration();
+      const shouldEnable = !this.#disabled.has(manifest.id);
+      const runtimeStage = shouldEnable
+        ? await this.#stagePluginRuntime(registration)
+        : undefined;
       try {
         await this.#configurationStore.save(
           this.#configuration({
@@ -211,13 +218,25 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
           }),
         );
       } catch (error) {
-        await this.#stopPluginRuntime(manifest.id);
+        await runtimeStage?.rollback();
         throw error;
       }
       this.#packageDescriptors = nextPackages;
       this.#uninstalled = nextUninstalled;
       this.#catalogPackages.set(manifest.id, registration);
-      this.#activateRegistration(registration);
+      try {
+        if (shouldEnable) {
+          await runtimeStage?.publish();
+          this.#activateRegistration(registration);
+        }
+      } catch (error) {
+        this.#catalogPackages.delete(manifest.id);
+        this.#packageDescriptors = previousConfiguration.packages ?? {};
+        this.#uninstalled = new Set(previousConfiguration.uninstalled ?? []);
+        await runtimeStage?.rollback();
+        await this.#configurationStore.save(previousConfiguration);
+        throw error;
+      }
     });
   }
 
@@ -231,18 +250,31 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         throw new Error(`Unknown ZenX capability: ${pluginId}`);
       }
       if (this.#uninstalled.has(pluginId)) return;
+      const hadRuntime =
+        supplied?.package.manifest.schemaVersion === 2 &&
+        !this.#disabled.has(pluginId);
+      if (hadRuntime && supplied !== undefined) {
+        await this.#stopPluginRuntimeWithRollback(pluginId, supplied);
+      }
       const nextUninstalled = new Set(this.#uninstalled);
       nextUninstalled.add(pluginId);
-      await this.#configurationStore.save(
-        this.#configuration({ uninstalled: nextUninstalled }),
-      );
+      try {
+        await this.#configurationStore.save(
+          this.#configuration({ uninstalled: nextUninstalled }),
+        );
+      } catch (error) {
+        if (hadRuntime && supplied !== undefined) {
+          await this.#restorePluginRuntime(supplied);
+        }
+        throw error;
+      }
       const previousUninstalled = this.#uninstalled;
       this.#uninstalled = nextUninstalled;
       this.#emit();
       try {
         const registered = this.#registered.get(pluginId);
         if (registered !== undefined) {
-          await this.#unregisterRegistration(pluginId, registered);
+          await this.#unregisterRegistration(pluginId, registered, false);
         }
       } catch (error) {
         await this.#configurationStore.save(
@@ -251,7 +283,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
         this.#uninstalled = previousUninstalled;
         if (supplied !== undefined && !this.#registered.has(pluginId)) {
           this.#validateRegistration(supplied.package.manifest);
-          await this.#startPluginRuntime(supplied);
+          await this.#restorePluginRuntime(supplied);
           this.#activateRegistration(supplied);
         }
         throw error;
@@ -268,8 +300,13 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
           `Plugin package ${pluginId} is not available to reinstall`,
         );
       }
-      this.#validateRegistration(supplied.package.manifest);
-      await this.#startPluginRuntime(supplied);
+      const shouldEnable = !this.#disabled.has(pluginId);
+      if (shouldEnable) {
+        this.#validateRegistration(supplied.package.manifest);
+      }
+      const runtimeStage = shouldEnable
+        ? await this.#stagePluginRuntime(supplied)
+        : undefined;
       const nextUninstalled = new Set(this.#uninstalled);
       nextUninstalled.delete(pluginId);
       try {
@@ -277,11 +314,23 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
           this.#configuration({ uninstalled: nextUninstalled }),
         );
       } catch (error) {
-        await this.#stopPluginRuntime(pluginId);
+        await runtimeStage?.rollback();
         throw error;
       }
       this.#uninstalled = nextUninstalled;
-      if (!this.#disabled.has(pluginId)) this.#activateRegistration(supplied);
+      if (shouldEnable) {
+        try {
+          await runtimeStage?.publish();
+          this.#activateRegistration(supplied);
+        } catch (error) {
+          this.#uninstalled.add(pluginId);
+          await runtimeStage?.rollback();
+          await this.#configurationStore.save(
+            this.#configuration({ uninstalled: this.#uninstalled }),
+          );
+          throw error;
+        }
+      }
     });
   }
 
@@ -352,6 +401,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   async #unregisterRegistration(
     capabilityId: string,
     registered: RegisteredZenXCapability,
+    stopRuntime = true,
   ): Promise<void> {
     if (this.#registered.get(capabilityId) !== registered) return;
     this.#registered.delete(capabilityId);
@@ -359,7 +409,7 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     for (const tool of registered.package.manifest.tools) {
       this.#toolOwners.delete(tool.name);
     }
-    await this.#stopPluginRuntime(capabilityId);
+    if (stopRuntime) await this.#stopPluginRuntime(capabilityId);
     await registered.package.close?.();
     this.#emit();
   }
@@ -593,7 +643,13 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
       if (enabled === !this.#disabled.has(capabilityId)) return;
       if (enabled && supplied.package.manifest.schemaVersion === 2) {
         this.#validateRegistration(supplied.package.manifest);
-        await this.#startPluginRuntime(supplied);
+      }
+      const runtimeStage =
+        enabled && supplied.package.manifest.schemaVersion === 2
+          ? await this.#stagePluginRuntime(supplied)
+          : undefined;
+      if (!enabled && supplied.package.manifest.schemaVersion === 2) {
+        await this.#stopPluginRuntimeWithRollback(capabilityId, supplied);
       }
       const nextDisabled = new Set(this.#disabled);
       if (enabled) nextDisabled.delete(capabilityId);
@@ -603,7 +659,8 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
           this.#configuration({ disabled: nextDisabled }),
         );
       } catch (error) {
-        if (enabled) await this.#stopPluginRuntime(capabilityId);
+        if (enabled) await runtimeStage?.rollback();
+        else await this.#restorePluginRuntime(supplied);
         throw error;
       }
       const previousDisabled = this.#disabled;
@@ -618,12 +675,13 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
       }
       try {
         if (enabled) {
+          await runtimeStage?.publish();
           this.#activateRegistration(supplied);
         } else {
           await this.#cancelAndSettle(capabilityId);
           const registered = this.#registered.get(capabilityId);
           if (registered !== undefined) {
-            await this.#unregisterRegistration(capabilityId, registered);
+            await this.#unregisterRegistration(capabilityId, registered, false);
           }
         }
       } catch (error) {
@@ -631,9 +689,11 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
           this.#configuration({ disabled: previousDisabled }),
         );
         this.#disabled = previousDisabled;
-        if (!this.#registered.has(capabilityId)) {
+        if (enabled) {
+          await runtimeStage?.rollback();
+        } else if (!this.#registered.has(capabilityId)) {
           this.#validateRegistration(supplied.package.manifest);
-          await this.#startPluginRuntime(supplied);
+          await this.#restorePluginRuntime(supplied);
           this.#activateRegistration(supplied);
         }
         throw error;
@@ -846,15 +906,44 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
     );
   }
 
-  async #startPluginRuntime(
+  async #stagePluginRuntime(
     registration: RegisteredZenXCapability,
-  ): Promise<void> {
-    if (registration.package.manifest.schemaVersion !== 2) return;
-    await this.#options.pluginRuntimeLifecycle?.start(registration);
+  ): Promise<ZenXPluginRuntimeStage | undefined> {
+    if (
+      registration.package.manifest.schemaVersion !== 2 ||
+      this.#options.pluginRuntimeLifecycle === undefined
+    ) {
+      return undefined;
+    }
+    return await this.#options.pluginRuntimeLifecycle.stage(registration);
   }
 
   async #stopPluginRuntime(pluginId: string): Promise<void> {
     await this.#options.pluginRuntimeLifecycle?.stop(pluginId);
+  }
+
+  async #stopPluginRuntimeWithRollback(
+    pluginId: string,
+    registration: RegisteredZenXCapability,
+  ): Promise<void> {
+    try {
+      await this.#stopPluginRuntime(pluginId);
+    } catch (error) {
+      await this.#restorePluginRuntime(registration);
+      throw error;
+    }
+  }
+
+  async #restorePluginRuntime(
+    registration: RegisteredZenXCapability,
+  ): Promise<void> {
+    const stage = await this.#stagePluginRuntime(registration);
+    try {
+      await stage?.publish();
+    } catch (error) {
+      await stage?.rollback();
+      throw error;
+    }
   }
 
   async #invokeProvider(

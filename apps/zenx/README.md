@@ -45,9 +45,11 @@ changes still require the existing Host refresh instead of live provider updates
 The ZP3 Host seam now provides one Plugin Runtime Supervisor and ABI for trusted
 bundled modules, persistent child processes, and HTTP services. It registers each
 enabled plugin as its own Tool Environment provider, routes exact namespaced tools,
-propagates abort/close, drains already executing admitted calls during revocation,
-and performs no retry or restart. Catalog install/enable/disable/uninstall can bind
-to this seam transactionally; the existing startup capability child-host composition
+propagates abort/close, drains prepared and executing admitted calls during revocation,
+and performs no retry or restart. Catalog install/enable stages runtime readiness without
+publishing tools until persistence commits; disable/uninstall closes new admission first
+and restores the enabled provider on persistence failure. Disabled reinstall stays disabled.
+The existing startup capability child-host composition
 has not yet migrated to it. Human product calls may route directly through the
 Supervisor without creating an AppServer Turn. This is not yet the completed Plugin
 Platform: progressive discovery, Host SDK and migrations, complete product

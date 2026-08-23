@@ -19,6 +19,8 @@ import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.js";
 import { ToolEnvironment } from "../../../src/tool.js";
 import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
 import type {
+  RegisteredZenXCapability,
+  ZenXCapabilityConfiguration,
   ZenXCapabilityPackage,
   ZenXPluginManifestV2,
 } from "../src/main/capabilities/types.js";
@@ -471,7 +473,7 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
     },
     {
       pluginRuntimeLifecycle: {
-        start: async () => {
+        stage: async () => {
           throw new Error("runtime start failed");
         },
         stop: async () => {},
@@ -485,6 +487,318 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
   );
   assert.equal(failSave, false);
   assert.deepEqual(startFailure.pluginSnapshot().plugins, []);
+});
+
+test("Catalog keeps a staged runtime unpublished until install persistence commits", async () => {
+  const environment = new ToolEnvironment();
+  const supervisor = new PluginRuntimeSupervisor(environment);
+  const saveStarted = deferred<void>();
+  const releaseSave = deferred<void>();
+  let starts = 0;
+  const registry = new ZenXCapabilityRegistry(
+    {
+      load: async () => emptyCapabilityConfiguration(),
+      save: async () => {
+        saveStarted.resolve();
+        await releaseSave.promise;
+      },
+    },
+    {
+      pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
+        supervisor,
+        registrationFor: countingRegistrationFor(() => {
+          starts += 1;
+        }),
+      }),
+    },
+  );
+  await registry.initialize();
+
+  const installing = registry.install(pluginPackage(), "bundled");
+  await saveStarted.promise;
+  assert.equal(starts, 1);
+  assert.deepEqual(environment.definitions, []);
+  assert.throws(
+    () => environment.prepare(invocation("fixture_echo", "too-early")),
+    /Unsupported tool/u,
+  );
+  releaseSave.resolve();
+  await installing;
+  assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+});
+
+test("failed install persistence never publishes its staged runtime", async () => {
+  const environment = new ToolEnvironment();
+  const supervisor = new PluginRuntimeSupervisor(environment);
+  const saveStarted = deferred<void>();
+  const releaseSave = deferred<void>();
+  let closes = 0;
+  const registry = new ZenXCapabilityRegistry(
+    {
+      load: async () => emptyCapabilityConfiguration(),
+      save: async () => {
+        saveStarted.resolve();
+        await releaseSave.promise;
+        throw new Error("catalog save failed");
+      },
+    },
+    {
+      pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
+        supervisor,
+        registrationFor: (registration) => {
+          const runtime = bundledPackageRegistration(registration);
+          return {
+            ...runtime,
+            start: async () => {
+              const started = await runtime.start();
+              return {
+                ...started,
+                close: async () => {
+                  closes += 1;
+                  await started.close();
+                },
+              };
+            },
+          };
+        },
+      }),
+    },
+  );
+  await registry.initialize();
+
+  const installing = registry.install(pluginPackage(), "bundled");
+  await saveStarted.promise;
+  assert.deepEqual(environment.definitions, []);
+  releaseSave.resolve();
+  await assert.rejects(installing, /catalog save failed/u);
+  assert.equal(closes, 1);
+  assert.deepEqual(environment.definitions, []);
+  assert.deepEqual(registry.pluginSnapshot().plugins, []);
+});
+
+test("disabled reinstall stays installed without staging or publishing a runtime", async () => {
+  const environment = new ToolEnvironment();
+  const supervisor = new PluginRuntimeSupervisor(environment);
+  let starts = 0;
+  let durable = emptyCapabilityConfiguration();
+  const registry = new ZenXCapabilityRegistry(
+    {
+      load: async () => structuredClone(durable),
+      save: async (configuration) => {
+        durable = structuredClone(configuration);
+      },
+    },
+    {
+      pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
+        supervisor,
+        registrationFor: countingRegistrationFor(() => {
+          starts += 1;
+        }),
+      }),
+    },
+  );
+  await registry.initialize();
+  await registry.install(pluginPackage(), "bundled");
+  assert.equal(starts, 1);
+  await registry.setEnabled("fixture", false);
+  await registry.uninstall("fixture");
+
+  await registry.reinstall("fixture");
+  assert.equal(starts, 1);
+  assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "installed");
+  assert.deepEqual(environment.definitions, []);
+  await registry.setEnabled("fixture", true);
+  assert.equal(starts, 2);
+  assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
+  assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+});
+
+test("publish failure restores durable catalog and closes the staged runtime", async () => {
+  const environment = new ToolEnvironment({
+    providers: [
+      {
+        identity: { kind: "external", id: "existing" },
+        definitions: [
+          {
+            name: "fixture_echo",
+            description: "Existing owner",
+            inputSchema: { type: "object" },
+          },
+        ],
+        execute: async () => ({ output: "existing", exitCode: 0 }),
+      },
+    ],
+  });
+  const supervisor = new PluginRuntimeSupervisor(environment);
+  let durable = emptyCapabilityConfiguration();
+  let closes = 0;
+  const registry = new ZenXCapabilityRegistry(
+    {
+      load: async () => structuredClone(durable),
+      save: async (configuration) => {
+        durable = structuredClone(configuration);
+      },
+    },
+    {
+      pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
+        supervisor,
+        registrationFor: (registration) => {
+          const runtime = bundledPackageRegistration(registration);
+          return {
+            ...runtime,
+            start: async () => {
+              const started = await runtime.start();
+              return {
+                ...started,
+                close: async () => {
+                  closes += 1;
+                  await started.close();
+                },
+              };
+            },
+          };
+        },
+      }),
+    },
+  );
+  await registry.initialize();
+  await assert.rejects(
+    registry.install(pluginPackage(), "bundled"),
+    /Tool is already registered/u,
+  );
+  assert.equal(closes, 1);
+  assert.deepEqual(durable, emptyCapabilityConfiguration());
+  assert.deepEqual(registry.pluginSnapshot().plugins, []);
+  assert.deepEqual(
+    environment.definitions.map((definition) => definition.name),
+    ["fixture_echo"],
+  );
+});
+
+test("failed disable and uninstall close admission during save then restore the enabled provider", async () => {
+  const environment = new ToolEnvironment();
+  const supervisor = new PluginRuntimeSupervisor(environment);
+  let durable = emptyCapabilityConfiguration();
+  let blockedSave:
+    | {
+        started: ReturnType<typeof deferred<void>>;
+        gate: ReturnType<typeof deferred<void>>;
+      }
+    | undefined;
+  const registry = new ZenXCapabilityRegistry(
+    {
+      load: async () => structuredClone(durable),
+      save: async (configuration) => {
+        const blocked = blockedSave;
+        if (blocked !== undefined) {
+          blocked.started.resolve();
+          await blocked.gate.promise;
+        }
+        durable = structuredClone(configuration);
+      },
+    },
+    {
+      pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
+        supervisor,
+        registrationFor: bundledPackageRegistration,
+      }),
+    },
+  );
+  await registry.initialize();
+  await registry.install(pluginPackage(), "bundled");
+
+  for (const operation of [
+    async () => await registry.setEnabled("fixture", false),
+    async () => await registry.uninstall("fixture"),
+  ]) {
+    const prepared = environment.prepare(
+      invocation("fixture_echo", randomTestId()),
+    );
+    const started = deferred<void>();
+    const gate = deferred<void>();
+    blockedSave = { started, gate };
+    const mutation = operation();
+    await definitionsDisappear(environment);
+    assert.deepEqual(await environment.execute(prepared), {
+      output: exactTrace,
+      exitCode: 0,
+    });
+    await started.promise;
+    assert.throws(
+      () => environment.prepare(invocation("fixture_echo", randomTestId())),
+      /Unsupported tool/u,
+    );
+    gate.reject(new Error("catalog save failed"));
+    await assert.rejects(mutation, /catalog save failed/u);
+    blockedSave = undefined;
+    assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
+    assert.deepEqual(
+      environment.definitions.map((definition) => definition.name),
+      ["fixture_echo"],
+    );
+    const restored = environment.prepare(
+      invocation("fixture_echo", randomTestId()),
+    );
+    assert.deepEqual(await environment.execute(restored), {
+      output: exactTrace,
+      exitCode: 0,
+    });
+  }
+});
+
+test("runtime close failure rolls back disable admission to an enabled provider", async () => {
+  const environment = new ToolEnvironment();
+  const supervisor = new PluginRuntimeSupervisor(environment);
+  let durable = emptyCapabilityConfiguration();
+  let starts = 0;
+  const registry = new ZenXCapabilityRegistry(
+    {
+      load: async () => structuredClone(durable),
+      save: async (configuration) => {
+        durable = structuredClone(configuration);
+      },
+    },
+    {
+      pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
+        supervisor,
+        registrationFor: (registration) => {
+          const runtime = bundledPackageRegistration(registration);
+          return {
+            ...runtime,
+            start: async () => {
+              starts += 1;
+              const generation = starts;
+              const started = await runtime.start();
+              return {
+                identity: started.identity,
+                invoke: async (invocation) => await started.invoke(invocation),
+                close: async () => {
+                  if (generation === 1) throw new Error("runtime close failed");
+                  await started.close();
+                },
+              };
+            },
+          };
+        },
+      }),
+    },
+  );
+  await registry.initialize();
+  await registry.install(pluginPackage(), "bundled");
+
+  await assert.rejects(
+    registry.setEnabled("fixture", false),
+    /runtime close failed/u,
+  );
+  assert.equal(starts, 2);
+  assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
+  assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+  assert.deepEqual(
+    await environment.execute(
+      environment.prepare(invocation("fixture_echo", randomTestId())),
+    ),
+    { output: exactTrace, exitCode: 0 },
+  );
 });
 
 function bundledRegistration(
@@ -504,6 +818,59 @@ function bundledRegistration(
         { invoke: async () => await invoke(), close },
       ),
   };
+}
+
+function countingRegistrationFor(onStart: () => void) {
+  return (
+    registration: RegisteredZenXCapability,
+  ): PluginRuntimeRegistration => {
+    const runtime = bundledPackageRegistration(registration);
+    return {
+      ...runtime,
+      start: async () => {
+        onStart();
+        return await runtime.start();
+      },
+    };
+  };
+}
+
+function emptyCapabilityConfiguration(): ZenXCapabilityConfiguration {
+  return { grants: {}, disabled: [], uninstalled: [], packages: {} };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: Error): void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+let testSequence = 0;
+function randomTestId(): string {
+  testSequence += 1;
+  return `test-${String(testSequence)}`;
+}
+
+async function definitionsDisappear(
+  environment: ToolEnvironment,
+): Promise<void> {
+  for (let index = 0; index < 20; index += 1) {
+    if (environment.definitions.length === 0) return;
+    await Promise.resolve();
+  }
+  throw new Error("plugin provider remained visible");
+}
+
+function toolNames(environment: ToolEnvironment): string[] {
+  return environment.definitions.map((definition) => definition.name);
 }
 
 function invocation(name: string, callId: string) {

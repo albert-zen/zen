@@ -248,6 +248,13 @@ export interface RegisteredZenXCapability {
 
 /** Optional ZP3 bridge used by the Catalog to publish/revoke a runtime provider. */
 export interface ZenXPluginRuntimeLifecycle {
-  start(registration: RegisteredZenXCapability): Promise<void>;
+  stage(
+    registration: RegisteredZenXCapability,
+  ): Promise<ZenXPluginRuntimeStage>;
   stop(pluginId: string): Promise<void>;
+}
+
+export interface ZenXPluginRuntimeStage {
+  publish(): Promise<void>;
+  rollback(): Promise<void>;
 }

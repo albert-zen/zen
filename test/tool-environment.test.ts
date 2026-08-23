@@ -21,6 +21,7 @@ import {
 
 test("a prepared invocation keeps its exact provider after dynamic removal", async () => {
   const calls: string[] = [];
+  let preparedLeases = 0;
   const provider: ToolProvider = {
     identity: { kind: "plugin", id: "fixture" },
     definitions: [
@@ -30,6 +31,12 @@ test("a prepared invocation keeps its exact provider after dynamic removal", asy
         inputSchema: { type: "object" },
       },
     ],
+    retainPreparedInvocation: () => {
+      preparedLeases += 1;
+      return () => {
+        preparedLeases -= 1;
+      };
+    },
     execute: async (invocation) => {
       calls.push(invocation.name);
       return { output: "fixture result", exitCode: 0 };
@@ -51,11 +58,13 @@ test("a prepared invocation keeps its exact provider after dynamic removal", asy
     environment.unregisterProvider({ kind: "plugin", id: "fixture" }),
     true,
   );
+  assert.equal(preparedLeases, 1);
   assert.deepEqual(environment.definitions, []);
   assert.deepEqual(await environment.execute(prepared), {
     output: "fixture result",
     exitCode: 0,
   });
+  assert.equal(preparedLeases, 0);
   assert.deepEqual(calls, ["fixture_echo"]);
 });
 
