@@ -81,9 +81,7 @@ export function CapabilitySettings() {
     );
   }
 
-  const contributedPlugins = plugins.plugins.filter(
-    (plugin) => plugin.contributionCount > 0,
-  );
+  const contributedPlugins = pluginSpacesForSettings(plugins);
 
   return (
     <>
@@ -244,6 +242,15 @@ export function CapabilitySettings() {
         </div>
       ) : null}
     </>
+  );
+}
+
+export function pluginSpacesForSettings(
+  snapshot: ZenXPluginSnapshot,
+): ZenXPluginSummary[] {
+  return snapshot.plugins.filter(
+    (plugin) =>
+      plugin.lifecycle !== "uninstalled" && plugin.contributionCount > 0,
   );
 }
 
