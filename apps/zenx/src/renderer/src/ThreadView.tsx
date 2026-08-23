@@ -264,6 +264,25 @@ export function ThreadView({
           <label className="sr-only" htmlFor="thread-composer">
             Message ZenX
           </label>
+          {composer.draft.images.length === 0 ? null : (
+            <div className="composer-images" aria-label="Images to send">
+              {composer.draft.images.map((image) => (
+                <DraftImage
+                  image={image}
+                  key={image.id}
+                  onOpen={(trigger) =>
+                    setPreview({
+                      attachment: image.attachment,
+                      name: image.name,
+                      trigger,
+                    })
+                  }
+                  onReadAttachment={onReadAttachment}
+                  onRemove={() => onRemoveImage(image.id)}
+                />
+              ))}
+            </div>
+          )}
           <textarea
             id="thread-composer"
             aria-label="Message"
@@ -296,25 +315,6 @@ export function ThreadView({
             rows={1}
             value={composer.draft.text}
           />
-          {composer.draft.images.length === 0 ? null : (
-            <div className="composer-images" aria-label="Images to send">
-              {composer.draft.images.map((image) => (
-                <DraftImage
-                  image={image}
-                  key={image.id}
-                  onOpen={(trigger) =>
-                    setPreview({
-                      attachment: image.attachment,
-                      name: image.name,
-                      trigger,
-                    })
-                  }
-                  onReadAttachment={onReadAttachment}
-                  onRemove={() => onRemoveImage(image.id)}
-                />
-              ))}
-            </div>
-          )}
           <div className="composer-rail">
             <div className="composer-tools">
               <button

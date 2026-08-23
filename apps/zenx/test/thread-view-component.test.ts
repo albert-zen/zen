@@ -4,8 +4,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
 import type { Thread, ThreadItem, Turn } from "../src/protocol-client/index.js";
+import type { AttachmentRef } from "../../../src/attachment.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
 import {
+  addComposerImages,
   editComposer,
   emptyComposerState,
   type ComposerState,
@@ -110,6 +112,63 @@ test("resumed user messages expose canonical attachments with accessible preview
   assert.match(html, /aria-label="Attached images"/u);
   assert.match(html, /aria-label="Preview Attached image 1"/u);
   assert.doesNotMatch(html, /base64|\/tmp\//u);
+});
+
+test("images precede text in Composer and transcript, including image-only messages", () => {
+  const first: AttachmentRef = {
+    type: "attachment",
+    sha256: "a".repeat(64),
+    mediaType: "image/png",
+    byteLength: 4,
+    width: 1,
+    height: 1,
+  };
+  const second: AttachmentRef = { ...first, sha256: "b".repeat(64) };
+  const composer = addComposerImages(
+    editComposer(emptyComposerState(), "line one\nline two"),
+    [
+      { id: "draft-a", name: "first.png", attachment: first },
+      { id: "draft-b", name: "second.png", attachment: second },
+    ],
+  );
+  const composerHtml = renderTurns([], [], composer);
+  assert.ok(
+    composerHtml.indexOf('class="composer-images"') <
+      composerHtml.indexOf('id="thread-composer"'),
+  );
+  assert.ok(
+    composerHtml.indexOf("first.png") < composerHtml.indexOf("second.png"),
+  );
+
+  const transcriptHtml = renderTurns(
+    [turnWithItems("completed", [user("line one\nline two"), agent("Seen")])],
+    [],
+    emptyComposerState(),
+    { "user-1": [first, second] },
+  );
+  assert.ok(
+    transcriptHtml.indexOf('class="message-images"') <
+      transcriptHtml.indexOf("line one"),
+  );
+  assert.ok(
+    transcriptHtml.indexOf('aria-label="Preview Attached image 1"') <
+      transcriptHtml.indexOf('aria-label="Preview Attached image 2"'),
+  );
+
+  const imageOnlyHtml = renderTurns(
+    [turnWithItems("completed", [user(""), agent("Seen")])],
+    [],
+    emptyComposerState(),
+    { "user-1": [first] },
+  );
+  assert.match(imageOnlyHtml, /class="message-images"/u);
+  const userBubbleStart = imageOnlyHtml.indexOf('class="user-bubble"');
+  const userBubbleEnd = imageOnlyHtml.indexOf("</article>", userBubbleStart);
+  assert.ok(userBubbleStart >= 0 && userBubbleEnd > userBubbleStart);
+  assert.doesNotMatch(
+    imageOnlyHtml.slice(userBubbleStart, userBubbleEnd),
+    /markdown-body|<p>/u,
+  );
 });
 
 function render(
