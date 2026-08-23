@@ -183,6 +183,36 @@ test("unsupported image capability disables Send without removing the draft", as
   });
 });
 
+test("Unknown image capability warns but keeps the try-send action available", async () => {
+  await withDom(async (_dom, root) => {
+    const composer = addComposerImages(emptyComposerState(), [
+      { id: "draft-1", name: "unknown.png", attachment: ref },
+    ]);
+    let submitted = false;
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          imageCapabilityNotice:
+            "Image input capability is unknown. You can try sending now.",
+          thread: emptyThread(),
+          onDraftChange: () => undefined,
+          onInterrupt: async () => undefined,
+          onReadAttachment: async () => new Uint8Array([1]),
+          onRespondToApproval: async () => undefined,
+          onSubmit: async () => void (submitted = true),
+        }),
+      ),
+    );
+    const send = required<HTMLButtonElement>('[aria-label="Send"]');
+    assert.equal(send.disabled, false);
+    assert.match(document.body.textContent ?? "", /try sending now/u);
+    await act(async () => send.click());
+    assert.equal(submitted, true);
+  });
+});
+
 async function withDom(
   run: (dom: JSDOM, root: ReturnType<typeof createRoot>) => Promise<void>,
 ) {

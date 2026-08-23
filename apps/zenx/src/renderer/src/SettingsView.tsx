@@ -1022,6 +1022,7 @@ function ProviderEditor({
     initialProvider.models.map((model) => ({ ...model })),
   );
   const [discovering, setDiscovering] = useState(false);
+  const [probingModel, setProbingModel] = useState<string | null>(null);
   const [catalogStatus, setCatalogStatus] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -1270,6 +1271,44 @@ function ProviderEditor({
                 index={index}
                 model={model}
                 onChange={(next) => updateModel(index, () => next)}
+                probing={probingModel === model.id}
+                onProbe={
+                  provider.type === "openai-compatible" &&
+                  mode === "edit" &&
+                  hasApiKey &&
+                  initialProvider.models.some(
+                    (entry) => entry.id === model.id,
+                  ) &&
+                  model.inputModalities === null
+                    ? async () => {
+                        setProbingModel(model.id);
+                        setValidationError(null);
+                        setCatalogStatus(
+                          "Sending one tiny image test request; Provider charges may apply…",
+                        );
+                        try {
+                          const result =
+                            await window.zenx.settings.probeProviderImage(
+                              provider.providerProfileId,
+                              model.id,
+                            );
+                          updateModel(index, () => ({ ...result.model }));
+                          setCatalogStatus(
+                            result.outcome === "supported"
+                              ? "Image probe succeeded; support was saved."
+                              : result.outcome === "unsupported"
+                                ? "Provider explicitly rejected image input; unsupported was saved."
+                                : "Image probe was inconclusive; capability remains Unknown.",
+                          );
+                        } catch (reason) {
+                          setValidationError(describeError(reason));
+                          setCatalogStatus(null);
+                        } finally {
+                          setProbingModel(null);
+                        }
+                      }
+                    : undefined
+                }
               />
             </div>
           ))}
@@ -1330,10 +1369,14 @@ function ModelCapabilityEditor({
   index,
   model,
   onChange,
+  onProbe,
+  probing = false,
 }: {
   index: number;
   model: ZenXModelCatalogEntry;
   onChange(model: ZenXModelCatalogEntry): void;
+  onProbe?(): Promise<void>;
+  probing?: boolean;
 }) {
   const manual = (
     update: Partial<ZenXModelCatalogEntry>,
@@ -1378,6 +1421,16 @@ function ModelCapabilityEditor({
             <option value="configured">Configured</option>
           </select>
         </label>
+        {onProbe === undefined ? null : (
+          <button
+            className="quiet-button"
+            type="button"
+            disabled={probing}
+            onClick={() => void onProbe()}
+          >
+            {probing ? "Testing image support…" : "Test image support"}
+          </button>
+        )}
         {reasoningMode === "configured" ? (
           <>
             <Field

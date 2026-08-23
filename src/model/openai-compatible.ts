@@ -24,6 +24,7 @@ export class OpenAiCompatibleModelError extends Error {
   readonly status: number | undefined;
   readonly requestId: string | undefined;
   readonly retryable: boolean;
+  readonly explicitlyRejectsImageInput: boolean;
 
   constructor(
     kind: OpenAiCompatibleModelErrorKind,
@@ -32,6 +33,7 @@ export class OpenAiCompatibleModelError extends Error {
       status?: number;
       requestId?: string;
       retryable?: boolean;
+      explicitlyRejectsImageInput?: boolean;
     } = {},
   ) {
     super(message);
@@ -40,6 +42,8 @@ export class OpenAiCompatibleModelError extends Error {
     this.status = options.status;
     this.requestId = options.requestId;
     this.retryable = options.retryable ?? false;
+    this.explicitlyRejectsImageInput =
+      options.explicitlyRejectsImageInput ?? false;
   }
 }
 
@@ -107,7 +111,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     }
 
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      const providerError = await readProviderError(response);
       const requestId = safeRequestId(response.headers, this.#apiKey);
       throw new OpenAiCompatibleModelError(
         "http",
@@ -118,6 +122,8 @@ export class OpenAiCompatibleModel implements ModelAdapter {
           status: response.status,
           ...(requestId === undefined ? {} : { requestId }),
           retryable: isRetryableStatus(response.status),
+          explicitlyRejectsImageInput:
+            providerError.explicitlyRejectsImageInput,
         },
       );
     }
@@ -134,6 +140,50 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       request.signal,
       allowedToolNames,
     );
+  }
+}
+
+async function readProviderError(
+  response: Response,
+): Promise<{ explicitlyRejectsImageInput: boolean }> {
+  let text: string;
+  try {
+    text = (await response.text()).slice(0, 16_384);
+  } catch {
+    return { explicitlyRejectsImageInput: false };
+  }
+  try {
+    const body = JSON.parse(text) as unknown;
+    if (typeof body !== "object" || body === null || !("error" in body))
+      return { explicitlyRejectsImageInput: false };
+    const error = (body as { error?: unknown }).error;
+    if (typeof error !== "object" || error === null)
+      return { explicitlyRejectsImageInput: false };
+    const value = error as {
+      code?: unknown;
+      type?: unknown;
+      message?: unknown;
+    };
+    const code =
+      typeof value.code === "string"
+        ? value.code.slice(0, 256)
+        : typeof value.type === "string"
+          ? value.type.slice(0, 256)
+          : undefined;
+    const message =
+      typeof value.message === "string"
+        ? value.message.slice(0, 2_048)
+        : undefined;
+    const detail = `${code ?? ""} ${message ?? ""}`.toLowerCase();
+    return {
+      explicitlyRejectsImageInput:
+        /image|vision|multimodal|content[_ -]?type/u.test(detail) &&
+        /not supported|unsupported|does not accept|invalid.*(?:image|content[_ -]?type)/u.test(
+          detail,
+        ),
+    };
+  } catch {
+    return { explicitlyRejectsImageInput: false };
   }
 }
 

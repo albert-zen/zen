@@ -16,6 +16,7 @@ import {
   canChangeThreadModel,
   groupedModelOptions,
   imageCapabilityMessage,
+  imageCapabilityNotice,
   modelChangeRequest,
   modelOptions,
   reasoningChangeRequest,
@@ -24,7 +25,7 @@ import {
   validateModelCatalog,
 } from "../src/renderer/src/model-settings.js";
 
-test("reports unsupported and Unknown image capability precisely", () => {
+test("blocks unsupported images but offers an explicit try-send path for Unknown", () => {
   const selected = {
     threadId: "thread-1",
     model: key("provider", "vision"),
@@ -43,10 +44,8 @@ test("reports unsupported and Unknown image capability precisely", () => {
       inputModalities: null,
     })),
   };
-  assert.match(
-    imageCapabilityMessage([unknown], selected) ?? "",
-    /capability.*unknown/u,
-  );
+  assert.equal(imageCapabilityMessage([unknown], selected), null);
+  assert.match(imageCapabilityNotice([unknown], selected) ?? "", /unknown/u);
   const supported = {
     ...unsupported,
     models: unsupported.models.map((entry) => ({
@@ -57,30 +56,36 @@ test("reports unsupported and Unknown image capability precisely", () => {
   assert.equal(imageCapabilityMessage([supported], selected), null);
 });
 
-test("the built-in Terra subscription preset passes the image send gate", () => {
+test("all built-in subscription presets pass the image send gate", () => {
   const providerProfileId = "openai-codex";
-  const terra = structuredLegacyModelCatalog("openai-subscription", [
+  const models = structuredLegacyModelCatalog("openai-subscription", [
+    "gpt-5.6-sol",
     "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
   ]);
-  assert.equal(
-    imageCapabilityMessage(
-      [
+  for (const model of models) {
+    assert.equal(
+      imageCapabilityMessage(
+        [
+          {
+            providerProfileId,
+            type: "openai-subscription",
+            displayName: "OpenAI subscription",
+            models,
+          },
+        ],
         {
-          providerProfileId,
-          type: "openai-subscription",
-          displayName: "OpenAI subscription",
-          models: terra,
+          threadId: `thread-${model.id}`,
+          model: key(providerProfileId, model.id),
+          modelProvider: providerProfileId,
+          reasoningEffort: "medium",
         },
-      ],
-      {
-        threadId: "thread-terra",
-        model: key(providerProfileId, "gpt-5.6-terra"),
-        modelProvider: providerProfileId,
-        reasoningEffort: "medium",
-      },
-    ),
-    null,
-  );
+      ),
+      null,
+    );
+  }
 });
 
 test("shows only visible models while preserving a hidden authoritative value", () => {

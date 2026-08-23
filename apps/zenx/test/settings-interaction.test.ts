@@ -19,6 +19,7 @@ import type {
 import type { AppearancePreference } from "../src/renderer/src/appearance.js";
 import type { SettingsTab } from "../src/renderer/src/SettingsView.js";
 import type { ZenXProviderCatalogSnapshot } from "../src/main/settings-service.js";
+import type { ZenXImageCapabilityProbeResult } from "../src/main/settings-service.js";
 
 const { act, createElement, useState } = React;
 const bootstrapDom = new JSDOM(
@@ -285,6 +286,49 @@ test("Provider discovery keeps unknown capabilities explicit and manual override
   }
 });
 
+test("a saved Unknown model offers a user-triggered image probe and shows its persisted outcome", async () => {
+  const unknownModel = {
+    ...multiProviderSettings.profile.providerProfiles[0]!.models[0]!,
+    inputModalities: null,
+  };
+  const initialSettings = {
+    ...multiProviderSettings,
+    profile: {
+      ...multiProviderSettings.profile,
+      providerProfiles: multiProviderSettings.profile.providerProfiles.map(
+        (provider, index) =>
+          index === 0 ? { ...provider, models: [unknownModel] } : provider,
+      ),
+    },
+  };
+  let probed: [string, string] | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings,
+    probeProviderImage: async (providerProfileId, modelId) => {
+      probed = [providerProfileId, modelId];
+      return {
+        outcome: "supported",
+        model: {
+          ...unknownModel,
+          inputModalities: ["text", "image"],
+          source: "probe",
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Test image support"));
+    await waitFor(() => probed);
+    assert.deepEqual(probed, ["profile-alpha", "shared-model"]);
+    assert.match(document.body.textContent ?? "", /support was saved/u);
+    assert.match(document.body.textContent ?? "", /text \+ image/u);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("Add custom provider submits an opaque identity, credential, and repeatable model rows", async () => {
   let added:
     { provider: ZenXProviderProfile; apiKey: string | undefined } | undefined;
@@ -505,7 +549,10 @@ test("OpenAI subscription choice exposes the five host-confirmed models", async 
       added?.models.map((entry) => entry.id),
       ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
     );
-    assert.deepEqual(added?.models[1]?.inputModalities, ["text", "image"]);
+    assert.deepEqual(
+      added?.models.map((entry) => entry.inputModalities),
+      Array.from({ length: 5 }, () => ["text", "image"]),
+    );
     assert.deepEqual(added?.models[1]?.supportedReasoningEfforts, [
       "low",
       "medium",
@@ -896,6 +943,10 @@ async function mountSettings(
     discoverProvider?(
       providerProfileId: string,
     ): Promise<ZenXProviderCatalogSnapshot>;
+    probeProviderImage?(
+      providerProfileId: string,
+      modelId: string,
+    ): Promise<ZenXImageCapabilityProbeResult>;
     archivedThreads?: NativeThreadSummary[];
     onUnarchive?(thread: NativeThreadSummary): Promise<void>;
   } = {},
@@ -956,6 +1007,11 @@ async function mountSettings(
         options.discoverProvider ??
         (async () => {
           throw new Error("Unexpected discoverProvider call");
+        }),
+      probeProviderImage:
+        options.probeProviderImage ??
+        (async () => {
+          throw new Error("Unexpected probeProviderImage call");
         }),
       onManualCodeRequested: () => () => undefined,
     },

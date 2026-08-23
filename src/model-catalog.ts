@@ -4,6 +4,7 @@ export const MODEL_CATALOG_SOURCES = [
   "preset",
   "discovered",
   "manual",
+  "probe",
   "legacy",
 ] as const;
 

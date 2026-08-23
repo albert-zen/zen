@@ -36,6 +36,7 @@ interface ThreadViewProps {
   modelDisabled?: boolean;
   modelError?: string | null;
   imageCapabilityError?: string | null;
+  imageCapabilityNotice?: string | null;
   models?: readonly ModelSummary[];
   permissionLabel?: string;
   providerProfiles?: readonly ZenXProviderProfile[];
@@ -71,6 +72,7 @@ export function ThreadView({
   modelDisabled = false,
   modelError = null,
   imageCapabilityError = null,
+  imageCapabilityNotice = null,
   models = [],
   permissionLabel = "Full access",
   providerProfiles = [],
@@ -406,6 +408,13 @@ export function ThreadView({
                 (blockedByImageCapability ? imageCapabilityError : null) ??
                 composer.submission?.error ??
                 modelError}
+            </p>
+          ) : null}
+          {composer.draft.images.length > 0 &&
+          imageCapabilityNotice !== null &&
+          !blockedByImageCapability ? (
+            <p className="composer-note" role="status">
+              {imageCapabilityNotice}
             </p>
           ) : null}
         </form>

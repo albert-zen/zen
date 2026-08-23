@@ -1447,13 +1447,7 @@ export class ZenAppServer {
       part.type === "image" ? [part.attachment] : [],
     );
     if (attachments.length === 0) return;
-    if (inputModalities === null) {
-      throw new AppServerError(
-        "image_capability_unknown",
-        "The selected model has unknown image input capability",
-      );
-    }
-    if (!inputModalities.includes("image")) {
+    if (inputModalities !== null && !inputModalities.includes("image")) {
       throw new AppServerError(
         "image_input_unsupported",
         "The selected model does not support image input",

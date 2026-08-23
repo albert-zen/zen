@@ -378,10 +378,15 @@ test("normalizes HTTP and streaming provider errors without leaking secrets", as
       baseUrl: "https://provider.test/v1",
       apiKey: fakeKey,
       fetch: (async () =>
-        new Response(`provider accidentally echoed ${fakeKey}`, {
-          status: 401,
-          headers: { "x-request-id": "req_safe-1" },
-        })) as typeof fetch,
+        Response.json(
+          {
+            error: {
+              code: "unsupported_image_input",
+              message: `image input is unsupported: ${fakeKey}`,
+            },
+          },
+          { status: 401, headers: { "x-request-id": "req_safe-1" } },
+        )) as typeof fetch,
     });
 
     await assert.rejects(
@@ -392,7 +397,9 @@ test("normalizes HTTP and streaming provider errors without leaking secrets", as
         assert.equal(error.status, 401);
         assert.equal(error.requestId, "req_safe-1");
         assert.equal(error.retryable, false);
+        assert.equal(error.explicitlyRejectsImageInput, true);
         assert.equal(String(error).includes(fakeKey), false);
+        assert.equal(JSON.stringify(error).includes(fakeKey), false);
         return true;
       },
     );

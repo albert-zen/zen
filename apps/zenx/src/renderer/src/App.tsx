@@ -53,6 +53,7 @@ import {
   canChangeThreadModel,
   modelChangeRequest,
   imageCapabilityMessage,
+  imageCapabilityNotice,
   reasoningChangeRequest,
   settingsFromSnapshot,
   validateModelCatalog,
@@ -1346,6 +1347,10 @@ function AgentSurface({
           composer={composerStates[threadDetail.id] ?? emptyComposerState()}
           composerDisabled={threadArchiving}
           imageCapabilityError={imageCapabilityMessage(
+            providerProfiles,
+            selectedSettings,
+          )}
+          imageCapabilityNotice={imageCapabilityNotice(
             providerProfiles,
             selectedSettings,
           )}

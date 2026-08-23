@@ -43,7 +43,10 @@ import type {
   DirectoryListing,
 } from "../../main/directory-browser.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
-import type { ZenXProviderCatalogSnapshot } from "../../main/settings-service.js";
+import type {
+  ZenXImageCapabilityProbeResult,
+  ZenXProviderCatalogSnapshot,
+} from "../../main/settings-service.js";
 import type {
   ZenXImageDraft,
   ZenXImageImport,
@@ -118,6 +121,10 @@ declare global {
         discoverProvider(
           providerProfileId: string,
         ): Promise<ZenXProviderCatalogSnapshot>;
+        probeProviderImage(
+          providerProfileId: string,
+          modelId: string,
+        ): Promise<ZenXImageCapabilityProbeResult>;
         addWorkspace(workspace: string): Promise<PublicHostSettings>;
         removeWorkspace(workspace: string): Promise<PublicHostSettings>;
         setDefaultWorkspace(workspace: string): Promise<PublicHostSettings>;

@@ -58,6 +58,25 @@ test("GET /models discovers ids with unknown capabilities and routes the selecte
   assert.doesNotMatch(JSON.stringify(models), /selected-secret/u);
 });
 
+test("GET /models uses explicit rich modalities and exact catalog enrichment without name guessing", async () => {
+  const models = await discoverOpenAiCompatibleModels({
+    baseUrl: "https://provider.example.test/v1",
+    apiKey: "secret",
+    fetch: async () =>
+      Response.json({
+        data: [
+          { id: "rich", architecture: { input_modalities: ["text", "image"] } },
+          { id: "gpt-5.6-sol" },
+          { id: "vision-looking-name" },
+        ],
+      }),
+  });
+  assert.deepEqual(models[0]?.inputModalities, ["text", "image"]);
+  assert.deepEqual(models[1]?.inputModalities, ["text", "image"]);
+  assert.equal(models[1]?.source, "preset");
+  assert.equal(models[2]?.inputModalities, null);
+});
+
 test("GET /models rejects duplicate, malformed, and failed discovery explicitly", async () => {
   await assert.rejects(
     discoverOpenAiCompatibleModels({
@@ -189,6 +208,66 @@ test("Host discovery failure is explicit and leaves configured catalog entries i
       /HTTP 502/u,
     );
     assert.deepEqual((await service.publicSettings()).profile, before);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a conclusive explicit image probe persists through the existing Host catalog boundary", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-probe-persist-"),
+  );
+  const profileStore = new ZenXHostProfileStore(
+    path.join(directory, "host-profile.json"),
+  );
+  const vault = new ZenXCredentialVault(
+    path.join(directory, "credentials.vault"),
+    encryption,
+  );
+  const runnable = structuredLegacyModelCatalog("openai-compatible", [
+    "runnable",
+  ])[0]!;
+  const unknown = {
+    ...runnable,
+    id: "unknown-image",
+    displayName: "unknown-image",
+    inputModalities: null,
+    source: "manual" as const,
+  };
+  const profile = compatibleProfile(runnable);
+  profile.providerProfiles[0]!.models.push(unknown);
+  try {
+    await profileStore.write(profile);
+    await vault.writeApiKey("selected", "selected-key");
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      profileStore,
+      vault,
+      subscription: inactiveSubscription,
+      providerFetchFactory: () =>
+        Object.assign(
+          async () =>
+            new Response(
+              'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+              { status: 200, headers: { "content-type": "text/event-stream" } },
+            ),
+          { close: async () => undefined },
+        ),
+    });
+    await service.initialize({});
+    const result = await service.probeProviderModelImage(
+      "selected",
+      "unknown-image",
+    );
+    assert.equal(result.outcome, "supported");
+    assert.deepEqual(result.model.inputModalities, ["text", "image"]);
+    assert.equal(result.model.source, "probe");
+    const persisted = await profileStore.readOptional();
+    assert.deepEqual(
+      persisted?.providerProfiles[0]?.models[1]?.inputModalities,
+      ["text", "image"],
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -1,6 +1,6 @@
 import type { ModelCatalogEntryInput } from "../../../src/model-catalog.js";
 
-export const BUILTIN_MODEL_CATALOG_PRESET_VERSION = 2;
+export const BUILTIN_MODEL_CATALOG_PRESET_VERSION = 3;
 
 export type BuiltinModelCatalogPresetKind =
   "fake" | "openai-subscription" | "openai-compatible";
@@ -30,11 +30,14 @@ const PRESETS: Readonly<
       "max",
       "ultra",
     ]),
-    subscriptionPreset(
-      "gpt-5.6-terra",
-      ["low", "medium", "high", "xhigh", "max", "ultra"],
-      ["text", "image"],
-    ),
+    subscriptionPreset("gpt-5.6-terra", [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]),
     subscriptionPreset("gpt-5.6-luna", [
       "low",
       "medium",
@@ -72,7 +75,6 @@ export function legacyModelCatalogEntries(
 function subscriptionPreset(
   id: string,
   supportedReasoningEfforts: readonly string[],
-  inputModalities: readonly ("text" | "image")[] = ["text"],
 ): ModelCatalogEntryInput {
   return Object.freeze({
     id,
@@ -84,7 +86,10 @@ function subscriptionPreset(
     // model id. The Provider context window remains unconfirmed.
     supportedReasoningEfforts: Object.freeze([...supportedReasoningEfforts]),
     defaultReasoningEffort: "medium",
-    inputModalities: Object.freeze([...inputModalities]),
+    // models.dev's versioned OpenAI catalog lists all five fixed subscription
+    // models with text/image/pdf input. Zen currently projects only the two
+    // modalities it implements.
+    inputModalities: Object.freeze(["text" as const, "image" as const]),
     contextWindow: null,
   });
 }
