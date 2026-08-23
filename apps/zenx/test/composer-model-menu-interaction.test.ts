@@ -36,6 +36,7 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
   const root = createRoot(container);
   const selected = key("alpha", "alpha-text");
   const modelChanges: string[] = [];
+  const reasoningChanges: string[] = [];
 
   try {
     await act(async () =>
@@ -49,7 +50,7 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
             model(key("alpha", "hidden"), "Hidden", ["medium"], false, true),
           ],
           onModelChange: (value: string) => modelChanges.push(value),
-          onReasoningChange: () => undefined,
+          onReasoningChange: (value: string) => reasoningChanges.push(value),
           providerProfiles: [
             provider("alpha", "Alpha Cloud", ["alpha-text", "hidden"]),
             provider("beta", "Beta Local", ["beta-vision"]),
@@ -102,6 +103,23 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     assert.equal(document.querySelector('[role="menu"]'), null);
     assert.equal(document.activeElement, trigger);
 
+    const reasoningTrigger = requiredButton(".composer-reasoning-trigger");
+    assert.match(reasoningTrigger.getAttribute("aria-label") ?? "", /medium/);
+    await act(async () => reasoningTrigger.click());
+    assert.deepEqual(
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      ).map((button) => button.textContent?.trim()),
+      ["low", "medium"],
+    );
+    await act(async () =>
+      (
+        document.querySelector('[role="menuitemradio"]') as HTMLButtonElement
+      ).click(),
+    );
+    assert.deepEqual(reasoningChanges, ["low"]);
+    assert.equal(document.activeElement, reasoningTrigger);
+
     await act(async () => trigger.click());
     const reasoning = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
@@ -128,6 +146,28 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     });
     assert.equal(document.querySelector('[role="menu"]'), null);
     assert.equal(document.activeElement, trigger);
+
+    await act(async () =>
+      root.render(
+        createElement(ComposerModelMenu, {
+          disabled: false,
+          modelError: null,
+          models: [],
+          onModelChange: () => undefined,
+          onReasoningChange: () => undefined,
+          providerProfiles: [],
+          selectedModel: key("removed", "old-model"),
+          selectedReasoningEffort: "medium",
+          switching: false,
+        }),
+      ),
+    );
+    const unknownReasoning = requiredButton(".composer-reasoning-trigger");
+    assert.equal(unknownReasoning.disabled, true);
+    assert.equal(
+      unknownReasoning.getAttribute("aria-label"),
+      "Reasoning effort: Unknown",
+    );
   } finally {
     await act(async () => root.unmount());
     Object.assign(globalThis, previousGlobals, {

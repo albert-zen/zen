@@ -1678,6 +1678,45 @@ a:focus-visible {
   max-width: 190px;
   cursor: pointer;
 }
+.composer-reasoning-trigger {
+  min-width: 0;
+  max-width: 150px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 36px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 10px;
+}
+.composer-reasoning-trigger span,
+.composer-reasoning-trigger strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-reasoning-trigger strong {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+}
+.composer-reasoning-trigger:hover:not(:disabled),
+.composer-reasoning-trigger[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.composer-reasoning-trigger.unavailable,
+.composer-reasoning-trigger.unavailable strong {
+  color: var(--text-3);
+}
+.composer-reasoning-trigger:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
 .composer-model-trigger > span:nth-child(2) {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3661,6 +3700,9 @@ a:focus-visible {
   .composer-model-trigger {
     max-width: 120px;
   }
+  .composer-reasoning-trigger {
+    max-width: 116px;
+  }
   .permission-control span {
     display: none;
   }
@@ -3750,6 +3792,12 @@ a:focus-visible {
   }
   .composer-model-trigger {
     max-width: 92px;
+  }
+  .composer-reasoning-trigger {
+    max-width: 84px;
+  }
+  .composer-reasoning-trigger span {
+    display: none;
   }
   .user-row {
     padding-left: 4%;
