@@ -703,6 +703,38 @@ function installSettingsIpc(
       });
     },
   );
+  ipcMain.handle(
+    ipcChannels.providerImageProbe,
+    async (_event, providerProfileId: unknown, modelId: unknown) => {
+      if (
+        typeof providerProfileId !== "string" ||
+        typeof modelId !== "string"
+      ) {
+        throw new Error("Invalid image capability probe target");
+      }
+      const profile = (
+        await settings.publicSettings()
+      ).profile.providerProfiles.find(
+        (candidate) => candidate.providerProfileId === providerProfileId,
+      );
+      if (profile === undefined) {
+        throw new Error(
+          `Provider profile ${providerProfileId} is not configured`,
+        );
+      }
+      const transport = await zenXProviderDiscoveryTransport(
+        profile,
+        async (url) => await session.defaultSession.resolveProxy(url),
+      );
+      return await settings.probeProviderModelImage(
+        providerProfileId,
+        modelId,
+        {
+          ...(transport === undefined ? {} : { transport }),
+        },
+      );
+    },
+  );
   ipcMain.handle(ipcChannels.subscriptionLogin, async () => {
     await settings.login(
       (url) => {

@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  applyBuiltInModelCatalogPresets,
   hostConfigFromProfile,
   migrateLegacyHostProfile,
   structuredLegacyModelCatalog,
@@ -137,6 +138,59 @@ test("v1 migration preserves fake and OpenAI subscription runtime identities", (
   }
 });
 
+test("upgrades an existing subscription catalog with current presets while preserving manual overrides", () => {
+  const oldTerra = {
+    ...structuredLegacyModelCatalog("openai-subscription", [
+      "gpt-5.6-terra",
+    ])[0]!,
+    supportedReasoningEfforts: ["medium"],
+    inputModalities: ["text" as const],
+  };
+  const luna = {
+    ...structuredLegacyModelCatalog("openai-subscription", [
+      "gpt-5.6-luna",
+    ])[0]!,
+    displayName: "Luna override",
+    source: "manual" as const,
+  };
+  const upgraded = applyBuiltInModelCatalogPresets({
+    ...profile,
+    providerProfiles: [
+      {
+        providerProfileId: "openai-codex",
+        type: "openai-subscription",
+        displayName: "OpenAI subscription",
+        models: [oldTerra, luna],
+      },
+    ],
+    defaultModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-terra",
+    },
+    titleModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-terra",
+    },
+  });
+  assert.deepEqual(
+    upgraded.providerProfiles[0]?.models.map((model) => model.id),
+    ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
+  );
+  assert.deepEqual(
+    upgraded.providerProfiles[0]?.models[1]?.supportedReasoningEfforts,
+    ["low", "medium", "high", "xhigh", "max", "ultra"],
+  );
+  assert.deepEqual(upgraded.providerProfiles[0]?.models[1]?.inputModalities, [
+    "text",
+    "image",
+  ]);
+  assert.equal(
+    upgraded.providerProfiles[0]?.models[2]?.displayName,
+    "Luna override",
+  );
+  assert.equal(upgraded.providerProfiles[0]?.models[2]?.source, "manual");
+});
+
 test("migrates v2 string catalogs deterministically without changing active model references", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-v2-"));
   const file = path.join(directory, "host-profile.json");
@@ -184,7 +238,11 @@ test("migrates v2 string catalogs deterministically without changing active mode
         model.defaultReasoningEffort,
       ]),
       [
+        ["gpt-5.6-sol", "preset", "medium"],
         ["gpt-5.6-terra", "preset", "medium"],
+        ["gpt-5.6-luna", "preset", "medium"],
+        ["gpt-5.5", "preset", "medium"],
+        ["gpt-5.4", "preset", "medium"],
         ["custom-confirmed", "legacy", "medium"],
       ],
     );

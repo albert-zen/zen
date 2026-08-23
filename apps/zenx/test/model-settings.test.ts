@@ -8,6 +8,7 @@ import type {
   UpdatedThreadSettings,
 } from "../src/protocol-client/index.js";
 import type { ZenXProviderProfile } from "../src/main/host-profile.js";
+import { structuredLegacyModelCatalog } from "../src/main/host-profile.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 import {
   applySettingsMirror,
@@ -15,6 +16,7 @@ import {
   canChangeThreadModel,
   groupedModelOptions,
   imageCapabilityMessage,
+  imageCapabilityNotice,
   modelChangeRequest,
   modelOptions,
   reasoningChangeRequest,
@@ -23,7 +25,7 @@ import {
   validateModelCatalog,
 } from "../src/renderer/src/model-settings.js";
 
-test("reports unsupported and Unknown image capability precisely", () => {
+test("blocks unsupported images but offers an explicit try-send path for Unknown", () => {
   const selected = {
     threadId: "thread-1",
     model: key("provider", "vision"),
@@ -42,10 +44,8 @@ test("reports unsupported and Unknown image capability precisely", () => {
       inputModalities: null,
     })),
   };
-  assert.match(
-    imageCapabilityMessage([unknown], selected) ?? "",
-    /capability.*unknown/u,
-  );
+  assert.equal(imageCapabilityMessage([unknown], selected), null);
+  assert.match(imageCapabilityNotice([unknown], selected) ?? "", /unknown/u);
   const supported = {
     ...unsupported,
     models: unsupported.models.map((entry) => ({
@@ -54,6 +54,38 @@ test("reports unsupported and Unknown image capability precisely", () => {
     })),
   };
   assert.equal(imageCapabilityMessage([supported], selected), null);
+});
+
+test("all built-in subscription presets pass the image send gate", () => {
+  const providerProfileId = "openai-codex";
+  const models = structuredLegacyModelCatalog("openai-subscription", [
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+  ]);
+  for (const model of models) {
+    assert.equal(
+      imageCapabilityMessage(
+        [
+          {
+            providerProfileId,
+            type: "openai-subscription",
+            displayName: "OpenAI subscription",
+            models,
+          },
+        ],
+        {
+          threadId: `thread-${model.id}`,
+          model: key(providerProfileId, model.id),
+          modelProvider: providerProfileId,
+          reasoningEffort: "medium",
+        },
+      ),
+      null,
+    );
+  }
 });
 
 test("shows only visible models while preserving a hidden authoritative value", () => {

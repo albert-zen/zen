@@ -169,12 +169,29 @@ export function imageCapabilityMessage(
   );
   const model = profile?.models.find((entry) => entry.id === identity.modelId);
   const label = model?.displayName ?? identity.modelId;
-  if (model?.inputModalities === null || model === undefined) {
-    return `Image input capability for “${label}” is unknown. Set it in Models & providers or choose a model with image support.`;
-  }
+  if (model?.inputModalities === null || model === undefined) return null;
   return model.inputModalities.includes("image")
     ? null
     : `“${label}” does not support image input. Remove the images or choose a model with image support.`;
+}
+
+export function imageCapabilityNotice(
+  providerProfiles: readonly ZenXProviderProfile[],
+  settings: SelectedThreadSettings | null,
+): string | null {
+  if (settings === null) return null;
+  let identity: ReturnType<typeof decodeModelKey>;
+  try {
+    identity = decodeModelKey(settings.model);
+  } catch {
+    return null;
+  }
+  const model = providerProfiles
+    .find((entry) => entry.providerProfileId === identity.providerProfileId)
+    ?.models.find((entry) => entry.id === identity.modelId);
+  if (model !== undefined && model.inputModalities !== null) return null;
+  const label = model?.displayName ?? identity.modelId;
+  return `Image input capability for “${label}” is unknown. You can try sending now, test it in Models & providers, or set it manually.`;
 }
 
 export function modelChangeRequest(

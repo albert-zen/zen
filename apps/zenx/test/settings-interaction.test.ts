@@ -19,6 +19,7 @@ import type {
 import type { AppearancePreference } from "../src/renderer/src/appearance.js";
 import type { SettingsTab } from "../src/renderer/src/SettingsView.js";
 import type { ZenXProviderCatalogSnapshot } from "../src/main/settings-service.js";
+import type { ZenXImageCapabilityProbeResult } from "../src/main/settings-service.js";
 
 const { act, createElement, useState } = React;
 const bootstrapDom = new JSDOM(
@@ -285,6 +286,49 @@ test("Provider discovery keeps unknown capabilities explicit and manual override
   }
 });
 
+test("a saved Unknown model offers a user-triggered image probe and shows its persisted outcome", async () => {
+  const unknownModel = {
+    ...multiProviderSettings.profile.providerProfiles[0]!.models[0]!,
+    inputModalities: null,
+  };
+  const initialSettings = {
+    ...multiProviderSettings,
+    profile: {
+      ...multiProviderSettings.profile,
+      providerProfiles: multiProviderSettings.profile.providerProfiles.map(
+        (provider, index) =>
+          index === 0 ? { ...provider, models: [unknownModel] } : provider,
+      ),
+    },
+  };
+  let probed: [string, string] | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings,
+    probeProviderImage: async (providerProfileId, modelId) => {
+      probed = [providerProfileId, modelId];
+      return {
+        outcome: "supported",
+        model: {
+          ...unknownModel,
+          inputModalities: ["text", "image"],
+          source: "probe",
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Test image support"));
+    await waitFor(() => probed);
+    assert.deepEqual(probed, ["profile-alpha", "shared-model"]);
+    assert.match(document.body.textContent ?? "", /support was saved/u);
+    assert.match(document.body.textContent ?? "", /text \+ image/u);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("Add custom provider submits an opaque identity, credential, and repeatable model rows", async () => {
   let added:
     { provider: ZenXProviderProfile; apiKey: string | undefined } | undefined;
@@ -414,6 +458,15 @@ test("Add provider offers known local and subscription flows without creating ac
     await click(exactButtonRequired("Add provider"));
     assert.ok(labeledButton("Add OpenAI subscription"));
     assert.ok(labeledButton("Add Local demo"));
+    for (const name of [
+      "SiliconFlow（硅基流动）",
+      "DashScope",
+      "DeepSeek",
+      "Kimi",
+      "Zhipu（智谱）",
+    ]) {
+      assert.ok(labeledButton(`Add ${name}`));
+    }
     await click(labeledButtonRequired("Add Local demo"));
     await click(exactButtonRequired("Add provider"));
     await waitFor(() => added);
@@ -423,6 +476,91 @@ test("Add provider offers known local and subscription flows without creating ac
       ["fake"],
     );
     assert.notEqual(added?.providerProfileId, "fake");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("known Provider choice pre-fills its stable profile identity and connection", async () => {
+  let added:
+    { provider: ZenXProviderProfile; apiKey: string | undefined } | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    addProvider: async (provider, apiKey) => {
+      added = { provider, apiKey };
+      return {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add provider"));
+    await click(exactButtonRequired("Add provider"));
+    await click(labeledButtonRequired("Add DeepSeek"));
+    assert.equal(requiredInput("Display name").value, "DeepSeek");
+    assert.equal(requiredInput("Provider name").value, "deepseek");
+    assert.equal(requiredInput("Base URL").value, "https://api.deepseek.com");
+    await changeControl(requiredInput("API key"), "deepseek-key");
+    await changeControl(requiredInput("Model 1"), "deepseek-chat");
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(() => added);
+    assert.equal(added?.provider.providerProfileId, "deepseek");
+    assert.equal(added?.apiKey, "deepseek-key");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("OpenAI subscription choice exposes the five host-confirmed models", async () => {
+  let added: ZenXProviderProfile | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: settings,
+    addProvider: async (provider) => {
+      added = provider;
+      return {
+        ...settings,
+        profile: {
+          ...settings.profile,
+          providerProfiles: [...settings.profile.providerProfiles, provider],
+        },
+      };
+    },
+  });
+  try {
+    await waitFor(() => exactButton("Add provider"));
+    await click(exactButtonRequired("Add provider"));
+    await click(labeledButtonRequired("Add OpenAI subscription"));
+    for (const [index, id] of [
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4",
+    ].entries()) {
+      assert.equal(requiredInput(`Model ${index + 1}`).value, id);
+    }
+    await click(exactButtonRequired("Add provider"));
+    await waitFor(() => added);
+    assert.deepEqual(
+      added?.models.map((entry) => entry.id),
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
+    );
+    assert.deepEqual(
+      added?.models.map((entry) => entry.inputModalities),
+      Array.from({ length: 5 }, () => ["text", "image"]),
+    );
+    assert.deepEqual(added?.models[1]?.supportedReasoningEfforts, [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
   } finally {
     await unmount(harness);
   }
@@ -805,6 +943,10 @@ async function mountSettings(
     discoverProvider?(
       providerProfileId: string,
     ): Promise<ZenXProviderCatalogSnapshot>;
+    probeProviderImage?(
+      providerProfileId: string,
+      modelId: string,
+    ): Promise<ZenXImageCapabilityProbeResult>;
     archivedThreads?: NativeThreadSummary[];
     onUnarchive?(thread: NativeThreadSummary): Promise<void>;
   } = {},
@@ -865,6 +1007,11 @@ async function mountSettings(
         options.discoverProvider ??
         (async () => {
           throw new Error("Unexpected discoverProvider call");
+        }),
+      probeProviderImage:
+        options.probeProviderImage ??
+        (async () => {
+          throw new Error("Unexpected probeProviderImage call");
         }),
       onManualCodeRequested: () => () => undefined,
     },

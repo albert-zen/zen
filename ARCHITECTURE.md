@@ -86,8 +86,15 @@
   `providerProfileId / modelId` 引用；workspace、审批默认值与本地产品偏好仍在同一
   host-owned 配置中，credential 不在其中，配置变更也不覆盖已存 Thread 的生效设置。
 - **ZenXModelDiscovery** — ZenX 主进程用所选 OpenAI-compatible profile 的 endpoint、
-  credential 与 transport 发起一次无持久状态的 `GET /models`，只把响应 id 与
-  Unknown capability 投影给 host catalog；失败明确返回且不修改已配置条目。
+  credential 与 transport 发起一次无持久状态的 `GET /models`，采信响应中可明确解析的
+  modality metadata，并按完整 model id 用内建核验目录补全未知能力；匹配不到仍保持 Unknown，
+  失败明确返回且不修改已配置条目。
+- **ZenXImageCapabilityProbe** — 用户明确触发一次经目标 OpenAI-compatible profile 真实 adapter
+  的极小图片请求；成功或明确图片类型拒绝写回既有 Host ModelCatalog，认证、额度、限流、网络及
+  模糊失败保持 inconclusive，不进入 Thread、journal 或后台调度。
+- **ZenXKnownProviderPreset** — ZenX 主进程版本化维护已确认的 OpenAI-compatible
+  Provider 稳定 identity、显示名与正式 base URL，renderer 只消费这份连接数据创建
+  host-owned profile，五家 Provider 继续复用同一个 adapter 与 discovery 边界。
 - **ZenXAppearancePreference** — ZenX renderer 在本机 app profile 保存 System / Light / Dark
   偏好，并在首屏前把系统解析结果投影为同一套组件消费的语义色彩 token；它不进入 Core、
   Thread、Project、host restart 或 canonical ItemList。

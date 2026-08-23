@@ -199,8 +199,9 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   不以 base64 或源文件路径为权威。导入或读取失败在 Composer 附近明确显示并保留现有草稿。
 - 每张待发送图片显示紧凑、有稳定占位尺寸和 accessible name 的缩略图；删除一张不得清除文字或其他图片。
   picker、paste、drop 与 thumbnail 更新不得改变既有 Enter / Shift+Enter、Model / Reasoning menu 或 primary action 语义。
-- 已选模型的 image capability 为 Unknown 或明确不支持时，Send / Interrupt & Send 在进入 Provider 前阻断，说明
-  Unknown、unsupported 各自的原因与恢复方式，并保留完整草稿。文字草稿的普通发送行为不受影响。
+- 已选模型明确不支持 image 时，Send / Interrupt & Send 在进入 Provider 前阻断并保留完整草稿。
+  Unknown 必须显示为 Unknown，并提供“尝试发送”以及 Settings 中显式 probe / 手动配置的恢复入口；
+  Unknown 不得冒充 unsupported。文字草稿的普通发送行为不受影响。
 - transcript 从 canonical `user_message` 的 `AttachmentRef` 投影图片；send 后与 resume 后使用同一渲染路径。
   缩略图可用鼠标或键盘打开应用内 modal preview；Escape、关闭按钮和 backdrop 可关闭，关闭后焦点返回触发缩略图。
 
@@ -212,8 +213,9 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   `Provider display name · model ID` 选择全局 Default model 与 Title model；相同 model ID
   可以属于不同 profile，选择器不能把它们合并。Profile 内的结构化 ModelCatalog 使用可聚焦的
   重复行编辑，不使用单个 textarea。已有 OpenAI-compatible profile 可以通过所选 profile 的
-  credential/transport 获取 `/models` ID；Unknown reasoning、input 与 context 必须原样显示，
-  用户展开模型行后可以显式写入 manual capability override，UI 不从名称猜测能力。
+  credential/transport 获取 `/models` ID 与明确 modality metadata，并按完整 ID 用核验目录补全；
+  Unknown reasoning、input 与 context 必须原样显示，用户展开模型行后可以显式写入 manual capability override，
+  或对已保存的 Unknown model 明确触发一次提示可能计费的极小图片 probe。UI 不从名称猜测能力。
 - Known Provider 新增入口只提供当前已有生命周期的 OpenAI subscription 与 local demo；
   custom OpenAI-compatible 入口编辑 display name、Provider name、base URL、API key replacement
   和 model IDs。稳定 profile ID 既不展示也不可编辑；已保存 API key 永不回显，空白表示保留。
@@ -329,7 +331,7 @@ ThreadView
 - [ ] Composer 的 Steer、Stop、Interrupt & Send、Send 和 disabled 均语义明确；primary action 切换时几何稳定。
 - [ ] Composer primary action 的可见圆更小但图标和 hit target 不随之大幅缩小；底部 toolbar 更靠近容器底边。
 - [ ] picker、paste 与 drop 可按稳定顺序加入多张受支持图片；图片-only draft 可发送，单张删除不改变文字或其他图片。
-- [ ] Unknown / unsupported image capability 在 Provider 前显示精确阻断并保留草稿；text-only 与既有 pending action 不回归。
+- [ ] unsupported image capability 在 Provider 前精确阻断并保留草稿；Unknown 显示提示且仍可尝试发送；text-only 与既有 pending action 不回归。
 - [ ] send / resume 后 transcript 从 canonical AttachmentRef 渲染；preview 可由鼠标/键盘打开，以 Escape/关闭/backdrop 关闭并归还焦点。
 - [ ] 离开实时底部后显示 Back to live，streaming 不破坏 scroll、focus、draft 或 disclosure。
 - [ ] 不同宽度下无页面级横向滚动或 action/title overlap；不假定最终 breakpoint 或 mobile drawer contract。

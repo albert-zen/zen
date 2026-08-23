@@ -84,7 +84,8 @@ wire method、后台 retry 或 compaction progress notification。手动 `thread
 不会阻断同目录内可表示、可运行的条目。manual override 补全能力后，该条目自然重新
 进入列表。Host 默认模型必须可表示且可运行，否则明确失败；不使用缺省值或 Zen 私有
 字段。context window 与 catalog source 在本切片仍是 host data，不扩展固定 wire
-schema。ID-only `GET /models` discovery 不会按名称补写这些字段，Unknown reasoning
+schema。bare-ID `GET /models` discovery 不会按名称补写这些字段；Provider 明确返回的
+modality metadata 与 exact-ID 核验目录可以补全 input capability。Unknown reasoning
 也不能被一次 per-Thread explicit effort 绕过。
 
 `thread/settings/update` 与 `turn/start` 在既有 `model` / `effort` 字段内提交同一
@@ -124,7 +125,8 @@ MCP `-c` 配置由 CLI remote bridge 启动边界验证后忽略，不进入 wir
 重放时偷偷重新下载。路径与 data URI 只在 ZAS 导入边界存在，校验后写入
 Attachment Store；`attachment` 直接复用已经导入的 immutable `AttachmentRef`，不会
 再次读取或导入 payload。Core 只收到 typed `AttachmentRef`。
-图片能力为 Unknown 或明确不支持时请求失败，不静默发送；Z08 的真实纵向执行以
+图片能力明确不支持时请求失败；Unknown 会由客户端明确提示并允许用户尝试发送，Provider
+失败仍按普通 Turn failure 可见。Z08 的真实纵向执行以
 `turn/start` 为准，steer/replace 保留同一 typed public seam，完整中断/重试体验由
 后续切片收口。
 

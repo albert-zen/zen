@@ -201,9 +201,9 @@ test("an initial user-message journal failure leaves an interrupted start withou
   );
 });
 
-test("unknown and unsupported image capabilities fail before a Turn starts", async () => {
+test("Unknown image capability is attempted while unsupported fails before a Turn starts", async () => {
   for (const [inputModalities, expectedCode] of [
-    [null, "image_capability_unknown"],
+    [null, null],
     [["text"] as const, "image_input_unsupported"],
   ] as const) {
     const attachments = new InMemoryAttachmentStore();
@@ -222,18 +222,26 @@ test("unknown and unsupported image capabilities fail before a Turn starts", asy
     });
     const thread = await server.startThread();
     const ref = await server.importImageBytes(png1x1());
-    await assert.rejects(
-      server.startTurn(thread.id, [{ type: "image", attachment: ref }]),
-      (error: unknown) =>
-        error instanceof Error &&
-        "code" in error &&
-        error.code === expectedCode,
-    );
-    assert.deepEqual(
-      (await journal.read(thread.id)).map((item) => item.type),
-      ["thread_metadata"],
-    );
-    assert.equal(providerInvocations, 0);
+    if (expectedCode === null) {
+      const turn = await server.startTurn(thread.id, [
+        { type: "image", attachment: ref },
+      ]);
+      await turn.done;
+      assert.equal(providerInvocations, 1);
+    } else {
+      await assert.rejects(
+        server.startTurn(thread.id, [{ type: "image", attachment: ref }]),
+        (error: unknown) =>
+          error instanceof Error &&
+          "code" in error &&
+          error.code === expectedCode,
+      );
+      assert.deepEqual(
+        (await journal.read(thread.id)).map((item) => item.type),
+        ["thread_metadata"],
+      );
+      assert.equal(providerInvocations, 0);
+    }
   }
 });
 

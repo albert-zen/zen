@@ -91,18 +91,34 @@ an old Thread remains readable, fails clearly when that profile is unavailable,
 and runs again only after an explicit switch to an available profile.
 
 Built-in model metadata is versioned separately from the profile and contains
-only repository-confirmed facts. Manual entries and per-model overrides are
-stored in the profile. OpenAI-compatible profiles can optionally issue
+only repository-confirmed facts. The five OpenAI subscription input-modality
+entries are curated from the versioned models.dev OpenAI catalog; this is a
+verified external catalog source, not a claim that `GET /models` returned those
+facts. The entries were checked on 2026-08-23 against the models.dev `dev`
+branch files for `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
+and `gpt-5.4` under <https://github.com/anomalyco/models.dev/tree/dev/models/openai>.
+Manual entries and per-model overrides are stored in the profile.
+OpenAI-compatible profiles can optionally issue
 credential-scoped `GET <baseUrl>/models` discovery through that profile's system
-proxy transport. Discovery reads IDs only, returns all other unconfirmed
-capabilities as Unknown, does not persist credentials, and does not modify the
-configured/manual catalog on success or failure. A discovered model with no
+proxy transport. Discovery reads IDs plus only explicitly parseable modality
+fields returned by that Provider, then performs exact-ID enrichment from the
+built-in verified catalog. It never infers capabilities from model names;
+unmatched or bare-ID results remain Unknown. Discovery does not persist
+credentials or modify the configured/manual catalog on success or failure. A discovered model with no
 known reasoning capability is non-runnable even when a Thread supplies an
 explicit effort; it requires a manual catalog capability override before it can
 become the canonical selection. The fixed Codex 0.146.0 `model/list` omits such
 non-default entries while continuing to expose valid configured models, and a
 completed manual override makes the entry visible. Default and title models
 must have runnable, wire-representable reasoning and text-input metadata.
+
+The OpenAI subscription preset exposes the five models confirmed by the current
+host: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, and `gpt-5.4`.
+Sol and Terra expose `low / medium / high / xhigh / max / ultra`; Luna exposes
+those efforts through `max`; 5.5 and 5.4 expose `low / medium / high / xhigh`.
+All default to `medium`. All five have verified text and image input in the
+versioned external catalog; Zen does not yet project their PDF input. Context
+windows remain Unknown in Zen's curated preset.
 
 Host profiles live under Electron `userData` without credentials. Compatible
 provider API keys are encrypted with Electron `safeStorage` and keyed by stable
@@ -123,14 +139,24 @@ configured compatible-provider name); legacy unknown model IDs retain the prior
 Settings → Models & providers exposes every profile as an independently editable
 row. Global Default and Title selectors show both Provider display name and model
 ID. Custom catalogs use repeatable model rows; an existing compatible profile can
-fetch `/models` IDs, Unknown capabilities remain visibly Unknown, and each row can
-store an explicit manual reasoning/input/context override. Saved keys are represented
+fetch `/models` IDs and explicit modality metadata with exact-ID verified-catalog
+enrichment. Unknown capabilities remain visibly Unknown, and each row can store an
+explicit manual reasoning/input/context override. A saved Unknown model offers one
+user-triggered tiny image probe with a cost warning; only success or an explicit
+image-type rejection is persisted, while auth, quota, rate-limit, network,
+missing-model, and ambiguous failures remain inconclusive. Saved keys are represented
 only by presence—blank credential input keeps the existing key. Deleting a
 profile that owns either global model requires the corresponding replacement(s)
 and sends them with the deletion in one host mutation; Settings never changes
 historical Thread selections. ZenX exposes at most one OpenAI subscription profile
 in this UI; Account login/logout follows that profile's stable ID, and deleting it
 clears its profile-scoped OAuth credential without reviving historical Threads.
+
+Add provider also offers stable OpenAI-compatible connection presets for
+SiliconFlow（硅基流动）, DashScope, DeepSeek, Kimi, and Zhipu（智谱）. Their
+host-owned profiles still use the same adapter, credential vault, manual catalog
+editor, and `GET /models` discovery path as a custom Provider; the presets add no
+Provider-specific protocol or inferred model capabilities.
 
 ## Triggers and Rooms
 

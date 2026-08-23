@@ -15,6 +15,7 @@ import type {
   ZenXSingleProviderHostConfig,
 } from "./host-messages.js";
 import {
+  applyBuiltInModelCatalogPresets,
   hostConfigFromProfile,
   type PublicHostSettings,
   type ZenXHostProfile,
@@ -29,8 +30,15 @@ import {
   validateHostProfile,
 } from "./host-profile.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
-import { discoverOpenAiCompatibleModels } from "./model-discovery.js";
+import {
+  discoverOpenAiCompatibleModels,
+  type DiscoveredModelCatalogEntry,
+} from "./model-discovery.js";
 import { resolveZenXHostConfig } from "./host-config.js";
+import {
+  probeOpenAiCompatibleImage,
+  type ImageCapabilityProbeOutcome,
+} from "./image-capability-probe.js";
 import {
   type ProjectPathIdentity,
   type ProjectPathSnapshot,
@@ -63,6 +71,11 @@ interface CanonicalWorkspaceSnapshot {
 export interface ZenXProviderCatalogSnapshot {
   providerProfileId: string;
   models: ZenXModelCatalogEntry[];
+}
+
+export interface ZenXImageCapabilityProbeResult {
+  outcome: ImageCapabilityProbeOutcome;
+  model: ZenXModelCatalogEntry;
 }
 
 export class ZenXSettingsService {
@@ -250,17 +263,106 @@ export class ZenXSettingsService {
         fetch,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       });
+      const discoveredById = new Map(
+        discovered.map((entry) => [entry.id, entry]),
+      );
       const configuredIds = new Set(provider.models.map((entry) => entry.id));
       return {
         providerProfileId: provider.providerProfileId,
         models: [
-          ...provider.models,
+          ...provider.models.map((entry) =>
+            enrichConfiguredModel(entry, discoveredById.get(entry.id)),
+          ),
           ...discovered.filter((entry) => !configuredIds.has(entry.id)),
         ],
       };
     } finally {
       await fetch.close?.();
     }
+  }
+
+  async probeProviderModelImage(
+    providerProfileId: string,
+    modelId: string,
+    options: { transport?: ProviderTransport; signal?: AbortSignal } = {},
+  ): Promise<ZenXImageCapabilityProbeResult> {
+    await this.#profileOperations;
+    const provider = this.#requireProfile().providerProfiles.find(
+      (candidate) => candidate.providerProfileId === providerProfileId,
+    );
+    if (provider === undefined) {
+      throw new Error(
+        `Provider profile ${providerProfileId} is not configured`,
+      );
+    }
+    if (provider.type !== "openai-compatible") {
+      throw new Error(
+        `Provider profile ${providerProfileId} does not support image probing`,
+      );
+    }
+    const model = provider.models.find((entry) => entry.id === modelId);
+    if (model === undefined) {
+      throw new Error(
+        `Model ${modelId} is not configured for Provider profile ${providerProfileId}`,
+      );
+    }
+    const apiKey = await this.#vault.readApiKey(providerProfileId);
+    if (apiKey === undefined) {
+      throw new Error(`Provider profile ${providerProfileId} has no API key`);
+    }
+    const fetch = this.#providerFetchFactory(options.transport);
+    let outcome: ImageCapabilityProbeOutcome;
+    try {
+      outcome = await probeOpenAiCompatibleImage({
+        baseUrl: provider.baseUrl,
+        apiKey,
+        provider: provider.name,
+        model: model.id,
+        fetch,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+    } finally {
+      await fetch.close?.();
+    }
+    if (outcome === "inconclusive") return { outcome, model };
+    const updated = await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const providerIndex = current.providerProfiles.findIndex(
+        (candidate) => candidate.providerProfileId === providerProfileId,
+      );
+      if (providerIndex < 0) {
+        throw new Error(
+          `Provider profile ${providerProfileId} is not configured`,
+        );
+      }
+      const currentProvider = current.providerProfiles[providerIndex]!;
+      const modelIndex = currentProvider.models.findIndex(
+        (entry) => entry.id === modelId,
+      );
+      if (modelIndex < 0) {
+        throw new Error(
+          `Model ${modelId} is not configured for Provider profile ${providerProfileId}`,
+        );
+      }
+      const currentModel = currentProvider.models[modelIndex]!;
+      const nextModel: ZenXModelCatalogEntry = {
+        ...currentModel,
+        inputModalities: outcome === "supported" ? ["text", "image"] : ["text"],
+        source: "probe",
+      };
+      const models = [...currentProvider.models];
+      models[modelIndex] = nextModel;
+      const providers = [...current.providerProfiles];
+      providers[providerIndex] = { ...currentProvider, models };
+      const next = validateHostProfile({
+        ...current,
+        providerProfiles: providers,
+      });
+      await this.#persistProfile(next);
+      this.#profile = next;
+      return nextModel;
+    });
+    return { outcome, model: updated };
   }
 
   configuredTitleModel(): string {
@@ -835,6 +937,31 @@ export class ZenXSettingsService {
   }
 }
 
+function enrichConfiguredModel(
+  configured: ZenXModelCatalogEntry,
+  discovered: DiscoveredModelCatalogEntry | undefined,
+): ZenXModelCatalogEntry {
+  if (discovered === undefined || configured.source === "manual") {
+    return configured;
+  }
+  return {
+    ...configured,
+    displayName:
+      configured.displayName === configured.id
+        ? discovered.displayName
+        : configured.displayName,
+    description: configured.description || discovered.description,
+    supportedReasoningEfforts:
+      configured.supportedReasoningEfforts ??
+      discovered.supportedReasoningEfforts,
+    defaultReasoningEffort:
+      configured.defaultReasoningEffort ?? discovered.defaultReasoningEffort,
+    inputModalities: configured.inputModalities ?? discovered.inputModalities,
+    contextWindow: configured.contextWindow ?? discovered.contextWindow,
+    source: discovered.source,
+  };
+}
+
 async function normalizeCanonicalWorkspaces(
   profile: ZenXHostProfile,
   platform: NodeJS.Platform,
@@ -932,7 +1059,7 @@ function profileFromLegacy(
   const models = [...(config.models ?? [config.model])];
   const titleModel = "gpt-5.6-luna";
   if (!models.includes(titleModel)) models.push(titleModel);
-  return {
+  return applyBuiltInModelCatalogPresets({
     version: 3,
     onboardingComplete: false,
     providerProfiles: [
@@ -950,5 +1077,5 @@ function profileFromLegacy(
     approvalPolicy: config.approvalPolicy,
     pinnedThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
-  };
+  });
 }
