@@ -41,9 +41,6 @@ export function ComposerModelMenu({
   const containerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const reasoningTriggerRef = useRef<HTMLButtonElement>(null);
-  const activeTriggerRef =
-    useRef<React.RefObject<HTMLButtonElement | null>>(triggerRef);
   const restoreFocusRef = useRef(false);
   const [panel, setPanel] = useState<MenuPanel | null>(null);
   const selected = models.find((model) => model.id === selectedModel);
@@ -51,12 +48,22 @@ export function ComposerModelMenu({
   const groups = groupedModelOptions(models, providerProfiles);
   const efforts = reasoningOptions(models, selectedModel);
   const currentModelLabel = selected?.displayName ?? "Unavailable model";
+  const selectedReasoningLabel =
+    selected === undefined ||
+    efforts.length === 0 ||
+    selectedReasoningEffort === null
+      ? null
+      : formatReasoningEffort(selectedReasoningEffort);
+  const currentSelectionLabel =
+    selectedReasoningLabel === null
+      ? currentModelLabel
+      : `${currentModelLabel} ${selectedReasoningLabel}`;
   const reasoningLabel =
     selected === undefined
       ? "Unknown"
       : efforts.length === 0
         ? "Unavailable"
-        : (selectedReasoningEffort ?? "Choose");
+        : (selectedReasoningLabel ?? "Choose");
   const close = (restoreFocus = true) => {
     restoreFocusRef.current = restoreFocus;
     setPanel(null);
@@ -80,7 +87,7 @@ export function ComposerModelMenu({
   useLayoutEffect(() => {
     if (panel !== null || !restoreFocusRef.current) return;
     restoreFocusRef.current = false;
-    activeTriggerRef.current.current?.focus();
+    triggerRef.current?.focus();
   }, [panel]);
 
   const selectModel = (model: string) => {
@@ -91,11 +98,6 @@ export function ComposerModelMenu({
     onReasoningChange(effort);
     close();
   };
-  const openReasoning = () => {
-    activeTriggerRef.current = reasoningTriggerRef;
-    setPanel("reasoning");
-  };
-
   return (
     <div className="composer-model-menu" ref={containerRef}>
       <button
@@ -107,47 +109,22 @@ export function ComposerModelMenu({
         }
         aria-expanded={panel !== null}
         aria-haspopup="menu"
-        aria-label={`Model and reasoning: ${currentModelLabel}, ${selectedReasoningEffort ?? "unavailable"}`}
+        aria-label={`Model and reasoning: ${currentSelectionLabel}`}
+        title={currentSelectionLabel}
         disabled={disabled || switching}
         onClick={() => {
-          activeTriggerRef.current = triggerRef;
           panel === null ? setPanel("root") : close();
         }}
         onKeyDown={(event) => {
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
           event.preventDefault();
-          activeTriggerRef.current = triggerRef;
           setPanel("root");
         }}
       >
         <span className="provider-mark generic" aria-hidden="true">
           ◇
         </span>
-        <span>{switching ? "Changing…" : currentModelLabel}</span>
-        <Icon name="chevron-down" size={12} />
-      </button>
-      <button
-        ref={reasoningTriggerRef}
-        className={`composer-reasoning-trigger${efforts.length === 0 ? " unavailable" : ""}`}
-        type="button"
-        aria-describedby={
-          modelError === null ? undefined : "composer-model-error"
-        }
-        aria-expanded={panel === "reasoning"}
-        aria-haspopup="menu"
-        aria-label={`Reasoning effort: ${reasoningLabel}`}
-        title={`Reasoning: ${reasoningLabel}`}
-        disabled={disabled || switching || efforts.length === 0}
-        onClick={() => (panel === "reasoning" ? close() : openReasoning())}
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-          event.preventDefault();
-          openReasoning();
-        }}
-      >
-        <Icon name="reasoning" size={14} />
-        <span>Reasoning</span>
-        <strong>{reasoningLabel}</strong>
+        <span>{switching ? "Changing…" : currentSelectionLabel}</span>
         <Icon name="chevron-down" size={12} />
       </button>
       {panel === null ? null : (
@@ -176,7 +153,7 @@ export function ComposerModelMenu({
               <MenuEntry
                 disabled={efforts.length === 0}
                 label="Reasoning"
-                value={selectedReasoningEffort ?? "Unavailable"}
+                value={reasoningLabel}
                 onClick={() => setPanel("reasoning")}
               />
               {available ? (
@@ -237,7 +214,9 @@ export function ComposerModelMenu({
                   onClick={() => selectEffort(effort.reasoningEffort)}
                 >
                   <span>
-                    <strong>{effort.reasoningEffort}</strong>
+                    <strong>
+                      {formatReasoningEffort(effort.reasoningEffort)}
+                    </strong>
                     {effort.description === effort.reasoningEffort ? null : (
                       <small>{effort.description}</small>
                     )}
@@ -304,6 +283,15 @@ function capabilityLabel(model: ModelSummary): string {
   return `${modalities} · ${model.supportedReasoningEfforts.length} reasoning ${
     model.supportedReasoningEfforts.length === 1 ? "level" : "levels"
   }`;
+}
+
+function formatReasoningEffort(effort: string): string {
+  if (effort === "xhigh") return "Extra High";
+  return effort
+    .split(/[-_\s]+/u)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
 function handleMenuKeyDown(

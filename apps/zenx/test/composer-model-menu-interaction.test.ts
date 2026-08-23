@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import * as React from "react";
@@ -12,6 +13,10 @@ const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const { ComposerModelMenu } =
   await import("../src/renderer/src/ComposerModelMenu.js");
+const rendererStyles = await readFile(
+  new URL("../src/renderer/src/styles.css", import.meta.url),
+  "utf8",
+);
 
 test("Composer model menu groups Providers and manages keyboard focus", async () => {
   const dom = new JSDOM(
@@ -33,6 +38,7 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
   });
   const container = document.getElementById("root");
   assert.ok(container);
+  installComposerToolsStyles(dom);
   const root = createRoot(container);
   const selected = key("alpha", "alpha-text");
   const modelChanges: string[] = [];
@@ -41,29 +47,42 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
   try {
     await act(async () =>
       root.render(
-        createElement(ComposerModelMenu, {
-          disabled: false,
-          modelError: null,
-          models: [
-            model(selected, "Alpha Text", ["low", "medium"], true),
-            model(key("beta", "beta-vision"), "Beta Vision", ["high"]),
-            model(key("alpha", "hidden"), "Hidden", ["medium"], false, true),
-          ],
-          onModelChange: (value: string) => modelChanges.push(value),
-          onReasoningChange: (value: string) => reasoningChanges.push(value),
-          providerProfiles: [
-            provider("alpha", "Alpha Cloud", ["alpha-text", "hidden"]),
-            provider("beta", "Beta Local", ["beta-vision"]),
-          ],
-          selectedModel: selected,
-          selectedReasoningEffort: "medium",
-          switching: false,
-        }),
+        createElement(
+          "div",
+          { className: "composer-tools" },
+          createElement(ComposerModelMenu, {
+            disabled: false,
+            modelError: null,
+            models: [
+              model(selected, "Alpha Text", ["low", "medium"], true),
+              model(key("beta", "beta-vision"), "Beta Vision", ["high"]),
+              model(key("alpha", "hidden"), "Hidden", ["medium"], false, true),
+            ],
+            onModelChange: (value: string) => modelChanges.push(value),
+            onReasoningChange: (value: string) => reasoningChanges.push(value),
+            providerProfiles: [
+              provider("alpha", "Alpha Cloud", ["alpha-text", "hidden"]),
+              provider("beta", "Beta Local", ["beta-vision"]),
+            ],
+            selectedModel: selected,
+            selectedReasoningEffort: "medium",
+            switching: false,
+          }),
+        ),
       ),
     );
     const trigger = requiredButton(".composer-model-trigger");
+    assert.equal(trigger.textContent?.trim(), "◇Alpha Text Medium");
     await act(async () => trigger.click());
     assert.equal(trigger.getAttribute("aria-expanded"), "true");
+    const tools = requiredElement<HTMLElement>(".composer-tools");
+    const menu = requiredElement<HTMLElement>(".composer-selection-menu");
+    installRect(tools, { left: 0, top: 100, width: 300, height: 40 });
+    installRect(menu, { left: 0, top: 20, width: 300, height: 72 });
+    assert.ok(
+      visibleAreaWithinClippingAncestors(menu, dom.window) > 0,
+      "The upward-opening menu must have a visible area outside the toolbar",
+    );
     assert.equal(
       document.activeElement?.textContent?.trim(),
       "ModelAlpha Text",
@@ -74,7 +93,7 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     );
     assert.equal(
       document.activeElement?.textContent?.trim(),
-      "Reasoningmedium",
+      "ReasoningMedium",
     );
     await act(async () =>
       document.activeElement?.dispatchEvent(keydown(dom, "ArrowUp")),
@@ -103,14 +122,17 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     assert.equal(document.querySelector('[role="menu"]'), null);
     assert.equal(document.activeElement, trigger);
 
-    const reasoningTrigger = requiredButton(".composer-reasoning-trigger");
-    assert.match(reasoningTrigger.getAttribute("aria-label") ?? "", /medium/);
-    await act(async () => reasoningTrigger.click());
+    await act(async () => trigger.click());
+    const reasoningEntry = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((button) => button.textContent?.includes("Reasoning"));
+    assert.ok(reasoningEntry);
+    await act(async () => reasoningEntry.click());
     assert.deepEqual(
       Array.from(
         document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
       ).map((button) => button.textContent?.trim()),
-      ["low", "medium"],
+      ["Low", "Medium"],
     );
     await act(async () =>
       (
@@ -118,13 +140,18 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
       ).click(),
     );
     assert.deepEqual(reasoningChanges, ["low"]);
-    assert.equal(document.activeElement, reasoningTrigger);
+    assert.equal(document.activeElement, trigger);
 
-    await act(async () => reasoningTrigger.click());
+    await act(async () => trigger.click());
+    const reasoningForEscape = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((button) => button.textContent?.includes("Reasoning"));
+    assert.ok(reasoningForEscape);
+    await act(async () => reasoningForEscape.click());
     await act(async () =>
       document.activeElement?.dispatchEvent(keydown(dom, "Escape")),
     );
-    assert.equal(document.activeElement, reasoningTrigger);
+    assert.equal(document.activeElement, trigger);
 
     trigger.focus();
     await act(async () => trigger.dispatchEvent(keydown(dom, "ArrowDown")));
@@ -141,24 +168,6 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     assert.equal(document.activeElement, trigger);
 
     await act(async () => trigger.click());
-    const reasoning = Array.from(
-      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-    ).find((button) => button.textContent?.includes("Reasoning"));
-    assert.ok(reasoning);
-    await act(async () => reasoning.click());
-    assert.deepEqual(
-      Array.from(
-        document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
-      ).map((button) => button.textContent?.trim()),
-      ["low", "medium"],
-    );
-    await act(async () =>
-      document.activeElement?.dispatchEvent(keydown(dom, "Escape")),
-    );
-    assert.equal(document.querySelector('[role="menu"]'), null);
-    assert.equal(document.activeElement, trigger);
-
-    await act(async () => trigger.click());
     await act(async () => {
       document
         .getElementById("outside")
@@ -169,25 +178,29 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
 
     await act(async () =>
       root.render(
-        createElement(ComposerModelMenu, {
-          disabled: false,
-          modelError: null,
-          models: [],
-          onModelChange: () => undefined,
-          onReasoningChange: () => undefined,
-          providerProfiles: [],
-          selectedModel: key("removed", "old-model"),
-          selectedReasoningEffort: "medium",
-          switching: false,
-        }),
+        createElement(
+          "div",
+          { className: "composer-tools" },
+          createElement(ComposerModelMenu, {
+            disabled: false,
+            modelError: null,
+            models: [],
+            onModelChange: () => undefined,
+            onReasoningChange: () => undefined,
+            providerProfiles: [],
+            selectedModel: key("removed", "old-model"),
+            selectedReasoningEffort: "medium",
+            switching: false,
+          }),
+        ),
       ),
     );
-    const unknownReasoning = requiredButton(".composer-reasoning-trigger");
-    assert.equal(unknownReasoning.disabled, true);
+    const unavailableTrigger = requiredButton(".composer-model-trigger");
     assert.equal(
-      unknownReasoning.getAttribute("aria-label"),
-      "Reasoning effort: Unknown",
+      unavailableTrigger.getAttribute("aria-label"),
+      "Model and reasoning: Unavailable model",
     );
+    assert.equal(document.querySelector(".composer-reasoning-trigger"), null);
   } finally {
     await act(async () => root.unmount());
     Object.assign(globalThis, previousGlobals, {
@@ -205,6 +218,66 @@ function requiredElement<T extends Element = Element>(selector: string): T {
 
 function requiredButton(selector: string): HTMLButtonElement {
   return requiredElement<HTMLButtonElement>(selector);
+}
+
+function installComposerToolsStyles(dom: JSDOM): void {
+  const rule = rendererStyles.match(/\.composer-tools\s*\{[^}]*\}/u)?.[0];
+  assert.ok(rule, "Missing .composer-tools CSS rule");
+  const style = dom.window.document.createElement("style");
+  style.textContent = rule;
+  dom.window.document.head.append(style);
+}
+
+type Rect = { left: number; top: number; width: number; height: number };
+
+function installRect(element: Element, rect: Rect): void {
+  Object.defineProperty(element, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      ...rect,
+      bottom: rect.top + rect.height,
+      right: rect.left + rect.width,
+      x: rect.left,
+      y: rect.top,
+      toJSON: () => undefined,
+    }),
+  });
+}
+
+function visibleAreaWithinClippingAncestors(
+  element: Element,
+  window: { getComputedStyle(element: Element): CSSStyleDeclaration },
+): number {
+  let visible = element.getBoundingClientRect();
+  for (
+    let ancestor = element.parentElement;
+    ancestor;
+    ancestor = ancestor.parentElement
+  ) {
+    const style = window.getComputedStyle(ancestor);
+    if (!clipsOverflow(style.overflow, style.overflowX, style.overflowY)) {
+      continue;
+    }
+    const bounds = ancestor.getBoundingClientRect();
+    const left = Math.max(visible.left, bounds.left);
+    const top = Math.max(visible.top, bounds.top);
+    const right = Math.min(visible.right, bounds.right);
+    const bottom = Math.min(visible.bottom, bounds.bottom);
+    visible = {
+      ...visible,
+      left,
+      top,
+      right,
+      bottom,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top),
+    };
+  }
+  return Math.max(0, visible.width) * Math.max(0, visible.height);
+}
+
+function clipsOverflow(...values: string[]): boolean {
+  return values.some((value) => /^(auto|clip|hidden|scroll)$/u.test(value));
 }
 
 function keydown(dom: JSDOM, key: string): KeyboardEvent {
