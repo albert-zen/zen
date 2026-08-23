@@ -95,9 +95,104 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
 
     const more = beta.querySelector<HTMLButtonElement>('.project-more-trigger');
     assert.ok(more);
+    await act(async () => {
+      more.focus();
+      more.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Enter",
+        }),
+      );
+    });
+    assert.match(document.activeElement?.textContent ?? "", /Set as default/u);
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Escape",
+        }),
+      );
+    });
+    assert.equal(document.activeElement, more);
+    await act(async () => {
+      more.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowUp",
+        }),
+      );
+    });
+    assert.match(document.activeElement?.textContent ?? "", /Remove from ZenX/u);
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Escape",
+        }),
+      );
+    });
+    assert.equal(document.activeElement, more);
     await act(async () => more.click());
     assert.equal(beta.querySelector('[role="menu"]')?.textContent?.includes("Set as default"), true);
     assert.equal(beta.querySelector('[role="menu"]')?.textContent?.includes("Remove from ZenX"), true);
+    assert.match(document.activeElement?.textContent ?? "", /Set as default/u);
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowDown",
+        }),
+      );
+    });
+    assert.match(document.activeElement?.textContent ?? "", /Remove from ZenX/u);
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Home",
+        }),
+      );
+    });
+    assert.match(document.activeElement?.textContent ?? "", /Set as default/u);
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "End",
+        }),
+      );
+    });
+    assert.match(document.activeElement?.textContent ?? "", /Remove from ZenX/u);
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowUp",
+        }),
+      );
+    });
+    assert.match(document.activeElement?.textContent ?? "", /Set as default/u);
+    const focusedMore = more;
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Escape",
+        }),
+      );
+    });
+    assert.equal(document.activeElement, focusedMore);
+    assert.equal(beta.querySelector('[role="menu"]'), null);
+    await act(async () => more.click());
     await act(async () => beta.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
     assert.deepEqual(defaults, ["/work/beta"]);
     assert.equal(beta.querySelector('[role="menu"]'), null);
@@ -123,6 +218,41 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
     assert.ok(removeAgain);
     await act(async () => removeAgain.click());
     assert.deepEqual(removed, ["/work/beta"]);
+
+    const defaultProject = document.querySelector<HTMLElement>(
+      '[data-project-key="/work/zen"]',
+    );
+    assert.ok(defaultProject);
+    const defaultMore = defaultProject.querySelector<HTMLButtonElement>(
+      ".project-more-trigger",
+    );
+    assert.ok(defaultMore);
+    await act(async () => defaultMore.click());
+    assert.equal(
+      defaultProject.querySelectorAll('[role="menuitem"]').length,
+      1,
+    );
+    assert.match(document.activeElement?.textContent ?? "", /Remove from ZenX/u);
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "ArrowUp",
+        }),
+      );
+    });
+    assert.match(document.activeElement?.textContent ?? "", /Remove from ZenX/u);
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Escape",
+        }),
+      );
+    });
+    assert.equal(document.activeElement, defaultMore);
   } finally {
     await act(async () => root.unmount());
     Object.assign(globalThis, previous, { IS_REACT_ACT_ENVIRONMENT: undefined });

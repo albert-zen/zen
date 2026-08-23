@@ -854,6 +854,17 @@ function ProjectRows({
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
+  const restoreMenuFocusRef = useRef(false);
+  const initialMenuFocusRef = useRef<"first" | "last">("first");
+  const projectMenuId = `project-menu-${encodeURIComponent(group.key)}`;
+  const openMenu = (initialFocus: "first" | "last") => {
+    initialMenuFocusRef.current = initialFocus;
+    setMenuOpen(true);
+  };
+  const closeMenu = (restoreFocus = true) => {
+    restoreMenuFocusRef.current = restoreFocus;
+    setMenuOpen(false);
+  };
   useEffect(() => {
     if (!menuOpen) return;
     const closeOnOutsidePointer = (event: MouseEvent) => {
@@ -861,14 +872,13 @@ function ProjectRows({
         menuRef.current !== null &&
         !menuRef.current.contains(event.target as Node)
       ) {
-        setMenuOpen(false);
+        closeMenu();
       }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      setMenuOpen(false);
-      moreRef.current?.focus();
+      closeMenu();
     };
     document.addEventListener("mousedown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
@@ -877,15 +887,33 @@ function ProjectRows({
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [menuOpen]);
-  const closeMenu = () => {
-    setMenuOpen(false);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const items = enabledMenuItems(menuRef.current);
+    const item =
+      initialMenuFocusRef.current === "last" ? items.at(-1) : items.at(0);
+    item?.focus();
+  }, [menuOpen]);
+  useLayoutEffect(() => {
+    if (menuOpen || !restoreMenuFocusRef.current) return;
+    restoreMenuFocusRef.current = false;
     moreRef.current?.focus();
+  }, [menuOpen]);
+  const toggleMenu = () => {
+    if (menuOpen) {
+      closeMenu();
+      return;
+    }
+    openMenu("first");
   };
-  const toggleMenu = () => setMenuOpen((value) => !value);
   const handleMoreKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
+    if (!["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) return;
     event.preventDefault();
-    toggleMenu();
+    if (menuOpen) {
+      closeMenu();
+      return;
+    }
+    openMenu(event.key === "ArrowUp" ? "last" : "first");
   };
   const projectSelected = group.threads.some(
     (thread) => thread.threadId === selectedThreadId,
@@ -939,9 +967,11 @@ function ProjectRows({
               ref={moreRef}
               className="project-more-trigger"
               type="button"
+              id={`project-more-trigger-${encodeURIComponent(group.key)}`}
               aria-label={`More actions for ${group.label}`}
               aria-expanded={menuOpen}
               aria-haspopup="menu"
+              aria-controls={menuOpen ? projectMenuId : undefined}
               title="More actions"
               onClick={toggleMenu}
               onKeyDown={handleMoreKeyDown}
@@ -951,8 +981,44 @@ function ProjectRows({
             {menuOpen ? (
               <div
                 className="project-menu"
+                id={projectMenuId}
                 role="menu"
+                aria-labelledby={`project-more-trigger-${encodeURIComponent(group.key)}`}
                 aria-label={`${group.label} project actions`}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    closeMenu();
+                    return;
+                  }
+                  if (
+                    !["ArrowDown", "ArrowUp", "Home", "End"].includes(
+                      event.key,
+                    )
+                  ) {
+                    return;
+                  }
+                  const items = enabledMenuItems(event.currentTarget);
+                  if (items.length === 0) return;
+                  event.preventDefault();
+                  const currentIndex = items.indexOf(
+                    document.activeElement as HTMLButtonElement,
+                  );
+                  const nextIndex =
+                    event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? items.length - 1
+                        : currentIndex === -1
+                          ? event.key === "ArrowUp"
+                            ? items.length - 1
+                            : 0
+                          : event.key === "ArrowUp"
+                            ? (currentIndex - 1 + items.length) % items.length
+                            : (currentIndex + 1) % items.length;
+                  items[nextIndex]?.focus();
+                }}
               >
                 {!group.isDefault ? (
                   <button
