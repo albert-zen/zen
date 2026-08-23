@@ -2,6 +2,10 @@ import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { Thread } from "../../protocol-client/index.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 import type { ZenXSidebarOrder } from "../../main/host-profile.js";
+import {
+  providerLogoKindForIdentity,
+  type ProviderLogoKind,
+} from "./ProviderLogo.js";
 
 export type SidebarMode = "inbox" | "projects";
 
@@ -27,7 +31,7 @@ export interface ProjectGroup {
 
 export interface ThreadModelIdentity {
   label: string;
-  providerKind: "openai" | "deepseek" | "qwen" | "local" | "generic";
+  providerKind: ProviderLogoKind;
 }
 
 export type SidebarOrderPlacement = "before" | "after";
@@ -327,16 +331,7 @@ export function threadModelIdentity(
     .replace(/^gpt-/iu, "GPT-")
     .replace(/^claude-/iu, "Claude ")
     .replace(/^gemini-/iu, "Gemini ");
-  const providerKind =
-    provider.includes("openai") || /^gpt-/iu.test(model)
-      ? "openai"
-      : provider.includes("deepseek") || /^deepseek/iu.test(model)
-        ? "deepseek"
-        : provider.includes("qwen") || /^qwen/iu.test(model)
-          ? "qwen"
-          : provider.includes("local")
-            ? "local"
-            : "generic";
+  const providerKind = providerLogoKindForIdentity(provider, model);
   return { label: normalized, providerKind };
 }
 

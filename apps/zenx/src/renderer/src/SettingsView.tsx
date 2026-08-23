@@ -16,7 +16,7 @@ import {
 } from "./appearance.js";
 import { CapabilitySettings } from "./CapabilitySettings.js";
 import { Icon } from "./icons.js";
-import { ProviderLogo } from "./ProviderLogo.js";
+import { ProviderLogo, providerLogoKindForIdentity } from "./ProviderLogo.js";
 import { threadModelIdentity, threadTitle } from "./thread-list.js";
 
 export type SettingsTab =
@@ -1675,17 +1675,10 @@ function providerTypeLabel(provider: ZenXProviderProfile): string {
   return "OpenAI-compatible API";
 }
 
-function providerLogoKind(
-  provider: ZenXProviderProfile,
-): "openai" | "deepseek" | "qwen" | "local" | "generic" {
+function providerLogoKind(provider: ZenXProviderProfile) {
   if (provider.type === "fake") return "local";
   if (provider.type === "openai-subscription") return "openai";
-  const identity = `${provider.name} ${provider.displayName}`.toLowerCase();
-  if (identity.includes("deepseek")) return "deepseek";
-  if (identity.includes("qwen") || identity.includes("dashscope"))
-    return "qwen";
-  if (identity.includes("openai")) return "openai";
-  return "generic";
+  return providerLogoKindForIdentity(provider.name, provider.displayName);
 }
 
 function providerProfilesEquivalent(
