@@ -22,8 +22,8 @@ host、Thread 列表与恢复、流式 Item、审批、模型切换、soft steer
 Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / Room，
 以及可显式授权的 bundled/local capability registry 已形成可运行 vertical slice。
 这套 capability package / registry、child-host bridge、Tool Environment 与 Generic UI Host
-已经形成可运行的 Plugin Platform 纵向切片；渐进发现、完整安装产品入口与 structured result
-renderer 仍未完成。
+已经形成可运行的 Plugin Platform 纵向切片；渐进发现与 structured result renderer 已完成，
+完整安装产品入口仍未完成。
 ZenX 的产品读取模型来自 ZAS 原生 `ThreadSummary` 查询，并经 Electron main/preload
 typed IPC 暴露；Codex Thread DTO 只属于兼容协议 adapter，不定义 ZenX 产品模型。
 高保真 renderer 的当前 UI/UX 合同单独维护在 `apps/zenx/docs/ui-ux.md`，本文件不重复
@@ -48,7 +48,8 @@ Tool Environment 路径产生既有 canonical tool call/result。versioned Plugi
 namespaced JSON storage 串行原子写入并执行 package-owned 逐版本 migration，disable/uninstall 保留数据；
 只有显式 `actions.threads.startTurn` 经 AppServer port 产生 canonical Items。bundled module 直接拿 SDK，
 process/HTTP 只经既有 ABI 的 SDK request/result 边界访问同一逻辑操作，不取得内部 store。Generic UI
-Host 从同一 lifecycle snapshot 投影 sidebar、page/subroute、settings、panel、command/menu；trusted
+Host 从同一 lifecycle snapshot 投影 sidebar、page/subroute、settings、panel、command/menu 与
+plugin-owned namespaced result renderer；trusted
 bundled module 只在分配的 React surface 内挂载，local/third-party renderer 使用没有 same-origin 权限的
 sandboxed iframe 与验证过的 message API。两者共享 v1 theme/context、opaque handle、navigation 与 command
 合同，command 经 Host SDK UI port 回到 enabled package。实际桌面 composition 已把主进程
@@ -56,7 +57,10 @@ CapabilityService 的 Catalog/Registry/Supervisor 与 hosted AppServer 接通：
 组合 shell、仍需兼容的 external capability 与常驻 `zenx_plugin`，并在每次模型采样从普通 canonical
 read call/result 投影该插件精确 namespaced schemas。普通插件调用沿既有私有 bridge 回到主进程，由
 Supervisor 的稳定 plugin provider 执行；重启无需额外状态，disable/uninstall 只影响后续投影和新调用。
-产品 install/update 入口仍未实现；v1 capability 继续保留在原兼容
+Tool Environment 只在 JSON-compatible、1 MiB 内且 content type 属于 provider namespace 时把可选
+structured content 附加到既有 canonical `tool_result`；原 output/exitCode 和模型上下文不变。Transcript
+把 immutable structured data 与文本 fallback 交给当前 enabled renderer；disable/uninstall/missing 时显示
+确定性的 JSON/Text fallback，reinstall 从同一历史 Item 恢复 renderer。产品 install/update 入口仍未实现；v1 capability 继续保留在原兼容
 seam，不参与 v2 发现合同。
 
 目标 Plugin Platform 保持 Zen `AgentRuntime` 拥有 provider-neutral agent loop 和 canonical
@@ -69,9 +73,9 @@ child process、本地服务或远程服务。模型初始只看到 builtin tool
 目标插件生命周期只有 installed / enabled / uninstalled；bundled plugin 同样可卸载、以后重装，
 卸载默认保留数据，删除数据是独立动作。目标权限只有默认 `full_access` 与可选 `ask_unknown`；后者
 由 Host 按稳定 tool name 维护 approved/denied 集合，不保留现有细粒度 grant UX，也不增加风险引擎。
-通用 UI Host 已支持 sidebar、pages/subroutes、settings、panel、commands/menu；result renderer 属于
-后续 ZP7。第一方/第三方共用逻辑 UI SDK且第三方隔离运行。直接操作插件 UI 不创建 Turn，只有显式 Run Agent
-才调用 AppServer。现有 `ToolResultItem` 后续只增加可选 structured content；renderer 缺失时使用
+通用 UI Host 已支持 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer。
+第一方/第三方共用逻辑 UI SDK且第三方隔离运行。直接操作插件 UI 不创建 Turn，只有显式 Run Agent
+才调用 AppServer。现有 `ToolResultItem` 已增加可选 structured content；renderer 缺失时使用
 text/JSON fallback，历史文本、reasoning、tool/title trace 永不扫描或改写。
 
 ZAS 与 Plugin Host 是 ZenX Host 下的并列服务。ZenX Host 已通过稳定的私有 descriptor
@@ -141,18 +145,18 @@ presenter；其他扩展位置缺席，因此保持 SDK 默认行为。
 
 ## 里程碑
 
-| 阶段 | 当前结果                                                                          | 状态                                                                                                                                                              |
-| ---- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | VISION / ARCHITECTURE / LESSONS / PRODUCTS 定义当前产品边界                       | 完成                                                                                                                                                              |
-| 2    | 协议钉在 codex-cli 0.146.0；精确子集记录在 `src/protocol/codex/README.md`         | 完成                                                                                                                                                              |
-| 3    | 内存 ItemList → Runtime → App Server → FakeModel 事件链                           | 完成                                                                                                                                                              |
-| 4    | 每 Thread 一个 append-only JSONL；stale open Turn 派生为 interrupted              | 完成                                                                                                                                                              |
-| 5    | shell + command item 瞬态审批；accept / decline / cancel / interrupt              | 完成                                                                                                                                                              |
-| 6    | 薄 Zen CLI；stdio 与 loopback WebSocket                                           | 完成                                                                                                                                                              |
-| 7    | OpenAI-compatible 与 ChatGPT subscription adapters；两轮 tool-call                | 实现完成；订阅真实网络闭环已通过                                                                                                                                  |
-| 8    | 独立 IMZen；组合固定提交的 IM Agent SDK                                           | SDK/本地闭环通过；真实 QQ 需频道凭证                                                                                                                              |
-| 9    | ZenX 桌面 vertical slice；Provider、Markdown、Trigger / Watching / Room           | 开发中                                                                                                                                                            |
-| 10   | ZenX Plugin Platform：Tool Environment、Plugin Host/Runtime、通用 UI/ZAS 生命周期 | Package lifecycle、Runtime/SDK、渐进发现、桌面 AppServer composition、Generic UI Host 与 ZAS lifecycle 已完成纵向切片；安装 UX/result renderer/首批插件迁移待后续 |
+| 阶段 | 当前结果                                                                          | 状态                                                                                                                                                                          |
+| ---- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | VISION / ARCHITECTURE / LESSONS / PRODUCTS 定义当前产品边界                       | 完成                                                                                                                                                                          |
+| 2    | 协议钉在 codex-cli 0.146.0；精确子集记录在 `src/protocol/codex/README.md`         | 完成                                                                                                                                                                          |
+| 3    | 内存 ItemList → Runtime → App Server → FakeModel 事件链                           | 完成                                                                                                                                                                          |
+| 4    | 每 Thread 一个 append-only JSONL；stale open Turn 派生为 interrupted              | 完成                                                                                                                                                                          |
+| 5    | shell + command item 瞬态审批；accept / decline / cancel / interrupt              | 完成                                                                                                                                                                          |
+| 6    | 薄 Zen CLI；stdio 与 loopback WebSocket                                           | 完成                                                                                                                                                                          |
+| 7    | OpenAI-compatible 与 ChatGPT subscription adapters；两轮 tool-call                | 实现完成；订阅真实网络闭环已通过                                                                                                                                              |
+| 8    | 独立 IMZen；组合固定提交的 IM Agent SDK                                           | SDK/本地闭环通过；真实 QQ 需频道凭证                                                                                                                                          |
+| 9    | ZenX 桌面 vertical slice；Provider、Markdown、Trigger / Watching / Room           | 开发中                                                                                                                                                                        |
+| 10   | ZenX Plugin Platform：Tool Environment、Plugin Host/Runtime、通用 UI/ZAS 生命周期 | Package lifecycle、Runtime/SDK、渐进发现、structured result renderer、桌面 AppServer composition、Generic UI Host 与 ZAS lifecycle 已完成纵向切片；安装 UX/首批插件迁移待后续 |
 
 原版 `codex --remote` 0.146.0 还会调用账户、模型、配置、hooks 等 bootstrap
 方法，Zen 当前明确返回 unsupported，因此不宣称兼容原版 TUI。这不阻塞 Zen CLI，

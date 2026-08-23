@@ -281,8 +281,12 @@ request/result；三者只看 SDK operation，不取得 Project、storage 或 Ap
 state，且不建立恢复状态机。Generic UI Host 已按同一 v1 逻辑 SDK 装载 registry-backed trusted
 bundled surface 或无 `allow-same-origin` 的 sandboxed iframe；两者只获得 theme/context、opaque handle、
 navigation 与经 Host SDK UI port 校验的 command dispatch。disable/uninstall 直接撤销 Catalog projection，
-已挂载 surface/listener 随 React lifecycle 清理。当前 `ToolResultItem` 仍只有 text output 与 exit code；
-完整产品安装入口与 structured result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
+已挂载 surface/listener 随 React lifecycle 清理。既有 `ToolResultItem` 现可附带成对出现的
+namespaced `contentType` 与 1 MiB 内 JSON-compatible `structuredContent`；Tool Environment 在 append 前
+校验 JSON、大小和 plugin namespace，并冻结副本，不改变原有 text output、exit code 或模型上下文。
+v2 manifest 可按 plugin-owned content type 注册 result renderer；Transcript 从当前 enabled snapshot 选择
+trusted/isolated surface，缺失、disabled、uninstalled 或不兼容时稳定显示 JSON 与原文本 fallback，重启只重放
+原 Item。完整产品安装入口仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
 connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
 
 ### 工具执行与发现
@@ -314,7 +318,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - 已写入的模型文本、reasoning、tool calls/results、title 与其他 trace 必须逐字保持。
   Zen/ZenX 不扫描、改写或按 credential 字节脱敏历史 trace；能力变化只影响后续
   模型投影或后续调用结果。
-- structured result content 将作为既有 `ToolResultItem` 的可选字段进入同一
+- structured result content 作为既有 `ToolResultItem` 的可选字段进入同一
   canonical Item，不新增 result Item 类型。Plugin result renderer 只决定展示；
   renderer 不可用、插件 disabled/uninstalled 或版本变化时，历史仍以 text/JSON
   fallback 可读，原始 trace 不变。

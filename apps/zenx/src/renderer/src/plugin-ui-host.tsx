@@ -86,7 +86,7 @@ export function GenericPluginUiHost({
         version: 1 as const,
         pluginId,
         theme,
-        context: Object.freeze(structuredClone(context)),
+        context: immutableClone(context),
         navigation: Object.freeze({ navigate }),
         handles: Object.freeze({
           read: async (handleId: string) =>
@@ -129,6 +129,21 @@ export function GenericPluginUiHost({
       <Surface sdk={sdk} />
     </section>
   );
+}
+
+function immutableClone<T>(value: T): T {
+  const clone = structuredClone(value);
+  const freeze = (entry: unknown): void => {
+    if (typeof entry !== "object" || entry === null || Object.isFrozen(entry))
+      return;
+    for (const child of Array.isArray(entry)
+      ? entry
+      : Object.values(entry as Record<string, unknown>))
+      freeze(child);
+    Object.freeze(entry);
+  };
+  freeze(clone);
+  return clone;
 }
 
 function IsolatedPluginSurface({
@@ -210,7 +225,7 @@ function isolatedDocument(
   init: Readonly<Record<string, unknown>>,
 ): string {
   const payload = JSON.stringify(init).replaceAll("<", "\\u003c");
-  return `<!doctype html><html data-theme="${String(init.theme)}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"></head><body>${html}<script>(()=>{const init=${payload};window.zenxPluginUi=Object.freeze({version:1,pluginId:init.pluginId,theme:init.theme,context:Object.freeze(init.context),commands:{execute:(id,input)=>request('commands.execute',id,input)},handles:{read:(id)=>request('handles.read',id)},navigation:{navigate:(route)=>request('navigation.navigate','route',route)}});let sequence=0;const pending=new Map();function request(operation,id,input){const requestId=String(++sequence);parent.postMessage({channel:init.channel,type:'zenx-plugin-ui:request',requestId,operation,id,input},'*');return new Promise((resolve,reject)=>pending.set(requestId,{resolve,reject}));}addEventListener('message',(event)=>{const message=event.data;if(!message||message.channel!==init.channel)return;const waiter=pending.get(message.requestId);if(!waiter)return;pending.delete(message.requestId);message.type==='zenx-plugin-ui:result'?waiter.resolve(message.value):waiter.reject(new Error(message.message));});dispatchEvent(new CustomEvent('zenx-plugin-ui:init',{detail:{exportName:init.exportName,sdk:window.zenxPluginUi}}));})();</script></body></html>`;
+  return `<!doctype html><html data-theme="${String(init.theme)}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"></head><body>${html}<script>(()=>{const init=${payload};const deepFreeze=(value)=>{if(!value||typeof value!=='object'||Object.isFrozen(value))return value;Object.values(value).forEach(deepFreeze);return Object.freeze(value)};window.zenxPluginUi=Object.freeze({version:1,pluginId:init.pluginId,theme:init.theme,context:deepFreeze(init.context),commands:{execute:(id,input)=>request('commands.execute',id,input)},handles:{read:(id)=>request('handles.read',id)},navigation:{navigate:(route)=>request('navigation.navigate','route',route)}});let sequence=0;const pending=new Map();function request(operation,id,input){const requestId=String(++sequence);parent.postMessage({channel:init.channel,type:'zenx-plugin-ui:request',requestId,operation,id,input},'*');return new Promise((resolve,reject)=>pending.set(requestId,{resolve,reject}));}addEventListener('message',(event)=>{const message=event.data;if(!message||message.channel!==init.channel)return;const waiter=pending.get(message.requestId);if(!waiter)return;pending.delete(message.requestId);message.type==='zenx-plugin-ui:result'?waiter.resolve(message.value):waiter.reject(new Error(message.message));});dispatchEvent(new CustomEvent('zenx-plugin-ui:init',{detail:{exportName:init.exportName,sdk:window.zenxPluginUi}}));})();</script></body></html>`;
 }
 
 function isUiRequest(

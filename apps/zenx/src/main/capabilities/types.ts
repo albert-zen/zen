@@ -88,6 +88,12 @@ export interface ZenXPluginMenuContribution {
   order?: number;
 }
 
+export interface ZenXPluginResultRendererContribution {
+  id: string;
+  contentType: string;
+  surfaceId: string;
+}
+
 export interface ZenXPluginContributions {
   sidebar?: ZenXPluginSidebarContribution[];
   pages?: ZenXPluginPageContribution[];
@@ -96,6 +102,7 @@ export interface ZenXPluginContributions {
   panels?: ZenXPluginSurfaceContribution[];
   commands?: ZenXPluginCommandContribution[];
   menus?: ZenXPluginMenuContribution[];
+  resultRenderers?: ZenXPluginResultRendererContribution[];
 }
 
 export interface ZenXPluginUiBundle {
@@ -266,6 +273,11 @@ export interface ZenXPluginCommandProjection
 export interface ZenXPluginMenuProjection
   extends ZenXPluginMenuContribution, ZenXPluginContributionProjection {}
 
+export interface ZenXPluginResultRendererProjection
+  extends
+    ZenXPluginResultRendererContribution,
+    ZenXPluginContributionProjection {}
+
 export interface ZenXPluginUiBundleProjection
   extends ZenXPluginUiBundle, ZenXPluginContributionProjection {}
 
@@ -294,6 +306,7 @@ export interface ZenXPluginSnapshot {
   panels: ZenXPluginSurfaceProjection[];
   commands: ZenXPluginCommandProjection[];
   menus: ZenXPluginMenuProjection[];
+  resultRenderers?: ZenXPluginResultRendererProjection[];
 }
 
 export interface ZenXCapabilitySnapshot {

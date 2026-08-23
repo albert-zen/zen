@@ -16,6 +16,7 @@ Provider 账户和 workspace 配置由宿主持有，不进入 Thread。
 - `run`、`chat`、`threads`、`app-server` 薄 CLI
 - 独立 IMZen（QQ / Telegram / Feishu / Weixin channel adapters）
 - ZenX Plugin Package lifecycle、Host SDK 与 Generic UI Host（sidebar、page/subroute、settings、panel、command/menu；第三方 iframe 隔离）
+- 既有 tool result 的可选 namespaced structured content，以及缺失插件时仍可读的 JSON/Text fallback renderer
 
 ## 快速验证
 

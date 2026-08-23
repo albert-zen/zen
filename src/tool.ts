@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-import type { ApprovalDecision } from "./item.js";
+import type { ApprovalDecision, JsonValue } from "./item.js";
 import type { ModelTool } from "./model.js";
 
 export interface ToolInvocation {
@@ -14,7 +14,11 @@ export interface ToolInvocation {
 export interface ToolExecutionResult {
   output: string;
   exitCode: number;
+  contentType?: string;
+  structuredContent?: JsonValue;
 }
+
+export const MAX_STRUCTURED_TOOL_RESULT_BYTES = 1024 * 1024;
 
 export interface ToolExecutor {
   readonly definitions: readonly ModelTool[];
@@ -337,7 +341,10 @@ export class ToolEnvironment {
     const provider = this.#requirePrepared(prepared).provider;
     try {
       prepared.invocation.signal.throwIfAborted();
-      return await provider.execute(prepared.invocation);
+      return normalizeToolExecutionResult(
+        await provider.execute(prepared.invocation),
+        prepared.provider,
+      );
     } finally {
       this.#releasePrepared(prepared);
     }
@@ -360,6 +367,105 @@ export class ToolEnvironment {
     this.#preparedProviders.delete(prepared);
     registration.release?.();
   }
+}
+
+export function normalizeToolExecutionResult(
+  result: ToolExecutionResult,
+  provider: ToolProviderIdentity,
+): ToolExecutionResult {
+  if (
+    typeof result.output !== "string" ||
+    !Number.isSafeInteger(result.exitCode)
+  ) {
+    throw new Error("Tool returned an invalid output or exit code");
+  }
+  const hasContentType = result.contentType !== undefined;
+  const hasStructuredContent = result.structuredContent !== undefined;
+  if (hasContentType !== hasStructuredContent) {
+    throw new Error(
+      "Structured tool results require both contentType and structuredContent",
+    );
+  }
+  if (!hasContentType || !hasStructuredContent) return result;
+  const contentType = result.contentType!;
+  if (!/^[a-z][a-z0-9-]{1,62}\/[a-z][a-z0-9.-]{0,127}$/u.test(contentType)) {
+    throw new Error(`Invalid structured result contentType: ${contentType}`);
+  }
+  if (
+    provider.kind === "plugin" &&
+    !contentType.startsWith(`${provider.id}/`)
+  ) {
+    throw new Error(
+      `Plugin ${provider.id} does not own structured result contentType ${contentType}`,
+    );
+  }
+  assertJsonValue(result.structuredContent, "$structuredContent");
+  const encoded = JSON.stringify(result.structuredContent);
+  if (Buffer.byteLength(encoded, "utf8") > MAX_STRUCTURED_TOOL_RESULT_BYTES) {
+    throw new Error(
+      `Structured tool result exceeded its ${String(MAX_STRUCTURED_TOOL_RESULT_BYTES)} byte limit`,
+    );
+  }
+  return {
+    output: result.output,
+    exitCode: result.exitCode,
+    contentType,
+    structuredContent: deepFreeze(structuredClone(result.structuredContent)),
+  };
+}
+
+function assertJsonValue(
+  value: unknown,
+  path: string,
+  seen = new Set<object>(),
+): asserts value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return;
+  if (typeof value === "number") {
+    if (Number.isFinite(value)) return;
+    throw new Error(
+      `Structured tool result contains a non-finite number at ${path}`,
+    );
+  }
+  if (typeof value !== "object") {
+    throw new Error(`Structured tool result is not JSON-compatible at ${path}`);
+  }
+  if (seen.has(value))
+    throw new Error(`Structured tool result is cyclic at ${path}`);
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      if (!(index in value))
+        throw new Error(
+          `Structured tool result contains a sparse array at ${path}`,
+        );
+      assertJsonValue(value[index], `${path}[${String(index)}]`, seen);
+    }
+  } else {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error(
+        `Structured tool result contains a non-JSON object at ${path}`,
+      );
+    }
+    if (Object.getOwnPropertySymbols(value).length > 0) {
+      throw new Error(
+        `Structured tool result contains a symbol-keyed value at ${path}`,
+      );
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      assertJsonValue(entry, `${path}.${key}`, seen);
+    }
+  }
+  seen.delete(value);
+}
+
+function deepFreeze<T extends JsonValue>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value))
+    return value;
+  for (const entry of Array.isArray(value) ? value : Object.values(value))
+    deepFreeze(entry);
+  return Object.freeze(value);
 }
 
 export function toolProviderFromExecutor(

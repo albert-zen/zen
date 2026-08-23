@@ -33,7 +33,12 @@ test("real ZenX host progressively discovers and supervises a desktop plugin fro
     manifest: fixtureManifest(),
     invoke: async () => {
       invocations += 1;
-      return { output: exactOutput, exitCode: 7 };
+      return {
+        output: exactOutput,
+        exitCode: 7,
+        contentType: "fixture/echo",
+        structuredContent: { desktop: true, rows: [{ value: exactOutput }] },
+      };
     },
     close: () => {
       closes += 1;
@@ -131,12 +136,40 @@ test("real ZenX host progressively discovers and supervises a desktop plugin fro
     assert.equal(pluginResult?.type, "tool_result");
     assert.equal(pluginResult.output, exactOutput);
     assert.equal(pluginResult.exitCode, 7);
+    assert.equal(pluginResult.contentType, "fixture/echo");
+    assert.deepEqual(pluginResult.structuredContent, {
+      desktop: true,
+      rows: [{ value: exactOutput }],
+    });
     assert.equal(invocations, 1);
     assert.equal(
       (await readFile(journalPath, "utf8")).startsWith(afterRead),
       true,
     );
     const afterInvocation = await readFile(journalPath, "utf8");
+
+    const projectedBeforeRestart = await manager.request("thread/read", {
+      threadId: thread.id,
+      includeTurns: true,
+    });
+    const renderedBeforeRestart = projectedBeforeRestart.thread.turns
+      .flatMap((turn) => turn.items)
+      .find(
+        (item) =>
+          item.type === "commandExecution" &&
+          item.contentType === "fixture/echo",
+      );
+    assert.equal(renderedBeforeRestart?.type, "commandExecution");
+    assert.deepEqual(renderedBeforeRestart.structuredContent, {
+      desktop: true,
+      rows: [{ value: exactOutput }],
+    });
+    await manager.restartCapabilities();
+    const projectedAfterRestart = await manager.request("thread/read", {
+      threadId: thread.id,
+      includeTurns: true,
+    });
+    assert.deepEqual(projectedAfterRestart, projectedBeforeRestart);
 
     await capabilities.setEnabled("fixture", false);
     await manager.restartCapabilities();
@@ -248,6 +281,32 @@ function fixtureManifest(): ZenXPluginManifestV2 {
         content: "This resource name must not be projected before discovery.",
       },
     ],
+    ui: {
+      bundles: [
+        {
+          id: "result-ui",
+          apiVersion: 1,
+          kind: "isolated",
+          entry: "<main>Fixture structured echo</main>",
+        },
+      ],
+      surfaces: [
+        {
+          id: "echo-result",
+          bundleId: "result-ui",
+          exportName: "echo-result",
+        },
+      ],
+    },
+    contributions: {
+      resultRenderers: [
+        {
+          id: "echo-result",
+          contentType: "fixture/echo",
+          surfaceId: "echo-result",
+        },
+      ],
+    },
   };
 }
 

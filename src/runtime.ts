@@ -22,6 +22,7 @@ import {
   ToolEnvironment,
   toolProviderFromExecutor,
   type ApprovalHandler,
+  type ToolExecutionResult,
   type ToolExecutor,
   type ToolPolicy,
 } from "./tool.js";
@@ -463,7 +464,7 @@ export class AgentRuntime {
       throw new DOMException("Cancelled by user", "AbortError");
     }
 
-    let result: { output: string; exitCode: number };
+    let result: ToolExecutionResult;
     if (decision === "decline") {
       result = { output: "User declined this tool call.", exitCode: 126 };
     } else {
@@ -488,7 +489,7 @@ export class AgentRuntime {
 
   async #completeToolResult(
     toolCall: ToolCallItem,
-    result: { output: string; exitCode: number },
+    result: ToolExecutionResult,
     options: RunTurnOptions,
   ): Promise<void> {
     const resultItem: ToolResultItem = {
@@ -500,6 +501,12 @@ export class AgentRuntime {
       callId: toolCall.callId,
       output: result.output,
       exitCode: result.exitCode,
+      ...(result.contentType === undefined
+        ? {}
+        : {
+            contentType: result.contentType,
+            structuredContent: result.structuredContent,
+          }),
     };
     await this.#completeItem(resultItem, options);
   }

@@ -173,7 +173,14 @@ export interface ToolResultItem extends ItemBase {
   callId: string;
   output: string;
   exitCode: number;
+  /** Optional provider-neutral data for product rendering; absent on legacy Items. */
+  contentType?: string;
+  structuredContent?: JsonValue;
 }
+
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue =
+  JsonPrimitive | { readonly [key: string]: JsonValue } | readonly JsonValue[];
 
 export interface FailureItem extends ItemBase {
   type: "failure";

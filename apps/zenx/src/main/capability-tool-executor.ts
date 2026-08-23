@@ -84,6 +84,12 @@ export class ZenXHostToolExecutor implements ToolProvider {
       pending.resolve({
         output: command.output ?? "",
         exitCode: command.exitCode ?? 1,
+        ...(command.contentType === undefined
+          ? {}
+          : {
+              contentType: command.contentType,
+              structuredContent: command.structuredContent,
+            }),
       });
     } else {
       pending.reject(new Error(command.error));

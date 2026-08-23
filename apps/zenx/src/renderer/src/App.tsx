@@ -60,7 +60,7 @@ import {
   type SelectedThreadSettings,
 } from "./model-settings.js";
 import { loadedPluginContributions } from "./plugin-contributions.js";
-import { PluginProductPage } from "./PluginProductPage.js";
+import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
 import { RoomView } from "./RoomView.js";
 import { ScheduledView } from "./ScheduledView.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
@@ -1052,6 +1052,7 @@ export function App() {
         ) : (
           <AgentSurface
             approvals={approvals}
+            pluginSnapshot={pluginSnapshot}
             composerStates={composerStates}
             threadAttachments={threadAttachments}
             models={models}
@@ -1177,6 +1178,7 @@ export function App() {
 
 function AgentSurface({
   approvals,
+  pluginSnapshot,
   composerStates,
   threadAttachments,
   models,
@@ -1217,6 +1219,7 @@ function AgentSurface({
   triggerSnapshot,
 }: {
   approvals: ApprovalCardState[];
+  pluginSnapshot: ZenXPluginSnapshot | null;
   composerStates: Record<string, ComposerState>;
   threadAttachments: ZenXThreadAttachmentProjection;
   models: ModelSummary[];
@@ -1424,6 +1427,8 @@ function AgentSurface({
           selectedReasoningEffort={selectedSettings?.reasoningEffort}
           switchingModel={switchingModel}
           thread={threadDetail}
+          pluginSnapshot={pluginSnapshot}
+          pluginUiRegistry={pluginUiRegistry}
           threadAttachments={threadAttachments}
           wakeups={triggerSnapshot.history.filter(
             (entry) => entry.threadId === threadDetail.id,

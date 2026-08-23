@@ -733,6 +733,12 @@ export class AppServerManager {
               invocationId: hostEvent.invocationId,
               output: result.output,
               exitCode: result.exitCode,
+              ...(result.contentType === undefined
+                ? {}
+                : {
+                    contentType: result.contentType,
+                    structuredContent: result.structuredContent,
+                  }),
             } satisfies HostCommand);
           }
         })

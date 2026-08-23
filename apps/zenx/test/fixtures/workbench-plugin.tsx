@@ -55,6 +55,11 @@ export class ZenXWorkbenchFixturePackage implements ZenXCapabilityPackage {
         { id: "details", bundleId: "main", exportName: "details" },
         { id: "preferences", bundleId: "main", exportName: "preferences" },
         { id: "status", bundleId: "main", exportName: "status" },
+        {
+          id: "refresh-result",
+          bundleId: "main",
+          exportName: "refresh-result",
+        },
       ],
     },
     contributions: {
@@ -107,6 +112,13 @@ export class ZenXWorkbenchFixturePackage implements ZenXCapabilityPackage {
           label: "Refresh",
           commandId: "refresh",
           location: "page",
+        },
+      ],
+      resultRenderers: [
+        {
+          id: "refresh-result",
+          contentType: "workbench/refresh",
+          surfaceId: "refresh-result",
         },
       ],
     },
@@ -195,9 +207,24 @@ function Status() {
   );
 }
 
+function RefreshResult({ sdk }: PluginUiSurfaceProps) {
+  const context = sdk.context as {
+    structuredContent?: { ok?: boolean };
+    fallback?: { output?: string };
+  };
+  return (
+    <div role="status">
+      {context.structuredContent?.ok === true
+        ? "Workbench refreshed"
+        : (context.fallback?.output ?? "Workbench result unavailable")}
+    </div>
+  );
+}
+
 export const workbenchPluginUi: PluginUiModule = {
   overview: Overview,
   details: Details,
   preferences: Preferences,
   status: Status,
+  "refresh-result": RefreshResult,
 };

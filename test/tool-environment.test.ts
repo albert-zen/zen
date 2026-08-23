@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { shellPrintCommand } from "./fixtures.js";
 
 import { ZenAppServer } from "../src/app-server.js";
 import type { CanonicalItem } from "../src/item.js";
-import { InMemoryThreadJournal } from "../src/journal.js";
+import { InMemoryThreadJournal, JsonlThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import type { ModelAdapter, ModelEvent, ModelRequest } from "../src/model.js";
+import { compileModelMessages } from "../src/model.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
@@ -17,7 +21,187 @@ import {
   ShellToolExecutor,
   ToolEnvironment,
   type ToolProvider,
+  MAX_STRUCTURED_TOOL_RESULT_BYTES,
 } from "../src/tool.js";
+
+test("structured tool results survive canonical persistence without entering model context", async () => {
+  const source = { cards: [{ id: "one", title: "Verbatim" }] };
+  const provider: ToolProvider = {
+    identity: { kind: "plugin", id: "fixture" },
+    definitions: [
+      { name: "fixture_cards", description: "Cards", inputSchema: {} },
+    ],
+    execute: async () => ({
+      output: "exact textual fallback",
+      exitCode: 0,
+      contentType: "fixture/cards",
+      structuredContent: source,
+    }),
+  };
+  const journalRoot = await mkdtemp(path.join(os.tmpdir(), "zen-structured-"));
+  try {
+    const journal = new JsonlThreadJournal(journalRoot);
+    const server = new ZenAppServer({
+      journal,
+      runtime: new AgentRuntime({
+        toolEnvironment: new ToolEnvironment({ providers: [provider] }),
+      }),
+      providerRegistry: new ProviderRegistry([
+        {
+          providerProfileId: "structured",
+          adapter: modelCalling("fixture_cards"),
+          modelCatalog: new StaticModelCatalog([
+            { id: "fixture-model", isDefault: true },
+          ]),
+        },
+      ]),
+      threadMetadata: new InMemoryThreadMetadataStore(),
+      defaults: {
+        cwd: process.cwd(),
+        providerProfileId: "structured",
+        modelId: "fixture-model",
+        reasoningEffort: "medium",
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+      },
+    });
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "cards")
+    ).done;
+    source.cards[0]!.title = "mutated after execution";
+    const replayed = await journal.read(thread.id);
+    const result = replayed.find((item) => item.type === "tool_result");
+    assert(result?.type === "tool_result");
+    assert.equal(result.contentType, "fixture/cards");
+    assert.deepEqual(result.structuredContent, {
+      cards: [{ id: "one", title: "Verbatim" }],
+    });
+    assert.deepEqual(
+      compileModelMessages(replayed).find((message) => message.role === "tool"),
+      {
+        role: "tool",
+        callId: "fixture_cards-1",
+        text: "exact textual fallback",
+        exitCode: 0,
+      },
+    );
+  } finally {
+    await rm(journalRoot, { recursive: true, force: true });
+  }
+});
+
+test("legacy tool results keep their exact serialized shape", () => {
+  const legacy = {
+    id: "result",
+    threadId: "thread",
+    turnId: "turn",
+    createdAt: "2026-08-24T00:00:00.000Z",
+    type: "tool_result",
+    callId: "call",
+    output: 'legacy bytes {"exact":true}',
+    exitCode: 7,
+  } as const;
+  assert.equal(
+    JSON.stringify(legacy),
+    '{"id":"result","threadId":"thread","turnId":"turn","createdAt":"2026-08-24T00:00:00.000Z","type":"tool_result","callId":"call","output":"legacy bytes {\\"exact\\":true}","exitCode":7}',
+  );
+  assert.deepEqual(compileModelMessages([legacy]), [
+    {
+      role: "tool",
+      callId: "call",
+      text: 'legacy bytes {"exact":true}',
+      exitCode: 7,
+    },
+  ]);
+});
+
+test("structured result admission rejects non-JSON, cyclic, oversized, and foreign plugin content", async () => {
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  const cases = [
+    {
+      contentType: "fixture/value",
+      structuredContent: { value: undefined },
+      pattern: /JSON-compatible/u,
+    },
+    {
+      contentType: "fixture/value",
+      structuredContent: cyclic,
+      pattern: /cyclic/u,
+    },
+    {
+      contentType: "fixture/value",
+      structuredContent: "x".repeat(MAX_STRUCTURED_TOOL_RESULT_BYTES + 1),
+      pattern: /byte limit/u,
+    },
+    {
+      contentType: "other/value",
+      structuredContent: { ok: true },
+      pattern: /does not own/u,
+    },
+  ];
+  for (const [index, fixture] of cases.entries()) {
+    const environment = new ToolEnvironment({
+      providers: [
+        {
+          identity: { kind: "plugin", id: "fixture" },
+          definitions: [
+            { name: "fixture_value", description: "Value", inputSchema: {} },
+          ],
+          execute: async () =>
+            ({ output: "unchanged", exitCode: 7, ...fixture }) as never,
+        },
+      ],
+    });
+    const prepared = environment.prepare({
+      callId: String(index),
+      name: "fixture_value",
+      arguments: {},
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+    });
+    await assert.rejects(environment.execute(prepared), fixture.pattern);
+  }
+});
+
+test("invalid structured content settles its tool call with existing failure semantics", async () => {
+  const provider: ToolProvider = {
+    identity: { kind: "plugin", id: "fixture" },
+    definitions: [
+      { name: "fixture_invalid", description: "Invalid", inputSchema: {} },
+    ],
+    execute: async () => ({
+      output: "must not be appended",
+      exitCode: 0,
+      contentType: "foreign/value",
+      structuredContent: { ok: true },
+    }),
+  };
+  const server = createServer(
+    modelCalling("fixture_invalid"),
+    new ToolEnvironment({ providers: [provider] }),
+    "never",
+  );
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "invalid structured result")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  const results = snapshot.items.filter((item) => item.type === "tool_result");
+  assert.equal(results.length, 1);
+  assert.equal(results[0]!.exitCode, 1);
+  assert.match(results[0]!.output, /does not own/u);
+  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.equal(
+    snapshot.items.some(
+      (item) =>
+        item.type === "tool_result" && item.output === "must not be appended",
+    ),
+    false,
+  );
+  assertEveryToolCallHasOneResult(snapshot.items);
+});
 
 test("a prepared invocation keeps its exact provider after dynamic removal", async () => {
   const calls: string[] = [];

@@ -37,7 +37,7 @@ const snapshot: ZenXPluginSnapshot = {
       lifecycle: "enabled",
       enabled: true,
       available: true,
-      contributionCount: 7,
+      contributionCount: 8,
     },
   ],
   bundles: [
@@ -71,6 +71,13 @@ const snapshot: ZenXPluginSnapshot = {
       id: "status",
       bundleId: "main",
       exportName: "status",
+    },
+    {
+      key: "workbench:refresh-result",
+      pluginId: "workbench",
+      id: "refresh-result",
+      bundleId: "main",
+      exportName: "refresh-result",
     },
   ],
   pages: [
@@ -139,6 +146,15 @@ const snapshot: ZenXPluginSnapshot = {
       label: "Refresh",
       commandId: "refresh",
       location: "page",
+    },
+  ],
+  resultRenderers: [
+    {
+      key: "workbench:refresh-result",
+      pluginId: "workbench",
+      id: "refresh-result",
+      contentType: "workbench/refresh",
+      surfaceId: "refresh-result",
     },
   ],
 };
@@ -392,8 +408,9 @@ test("product fixture projects every UI surface and revokes command admission ac
       enabled.panels.length,
       enabled.commands.length,
       enabled.menus.length,
+      enabled.resultRenderers?.length,
     ],
-    [1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
   );
   const reply = (await registry.executePluginCommand(
     "workbench",
@@ -404,6 +421,7 @@ test("product fixture projects every UI surface and revokes command admission ac
 
   await registry.setEnabled("workbench", false);
   assert.deepEqual(registry.pluginSnapshot().surfaces, []);
+  assert.deepEqual(registry.pluginSnapshot().resultRenderers, []);
   await assert.rejects(
     registry.executePluginCommand("workbench", "refresh"),
     /not enabled/u,
@@ -448,5 +466,24 @@ test("manifest validation rejects dangling surfaces and commands deterministical
   await assert.rejects(
     registry.install(invalidIcon, "bundled"),
     /invalid icon/u,
+  );
+
+  const foreignRenderer = new ZenXWorkbenchFixturePackage();
+  foreignRenderer.manifest.contributions!.resultRenderers![0]!.contentType =
+    "other/refresh";
+  await assert.rejects(
+    registry.install(foreignRenderer, "bundled"),
+    /foreign/u,
+  );
+
+  const duplicateRenderer = new ZenXWorkbenchFixturePackage();
+  duplicateRenderer.manifest.contributions!.resultRenderers!.push({
+    id: "refresh-result-two",
+    contentType: "workbench/refresh",
+    surfaceId: "refresh-result",
+  });
+  await assert.rejects(
+    registry.install(duplicateRenderer, "bundled"),
+    /duplicate/u,
   );
 });

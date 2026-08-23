@@ -8,6 +8,7 @@ import type {
   ToolInvocation,
   ToolProvider,
 } from "../../../../src/tool.js";
+import { normalizeToolExecutionResult } from "../../../../src/tool.js";
 import type {
   RegisteredZenXCapability,
   ZenXPluginManifestV2,
@@ -297,7 +298,10 @@ class SupervisedPluginProvider implements ToolProvider {
     const operation = this.#runtime.invoke(invocation);
     this.#active.add(operation);
     try {
-      return validateResult(await operation, this.identity.id);
+      return normalizeToolExecutionResult(
+        validateResult(await operation, this.identity.id),
+        this.identity,
+      );
     } finally {
       this.#active.delete(operation);
       this.#notifyDrain();
@@ -1017,7 +1021,18 @@ function normalizePackageResult(value: unknown): ToolExecutionResult {
     typeof value.output === "string" &&
     Number.isSafeInteger(value.exitCode)
   ) {
-    return { output: value.output, exitCode: value.exitCode as number };
+    return {
+      output: value.output,
+      exitCode: value.exitCode as number,
+      ...(Object.hasOwn(value, "contentType") ||
+      Object.hasOwn(value, "structuredContent")
+        ? {
+            contentType: value.contentType as string,
+            structuredContent:
+              value.structuredContent as ToolExecutionResult["structuredContent"],
+          }
+        : {}),
+    };
   }
   const output = typeof value === "string" ? value : JSON.stringify(value);
   return { output: output ?? String(value), exitCode: 0 };
@@ -1081,7 +1096,18 @@ function validateResult(value: unknown, pluginId: string): ToolExecutionResult {
   ) {
     throw new Error(`Plugin runtime ${pluginId} returned an invalid result`);
   }
-  return { output: value.output, exitCode: value.exitCode as number };
+  return {
+    output: value.output,
+    exitCode: value.exitCode as number,
+    ...(Object.hasOwn(value, "contentType") ||
+    Object.hasOwn(value, "structuredContent")
+      ? {
+          contentType: value.contentType as string,
+          structuredContent:
+            value.structuredContent as ToolExecutionResult["structuredContent"],
+        }
+      : {}),
+  };
 }
 
 function encodeMessage(value: unknown, maxBytes: number): string {

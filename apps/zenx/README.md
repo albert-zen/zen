@@ -78,9 +78,13 @@ sandboxed iframe without same-origin authority and talks only through validated 
 Sidebar contributions use the bounded product icon keys `clock`, `layers`, `plug`,
 `settings`, `terminal`, `trigger`, or `users`; package validation rejects any other key.
 
-This is not yet the completed Plugin Platform: complete
-product install/update entry points, and structured result renderers remain future nodes.
-`ToolResultItem` currently stores only text output and an exit code. The app-owned
+This is not yet the completed Plugin Platform: complete product install/update entry
+points remain future nodes. `ToolResultItem` now keeps optional namespaced,
+JSON-compatible structured content alongside unchanged text output and exit code.
+The Tool Environment validates ownership and a 1 MiB bound before append. The current
+enabled v2 manifest selects a trusted or isolated Generic UI Host result surface;
+missing, disabled, uninstalled, or incompatible renderers use deterministic JSON/Text
+fallback without rewriting history. The app-owned
 Host already publishes its one ZAS authority through a private authenticated
 loopback descriptor that survives window closure.
 

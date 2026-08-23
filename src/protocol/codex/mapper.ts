@@ -93,6 +93,9 @@ export interface CodexCommandItem {
   aggregatedOutput: string | null;
   exitCode: number | null;
   durationMs: null;
+  /** Zen fixed-subset extension; omitted for ordinary and legacy results. */
+  contentType?: string;
+  structuredContent?: ToolResultItem["structuredContent"];
 }
 
 export function projectThread(
@@ -336,6 +339,12 @@ export function projectCommandCompleted(
           : "failed",
     aggregatedOutput: result.output,
     exitCode: result.exitCode,
+    ...(result.contentType === undefined
+      ? {}
+      : {
+          contentType: result.contentType,
+          structuredContent: structuredClone(result.structuredContent),
+        }),
   };
 }
 

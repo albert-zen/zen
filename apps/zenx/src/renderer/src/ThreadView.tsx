@@ -5,6 +5,7 @@ import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { ApprovalDecision } from "../../main/app-server-manager.js";
 import type { TriggerHistoryEntry } from "../../main/trigger-types.js";
 import type { ZenXProviderProfile } from "../../main/host-profile.js";
+import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import type {
   ModelSummary,
   Thread,
@@ -23,6 +24,8 @@ import { ComposerModelMenu } from "./ComposerModelMenu.js";
 import { Icon } from "./icons.js";
 import { Markdown } from "./Markdown.js";
 import { activeTurn } from "./thread-view-state.js";
+import type { PluginUiRegistry } from "./plugin-ui-host.js";
+import { ToolResultRenderer } from "./ToolResultRenderer.js";
 import {
   commandLabel,
   projectTurn,
@@ -47,6 +50,8 @@ interface ThreadViewProps {
   threadAttachments?: ZenXThreadAttachmentProjection;
   wakeups?: readonly TriggerHistoryEntry[];
   watching?: boolean;
+  pluginSnapshot?: ZenXPluginSnapshot | null;
+  pluginUiRegistry?: PluginUiRegistry | null;
   onDraftChange(draft: string): void;
   onImportImages?(files: readonly File[]): Promise<void>;
   onPickImages?(): Promise<void>;
@@ -83,6 +88,8 @@ export function ThreadView({
   threadAttachments = {},
   wakeups = [],
   watching = false,
+  pluginSnapshot = null,
+  pluginUiRegistry = null,
   onDraftChange,
   onImportImages = async () => undefined,
   onPickImages = async () => undefined,
@@ -225,6 +232,8 @@ export function ThreadView({
                   setPreview({ attachment, name, trigger })
                 }
                 onReadAttachment={onReadAttachment}
+                pluginSnapshot={pluginSnapshot}
+                pluginUiRegistry={pluginUiRegistry}
               />
             ))
           )}
@@ -439,6 +448,8 @@ function TurnBlock({
   attachments,
   onOpenImage,
   onReadAttachment,
+  pluginSnapshot,
+  pluginUiRegistry,
 }: {
   turn: Turn;
   index: number;
@@ -450,6 +461,8 @@ function TurnBlock({
     trigger: HTMLButtonElement,
   ): void;
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
+  pluginSnapshot: ZenXPluginSnapshot | null;
+  pluginUiRegistry: PluginUiRegistry | null;
 }) {
   const projection = useMemo(() => projectTurn(turn), [turn]);
   const [expanded, setExpanded] = useState(false);
@@ -494,6 +507,8 @@ function TurnBlock({
             <DisplayNode
               key={node.kind === "agent" ? node.item.id : node.id}
               node={node}
+              pluginSnapshot={pluginSnapshot}
+              pluginUiRegistry={pluginUiRegistry}
             />
           ))}
           {!complete && projection.finalItem !== null ? (
@@ -514,18 +529,34 @@ function TurnBlock({
   );
 }
 
-function DisplayNode({ node }: { node: TurnDisplayNode }) {
+function DisplayNode({
+  node,
+  pluginSnapshot,
+  pluginUiRegistry,
+}: {
+  node: TurnDisplayNode;
+  pluginSnapshot: ZenXPluginSnapshot | null;
+  pluginUiRegistry: PluginUiRegistry | null;
+}) {
   return node.kind === "agent" ? (
     <AgentMessage item={node.item} />
   ) : (
-    <TraceGroup node={node} />
+    <TraceGroup
+      node={node}
+      pluginSnapshot={pluginSnapshot}
+      pluginUiRegistry={pluginUiRegistry}
+    />
   );
 }
 
 function TraceGroup({
   node,
+  pluginSnapshot,
+  pluginUiRegistry,
 }: {
   node: Extract<TurnDisplayNode, { kind: "trace" }>;
+  pluginSnapshot: ZenXPluginSnapshot | null;
+  pluginUiRegistry: PluginUiRegistry | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
@@ -575,7 +606,13 @@ function TraceGroup({
                   <StatusMark item={item} />
                   <Icon name="chevron-down" size={13} />
                 </button>
-                {open ? <TraceDetail item={item} /> : null}
+                {open ? (
+                  <TraceDetail
+                    item={item}
+                    pluginSnapshot={pluginSnapshot}
+                    pluginUiRegistry={pluginUiRegistry}
+                  />
+                ) : null}
               </div>
             );
           })}
@@ -596,7 +633,15 @@ function StatusMark({ item }: { item: ThreadItem }) {
   );
 }
 
-function TraceDetail({ item }: { item: ThreadItem }) {
+function TraceDetail({
+  item,
+  pluginSnapshot,
+  pluginUiRegistry,
+}: {
+  item: ThreadItem;
+  pluginSnapshot: ZenXPluginSnapshot | null;
+  pluginUiRegistry: PluginUiRegistry | null;
+}) {
   if (item.type === "reasoning") {
     return (
       <div className="trace-detail">
@@ -610,8 +655,16 @@ function TraceDetail({ item }: { item: ThreadItem }) {
   return (
     <div className="trace-detail">
       <code>{item.command}</code>
-      {item.aggregatedOutput ? <pre>{item.aggregatedOutput}</pre> : null}
-      {item.exitCode === null ? null : <small>Exit code {item.exitCode}</small>}
+      <ToolResultRenderer
+        item={item}
+        snapshot={pluginSnapshot}
+        registry={pluginUiRegistry}
+        theme={
+          document.documentElement.dataset.appearance === "dark"
+            ? "dark"
+            : "light"
+        }
+      />
     </div>
   );
 }

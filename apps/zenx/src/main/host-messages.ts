@@ -5,6 +5,7 @@ import type {
 } from "../../../../src/thread-summary.js";
 import { isNativeThreadSummary } from "../../../../src/thread-summary.js";
 import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
+import type { JsonValue } from "../../../../src/item.js";
 import {
   isAttachmentRef,
   type ZenXThreadAttachmentProjection,
@@ -47,6 +48,8 @@ export interface CapabilityResultCommand {
   invocationId: string;
   output?: string;
   exitCode?: number;
+  contentType?: string;
+  structuredContent?: JsonValue;
   error?: string;
 }
 

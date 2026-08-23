@@ -612,7 +612,8 @@ export class ZenXCapabilityRegistry
           (manifest.contributions?.settings?.length ?? 0) +
           (manifest.contributions?.panels?.length ?? 0) +
           (manifest.contributions?.commands?.length ?? 0) +
-          (manifest.contributions?.menus?.length ?? 0),
+          (manifest.contributions?.menus?.length ?? 0) +
+          (manifest.contributions?.resultRenderers?.length ?? 0),
       };
     });
     const enabled = [...this.#registered.values()].filter(
@@ -690,6 +691,9 @@ export class ZenXCapabilityRegistry
       panels: project((manifest) => manifest.contributions?.panels),
       commands: project((manifest) => manifest.contributions?.commands),
       menus: project((manifest) => manifest.contributions?.menus),
+      resultRenderers: project(
+        (manifest) => manifest.contributions?.resultRenderers,
+      ),
     };
   }
 
@@ -1456,6 +1460,27 @@ function validateManifest(
       );
     }
     menuIds.add(menu.id);
+  }
+  const rendererIds = new Set<string>();
+  const renderedContentTypes = new Set<string>();
+  for (const renderer of manifest.contributions?.resultRenderers ?? []) {
+    if (
+      manifest.schemaVersion !== 2 ||
+      !isContributionId(renderer.id) ||
+      rendererIds.has(renderer.id) ||
+      !renderer.contentType.startsWith(`${manifest.id}/`) ||
+      !/^[a-z][a-z0-9-]{1,62}\/[a-z][a-z0-9.-]{0,127}$/u.test(
+        renderer.contentType,
+      ) ||
+      renderedContentTypes.has(renderer.contentType) ||
+      !surfaceIds.has(renderer.surfaceId)
+    ) {
+      throw new Error(
+        `Plugin ${manifest.id} has invalid, foreign, duplicate, or dangling result renderer ${renderer.id}`,
+      );
+    }
+    rendererIds.add(renderer.id);
+    renderedContentTypes.add(renderer.contentType);
   }
   if (permissionIds.size !== manifest.permissions.length) {
     throw new Error(`Capability ${manifest.id} has duplicate permissions`);
