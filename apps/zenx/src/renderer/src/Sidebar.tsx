@@ -993,9 +993,7 @@ function ProjectRows({
                     return;
                   }
                   if (
-                    !["ArrowDown", "ArrowUp", "Home", "End"].includes(
-                      event.key,
-                    )
+                    !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)
                   ) {
                     return;
                   }

@@ -9,9 +9,12 @@ Object.assign(globalThis, { React });
 const { Sidebar } = await import("../src/renderer/src/Sidebar.js");
 
 test("configured Project rows expose scoped creation and a keyboard-safe More menu", async () => {
-  const dom = new JSDOM("<!doctype html><html><body><div id=root></div></body></html>", {
-    url: "http://localhost",
-  });
+  const dom = new JSDOM(
+    "<!doctype html><html><body><div id=root></div></body></html>",
+    {
+      url: "http://localhost",
+    },
+  );
   const previous = {
     document: globalThis.document,
     HTMLElement: globalThis.HTMLElement,
@@ -84,16 +87,23 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
 
     assert.equal(document.querySelectorAll(".project-more-trigger").length, 3);
     assert.equal(document.querySelectorAll(".project-toggle svg").length, 3);
-    assert.equal(document.querySelectorAll('[aria-label^="New thread in "]').length, 3);
+    assert.equal(
+      document.querySelectorAll('[aria-label^="New thread in "]').length,
+      3,
+    );
 
-    const beta = document.querySelector<HTMLElement>('[data-project-key="/work/beta"]');
+    const beta = document.querySelector<HTMLElement>(
+      '[data-project-key="/work/beta"]',
+    );
     assert.ok(beta);
-    const compose = beta.querySelector<HTMLButtonElement>('[aria-label="New thread in beta"]');
+    const compose = beta.querySelector<HTMLButtonElement>(
+      '[aria-label="New thread in beta"]',
+    );
     assert.ok(compose);
     await act(async () => compose.click());
     assert.deepEqual(created, ["/work/beta"]);
 
-    const more = beta.querySelector<HTMLButtonElement>('.project-more-trigger');
+    const more = beta.querySelector<HTMLButtonElement>(".project-more-trigger");
     assert.ok(more);
     await act(async () => {
       more.focus();
@@ -125,7 +135,10 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
         }),
       );
     });
-    assert.match(document.activeElement?.textContent ?? "", /Remove from ZenX/u);
+    assert.match(
+      document.activeElement?.textContent ?? "",
+      /Remove from ZenX/u,
+    );
     await act(async () => {
       document.activeElement?.dispatchEvent(
         new dom.window.KeyboardEvent("keydown", {
@@ -137,8 +150,18 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
     });
     assert.equal(document.activeElement, more);
     await act(async () => more.click());
-    assert.equal(beta.querySelector('[role="menu"]')?.textContent?.includes("Set as default"), true);
-    assert.equal(beta.querySelector('[role="menu"]')?.textContent?.includes("Remove from ZenX"), true);
+    assert.equal(
+      beta
+        .querySelector('[role="menu"]')
+        ?.textContent?.includes("Set as default"),
+      true,
+    );
+    assert.equal(
+      beta
+        .querySelector('[role="menu"]')
+        ?.textContent?.includes("Remove from ZenX"),
+      true,
+    );
     assert.match(document.activeElement?.textContent ?? "", /Set as default/u);
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -149,7 +172,10 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
         }),
       );
     });
-    assert.match(document.activeElement?.textContent ?? "", /Remove from ZenX/u);
+    assert.match(
+      document.activeElement?.textContent ?? "",
+      /Remove from ZenX/u,
+    );
     await act(async () => {
       document.activeElement?.dispatchEvent(
         new dom.window.KeyboardEvent("keydown", {
@@ -169,7 +195,10 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
         }),
       );
     });
-    assert.match(document.activeElement?.textContent ?? "", /Remove from ZenX/u);
+    assert.match(
+      document.activeElement?.textContent ?? "",
+      /Remove from ZenX/u,
+    );
     await act(async () => {
       document.activeElement?.dispatchEvent(
         new dom.window.KeyboardEvent("keydown", {
@@ -193,7 +222,9 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
     assert.equal(document.activeElement, focusedMore);
     assert.equal(beta.querySelector('[role="menu"]'), null);
     await act(async () => more.click());
-    await act(async () => beta.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+    await act(async () =>
+      beta.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click(),
+    );
     assert.deepEqual(defaults, ["/work/beta"]);
     assert.equal(beta.querySelector('[role="menu"]'), null);
 
@@ -206,9 +237,23 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
     assert.equal(beta.querySelector('[role="menu"]'), null);
 
     await act(async () => more.focus());
-    await act(async () => more.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await act(async () =>
+      more.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      ),
+    );
     assert.ok(beta.querySelector('[role="menu"]'));
-    await act(async () => dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () =>
+      dom.window.document.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      ),
+    );
     assert.equal(beta.querySelector('[role="menu"]'), null);
 
     await act(async () => more.click());
@@ -232,7 +277,10 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
       defaultProject.querySelectorAll('[role="menuitem"]').length,
       1,
     );
-    assert.match(document.activeElement?.textContent ?? "", /Remove from ZenX/u);
+    assert.match(
+      document.activeElement?.textContent ?? "",
+      /Remove from ZenX/u,
+    );
     await act(async () => {
       document.activeElement?.dispatchEvent(
         new dom.window.KeyboardEvent("keydown", {
@@ -242,7 +290,10 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
         }),
       );
     });
-    assert.match(document.activeElement?.textContent ?? "", /Remove from ZenX/u);
+    assert.match(
+      document.activeElement?.textContent ?? "",
+      /Remove from ZenX/u,
+    );
     await act(async () => {
       document.activeElement?.dispatchEvent(
         new dom.window.KeyboardEvent("keydown", {
@@ -255,7 +306,9 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
     assert.equal(document.activeElement, defaultMore);
   } finally {
     await act(async () => root.unmount());
-    Object.assign(globalThis, previous, { IS_REACT_ACT_ENVIRONMENT: undefined });
+    Object.assign(globalThis, previous, {
+      IS_REACT_ACT_ENVIRONMENT: undefined,
+    });
     dom.window.close();
   }
 });

@@ -8,13 +8,7 @@ const providerLogoSource = await readFile(
 );
 
 test("known Provider logos use recorded local formal assets", async () => {
-  for (const name of [
-    "openai",
-    "siliconflow",
-    "deepseek",
-    "qwen",
-    "zhipu",
-  ]) {
+  for (const name of ["openai", "siliconflow", "deepseek", "qwen", "zhipu"]) {
     const asset = await readFile(
       new URL(
         `../src/renderer/src/assets/providers/${name}.svg`,
