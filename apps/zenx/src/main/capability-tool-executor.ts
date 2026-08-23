@@ -1,9 +1,9 @@
 import type {
   ToolExecutionResult,
-  ToolExecutor,
   ToolInvocation,
+  ToolProvider,
 } from "../../../../src/tool.js";
-import { ShellToolExecutor } from "../../../../src/tool.js";
+import { ShellToolExecutor, ToolEnvironment } from "../../../../src/tool.js";
 import type { CapabilityResultCommand, HostEvent } from "./host-messages.js";
 import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
 
@@ -14,36 +14,28 @@ interface PendingInvocation {
   abort(): void;
 }
 
-export class ZenXHostToolExecutor implements ToolExecutor {
+export class ZenXHostToolExecutor implements ToolProvider {
+  readonly identity = {
+    kind: "external",
+    id: "zenx-capability-host",
+  } as const;
   readonly definitions;
-  readonly #shell: ShellToolExecutor;
   readonly #capabilityNames: Set<string>;
   readonly #send: (event: HostEvent) => void;
   readonly #pending = new Map<string, PendingInvocation>();
 
   constructor(options: {
     capabilities: ZenXCapabilityHostSnapshot;
-    blockedEnvironmentVariables?: readonly string[];
-    redactedValues?: readonly string[];
     send: (event: HostEvent) => void;
   }) {
-    this.#shell = new ShellToolExecutor({
-      blockedEnvironmentVariables: options.blockedEnvironmentVariables,
-      redactedValues: options.redactedValues,
-    });
     this.#capabilityNames = new Set(
       options.capabilities.definitions.map((definition) => definition.name),
     );
-    this.definitions = [
-      ...this.#shell.definitions,
-      ...options.capabilities.definitions,
-    ];
+    this.definitions = options.capabilities.definitions;
     this.#send = options.send;
   }
 
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
-    if (invocation.name === "shell")
-      return await this.#shell.execute(invocation);
     if (!this.#capabilityNames.has(invocation.name)) {
       throw new Error(`Unsupported tool: ${invocation.name}`);
     }
@@ -100,4 +92,31 @@ export class ZenXHostToolExecutor implements ToolExecutor {
     }
     this.#pending.clear();
   }
+}
+
+export function createZenXHostToolEnvironment(options: {
+  capabilities: ZenXCapabilityHostSnapshot;
+  blockedEnvironmentVariables?: readonly string[];
+  redactedValues?: readonly string[];
+  send: (event: HostEvent) => void;
+}): {
+  capabilityProvider: ZenXHostToolExecutor;
+  toolEnvironment: ToolEnvironment;
+} {
+  const capabilityProvider = new ZenXHostToolExecutor({
+    capabilities: options.capabilities,
+    send: options.send,
+  });
+  return {
+    capabilityProvider,
+    toolEnvironment: new ToolEnvironment({
+      providers: [
+        new ShellToolExecutor({
+          blockedEnvironmentVariables: options.blockedEnvironmentVariables,
+          redactedValues: options.redactedValues,
+        }),
+        capabilityProvider,
+      ],
+    }),
+  };
 }

@@ -12,7 +12,7 @@ import {
   type ApprovalResolvedEvent,
 } from "../src/main/app-server-manager.js";
 
-test("broadcasts approval state to two renderer clients and completes both decisions", async () => {
+test("broadcasts approval state and reuses the persisted tool decision", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-approval-"));
   const manager = new AppServerManager({
     entryPath: path.resolve("src/main/app-server-host.ts"),
@@ -84,32 +84,21 @@ test("broadcasts approval state to two renderer clients and completes both decis
     assert.equal(firstResolved[0]?.decision, "accept");
     assert.equal(outputDeltas.join(""), "zenx-approved");
 
-    const declineSeen = deferred<void>();
-    const declineResolved = deferred<void>();
-    const declineCompleted = deferred<void>();
-    const disposeRequest = manager.onApprovalRequest(() =>
-      declineSeen.resolve(),
-    );
-    const disposeResolved = manager.onApprovalResolved((event) => {
-      if (event.requestId !== request.requestId) declineResolved.resolve();
-    });
+    const reusedCompleted = deferred<void>();
     const disposeNotifications = manager.onNotification((method) => {
-      if (method === "turn/completed") declineCompleted.resolve();
+      if (method === "turn/completed") reusedCompleted.resolve();
     });
     await manager.request("turn/start", {
       threadId: started.thread.id,
-      input: [{ type: "text", text: "!shell printf must-not-run" }],
+      input: [
+        { type: "text", text: `!shell ${shellPrintCommand("zenx-reused")}` },
+      ],
     });
-    await within(declineSeen.promise);
-    const decline = manager.pendingApprovalRequests[0];
-    assert(decline !== undefined);
-    manager.respondToApproval(decline.requestId, "decline");
-    await within(
-      Promise.all([declineResolved.promise, declineCompleted.promise]),
-    );
-    disposeRequest();
-    disposeResolved();
+    await within(reusedCompleted.promise);
     disposeNotifications();
+    assert.equal(firstRequests.length, 1);
+    assert.equal(secondRequests.length, 1);
+    assert.deepEqual(manager.pendingApprovalRequests, []);
 
     const read = await manager.request("thread/read", {
       threadId: started.thread.id,
@@ -120,8 +109,9 @@ test("broadcasts approval state to two renderer clients and completes both decis
     );
     assert.deepEqual(
       commands.map((command) => command.status),
-      ["completed", "declined"],
+      ["completed", "completed"],
     );
+    assert.equal(outputDeltas.join(""), "zenx-approvedzenx-reused");
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });

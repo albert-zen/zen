@@ -11,7 +11,10 @@ import {
   type HostCommand,
   type HostEvent,
 } from "./host-messages.js";
-import { ZenXHostToolExecutor } from "./capability-tool-executor.js";
+import {
+  createZenXHostToolEnvironment,
+  ZenXHostToolExecutor,
+} from "./capability-tool-executor.js";
 import { projectThreadAttachments } from "./image-attachments.js";
 
 let server: CodexWebSocketServer | undefined;
@@ -97,12 +100,16 @@ async function handleCommand(command: HostCommand): Promise<void> {
   if (server !== undefined) {
     throw new Error("ZenX App Server host already started");
   }
-  tools = new ZenXHostToolExecutor({
+  const toolComposition = createZenXHostToolEnvironment({
     capabilities: command.capabilities,
     blockedEnvironmentVariables: command.config.secretEnvironmentVariables,
     send,
   });
-  appServer = createHostedAppServer({ ...command.config, tools });
+  tools = toolComposition.capabilityProvider;
+  appServer = createHostedAppServer({
+    ...command.config,
+    toolEnvironment: toolComposition.toolEnvironment,
+  });
   server = await serveCodexWebSocket({
     appServer,
     zenHome: command.config.dataDirectory,

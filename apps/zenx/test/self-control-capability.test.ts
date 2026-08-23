@@ -371,8 +371,17 @@ test("an Agent drives the complete bounded tracer bullet through App Server wire
       ],
     );
     assert(calls?.every((call) => call.status === "completed"));
-    assert.equal(approvals.length, 7);
-    assert(approvals.every((command) => command.startsWith("zenx_")));
+    assert.deepEqual(
+      approvals.map((command) => command.split(" ")[0]),
+      [
+        "zenx_projects_list",
+        "zenx_threads_list",
+        "zenx_threads_create",
+        "zenx_threads_send",
+        "zenx_threads_status",
+        "zenx_threads_read",
+      ],
+    );
 
     const listed = await client.request("thread/list", {});
     const target = listed.data.find((thread) => thread.id !== source.thread.id);
