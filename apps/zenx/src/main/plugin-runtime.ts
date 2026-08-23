@@ -100,6 +100,7 @@ export class PluginRuntimeSupervisor {
 
   async stage(
     registration: PluginRuntimeRegistration,
+    hostSdk?: ZenXPluginHostSdkV1,
   ): Promise<ZenXPluginRuntimeStage> {
     return await this.#serializeMutation(async () => {
       validateIdentity(registration.identity);
@@ -108,11 +109,11 @@ export class PluginRuntimeSupervisor {
         registration.definitions,
       );
       const pluginId = registration.identity.pluginId;
-      if (this.#active.has(pluginId) || this.#staged.has(pluginId)) {
-        throw new Error(`Plugin runtime is already registered: ${pluginId}`);
+      if (this.#staged.has(pluginId)) {
+        throw new Error(`Plugin runtime is already staged: ${pluginId}`);
       }
 
-      const sdk = await this.#hostSdkFor(pluginId);
+      const sdk = hostSdk ?? (await this.#hostSdkFor(pluginId));
       if (
         sdk.version !== ZENX_PLUGIN_HOST_SDK_VERSION ||
         sdk.pluginId !== pluginId
@@ -953,15 +954,24 @@ export class CatalogPluginRuntimeLifecycle implements ZenXPluginRuntimeLifecycle
   readonly #registrationFor: (
     registration: RegisteredZenXCapability,
   ) => PluginRuntimeRegistration;
+  readonly #hostSdkFor?: (registration: RegisteredZenXCapability) => Promise<{
+    sdk: ZenXPluginHostSdkV1;
+    rollback?(): Promise<void>;
+  }>;
 
   constructor(options: {
     supervisor: PluginRuntimeSupervisor;
     registrationFor(
       registration: RegisteredZenXCapability,
     ): PluginRuntimeRegistration;
+    hostSdkFor?(registration: RegisteredZenXCapability): Promise<{
+      sdk: ZenXPluginHostSdkV1;
+      rollback?(): Promise<void>;
+    }>;
   }) {
     this.#supervisor = options.supervisor;
     this.#registrationFor = options.registrationFor;
+    this.#hostSdkFor = options.hostSdkFor;
   }
 
   async stage(
@@ -970,7 +980,32 @@ export class CatalogPluginRuntimeLifecycle implements ZenXPluginRuntimeLifecycle
     if (registration.package.manifest.schemaVersion !== 2) {
       throw new Error("Plugin Runtime requires manifest v2");
     }
-    return await this.#supervisor.stage(this.#registrationFor(registration));
+    const prepared =
+      this.#hostSdkFor === undefined
+        ? undefined
+        : await this.#hostSdkFor(registration);
+    try {
+      const stage = await this.#supervisor.stage(
+        this.#registrationFor(registration),
+        prepared?.sdk,
+      );
+      return {
+        publish: async () => await stage.publish(),
+        rollback: async () => {
+          let runtimeError: unknown;
+          try {
+            await stage.rollback();
+          } catch (error) {
+            runtimeError = error;
+          }
+          await prepared?.rollback?.();
+          if (runtimeError !== undefined) throw runtimeError;
+        },
+      };
+    } catch (error) {
+      await prepared?.rollback?.();
+      throw error;
+    }
   }
 
   async stop(pluginId: string): Promise<void> {

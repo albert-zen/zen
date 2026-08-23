@@ -963,6 +963,66 @@ function installCapabilityIpc(
     },
   );
   ipcMain.handle(
+    ipcChannels.pluginsSelectPackage,
+    async (event, expectedPluginId: unknown) => {
+      if (
+        expectedPluginId !== undefined &&
+        (typeof expectedPluginId !== "string" || expectedPluginId.length === 0)
+      ) {
+        throw new Error("Invalid expected plugin ID");
+      }
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const options = {
+        title:
+          expectedPluginId === undefined
+            ? "Install local plugin package"
+            : `Update ${expectedPluginId}`,
+        properties: ["openFile"],
+        filters: [{ name: "ZenX plugin manifest", extensions: ["json"] }],
+      } satisfies Electron.OpenDialogOptions;
+      const result =
+        owner === null
+          ? await dialog.showOpenDialog(options)
+          : await dialog.showOpenDialog(owner, options);
+      if (result.canceled || result.filePaths[0] === undefined)
+        return { canceled: true } as const;
+      const snapshot = await capabilities.installLocalPackage(
+        result.filePaths[0],
+        expectedPluginId as string | undefined,
+      );
+      await manager.restartCapabilities();
+      return { canceled: false, snapshot } as const;
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.pluginsUninstall,
+    async (_event, pluginId: unknown) => {
+      if (typeof pluginId !== "string" || pluginId.length === 0)
+        throw new Error("Invalid plugin uninstall request");
+      const snapshot = await capabilities.uninstall(pluginId);
+      await manager.restartCapabilities();
+      return snapshot;
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.pluginsReinstall,
+    async (_event, pluginId: unknown) => {
+      if (typeof pluginId !== "string" || pluginId.length === 0)
+        throw new Error("Invalid plugin reinstall request");
+      const snapshot = await capabilities.reinstall(pluginId);
+      await manager.restartCapabilities();
+      return snapshot;
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.pluginsDeleteData,
+    async (_event, pluginId: unknown) => {
+      if (typeof pluginId !== "string" || pluginId.length === 0)
+        throw new Error("Invalid plugin delete-data request");
+      await capabilities.deletePluginData(pluginId);
+    },
+  );
+  ipcMain.handle(
     ipcChannels.pluginsExecuteCommand,
     async (_event, pluginId: unknown, commandId: unknown, input: unknown) => {
       if (typeof pluginId !== "string" || typeof commandId !== "string") {

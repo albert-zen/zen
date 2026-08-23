@@ -178,6 +178,22 @@ export class ZenXCapabilityRegistry
             `Plugin ${manifest.id} does not match its installed package descriptor`,
           );
         }
+        if (
+          capabilityPackage.manifestPath !== undefined &&
+          capabilityPackage.manifestPath !== stored.manifestPath
+        ) {
+          const nextPackages = {
+            ...this.#packageDescriptors,
+            [manifest.id]: {
+              ...stored,
+              manifestPath: capabilityPackage.manifestPath,
+            },
+          };
+          await this.#configurationStore.save(
+            this.#configuration({ packages: nextPackages }),
+          );
+          this.#packageDescriptors = nextPackages;
+        }
         const registration = { package: capabilityPackage, source } as const;
         this.#catalogPackages.set(manifest.id, registration);
         if (
@@ -203,6 +219,9 @@ export class ZenXCapabilityRegistry
       const descriptor = {
         manifest: structuredClone(manifest),
         source,
+        ...(capabilityPackage.manifestPath === undefined
+          ? {}
+          : { manifestPath: capabilityPackage.manifestPath }),
       } satisfies ZenXPluginPackageDescriptor;
       const nextPackages = {
         ...this.#packageDescriptors,
@@ -240,6 +259,90 @@ export class ZenXCapabilityRegistry
         this.#uninstalled = new Set(previousConfiguration.uninstalled ?? []);
         await runtimeStage?.rollback();
         await this.#configurationStore.save(previousConfiguration);
+        throw error;
+      }
+    });
+  }
+
+  async update(
+    capabilityPackage: ZenXCapabilityPackage,
+    source: "bundled" | "local" = "local",
+  ): Promise<void> {
+    await this.#serializeConfigurationMutation(async () => {
+      const manifest = validateManifest(capabilityPackage.manifest);
+      if (manifest.schemaVersion !== 2) {
+        throw new Error("Plugin update requires a manifest v2 package");
+      }
+      const previous = this.#catalogPackages.get(manifest.id);
+      const previousDescriptor = this.#packageDescriptors[manifest.id];
+      if (previous === undefined || previousDescriptor === undefined) {
+        throw new Error(`Plugin ${manifest.id} is not installed`);
+      }
+      if (previousDescriptor.source !== source) {
+        throw new Error(`Plugin ${manifest.id} package source cannot change`);
+      }
+      if (previousDescriptor.manifest.version === manifest.version) {
+        throw new Error(
+          `Plugin ${manifest.id} is already version ${manifest.version}`,
+        );
+      }
+      this.#validateRegistration(manifest, manifest.id);
+      const replacement = { package: capabilityPackage, source } as const;
+      const shouldEnable =
+        !this.#uninstalled.has(manifest.id) && !this.#disabled.has(manifest.id);
+      const runtimeStage = shouldEnable
+        ? await this.#stagePluginRuntime(replacement)
+        : undefined;
+      const nextDescriptor = {
+        manifest: structuredClone(manifest),
+        source,
+        ...(capabilityPackage.manifestPath === undefined
+          ? {}
+          : { manifestPath: capabilityPackage.manifestPath }),
+      } satisfies ZenXPluginPackageDescriptor;
+      const nextPackages = {
+        ...this.#packageDescriptors,
+        [manifest.id]: nextDescriptor,
+      };
+
+      try {
+        if (shouldEnable) {
+          await this.#stopPluginRuntimeWithRollback(manifest.id, previous);
+        }
+        await this.#configurationStore.save(
+          this.#configuration({ packages: nextPackages }),
+        );
+      } catch (error) {
+        await runtimeStage?.rollback();
+        if (shouldEnable) await this.#restorePluginRuntime(previous);
+        throw error;
+      }
+
+      this.#packageDescriptors = nextPackages;
+      this.#catalogPackages.set(manifest.id, replacement);
+      try {
+        const active = this.#registered.get(manifest.id);
+        if (active !== undefined) {
+          await this.#unregisterRegistration(manifest.id, active, false);
+        }
+        if (shouldEnable) {
+          await runtimeStage?.publish();
+          this.#activateRegistration(replacement);
+        }
+      } catch (error) {
+        await runtimeStage?.rollback();
+        this.#packageDescriptors = {
+          ...this.#packageDescriptors,
+          [manifest.id]: previousDescriptor,
+        };
+        this.#catalogPackages.set(manifest.id, previous);
+        await this.#configurationStore.save(
+          this.#configuration({ packages: this.#packageDescriptors }),
+        );
+        if (shouldEnable && !this.#registered.has(manifest.id)) {
+          await this.#restorePluginRuntime(previous);
+          this.#activateRegistration(previous);
+        }
         throw error;
       }
     });
@@ -340,15 +443,28 @@ export class ZenXCapabilityRegistry
   }
 
   async deleteData(pluginId: string): Promise<void> {
-    if (!/^[a-z][a-z0-9-]{1,62}$/u.test(pluginId)) {
-      throw new Error(`Invalid plugin id: ${pluginId}`);
-    }
-    if (this.#options.pluginDataDirectory === undefined) {
-      throw new Error("Plugin data directory is not configured");
-    }
-    await rm(path.join(this.#options.pluginDataDirectory, pluginId), {
-      recursive: true,
-      force: true,
+    await this.#serializeConfigurationMutation(async () => {
+      if (!/^[a-z][a-z0-9-]{1,62}$/u.test(pluginId)) {
+        throw new Error(`Invalid plugin id: ${pluginId}`);
+      }
+      if (this.#options.pluginDataDirectory === undefined) {
+        throw new Error("Plugin data directory is not configured");
+      }
+      if (
+        this.#packageDescriptors[pluginId] === undefined &&
+        !this.#catalogPackages.has(pluginId)
+      ) {
+        throw new Error(`Unknown ZenX plugin: ${pluginId}`);
+      }
+      if (!this.#uninstalled.has(pluginId) && !this.#disabled.has(pluginId)) {
+        throw new Error(
+          `Disable or uninstall plugin ${pluginId} before deleting its data`,
+        );
+      }
+      await rm(path.join(this.#options.pluginDataDirectory, pluginId), {
+        recursive: true,
+        force: true,
+      });
     });
   }
 
@@ -364,11 +480,15 @@ export class ZenXCapabilityRegistry
     }
   }
 
-  #validateRegistration(manifest: ZenXCapabilityManifest): void {
+  #validateRegistration(
+    manifest: ZenXCapabilityManifest,
+    replacingPluginId?: string,
+  ): void {
     for (const tool of manifest.tools) {
       if (
         tool.name === CAPABILITY_RESOURCE_TOOL ||
-        this.#toolOwners.has(tool.name)
+        (this.#toolOwners.has(tool.name) &&
+          this.#toolOwners.get(tool.name)?.capabilityId !== replacingPluginId)
       ) {
         throw new Error(`Capability tool ${tool.name} is already registered`);
       }
@@ -378,6 +498,7 @@ export class ZenXCapabilityRegistry
       ...(manifest.contributions?.subroutes ?? []),
     ]) {
       for (const registered of this.#registered.values()) {
+        if (registered.package.manifest.id === replacingPluginId) continue;
         const contributions = registered.package.manifest.contributions;
         if (
           [
@@ -580,6 +701,7 @@ export class ZenXCapabilityRegistry
       });
     }
     for (const registered of this.#catalogPackages.values()) {
+      if (registered.package.manifest.schemaVersion !== 2) continue;
       if (!catalog.has(registered.package.manifest.id)) {
         catalog.set(registered.package.manifest.id, {
           manifest: registered.package.manifest,
@@ -601,6 +723,9 @@ export class ZenXCapabilityRegistry
         id: manifest.id,
         displayName: manifestName(manifest),
         version: manifest.version,
+        description: manifest.description,
+        compatibility:
+          manifest.schemaVersion === 2 ? manifest.compatibility.zenx : "legacy",
         source: entry.source,
         lifecycle,
         enabled,
@@ -695,6 +820,10 @@ export class ZenXCapabilityRegistry
         (manifest) => manifest.contributions?.resultRenderers,
       ),
     };
+  }
+
+  packageDescriptors(): Record<string, ZenXPluginPackageDescriptor> {
+    return structuredClone(this.#packageDescriptors);
   }
 
   availablePlugins(): ZenXAvailablePlugin[] {
@@ -1541,6 +1670,14 @@ function validatePluginManifestV2(manifest: ZenXPluginManifestV2): void {
   }
   if (manifest.description.trim().length === 0) {
     throw new Error(`Plugin ${manifest.id} has no short description`);
+  }
+  if (
+    manifest.storageVersion !== undefined &&
+    (!Number.isSafeInteger(manifest.storageVersion) ||
+      manifest.storageVersion < 1 ||
+      manifest.storageVersion > 1000)
+  ) {
+    throw new Error(`Plugin ${manifest.id} has an invalid storage version`);
   }
   if (manifest.tools.length === 0) {
     throw new Error(`Plugin ${manifest.id} declares no tools`);

@@ -35,6 +35,7 @@ import type {
 import type {
   ZenXCapabilitySnapshot,
   ZenXPluginSnapshot,
+  ZenXPluginPackageSelectionResult,
 } from "../main/capabilities/types.js";
 import type {
   ThreadTitleProjection,
@@ -334,6 +335,19 @@ contextBridge.exposeInMainWorld("zenx", {
         pluginId,
         enabled,
       ),
+    selectPackage: async (
+      expectedPluginId?: string,
+    ): Promise<ZenXPluginPackageSelectionResult> =>
+      await ipcRenderer.invoke(
+        ipcChannels.pluginsSelectPackage,
+        expectedPluginId,
+      ),
+    uninstall: async (pluginId: string): Promise<ZenXPluginSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.pluginsUninstall, pluginId),
+    reinstall: async (pluginId: string): Promise<ZenXPluginSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.pluginsReinstall, pluginId),
+    deleteData: async (pluginId: string): Promise<void> =>
+      await ipcRenderer.invoke(ipcChannels.pluginsDeleteData, pluginId),
     executeCommand: async (
       pluginId: string,
       commandId: string,

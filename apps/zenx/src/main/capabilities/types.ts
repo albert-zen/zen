@@ -3,7 +3,11 @@ import type {
   ToolExecutionResult,
   ToolInvocation,
 } from "../../../../../src/tool.js";
-import type { ZenXPluginHostSdkV1 } from "../plugin-host-sdk.js";
+import type {
+  PluginStorageMigration,
+  PluginStorageValue,
+  ZenXPluginHostSdkV1,
+} from "../plugin-host-sdk.js";
 
 export const MIN_CAPABILITY_OUTPUT_BYTES = 1024;
 export const MAX_CAPABILITY_OUTPUT_BYTES = 1024 * 1024;
@@ -171,6 +175,7 @@ export interface ZenXPluginManifestV2 extends Omit<
   compatibility: ZenXPluginCompatibility;
   runtime: ZenXPluginRuntimeDescriptor;
   mainDocument: string;
+  storageVersion?: number;
   ui?: ZenXPluginUiManifest;
 }
 
@@ -179,6 +184,13 @@ export type ZenXCapabilityManifest =
 
 export interface ZenXCapabilityPackage {
   manifest: ZenXCapabilityManifest;
+  /** Absolute manifest path for a trusted local package. */
+  manifestPath?: string;
+  storage?: {
+    version: number;
+    migrations?: readonly PluginStorageMigration[];
+    initialValue?: PluginStorageValue;
+  };
   invoke(
     toolName: string,
     invocation: ToolInvocation,
@@ -288,6 +300,8 @@ export interface ZenXPluginSummary {
   id: string;
   displayName: string;
   version: string;
+  description?: string;
+  compatibility?: string;
   source: "bundled" | "local";
   lifecycle: "installed" | "enabled" | "uninstalled";
   enabled: boolean;
@@ -308,6 +322,9 @@ export interface ZenXPluginSnapshot {
   menus: ZenXPluginMenuProjection[];
   resultRenderers?: ZenXPluginResultRendererProjection[];
 }
+
+export type ZenXPluginPackageSelectionResult =
+  { canceled: true } | { canceled: false; snapshot: ZenXPluginSnapshot };
 
 export interface ZenXCapabilitySnapshot {
   capabilities: ZenXCapabilitySummary[];
@@ -356,6 +373,7 @@ export interface ZenXCapabilityConfiguration {
 export interface ZenXPluginPackageDescriptor {
   manifest: ZenXPluginManifestV2;
   source: "bundled" | "local";
+  manifestPath?: string;
 }
 
 export interface RegisteredZenXCapability {

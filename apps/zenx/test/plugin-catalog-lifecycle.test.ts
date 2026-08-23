@@ -5,8 +5,10 @@ import path from "node:path";
 import test from "node:test";
 
 import { JsonZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
+import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
 import type {
+  ZenXCapabilityConfiguration,
   ZenXCapabilityPackage,
   ZenXPluginManifestV2,
 } from "../src/main/capabilities/types.js";
@@ -133,6 +135,7 @@ test("persists v2 install/enable/uninstall/reinstall and keeps plugin data", asy
       "preserved",
     );
 
+    await restarted.setEnabled("fixture", false);
     await restarted.deleteData("fixture");
     await assert.rejects(
       readFile(path.join(dataDirectory, "fixture", "state.json"), "utf8"),
@@ -248,4 +251,155 @@ test("concurrent lifecycle mutations converge in invocation order", async () => 
   ]);
   assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
   assert.equal(registry.hostSnapshot().definitions[0]?.name, "fixture_run");
+});
+
+test("update swaps version and contributions atomically while preserving lifecycle", async () => {
+  let failSave = false;
+  let durable = {
+    grants: {},
+    disabled: [] as string[],
+    uninstalled: [] as string[],
+    packages: {},
+  };
+  const registry = new ZenXCapabilityRegistry({
+    load: async () => structuredClone(durable),
+    save: async (configuration) => {
+      if (failSave) throw new Error("update catalog unavailable");
+      durable = structuredClone(configuration) as typeof durable;
+    },
+  });
+  await registry.initialize();
+  await registry.install(plugin(manifest()), "local");
+  const v2 = manifest();
+  v2.version = "2.0.0";
+  v2.description = "Updated package";
+  v2.contributions!.pages![0]!.title = "Fixture v2";
+  await registry.update(plugin(v2), "local");
+  assert.equal(registry.pluginSnapshot().plugins[0]?.version, "2.0.0");
+  assert.equal(registry.pluginSnapshot().pages[0]?.title, "Fixture v2");
+  assert.equal(registry.hostSnapshot().definitions[0]?.name, "fixture_run");
+
+  const v3 = structuredClone(v2);
+  v3.version = "3.0.0";
+  failSave = true;
+  await assert.rejects(
+    registry.update(plugin(v3), "local"),
+    /update catalog unavailable/u,
+  );
+  assert.equal(registry.pluginSnapshot().plugins[0]?.version, "2.0.0");
+  assert.equal(registry.pluginSnapshot().pages[0]?.title, "Fixture v2");
+  assert.equal(registry.hostSnapshot().definitions[0]?.name, "fixture_run");
+});
+
+test("service update runs Host SDK storage migration exactly once before publishing v2", async () => {
+  const userData = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-update-migration-"),
+  );
+  let migrations = 0;
+  let failCatalogSave = false;
+  let catalog: ZenXCapabilityConfiguration = {
+    grants: {},
+    disabled: [],
+    uninstalled: [],
+    packages: {},
+  };
+  const service = new ZenXCapabilityService({
+    userDataDirectory: userData,
+    grantStore: {
+      load: async () => structuredClone(catalog),
+      save: async (configuration) => {
+        if (failCatalogSave) throw new Error("fixture catalog save failed");
+        catalog = structuredClone(configuration);
+      },
+    },
+    localDirectory: path.join(userData, "none"),
+    bundledProvidersOnly: true,
+  });
+  const v1 = plugin(manifest());
+  v1.storage = { version: 1, initialValue: { count: 1 } };
+  const v2Manifest = manifest();
+  v2Manifest.version = "2.0.0";
+  v2Manifest.storageVersion = 2;
+  const v2 = plugin(v2Manifest);
+  v2.storage = {
+    version: 2,
+    migrations: [
+      {
+        fromVersion: 1,
+        toVersion: 2,
+        migrate: (value) => {
+          migrations += 1;
+          return { ...(value as object), migrated: true };
+        },
+      },
+    ],
+  };
+  try {
+    await service.initialize();
+    await service.install(v1, "local");
+    await service.update(v2, "local");
+    assert.equal(migrations, 1);
+    assert.equal(service.pluginSnapshot().plugins[0]?.version, "2.0.0");
+    await service.setEnabled("fixture", false);
+    await service.setEnabled("fixture", true);
+    assert.equal(migrations, 1);
+    const stored = JSON.parse(
+      await readFile(
+        path.join(userData, "plugin-data", "fixture", "storage.json"),
+        "utf8",
+      ),
+    ) as { version: number; value: unknown };
+    assert.equal(stored.version, 2);
+    assert.deepEqual(stored.value, { count: 1, migrated: true });
+    const v3Manifest = manifest();
+    v3Manifest.version = "3.0.0";
+    v3Manifest.storageVersion = 3;
+    const v3 = plugin(v3Manifest);
+    v3.storage = {
+      version: 3,
+      migrations: [
+        {
+          fromVersion: 2,
+          toVersion: 3,
+          migrate: () => {
+            throw new Error("fixture migration failed");
+          },
+        },
+      ],
+    };
+    await assert.rejects(
+      service.update(v3, "local"),
+      /fixture migration failed/u,
+    );
+    assert.equal(service.pluginSnapshot().plugins[0]?.version, "2.0.0");
+    assert.equal(service.hostSnapshot().definitions[0]?.name, "fixture_run");
+    const saveFailure = plugin(v3Manifest);
+    saveFailure.storage = {
+      version: 3,
+      migrations: [
+        {
+          fromVersion: 2,
+          toVersion: 3,
+          migrate: (value) => ({ ...(value as object), shouldRollback: true }),
+        },
+      ],
+    };
+    failCatalogSave = true;
+    await assert.rejects(
+      service.update(saveFailure, "local"),
+      /fixture catalog save failed/u,
+    );
+    const afterFailedSave = JSON.parse(
+      await readFile(
+        path.join(userData, "plugin-data", "fixture", "storage.json"),
+        "utf8",
+      ),
+    ) as { version: number; value: unknown };
+    assert.equal(afterFailedSave.version, 2);
+    assert.deepEqual(afterFailedSave.value, { count: 1, migrated: true });
+    assert.equal(service.pluginSnapshot().plugins[0]?.version, "2.0.0");
+  } finally {
+    await service.close();
+    await rm(userData, { recursive: true, force: true });
+  }
 });

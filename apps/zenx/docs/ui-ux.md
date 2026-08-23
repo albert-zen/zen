@@ -236,7 +236,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - restart-required changes 必须在当前 route 明确反馈 pending、success 和 failure；具体使用顶部或内容区动作、动作名称、何时 enabled/emphasized，待 Settings action contract 确认。
 - 本地 service state 是弱状态信息：Sidebar 左下 Settings row 的最右侧显示一个不单独可点击的状态点，hover tooltip 与 Settings 的 accessible name 提供具体状态；它不再占用独立文字行，也不得盖过用户可执行设置。主区仍保留 starting、reconnecting 与 error 的阻断说明。
 - 未配置 host 的首次启动进入 provider onboarding；Subscription、OpenAI-compatible API 与 local demo 的 credential/configuration 仍遵守 Host/Core 安全边界。
-- Settings → Plugins 是已安装插件的统一管理入口。Agent page 不散落插件管理 UI；它必须表达 `installed` / `enabled` / `uninstalled` 生命周期。Bundled plugin 也可卸载并以后重装；卸载默认保留数据，“删除数据”是独立显式动作。
+- Settings → Plugins 是已安装插件的统一管理入口。Agent page 不散落插件管理 UI；它表达 `installed` / `enabled` / `uninstalled` 生命周期、bundled/local 来源、版本与兼容范围，并提供本地 manifest 安装/更新、Enable/Disable、Uninstall/Reinstall 和独立 Delete data。Bundled plugin 也可卸载并以后重装；卸载默认保留数据，破坏性操作使用有焦点的二次确认，错误留在当前面板且不伪装成功。
 - 插件工具策略只呈现默认 `full_access` 与可选 `ask_unknown`。后者按稳定 tool name 展示 Host-owned approved/denied 结果；未知工具只询问一次。不为现有 capability grants 延续 risk level、scope graph、参数权限矩阵或复杂 grant UX。
 
 ## 5. Responsive 与 accessibility guidance
@@ -266,7 +266,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 ### 6.1 已确认的 contribution 边界
 
-- 当前 Plugin Package v2、Host Catalog、typed plugin snapshot 与 installed/enabled/uninstalled 基础生命周期已经实现；bundled Triggers/Rooms 与本地 process package 使用同一 lifecycle API。它们仍不代表 Generic UI Host、Plugin UI SDK、隔离第三方 renderer、Runtime Supervisor 或完整产品安装界面已经实现。
+- 当前 Plugin Package v2、Host Catalog、Runtime Supervisor、Host SDK storage migration、Generic UI Host 与完整 Settings 生命周期入口已经实现；bundled Triggers/Rooms 与本地 process package 使用同一 lifecycle API。旧 v1 capability grant 只保留在明确标注的兼容区，不再是 v2 插件的主要产品控制。
 - 目标 Generic UI Host 支持 sidebar、pages/subroutes、settings、panel、commands/menu 与 namespaced result renderers。第一方 bundled plugin 与隔离运行的第三方 plugin 使用同一逻辑 Plugin UI SDK，不建立两套 contribution 语义。
 - 已启用 plugin 可以使用这些受控 surfaces，但不取得核心 DOM、router、Chat、Composer、Thread Item 层级或导航 authority。第三方 UI/runtime 必须隔离；第一方信任边界不同也不允许绕过逻辑 SDK。
 - Sidebar 的 Plugin spaces 位于**整个 Projects group 之前**。Plugin contribution 不能插入 Projects header 与 Project/Thread list 之间，也不能把这个 group 拆成两段。

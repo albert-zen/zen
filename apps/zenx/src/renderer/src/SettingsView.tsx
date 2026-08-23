@@ -224,8 +224,8 @@ export function SettingsView({
                 <header>
                   <h2>Plugins</h2>
                   <p>
-                    Manage loaded packages, their declared product spaces, and
-                    Agent tool grants without mixing those states.
+                    Install, update, disable, or remove trusted packages.
+                    Uninstall keeps plugin data until you explicitly delete it.
                   </p>
                 </header>
                 <CapabilitySettings />

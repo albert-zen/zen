@@ -8,31 +8,36 @@ import type {
 } from "../../main/capabilities/types.js";
 import { Icon } from "./icons.js";
 
+type Confirmation = { pluginId: string; action: "uninstall" | "delete-data" };
+
 export function CapabilitySettings() {
   const [capabilities, setCapabilities] =
     useState<ZenXCapabilitySnapshot | null>(null);
   const [plugins, setPlugins] = useState<ZenXPluginSnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    const disposeCapabilities = window.zenx.capabilities.onChange((value) => {
-      if (active) setCapabilities(value);
-    });
-    const disposePlugins = window.zenx.plugins.onChange((value) => {
-      if (active) setPlugins(value);
-    });
+    const disposeCapabilities = window.zenx.capabilities.onChange(
+      (value) => active && setCapabilities(value),
+    );
+    const disposePlugins = window.zenx.plugins.onChange(
+      (value) => active && setPlugins(value),
+    );
     void Promise.all([
       window.zenx.capabilities.get(),
       window.zenx.plugins.get(),
-    ])
-      .then(([nextCapabilities, nextPlugins]) => {
+    ]).then(
+      ([nextCapabilities, nextPlugins]) => {
         if (!active) return;
         setCapabilities(nextCapabilities);
         setPlugins(nextPlugins);
-      })
-      .catch((reason: unknown) => active && setError(describeError(reason)));
+      },
+      (reason: unknown) => active && setError(describeError(reason)),
+    );
     return () => {
       active = false;
       disposeCapabilities();
@@ -40,17 +45,19 @@ export function CapabilitySettings() {
     };
   }, []);
 
-  const setGranted = async (
-    capability: ZenXCapabilitySummary,
-    grant: boolean,
+  const run = async (
+    key: string,
+    operation: () => Promise<ZenXPluginSnapshot | void>,
+    success: string,
   ) => {
-    setBusy(`grant:${capability.manifest.id}`);
+    setBusy(key);
     setError(null);
+    setNotice(null);
     try {
-      const next = grant
-        ? await window.zenx.capabilities.grant(capability.manifest.id)
-        : await window.zenx.capabilities.revoke(capability.manifest.id);
-      setCapabilities(next);
+      const next = await operation();
+      if (next !== undefined) setPlugins(next);
+      setConfirmation(null);
+      setNotice(success);
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -58,14 +65,22 @@ export function CapabilitySettings() {
     }
   };
 
-  const setPluginEnabled = async (
-    plugin: ZenXPluginSummary,
-    enabled: boolean,
-  ) => {
-    setBusy(`plugin:${plugin.id}`);
+  const selectPackage = async (expectedPluginId?: string) => {
+    const key =
+      expectedPluginId === undefined ? "install" : `update:${expectedPluginId}`;
+    setBusy(key);
     setError(null);
+    setNotice(null);
     try {
-      setPlugins(await window.zenx.plugins.setEnabled(plugin.id, enabled));
+      const result = await window.zenx.plugins.selectPackage(expectedPluginId);
+      if (!result.canceled) {
+        setPlugins(result.snapshot);
+        setNotice(
+          expectedPluginId === undefined
+            ? "Local plugin installed and enabled."
+            : `${expectedPluginId} updated successfully.`,
+        );
+      }
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -76,165 +91,107 @@ export function CapabilitySettings() {
   if (capabilities === null || plugins === null) {
     return (
       <div className="page-card settings-card">
-        <p>{error ?? "Loading installed plugins…"}</p>
+        <p>{error ?? "Loading plugins…"}</p>
       </div>
     );
   }
-
-  const contributedPlugins = pluginSpacesForSettings(plugins);
+  const legacyCapabilities = capabilities.capabilities.filter(
+    (capability) => capability.manifest.schemaVersion === 1,
+  );
 
   return (
     <>
-      <div className="page-card settings-card plugin-boundary">
+      <div className="page-card settings-card plugin-library-head">
         <span className="plugin-icon">
           <Icon name="layers" />
         </span>
         <div>
-          <strong>Extension boundary</strong>
+          <strong>Installed on this device</strong>
           <span>
-            Projects, Inbox, Threads, and Settings remain native. Enabled
-            packages can mount only their declared pages in Plugin spaces.
+            Installing trusts a local package to run on this computer. ZenX
+            validates its manifest, compatibility, runtime, tools, and UI before
+            changing the active version.
           </span>
         </div>
-        <small>{plugins.sidebar.length} Sidebar contributions active</small>
+        <button
+          className="primary-button"
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void selectPackage()}
+        >
+          {busy === "install" ? "Opening…" : "Install local package"}
+        </button>
       </div>
 
-      {contributedPlugins.length === 0 ? null : (
-        <div className="page-card settings-card">
-          <div className="settings-card-head">
-            <div>
-              <h3>Plugin spaces</h3>
-              <p>
-                Disabling a package removes its product space and its Agent
-                tools. Permission grants remain a separate control.
-              </p>
-            </div>
+      <div className="plugin-lifecycle-list" aria-label="Installed plugins">
+        {plugins.plugins.length === 0 ? (
+          <div className="page-card settings-card plugin-empty">
+            <strong>No plugins installed</strong>
+            <span>Choose a local manifest to add your first plugin.</span>
           </div>
-          <div className="capability-list compact">
-            {contributedPlugins.map((plugin) => (
-              <div className="capability-row" key={plugin.id}>
-                <span className="plugin-icon">
-                  <Icon name={pluginIcon(plugin.id)} />
-                </span>
-                <div>
-                  <strong>{plugin.displayName}</strong>
-                  <span>
-                    {plugin.source} · v{plugin.version} ·{" "}
-                    {plugin.contributionCount} contributions
-                  </span>
-                </div>
-                <button
-                  className="plugin-switch"
-                  type="button"
-                  role="switch"
-                  aria-checked={plugin.enabled}
-                  aria-label={`${plugin.enabled ? "Disable" : "Enable"} ${plugin.displayName}`}
-                  disabled={busy !== null}
-                  onClick={() => void setPluginEnabled(plugin, !plugin.enabled)}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="page-card settings-card">
-        <div className="settings-card-head">
-          <div>
-            <h3>Installed capability packages</h3>
-            <p>
-              Grants decide which enabled tools the Agent may call. They do not
-              install or mount pages.
-            </p>
-          </div>
-          <span>{capabilities.capabilities.length} installed locally</span>
-        </div>
-        <div className="capability-list">
-          {capabilities.capabilities.map((capability) => {
-            const granted =
-              capability.manifest.permissions.length > 0 &&
-              capability.manifest.permissions.length ===
-                capability.granted.length;
-            return (
-              <div className="capability-row" key={capability.manifest.id}>
-                <span className="plugin-icon">
-                  <Icon name={pluginIcon(capability.manifest.id)} />
-                </span>
-                <div>
-                  <strong>
-                    {capability.manifest.schemaVersion === 2
-                      ? capability.manifest.name
-                      : capability.manifest.displayName}
-                  </strong>
-                  <span>
-                    {capability.source} · v{capability.manifest.version} ·{" "}
-                    {capability.enabled ? "enabled" : "disabled"} ·{" "}
-                    {capability.manifest.permissions.length} permissions ·{" "}
-                    {capability.manifest.tools.length} tools
-                    {capability.available
-                      ? ""
-                      : ` · ${capability.unavailableReason}`}
-                  </span>
-                </div>
-                <button
-                  className={granted ? "danger-button" : "secondary-button"}
-                  type="button"
-                  disabled={
-                    busy !== null ||
-                    !capability.enabled ||
-                    !capability.available ||
-                    capability.manifest.permissions.length === 0
-                  }
-                  onClick={() => void setGranted(capability, !granted)}
-                >
-                  {busy === `grant:${capability.manifest.id}`
-                    ? "Restarting…"
-                    : granted
-                      ? "Revoke"
-                      : "Grant"}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {capabilities.providerDiagnostics.length === 0 ? null : (
-        <div className="page-card settings-card">
-          <div className="settings-card-head">
-            <div>
-              <h3>Execution providers</h3>
-              <p>
-                Availability reported by the current local capability catalog.
-              </p>
-            </div>
-          </div>
-          {capabilities.providerDiagnostics.map((provider) => (
-            <div
-              className="settings-row"
-              key={`${provider.capabilityId}:${provider.providerId}`}
-            >
-              <div>
-                <strong>{provider.providerId}</strong>
-                <span>
-                  {provider.reason ??
-                    provider.permissionSummary ??
-                    provider.interactionModes.join(", ")}
-                </span>
-              </div>
-              <small
-                className={
-                  provider.status === "unavailable"
-                    ? "status-bad"
-                    : "status-good"
+        ) : (
+          plugins.plugins
+            .slice()
+            .sort((left, right) =>
+              left.displayName.localeCompare(right.displayName),
+            )
+            .map((plugin) => (
+              <PluginLifecycleCard
+                key={plugin.id}
+                plugin={plugin}
+                busy={busy}
+                confirmation={confirmation}
+                setConfirmation={setConfirmation}
+                onEnable={(enabled) =>
+                  run(
+                    `enable:${plugin.id}`,
+                    () => window.zenx.plugins.setEnabled(plugin.id, enabled),
+                    `${plugin.displayName} ${enabled ? "enabled" : "disabled"}.`,
+                  )
                 }
-              >
-                {provider.status}
-              </small>
-            </div>
-          ))}
-        </div>
+                onUpdate={() => selectPackage(plugin.id)}
+                onUninstall={() =>
+                  run(
+                    `uninstall:${plugin.id}`,
+                    () => window.zenx.plugins.uninstall(plugin.id),
+                    `${plugin.displayName} uninstalled. Its data was kept.`,
+                  )
+                }
+                onReinstall={() =>
+                  plugin.available
+                    ? run(
+                        `reinstall:${plugin.id}`,
+                        () => window.zenx.plugins.reinstall(plugin.id),
+                        `${plugin.displayName} reinstalled.`,
+                      )
+                    : selectPackage(plugin.id)
+                }
+                onDeleteData={() =>
+                  run(
+                    `delete-data:${plugin.id}`,
+                    () => window.zenx.plugins.deleteData(plugin.id),
+                    `${plugin.displayName} data deleted.`,
+                  )
+                }
+              />
+            ))
+        )}
+      </div>
+
+      {legacyCapabilities.length === 0 ? null : (
+        <LegacyCapabilitySettings
+          capabilities={legacyCapabilities}
+          busy={busy}
+          setBusy={setBusy}
+          setCapabilities={setCapabilities}
+          setError={setError}
+        />
       )}
+      {notice ? (
+        <div className="settings-success" role="status">
+          {notice}
+        </div>
+      ) : null}
       {error ? (
         <div className="settings-error" role="alert">
           <Icon name="warning" />
@@ -242,6 +199,252 @@ export function CapabilitySettings() {
         </div>
       ) : null}
     </>
+  );
+}
+
+function PluginLifecycleCard({
+  plugin,
+  busy,
+  confirmation,
+  setConfirmation,
+  onEnable,
+  onUpdate,
+  onUninstall,
+  onReinstall,
+  onDeleteData,
+}: {
+  plugin: ZenXPluginSummary;
+  busy: string | null;
+  confirmation: Confirmation | null;
+  setConfirmation(value: Confirmation | null): void;
+  onEnable(enabled: boolean): Promise<void>;
+  onUpdate(): Promise<void>;
+  onUninstall(): Promise<void>;
+  onReinstall(): Promise<void>;
+  onDeleteData(): Promise<void>;
+}) {
+  const confirming =
+    confirmation?.pluginId === plugin.id ? confirmation.action : null;
+  const active = plugin.lifecycle === "enabled";
+  const unavailable = plugin.lifecycle === "uninstalled" && !plugin.available;
+  return (
+    <article
+      className="page-card plugin-lifecycle-card"
+      data-lifecycle={plugin.lifecycle}
+    >
+      <div className="plugin-lifecycle-main">
+        <span className="plugin-icon">
+          <Icon name={pluginIcon(plugin.id)} />
+        </span>
+        <div className="plugin-lifecycle-copy">
+          <div className="plugin-title-line">
+            <h3>{plugin.displayName}</h3>
+            <span className={`plugin-status status-${plugin.lifecycle}`}>
+              {plugin.lifecycle}
+            </span>
+          </div>
+          <p>{plugin.description ?? "No package description provided."}</p>
+          <small>
+            {plugin.source === "bundled"
+              ? "Bundled with ZenX"
+              : "Local package"}
+            {` · v${plugin.version} · ZenX ${plugin.compatibility ?? "compatibility unknown"}`}
+            {` · ${String(plugin.contributionCount)} product contributions`}
+          </small>
+        </div>
+      </div>
+      <div
+        className="plugin-actions"
+        aria-label={`${plugin.displayName} actions`}
+      >
+        {plugin.lifecycle === "uninstalled" ? (
+          <button
+            className="primary-button"
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void onReinstall()}
+          >
+            {busy === `reinstall:${plugin.id}`
+              ? "Reinstalling…"
+              : unavailable
+                ? "Choose package…"
+                : "Reinstall"}
+          </button>
+        ) : (
+          <>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={busy !== null}
+              onClick={() => void onEnable(!active)}
+            >
+              {busy === `enable:${plugin.id}`
+                ? "Applying…"
+                : active
+                  ? "Disable"
+                  : "Enable"}
+            </button>
+            {plugin.source === "local" ? (
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy !== null}
+                onClick={() => void onUpdate()}
+              >
+                {busy === `update:${plugin.id}` ? "Opening…" : "Update…"}
+              </button>
+            ) : null}
+            <button
+              className="danger-button"
+              type="button"
+              disabled={busy !== null}
+              onClick={() =>
+                setConfirmation({ pluginId: plugin.id, action: "uninstall" })
+              }
+            >
+              Uninstall
+            </button>
+          </>
+        )}
+        <button
+          className="danger-button quiet-danger"
+          type="button"
+          disabled={busy !== null || active}
+          title={
+            active
+              ? "Disable or uninstall this plugin before deleting its data"
+              : undefined
+          }
+          onClick={() =>
+            setConfirmation({ pluginId: plugin.id, action: "delete-data" })
+          }
+        >
+          Delete data
+        </button>
+      </div>
+      {confirming ? (
+        <div
+          className="plugin-confirm"
+          role="group"
+          aria-label={`Confirm ${confirming}`}
+        >
+          <p>
+            {confirming === "uninstall"
+              ? "Uninstall removes this plugin's pages, commands, runtime, and Agent tools. Its data stays on this device."
+              : "Delete this plugin's saved data only. Other plugins and historical Threads are not changed."}
+          </p>
+          <div>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setConfirmation(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              autoFocus
+              onClick={() =>
+                void (confirming === "uninstall"
+                  ? onUninstall()
+                  : onDeleteData())
+              }
+            >
+              {confirming === "uninstall"
+                ? "Confirm uninstall"
+                : "Confirm delete data"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function LegacyCapabilitySettings({
+  capabilities,
+  busy,
+  setBusy,
+  setCapabilities,
+  setError,
+}: {
+  capabilities: ZenXCapabilitySummary[];
+  busy: string | null;
+  setBusy(value: string | null): void;
+  setCapabilities(value: ZenXCapabilitySnapshot): void;
+  setError(value: string | null): void;
+}) {
+  const setGranted = async (
+    capability: ZenXCapabilitySummary,
+    grant: boolean,
+  ) => {
+    setBusy(`grant:${capability.manifest.id}`);
+    setError(null);
+    try {
+      setCapabilities(
+        grant
+          ? await window.zenx.capabilities.grant(capability.manifest.id)
+          : await window.zenx.capabilities.revoke(capability.manifest.id),
+      );
+    } catch (reason) {
+      setError(describeError(reason));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="page-card settings-card legacy-capabilities">
+      <div className="settings-card-head">
+        <div>
+          <h3>Legacy capabilities</h3>
+          <p>
+            Older built-in integrations still use grants until they move to the
+            plugin lifecycle.
+          </p>
+        </div>
+      </div>
+      <div className="capability-list">
+        {capabilities.map((capability) => {
+          const granted =
+            capability.manifest.permissions.length > 0 &&
+            capability.manifest.permissions.length ===
+              capability.granted.length;
+          return (
+            <div className="capability-row" key={capability.manifest.id}>
+              <span className="plugin-icon">
+                <Icon name={pluginIcon(capability.manifest.id)} />
+              </span>
+              <div>
+                <strong>
+                  {capability.manifest.schemaVersion === 1
+                    ? capability.manifest.displayName
+                    : capability.manifest.name}
+                </strong>
+                <span>
+                  {capability.manifest.tools.length} tools ·{" "}
+                  {capability.available
+                    ? "available"
+                    : capability.unavailableReason}
+                </span>
+              </div>
+              <button
+                className={granted ? "danger-button" : "secondary-button"}
+                type="button"
+                disabled={
+                  busy !== null ||
+                  !capability.available ||
+                  capability.manifest.permissions.length === 0
+                }
+                onClick={() => void setGranted(capability, !granted)}
+              >
+                {granted ? "Revoke" : "Grant"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

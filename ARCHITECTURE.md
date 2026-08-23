@@ -281,12 +281,14 @@ request/result；三者只看 SDK operation，不取得 Project、storage 或 Ap
 state，且不建立恢复状态机。Generic UI Host 已按同一 v1 逻辑 SDK 装载 registry-backed trusted
 bundled surface 或无 `allow-same-origin` 的 sandboxed iframe；两者只获得 theme/context、opaque handle、
 navigation 与经 Host SDK UI port 校验的 command dispatch。disable/uninstall 直接撤销 Catalog projection，
-已挂载 surface/listener 随 React lifecycle 清理。既有 `ToolResultItem` 现可附带成对出现的
-namespaced `contentType` 与 1 MiB 内 JSON-compatible `structuredContent`；Tool Environment 在 append 前
-校验 JSON、大小和 plugin namespace，并冻结副本，不改变原有 text output、exit code 或模型上下文。
-v2 manifest 可按 plugin-owned content type 注册 result renderer；Transcript 从当前 enabled snapshot 选择
-trusted/isolated surface，缺失、disabled、uninstalled 或不兼容时稳定显示 JSON 与原文本 fallback，重启只重放
-原 Item。完整产品安装入口仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
+已挂载 surface/listener 随 React lifecycle 清理。Settings 经 typed main/preload IPC 选择可信本地 v2 manifest，
+并复用同一 Catalog transaction 完成 install/update/enable/disable/uninstall/reinstall/delete-data；更新暂存的新
+runtime 与 Host SDK migration 在 catalog commit 失败时回滚到原 package/storage，不持久化恢复状态。既有
+`ToolResultItem` 可附带成对出现的 namespaced `contentType` 与 1 MiB 内 JSON-compatible
+`structuredContent`；Tool Environment 在 append 前校验 JSON、大小和 plugin namespace，并冻结副本，不改变
+原有 text output、exit code 或模型上下文。v2 manifest 可按 plugin-owned content type 注册 result renderer；
+Transcript 从当前 enabled snapshot 选择 trusted/isolated surface，缺失、disabled、uninstalled 或不兼容时
+稳定显示 JSON 与原文本 fallback，重启只重放原 Item。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
 connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
 
 ### 工具执行与发现

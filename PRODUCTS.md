@@ -57,10 +57,14 @@ CapabilityService 的 Catalog/Registry/Supervisor 与 hosted AppServer 接通：
 组合 shell、仍需兼容的 external capability 与常驻 `zenx_plugin`，并在每次模型采样从普通 canonical
 read call/result 投影该插件精确 namespaced schemas。普通插件调用沿既有私有 bridge 回到主进程，由
 Supervisor 的稳定 plugin provider 执行；重启无需额外状态，disable/uninstall 只影响后续投影和新调用。
-Tool Environment 只在 JSON-compatible、1 MiB 内且 content type 属于 provider namespace 时把可选
-structured content 附加到既有 canonical `tool_result`；原 output/exitCode 和模型上下文不变。Transcript
-把 immutable structured data 与文本 fallback 交给当前 enabled renderer；disable/uninstall/missing 时显示
-确定性的 JSON/Text fallback，reinstall 从同一历史 Item 恢复 renderer。产品 install/update 入口仍未实现；v1 capability 继续保留在原兼容
+Settings 已通过 typed main/preload IPC 提供本地 manifest 选择、安装、版本更新、启停、
+卸载/重装与独立 delete-data；bundled/local 都显示同一生命周期，旧 v1 grant 只留在明确标注的
+兼容区。更新先验证并暂存新 runtime、UI 与 Host SDK storage migration，再原子提交 catalog；
+失败恢复旧 catalog、runtime 与 storage，且不建立 durable 恢复状态机。Tool Environment 只在
+JSON-compatible、1 MiB 内且 content type 属于 provider namespace 时把可选 structured content 附加到既有
+canonical `tool_result`；原 output/exitCode 和模型上下文不变。Transcript 把 immutable structured data 与文本
+fallback 交给当前 enabled renderer；disable/uninstall/missing 时显示确定性的 JSON/Text fallback，reinstall 从
+同一历史 Item 恢复 renderer。v1 capability 继续保留在原兼容
 seam，不参与 v2 发现合同。
 
 目标 Plugin Platform 保持 Zen `AgentRuntime` 拥有 provider-neutral agent loop 和 canonical

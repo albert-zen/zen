@@ -3,6 +3,7 @@ import { readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import type { ToolInvocation } from "../../../../../src/tool.js";
+import type { PluginStorageValue } from "../plugin-host-sdk.js";
 import {
   MAX_CAPABILITY_OUTPUT_BYTES,
   MIN_CAPABILITY_OUTPUT_BYTES,
@@ -58,8 +59,31 @@ export async function discoverLocalCapabilityPackages(
   return { packages, errors };
 }
 
+export async function loadLocalCapabilityPackage(
+  manifestPath: string,
+): Promise<ProcessZenXCapabilityPackage> {
+  const resolvedManifestPath = await realpath(path.resolve(manifestPath));
+  const parsed = JSON.parse(
+    await readFile(resolvedManifestPath, "utf8"),
+  ) as unknown;
+  if (!isLocalCapabilityFile(parsed) || parsed.schemaVersion !== 2) {
+    throw new Error("Local plugin manifest must be a valid schema v2 package");
+  }
+  if (
+    parsed.ui?.bundles.some((bundle) => bundle.kind !== "isolated") === true
+  ) {
+    throw new Error("Local plugin UI bundles must use the isolated host");
+  }
+  return await ProcessZenXCapabilityPackage.create(
+    parsed,
+    resolvedManifestPath,
+  );
+}
+
 export class ProcessZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXCapabilityManifest;
+  readonly manifestPath: string;
+  readonly storage: ZenXCapabilityPackage["storage"];
   readonly #command: string;
   readonly #args: readonly string[];
   readonly #cwd: string;
@@ -71,12 +95,39 @@ export class ProcessZenXCapabilityPackage implements ZenXCapabilityPackage {
     args: readonly string[],
     cwd: string,
     timeoutMs: number,
+    manifestPath: string,
   ) {
     this.manifest = manifest;
     this.#command = command;
     this.#args = args;
     this.#cwd = cwd;
     this.#timeoutMs = timeoutMs;
+    this.manifestPath = manifestPath;
+    if (manifest.schemaVersion === 2) {
+      const version = manifest.storageVersion ?? 1;
+      this.storage = {
+        version,
+        migrations: Array.from({ length: version - 1 }, (_, index) => {
+          const fromVersion = index + 1;
+          return {
+            fromVersion,
+            toVersion: fromVersion + 1,
+            migrate: async (value: unknown) =>
+              (await this.invoke("zenx_plugin_storage_migrate", {
+                callId: `storage-migration-${String(fromVersion)}`,
+                name: "zenx_plugin_storage_migrate",
+                arguments: {
+                  fromVersion,
+                  toVersion: fromVersion + 1,
+                  value,
+                },
+                cwd: this.#cwd,
+                signal: new AbortController().signal,
+              })) as PluginStorageValue,
+          };
+        }),
+      };
+    }
   }
 
   static async create(
@@ -121,6 +172,7 @@ export class ProcessZenXCapabilityPackage implements ZenXCapabilityPackage {
       runtimeArgs,
       resolvedDirectory,
       Math.min(Math.max(runtimeTimeoutMs, 100), 120_000),
+      manifestPath,
     );
   }
 
@@ -232,6 +284,10 @@ function isLocalCapabilityFile(value: unknown): value is LocalCapabilityFile {
         typeof value.mainDocument === "string"
       : typeof value.displayName === "string") &&
     typeof value.version === "string" &&
+    (value.storageVersion === undefined ||
+      (Number.isSafeInteger(value.storageVersion) &&
+        (value.storageVersion as number) >= 1 &&
+        (value.storageVersion as number) <= 1000)) &&
     typeof value.description === "string" &&
     Array.isArray(value.permissions) &&
     Array.isArray(value.tools) &&

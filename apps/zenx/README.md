@@ -78,13 +78,18 @@ sandboxed iframe without same-origin authority and talks only through validated 
 Sidebar contributions use the bounded product icon keys `clock`, `layers`, `plug`,
 `settings`, `terminal`, `trigger`, or `users`; package validation rejects any other key.
 
-This is not yet the completed Plugin Platform: complete product install/update entry
-points remain future nodes. `ToolResultItem` now keeps optional namespaced,
-JSON-compatible structured content alongside unchanged text output and exit code.
-The Tool Environment validates ownership and a 1 MiB bound before append. The current
-enabled v2 manifest selects a trusted or isolated Generic UI Host result surface;
-missing, disabled, uninstalled, or incompatible renderers use deterministic JSON/Text
-fallback without rewriting history. The app-owned
+Settings now exposes the complete local/bundled package lifecycle through typed
+main/preload IPC: choose a local v2 JSON manifest, install or update it, enable or
+disable it, uninstall/reinstall it, and explicitly delete only its namespaced data
+after the runtime is disabled or uninstalled.
+Update validates and stages the replacement runtime/UI/storage migration before the
+catalog changes; a failed stage, migration, catalog save, or publish restores the old
+version and its storage. `ToolResultItem` keeps optional namespaced, JSON-compatible
+structured content alongside unchanged text output and exit code. The Tool Environment
+validates ownership and a 1 MiB bound before append. The current enabled v2 manifest
+selects a trusted or isolated Generic UI Host result surface; missing, disabled,
+uninstalled, or incompatible renderers use deterministic JSON/Text fallback without
+rewriting history. The app-owned
 Host already publishes its one ZAS authority through a private authenticated
 loopback descriptor that survives window closure.
 
@@ -524,9 +529,11 @@ mature external implementations while retaining a runnable bundled baseline:
   VMware/VirtualBox/Docker/cloud is a useful reference, but no VM lifecycle is
   implemented in this PR. See <https://github.com/xlang-ai/OSWorld>.
 
-Local Plugin Package v2 manifests are placed in Electron
-`userData/capabilities`. The current process runtime seam requires the entry to
-stay inside that package directory. Schema v1 capability manifests remain
+Local Plugin Package v2 manifests can be selected from Settings. ZenX records the
+absolute trusted manifest location so the supplied package can be mounted again on
+restart; manifests already placed in Electron `userData/capabilities` remain supported.
+The current process runtime seam requires the entry to stay inside that package
+directory. Schema v1 capability manifests remain
 readable for migration, but new packages use v2 and declare stable identity,
 compatibility, runtime, main document, tools, and controlled UI descriptors:
 
@@ -545,6 +552,7 @@ main-document contract.
   "description": "One narrow local operation",
   "compatibility": { "zenx": ">=0.1.0 <0.2.0" },
   "mainDocument": "Use local_example_run for the narrow local operation.",
+  "storageVersion": 1,
   "provider": {
     "id": "local-example-process",
     "platforms": ["darwin", "win32"],
@@ -608,6 +616,12 @@ main-document contract.
   "runtime": { "type": "process", "entry": "./provider" }
 }
 ```
+
+When a later local manifest raises `storageVersion`, ZenX invokes the same trusted
+process once per required step with the internal operation
+`zenx_plugin_storage_migrate` and arguments `{ fromVersion, toVersion, value }`.
+The process returns the migrated JSON value. Every step must advance exactly one
+version; a missing/failed/invalid step leaves the prior package and storage active.
 
 The legacy local-capability discovery seam currently launches its executable once
 per request, without a shell, using one bounded JSON stdin/stdout value. The ZP3

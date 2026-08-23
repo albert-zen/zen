@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { chmod, copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -7,6 +15,8 @@ import test from "node:test";
 import { discoverLocalCapabilityPackages } from "../src/main/capabilities/local-package.js";
 import { JsonZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
 import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
+import { ZenXCapabilityService } from "../src/main/capability-service.js";
+import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
 
 test("discovers and executes a local process package with a minimal JSON contract", async () => {
   const directory = await mkdtemp(
@@ -183,5 +193,110 @@ test("reports malformed local manifests without hiding other packages", async ()
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("selected local package updates v1 to v2 and migrates namespaced storage once", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-local-update-"));
+  const v1Directory = path.join(root, "v1");
+  const v2Directory = path.join(root, "v2");
+  await mkdir(v1Directory);
+  await mkdir(v2Directory);
+  const writePackage = async (directory: string, version: string) => {
+    const runtime = path.join(directory, "provider.mjs");
+    await writeFile(
+      runtime,
+      `#!/usr/bin/env node
+let input=""; for await (const chunk of process.stdin) input+=chunk;
+const request=JSON.parse(input);
+if(request.tool==="zenx_plugin_storage_migrate") process.stdout.write(JSON.stringify({...request.arguments.value,migratedBy:"${version}"}));
+else process.stdout.write(JSON.stringify({version:"${version}"}));
+`,
+      "utf8",
+    );
+    await chmod(runtime, 0o700);
+    const manifestPath = path.join(directory, "manifest.json");
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        id: "local-update",
+        name: "Local update",
+        version,
+        description: `Local update ${version}`,
+        compatibility: { zenx: ">=0.1.0 <0.2.0" },
+        mainDocument: "Use local_update_run.",
+        storageVersion: version === "1.0.0" ? 1 : 2,
+        provider: {
+          id: "local-update-process",
+          platforms: [process.platform],
+          interactionModes: ["background_safe"],
+          capabilities: ["local.update"],
+        },
+        permissions: [],
+        tools: [
+          {
+            name: "local_update_run",
+            description: "Read the installed version",
+            inputSchema: { type: "object" },
+            permissions: [],
+            interactionMode: "background_safe",
+            capabilities: ["local.update"],
+          },
+        ],
+        resources: [],
+        contributions: {
+          pages: [
+            {
+              id: "home",
+              title: `Local update ${version}`,
+              route: "/plugins/local-update/home",
+            },
+          ],
+        },
+        runtime: { type: "process", entry: "./provider.mjs" },
+      }),
+      "utf8",
+    );
+    return manifestPath;
+  };
+  const v1Manifest = await writePackage(v1Directory, "1.0.0");
+  const v2Manifest = await writePackage(v2Directory, "2.0.0");
+  const service = new ZenXCapabilityService({
+    userDataDirectory: root,
+    grantStore: new MemoryZenXCapabilityGrantStore(),
+    localDirectory: path.join(root, "none"),
+    bundledProvidersOnly: true,
+  });
+  try {
+    await service.initialize();
+    await service.installLocalPackage(v1Manifest);
+    const storageFile = path.join(
+      root,
+      "plugin-data",
+      "local-update",
+      "storage.json",
+    );
+    await writeFile(
+      storageFile,
+      JSON.stringify({ version: 1, value: { stable: true } }),
+    );
+    const snapshot = await service.installLocalPackage(
+      v2Manifest,
+      "local-update",
+    );
+    assert.equal(snapshot.plugins[0]?.version, "2.0.0");
+    assert.equal(snapshot.pages[0]?.title, "Local update 2.0.0");
+    const storage = JSON.parse(await readFile(storageFile, "utf8")) as {
+      version: number;
+      value: unknown;
+    };
+    assert.deepEqual(storage, {
+      version: 2,
+      value: { stable: true, migratedBy: "2.0.0" },
+    });
+  } finally {
+    await service.close();
+    await rm(root, { recursive: true, force: true });
   }
 });

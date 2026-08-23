@@ -1,4 +1,5 @@
 import path from "node:path";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 
 import { ToolEnvironment, type ToolInvocation } from "../../../../src/tool.js";
 import {
@@ -10,7 +11,10 @@ import {
   type ZenXComputerBackend,
 } from "./capabilities/computer-provider.js";
 import { JsonZenXCapabilityGrantStore } from "./capabilities/grant-store.js";
-import { discoverLocalCapabilityPackages } from "./capabilities/local-package.js";
+import {
+  discoverLocalCapabilityPackages,
+  loadLocalCapabilityPackage,
+} from "./capabilities/local-package.js";
 import { ZenXCapabilityRegistry } from "./capabilities/registry.js";
 import {
   selectBrowserProvider,
@@ -33,6 +37,7 @@ import type {
   ZenXPluginSnapshot,
 } from "./capabilities/types.js";
 import type { PluginHostUiPort } from "./plugin-host-sdk.js";
+import { createZenXPluginHostSdk } from "./plugin-host-sdk.js";
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #registry: ZenXCapabilityRegistry;
@@ -77,6 +82,57 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
           supervisor: this.#pluginRuntimeSupervisor,
           registrationFor: bundledPackageRegistration,
+          hostSdkFor: async (registration) => {
+            const manifest = registration.package.manifest;
+            if (manifest.schemaVersion !== 2)
+              throw new Error("Plugin Host SDK requires manifest v2");
+            const storage = registration.package.storage;
+            const storageFile = path.join(
+              options.userDataDirectory,
+              "plugin-data",
+              manifest.id,
+              "storage.json",
+            );
+            let previousStorage: Buffer | undefined;
+            try {
+              previousStorage = await readFile(storageFile);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+                throw error;
+            }
+            const sdk = await createZenXPluginHostSdk({
+              pluginId: manifest.id,
+              storageRoot: path.join(options.userDataDirectory, "plugin-data"),
+              storageVersion: storage?.version ?? manifest.storageVersion ?? 1,
+              migrations: storage?.migrations,
+              initialStorage: storage?.initialValue,
+              queryProjects: async () => [],
+              appServer: {
+                startTurn: async () => {
+                  throw new Error("Plugin AppServer actions are not attached");
+                },
+                readThread: async () => {
+                  throw new Error("Plugin AppServer actions are not attached");
+                },
+              },
+            });
+            return {
+              sdk,
+              rollback: async () => {
+                if (previousStorage === undefined) {
+                  await rm(storageFile, { force: true });
+                  return;
+                }
+                await mkdir(path.dirname(storageFile), {
+                  recursive: true,
+                  mode: 0o700,
+                });
+                const temporary = `${storageFile}.${String(process.pid)}.rollback`;
+                await writeFile(temporary, previousStorage, { mode: 0o600 });
+                await rename(temporary, storageFile);
+              },
+            };
+          },
         }),
       },
     );
@@ -96,10 +152,36 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     await this.#registry.initialize();
     await this.#mountBrowser();
     await this.#mountComputer();
+    const configuredManifestPaths = new Set<string>();
+    for (const descriptor of Object.values(
+      this.#registry.packageDescriptors(),
+    )) {
+      if (
+        descriptor.source !== "local" ||
+        descriptor.manifestPath === undefined
+      )
+        continue;
+      configuredManifestPaths.add(descriptor.manifestPath);
+      try {
+        await this.#registry.install(
+          await loadLocalCapabilityPackage(descriptor.manifestPath),
+          "local",
+        );
+      } catch (error) {
+        this.#registry.recordDiscoveryError(
+          `${descriptor.manifest.id}: ${describeError(error)}`,
+        );
+      }
+    }
     const discovered = await discoverLocalCapabilityPackages(
       this.#localDirectory,
     );
     for (const capabilityPackage of discovered.packages) {
+      if (
+        capabilityPackage.manifestPath !== undefined &&
+        configuredManifestPaths.has(capabilityPackage.manifestPath)
+      )
+        continue;
       try {
         if (capabilityPackage.manifest.schemaVersion === 2) {
           await this.#registry.install(capabilityPackage, "local");
@@ -227,6 +309,50 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     source: "bundled" | "local" = "local",
   ): Promise<ZenXPluginSnapshot> {
     await this.#registry.install(capabilityPackage, source);
+    return this.pluginSnapshot();
+  }
+
+  async update(
+    capabilityPackage: ZenXCapabilityPackage,
+    source: "bundled" | "local" = "local",
+  ): Promise<ZenXPluginSnapshot> {
+    await this.#registry.update(capabilityPackage, source);
+    return this.pluginSnapshot();
+  }
+
+  async installLocalPackage(
+    manifestPath: string,
+    expectedPluginId?: string,
+  ): Promise<ZenXPluginSnapshot> {
+    const capabilityPackage = await loadLocalCapabilityPackage(manifestPath);
+    const pluginId = capabilityPackage.manifest.id;
+    if (expectedPluginId !== undefined && pluginId !== expectedPluginId) {
+      throw new Error(
+        `Selected package is ${pluginId}; choose an update for ${expectedPluginId}`,
+      );
+    }
+    const current = this.pluginSnapshot().plugins.find(
+      (plugin) => plugin.id === pluginId,
+    );
+    if (current === undefined) {
+      await this.#registry.install(capabilityPackage, "local");
+    } else if (current.source !== "local") {
+      throw new Error(
+        `Bundled plugin ${pluginId} cannot be replaced by a local package`,
+      );
+    } else if (current.version !== capabilityPackage.manifest.version) {
+      await this.#registry.update(capabilityPackage, "local");
+      if (current.lifecycle === "uninstalled")
+        await this.#registry.reinstall(pluginId);
+    } else if (current.lifecycle === "uninstalled" || !current.available) {
+      await this.#registry.install(capabilityPackage, "local");
+      if (current.lifecycle === "uninstalled")
+        await this.#registry.reinstall(pluginId);
+    } else {
+      throw new Error(
+        `Plugin ${pluginId} is already version ${current.version}`,
+      );
+    }
     return this.pluginSnapshot();
   }
 
