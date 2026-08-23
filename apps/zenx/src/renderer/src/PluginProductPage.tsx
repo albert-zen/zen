@@ -5,22 +5,23 @@ import { Icon } from "./icons.js";
 import {
   GenericPluginUiHost,
   createPluginUiRegistry,
+  type PluginUiRegistry,
 } from "./plugin-ui-host.js";
-import { workbenchPluginUi } from "./workbench-plugin-ui.js";
 
 export const pluginUiRegistry = createPluginUiRegistry();
-pluginUiRegistry.registerTrusted("zenx/fixtures/workbench", workbenchPluginUi);
 
 export function PluginProductPage({
   snapshot,
   route,
   navigate,
   onOpenSidebar,
+  registry = pluginUiRegistry,
 }: {
   snapshot: ZenXPluginSnapshot;
   route: string;
   navigate(route: string): void;
   onOpenSidebar(): void;
+  registry?: PluginUiRegistry;
 }) {
   const target =
     snapshot.pages.find((page) => page.route === route) ??
@@ -82,7 +83,7 @@ export function PluginProductPage({
       </header>
       <div className="page-scroll plugin-page-scroll">
         <GenericPluginUiHost
-          registry={pluginUiRegistry}
+          registry={registry}
           snapshot={snapshot}
           pluginId={target.pluginId}
           surfaceId={target.surfaceId}
@@ -102,7 +103,7 @@ export function PluginProductPage({
               label={`${panel.title} commands`}
             />
             <GenericPluginUiHost
-              registry={pluginUiRegistry}
+              registry={registry}
               snapshot={snapshot}
               pluginId={panel.pluginId}
               surfaceId={panel.surfaceId}
@@ -121,8 +122,10 @@ export function PluginProductPage({
 
 export function PluginSettingsSurfaces({
   snapshot,
+  registry = pluginUiRegistry,
 }: {
   snapshot: ZenXPluginSnapshot;
+  registry?: PluginUiRegistry;
 }) {
   const theme = useAppearance();
   return (snapshot.settings ?? []).map((settings) => (
@@ -134,7 +137,7 @@ export function PluginSettingsSurfaces({
         label={`${settings.title} commands`}
       />
       <GenericPluginUiHost
-        registry={pluginUiRegistry}
+        registry={registry}
         snapshot={snapshot}
         pluginId={settings.pluginId}
         surfaceId={settings.surfaceId}

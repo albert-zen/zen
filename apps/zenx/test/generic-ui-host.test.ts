@@ -7,13 +7,25 @@ import test from "node:test";
 
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
-import { ZenXWorkbenchFixturePackage } from "../src/main/capabilities/workbench-fixture-package.js";
+import {
+  zenXBundledAutomationPackages,
+  type ZenXAutomationControlPort,
+} from "../src/main/capabilities/automation-control-package.js";
 import {
   GenericPluginUiHost,
   createPluginUiRegistry,
   type PluginUiModule,
 } from "../src/renderer/src/plugin-ui-host.js";
-import { PluginProductPage } from "../src/renderer/src/PluginProductPage.js";
+import {
+  PluginProductPage,
+  PluginSettingsSurfaces,
+  pluginUiRegistry,
+} from "../src/renderer/src/PluginProductPage.js";
+import {
+  WORKBENCH_UI_ENTRY,
+  ZenXWorkbenchFixturePackage,
+  workbenchPluginUi,
+} from "./fixtures/workbench-plugin.js";
 
 const snapshot: ZenXPluginSnapshot = {
   plugins: [
@@ -35,7 +47,7 @@ const snapshot: ZenXPluginSnapshot = {
       id: "main",
       apiVersion: 1,
       kind: "trusted",
-      entry: "zenx/fixtures/workbench",
+      entry: WORKBENCH_UI_ENTRY,
     },
   ],
   surfaces: [
@@ -160,7 +172,7 @@ test("generic trusted host renders an owned route and dispatches one bounded com
     },
   };
   const registry = createPluginUiRegistry();
-  registry.registerTrusted("zenx/fixtures/workbench", module);
+  registry.registerTrusted(WORKBENCH_UI_ENTRY, module);
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
     root.render(
@@ -261,6 +273,8 @@ test("product composition renders page, panel, menu and keyboard-operable subrou
       },
     },
   });
+  const registry = createPluginUiRegistry();
+  registry.registerTrusted(WORKBENCH_UI_ENTRY, workbenchPluginUi);
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
     root.render(
@@ -269,6 +283,7 @@ test("product composition renders page, panel, menu and keyboard-operable subrou
         route: "/plugins/workbench/home",
         navigate: (route: string) => routes.push(route),
         onOpenSidebar: () => {},
+        registry,
       }),
     );
   });
@@ -296,7 +311,56 @@ test("product composition renders page, panel, menu and keyboard-operable subrou
   });
   assert.equal(commands, 1);
   assert.deepEqual(routes, ["/plugins/workbench/home/details"]);
+  await act(async () => {
+    root.render(
+      React.createElement(PluginSettingsSurfaces, { snapshot, registry }),
+    );
+  });
+  assert.equal(
+    dom.window.document.querySelector("[aria-label='Workbench preferences'] h3")
+      ?.textContent,
+    "Workbench preferences",
+  );
   await act(async () => root.unmount());
+});
+
+test("normal bundled product composition contains no fixture UI or command", async () => {
+  assert.equal(pluginUiRegistry.resolveTrusted(WORKBENCH_UI_ENTRY), undefined);
+  const registry = new ZenXCapabilityRegistry({
+    load: async () => ({
+      grants: {},
+      disabled: [],
+      uninstalled: [],
+      packages: {},
+    }),
+    save: async () => {},
+  });
+  await registry.initialize();
+  const port = {} as ZenXAutomationControlPort;
+  for (const capabilityPackage of zenXBundledAutomationPackages(port)) {
+    await registry.install(capabilityPackage, "bundled");
+  }
+
+  const normal = registry.pluginSnapshot();
+  assert.deepEqual(normal.plugins.map((plugin) => plugin.id).sort(), [
+    "zenx-rooms",
+    "zenx-triggers",
+  ]);
+  assert.deepEqual(normal.bundles, []);
+  assert.deepEqual(normal.surfaces, []);
+  assert.deepEqual(normal.settings, []);
+  assert.deepEqual(normal.panels, []);
+  assert.deepEqual(normal.commands, []);
+  assert.deepEqual(normal.menus, []);
+  assert.deepEqual(normal.sidebar.map((item) => item.pluginId).sort(), [
+    "zenx-rooms",
+    "zenx-triggers",
+  ]);
+  assert.deepEqual(normal.pages.map((page) => page.pluginId).sort(), [
+    "zenx-rooms",
+    "zenx-triggers",
+  ]);
+  assert.equal(JSON.stringify(normal).includes("workbench"), false);
 });
 
 test("product fixture projects every UI surface and revokes command admission across lifecycle", async () => {

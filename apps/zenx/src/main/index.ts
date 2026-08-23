@@ -34,10 +34,7 @@ import {
 } from "./system-proxy.js";
 import { ZenXTriggerService } from "./trigger-service.js";
 import { ZenXTriggerStore } from "./trigger-store.js";
-import {
-  ZenXRoomsCapabilityPackage,
-  ZenXTriggersCapabilityPackage,
-} from "./capabilities/automation-control-package.js";
+import { zenXBundledAutomationPackages } from "./capabilities/automation-control-package.js";
 import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
 import { normalizeTitleOwnershipFailure } from "./thread-title-failure.js";
 import { ZenXThreadTitleStore } from "./thread-title-store.js";
@@ -50,7 +47,6 @@ import type {
 } from "./trigger-types.js";
 import { ZenXCapabilityService } from "./capability-service.js";
 import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
-import { ZenXWorkbenchFixturePackage } from "./capabilities/workbench-fixture-package.js";
 import {
   MutableAppServerRequestPort,
   ZenXSelfControlCapabilityPackage,
@@ -241,18 +237,11 @@ app.whenReady().then(async () => {
       new ZenXTriggerStore(join(userDataDirectory, "trigger-registry.json")),
       { titles: titleCoordinator },
     );
-    await capabilityService.install(
-      new ZenXTriggersCapabilityPackage(triggerService),
-      "bundled",
-    );
-    await capabilityService.install(
-      new ZenXRoomsCapabilityPackage(triggerService),
-      "bundled",
-    );
-    await capabilityService.install(
-      new ZenXWorkbenchFixturePackage(),
-      "bundled",
-    );
+    for (const capabilityPackage of zenXBundledAutomationPackages(
+      triggerService,
+    )) {
+      await capabilityService.install(capabilityPackage, "bundled");
+    }
     await triggerService.start();
     installTriggerIpc(triggerService);
     if (startupError === undefined) await appServerManager.start();

@@ -68,18 +68,8 @@
   padding: 22px;
 }
 
-.plugin-primary-surface,
-.workbench-card,
-.workbench-panel {
+.plugin-primary-surface {
   min-width: 0;
-}
-
-.workbench-card,
-.workbench-panel {
-  border: 1px solid var(--border-soft);
-  border-radius: 14px;
-  background: var(--surface-2);
-  padding: 20px;
 }
 
 .plugin-action-row,

@@ -393,6 +393,15 @@ export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
   }
 }
 
+export function zenXBundledAutomationPackages(
+  port: ZenXAutomationControlPort,
+): readonly ZenXCapabilityPackage[] {
+  return [
+    new ZenXTriggersCapabilityPackage(port),
+    new ZenXRoomsCapabilityPackage(port),
+  ];
+}
+
 function automationPluginManifest(
   source: ZenXCapabilityManifest,
   plugin: {

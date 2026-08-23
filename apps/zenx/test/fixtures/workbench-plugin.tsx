@@ -1,7 +1,17 @@
-import type { ToolInvocation } from "../../../../../src/tool.js";
-import type { ZenXCapabilityPackage, ZenXPluginManifestV2 } from "./types.js";
+import React, { useState } from "react";
+
+import type { ToolInvocation } from "../../../../src/tool.js";
+import type {
+  ZenXCapabilityPackage,
+  ZenXPluginManifestV2,
+} from "../../src/main/capabilities/types.js";
+import type {
+  PluginUiModule,
+  PluginUiSurfaceProps,
+} from "../../src/renderer/src/plugin-ui-host.js";
 
 export const WORKBENCH_PLUGIN_ID = "workbench";
+export const WORKBENCH_UI_ENTRY = "zenx/test-fixtures/workbench";
 
 export class ZenXWorkbenchFixturePackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2 = {
@@ -11,7 +21,7 @@ export class ZenXWorkbenchFixturePackage implements ZenXCapabilityPackage {
     version: "1.0.0",
     description: "Generic UI Host product fixture",
     compatibility: { zenx: ">=0.1.0 <0.2.0" },
-    runtime: { type: "bundled", entry: "zenx/fixtures/workbench-runtime" },
+    runtime: { type: "bundled", entry: "zenx/test-fixtures/workbench-runtime" },
     mainDocument: "Use Workbench to verify the generic ZenX plugin UI host.",
     provider: {
       id: "workbench-bundled",
@@ -37,7 +47,7 @@ export class ZenXWorkbenchFixturePackage implements ZenXCapabilityPackage {
           id: "main",
           apiVersion: 1,
           kind: "trusted",
-          entry: "zenx/fixtures/workbench",
+          entry: WORKBENCH_UI_ENTRY,
         },
       ],
       surfaces: [
@@ -114,3 +124,80 @@ export class ZenXWorkbenchFixturePackage implements ZenXCapabilityPackage {
     };
   }
 }
+
+function Overview({ sdk }: PluginUiSurfaceProps) {
+  const [reply, setReply] = useState("Ready");
+  return (
+    <div className="workbench-card">
+      <p className="eyebrow">Plugin UI SDK v{sdk.version}</p>
+      <h2>Workbench</h2>
+      <p>A generic bundled surface mounted inside the ZenX workspace.</p>
+      <div className="plugin-action-row">
+        <button
+          type="button"
+          onClick={() =>
+            sdk.navigation.navigate("/plugins/workbench/home/details")
+          }
+        >
+          Open details
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            void sdk.commands.execute("refresh").then((value) => {
+              const result = value as { result?: { ok?: boolean } };
+              setReply(result.result?.ok === true ? "Refreshed" : "Completed");
+            });
+          }}
+        >
+          Refresh
+        </button>
+      </div>
+      <p role="status">{reply}</p>
+    </div>
+  );
+}
+
+function Details({ sdk }: PluginUiSurfaceProps) {
+  return (
+    <div className="workbench-card">
+      <p className="eyebrow">Subroute</p>
+      <h2>Workbench details</h2>
+      <p>Theme from the shared UI SDK: {sdk.theme}</p>
+      <button
+        type="button"
+        onClick={() => sdk.navigation.navigate("/plugins/workbench/home")}
+      >
+        Back to overview
+      </button>
+    </div>
+  );
+}
+
+function Preferences({ sdk }: PluginUiSurfaceProps) {
+  return (
+    <div className="workbench-card">
+      <h3>Workbench preferences</h3>
+      <p>Host context handle: {String(sdk.context.handleId)}</p>
+    </div>
+  );
+}
+
+function Status() {
+  return (
+    <div
+      className="workbench-panel"
+      role="status"
+      aria-label="Workbench status"
+    >
+      Workbench is connected through the generic panel surface.
+    </div>
+  );
+}
+
+export const workbenchPluginUi: PluginUiModule = {
+  overview: Overview,
+  details: Details,
+  preferences: Preferences,
+  status: Status,
+};
