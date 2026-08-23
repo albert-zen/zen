@@ -1117,8 +1117,17 @@ export class ZenXCapabilityRegistry implements ZenXCapabilityHost {
   }
 
   #emit(): void {
-    const snapshot = this.snapshot();
-    for (const listener of this.#listeners) listener(snapshot);
+    for (const listener of this.#listeners) {
+      try {
+        listener(this.snapshot());
+      } catch (error) {
+        console.warn(
+          `ZenX Capability change listener failed after the mutation committed: ${summarize(
+            describeError(error),
+          )}`,
+        );
+      }
+    }
   }
 
   #configuration(

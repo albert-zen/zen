@@ -22,6 +22,7 @@ import type {
   RegisteredZenXCapability,
   ZenXCapabilityConfiguration,
   ZenXCapabilityPackage,
+  ZenXCapabilitySnapshot,
   ZenXPluginManifestV2,
 } from "../src/main/capabilities/types.js";
 import {
@@ -798,6 +799,86 @@ test("runtime close failure rolls back disable admission to an enabled provider"
       environment.prepare(invocation("fixture_echo", randomTestId())),
     ),
     { output: exactTrace, exitCode: 0 },
+  );
+});
+
+test("throwing Catalog listeners cannot fail lifecycle commits or block later listeners", async () => {
+  const environment = new ToolEnvironment();
+  const supervisor = new PluginRuntimeSupervisor(environment);
+  let durable = emptyCapabilityConfiguration();
+  const observed: ZenXCapabilitySnapshot[] = [];
+  const warnings: string[] = [];
+  const registry = new ZenXCapabilityRegistry(
+    {
+      load: async () => structuredClone(durable),
+      save: async (configuration) => {
+        durable = structuredClone(configuration);
+      },
+    },
+    {
+      pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
+        supervisor,
+        registrationFor: bundledPackageRegistration,
+      }),
+    },
+  );
+  await registry.initialize();
+  registry.onChange(() => {
+    throw new Error(`listener failed ${"x".repeat(2_000)}`);
+  });
+  registry.onChange((snapshot) => {
+    observed.push(snapshot);
+  });
+  const originalWarn = console.warn;
+  console.warn = (message?: unknown) => {
+    warnings.push(String(message));
+  };
+
+  try {
+    let observedBefore = observed.length;
+    await registry.install(pluginPackage(), "bundled");
+    assert.ok(observed.length > observedBefore);
+    assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
+    assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+
+    await registry.setEnabled("fixture", false);
+    assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "installed");
+    assert.deepEqual(environment.definitions, []);
+    observedBefore = observed.length;
+    await registry.setEnabled("fixture", true);
+    assert.ok(observed.length > observedBefore);
+    assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
+    assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+
+    await registry.uninstall("fixture");
+    assert.equal(
+      registry.pluginSnapshot().plugins[0]?.lifecycle,
+      "uninstalled",
+    );
+    assert.deepEqual(environment.definitions, []);
+    observedBefore = observed.length;
+    await registry.reinstall("fixture");
+    assert.ok(observed.length > observedBefore);
+    assert.equal(registry.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
+    assert.deepEqual(toolNames(environment), ["fixture_echo"]);
+    assert.deepEqual(
+      await environment.execute(
+        environment.prepare(invocation("fixture_echo", randomTestId())),
+      ),
+      { output: exactTrace, exitCode: 0 },
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.ok(warnings.length >= 3);
+  assert.ok(warnings.every((warning) => warning.length < 700));
+  assert.equal(
+    observed
+      .at(-1)
+      ?.capabilities.find((capability) => capability.manifest.id === "fixture")
+      ?.enabled,
+    true,
   );
 });
 
