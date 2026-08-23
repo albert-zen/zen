@@ -17,8 +17,312 @@ export interface ToolExecutionResult {
 }
 
 export interface ToolExecutor {
-  readonly definitions: ModelTool[];
+  readonly definitions: readonly ModelTool[];
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
+}
+
+export type ToolProviderKind = "builtin" | "plugin" | "external";
+
+export interface ToolProviderIdentity {
+  kind: ToolProviderKind;
+  id: string;
+}
+
+export interface ToolProvider extends ToolExecutor {
+  readonly identity: ToolProviderIdentity;
+}
+
+export type ToolPolicy = "full_access" | "ask_unknown";
+export type StoredToolPolicyDecision = "approved" | "denied";
+
+/** Host-owned persistence port for stable tool-name admission decisions. */
+export interface ToolPolicyStore {
+  get(toolName: string): Promise<StoredToolPolicyDecision | undefined>;
+  set(toolName: string, decision: StoredToolPolicyDecision): Promise<void>;
+}
+
+export class InMemoryToolPolicyStore implements ToolPolicyStore {
+  readonly #decisions = new Map<string, StoredToolPolicyDecision>();
+
+  constructor(
+    initial: Readonly<Record<string, StoredToolPolicyDecision>> = {},
+  ) {
+    for (const [toolName, decision] of Object.entries(initial)) {
+      this.#decisions.set(toolName, decision);
+    }
+  }
+
+  async get(toolName: string): Promise<StoredToolPolicyDecision | undefined> {
+    return this.#decisions.get(toolName);
+  }
+
+  async set(
+    toolName: string,
+    decision: StoredToolPolicyDecision,
+  ): Promise<void> {
+    this.#decisions.set(toolName, decision);
+  }
+}
+
+export class SetToolPolicyStore implements ToolPolicyStore {
+  readonly #approvedTools: Set<string>;
+  readonly #deniedTools: Set<string>;
+
+  constructor(options: {
+    approvedTools: Set<string>;
+    deniedTools: Set<string>;
+  }) {
+    this.#approvedTools = options.approvedTools;
+    this.#deniedTools = options.deniedTools;
+  }
+
+  async get(toolName: string): Promise<StoredToolPolicyDecision | undefined> {
+    if (this.#approvedTools.has(toolName)) return "approved";
+    if (this.#deniedTools.has(toolName)) return "denied";
+    return undefined;
+  }
+
+  async set(
+    toolName: string,
+    decision: StoredToolPolicyDecision,
+  ): Promise<void> {
+    if (decision === "approved") {
+      this.#deniedTools.delete(toolName);
+      this.#approvedTools.add(toolName);
+    } else {
+      this.#approvedTools.delete(toolName);
+      this.#deniedTools.add(toolName);
+    }
+  }
+}
+
+export interface PreparedToolInvocation {
+  readonly provider: ToolProviderIdentity;
+  readonly definition: ModelTool;
+  readonly invocation: ToolInvocation;
+}
+
+export interface ToolAdmissionOptions {
+  policy: ToolPolicy;
+  approvalRequest: ApprovalRequest;
+  requestApproval?: ApprovalHandler;
+}
+
+interface ProviderRegistration {
+  identity: ToolProviderIdentity;
+  provider: ToolProvider;
+  definitions: readonly ModelTool[];
+}
+
+/**
+ * Dynamic provider projection and invocation boundary. Preparing captures the
+ * exact provider so later registration changes affect only future calls.
+ */
+export class ToolEnvironment {
+  readonly #providers = new Map<string, ProviderRegistration>();
+  readonly #tools = new Map<string, ProviderRegistration>();
+  readonly #preparedProviders = new WeakMap<
+    PreparedToolInvocation,
+    ToolProvider
+  >();
+  readonly #policyStore: ToolPolicyStore;
+  readonly #pendingAdmissions = new Map<string, Promise<void>>();
+
+  constructor(
+    options: {
+      providers?: readonly ToolProvider[];
+      policyStore?: ToolPolicyStore;
+      approvedTools?: Set<string>;
+      deniedTools?: Set<string>;
+    } = {},
+  ) {
+    if (
+      options.policyStore !== undefined &&
+      (options.approvedTools !== undefined || options.deniedTools !== undefined)
+    ) {
+      throw new Error(
+        "Provide policyStore or approvedTools/deniedTools, not both",
+      );
+    }
+    this.#policyStore =
+      options.policyStore ??
+      (options.approvedTools !== undefined || options.deniedTools !== undefined
+        ? new SetToolPolicyStore({
+            approvedTools: options.approvedTools ?? new Set<string>(),
+            deniedTools: options.deniedTools ?? new Set<string>(),
+          })
+        : new InMemoryToolPolicyStore());
+    for (const provider of options.providers ?? []) {
+      this.registerProvider(provider);
+    }
+  }
+
+  get definitions(): ModelTool[] {
+    return [...this.#providers.values()].flatMap((registration) =>
+      registration.definitions.map((definition) => structuredClone(definition)),
+    );
+  }
+
+  registerProvider(provider: ToolProvider): () => void {
+    const identity = Object.freeze({ ...provider.identity });
+    const key = providerIdentityKey(identity);
+    if (this.#providers.has(key)) {
+      throw new Error(`Tool provider is already registered: ${key}`);
+    }
+    const definitions = provider.definitions.map((definition) =>
+      structuredClone(definition),
+    );
+    const localNames = new Set<string>();
+    for (const definition of definitions) {
+      if (definition.name.length === 0) {
+        throw new Error(`Tool provider ${key} has an empty tool name`);
+      }
+      if (localNames.has(definition.name)) {
+        throw new Error(
+          `Tool provider ${key} defines ${definition.name} more than once`,
+        );
+      }
+      if (this.#tools.has(definition.name)) {
+        throw new Error(`Tool is already registered: ${definition.name}`);
+      }
+      localNames.add(definition.name);
+    }
+    const registration = { identity, provider, definitions };
+    this.#providers.set(key, registration);
+    for (const definition of definitions) {
+      this.#tools.set(definition.name, registration);
+    }
+    return () => {
+      this.#unregisterRegistration(key, registration);
+    };
+  }
+
+  unregisterProvider(identity: ToolProviderIdentity): boolean {
+    const key = providerIdentityKey(identity);
+    const registration = this.#providers.get(key);
+    if (registration === undefined) return false;
+    return this.#unregisterRegistration(key, registration);
+  }
+
+  #unregisterRegistration(
+    key: string,
+    registration: ProviderRegistration,
+  ): boolean {
+    if (this.#providers.get(key) !== registration) return false;
+    this.#providers.delete(key);
+    for (const definition of registration.definitions) {
+      if (this.#tools.get(definition.name) === registration) {
+        this.#tools.delete(definition.name);
+      }
+    }
+    return true;
+  }
+
+  removeProvider(identity: ToolProviderIdentity): boolean {
+    return this.unregisterProvider(identity);
+  }
+
+  prepare(invocation: ToolInvocation): PreparedToolInvocation {
+    const registration = this.#tools.get(invocation.name);
+    if (registration === undefined) {
+      throw new Error(`Unsupported tool: ${invocation.name}`);
+    }
+    const definition = registration.definitions.find(
+      (candidate) => candidate.name === invocation.name,
+    );
+    if (definition === undefined) {
+      throw new Error(`Unsupported tool: ${invocation.name}`);
+    }
+    const prepared: PreparedToolInvocation = Object.freeze({
+      provider: registration.identity,
+      definition: structuredClone(definition),
+      invocation: Object.freeze({
+        ...invocation,
+        arguments: Object.freeze(structuredClone(invocation.arguments)),
+      }),
+    });
+    this.#preparedProviders.set(prepared, registration.provider);
+    return prepared;
+  }
+
+  async admit(
+    prepared: PreparedToolInvocation,
+    options: ToolAdmissionOptions,
+  ): Promise<ApprovalDecision> {
+    this.#requirePrepared(prepared);
+    if (options.policy === "full_access") return "accept";
+
+    const toolName = prepared.invocation.name;
+    for (;;) {
+      const stored = await this.#policyStore.get(toolName);
+      if (stored === "approved") return "accept";
+      if (stored === "denied") return "decline";
+      const pending = this.#pendingAdmissions.get(toolName);
+      if (pending !== undefined) {
+        await waitForToolAbort(pending, prepared.invocation.signal);
+        continue;
+      }
+      if (options.requestApproval === undefined) {
+        throw new Error(
+          "Approval is required, but this client cannot answer approval requests",
+        );
+      }
+
+      let release!: () => void;
+      const admission = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      this.#pendingAdmissions.set(toolName, admission);
+      try {
+        const decision = await waitForToolAbort(
+          options.requestApproval(options.approvalRequest),
+          prepared.invocation.signal,
+        );
+        if (decision === "accept") {
+          await this.#policyStore.set(toolName, "approved");
+        } else if (decision === "decline") {
+          await this.#policyStore.set(toolName, "denied");
+        }
+        return decision;
+      } finally {
+        if (this.#pendingAdmissions.get(toolName) === admission) {
+          this.#pendingAdmissions.delete(toolName);
+        }
+        release();
+      }
+    }
+  }
+
+  async execute(
+    prepared: PreparedToolInvocation,
+  ): Promise<ToolExecutionResult> {
+    const provider = this.#requirePrepared(prepared);
+    prepared.invocation.signal.throwIfAborted();
+    return await provider.execute(prepared.invocation);
+  }
+
+  #requirePrepared(prepared: PreparedToolInvocation): ToolProvider {
+    const provider = this.#preparedProviders.get(prepared);
+    if (provider === undefined) {
+      throw new Error("Tool invocation was not prepared by this environment");
+    }
+    return provider;
+  }
+}
+
+export function toolProviderFromExecutor(
+  executor: ToolExecutor,
+  identity: ToolProviderIdentity = {
+    kind: "external",
+    id: "legacy-tool-executor",
+  },
+): ToolProvider {
+  if ("identity" in executor) return executor as ToolProvider;
+  return {
+    identity,
+    definitions: executor.definitions,
+    execute: async (invocation) => await executor.execute(invocation),
+  };
 }
 
 export interface ApprovalRequest {
@@ -35,7 +339,8 @@ export type ApprovalHandler = (
   request: ApprovalRequest,
 ) => Promise<ApprovalDecision>;
 
-export class ShellToolExecutor implements ToolExecutor {
+export class ShellToolExecutor implements ToolProvider {
+  readonly identity = { kind: "builtin", id: "shell" } as const;
   readonly definitions: ModelTool[] = [
     {
       name: "shell",
@@ -210,6 +515,41 @@ export class ShellToolExecutor implements ToolExecutor {
       });
     });
   }
+}
+
+function providerIdentityKey(identity: ToolProviderIdentity): string {
+  if (identity.id.trim().length === 0) {
+    throw new Error("Tool provider id must not be empty");
+  }
+  return `${identity.kind}:${identity.id}`;
+}
+
+async function waitForToolAbort<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  signal.throwIfAborted();
+  return await new Promise<T>((resolve, reject) => {
+    const abort = (): void => {
+      cleanup();
+      reject(abortReason(signal));
+    };
+    const cleanup = (): void => {
+      signal.removeEventListener("abort", abort);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    void operation.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
 }
 
 function abortReason(signal: AbortSignal): unknown {

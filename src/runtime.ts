@@ -18,7 +18,13 @@ import type {
 } from "./item.js";
 import type { ModelAdapter, ModelMessage } from "./model.js";
 import type { Thread } from "./thread.js";
-import type { ApprovalHandler, ToolExecutor } from "./tool.js";
+import {
+  ToolEnvironment,
+  toolProviderFromExecutor,
+  type ApprovalHandler,
+  type ToolExecutor,
+  type ToolPolicy,
+} from "./tool.js";
 
 export interface RuntimeConfiguration {
   cwd: string;
@@ -80,18 +86,30 @@ export interface RunTurnOptions {
 }
 
 export class AgentRuntime {
-  readonly #tools: ToolExecutor;
+  readonly #tools: ToolEnvironment;
   readonly #id: () => string;
   readonly #now: () => string;
   readonly #maxToolRounds: number;
 
   constructor(options: {
-    tools: ToolExecutor;
+    tools?: ToolExecutor;
+    toolEnvironment?: ToolEnvironment;
     idFactory?: () => string;
     now?: () => string;
     maxToolRounds?: number;
   }) {
-    this.#tools = options.tools;
+    if (options.tools !== undefined && options.toolEnvironment !== undefined) {
+      throw new Error("Provide tools or toolEnvironment, not both");
+    }
+    if (options.toolEnvironment !== undefined) {
+      this.#tools = options.toolEnvironment;
+    } else if (options.tools !== undefined) {
+      this.#tools = new ToolEnvironment({
+        providers: [toolProviderFromExecutor(options.tools)],
+      });
+    } else {
+      throw new Error("AgentRuntime requires a Tool Environment");
+    }
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#maxToolRounds = options.maxToolRounds ?? 8;
@@ -371,39 +389,59 @@ export class AgentRuntime {
     toolCall: ToolCallItem,
     options: RunTurnOptions,
   ): Promise<void> {
-    let decision: ApprovalDecision = "accept";
-    if (options.configuration.approvalPolicy === "always") {
-      try {
-        const command = readCommand(toolCall);
-        if (options.requestApproval === undefined) {
-          throw new Error(
-            "Approval is required, but this client cannot answer approval requests",
-          );
-        }
-        options.signal.throwIfAborted();
-        decision = await waitForAbort(
-          options.requestApproval({
+    let prepared;
+    try {
+      prepared = this.#tools.prepare({
+        callId: toolCall.callId,
+        name: toolCall.name,
+        arguments: toolCall.arguments,
+        cwd: options.configuration.cwd,
+        signal: options.signal,
+      });
+    } catch (error) {
+      await this.#completeToolResult(
+        toolCall,
+        {
+          output: `Tool preparation failed: ${describeError(error)}`,
+          exitCode: options.signal.aborted || isAbortError(error) ? 130 : 1,
+        },
+        options,
+      );
+      throw error;
+    }
+
+    let decision: ApprovalDecision;
+    try {
+      decision = await waitForAbort(
+        this.#tools.admit(prepared, {
+          policy: toolPolicyFromApprovalPolicy(
+            options.configuration.approvalPolicy,
+          ),
+          approvalRequest: {
             threadId: options.thread.id,
             turnId,
             itemId: toolCall.id,
             callId: toolCall.callId,
-            command,
+            command: readCommand(toolCall),
             cwd: options.configuration.cwd,
             signal: options.signal,
-          }),
-          options.signal,
-        );
-      } catch (error) {
-        await this.#completeToolResult(
-          toolCall,
-          {
-            output: `Tool approval did not complete: ${describeError(error)}`,
-            exitCode: options.signal.aborted || isAbortError(error) ? 130 : 1,
           },
-          options,
-        );
-        throw error;
-      }
+          ...(options.requestApproval === undefined
+            ? {}
+            : { requestApproval: options.requestApproval }),
+        }),
+        options.signal,
+      );
+    } catch (error) {
+      await this.#completeToolResult(
+        toolCall,
+        {
+          output: `Tool approval did not complete: ${describeError(error)}`,
+          exitCode: options.signal.aborted || isAbortError(error) ? 130 : 1,
+        },
+        options,
+      );
+      throw error;
     }
 
     if (decision === "cancel") {
@@ -420,13 +458,7 @@ export class AgentRuntime {
       result = { output: "User declined this tool call.", exitCode: 126 };
     } else {
       try {
-        result = await this.#tools.execute({
-          callId: toolCall.callId,
-          name: toolCall.name,
-          arguments: toolCall.arguments,
-          cwd: options.configuration.cwd,
-          signal: options.signal,
-        });
+        result = await this.#tools.execute(prepared);
       } catch (error) {
         const interrupted = options.signal.aborted || isAbortError(error);
         await this.#completeToolResult(
@@ -484,6 +516,10 @@ export class AgentRuntime {
       throw new UnsupportedSandboxError(sandbox);
     }
   }
+}
+
+function toolPolicyFromApprovalPolicy(policy: ApprovalPolicy): ToolPolicy {
+  return policy === "never" ? "full_access" : "ask_unknown";
 }
 
 export class UnsupportedSandboxError extends Error {

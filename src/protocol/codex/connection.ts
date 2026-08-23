@@ -869,7 +869,7 @@ export class CodexConnection {
     await this.#eventChain;
     request.signal.throwIfAborted();
     if (this.#acceptedCommandThreads.has(request.threadId)) {
-      return "accept";
+      return "acceptForSession";
     }
     const requestId = `approval_${String(this.#nextServerRequest++)}`;
     let response: unknown;

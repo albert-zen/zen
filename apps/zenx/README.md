@@ -37,13 +37,17 @@ disable and uninstall revoke their current runtime/tool/sidebar/page
 registration, bundled packages can be reinstalled from the app-supplied
 package, and uninstall preserves namespaced plugin data unless deletion is
 requested separately. Existing capability grants are migrated and retained as
-compatibility data. This is still not the completed Plugin Platform: dynamic
-Tool Environment, Runtime Supervisor, progressive discovery, Host SDK and
-migrations, complete product install/update entry points, generic UI SDK, and
-structured result renderers remain future nodes. `ToolResultItem` currently stores
-only text output and an exit code. The app-owned Host already publishes its one
-ZAS authority through a private authenticated loopback descriptor that survives
-window closure.
+compatibility data. Zen Core now has the provider-neutral dynamic Tool Environment
+for builtin, plugin, and external provider identities, including Host policy,
+prepared-call stability, execution, and cancellation. ZenX injects builtin
+`shell` and its startup capability snapshot as distinct providers; registry
+changes still require the existing Host refresh instead of live provider updates.
+This is not yet the completed Plugin Platform: Runtime Supervisor, progressive
+discovery, Host SDK and migrations, complete product install/update entry points,
+generic UI SDK, and structured result renderers remain future nodes.
+`ToolResultItem` currently stores only text output and an exit code. The app-owned
+Host already publishes its one ZAS authority through a private authenticated
+loopback descriptor that survives window closure.
 
 The target contract is:
 

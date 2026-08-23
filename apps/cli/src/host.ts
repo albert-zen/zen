@@ -27,7 +27,12 @@ import {
   JsonThreadSummaryProjection,
   type ThreadSummaryProjection,
 } from "../../../src/thread-summary.js";
-import { ShellToolExecutor, type ToolExecutor } from "../../../src/tool.js";
+import {
+  ShellToolExecutor,
+  ToolEnvironment,
+  toolProviderFromExecutor,
+  type ToolExecutor,
+} from "../../../src/tool.js";
 import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
 import { legacyModelCatalogEntries } from "./model-presets.js";
 
@@ -77,6 +82,8 @@ export interface ZenHostOptions {
   journal?: ThreadJournal;
   threadMetadata?: ThreadMetadataStore;
   threadSummaryProjection?: ThreadSummaryProjection;
+  toolEnvironment?: ToolEnvironment;
+  /** Compatibility input for callers that still provide one static executor. */
   tools?: ToolExecutor;
   attachments?: AttachmentStore;
 }
@@ -96,6 +103,9 @@ export type HostedZenAppServer = ZenAppServer & {
 export function createHostedAppServer(
   options: ZenHostOptions,
 ): HostedZenAppServer {
+  if (options.toolEnvironment !== undefined && options.tools !== undefined) {
+    throw new Error("Provide toolEnvironment or tools, not both");
+  }
   const attachments =
     options.attachments ??
     new FileAttachmentStore(path.join(options.dataDirectory, "attachments"));
@@ -179,10 +189,18 @@ export function createHostedAppServer(
       new JsonlThreadJournal(path.join(options.dataDirectory, "threads")),
     attachments,
     runtime: new AgentRuntime({
-      tools:
-        options.tools ??
-        new ShellToolExecutor({
-          blockedEnvironmentVariables: options.secretEnvironmentVariables ?? [],
+      toolEnvironment:
+        options.toolEnvironment ??
+        new ToolEnvironment({
+          providers: [
+            toolProviderFromExecutor(
+              options.tools ??
+                new ShellToolExecutor({
+                  blockedEnvironmentVariables:
+                    options.secretEnvironmentVariables ?? [],
+                }),
+            ),
+          ],
         }),
     }),
     providerRegistry: new ProviderRegistry(profiles),

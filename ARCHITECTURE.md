@@ -11,6 +11,7 @@
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
 - **Tool Environment** — AgentRuntime 面向的混合工具执行环境，统一解析、投影、Host policy、取消、路由与结果回写，但不要求 Zen 自己实现每个工具的领域行为。
+- **Tool Policy Store** — Host 按稳定 tool name 持有 `ask_unknown` 的 approved/denied 决定并通过可持久化 port 注入 Tool Environment，不进入 Thread 或 canonical ItemList。
 - **Builtin Tool Provider** — Zen 内建并直接执行的工具 provider，例如 `shell`，其执行仍经同一个 Tool Environment 和 canonical call/result 生命周期。
 - **Plugin Tool Provider** — Tool Environment 把 namespaced plugin tool 调用路由到 Plugin Runtime 的 provider，领域执行由插件拥有，Zen 只负责 admission、路由和结果回写。
 - **External Tool Provider** — Tool Environment 把调用路由到 Zen/ZenX 之外服务的 provider，外部服务拥有领域执行，Zen 仍保留 Host policy 与 canonical settlement。
@@ -250,14 +251,15 @@ Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派�
 
 ## Plugin Platform 与 Tool Environment 目标合同
 
-本节描述目标架构，不声称已经实现。当前代码只有 provider-neutral
-`AgentRuntime` 的普通 tool loop、builtin `shell`、静态 `ToolExecutor`，以及 ZenX
-capability package / registry / child-host bridge / sidebar-page projection 骨架。
+本节描述完整目标架构，不把局部实现声称为完整平台。当前 Core 已有 provider-neutral
+`AgentRuntime` 的普通 tool loop，以及组合 builtin / plugin / external identity、动态 definitions、
+prepare、Host policy、取消与执行的 Tool Environment；builtin `shell` 与可注入 provider 走同一边界。
 Plugin Package v2、Catalog 和 installed/enabled/uninstalled 基础生命周期已经落在现有
-capability runtime seam 上；当前 `ToolResultItem` 仍只有 text output 与 exit code。动态
-Tool Environment、Plugin Runtime Supervisor、渐进发现、完整产品安装入口、Generic UI Host
-与 structured result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的
-loopback connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
+capability runtime seam 上；ZenX capability registry / child-host bridge 仍以启动时快照作为一个
+独立 external provider 注入 Tool Environment。当前 `ToolResultItem` 仍只有 text output 与 exit
+code；Plugin Runtime Supervisor、渐进发现、完整产品安装入口、Generic UI Host 与 structured
+result content 仍是后续节点。ZenX Host 已把现有唯一 ZAS 通过私有、带认证的 loopback
+connection descriptor 发布，并让该 authority 独立于窗口生命周期存活。
 
 ### 工具执行与发现
 

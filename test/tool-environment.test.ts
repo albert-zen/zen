@@ -1,0 +1,417 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { shellPrintCommand } from "./fixtures.js";
+
+import { ZenAppServer } from "../src/app-server.js";
+import type { CanonicalItem } from "../src/item.js";
+import { InMemoryThreadJournal } from "../src/journal.js";
+import { StaticModelCatalog } from "../src/model-catalog.js";
+import type { ModelAdapter, ModelEvent, ModelRequest } from "../src/model.js";
+import { ProviderRegistry } from "../src/provider-registry.js";
+import { AgentRuntime } from "../src/runtime.js";
+import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
+import {
+  InMemoryToolPolicyStore,
+  SetToolPolicyStore,
+  ShellToolExecutor,
+  ToolEnvironment,
+  type ToolProvider,
+} from "../src/tool.js";
+
+test("a prepared invocation keeps its exact provider after dynamic removal", async () => {
+  const calls: string[] = [];
+  const provider: ToolProvider = {
+    identity: { kind: "plugin", id: "fixture" },
+    definitions: [
+      {
+        name: "fixture_echo",
+        description: "Echo fixture input.",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async (invocation) => {
+      calls.push(invocation.name);
+      return { output: "fixture result", exitCode: 0 };
+    },
+  };
+  const environment = new ToolEnvironment({
+    providers: [provider],
+    policyStore: new InMemoryToolPolicyStore(),
+  });
+  const prepared = environment.prepare({
+    callId: "call-1",
+    name: "fixture_echo",
+    arguments: { value: "unchanged" },
+    cwd: "/workspace",
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(
+    environment.unregisterProvider({ kind: "plugin", id: "fixture" }),
+    true,
+  );
+  assert.deepEqual(environment.definitions, []);
+  assert.deepEqual(await environment.execute(prepared), {
+    output: "fixture result",
+    exitCode: 0,
+  });
+  assert.deepEqual(calls, ["fixture_echo"]);
+});
+
+test("concurrent unknown calls share one persisted admission decision", async () => {
+  const provider = countingProvider("plugin_shared");
+  const environment = new ToolEnvironment({ providers: [provider] });
+  const signal = new AbortController().signal;
+  const first = environment.prepare({
+    callId: "first",
+    name: "plugin_shared",
+    arguments: {},
+    cwd: "/workspace",
+    signal,
+  });
+  const second = environment.prepare({
+    callId: "second",
+    name: "plugin_shared",
+    arguments: {},
+    cwd: "/workspace",
+    signal,
+  });
+  let approvalRequests = 0;
+  let releaseApproval!: () => void;
+  const approval = new Promise<void>((resolve) => {
+    releaseApproval = resolve;
+  });
+  const admit = async (
+    prepared: typeof first,
+  ): Promise<"accept" | "acceptForSession" | "decline" | "cancel"> =>
+    await environment.admit(prepared, {
+      policy: "ask_unknown",
+      approvalRequest: {
+        threadId: "thread",
+        turnId: "turn",
+        itemId: prepared.invocation.callId,
+        callId: prepared.invocation.callId,
+        command: prepared.invocation.name,
+        cwd: prepared.invocation.cwd,
+        signal,
+      },
+      requestApproval: async () => {
+        approvalRequests += 1;
+        await approval;
+        return "accept";
+      },
+    });
+
+  const firstAdmission = admit(first);
+  await Promise.resolve();
+  const secondAdmission = admit(second);
+  releaseApproval();
+  assert.deepEqual(await Promise.all([firstAdmission, secondAdmission]), [
+    "accept",
+    "accept",
+  ]);
+  assert.equal(approvalRequests, 1);
+});
+
+test("provider definitions appear and disappear on consecutive model samples", async () => {
+  const sampledTools: string[][] = [];
+  const executedSignals: AbortSignal[] = [];
+  const provider: ToolProvider = {
+    identity: { kind: "plugin", id: "fixture" },
+    definitions: [
+      {
+        name: "fixture_echo",
+        description: "Echo fixture input.",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async (invocation) => {
+      executedSignals.push(invocation.signal);
+      return { output: String(invocation.arguments.value), exitCode: 0 };
+    },
+  };
+  const environment = new ToolEnvironment({
+    providers: [new ShellToolExecutor()],
+  });
+  let round = 0;
+  const model: ModelAdapter = {
+    provider: "dynamic-tools",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      sampledTools.push(request.tools.map((tool) => tool.name));
+      if (round === 0) {
+        round += 1;
+        environment.registerProvider(provider);
+        yield {
+          type: "tool_call",
+          callId: "builtin-call",
+          name: "shell",
+          arguments: { command: shellPrintCommand("registered") },
+        };
+        return;
+      }
+      if (round === 1) {
+        round += 1;
+        yield {
+          type: "tool_call",
+          callId: "plugin-call",
+          name: "fixture_echo",
+          arguments: { value: "credential-like trace bytes" },
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "complete" };
+    },
+  };
+  const server = createServer(model, environment, "always");
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "dynamic providers", {
+      requestApproval: async (request) => {
+        if (request.callId === "plugin-call") {
+          environment.removeProvider(provider.identity);
+        }
+        return "accept";
+      },
+    })
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(
+    snapshot.turns[0]?.status,
+    "completed",
+    JSON.stringify(snapshot.items),
+  );
+  assert.deepEqual(sampledTools, [
+    ["shell"],
+    ["shell", "fixture_echo"],
+    ["shell"],
+  ]);
+  assert.equal(executedSignals.length, 1);
+  assert.equal(executedSignals[0]?.aborted, false);
+  const pluginResult = snapshot.items.find(
+    (item) => item.type === "tool_result" && item.callId === "plugin-call",
+  );
+  assert(pluginResult?.type === "tool_result");
+  assert.equal(pluginResult.output, "credential-like trace bytes");
+  assertEveryToolCallHasOneResult(snapshot.items);
+});
+
+test("full access bypasses approval and ask unknown persists allow and deny", async () => {
+  const provider = countingProvider("external_lookup");
+  const fullAccessEnvironment = new ToolEnvironment({ providers: [provider] });
+  let fullAccessApprovals = 0;
+  const fullAccess = createServer(
+    modelCalling("external_lookup"),
+    fullAccessEnvironment,
+    "never",
+  );
+  const fullAccessThread = await fullAccess.startThread();
+  await (
+    await fullAccess.startTurn(fullAccessThread.id, "full access", {
+      requestApproval: async () => {
+        fullAccessApprovals += 1;
+        return "decline";
+      },
+    })
+  ).done;
+  assert.equal(fullAccessApprovals, 0);
+  assert.equal(provider.executions(), 1);
+
+  const approvedTools = new Set<string>();
+  const deniedTools = new Set<string>();
+  const policyStore = new SetToolPolicyStore({ approvedTools, deniedTools });
+  const allowedProvider = countingProvider("plugin_allowed");
+  const allowedEnvironment = new ToolEnvironment({
+    providers: [allowedProvider],
+    policyStore,
+  });
+  let allowApprovals = 0;
+  const allowed = createServer(
+    modelCalling("plugin_allowed"),
+    allowedEnvironment,
+    "always",
+  );
+  const allowedThread = await allowed.startThread();
+  for (const input of ["first", "second"]) {
+    await (
+      await allowed.startTurn(allowedThread.id, input, {
+        requestApproval: async () => {
+          allowApprovals += 1;
+          return "accept";
+        },
+      })
+    ).done;
+  }
+  assert.equal(allowApprovals, 1);
+  assert.deepEqual([...approvedTools], ["plugin_allowed"]);
+  assert.equal(allowedProvider.executions(), 2);
+
+  const deniedProvider = countingProvider("plugin_denied");
+  const deniedEnvironment = new ToolEnvironment({
+    providers: [deniedProvider],
+    policyStore,
+  });
+  let denyApprovals = 0;
+  const denied = createServer(
+    modelCalling("plugin_denied"),
+    deniedEnvironment,
+    "always",
+  );
+  const deniedThread = await denied.startThread();
+  for (const input of ["first", "second"]) {
+    await (
+      await denied.startTurn(deniedThread.id, input, {
+        requestApproval: async () => {
+          denyApprovals += 1;
+          return "decline";
+        },
+      })
+    ).done;
+  }
+  const deniedSnapshot = await denied.readThread(deniedThread.id);
+  assert.equal(denyApprovals, 1);
+  assert.deepEqual([...deniedTools], ["plugin_denied"]);
+  assert.equal(deniedProvider.executions(), 0);
+  assertEveryToolCallHasOneResult(deniedSnapshot.items);
+});
+
+test("interrupt sends the exact runtime signal to the admitted provider", async () => {
+  let started!: () => void;
+  const executionStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let receivedSignal: AbortSignal | undefined;
+  const provider: ToolProvider = {
+    identity: { kind: "external", id: "waiter" },
+    definitions: [
+      {
+        name: "external_wait",
+        description: "Wait for cancellation.",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async (invocation) => {
+      receivedSignal = invocation.signal;
+      started();
+      return await new Promise((_resolve, reject) => {
+        invocation.signal.addEventListener(
+          "abort",
+          () => reject(invocation.signal.reason),
+          { once: true },
+        );
+      });
+    },
+  };
+  const server = createServer(
+    modelCalling("external_wait"),
+    new ToolEnvironment({ providers: [provider] }),
+    "never",
+  );
+  const thread = await server.startThread();
+  const turn = await server.startTurn(thread.id, "wait");
+  await within(executionStarted);
+  await within(server.interruptTurn(thread.id, turn.id));
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(receivedSignal?.aborted, true);
+  assertEveryToolCallHasOneResult(snapshot.items);
+  assert.equal(
+    snapshot.items.find((item) => item.type === "tool_result")?.exitCode,
+    130,
+  );
+});
+
+function createServer(
+  model: ModelAdapter,
+  toolEnvironment: ToolEnvironment,
+  approvalPolicy: "always" | "never",
+): ZenAppServer {
+  return new ZenAppServer({
+    journal: new InMemoryThreadJournal(),
+    runtime: new AgentRuntime({ toolEnvironment }),
+    providerRegistry: new ProviderRegistry([
+      {
+        providerProfileId: model.provider,
+        adapter: model,
+        modelCatalog: new StaticModelCatalog([
+          { id: "fixture-model", isDefault: true },
+        ]),
+      },
+    ]),
+    threadMetadata: new InMemoryThreadMetadataStore(),
+    defaults: {
+      cwd: process.cwd(),
+      providerProfileId: model.provider,
+      modelId: "fixture-model",
+      reasoningEffort: "medium",
+      sandbox: "danger-full-access",
+      approvalPolicy,
+    },
+  });
+}
+
+function modelCalling(toolName: string): ModelAdapter {
+  let callNumber = 0;
+  return {
+    provider: `model-for-${toolName}`,
+    async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
+      if (request.messages.at(-1)?.role === "tool") {
+        yield { type: "text_delta", delta: "complete" };
+        return;
+      }
+      callNumber += 1;
+      yield {
+        type: "tool_call",
+        callId: `${toolName}-${String(callNumber)}`,
+        name: toolName,
+        arguments: {},
+      };
+    },
+  };
+}
+
+function countingProvider(toolName: string): ToolProvider & {
+  executions(): number;
+} {
+  let count = 0;
+  return {
+    identity: { kind: "plugin", id: toolName },
+    definitions: [
+      {
+        name: toolName,
+        description: "Fixture tool.",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async () => {
+      count += 1;
+      return { output: "fixture", exitCode: 0 };
+    },
+    executions: () => count,
+  };
+}
+
+function assertEveryToolCallHasOneResult(
+  items: readonly CanonicalItem[],
+): void {
+  const callIds = items
+    .filter((item) => item.type === "tool_call")
+    .map((item) => item.callId);
+  const resultIds = items
+    .filter((item) => item.type === "tool_result")
+    .map((item) => item.callId);
+  assert(callIds.length > 0);
+  for (const callId of callIds) {
+    assert.equal(resultIds.filter((resultId) => resultId === callId).length, 1);
+  }
+}
+
+async function within<T>(operation: Promise<T>): Promise<T> {
+  return await Promise.race([
+    operation,
+    new Promise<never>((_resolve, reject) => {
+      setTimeout(() => reject(new Error("operation timed out")), 1000);
+    }),
+  ]);
+}
