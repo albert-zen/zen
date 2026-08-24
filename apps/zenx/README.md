@@ -157,9 +157,11 @@ The target contract is:
   and active Turns running; activation recreates the UI, while explicit Quit
   revokes discovery and stops the endpoint. This does not create an OS daemon.
 
-Marketplace, signing, dependency solving, same-Turn parallel tool execution,
-and unrelated Provider/image/attachment/compaction refactors are outside this
-phase.
+The thin read-only Marketplace is package metadata only: search, details, and
+explicit version selection resolve to the same npm profile installer. Publishing,
+reviews, payments, accounts, moderation, signing, dependency solving, same-Turn
+parallel tool execution, and unrelated Provider/image/attachment/compaction
+refactors remain outside this phase.
 
 ## Run
 
@@ -661,7 +663,7 @@ validates a bounded matching result envelope; close detaches and aborts outstand
 requests without asking ZenX to own the remote service lifecycle. Tool
 `maxOutputBytes` remains an integer from 1 KiB through 1 MiB on the capability
 projection. Discovery failures stay visible; there is no durable repair workflow,
-marketplace, signing, remote discovery, or distribution layer.
+signing, remote plugin discovery, or Marketplace-owned distribution lifecycle.
 
 ## Verification
 

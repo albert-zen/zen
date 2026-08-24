@@ -19,6 +19,7 @@ import {
   applicationIconForPlatform,
   copyBundledPnpmResource,
   copyFirstPartyPluginResources,
+  copyMarketplaceCatalogResource,
   copyPackagedProviderResources,
   createBuildSnapshot,
   packageManifest,
@@ -177,6 +178,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     );
     const buildPath = path.join(
       directory,
+      "build",
       "ZenX.app",
       "Contents",
       "Resources",
@@ -193,6 +195,34 @@ test("copies first-party plugin tarballs into App Resources", async () => {
       ),
       "rooms tarball",
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("copies the read-only Marketplace catalog into App Resources", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-marketplace-resource-"),
+  );
+  try {
+    const source = path.join(directory, "source", "catalog.json");
+    await mkdir(path.dirname(source), { recursive: true });
+    await writeFile(source, '{"entries":[]}\n');
+    const buildPath = path.join(
+      directory,
+      "build",
+      "ZenX.app",
+      "Contents",
+      "Resources",
+      "app",
+    );
+    const destination = await copyMarketplaceCatalogResource({
+      buildPath,
+      sourceFile: source,
+    });
+    assert.deepEqual(JSON.parse(await readFile(destination, "utf8")), {
+      entries: [],
+    });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

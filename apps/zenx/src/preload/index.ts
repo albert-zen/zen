@@ -53,6 +53,7 @@ import type {
   ZenXThreadAttachmentProjection,
 } from "../main/image-attachments.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
+import type { MarketplaceCatalogSnapshot } from "../marketplace.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -283,6 +284,10 @@ contextBridge.exposeInMainWorld("zenx", {
       ipcRenderer.on(ipcChannels.capabilitiesChanged, wrapped);
       return () => ipcRenderer.off(ipcChannels.capabilitiesChanged, wrapped);
     },
+  },
+  marketplace: {
+    get: async (): Promise<MarketplaceCatalogSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.marketplaceGet),
   },
   plugins: {
     get: async (): Promise<ZenXPluginSnapshot> =>

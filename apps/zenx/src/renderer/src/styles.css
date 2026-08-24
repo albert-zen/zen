@@ -2998,6 +2998,77 @@ a:focus-visible {
   display: grid;
   gap: 9px;
 }
+.marketplace-section,
+.marketplace-list {
+  display: grid;
+  gap: 9px;
+}
+.marketplace-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 0.45fr);
+  align-items: end;
+  gap: 14px;
+}
+.marketplace-head > div,
+.marketplace-state,
+.marketplace-search,
+.marketplace-detail > div {
+  display: grid;
+  gap: 4px;
+}
+.marketplace-head h3,
+.marketplace-head p,
+.marketplace-card p {
+  margin: 0;
+}
+.marketplace-head p,
+.marketplace-state span,
+.marketplace-detail span {
+  color: var(--text-3);
+  font-size: 9px;
+  line-height: 1.5;
+}
+.marketplace-search > span,
+.marketplace-detail label {
+  color: var(--text-2);
+  font-size: 9px;
+}
+.marketplace-state {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.marketplace-state span {
+  grid-column: 1;
+}
+.marketplace-state button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+.marketplace-card {
+  display: grid;
+  gap: 12px;
+  padding: 15px;
+}
+.marketplace-summary {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+}
+.marketplace-icon {
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.marketplace-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, 0.35fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
 .plugin-lifecycle-card {
   display: grid;
   gap: 12px;
@@ -3881,14 +3952,19 @@ a:focus-visible {
     grid-template-columns: 36px minmax(0, 1fr);
   }
   .plugin-library-head,
-  .plugin-confirm {
+  .plugin-confirm,
+  .marketplace-head,
+  .marketplace-summary,
+  .marketplace-detail {
     grid-template-columns: 1fr;
   }
   .plugin-library-head .plugin-icon {
     display: none;
   }
   .settings-actions,
-  .plugin-confirm > div {
+  .plugin-confirm > div,
+  .marketplace-summary > button,
+  .marketplace-detail > button {
     justify-self: start;
     justify-content: flex-start;
     flex-wrap: wrap;

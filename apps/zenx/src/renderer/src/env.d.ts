@@ -51,6 +51,7 @@ import type {
   ZenXThreadAttachmentProjection,
 } from "../../main/image-attachments.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
+import type { MarketplaceCatalogSnapshot } from "../../marketplace.js";
 
 declare global {
   interface Window {
@@ -161,6 +162,9 @@ declare global {
         onChange(
           listener: (snapshot: ZenXCapabilitySnapshot) => void,
         ): () => void;
+      };
+      marketplace: {
+        get(): Promise<MarketplaceCatalogSnapshot>;
       };
       plugins: {
         get(): Promise<ZenXPluginSnapshot>;

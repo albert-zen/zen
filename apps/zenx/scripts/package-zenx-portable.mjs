@@ -81,6 +81,15 @@ async function packageZenX(arguments_) {
               buildPath,
               sourceDirectory: path.join(resources, "providers"),
             });
+            await copyMarketplaceCatalogResource({
+              buildPath,
+              sourceFile: path.join(
+                zenx,
+                "resources",
+                "marketplace",
+                "catalog.json",
+              ),
+            });
             await copyBundledPnpmResource({
               buildPath,
               sourceDirectory: path.join(root, "node_modules", "pnpm"),
@@ -304,6 +313,18 @@ export async function copyFirstPartyPluginResources(options) {
   const destination = path.join(resourcesDirectory, "plugins");
   await mkdir(resourcesDirectory, { recursive: true, mode: 0o700 });
   await cp(options.sourceDirectory, destination, { recursive: true });
+  return destination;
+}
+
+export async function copyMarketplaceCatalogResource(options) {
+  const resourcesDirectory = path.dirname(options.buildPath);
+  const destination = path.join(
+    resourcesDirectory,
+    "marketplace",
+    "catalog.json",
+  );
+  await mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+  await cp(options.sourceFile, destination);
   return destination;
 }
 

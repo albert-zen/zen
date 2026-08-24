@@ -21,6 +21,10 @@ import { AppServerManager } from "../src/main/app-server-manager.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { JsonZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
 import { BUNDLED_PNPM_VERSION } from "../src/main/plugin-profile.js";
+import {
+  MarketplaceCatalogService,
+  marketplacePackageSource,
+} from "../src/main/marketplace-catalog.js";
 
 const run = promisify(execFile);
 const pnpmCli = fileURLToPath(
@@ -743,7 +747,7 @@ test("only App Resource packages enter the canonical trusted bundled source", as
   }
 });
 
-test("npm specs resolve recommended and exact versions through a local registry", async () => {
+test("a local Marketplace fixture drives exact versions through the canonical package installer", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-npm-"));
   const userData = path.join(directory, "user-data");
   const v1 = await createTarballFixture(directory, {
@@ -766,19 +770,57 @@ test("npm specs resolve recommended and exact versions through a local registry"
       npm_config_registry: registry.url,
     },
   });
+  const marketplace = new MarketplaceCatalogService({
+    load: async () => ({
+      entries: [
+        {
+          packageSpec: "@zenx-test/npm-fixture",
+          name: "npm fixture",
+          description: "Local Marketplace installer fixture.",
+          icon: "fixture",
+          recommendedVersion: "2.0.0",
+          curated: true,
+          versions: [
+            {
+              version: "2.0.0",
+              packageSpec: "@zenx-test/npm-fixture@2.0.0",
+            },
+            {
+              version: "1.0.0",
+              packageSpec: "@zenx-test/npm-fixture@1.0.0",
+            },
+          ],
+        },
+      ],
+    }),
+  });
   try {
     await service.initialize();
-    registry.setLatest("1.0.0");
-    await service.installPluginPackage({
-      mode: "npm",
-      packageSpec: "@zenx-test/npm-fixture",
-    });
+    const catalog = await marketplace.load();
+    await service.installPluginPackage(
+      marketplacePackageSource(catalog.entries[0]!, "1.0.0"),
+    );
     assert.equal(
       await invoke(service, "npm_fixture_echo", "one"),
       "npm-v1:one",
     );
-    registry.setLatest("2.0.0");
-    await service.updatePluginPackage("npm-fixture");
+    const committedBeforeCatalogFailure = structuredClone(
+      service.pluginSnapshot(),
+    );
+    const unavailableMarketplace = new MarketplaceCatalogService({
+      load: async () => {
+        throw new Error("fixture Marketplace unavailable");
+      },
+    });
+    await assert.rejects(
+      unavailableMarketplace.load(),
+      /fixture Marketplace unavailable/u,
+    );
+    assert.deepEqual(service.pluginSnapshot(), committedBeforeCatalogFailure);
+    await service.updatePluginPackage(
+      "npm-fixture",
+      marketplacePackageSource(catalog.entries[0]!, "2.0.0"),
+    );
     assert.equal(
       await invoke(service, "npm_fixture_echo", "two"),
       "npm-v2:two",

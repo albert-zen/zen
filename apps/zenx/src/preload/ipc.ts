@@ -41,6 +41,7 @@ export const ipcChannels = {
   capabilitiesGrant: "zenx:capabilities:grant",
   capabilitiesRevoke: "zenx:capabilities:revoke",
   capabilitiesChanged: "zenx:capabilities:changed",
+  marketplaceGet: "zenx:marketplace:get",
   pluginsGet: "zenx:plugins:get",
   pluginsSetEnabled: "zenx:plugins:set-enabled",
   pluginsSelectPackage: "zenx:plugins:select-package",

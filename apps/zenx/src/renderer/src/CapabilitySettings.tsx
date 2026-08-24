@@ -8,6 +8,12 @@ import type {
   ZenXPluginPackageSource,
   ZenXPluginSummary,
 } from "../../main/capabilities/types.js";
+import {
+  marketplaceCatalogView,
+  marketplacePackageSource,
+  type MarketplaceCatalogSnapshot,
+  type MarketplaceCatalogViewEntry,
+} from "../../marketplace.js";
 import { Icon } from "./icons.js";
 
 type Confirmation = { pluginId: string; action: "uninstall" | "delete-data" };
@@ -220,6 +226,8 @@ export function CapabilitySettings() {
         </div>
       </div>
 
+      <MarketplaceSettings plugins={plugins} busy={busy} run={run} />
+
       <div className="plugin-lifecycle-list" aria-label="Installed plugins">
         {plugins.plugins.length === 0 ? (
           <div className="page-card settings-card plugin-empty">
@@ -307,6 +315,245 @@ export function CapabilitySettings() {
         </div>
       ) : null}
     </>
+  );
+}
+
+function MarketplaceSettings({
+  plugins,
+  busy,
+  run,
+}: {
+  plugins: ZenXPluginSnapshot;
+  busy: string | null;
+  run(
+    key: string,
+    operation: () => Promise<ZenXPluginMutationResult>,
+    success: string,
+  ): Promise<void>;
+}) {
+  const [catalog, setCatalog] = useState<MarketplaceCatalogSnapshot | null>(
+    null,
+  );
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [detailPackageSpec, setDetailPackageSpec] = useState<string | null>(
+    null,
+  );
+  const [selectedVersions, setSelectedVersions] = useState<
+    Readonly<Record<string, string>>
+  >({});
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setCatalog(null);
+    setCatalogError(null);
+    void window.zenx.marketplace.get().then(
+      (next) => active && setCatalog(next),
+      (reason: unknown) => active && setCatalogError(describeError(reason)),
+    );
+    return () => {
+      active = false;
+    };
+  }, [loadAttempt]);
+
+  const entries =
+    catalog === null ? [] : marketplaceCatalogView(catalog, plugins, query);
+  return (
+    <section className="marketplace-section" aria-label="Marketplace">
+      <div className="page-card settings-card marketplace-head">
+        <div>
+          <div className="plugin-title-line">
+            <h3>Marketplace</h3>
+            <span className="plugin-status">Read only</span>
+          </div>
+          <p>
+            Browse package metadata, then install the selected npm version
+            through the same trusted plugin lifecycle.
+          </p>
+        </div>
+        <label className="marketplace-search">
+          <span>Search</span>
+          <input
+            aria-label="Search Marketplace"
+            placeholder="Name, description, or package"
+            value={query}
+            onInput={(event) => setQuery(event.currentTarget.value)}
+          />
+        </label>
+      </div>
+      {catalogError !== null ? (
+        <div className="page-card settings-card marketplace-state" role="alert">
+          <strong>Marketplace unavailable</strong>
+          <span>{catalogError}</span>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setLoadAttempt((value) => value + 1)}
+          >
+            Retry
+          </button>
+        </div>
+      ) : catalog === null ? (
+        <div className="page-card settings-card marketplace-state">
+          <strong>Loading Marketplace…</strong>
+          <span>Reading the package catalog.</span>
+        </div>
+      ) : entries.length === 0 ? (
+        <div className="page-card settings-card marketplace-state">
+          <strong>No plugins found</strong>
+          <span>
+            {query.trim().length === 0
+              ? "The catalog is currently empty."
+              : "Try a different search."}
+          </span>
+        </div>
+      ) : (
+        <div className="marketplace-list">
+          {entries.map((entry) => {
+            const open = detailPackageSpec === entry.packageSpec;
+            const selectedVersion =
+              selectedVersions[entry.packageSpec] ?? entry.recommendedVersion;
+            return (
+              <MarketplaceCard
+                key={entry.packageSpec}
+                entry={entry}
+                open={open}
+                selectedVersion={selectedVersion}
+                busy={busy}
+                onToggle={() =>
+                  setDetailPackageSpec(open ? null : entry.packageSpec)
+                }
+                onVersion={(version) =>
+                  setSelectedVersions((current) => ({
+                    ...current,
+                    [entry.packageSpec]: version,
+                  }))
+                }
+                onInstall={async () => {
+                  const source = marketplacePackageSource(
+                    entry,
+                    selectedVersion,
+                  );
+                  const installed = entry.installed;
+                  await run(
+                    `marketplace:${entry.packageSpec}`,
+                    () =>
+                      installed === undefined
+                        ? window.zenx.plugins.installSource(source)
+                        : window.zenx.plugins.update(
+                            installed.pluginId,
+                            source,
+                          ),
+                    installed === undefined
+                      ? `${entry.name} v${selectedVersion} installed and enabled.`
+                      : `${entry.name} updated to v${selectedVersion}.`,
+                  );
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MarketplaceCard({
+  entry,
+  open,
+  selectedVersion,
+  busy,
+  onToggle,
+  onVersion,
+  onInstall,
+}: {
+  entry: MarketplaceCatalogViewEntry;
+  open: boolean;
+  selectedVersion: string;
+  busy: string | null;
+  onToggle(): void;
+  onVersion(version: string): void;
+  onInstall(): Promise<void>;
+}) {
+  const selectedInstalled = entry.installed?.version === selectedVersion;
+  const actionLabel =
+    entry.installed === undefined
+      ? `Install v${selectedVersion}`
+      : selectedInstalled
+        ? "Installed"
+        : `Update to v${selectedVersion}`;
+  return (
+    <article className="page-card marketplace-card">
+      <div className="marketplace-summary">
+        <span className="plugin-icon marketplace-icon" aria-hidden="true">
+          <Icon name={marketplaceIcon(entry.icon)} />
+        </span>
+        <div className="plugin-lifecycle-copy">
+          <div className="plugin-title-line">
+            <h3>{entry.name}</h3>
+            {entry.curated ? (
+              <span className="plugin-status status-enabled">Curated</span>
+            ) : null}
+            {entry.updateAvailable ? (
+              <span className="plugin-status status-enabled">
+                Update available
+              </span>
+            ) : entry.installed === undefined ? null : (
+              <span className="plugin-status">Installed</span>
+            )}
+          </div>
+          <p>{entry.description}</p>
+          <small>
+            Recommended v{entry.recommendedVersion}
+            {entry.installed === undefined
+              ? ""
+              : ` · Installed v${entry.installed.version}`}
+          </small>
+        </div>
+        <button type="button" className="secondary-button" onClick={onToggle}>
+          {open ? "Hide details" : "View details"}
+        </button>
+      </div>
+      {open ? (
+        <div className="marketplace-detail">
+          <div>
+            <strong>{entry.packageSpec}</strong>
+            <span>{entry.description}</span>
+          </div>
+          <label>
+            Version
+            <select
+              aria-label={`${entry.name} version`}
+              value={selectedVersion}
+              disabled={busy !== null}
+              onChange={(event) => onVersion(event.target.value)}
+            >
+              {entry.versions.map((version) => (
+                <option key={version.version} value={version.version}>
+                  {version.version}
+                  {version.version === entry.recommendedVersion
+                    ? " · recommended"
+                    : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={busy !== null || selectedInstalled}
+            onClick={() => void onInstall()}
+          >
+            {busy === `marketplace:${entry.packageSpec}`
+              ? entry.installed === undefined
+                ? "Installing…"
+                : "Updating…"
+              : actionLabel}
+          </button>
+        </div>
+      ) : null}
+    </article>
   );
 }
 
@@ -607,6 +854,20 @@ function pluginIcon(
   if (id === "computer") return "panel-right";
   if (id.includes("triggers")) return "trigger";
   if (id.includes("rooms")) return "users";
+  return "layers";
+}
+
+function marketplaceIcon(
+  icon: string,
+): "search" | "panel-right" | "trigger" | "users" | "layers" {
+  if (
+    icon === "search" ||
+    icon === "panel-right" ||
+    icon === "trigger" ||
+    icon === "users"
+  ) {
+    return icon;
+  }
   return "layers";
 }
 

@@ -78,6 +78,10 @@ import {
   ZENX_ROOMS_PACKAGE_NAME,
   ZENX_ROOMS_TARBALL,
 } from "./rooms-profile-loader.js";
+import {
+  JsonFileMarketplaceCatalogTransport,
+  MarketplaceCatalogService,
+} from "./marketplace-catalog.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -245,6 +249,11 @@ app.whenReady().then(async () => {
       projectProjection,
       imageAttachments,
     );
+    const marketplace = new MarketplaceCatalogService(
+      new JsonFileMarketplaceCatalogTransport(
+        join(resourcesDirectory, "marketplace", "catalog.json"),
+      ),
+    );
     installTitleIpc(titleCoordinator);
     automationService = await createBundledAutomationPluginService({
       userDataDirectory,
@@ -271,7 +280,7 @@ app.whenReady().then(async () => {
       new ZenXTriggersCapabilityPackage(automationService),
       "bundled",
     );
-    installCapabilityIpc(capabilityService, appServerManager);
+    installCapabilityIpc(capabilityService, appServerManager, marketplace);
     if (startupError === undefined) await appServerManager.start();
     else appServerManager.reportStartupError(startupError);
   } catch (error) {
@@ -887,8 +896,10 @@ async function syncProjectProjection(
 function installCapabilityIpc(
   capabilities: ZenXCapabilityService,
   manager: AppServerManager,
+  marketplace: MarketplaceCatalogService,
 ): void {
   ipcMain.handle(ipcChannels.capabilitiesGet, () => capabilities.snapshot());
+  ipcMain.handle(ipcChannels.marketplaceGet, () => marketplace.load());
   ipcMain.handle(ipcChannels.pluginsGet, () => capabilities.pluginSnapshot());
   ipcMain.handle(
     ipcChannels.capabilitiesGrant,
