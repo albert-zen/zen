@@ -1,0 +1,281 @@
+{
+  "id": "computer",
+  "version": "1.1.0",
+  "description": "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and WGC capture stay background-safe; unsupported global input never silently substitutes for them.",
+  "provider": {
+    "id": "microsoft-winapp-cli",
+    "platforms": ["win32"],
+    "interactionModes": ["background_safe"],
+    "capabilities": [
+      "uia.inspect",
+      "uia.invoke",
+      "uia.set_value",
+      "uia.wait_for.verify",
+      "wgc.capture",
+      "cancellable",
+      "bounded_output"
+    ]
+  },
+  "permissions": [
+    {
+      "id": "computer.accessibility.inspect",
+      "title": "Inspect a targeted app",
+      "description": "Read a bounded accessibility tree for an explicitly targeted app or window.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.accessibility.act",
+      "title": "Act on a targeted control",
+      "description": "Invoke or set a value through Windows UI Automation on an explicitly selected control.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.window.capture",
+      "title": "Capture a targeted window",
+      "description": "Capture one explicitly targeted HWND through WinApp CLI's background-safe default capture path.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.foreground.control",
+      "title": "Control the foreground desktop",
+      "description": "Use global pointer, keyboard, focus, or scrolling. ZenX exposes these as explicitly labeled, cancellable foreground takeover.",
+      "scope": "local-device"
+    }
+  ],
+  "tools": [
+    {
+      "name": "computer_inspect",
+      "description": "Inspect at most 32 semantic UI Automation controls in one exact Windows HWND without activating it or reading sibling windows. target.windowTitle is required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["uia.inspect", "app_targeted", "no_global_input"],
+      "maxOutputBytes": 12288
+    },
+    {
+      "name": "computer_press",
+      "description": "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "control": {
+            "type": "object",
+            "properties": {
+              "observationId": {
+                "type": "string"
+              },
+              "targetId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": ["observationId", "targetId"]
+          }
+        },
+        "required": ["target", "control"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.act"],
+      "interactionMode": "background_safe",
+      "capabilities": ["uia.invoke", "app_targeted", "no_global_input"]
+    },
+    {
+      "name": "computer_set_value",
+      "description": "Set the supplied text on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "control": {
+            "type": "object",
+            "properties": {
+              "observationId": {
+                "type": "string"
+              },
+              "targetId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": ["observationId", "targetId"]
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": ["target", "control", "value"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.act"],
+      "interactionMode": "background_safe",
+      "capabilities": ["uia.set_value", "app_targeted", "no_global_input"]
+    },
+    {
+      "name": "computer_screenshot",
+      "description": "Capture one exact Windows HWND through WinApp CLI's default WGC/PrintWindow path to a private five-minute PNG artifact. Returns metadata/path, never pixels in the Thread journal.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.window.capture"],
+      "interactionMode": "background_safe",
+      "capabilities": ["wgc.capture", "app_targeted", "no_global_input"],
+      "maxOutputBytes": 4096
+    }
+  ],
+  "resources": [
+    {
+      "id": "windows-computer-use",
+      "kind": "skill",
+      "title": "Targeted Windows computer use",
+      "description": "Use Microsoft WinApp CLI UI Automation through ZenX's opaque observe-before-act contract.",
+      "content": "Target one Windows application by pid or applicationId plus an exact windowTitle. Inspect first, then use only the observationId and targetId returned by the latest computer_inspect. Re-inspect after every action. Semantic invoke and set-value use UI Automation and do not inject global input. Supplied text follows the ordinary set-value path and host/model policy owns credential decisions. Window capture uses WinApp CLI's default WGC/PrintWindow path and never opts into --capture-screen or --focus. If UIA semantics are insufficient, report foreground_required; this provider does not silently inject pointer or keyboard input."
+    }
+  ],
+  "settings": {
+    "dependency": "Microsoft WinApp CLI (Public Preview)",
+    "executable": "winapp",
+    "installCommand": "winget install Microsoft.winappcli --source winget",
+    "jsonContract": "ui list-windows/inspect/invoke/set-value/wait-for/screenshot --json",
+    "minimumVersion": "0.3.1",
+    "docs": "https://learn.microsoft.com/windows/apps/dev-tools/winapp-cli/ui-automation"
+  },
+  "schemaVersion": 2,
+  "name": "Computer",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "Use Computer to inspect an exact native window before acting, prefer background-safe semantic controls, and use explicitly labeled foreground takeover only when necessary."
+}

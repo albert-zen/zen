@@ -306,6 +306,7 @@ export class ZenXCapabilityRegistry
     },
     options: {
       allowSameVersionDevReload?: boolean;
+      allowSameVersionBundledVariant?: boolean;
       signal?: AbortSignal;
       enterCommitPhase?: () => void;
     } = {},
@@ -328,6 +329,11 @@ export class ZenXCapabilityRegistry
         !(
           options.allowSameVersionDevReload === true &&
           profile?.source.mode === "dev-link"
+        ) &&
+        !(
+          options.allowSameVersionBundledVariant === true &&
+          source === "bundled" &&
+          profile?.source.mode === "bundled"
         )
       ) {
         throw new Error(
@@ -807,6 +813,24 @@ export class ZenXCapabilityRegistry
     if (index === -1)
       this.#providerDiagnostics.push(structuredClone(diagnostic));
     else this.#providerDiagnostics[index] = structuredClone(diagnostic);
+    this.#emit();
+  }
+
+  replaceProviderDiagnostics(
+    capabilityId: "browser" | "computer",
+    diagnostics: readonly ZenXCapabilityProviderDiagnostic[],
+  ): void {
+    const next = [
+      ...this.#providerDiagnostics.filter(
+        (diagnostic) => diagnostic.capabilityId !== capabilityId,
+      ),
+      ...diagnostics.map((diagnostic) => structuredClone(diagnostic)),
+    ];
+    this.#providerDiagnostics.splice(
+      0,
+      this.#providerDiagnostics.length,
+      ...next,
+    );
     this.#emit();
   }
 

@@ -1,0 +1,270 @@
+{
+  "id": "zenx-self-control",
+  "version": "1.0.0",
+  "description": "List derived workspaces and control Zen Threads through typed App Server requests.",
+  "provider": {
+    "id": "zenx-app-server",
+    "platforms": ["*"],
+    "interactionModes": ["background_safe"],
+    "capabilities": [
+      "zenx.projects.read",
+      "zenx.threads.read",
+      "zenx.threads.control"
+    ]
+  },
+  "permissions": [
+    {
+      "id": "zenx-self-control.workspace-read",
+      "title": "Read Zen workspaces and Threads",
+      "description": "Read configured workspace metadata and bounded canonical Thread projections.",
+      "scope": "workspace"
+    },
+    {
+      "id": "zenx-self-control.local-device-control",
+      "title": "Control local Zen Threads",
+      "description": "Create, rename, archive, or unarchive local Threads and start, steer, or replace their active Turns through App Server.",
+      "scope": "local-device"
+    }
+  ],
+  "tools": [
+    {
+      "name": "zenx_projects_list",
+      "description": "List bounded workspace groupings derived from ZenX configuration and Thread cwd metadata. Projects are not runtime objects.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.workspace-read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.projects.read"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_threads_list",
+      "description": "List bounded App Server Threads, optionally filtered by workspace/cwd or a name, preview, and ID query.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.workspace-read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.read"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_threads_create",
+      "description": "Create an idle Thread through App Server thread/start with an explicit cwd and optional runtime settings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "approvalPolicy": {
+            "type": "string",
+            "enum": ["on-request", "never"]
+          },
+          "sandbox": {
+            "type": "string",
+            "enum": ["danger-full-access"]
+          }
+        },
+        "required": ["cwd"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "zenx-self-control.workspace-read",
+        "zenx-self-control.local-device-control"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.control"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_threads_read",
+      "description": "Read bounded recent turns and safe item projections from one Thread through App Server thread/read.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "maxTurns": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "maxItemsPerTurn": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25
+          }
+        },
+        "required": ["threadId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.workspace-read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.read"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_threads_status",
+      "description": "Inspect authoritative idle, active, or error status and the current/last Turn identity for one Thread.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": ["threadId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.workspace-read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.read"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_threads_rename",
+      "description": "Set the authoritative user-facing name for a Thread through App Server thread/name/set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["threadId", "name"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "zenx-self-control.workspace-read",
+        "zenx-self-control.local-device-control"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.control"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_threads_archive",
+      "description": "Archive a Thread through the standard App Server lifecycle without changing its canonical history.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": ["threadId"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "zenx-self-control.workspace-read",
+        "zenx-self-control.local-device-control"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.control"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_threads_unarchive",
+      "description": "Restore an archived Thread to normal listings through the standard App Server lifecycle.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": ["threadId"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "zenx-self-control.workspace-read",
+        "zenx-self-control.local-device-control"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.control"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_threads_send",
+      "description": "Send input through explicit App Server start, steer, or replace semantics. steer and replace require the expected active Turn ID; every mode requires a stable clientUserMessageId.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["start", "steer", "replace"]
+          },
+          "text": {
+            "type": "string"
+          },
+          "expectedTurnId": {
+            "type": "string"
+          },
+          "clientUserMessageId": {
+            "type": "string"
+          }
+        },
+        "required": ["threadId", "mode", "text", "clientUserMessageId"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "zenx-self-control.workspace-read",
+        "zenx-self-control.local-device-control"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.control"],
+      "maxOutputBytes": 65536
+    }
+  ],
+  "resources": [],
+  "schemaVersion": 2,
+  "name": "ZenX self-control",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "Use ZenX self-control to list derived workspaces and inspect or control Threads through the authoritative App Server."
+}

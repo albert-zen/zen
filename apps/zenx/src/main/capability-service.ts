@@ -26,6 +26,7 @@ import { ZenXCapabilityRegistry } from "./capabilities/registry.js";
 import {
   selectBrowserProvider,
   selectComputerProvider,
+  type ZenXCapabilityProviderCatalogOptions,
 } from "./capabilities/provider-catalog.js";
 import { WinAppCliComputerBackend } from "./capabilities/windows-computer-provider.js";
 import {
@@ -56,6 +57,7 @@ import {
   stagePluginRemoval,
   type ZenXTrustedProfilePluginLoader,
 } from "./plugin-profile.js";
+import { firstPartyProviderTarball } from "./first-party-profile-loader.js";
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #registry: ZenXCapabilityRegistry;
@@ -75,6 +77,19 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #trustedProfileLoaders: Readonly<
     Record<string, ZenXTrustedProfilePluginLoader>
   >;
+  readonly #profileManagedProviders: boolean;
+  readonly #providerCatalogOptions: Pick<
+    ZenXCapabilityProviderCatalogOptions,
+    | "environment"
+    | "platform"
+    | "runner"
+    | "winAppRunner"
+    | "userBrowserConnector"
+  >;
+  #browserProfilePackage: ZenXCapabilityPackage | undefined;
+  #computerProfilePackage: ZenXCapabilityPackage | undefined;
+  #stagedBrowserProfilePackage: ZenXCapabilityPackage | undefined;
+  #stagedComputerProfilePackage: ZenXCapabilityPackage | undefined;
   #serviceMutationTail: Promise<void> = Promise.resolve();
   #browserRegistration: ZenXCapabilityDisposer | undefined;
   #computerRegistered = false;
@@ -94,6 +109,15 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     removeProfileGeneration?: (directory: string) => Promise<void>;
     trustedProfileLoaders?: Readonly<
       Record<string, ZenXTrustedProfilePluginLoader>
+    >;
+    profileManagedProviders?: boolean;
+    providerCatalogOptions?: Pick<
+      ZenXCapabilityProviderCatalogOptions,
+      | "environment"
+      | "platform"
+      | "runner"
+      | "winAppRunner"
+      | "userBrowserConnector"
     >;
   }) {
     this.#pluginToolEnvironment = new ToolEnvironment();
@@ -183,13 +207,23 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     this.#trustedProfileLoaders = Object.freeze({
       ...(options.trustedProfileLoaders ?? {}),
     });
+    this.#profileManagedProviders = options.profileManagedProviders ?? false;
+    this.#providerCatalogOptions = Object.freeze({
+      ...(options.providerCatalogOptions ?? {}),
+    });
   }
 
   async initialize(): Promise<void> {
     await this.#registry.initialize();
+    if (this.#profileManagedProviders) {
+      await this.#selectBrowserProfileProvider();
+      await this.#selectComputerProfileProvider();
+    }
     await this.#loadCommittedProfile();
-    await this.#mountBrowser();
-    await this.#mountComputer();
+    if (!this.#profileManagedProviders) {
+      await this.#mountBrowser();
+      await this.#mountComputer();
+    }
     const configuredManifestPaths = new Set<string>();
     for (const descriptor of Object.values(
       this.#registry.packageDescriptors(),
@@ -304,6 +338,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     const browser =
       this.#browserBackend === undefined
         ? await selectBrowserProvider({
+            ...this.#providerCatalogOptions,
             userDataDirectory: this.#userDataDirectory,
             bundledProvidersOnly: this.#bundledProvidersOnly,
             resourcesDirectory: this.#resourcesDirectory,
@@ -330,6 +365,105 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     }
   }
 
+  async #selectBrowserProfileProvider(): Promise<void> {
+    const selection = await this.#resolveBrowserProfileProvider();
+    this.#browserProfilePackage = selection.capabilityPackage;
+    this.#registry.replaceProviderDiagnostics("browser", selection.diagnostics);
+    if (selection.capabilityPackage === undefined)
+      this.#registry.recordDiscoveryError(
+        `Browser provider: ${selection.diagnostics[0]?.reason ?? "unavailable"}`,
+      );
+  }
+
+  async #resolveBrowserProfileProvider(): Promise<{
+    capabilityPackage?: ZenXCapabilityPackage;
+    diagnostics: ZenXCapabilitySnapshot["providerDiagnostics"];
+  }> {
+    const selection =
+      this.#browserBackend === undefined
+        ? await selectBrowserProvider({
+            ...this.#providerCatalogOptions,
+            userDataDirectory: this.#userDataDirectory,
+            bundledProvidersOnly: this.#bundledProvidersOnly,
+            resourcesDirectory: this.#resourcesDirectory,
+            bundledManifestSha256: this.#bundledManifestSha256,
+          })
+        : {
+            backend: this.#browserBackend,
+            manifest: undefined,
+            diagnostics: [],
+          };
+    return {
+      capabilityPackage:
+        selection.backend === undefined
+          ? undefined
+          : new BrowserZenXCapabilityPackage(
+              selection.backend,
+              selection.manifest,
+            ),
+      diagnostics: selection.diagnostics,
+    };
+  }
+
+  async #selectComputerProfileProvider(): Promise<void> {
+    const selection = await this.#resolveComputerProfileProvider();
+    this.#computerProfilePackage = selection.capabilityPackage;
+    this.#registry.replaceProviderDiagnostics(
+      "computer",
+      selection.diagnostics,
+    );
+  }
+
+  async #resolveComputerProfileProvider(): Promise<{
+    capabilityPackage?: ZenXCapabilityPackage;
+    diagnostics: ZenXCapabilitySnapshot["providerDiagnostics"];
+  }> {
+    const selection =
+      this.#computerBackend === undefined
+        ? await selectComputerProvider({
+            ...this.#providerCatalogOptions,
+            userDataDirectory: this.#userDataDirectory,
+            bundledProvidersOnly: this.#bundledProvidersOnly,
+            resourcesDirectory: this.#resourcesDirectory,
+            bundledManifestSha256: this.#bundledManifestSha256,
+          })
+        : {
+            backend: this.#computerBackend,
+            manifest: this.#computerManifest,
+            diagnostics: [],
+          };
+    let backend = selection.backend;
+    if (
+      this.#computerBackend !== undefined &&
+      backend instanceof WinAppCliComputerBackend &&
+      !(await backend.diagnose()).ready
+    )
+      backend = undefined;
+    return {
+      capabilityPackage:
+        backend === undefined
+          ? undefined
+          : new ComputerZenXCapabilityPackage(backend, selection.manifest),
+      diagnostics: selection.diagnostics,
+    };
+  }
+
+  browserProfilePackage(): ZenXCapabilityPackage {
+    const capabilityPackage =
+      this.#stagedBrowserProfilePackage ?? this.#browserProfilePackage;
+    if (capabilityPackage === undefined)
+      throw new Error("Browser provider is unavailable");
+    return capabilityPackage;
+  }
+
+  computerProfilePackage(): ZenXCapabilityPackage {
+    const capabilityPackage =
+      this.#stagedComputerProfilePackage ?? this.#computerProfilePackage;
+    if (capabilityPackage === undefined)
+      throw new Error("Computer provider is unavailable");
+    return capabilityPackage;
+  }
+
   async #unmountBrowser(): Promise<void> {
     const dispose = this.#browserRegistration;
     this.#browserRegistration = undefined;
@@ -346,6 +480,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     const computer =
       this.#computerBackend === undefined
         ? await selectComputerProvider({
+            ...this.#providerCatalogOptions,
             userDataDirectory: this.#userDataDirectory,
             bundledProvidersOnly: this.#bundledProvidersOnly,
             resourcesDirectory: this.#resourcesDirectory,
@@ -488,6 +623,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       signal?: AbortSignal;
       pnpmAbortGraceMs?: number;
       enterCommitPhase?: () => void;
+      allowSameVersionBundledVariant?: boolean;
     } = {},
   ): Promise<{
     snapshot: ZenXPluginSnapshot;
@@ -530,6 +666,112 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     );
   }
 
+  async replaceBundledProviderVariant(
+    tarballPath: string,
+    expected: { pluginId: "browser" | "computer"; packageName: string },
+    candidatePackage?: ZenXCapabilityPackage,
+  ): Promise<ZenXPluginSnapshot> {
+    return await this.#serializeServiceMutation(async () => {
+      const descriptor = this.#registry.packageDescriptors()[expected.pluginId];
+      if (
+        descriptor?.source !== "bundled" ||
+        descriptor.profileSource?.mode !== "bundled" ||
+        descriptor.profilePackageName !== expected.packageName
+      ) {
+        throw new Error(
+          `Plugin ${expected.pluginId} is not a bundled provider package`,
+        );
+      }
+      const source = await this.#trustedBundledSource(tarballPath);
+      const previous =
+        expected.pluginId === "browser"
+          ? this.#browserProfilePackage
+          : this.#computerProfilePackage;
+      const candidate = candidatePackage ?? previous;
+      if (candidate === undefined) {
+        throw new Error(`${expected.pluginId} provider is unavailable`);
+      }
+      const selectedTarball = firstPartyProviderTarball(
+        expected.pluginId,
+        candidate.manifest.provider.id,
+      );
+      if (path.basename(source.packageSpec) !== selectedTarball) {
+        throw new Error(
+          `${expected.pluginId} provider candidate does not match ${path.basename(source.packageSpec)}`,
+        );
+      }
+      this.#setStagedProviderPackage(expected.pluginId, candidate);
+      try {
+        const snapshot = await this.#mutatePluginPackage(
+          source,
+          expected.pluginId,
+          expected.packageName,
+          { allowSameVersionBundledVariant: true },
+        );
+        this.#commitProviderPackage(expected.pluginId, candidate);
+        if (previous !== undefined && previous !== candidate) {
+          this.#retireProviderPackage(expected.pluginId, previous);
+        }
+        return snapshot;
+      } catch (error) {
+        if (candidate !== previous) {
+          await this.#discardProviderCandidate(expected.pluginId, candidate);
+        }
+        throw error;
+      } finally {
+        this.#setStagedProviderPackage(expected.pluginId, undefined);
+      }
+    });
+  }
+
+  #setStagedProviderPackage(
+    pluginId: "browser" | "computer",
+    capabilityPackage: ZenXCapabilityPackage | undefined,
+  ): void {
+    if (pluginId === "browser") {
+      this.#stagedBrowserProfilePackage = capabilityPackage;
+    } else {
+      this.#stagedComputerProfilePackage = capabilityPackage;
+    }
+  }
+
+  #commitProviderPackage(
+    pluginId: "browser" | "computer",
+    capabilityPackage: ZenXCapabilityPackage,
+  ): void {
+    if (pluginId === "browser") {
+      this.#browserProfilePackage = capabilityPackage;
+    } else {
+      this.#computerProfilePackage = capabilityPackage;
+    }
+  }
+
+  async #discardProviderCandidate(
+    pluginId: "browser" | "computer",
+    capabilityPackage: ZenXCapabilityPackage,
+  ): Promise<void> {
+    try {
+      await capabilityPackage.close?.();
+    } catch (error) {
+      console.warn(
+        `${pluginId} provider candidate cleanup failed: ${describeError(error)}`,
+      );
+    }
+  }
+
+  #retireProviderPackage(
+    pluginId: "browser" | "computer",
+    capabilityPackage: ZenXCapabilityPackage,
+  ): void {
+    void Promise.resolve()
+      .then(async () => await capabilityPackage.close?.())
+      .catch((error: unknown) => {
+        console.warn(
+          `${pluginId} provider cleanup failed after variant commit: ${describeError(error)}`,
+        );
+      });
+  }
+
   async #mutatePluginPackage(
     source: ZenXPluginPackageSource,
     expectedPluginId?: string,
@@ -538,6 +780,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       signal?: AbortSignal;
       pnpmAbortGraceMs?: number;
       enterCommitPhase?: () => void;
+      allowSameVersionBundledVariant?: boolean;
     } = {},
   ): Promise<ZenXPluginSnapshot> {
     options.signal?.throwIfAborted();
@@ -651,6 +894,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           profile,
           {
             allowSameVersionDevReload: source.mode === "dev-link",
+            allowSameVersionBundledVariant:
+              options.allowSameVersionBundledVariant === true &&
+              source.mode === "bundled",
             signal: options.signal,
             enterCommitPhase: options.enterCommitPhase,
           },
@@ -808,11 +1054,126 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   async resetTransient(): Promise<void> {
     await this.#registry.resetTransient();
+    if (this.#profileManagedProviders) {
+      if (this.#browserBackend === undefined) {
+        await this.#applySelectedProviderCandidate(
+          "browser",
+          await this.#resolveBrowserProfileProvider(),
+        );
+      } else {
+        await this.#syncProviderVariant("browser", this.#browserProfilePackage);
+      }
+      if (this.#computerBackend === undefined) {
+        await this.#applySelectedProviderCandidate(
+          "computer",
+          await this.#resolveComputerProfileProvider(),
+        );
+      } else {
+        await this.#syncProviderVariant(
+          "computer",
+          this.#computerProfilePackage,
+        );
+      }
+      return;
+    }
     await this.#resetBrowser();
     if (this.#computerBackend !== undefined) return;
     await this.#registry.unregister("computer");
     this.#computerRegistered = false;
     await this.#mountComputer();
+  }
+
+  async syncProfileManagedProviderVariants(): Promise<void> {
+    if (!this.#profileManagedProviders) return;
+    await this.#serializeServiceMutation(async () => {
+      await this.#syncProviderVariant("browser", this.#browserProfilePackage);
+      await this.#syncProviderVariant("computer", this.#computerProfilePackage);
+    });
+  }
+
+  async #applySelectedProviderCandidate(
+    pluginId: "browser" | "computer",
+    selection: {
+      capabilityPackage?: ZenXCapabilityPackage;
+      diagnostics: ZenXCapabilitySnapshot["providerDiagnostics"];
+    },
+  ): Promise<void> {
+    const candidate = selection.capabilityPackage;
+    if (candidate === undefined || this.#resourcesDirectory === undefined) {
+      this.#registry.recordDiscoveryError(
+        `${pluginId === "browser" ? "Browser" : "Computer"} provider: ${selection.diagnostics[0]?.reason ?? "unavailable"}`,
+      );
+      return;
+    }
+    const tarball = firstPartyProviderTarball(
+      pluginId,
+      candidate.manifest.provider.id,
+    );
+    const selected = path.join(this.#resourcesDirectory, "plugins", tarball);
+    const descriptor = this.#registry.packageDescriptors()[pluginId];
+    if (
+      descriptor?.profileSource?.mode !== "bundled" ||
+      descriptor.profilePackageName === undefined
+    ) {
+      await this.#discardProviderCandidate(pluginId, candidate);
+      return;
+    }
+    if ((await realpath(selected)) === descriptor.profileSource.packageSpec) {
+      await this.#discardProviderCandidate(pluginId, candidate);
+      this.#registry.replaceProviderDiagnostics(
+        pluginId,
+        selection.diagnostics,
+      );
+      return;
+    }
+    try {
+      await this.replaceBundledProviderVariant(
+        selected,
+        {
+          pluginId,
+          packageName: descriptor.profilePackageName,
+        },
+        candidate,
+      );
+      this.#registry.replaceProviderDiagnostics(
+        pluginId,
+        selection.diagnostics,
+      );
+    } catch (error) {
+      this.#registry.recordDiscoveryError(
+        `${pluginId === "browser" ? "Browser" : "Computer"} provider variant: ${describeError(error)}`,
+      );
+      throw error;
+    }
+  }
+
+  async #syncProviderVariant(
+    pluginId: "browser" | "computer",
+    capabilityPackage: ZenXCapabilityPackage | undefined,
+  ): Promise<void> {
+    if (
+      capabilityPackage === undefined ||
+      this.#resourcesDirectory === undefined
+    )
+      return;
+    const descriptor = this.#registry.packageDescriptors()[pluginId];
+    if (descriptor?.profileSource?.mode !== "bundled") return;
+    const selected = path.join(
+      this.#resourcesDirectory,
+      "plugins",
+      firstPartyProviderTarball(
+        pluginId,
+        capabilityPackage.manifest.provider.id,
+      ),
+    );
+    if ((await realpath(selected)) === descriptor.profileSource.packageSpec)
+      return;
+    await this.#mutatePluginPackage(
+      await this.#trustedBundledSource(selected),
+      pluginId,
+      descriptor.profilePackageName,
+      { allowSameVersionBundledVariant: true },
+    );
   }
 
   hostSnapshot(): ZenXCapabilityHostSnapshot {
@@ -890,7 +1251,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     await this.#unmountBrowser();
     await this.#registry.close();
     await this.#pluginRuntimeSupervisor.close();
-    if (!this.#computerRegistered) await this.#computerBackend?.close();
+    await this.#browserProfilePackage?.close?.();
+    await this.#computerProfilePackage?.close?.();
+    if (!this.#profileManagedProviders && !this.#computerRegistered)
+      await this.#computerBackend?.close();
   }
 
   async #resolvePnpm(): Promise<string> {

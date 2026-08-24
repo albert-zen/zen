@@ -1,0 +1,22 @@
+{
+  "name": "@zenx/triggers-plugin",
+  "version": "1.0.0",
+  "description": "First-party ZenX Triggers plugin",
+  "type": "module",
+  "files": [
+    "dist/runtime.js",
+    "zenx.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@zenx/plugin-sdk": "0.1.0",
+    "typescript": "^5.9.2"
+  },
+  "zenx": {
+    "plugin": "./zenx.plugin.json"
+  }
+}

@@ -122,7 +122,7 @@ export function validatePluginManifest(value: unknown): ZenXPluginManifestV2 {
     const name = requireString(tool.name, "Plugin tool name");
     if (
       !/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/u.test(name) ||
-      !name.startsWith(toolPrefix)
+      (!name.startsWith(toolPrefix) && !isHistoricalSelfControlTool(id, name))
     ) {
       throw new Error(
         `Plugin tool ${name} must be namespaced with ${toolPrefix}`,
@@ -190,6 +190,24 @@ export function validatePluginManifest(value: unknown): ZenXPluginManifestV2 {
   }
   validateUi(value.ui, value.contributions, id, toolNames);
   return structuredClone(value) as unknown as ZenXPluginManifestV2;
+}
+
+const HISTORICAL_SELF_CONTROL_TOOLS = new Set([
+  "zenx_projects_list",
+  "zenx_threads_list",
+  "zenx_threads_create",
+  "zenx_threads_read",
+  "zenx_threads_status",
+  "zenx_threads_rename",
+  "zenx_threads_archive",
+  "zenx_threads_unarchive",
+  "zenx_threads_send",
+]);
+
+function isHistoricalSelfControlTool(id: string, name: string): boolean {
+  // Package-shape compatibility only. Host admission still restricts this
+  // historical namespace to the exact bundled first-party identity/source.
+  return id === "zenx-self-control" && HISTORICAL_SELF_CONTROL_TOOLS.has(name);
 }
 
 async function resolvePackageFile(

@@ -6,7 +6,11 @@
   "workspaces": [
     "apps/zenx",
     "packages/zenx-plugin-sdk",
-    "packages/zenx-rooms-plugin"
+    "packages/zenx-browser-plugin",
+    "packages/zenx-computer-plugin",
+    "packages/zenx-rooms-plugin",
+    "packages/zenx-self-control-plugin",
+    "packages/zenx-triggers-plugin"
   ],
   "bin": {
     "zen": "./dist/apps/cli/src/cli.js"

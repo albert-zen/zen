@@ -2,7 +2,31 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { createFixturePluginHost } from "../dist/index.js";
+import {
+  createFixturePluginHost,
+  validatePluginManifest,
+} from "../dist/index.js";
+
+test("self-control package validation accepts only the exact historical tool-name set", async () => {
+  const manifest = JSON.parse(
+    await readFile(
+      new URL(
+        "../../zenx-self-control-plugin/zenx.plugin.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  assert.doesNotThrow(() => validatePluginManifest(manifest));
+  for (const name of ["zenx_project_list", "zenx_threads_list_extra"]) {
+    const invalid = structuredClone(manifest);
+    invalid.tools[0].name = name;
+    assert.throws(
+      () => validatePluginManifest(invalid),
+      /must be namespaced with zenx_self_control_/u,
+    );
+  }
+});
 
 test("the public package ships a v2 manifest JSON schema beside its runtime validator", async () => {
   const schema = JSON.parse(

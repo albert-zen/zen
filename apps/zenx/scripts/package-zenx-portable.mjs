@@ -13,7 +13,7 @@ import {
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { packZenXRoomsPlugin } from "./pack-first-party-plugins.mjs";
+import { packZenXFirstPartyPlugins } from "./pack-first-party-plugins.mjs";
 
 const run = promisify(execFile);
 const zenx = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -48,7 +48,7 @@ async function packageZenX(arguments_) {
           ])
         ).stdout,
       );
-      await packZenXRoomsPlugin({ outputDirectory: resources });
+      await packZenXFirstPartyPlugins({ outputDirectory: resources });
       const zenxPackage = JSON.parse(
         await readFile(path.join(zenx, "package.json"), "utf8"),
       );

@@ -52,6 +52,7 @@ export interface PluginRuntime {
 
 export interface PluginRuntimeRegistration {
   identity: PluginRuntimeIdentity;
+  source?: "bundled" | "local";
   definitions: readonly ModelTool[];
   start(sdk?: ZenXPluginHostSdkV1): Promise<PluginRuntime>;
 }
@@ -107,10 +108,7 @@ export class PluginRuntimeSupervisor {
   ): Promise<ZenXPluginRuntimeStage> {
     return await this.#serializeMutation(async () => {
       validateIdentity(registration.identity);
-      validateNamespacedDefinitions(
-        registration.identity.pluginId,
-        registration.definitions,
-      );
+      validateNamespacedDefinitions(registration);
       const pluginId = registration.identity.pluginId;
       if (this.#staged.has(pluginId)) {
         throw new Error(`Plugin runtime is already staged: ${pluginId}`);
@@ -1035,6 +1033,7 @@ export function bundledPackageRegistration(
     throw new Error("Plugin Runtime requires manifest v2");
   return {
     identity: { pluginId: manifest.id, packageVersion: manifest.version },
+    source: registration.source,
     definitions: manifest.tools.map(({ name, description, inputSchema }) => ({
       name,
       description,
@@ -1091,16 +1090,33 @@ function normalizePackageResult(value: unknown): ToolExecutionResult {
   return { output: output ?? String(value), exitCode: 0 };
 }
 
+const HISTORICAL_SELF_CONTROL_TOOLS = new Set([
+  "zenx_projects_list",
+  "zenx_threads_list",
+  "zenx_threads_create",
+  "zenx_threads_read",
+  "zenx_threads_status",
+  "zenx_threads_rename",
+  "zenx_threads_archive",
+  "zenx_threads_unarchive",
+  "zenx_threads_send",
+]);
+
 function validateNamespacedDefinitions(
-  pluginId: string,
-  definitions: readonly ModelTool[],
+  registration: PluginRuntimeRegistration,
 ): void {
+  const pluginId = registration.identity.pluginId;
+  const definitions = registration.definitions;
   const prefix = `${pluginId.replaceAll("-", "_")}_`;
   if (definitions.length === 0)
     throw new Error(`Plugin ${pluginId} declares no tools`);
   const names = new Set<string>();
   for (const definition of definitions) {
-    if (!definition.name.startsWith(prefix))
+    const historicalBundledSelfControl =
+      registration.source === "bundled" &&
+      pluginId === "zenx-self-control" &&
+      HISTORICAL_SELF_CONTROL_TOOLS.has(definition.name);
+    if (!definition.name.startsWith(prefix) && !historicalBundledSelfControl)
       throw new Error(
         `Plugin tool ${definition.name} must be namespaced with ${prefix}`,
       );

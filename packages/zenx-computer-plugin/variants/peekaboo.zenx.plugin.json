@@ -1,0 +1,378 @@
+{
+  "id": "computer",
+  "version": "1.0.0",
+  "description": "Peekaboo 3.x background-first macOS automation with bounded snapshots, explicit permissions, and foreground input only through labeled takeover tools.",
+  "provider": {
+    "id": "peekaboo-cli",
+    "platforms": ["darwin"],
+    "interactionModes": ["background_safe", "foreground_required"],
+    "capabilities": [
+      "peekaboo.snapshot",
+      "accessibility.inspect",
+      "background.semantic_action",
+      "window.capture",
+      "foreground.global_input"
+    ]
+  },
+  "permissions": [
+    {
+      "id": "computer.accessibility.inspect",
+      "title": "Inspect a targeted app",
+      "description": "Read a bounded accessibility tree for an explicitly targeted app or window.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.accessibility.act",
+      "title": "Act on a targeted control",
+      "description": "Perform a semantic press or set a semantic value on an explicitly selected accessibility control without global input.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.window.capture",
+      "title": "Capture a targeted window",
+      "description": "Capture one explicitly targeted app window to a private short-lived artifact.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.foreground.control",
+      "title": "Control the foreground desktop",
+      "description": "Use global pointer, keyboard, focus, or scrolling. ZenX exposes these as explicitly labeled, cancellable foreground takeover.",
+      "scope": "local-device"
+    }
+  ],
+  "tools": [
+    {
+      "name": "computer_inspect",
+      "description": "Inspect at most 32 semantic accessibility controls in one exact app window target without activating it or reading sibling windows. target.windowTitle is required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "computer.accessibility.inspect",
+        "computer.window.capture"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "peekaboo_cli",
+        "accessibility.inspect",
+        "app_targeted",
+        "no_global_input"
+      ],
+      "maxOutputBytes": 12288
+    },
+    {
+      "name": "computer_press",
+      "description": "Perform a native semantic press on one control returned by computer_inspect. Does not move the pointer, type keys, or activate the target app.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "control": {
+            "type": "object",
+            "properties": {
+              "observationId": {
+                "type": "string"
+              },
+              "targetId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": ["observationId", "targetId"]
+          }
+        },
+        "required": ["target", "control"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.act"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "peekaboo_cli",
+        "semantic.press",
+        "app_targeted",
+        "no_global_input"
+      ]
+    },
+    {
+      "name": "computer_set_value",
+      "description": "Set the supplied text on one editable opaque target from the latest computer_inspect observation. The value follows the ordinary tool path and host/model policy decides how it is handled.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "control": {
+            "type": "object",
+            "properties": {
+              "observationId": {
+                "type": "string"
+              },
+              "targetId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": ["observationId", "targetId"]
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": ["target", "control", "value"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.act"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "peekaboo_cli",
+        "semantic.set_value",
+        "app_targeted",
+        "no_global_input"
+      ]
+    },
+    {
+      "name": "computer_screenshot",
+      "description": "Capture one explicit app/window target to a private five-minute PNG artifact. Returns metadata/path, never pixels in the Thread journal.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.window.capture"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "peekaboo_cli",
+        "window.capture",
+        "app_targeted",
+        "no_global_input"
+      ],
+      "maxOutputBytes": 4096
+    },
+    {
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "peekaboo_cli",
+        "global_input",
+        "may_change_focus",
+        "cancellable"
+      ],
+      "name": "computer_foreground_click",
+      "description": "FOREGROUND TAKEOVER: move and click the real global pointer. ZenX shows the running tool before input begins; Stop cancels it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "button": {
+            "type": "string",
+            "enum": ["left", "right"]
+          }
+        },
+        "required": ["x", "y"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "peekaboo_cli",
+        "global_input",
+        "may_change_focus",
+        "cancellable"
+      ],
+      "name": "computer_foreground_key_press",
+      "description": "FOREGROUND TAKEOVER: press one allowlisted key in the focused control. Stop cancels the running operation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "enter",
+              "escape",
+              "tab",
+              "backspace",
+              "space",
+              "arrowUp",
+              "arrowDown",
+              "arrowLeft",
+              "arrowRight"
+            ]
+          }
+        },
+        "required": ["key"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "peekaboo_cli",
+        "global_input",
+        "may_change_focus",
+        "cancellable"
+      ],
+      "name": "computer_foreground_scroll",
+      "description": "FOREGROUND TAKEOVER: scroll the current foreground target. Stop cancels the running operation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deltaY": {
+            "type": "number"
+          }
+        },
+        "required": ["deltaY"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "resources": [
+    {
+      "id": "background-safe-computer-use",
+      "kind": "skill",
+      "title": "Background-safe computer use",
+      "description": "Instructions for app-targeted accessibility actions without foreground takeover.",
+      "content": "Prefer structured browser tools for web pages. For native apps, identify a pid or bundleId and optionally an exact window title, inspect that target, then act only with the observationId and opaque targetId from the latest inspect. Re-inspect after every action. Supplied text follows the ordinary set-value path; host/model policy owns credential decisions. Try background-safe semantic press/value/capture first. Those tools must never fall back to pointer motion, foreground keystrokes, app activation, or workspace changes. If accessibility semantics are insufficient and foreground takeover is acceptable, choose an explicitly named computer_foreground_* tool, warn that it affects the user's live desktop, and keep the operation cancellable; otherwise report unsupported."
+    }
+  ],
+  "schemaVersion": 2,
+  "name": "Computer",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "Use Computer to inspect an exact native window before acting, prefer background-safe semantic controls, and use explicitly labeled foreground takeover only when necessary."
+}

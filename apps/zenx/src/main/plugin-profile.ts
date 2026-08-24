@@ -157,6 +157,24 @@ export async function stagePluginPackage(options: {
         currentPackage.dependencies,
         options.allowBuilds ?? currentPackage.pnpm?.allowBuilds ?? {},
       );
+      await rm(path.join(generationDirectory, "node_modules"), {
+        recursive: true,
+        force: true,
+      });
+      await runBundledPnpm({
+        cliPath: options.pnpmCliPath,
+        cwd: generationDirectory,
+        environment: options.pnpmEnvironment,
+        arguments: [
+          "install",
+          "--offline",
+          "--ignore-workspace",
+          "--store-dir",
+          paths.store,
+        ],
+        signal: options.signal,
+        abortGraceMs: options.pnpmAbortGraceMs,
+      });
     }
 
     const before = (await readProfilePackageJson(generationDirectory))

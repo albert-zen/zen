@@ -83,6 +83,11 @@ import {
   MarketplaceCatalogService,
 } from "./marketplace-catalog.js";
 import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
+import {
+  createDelegatingFirstPartyProfileLoader,
+  FIRST_PARTY_PLUGIN_PACKAGES,
+  firstPartyProviderTarball,
+} from "./first-party-profile-loader.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -174,6 +179,10 @@ app.whenReady().then(async () => {
   });
   installApplicationMenu();
   let automationService: ZenXAutomationControlPort | undefined;
+  let triggersPackage: ZenXTriggersCapabilityPackage | undefined;
+  const selfControlPackage = new ZenXSelfControlCapabilityPackage({
+    appServer: selfControlPort,
+  });
   const resourcesDirectory = app.isPackaged
     ? process.resourcesPath
     : join(__dirname, "../../resources");
@@ -201,7 +210,22 @@ app.whenReady().then(async () => {
         : join(__dirname, "../../../../node_modules/pnpm/bin/pnpm.cjs"),
       trustedProfileLoaders: {
         [ZENX_ROOMS_CAPABILITY_ID]: createZenXRoomsProfileLoader(roomsService),
+        browser: createDelegatingFirstPartyProfileLoader(() =>
+          capabilityService!.browserProfilePackage(),
+        ),
+        computer: createDelegatingFirstPartyProfileLoader(() =>
+          capabilityService!.computerProfilePackage(),
+        ),
+        "zenx-self-control": createDelegatingFirstPartyProfileLoader(
+          () => selfControlPackage,
+        ),
+        "zenx-triggers": createDelegatingFirstPartyProfileLoader(() => {
+          if (triggersPackage === undefined)
+            throw new Error("Triggers service is not attached");
+          return triggersPackage;
+        }),
       },
+      profileManagedProviders: true,
       bundledManifestSha256: app.isPackaged
         ? PACKAGED_PROVIDER_MANIFEST_SHA256
         : undefined,
@@ -264,7 +288,9 @@ app.whenReady().then(async () => {
       appServer: appServerManager,
       titles: titleCoordinator,
     });
+    triggersPackage = new ZenXTriggersCapabilityPackage(automationService);
     await capabilityService.initialize();
+    await capabilityService.syncProfileManagedProviderVariants();
     const installedRooms = capabilityService
       .pluginSnapshot()
       .plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID);
@@ -277,13 +303,62 @@ app.whenReady().then(async () => {
         },
       );
     }
-    capabilityService.register(
-      new ZenXSelfControlCapabilityPackage({ appServer: selfControlPort }),
-    );
-    await capabilityService.install(
-      new ZenXTriggersCapabilityPackage(automationService),
-      "bundled",
-    );
+    for (const definition of [
+      FIRST_PARTY_PLUGIN_PACKAGES.browser,
+      FIRST_PARTY_PLUGIN_PACKAGES.computer,
+      FIRST_PARTY_PLUGIN_PACKAGES.selfControl,
+      FIRST_PARTY_PLUGIN_PACKAGES.triggers,
+    ]) {
+      if (
+        definition.pluginId === "computer" &&
+        (() => {
+          try {
+            capabilityService!.computerProfilePackage();
+            return false;
+          } catch {
+            return true;
+          }
+        })()
+      )
+        continue;
+      if (
+        definition.pluginId === "browser" &&
+        (() => {
+          try {
+            capabilityService!.browserProfilePackage();
+            return false;
+          } catch {
+            return true;
+          }
+        })()
+      )
+        continue;
+      const installed = capabilityService
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === definition.pluginId);
+      if (installed?.profileSource === undefined) {
+        const tarball =
+          definition.pluginId === "browser"
+            ? firstPartyProviderTarball(
+                "browser",
+                capabilityService.browserProfilePackage().manifest.provider.id,
+              )
+            : definition.pluginId === "computer"
+              ? firstPartyProviderTarball(
+                  "computer",
+                  capabilityService.computerProfilePackage().manifest.provider
+                    .id,
+                )
+              : definition.tarball;
+        await capabilityService.installBundledPluginPackage(
+          join(resourcesDirectory, "plugins", tarball),
+          {
+            pluginId: definition.pluginId,
+            packageName: definition.packageName,
+          },
+        );
+      }
+    }
     installCapabilityIpc(capabilityService, appServerManager, marketplace);
     if (startupError === undefined) {
       await appServerManager.start();

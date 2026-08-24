@@ -1,0 +1,510 @@
+{
+  "id": "zenx-triggers",
+  "version": "1.0.0",
+  "description": "Schedule and inspect ZenX Trigger wakeups.",
+  "provider": {
+    "id": "zenx-automation-service",
+    "platforms": ["*"],
+    "interactionModes": ["background_safe"],
+    "capabilities": ["zenx.triggers.manage"]
+  },
+  "permissions": [
+    {
+      "id": "zenx-triggers.read",
+      "title": "Read Triggers",
+      "description": "List Trigger definitions and bounded wakeup history.",
+      "scope": "workspace"
+    },
+    {
+      "id": "zenx-triggers.write",
+      "title": "Manage Triggers",
+      "description": "Create, update, cancel, and delete Triggers and manage Room collaboration.",
+      "scope": "local-device"
+    }
+  ],
+  "tools": [
+    {
+      "name": "zenx_triggers_list",
+      "description": "List Trigger definitions and bounded wakeup history.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_create",
+      "description": "Create a timer, Thread watcher, Room mention, or signal Trigger, optionally with a local predicate/action.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["timer", "thread", "roomMention", "signal"]
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "runAt": {
+            "type": "number"
+          },
+          "intervalMinutes": {
+            "type": "number"
+          },
+          "watchedThreadId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "mention": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "signalName": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "program": {
+            "type": "object",
+            "properties": {
+              "predicate": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "maxItems": 64
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "env": {
+                    "type": "object",
+                    "maxProperties": 64,
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "timeoutMs": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 120000
+                  },
+                  "maxOutputBytes": {
+                    "type": "integer",
+                    "minimum": 256,
+                    "maximum": 1048576
+                  }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+              },
+              "action": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "maxItems": 64
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "env": {
+                    "type": "object",
+                    "maxProperties": 64,
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "timeoutMs": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 120000
+                  },
+                  "maxOutputBytes": {
+                    "type": "integer",
+                    "minimum": 256,
+                    "maximum": 1048576
+                  }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+              },
+              "match": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "enum": ["completedItemText"]
+                  },
+                  "regex": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "flags": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "required": ["field", "regex"],
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": ["threadId", "kind", "label", "prompt"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_update",
+      "description": "Replace an existing Trigger definition while preserving its identity and active state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "threadId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["timer", "thread", "roomMention", "signal"]
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "runAt": {
+            "type": "number"
+          },
+          "intervalMinutes": {
+            "type": "number"
+          },
+          "watchedThreadId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "mention": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "signalName": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "program": {
+            "type": "object",
+            "properties": {
+              "predicate": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "maxItems": 64
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "env": {
+                    "type": "object",
+                    "maxProperties": 64,
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "timeoutMs": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 120000
+                  },
+                  "maxOutputBytes": {
+                    "type": "integer",
+                    "minimum": 256,
+                    "maximum": 1048576
+                  }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+              },
+              "action": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "maxItems": 64
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "env": {
+                    "type": "object",
+                    "maxProperties": 64,
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "timeoutMs": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 120000
+                  },
+                  "maxOutputBytes": {
+                    "type": "integer",
+                    "minimum": 256,
+                    "maximum": 1048576
+                  }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+              },
+              "match": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "enum": ["completedItemText"]
+                  },
+                  "regex": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "flags": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "required": ["field", "regex"],
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "threadId", "kind", "label", "prompt"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_cancel",
+      "description": "Deactivate a Trigger without deleting its definition or history.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          }
+        },
+        "required": ["triggerId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_delete",
+      "description": "Delete a Trigger definition while preserving audit history.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "triggerId": {
+            "type": "string"
+          }
+        },
+        "required": ["triggerId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_triggers_signal",
+      "description": "Emit an explicit named signal; matching Triggers may start ordinary Agent Turns.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": ["name", "detail"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 65536
+    }
+  ],
+  "resources": [],
+  "schemaVersion": 2,
+  "name": "Triggers",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "Use Triggers to schedule and inspect auditable ZenX wakeups.",
+  "ui": {
+    "bundles": [
+      {
+        "id": "main",
+        "apiVersion": 1,
+        "kind": "trusted",
+        "entry": "zenx/bundled/triggers-ui"
+      }
+    ],
+    "surfaces": [
+      {
+        "id": "triggers-page",
+        "bundleId": "main",
+        "exportName": "triggers-page"
+      },
+      {
+        "id": "trigger-panel",
+        "bundleId": "main",
+        "exportName": "trigger-panel"
+      }
+    ]
+  },
+  "contributions": {
+    "pages": [
+      {
+        "id": "triggers",
+        "title": "Triggers",
+        "route": "/plugins/zenx-triggers/triggers",
+        "surfaceId": "triggers-page"
+      }
+    ],
+    "sidebar": [
+      {
+        "id": "triggers",
+        "label": "Triggers",
+        "icon": "clock",
+        "pageId": "triggers",
+        "order": 10
+      }
+    ],
+    "commands": [
+      {
+        "id": "list",
+        "title": "List Trigger definitions and bounded wakeup history.",
+        "tool": "zenx_triggers_list"
+      },
+      {
+        "id": "create",
+        "title": "Create a timer, Thread watcher, Room mention, or signal Trigger, optionally with a local predicate/action.",
+        "tool": "zenx_triggers_create"
+      },
+      {
+        "id": "update",
+        "title": "Replace an existing Trigger definition while preserving its identity and active state.",
+        "tool": "zenx_triggers_update"
+      },
+      {
+        "id": "cancel",
+        "title": "Deactivate a Trigger without deleting its definition or history.",
+        "tool": "zenx_triggers_cancel"
+      },
+      {
+        "id": "delete",
+        "title": "Delete a Trigger definition while preserving audit history.",
+        "tool": "zenx_triggers_delete"
+      },
+      {
+        "id": "signal",
+        "title": "Emit an explicit named signal; matching Triggers may start ordinary Agent Turns.",
+        "tool": "zenx_triggers_signal"
+      }
+    ],
+    "panels": [
+      {
+        "id": "thread-wakeups",
+        "title": "Trigger wakeups",
+        "surfaceId": "trigger-panel"
+      }
+    ]
+  }
+}

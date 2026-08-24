@@ -1,0 +1,242 @@
+{
+  "id": "browser",
+  "version": "1.0.0",
+  "description": "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
+  "provider": {
+    "id": "electron-dedicated-browser",
+    "platforms": ["darwin", "win32", "linux"],
+    "interactionModes": ["background_safe"],
+    "capabilities": [
+      "dedicated_profile",
+      "cdp",
+      "dom.inspect",
+      "dom.navigate",
+      "dom.interact"
+    ]
+  },
+  "permissions": [
+    {
+      "id": "browser.tabs.read",
+      "title": "Inspect browser tabs",
+      "description": "List tabs and inspect bounded visible text and interactive targets.",
+      "scope": "browser-session"
+    },
+    {
+      "id": "browser.navigate",
+      "title": "Open and navigate pages",
+      "description": "Open URLs or navigate an explicitly targeted ZenX browser tab.",
+      "scope": "browser-session"
+    },
+    {
+      "id": "browser.interact",
+      "title": "Interact with pages",
+      "description": "Click and type into an explicitly targeted visible page element.",
+      "scope": "browser-session"
+    }
+  ],
+  "tools": [
+    {
+      "name": "browser_list_tabs",
+      "description": "List bounded metadata for tabs in one explicit ZenX browser session. Cookies, storage, headers, and history are never returned.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "tab_metadata.read"],
+      "maxOutputBytes": 8192
+    },
+    {
+      "name": "browser_open",
+      "description": "Open an http(s) URL in a hidden tab in an explicit ephemeral ZenX browser session. Returns the new tabId without activating an app window.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "url"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.navigate"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.navigate"]
+    },
+    {
+      "name": "browser_navigate",
+      "description": "Navigate one explicit ZenX browser session/tab target to an http(s) URL.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId", "url"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.navigate"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.navigate"]
+    },
+    {
+      "name": "browser_inspect",
+      "description": "Create the latest bounded observation for one ZenX browser tab and return opaque target IDs for visible controls. Existing input values are not returned.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.inspect"],
+      "maxOutputBytes": 12288
+    },
+    {
+      "name": "browser_click",
+      "description": "Click one visible, clickable opaque target from the latest browser_inspect observation. Stale, forged, hidden, or changed targets fail closed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "targetId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.click"]
+    },
+    {
+      "name": "browser_type",
+      "description": "Replace the value in one visible, typeable opaque target from the latest browser_inspect observation, optionally submitting its form. Text is dispatched as an ordinary tool argument regardless of field metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "submit": {
+            "type": "boolean"
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "targetId", "text"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.set_value"]
+    },
+    {
+      "name": "browser_close",
+      "description": "Close one explicit ZenX browser tab and invalidate its latest observation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.navigate"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "tab.close"]
+    },
+    {
+      "name": "browser_close_session",
+      "description": "Close every hidden tab in one explicit ZenX browser session, clear its storage/cache, and ensure reopening the same sessionId uses a fresh partition.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.navigate"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "session.close"]
+    }
+  ],
+  "resources": [
+    {
+      "id": "safe-browser-use",
+      "kind": "skill",
+      "title": "Safe browser use",
+      "description": "Instructions for targeted, inspect-before-act browser automation.",
+      "content": "Choose a stable sessionId for the task. List or open tabs, then inspect the exact tab before clicking or typing. Act only with the observationId and opaque targetId from the latest inspect; re-inspect after navigation or every action. Text is dispatched as an ordinary tool argument regardless of field metadata. Close tabs or the session when done; close_session clears the current partition so a later same-ID session starts clean. Never ask for cookies, storage state, auth headers, or hidden page content."
+    },
+    {
+      "id": "browser-research",
+      "kind": "prompt",
+      "title": "Browser research prompt",
+      "description": "A reusable prompt for evidence-backed browser research.",
+      "content": "Research the requested topic in the dedicated ZenX browser session. Keep a list of the exact page URLs inspected, distinguish page evidence from inference, and summarize only visible content returned by browser_inspect."
+    }
+  ],
+  "schemaVersion": 2,
+  "name": "Browser",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "Use Browser for targeted, inspect-before-act web automation in the selected ZenX browser provider."
+}

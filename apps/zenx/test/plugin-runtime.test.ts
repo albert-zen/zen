@@ -38,6 +38,40 @@ import {
 const exactTrace =
   'model/runtime bytes: sk-fixture\n<raw-json>{"x":1}</raw-json>';
 
+test("only the bundled self-control identity keeps its exact historical tool namespace", async () => {
+  const accepted = new PluginRuntimeSupervisor(new ToolEnvironment());
+  await accepted.start({
+    ...bundledRegistration(
+      "zenx-self-control",
+      async () => ({ output: "ok", exitCode: 0 }),
+      undefined,
+      "zenx_projects_list",
+    ),
+    source: "bundled",
+  });
+  await accepted.close();
+
+  for (const [source, tool] of [
+    ["local", "zenx_projects_list"],
+    ["bundled", "zenx_project_list"],
+    ["bundled", "zenx_threads_list_extra"],
+  ] as const) {
+    const rejected = new PluginRuntimeSupervisor(new ToolEnvironment());
+    await assert.rejects(
+      rejected.start({
+        ...bundledRegistration(
+          "zenx-self-control",
+          async () => ({ output: "no", exitCode: 0 }),
+          undefined,
+          tool,
+        ),
+        source,
+      }),
+      /must be namespaced with zenx_self_control_/u,
+    );
+  }
+});
+
 test("bundled runtime routes through Tool Environment verbatim while human invocation creates no Turn", async () => {
   const environment = new ToolEnvironment();
   const supervisor = new PluginRuntimeSupervisor(environment);

@@ -146,11 +146,14 @@ The target contract is:
   can also be uninstalled and later reinstalled. Uninstall removes runtime, UI,
   and tool registrations but retains plugin data by default; deleting data is a
   separate explicit action.
-- Rooms is the first profile-managed first-party package. Its standard npm
-  tarball ships in App Resources and uses the same profile installer, Catalog,
-  discovery, runtime, UI, and data lifecycle as external packages. Catalog
-  source plus the fixed package allowlist admits its existing trusted
-  automation service and UI; external tarballs cannot self-declare that trust.
+- Rooms, Triggers, Browser, Computer, and ZenX self-control are profile-managed
+  first-party packages. Their standard npm tarballs ship in App Resources and
+  use the same profile installer, Catalog, discovery, runtime, UI, and data
+  lifecycle as external packages. Browser and Computer ship fixed provider
+  manifest variants under one package identity; the existing selector chooses
+  the exact offline variant before admission. Catalog source plus the fixed
+  package allowlist admits existing trusted services and UI; external tarballs
+  cannot self-declare that trust.
 - Generic UI Host supports sidebar, pages/subroutes, settings, panel,
   commands/menu, and result renderers. First-party and third-party plugins use
   the same logical UI SDK, while third-party code runs isolated. Human plugin UI
