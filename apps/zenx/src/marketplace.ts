@@ -104,6 +104,11 @@ function validateMarketplaceEntry(
     throw new Error(`Marketplace entry ${String(index + 1)} is invalid`);
   }
   const packageSpec = requiredString(value.packageSpec, "package spec", index);
+  if (!isCanonicalNpmPackageName(packageSpec)) {
+    throw new Error(
+      `Marketplace entry ${String(index + 1)} package spec must be a canonical npm package identity`,
+    );
+  }
   const name = requiredString(value.name, "name", index);
   const description = requiredString(value.description, "description", index);
   const icon = requiredString(value.icon, "icon", index);
@@ -128,14 +133,18 @@ function validateMarketplaceEntry(
         `Marketplace entry ${String(index + 1)} version ${String(versionIndex + 1)} is invalid`,
       );
     }
-    return {
-      version: requiredSemver(candidate.version, "version", index),
-      packageSpec: requiredString(
-        candidate.packageSpec,
-        "version package spec",
-        index,
-      ),
-    };
+    const version = requiredSemver(candidate.version, "version", index);
+    const versionPackageSpec = requiredString(
+      candidate.packageSpec,
+      "version package spec",
+      index,
+    );
+    if (versionPackageSpec !== `${packageSpec}@${version}`) {
+      throw new Error(
+        `Marketplace entry ${String(index + 1)} version ${version} must use the exact canonical package version ${packageSpec}@${version}`,
+      );
+    }
+    return { version, packageSpec: versionPackageSpec };
   });
   if (
     new Set(versions.map((candidate) => candidate.version)).size !==
@@ -182,6 +191,12 @@ function requiredSemver(value: unknown, field: string, index: number): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCanonicalNpmPackageName(value: string): boolean {
+  if (value.length > 214) return false;
+  const segment = "[a-z0-9][a-z0-9._-]*";
+  return new RegExp(`^(?:${segment}|@${segment}/${segment})$`, "u").test(value);
 }
 
 function compareSemver(left: string, right: string): number {

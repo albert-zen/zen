@@ -122,6 +122,99 @@ test("catalog load and validation failures do not mutate the caller's plugin sna
   assert.deepEqual(plugins, before);
 });
 
+test("Marketplace admits only canonical npm identities with matching exact version specs", async () => {
+  const validUnscoped = new MarketplaceCatalogService({
+    load: async () => ({
+      entries: [
+        {
+          packageSpec: "notes-plugin",
+          name: "Notes",
+          description: "Unscoped canonical fixture.",
+          icon: "layers",
+          recommendedVersion: "1.2.3-beta.1",
+          curated: true,
+          versions: [
+            {
+              version: "1.2.3-beta.1",
+              packageSpec: "notes-plugin@1.2.3-beta.1",
+            },
+          ],
+        },
+      ],
+    }),
+  });
+  assert.equal(
+    (await validUnscoped.load()).entries[0]?.packageSpec,
+    "notes-plugin",
+  );
+
+  const invalidRoots = [
+    "file:../notes-plugin",
+    "link:../notes-plugin",
+    "git+https://example.test/notes-plugin.git#deadbeef",
+    "/tmp/notes-plugin",
+    "../notes-plugin",
+    "https://example.test/notes-plugin.tgz",
+    "npm:@fixtures/notes-plugin@1.0.0",
+    "@fixtures/notes-plugin@latest",
+    "notes-plugin@^1.0.0",
+    "Notes-Plugin",
+    " notes-plugin",
+    "notes-plugin ",
+    "@fixtures//notes-plugin",
+  ];
+  for (const packageSpec of invalidRoots) {
+    const service = new MarketplaceCatalogService({
+      load: async () => ({
+        entries: [{ ...fixtureCatalog.entries[0], packageSpec }],
+      }),
+    });
+    await assert.rejects(
+      service.load(),
+      /canonical npm package identity/u,
+      packageSpec,
+    );
+  }
+
+  const invalidVersions = [
+    "@fixtures/other-plugin@2.0.0",
+    "@fixtures/notes-plugin@latest",
+    "@fixtures/notes-plugin@^2.0.0",
+    "@fixtures/notes-plugin@2.x",
+    "npm:@fixtures/notes-plugin@2.0.0",
+    "file:../notes-plugin",
+    "link:../notes-plugin",
+    "git+https://example.test/notes-plugin.git#deadbeef",
+    "/tmp/notes-plugin.tgz",
+    "../notes-plugin.tgz",
+    "https://example.test/notes-plugin.tgz",
+    " @fixtures/notes-plugin@2.0.0",
+    "@fixtures/notes-plugin@2.0.0 ",
+  ];
+  for (const packageSpec of invalidVersions) {
+    const service = new MarketplaceCatalogService({
+      load: async () => ({
+        entries: [
+          {
+            ...fixtureCatalog.entries[0],
+            versions: [
+              {
+                version: "2.0.0",
+                packageSpec,
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    await assert.rejects(
+      service.load(),
+      /exact canonical package version/u,
+      packageSpec,
+    );
+  }
+});
+
 function pluginSnapshot(version: string): ZenXPluginSnapshot {
   return {
     plugins: [
