@@ -19,6 +19,7 @@ export interface ZenXPluginDevControlOptions {
   install(
     request: ZenXPluginDevRequest,
     signal: AbortSignal,
+    enterCommitPhase: () => void,
   ): Promise<{
     pluginId: string;
     packageName: string;
@@ -34,6 +35,7 @@ export interface ZenXPluginDevControlOptions {
 interface ActiveDevRequest {
   controller: AbortController;
   operation: Promise<void>;
+  interruptible: boolean;
 }
 
 /** Explicit, authenticated loopback control seam for one running ZenX instance. */
@@ -69,18 +71,20 @@ export class ZenXPluginDevControlServer {
     );
     const server = createServer((request, response) => {
       const controller = new AbortController();
-      const active = {} as ActiveDevRequest;
-      const operation = serveDevRequest({
+      const active: ActiveDevRequest = {
+        controller,
+        interruptible: true,
+        operation: Promise.resolve(),
+      };
+      active.operation = serveDevRequest({
         request,
         response,
         token,
         options,
-        controller,
+        active,
         bodyTimeoutMs,
         transactionTimeoutMs,
       }).finally(() => activeRequests.delete(active));
-      active.controller = controller;
-      active.operation = operation;
       activeRequests.add(active);
     });
     await new Promise<void>((resolve, reject) => {
@@ -136,7 +140,7 @@ export class ZenXPluginDevControlServer {
       );
     });
     for (const active of this.#activeRequests) {
-      active.controller.abort(new Error("ZenX plugin dev control stopped"));
+      abortInterruptible(active, new Error("ZenX plugin dev control stopped"));
     }
     await Promise.allSettled(
       [...this.#activeRequests].map((active) => active.operation),
@@ -153,29 +157,40 @@ async function serveDevRequest(options: {
   response: import("node:http").ServerResponse;
   token: string;
   options: ZenXPluginDevControlOptions;
-  controller: AbortController;
+  active: ActiveDevRequest;
   bodyTimeoutMs: number;
   transactionTimeoutMs: number;
 }): Promise<void> {
-  const { request, response, controller } = options;
+  const { request, response, active } = options;
+  const { controller } = active;
   response.setHeader("content-type", "application/json");
   response.setHeader("connection", "close");
   const abortDisconnected = (): void => {
     if (!response.writableEnded) {
-      controller.abort(new Error("Plugin dev client disconnected"));
+      abortInterruptible(active, new Error("Plugin dev client disconnected"));
     }
   };
   request.once("aborted", abortDisconnected);
   response.once("close", abortDisconnected);
-  const transactionTimer = setTimeout(
-    () =>
-      controller.abort(
-        new Error(
-          `Plugin dev transaction timed out after ${String(options.transactionTimeoutMs)}ms`,
-        ),
+  let transactionTimer: NodeJS.Timeout | undefined = setTimeout(() => {
+    abortInterruptible(
+      active,
+      new Error(
+        `Plugin dev transaction timed out after ${String(options.transactionTimeoutMs)}ms`,
       ),
-    options.transactionTimeoutMs,
-  );
+    );
+  }, options.transactionTimeoutMs);
+  let commitPhaseEntered = false;
+  const enterCommitPhase = (): void => {
+    if (commitPhaseEntered) {
+      throw new Error("Plugin dev commit phase was entered more than once");
+    }
+    controller.signal.throwIfAborted();
+    commitPhaseEntered = true;
+    active.interruptible = false;
+    clearTimeout(transactionTimer);
+    transactionTimer = undefined;
+  };
   try {
     if (request.method !== "POST" || request.url !== "/v1/plugins/dev") {
       respond(response, 404, { message: "Unknown plugin dev route" });
@@ -198,7 +213,11 @@ async function serveDevRequest(options: {
     const installed = await options.options.install(
       devRequest,
       controller.signal,
+      enterCommitPhase,
     );
+    if (!commitPhaseEntered) {
+      throw new Error("Plugin dev install did not enter its commit phase");
+    }
     controller.signal.throwIfAborted();
     if (
       installed.pluginId !== devRequest.pluginId ||
@@ -219,10 +238,14 @@ async function serveDevRequest(options: {
       message: error instanceof Error ? error.message : String(error),
     });
   } finally {
-    clearTimeout(transactionTimer);
+    if (transactionTimer !== undefined) clearTimeout(transactionTimer);
     request.off("aborted", abortDisconnected);
     response.off("close", abortDisconnected);
   }
+}
+
+function abortInterruptible(active: ActiveDevRequest, reason: Error): void {
+  if (active.interruptible) active.controller.abort(reason);
 }
 
 function assertDevRequest(value: unknown): ZenXPluginDevRequest {

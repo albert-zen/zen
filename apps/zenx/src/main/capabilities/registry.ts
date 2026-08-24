@@ -185,7 +185,10 @@ export class ZenXCapabilityRegistry
       packageName: string;
       source: ZenXPluginProfileSource;
     },
-    options: { signal?: AbortSignal } = {},
+    options: {
+      signal?: AbortSignal;
+      enterCommitPhase?: () => void;
+    } = {},
   ): Promise<void> {
     await this.#serializeConfigurationMutation(async () => {
       const manifest = validateManifest(capabilityPackage.manifest);
@@ -216,10 +219,11 @@ export class ZenXCapabilityRegistry
               manifestPath: capabilityPackage.manifestPath,
             },
           };
-          options.signal?.throwIfAborted();
-          await this.#configurationStore.save(
-            this.#configuration({ packages: nextPackages }),
-          );
+          const nextConfiguration = this.#configuration({
+            packages: nextPackages,
+          });
+          enterCatalogCommit(options);
+          await this.#configurationStore.save(nextConfiguration);
           this.#packageDescriptors = nextPackages;
         }
         const registration = { package: capabilityPackage, source } as const;
@@ -267,17 +271,16 @@ export class ZenXCapabilityRegistry
       const runtimeStage = shouldEnable
         ? await this.#stagePluginRuntime(registration)
         : undefined;
+      const nextConfiguration = this.#configuration({
+        packages: nextPackages,
+        uninstalled: nextUninstalled,
+        ...(profile === undefined
+          ? {}
+          : { profileGeneration: profile.generation }),
+      });
       try {
-        options.signal?.throwIfAborted();
-        await this.#configurationStore.save(
-          this.#configuration({
-            packages: nextPackages,
-            uninstalled: nextUninstalled,
-            ...(profile === undefined
-              ? {}
-              : { profileGeneration: profile.generation }),
-          }),
-        );
+        enterCatalogCommit(options);
+        await this.#configurationStore.save(nextConfiguration);
       } catch (error) {
         await runtimeStage?.rollback();
         throw error;
@@ -304,6 +307,7 @@ export class ZenXCapabilityRegistry
     options: {
       allowSameVersionDevReload?: boolean;
       signal?: AbortSignal;
+      enterCommitPhase?: () => void;
     } = {},
   ): Promise<void> {
     await this.#serializeConfigurationMutation(async () => {
@@ -355,20 +359,19 @@ export class ZenXCapabilityRegistry
         ...this.#packageDescriptors,
         [manifest.id]: nextDescriptor,
       };
+      const nextConfiguration = this.#configuration({
+        packages: nextPackages,
+        ...(profile === undefined
+          ? {}
+          : { profileGeneration: profile.generation }),
+      });
 
       try {
         if (shouldEnable && profile === undefined) {
           await this.#stopPluginRuntimeWithRollback(manifest.id, previous);
         }
-        options.signal?.throwIfAborted();
-        await this.#configurationStore.save(
-          this.#configuration({
-            packages: nextPackages,
-            ...(profile === undefined
-              ? {}
-              : { profileGeneration: profile.generation }),
-          }),
-        );
+        enterCatalogCommit(options);
+        await this.#configurationStore.save(nextConfiguration);
       } catch (error) {
         await runtimeStage?.rollback();
         if (shouldEnable && profile === undefined) {
@@ -1683,6 +1686,17 @@ export class ZenXCapabilityRegistry
           }),
     };
   }
+}
+
+function enterCatalogCommit(options: {
+  signal?: AbortSignal;
+  enterCommitPhase?: () => void;
+}): void {
+  if (options.enterCommitPhase !== undefined) {
+    options.enterCommitPhase();
+    return;
+  }
+  options.signal?.throwIfAborted();
 }
 
 function isProfileSource(value: unknown): value is ZenXPluginProfileSource {

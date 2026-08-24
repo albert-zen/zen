@@ -485,14 +485,14 @@ async function startPluginDevControl(
   pluginDevControl = await ZenXPluginDevControlServer.start({
     descriptorFile: join(userDataDirectory, "runtime", "plugin-dev.json"),
     tokenFile: join(userDataDirectory, "runtime", "plugin-dev.token"),
-    install: async (request, signal) =>
+    install: async (request, signal, enterCommitPhase) =>
       await capabilities.devPluginPackage(
         request.projectDirectory,
         {
           pluginId: request.pluginId,
           packageName: request.packageName,
         },
-        { signal },
+        { signal, enterCommitPhase },
       ),
     reload: async (pluginId) =>
       await manager.refreshPluginAfterCommit(pluginId),

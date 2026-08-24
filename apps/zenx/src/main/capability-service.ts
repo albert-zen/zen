@@ -484,7 +484,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   async devPluginPackage(
     projectDirectory: string,
     expected: { pluginId: string; packageName: string },
-    options: { signal?: AbortSignal; pnpmAbortGraceMs?: number } = {},
+    options: {
+      signal?: AbortSignal;
+      pnpmAbortGraceMs?: number;
+      enterCommitPhase?: () => void;
+    } = {},
   ): Promise<{
     snapshot: ZenXPluginSnapshot;
     generation: string;
@@ -530,7 +534,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     source: ZenXPluginPackageSource,
     expectedPluginId?: string,
     expectedPackageName?: string,
-    options: { signal?: AbortSignal; pnpmAbortGraceMs?: number } = {},
+    options: {
+      signal?: AbortSignal;
+      pnpmAbortGraceMs?: number;
+      enterCommitPhase?: () => void;
+    } = {},
   ): Promise<ZenXPluginSnapshot> {
     options.signal?.throwIfAborted();
     const pnpmCliPath = await resolveBundledPnpmCli({
@@ -626,7 +634,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           staged.capabilityPackage,
           catalogSource,
           profile,
-          { signal: options.signal },
+          {
+            signal: options.signal,
+            enterCommitPhase: options.enterCommitPhase,
+          },
         );
       } else {
         if (current.lifecycle === "uninstalled") {
@@ -641,6 +652,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           {
             allowSameVersionDevReload: source.mode === "dev-link",
             signal: options.signal,
+            enterCommitPhase: options.enterCommitPhase,
           },
         );
       }

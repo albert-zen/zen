@@ -12,12 +12,14 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import type { CanonicalItem } from "../../../src/item.js";
+import { requestPluginDevLink } from "@zenx/plugin-sdk";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { JsonZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
@@ -308,14 +310,14 @@ test("external public fixture completes create, dev target reload, validate, pac
     devControl = await ZenXPluginDevControlServer.start({
       descriptorFile,
       tokenFile: path.join(devUserData, "runtime", "plugin-dev.token"),
-      install: async (request, signal) =>
+      install: async (request, signal, enterCommitPhase) =>
         await devCapabilities.devPluginPackage(
           request.projectDirectory,
           {
             pluginId: request.pluginId,
             packageName: request.packageName,
           },
-          { signal },
+          { signal, enterCommitPhase },
         ),
       reload: async (pluginId) =>
         await devManager.refreshPluginAfterCommit(pluginId),
@@ -916,7 +918,7 @@ test("explicit dev-link mutation reloads the same plugin version without touchin
   }
 });
 
-test("aborted dev-link pnpm settles and discards staging before returning", async () => {
+test("dev timeout before the commit fence settles pnpm and discards staging", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-profile-dev-abort-"),
   );
@@ -930,27 +932,48 @@ test("aborted dev-link pnpm settles and discards staging before returning", asyn
     "fixture-package-abort-target-1.0.0",
   );
   const marker = path.join(directory, "pnpm-started");
-  const controller = new AbortController();
+  let devControl: ZenXPluginDevControlServer | undefined;
   const service = profileService(userData, {
     pnpmCliPath: await createStallingPnpm(directory),
     pnpmEnvironment: { ...process.env, ZENX_TEST_PNPM_MARKER: marker },
   });
   try {
     await service.initialize();
-    const mutation = service.devPluginPackage(
-      projectDirectory,
-      { pluginId: "abort-target", packageName: "@zenx-test/abort-target" },
-      { signal: controller.signal, pnpmAbortGraceMs: 20 },
+    const descriptorFile = path.join(userData, "runtime", "plugin-dev.json");
+    devControl = await ZenXPluginDevControlServer.start({
+      descriptorFile,
+      tokenFile: path.join(userData, "runtime", "plugin-dev.token"),
+      transactionTimeoutMs: 250,
+      install: async (request, signal, enterCommitPhase) =>
+        await service.devPluginPackage(
+          request.projectDirectory,
+          {
+            pluginId: request.pluginId,
+            packageName: request.packageName,
+          },
+          { signal, pnpmAbortGraceMs: 20, enterCommitPhase },
+        ),
+      reload: async () => ({ status: "reloaded" }),
+    });
+    const mutation = requestPluginDevLink(
+      descriptorFile,
+      {
+        version: 1,
+        projectDirectory,
+        pluginId: "abort-target",
+        packageName: "@zenx-test/abort-target",
+      },
+      { timeoutMs: 1_000 },
     );
     await waitForFile(marker);
-    controller.abort(new Error("fixture dev deadline"));
-    await assert.rejects(mutation, /fixture dev deadline/u);
+    await assert.rejects(mutation, /transaction timed out after 250ms/u);
     assert.deepEqual(service.pluginSnapshot().plugins, []);
     assert.deepEqual(
       await readdir(path.join(userData, "plugin-profile", "generations")),
       [],
     );
   } finally {
+    await devControl?.close();
     await service.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -993,6 +1016,260 @@ test("dev abort after runtime admission begins rolls back before Catalog commit"
       [],
     );
   } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("dev install timeout and close after its Catalog fence wait for the committed result", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-dev-install-fence-"),
+  );
+  const userData = path.join(directory, "user-data");
+  await createTarballFixture(directory, {
+    id: "install-fence",
+    packageName: "@zenx-test/install-fence",
+  });
+  const projectDirectory = path.join(
+    directory,
+    "fixture-package-install-fence-1.0.0",
+  );
+  const catalog = blockingCatalog(userData);
+  const service = profileService(userData, {
+    pnpmCliPath: pnpmCli,
+    grantStore: catalog.store,
+  });
+  let fences = 0;
+  let devControl: ZenXPluginDevControlServer | undefined;
+  const transactionTimeoutMs = 3_000;
+  try {
+    await service.initialize();
+    const blocked = catalog.blockNext(() => assert.equal(fences, 1));
+    const descriptorFile = path.join(userData, "runtime", "plugin-dev.json");
+    devControl = await ZenXPluginDevControlServer.start({
+      descriptorFile,
+      tokenFile: path.join(userData, "runtime", "plugin-dev.token"),
+      transactionTimeoutMs,
+      install: async (request, signal, enterCommitPhase) =>
+        await service.devPluginPackage(
+          request.projectDirectory,
+          {
+            pluginId: request.pluginId,
+            packageName: request.packageName,
+          },
+          {
+            signal,
+            enterCommitPhase: () => {
+              fences += 1;
+              enterCommitPhase();
+            },
+          },
+        ),
+      reload: async () => ({ status: "reloaded" }),
+    });
+    const startedAt = Date.now();
+    const requested = requestPluginDevLink(
+      descriptorFile,
+      {
+        version: 1,
+        projectDirectory,
+        pluginId: "install-fence",
+        packageName: "@zenx-test/install-fence",
+      },
+      { timeoutMs: 5_000 },
+    );
+    await blocked.started;
+    const closing = devControl.close();
+    await delay(
+      Math.max(0, transactionTimeoutMs - (Date.now() - startedAt) + 25),
+    );
+    assert.equal(
+      await Promise.race([
+        closing.then(() => "closed"),
+        delay(20).then(() => "waiting"),
+      ]),
+      "waiting",
+    );
+    blocked.release();
+    const result = await requested;
+    await closing;
+    assert.equal(result.reload.status, "reloaded");
+    assert.equal(fences, 1);
+    assert.equal(
+      (await readCatalog(userData)).profileGeneration,
+      result.generation,
+    );
+    assert.equal(service.pluginSnapshot().plugins[0]?.id, "install-fence");
+  } finally {
+    catalog.release();
+    await devControl?.close();
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("dev Catalog save rejection after the fence reports failure without a commit", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-dev-save-fail-"),
+  );
+  const userData = path.join(directory, "user-data");
+  await createTarballFixture(directory, {
+    id: "save-fail",
+    packageName: "@zenx-test/save-fail",
+  });
+  const projectDirectory = path.join(
+    directory,
+    "fixture-package-save-fail-1.0.0",
+  );
+  const delegate = new JsonZenXCapabilityGrantStore(
+    path.join(userData, "capability-grants.json"),
+  );
+  let fences = 0;
+  const service = profileService(userData, {
+    pnpmCliPath: pnpmCli,
+    grantStore: {
+      load: async () => await delegate.load(),
+      save: async () => {
+        assert.equal(fences, 1);
+        throw new Error("fixture fenced Catalog failure");
+      },
+    },
+  });
+  let devControl: ZenXPluginDevControlServer | undefined;
+  try {
+    await service.initialize();
+    const descriptorFile = path.join(userData, "runtime", "plugin-dev.json");
+    devControl = await ZenXPluginDevControlServer.start({
+      descriptorFile,
+      tokenFile: path.join(userData, "runtime", "plugin-dev.token"),
+      install: async (request, signal, enterCommitPhase) =>
+        await service.devPluginPackage(
+          request.projectDirectory,
+          {
+            pluginId: request.pluginId,
+            packageName: request.packageName,
+          },
+          {
+            signal,
+            enterCommitPhase: () => {
+              fences += 1;
+              enterCommitPhase();
+            },
+          },
+        ),
+      reload: async () => ({ status: "reloaded" }),
+    });
+    await assert.rejects(
+      requestPluginDevLink(
+        descriptorFile,
+        {
+          version: 1,
+          projectDirectory,
+          pluginId: "save-fail",
+          packageName: "@zenx-test/save-fail",
+        },
+        { timeoutMs: 1_000 },
+      ),
+      /fixture fenced Catalog failure/u,
+    );
+    assert.equal(fences, 1);
+    assert.deepEqual(service.pluginSnapshot().plugins, []);
+    assert.deepEqual(
+      await readdir(path.join(userData, "plugin-profile", "generations")),
+      [],
+    );
+    await assert.rejects(readCatalog(userData), /ENOENT/u);
+  } finally {
+    await devControl?.close();
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("dev same-version update commits after a post-fence client disconnect", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-dev-update-fence-"),
+  );
+  const userData = path.join(directory, "user-data");
+  await createTarballFixture(directory, {
+    id: "update-fence",
+    packageName: "@zenx-test/update-fence",
+    outputPrefix: "before:",
+  });
+  const projectDirectory = path.join(
+    directory,
+    "fixture-package-update-fence-1.0.0",
+  );
+  const catalog = blockingCatalog(userData);
+  const service = profileService(userData, {
+    pnpmCliPath: pnpmCli,
+    grantStore: catalog.store,
+  });
+  let fences = 0;
+  let devControl: ZenXPluginDevControlServer | undefined;
+  try {
+    await service.initialize();
+    await service.installPluginPackage({
+      mode: "dev-link",
+      packageSpec: projectDirectory,
+    });
+    const previousGeneration = (await readCatalog(userData)).profileGeneration;
+    await replaceRuntimePrefix(projectDirectory, "before:", "after:");
+    const blocked = catalog.blockNext(() => assert.equal(fences, 1));
+    const descriptorFile = path.join(userData, "runtime", "plugin-dev.json");
+    const tokenFile = path.join(userData, "runtime", "plugin-dev.token");
+    devControl = await ZenXPluginDevControlServer.start({
+      descriptorFile,
+      tokenFile,
+      transactionTimeoutMs: 1_000,
+      install: async (request, signal, enterCommitPhase) =>
+        await service.devPluginPackage(
+          request.projectDirectory,
+          {
+            pluginId: request.pluginId,
+            packageName: request.packageName,
+          },
+          {
+            signal,
+            enterCommitPhase: () => {
+              fences += 1;
+              enterCommitPhase();
+            },
+          },
+        ),
+      reload: async () => ({ status: "reloaded" }),
+    });
+    const client = await rawProfileDevRequest(descriptorFile, tokenFile, {
+      version: 1,
+      projectDirectory,
+      pluginId: "update-fence",
+      packageName: "@zenx-test/update-fence",
+    });
+    client.once("error", () => undefined);
+    await blocked.started;
+    client.destroy();
+    const closing = devControl.close();
+    assert.equal(
+      await Promise.race([
+        closing.then(() => "closed"),
+        delay(20).then(() => "waiting"),
+      ]),
+      "waiting",
+    );
+    blocked.release();
+    await closing;
+    assert.equal(fences, 1);
+    assert.notEqual(
+      (await readCatalog(userData)).profileGeneration,
+      previousGeneration,
+    );
+    assert.equal(
+      await invoke(service, "update_fence_echo", "committed"),
+      "after:committed",
+    );
+  } finally {
+    catalog.release();
+    await devControl?.close();
     await service.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -1415,6 +1692,73 @@ function profileService(
     bundledProvidersOnly: true,
     ...options,
   });
+}
+
+function blockingCatalog(userDataDirectory: string) {
+  const delegate = new JsonZenXCapabilityGrantStore(
+    path.join(userDataDirectory, "capability-grants.json"),
+  );
+  let active:
+    | {
+        beforeSave: () => void;
+        started: ReturnType<typeof deferred<void>>;
+        release: ReturnType<typeof deferred<void>>;
+      }
+    | undefined;
+  return {
+    store: {
+      load: async () => await delegate.load(),
+      save: async (configuration: Parameters<typeof delegate.save>[0]) => {
+        const blocked = active;
+        if (blocked !== undefined) {
+          blocked.beforeSave();
+          blocked.started.resolve(undefined);
+          await blocked.release.promise;
+          if (active === blocked) active = undefined;
+        }
+        await delegate.save(configuration);
+      },
+    },
+    blockNext: (beforeSave: () => void) => {
+      assert.equal(active, undefined);
+      const blocked = {
+        beforeSave,
+        started: deferred<void>(),
+        release: deferred<void>(),
+      };
+      active = blocked;
+      return {
+        started: blocked.started.promise,
+        release: () => blocked.release.resolve(undefined),
+      };
+    },
+    release: () => active?.release.resolve(undefined),
+  };
+}
+
+async function rawProfileDevRequest(
+  descriptorFile: string,
+  tokenFile: string,
+  body: {
+    version: 1;
+    projectDirectory: string;
+    packageName: string;
+    pluginId: string;
+  },
+) {
+  const descriptor = JSON.parse(await readFile(descriptorFile, "utf8")) as {
+    url: string;
+  };
+  const token = (await readFile(tokenFile, "utf8")).trim();
+  const request = httpRequest(new URL("/v1/plugins/dev", descriptor.url), {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+  });
+  request.end(JSON.stringify(body));
+  return request;
 }
 
 async function readCatalog(userDataDirectory: string): Promise<{

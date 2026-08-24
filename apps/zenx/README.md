@@ -93,8 +93,16 @@ the generation. Package metadata, manifest, runtime containment, and UI relation
 use the public `@zenx/plugin-sdk` validator; isolated UI entries remain inline HTML.
 Publication after that commit is an in-memory, non-rejecting swap; restart loads only
 the recorded generation. A later AppServer capability refresh failure is reported as
-such without misreporting the already committed installation as failed. npm/Git/
-The profile source/update matrix is shared by Settings and the public developer kit. Stable local installs copy a snapshot; only an explicitly enabled `ZENX_PLUGIN_DEV=1` Host publishes the private `runtime/plugin-dev.json` target used by `zenx-plugin dev`, and that path uses the canonical `dev-link` transaction plus target-only reload.
+such without misreporting the already committed installation as failed. npm, Git,
+local-copy, dev-link, and the full source/update matrix are shared by Settings and the
+public developer kit. Stable local installs copy a snapshot; only an explicitly enabled
+`ZENX_PLUGIN_DEV=1` Host publishes the private `runtime/plugin-dev.json` target used by
+`zenx-plugin dev`, and that path uses the canonical `dev-link` transaction plus target-only
+reload. Dev cancellation remains effective through staging and runtime/UI admission.
+Immediately before the one Catalog save, a synchronous fence checks cancellation and
+makes that request non-interruptible; Host timeout/disconnect/shutdown then waits for save
+and the existing non-fallible publish rather than returning an in-process failure while a
+still-active save can later commit.
 Update validates and stages the replacement runtime/UI/storage migration before the
 catalog changes; a failed stage, migration, catalog save, or publish restores the old
 version and its storage. `ToolResultItem` keeps optional namespaced, JSON-compatible
