@@ -82,10 +82,12 @@ import {
   JsonFileMarketplaceCatalogTransport,
   MarketplaceCatalogService,
 } from "./marketplace-catalog.js";
+import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
+let pluginDevControl: ZenXPluginDevControlServer | undefined;
 const projectProjection = new ZenXProjectProjection();
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
@@ -108,6 +110,8 @@ delete process.env["ZENX_PROJECT_ACCEPTANCE_CONFIG"];
 const externalZasAcceptanceEnvironment =
   process.env["ZENX_EXTERNAL_ZAS_ACCEPTANCE_CONFIG"];
 delete process.env["ZENX_EXTERNAL_ZAS_ACCEPTANCE_CONFIG"];
+const pluginDevEnabled = process.env["ZENX_PLUGIN_DEV"] === "1";
+delete process.env["ZENX_PLUGIN_DEV"];
 const projectWorkspaceAcceptancePath = projectWorkspaceAcceptanceConfigPath(
   process.argv,
   projectWorkspaceAcceptanceEnvironment,
@@ -281,8 +285,14 @@ app.whenReady().then(async () => {
       "bundled",
     );
     installCapabilityIpc(capabilityService, appServerManager, marketplace);
-    if (startupError === undefined) await appServerManager.start();
-    else appServerManager.reportStartupError(startupError);
+    if (startupError === undefined) {
+      await appServerManager.start();
+      await startPluginDevControl(
+        userDataDirectory,
+        capabilityService,
+        appServerManager,
+      );
+    } else appServerManager.reportStartupError(startupError);
   } catch (error) {
     console.error("Could not start Zen App Server", error);
     if (appServerManager === undefined) {
@@ -313,6 +323,11 @@ app.whenReady().then(async () => {
         });
         await selfControlPort.attach(appServerManager);
         await appServerManager.start();
+        await startPluginDevControl(
+          userDataDirectory,
+          capabilityService!,
+          appServerManager,
+        );
       } else {
         await selfControlPort.attach(appServerManager);
         const restartErrors: Error[] = [];
@@ -342,6 +357,11 @@ app.whenReady().then(async () => {
           try {
             await appServerManager.restart(hostConfig);
             hostRestarted = true;
+            await startPluginDevControl(
+              userDataDirectory,
+              capabilityService!,
+              appServerManager,
+            );
           } catch (error) {
             restartErrors.push(normalizeTitleOwnershipFailure(error));
           }
@@ -430,6 +450,8 @@ app.on("second-instance", () => {
 async function stopZenXHost(): Promise<void> {
   const errors: Error[] = [];
   try {
+    await pluginDevControl?.close();
+    pluginDevControl = undefined;
   } catch (error) {
     errors.push(normalizeTitleOwnershipFailure(error));
   }
@@ -452,6 +474,25 @@ async function stopZenXHost(): Promise<void> {
   if (errors.length > 0) {
     throw new AggregateError(errors, "Could not fully stop ZenX before quit");
   }
+}
+
+async function startPluginDevControl(
+  userDataDirectory: string,
+  capabilities: ZenXCapabilityService,
+  manager: AppServerManager,
+): Promise<void> {
+  if (!pluginDevEnabled || pluginDevControl !== undefined) return;
+  pluginDevControl = await ZenXPluginDevControlServer.start({
+    descriptorFile: join(userDataDirectory, "runtime", "plugin-dev.json"),
+    tokenFile: join(userDataDirectory, "runtime", "plugin-dev.token"),
+    install: async (request) =>
+      await capabilities.devPluginPackage(request.projectDirectory, {
+        pluginId: request.pluginId,
+        packageName: request.packageName,
+      }),
+    reload: async (pluginId) =>
+      await manager.refreshPluginAfterCommit(pluginId),
+  });
 }
 
 function desktopPlatform(platform: NodeJS.Platform): ZenXDesktopPlatform {

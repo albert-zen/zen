@@ -94,7 +94,7 @@ use the public `@zenx/plugin-sdk` validator; isolated UI entries remain inline H
 Publication after that commit is an in-memory, non-rejecting swap; restart loads only
 the recorded generation. A later AppServer capability refresh failure is reported as
 such without misreporting the already committed installation as failed. npm/Git/
-local-copy/dev-link and the full source/update matrix remain later slices.
+The profile source/update matrix is shared by Settings and the public developer kit. Stable local installs copy a snapshot; only an explicitly enabled `ZENX_PLUGIN_DEV=1` Host publishes the private `runtime/plugin-dev.json` target used by `zenx-plugin dev`, and that path uses the canonical `dev-link` transaction plus target-only reload.
 Update validates and stages the replacement runtime/UI/storage migration before the
 catalog changes; a failed stage, migration, catalog save, or publish restores the old
 version and its storage. `ToolResultItem` keeps optional namespaced, JSON-compatible

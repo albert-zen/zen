@@ -25,6 +25,7 @@ import {
   MarketplaceCatalogService,
   marketplacePackageSource,
 } from "../src/main/marketplace-catalog.js";
+import { ZenXPluginDevControlServer } from "../src/main/plugin-dev-control.js";
 
 const run = promisify(execFile);
 const pnpmCli = fileURLToPath(
@@ -238,6 +239,182 @@ test("public create and pack output installs through Agent discovery and invocat
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("external public fixture completes create, dev target reload, validate, pack, and ordinary profile run", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-public-dev-flow-"),
+  );
+  const project = path.join(directory, "external-plugin");
+  const devUserData = path.join(directory, "dev-user-data");
+  const installUserData = path.join(directory, "install-user-data");
+  const sdkTarballs = path.join(directory, "sdk-tarballs");
+  await mkdir(sdkTarballs);
+  let devControl: ZenXPluginDevControlServer | undefined;
+  const devCapabilities = profileService(devUserData, { pnpmCliPath: pnpmCli });
+  const devManager = profileManager(directory, "dev", devCapabilities);
+  const installedCapabilities = profileService(installUserData, {
+    pnpmCliPath: pnpmCli,
+  });
+  const installedManager = profileManager(
+    directory,
+    "installed",
+    installedCapabilities,
+  );
+  try {
+    await run(process.execPath, [
+      pluginSdkCli,
+      "create",
+      project,
+      "--name",
+      "@external/dev-flow",
+      "--id",
+      "dev-flow",
+    ]);
+    const packedSdk = await run(
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      ["pack", pluginSdkRoot, "--json", "--pack-destination", sdkTarballs],
+      { cwd: directory },
+    );
+    const sdkFilename = (
+      JSON.parse(packedSdk.stdout) as [{ filename: string }]
+    )[0].filename;
+    const projectPackageFile = path.join(project, "package.json");
+    const projectPackage = JSON.parse(
+      await readFile(projectPackageFile, "utf8"),
+    ) as { dependencies: Record<string, string> };
+    projectPackage.dependencies["@zenx/plugin-sdk"] = `file:${path.join(
+      sdkTarballs,
+      sdkFilename,
+    )}`;
+    await writeFile(
+      projectPackageFile,
+      `${JSON.stringify(projectPackage, null, 2)}\n`,
+    );
+    await run(
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      [
+        "install",
+        "--ignore-scripts",
+        "--no-save",
+        path.join(sdkTarballs, sdkFilename),
+      ],
+      { cwd: project },
+    );
+
+    await devCapabilities.initialize();
+    await devManager.start();
+    const descriptorFile = path.join(devUserData, "runtime", "plugin-dev.json");
+    devControl = await ZenXPluginDevControlServer.start({
+      descriptorFile,
+      tokenFile: path.join(devUserData, "runtime", "plugin-dev.token"),
+      install: async (request) =>
+        await devCapabilities.devPluginPackage(request.projectDirectory, {
+          pluginId: request.pluginId,
+          packageName: request.packageName,
+        }),
+      reload: async (pluginId) =>
+        await devManager.refreshPluginAfterCommit(pluginId),
+    });
+    const developed = await run(process.execPath, [
+      pluginSdkCli,
+      "dev",
+      project,
+      "--target",
+      descriptorFile,
+    ]);
+    assert.deepEqual(JSON.parse(developed.stdout).reload, {
+      status: "reloaded",
+    });
+    await assertAgentPluginFlow(devManager, directory, "dev", "dev flow");
+
+    const validated = await run(process.execPath, [
+      pluginSdkCli,
+      "validate",
+      project,
+    ]);
+    assert.equal(JSON.parse(validated.stdout).pluginId, "dev-flow");
+    const packed = await run(process.execPath, [pluginSdkCli, "pack", project]);
+    const tarball = path.join(
+      project,
+      (JSON.parse(packed.stdout) as [{ filename: string }])[0].filename,
+    );
+
+    await installedCapabilities.initialize();
+    await installedCapabilities.installPluginTarball(tarball);
+    await installedManager.start();
+    await assertAgentPluginFlow(
+      installedManager,
+      directory,
+      "installed",
+      "ordinary install",
+    );
+  } finally {
+    await devControl?.close();
+    await devManager.stop();
+    await installedManager.stop();
+    await devCapabilities.close();
+    await installedCapabilities.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function profileManager(
+  directory: string,
+  name: string,
+  capabilities: ZenXCapabilityService,
+): AppServerManager {
+  return new AppServerManager({
+    entryPath: fileURLToPath(
+      new URL("../src/main/app-server-host.ts", import.meta.url),
+    ),
+    tokenFile: path.join(directory, `${name}-app-server.token`),
+    hostConfig: {
+      cwd: directory,
+      dataDirectory: path.join(directory, `${name}-zen-data`),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+    },
+    capabilityHost: capabilities,
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+}
+
+async function assertAgentPluginFlow(
+  manager: AppServerManager,
+  directory: string,
+  name: string,
+  probe: string,
+): Promise<void> {
+  const thread = (await manager.request("thread/start", {})).thread;
+  await runTurn(
+    manager,
+    thread.id,
+    '!tool zenx_plugin {"operation":"discover"}',
+  );
+  await runTurn(
+    manager,
+    thread.id,
+    '!tool zenx_plugin {"operation":"read","pluginId":"dev-flow"}',
+  );
+  await runTurn(
+    manager,
+    thread.id,
+    `!tool dev_flow_run ${JSON.stringify({ probe })}`,
+  );
+  const items = await journalItems(
+    path.join(directory, `${name}-zen-data`, "threads", `${thread.id}.jsonl`),
+  );
+  const results = items.filter((item) => item.type === "tool_result");
+  assert.equal(JSON.parse(results.at(-3)!.output).plugins[0].id, "dev-flow");
+  assert.match(
+    JSON.parse(results.at(-2)!.output).plugin.mainDocument,
+    /dev_flow_run/u,
+  );
+  assert.equal(results.at(-1)!.output, JSON.stringify({ probe }));
+}
 
 test("restart loads only the Catalog-selected generation without the source tarball or pnpm", async () => {
   const directory = await mkdtemp(
@@ -615,6 +792,93 @@ test("stable local copies are immutable while explicit development links reload 
       ["stable-local", "local-copy"],
       ["dev-live", "dev-link"],
     ]);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("explicit dev-link mutation reloads the same plugin version without touching another active plugin", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-dev-reload-"),
+  );
+  const userData = path.join(directory, "user-data");
+  await createTarballFixture(directory, {
+    id: "dev-target",
+    packageName: "@zenx-test/dev-target",
+    outputPrefix: "target-one:",
+  });
+  await createTarballFixture(directory, {
+    id: "dev-neighbor",
+    packageName: "@zenx-test/dev-neighbor",
+    outputPrefix: "neighbor:",
+  });
+  const targetDirectory = path.join(
+    directory,
+    "fixture-package-dev-target-1.0.0",
+  );
+  const neighborDirectory = path.join(
+    directory,
+    "fixture-package-dev-neighbor-1.0.0",
+  );
+  const service = profileService(userData, { pnpmCliPath: pnpmCli });
+  try {
+    await service.initialize();
+    await service.installPluginPackage({
+      mode: "dev-link",
+      packageSpec: targetDirectory,
+    });
+    await service.installPluginPackage({
+      mode: "dev-link",
+      packageSpec: neighborDirectory,
+    });
+    const neighborGeneration = service
+      .pluginSnapshot()
+      .plugins.find((plugin) => plugin.id === "dev-neighbor")
+      ?.profileSource?.resolvedSpec;
+
+    await replaceRuntimePrefix(targetDirectory, "target-one:", "target-two:");
+    await service.installPluginPackage(
+      { mode: "dev-link", packageSpec: targetDirectory },
+      "dev-target",
+    );
+
+    assert.equal(
+      await invoke(service, "dev_target_echo", "after"),
+      "target-two:after",
+    );
+    assert.equal(
+      await invoke(service, "dev_neighbor_echo", "still"),
+      "neighbor:still",
+    );
+    assert.equal(
+      service
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === "dev-neighbor")?.profileSource
+        ?.resolvedSpec,
+      neighborGeneration,
+    );
+    const committedGeneration = (await readCatalog(userData)).profileGeneration;
+    await replaceRuntimePrefix(
+      targetDirectory,
+      'pluginId:"dev-target"',
+      'pluginId:"wrong-target"',
+    );
+    await assert.rejects(
+      service.installPluginPackage(
+        { mode: "dev-link", packageSpec: targetDirectory },
+        "dev-target",
+      ),
+      /ready identity mismatch/u,
+    );
+    assert.equal(
+      await invoke(service, "dev_target_echo", "rollback"),
+      "target-two:rollback",
+    );
+    assert.equal(
+      (await readCatalog(userData)).profileGeneration,
+      committedGeneration,
+    );
   } finally {
     await service.close();
     await rm(directory, { recursive: true, force: true });

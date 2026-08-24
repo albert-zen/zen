@@ -92,7 +92,11 @@ install/disable/uninstall/reinstall/delete-data 路径；卸载保留既有 Room
 generation 恢复。升级时，同一 transaction 会把 identity 完全匹配的旧 bundled Rooms Catalog descriptor
 收编进 profile，并原样保留 disabled/uninstalled 与数据状态。只有 Host-owned App Resources allowlist 可以启用其 bundled runtime 与 trusted UI，
 外部 tarball 自报同类信任会被拒绝。Browser、Computer、ZenX self-control 与 Triggers 仍将在后续切片
-迁移到同一路径；薄 Marketplace
+迁移到同一路径。
+公开 `zenx-plugin dev` 只连接显式开发模式启动的单个本机 Host，复用上述 `dev-link` transaction；同版本
+reload 仅在该显式语义下成立，并只更新目标插件 runtime 与 App Server capability projection，不重启或替换
+其他插件实例。
+薄 Marketplace
 只提供 package metadata 与 installer 入口，不成为 registry、发布后台或新的 package authority。
 
 目标 Plugin Platform 保持 Zen `AgentRuntime` 拥有 provider-neutral agent loop 和 canonical

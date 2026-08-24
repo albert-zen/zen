@@ -277,6 +277,82 @@ test("post-commit capability refresh reports failure without rejecting the commi
   }
 });
 
+test("refreshes one plugin projection in the existing target App Server process", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-plugin-refresh-"),
+  );
+  let snapshot = pluginHostSnapshot("Target one");
+  const capabilityHost: ZenXCapabilityHost = {
+    hostSnapshot: () => structuredClone(snapshot),
+    execute: async () => ({ output: "ok", exitCode: 0 }),
+  };
+  const manager = new AppServerManager({
+    entryPath: path.resolve("src/main/app-server-host.ts"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: process.cwd(),
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+    },
+    capabilityHost,
+    execArgv: ["--import", "tsx"],
+    startupTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    const processId = manager.processId;
+    snapshot = pluginHostSnapshot("Target two");
+    assert.deepEqual(await manager.refreshPluginAfterCommit("target"), {
+      status: "reloaded",
+    });
+    assert.equal(manager.processId, processId);
+    assert.deepEqual(manager.status, { type: "ready", reconnected: false });
+    snapshot = {
+      ...snapshot,
+      definitions: [
+        ...snapshot.definitions,
+        {
+          name: "neighbor_added",
+          description: "Out-of-scope neighbor",
+          inputSchema: { type: "object" },
+        },
+      ],
+    };
+    const rejected = await manager.refreshPluginAfterCommit("target");
+    assert.equal(rejected.status, "failed");
+    if (rejected.status === "failed") {
+      assert.match(rejected.message, /non-target capability projection/u);
+    }
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function pluginHostSnapshot(description: string) {
+  const tool = {
+    name: "target_echo",
+    description,
+    inputSchema: { type: "object" },
+  };
+  return {
+    definitions: [tool],
+    plugins: [
+      {
+        id: "target",
+        name: "Target",
+        description: "Target plugin",
+        status: "enabled" as const,
+        mainDocument: "Target main document",
+        tools: [tool],
+      },
+    ],
+  };
+}
+
 test("recovers a killed hosted App Server and admits one subsequent Turn", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-crash-"));
   const invocations: string[] = [];

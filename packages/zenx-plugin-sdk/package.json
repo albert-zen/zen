@@ -1,7 +1,7 @@
 {
   "name": "@zenx/plugin-sdk",
   "version": "0.1.0",
-  "description": "Public ZenX plugin manifest, Host SDK v1 types, fixture Host, and developer CLI",
+  "description": "Public ZenX plugin manifest, Host SDK v1 types, fixture Host, and create/dev/validate/pack CLI",
   "type": "module",
   "bin": {
     "zenx-plugin": "./dist/cli.js"

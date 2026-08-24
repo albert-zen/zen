@@ -41,6 +41,12 @@ export type HostCommand =
       requestId: string;
       threadId: string;
     }
+  | {
+      type: "capabilities/replace";
+      requestId: string;
+      targetPluginId: string;
+      capabilities: ZenXCapabilityHostSnapshot;
+    }
   | CapabilityResultCommand;
 
 export interface CapabilityResultCommand {
@@ -90,7 +96,12 @@ export type HostEvent =
         cwd: string;
       };
     }
-  | { type: "capability/cancel"; invocationId: string };
+  | { type: "capability/cancel"; invocationId: string }
+  | {
+      type: "capabilities/replaced";
+      requestId: string;
+      error?: string;
+    };
 
 export function isHostCommand(value: unknown): value is HostCommand {
   if (typeof value !== "object" || value === null || !("type" in value)) {
@@ -101,12 +112,18 @@ export function isHostCommand(value: unknown): value is HostCommand {
     requestId?: unknown;
     options?: unknown;
     threadId?: unknown;
+    targetPluginId?: unknown;
+    capabilities?: unknown;
   };
   const type = command.type;
   return (
     type === "start" ||
     type === "shutdown" ||
     type === "capability/result" ||
+    (type === "capabilities/replace" &&
+      typeof command.requestId === "string" &&
+      typeof command.targetPluginId === "string" &&
+      isCapabilityHostSnapshot(command.capabilities)) ||
     (type === "thread-attachments/read" &&
       typeof command.requestId === "string" &&
       typeof command.threadId === "string") ||
@@ -161,6 +178,9 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
   return (
     (event.type === "ready" && typeof event.url === "string") ||
     (event.type === "error" && typeof event.message === "string") ||
+    (event.type === "capabilities/replaced" &&
+      typeof event.requestId === "string" &&
+      (event.error === undefined || typeof event.error === "string")) ||
     (event.type === "thread-attachments/result" &&
       typeof event.requestId === "string" &&
       ((hasAttachments &&
@@ -177,6 +197,18 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     ((event.type === "capability/invoke" ||
       event.type === "capability/cancel") &&
       typeof event.invocationId === "string")
+  );
+}
+
+function isCapabilityHostSnapshot(
+  value: unknown,
+): value is ZenXCapabilityHostSnapshot {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { definitions?: unknown }).definitions) &&
+    ((value as { plugins?: unknown }).plugins === undefined ||
+      Array.isArray((value as { plugins?: unknown }).plugins))
   );
 }
 

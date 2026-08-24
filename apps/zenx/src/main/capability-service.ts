@@ -481,6 +481,34 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     );
   }
 
+  async devPluginPackage(
+    projectDirectory: string,
+    expected: { pluginId: string; packageName: string },
+  ): Promise<{
+    snapshot: ZenXPluginSnapshot;
+    generation: string;
+    packageName: string;
+    pluginId: string;
+  }> {
+    return await this.#serializeServiceMutation(async () => {
+      const snapshot = await this.#mutatePluginPackage(
+        { mode: "dev-link", packageSpec: projectDirectory },
+        expected.pluginId,
+        expected.packageName,
+      );
+      const generation = this.#registry.profileGeneration();
+      if (generation === undefined) {
+        throw new Error("Plugin dev-link mutation did not commit a generation");
+      }
+      return {
+        snapshot,
+        generation,
+        packageName: expected.packageName,
+        pluginId: expected.pluginId,
+      };
+    });
+  }
+
   async installBundledPluginPackage(
     tarballPath: string,
     expected: { pluginId: string; packageName: string },
@@ -602,6 +630,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           staged.capabilityPackage,
           catalogSource,
           profile,
+          { allowSameVersionDevReload: source.mode === "dev-link" },
         );
       }
     } catch (error) {

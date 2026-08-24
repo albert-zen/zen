@@ -205,6 +205,73 @@ test("propagates cancellation to the main-process provider", async () => {
   assert.equal(events.at(-1)?.type, "capability/cancel");
 });
 
+test("replaces one target projection while an invocation from another plugin remains active", async () => {
+  const events: HostEvent[] = [];
+  const neighbor = tool("neighbor_wait", "Neighbor wait");
+  const targetOne = tool("target_echo", "Target one");
+  const targetTwo = tool("target_echo", "Target two");
+  const composition = createZenXHostToolEnvironment({
+    capabilities: {
+      definitions: [neighbor, targetOne],
+      plugins: [plugin("neighbor", neighbor), plugin("fixture", targetOne)],
+    },
+    send: (event) => events.push(event),
+  });
+  const preparedNeighbor = composition.toolEnvironment.prepare({
+    callId: "neighbor-active",
+    name: neighbor.name,
+    arguments: {},
+    cwd: "/workspace",
+    signal: new AbortController().signal,
+  });
+  const activeNeighbor = composition.toolEnvironment.execute(preparedNeighbor);
+  const neighborRequest = events.find(
+    (event) => event.type === "capability/invoke",
+  );
+  assert.equal(neighborRequest?.type, "capability/invoke");
+  if (neighborRequest?.type !== "capability/invoke") {
+    throw new Error("missing neighbor request");
+  }
+
+  composition.replaceCapabilities({
+    definitions: [neighbor, targetTwo],
+    plugins: [plugin("neighbor", neighbor), plugin("fixture", targetTwo)],
+  });
+  assert.equal(
+    composition
+      .toolDefinitionProjection(
+        canonicalReadPair({
+          operation: "read",
+          plugin: plugin("fixture", targetTwo),
+        }),
+      )
+      .find((definition) => definition.name === "target_echo")?.description,
+    "Target two",
+  );
+  composition.capabilityProvider.handleResult({
+    type: "capability/result",
+    invocationId: neighborRequest.invocationId,
+    output: "neighbor-completed",
+    exitCode: 0,
+  });
+  assert.equal((await activeNeighbor).output, "neighbor-completed");
+});
+
+function tool(name: string, description: string) {
+  return { name, description, inputSchema: { type: "object" } };
+}
+
+function plugin(id: string, pluginTool: ReturnType<typeof tool>) {
+  return {
+    id,
+    name: id,
+    description: `${id} plugin`,
+    status: "enabled" as const,
+    mainDocument: `${id} main document`,
+    tools: [pluginTool],
+  };
+}
+
 function canonicalReadPair(result: unknown): CanonicalItem[] {
   const common = {
     threadId: "thread",

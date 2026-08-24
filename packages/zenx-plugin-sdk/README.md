@@ -6,7 +6,7 @@ Public ZenX Plugin Package v2 contract for repository and external plugin develo
 - `zenx.plugin.schema.json` plus the matching runtime validator.
 - `runProcessPlugin` for a minimal JSONL process runtime. Each tool receives its input plus an invocation context containing the Host call metadata and an `AbortSignal`; Host `cancel` and `close` abort active calls, and settled cancelled calls emit no result.
 - `createFixturePluginHost` for in-memory SDK tests. Its `startTurn` operation always rejects because the fixture does not own Agent, Thread, or Turn authority.
-- The `zenx-plugin create`, `validate`, and `pack` commands.
+- The `zenx-plugin create`, `dev`, `validate`, and `pack` commands.
 
 ## Package contract
 
@@ -27,10 +27,12 @@ The manifest `id` is the stable plugin identity and its `version` must equal the
 
 ```sh
 zenx-plugin create ./example-plugin --name example-plugin --id example-plugin
+ZENX_PLUGIN_DEV=1 zenx
+zenx-plugin dev ./example-plugin --target <ZenX-userData>/runtime/plugin-dev.json
 zenx-plugin validate ./example-plugin
 zenx-plugin pack ./example-plugin
 ```
 
-`create` writes a runnable process plugin with only public SDK imports. `validate` checks current package metadata, manifest v2, identity, compatibility, runtime/tool/UI relationships, and package-contained runtime paths. `pack` runs that validation first and then delegates unchanged archive semantics to `npm pack --json`; it does not implement a ZenX archive, registry, dependency solver, or publisher.
+`create` writes a runnable process plugin with only public SDK imports. `dev` first runs the same package validation, then asks one explicitly developer-enabled ZenX target to apply its canonical `dev-link` profile transaction and reload only that plugin instance; the SDK never writes Catalog or profile files. The private target descriptor exists only while that Host instance is running. `validate` checks current package metadata, manifest v2, identity, compatibility, runtime/tool/UI relationships, and package-contained runtime paths. `pack` runs that validation first and then delegates unchanged archive semantics to `npm pack --json`; it does not implement a ZenX archive, registry, dependency solver, or publisher.
 
 The fixture Host keeps query, UI, and storage behavior in memory. Tests using it do not read or write ZenX user data.

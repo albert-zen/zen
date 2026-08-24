@@ -298,6 +298,7 @@ export class ZenXCapabilityRegistry
       packageName: string;
       source: ZenXPluginProfileSource;
     },
+    options: { allowSameVersionDevReload?: boolean } = {},
   ): Promise<void> {
     await this.#serializeConfigurationMutation(async () => {
       const manifest = validateManifest(capabilityPackage.manifest);
@@ -312,7 +313,13 @@ export class ZenXCapabilityRegistry
       if (previousDescriptor.source !== source) {
         throw new Error(`Plugin ${manifest.id} package source cannot change`);
       }
-      if (previousDescriptor.manifest.version === manifest.version) {
+      if (
+        previousDescriptor.manifest.version === manifest.version &&
+        !(
+          options.allowSameVersionDevReload === true &&
+          profile?.source.mode === "dev-link"
+        )
+      ) {
         throw new Error(
           `Plugin ${manifest.id} is already version ${manifest.version}`,
         );

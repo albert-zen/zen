@@ -19,6 +19,10 @@ interface PendingInvocation {
   abort(): void;
 }
 
+interface CapabilityInvocationState {
+  pending: Map<string, PendingInvocation>;
+}
+
 export class ZenXHostToolExecutor implements ToolProvider {
   readonly identity = {
     kind: "external",
@@ -27,17 +31,19 @@ export class ZenXHostToolExecutor implements ToolProvider {
   readonly definitions;
   readonly #capabilityNames: Set<string>;
   readonly #send: (event: HostEvent) => void;
-  readonly #pending = new Map<string, PendingInvocation>();
+  readonly #state: CapabilityInvocationState;
 
   constructor(options: {
     capabilities: ZenXCapabilityHostSnapshot;
     send: (event: HostEvent) => void;
+    state?: CapabilityInvocationState;
   }) {
     this.#capabilityNames = new Set(
       options.capabilities.definitions.map((definition) => definition.name),
     );
     this.definitions = options.capabilities.definitions;
     this.#send = options.send;
+    this.#state = options.state ?? { pending: new Map() };
   }
 
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
@@ -48,14 +54,14 @@ export class ZenXHostToolExecutor implements ToolProvider {
     const invocationId = `${process.pid}:${invocation.callId}:${String(Date.now())}`;
     return await new Promise<ToolExecutionResult>((resolve, reject) => {
       const abort = (): void => {
-        this.#pending.delete(invocationId);
+        this.#state.pending.delete(invocationId);
         this.#send({ type: "capability/cancel", invocationId });
         reject(
           invocation.signal.reason ??
             new DOMException("The operation was aborted", "AbortError"),
         );
       };
-      this.#pending.set(invocationId, {
+      this.#state.pending.set(invocationId, {
         resolve,
         reject,
         signal: invocation.signal,
@@ -76,9 +82,9 @@ export class ZenXHostToolExecutor implements ToolProvider {
   }
 
   handleResult(command: CapabilityResultCommand): void {
-    const pending = this.#pending.get(command.invocationId);
+    const pending = this.#state.pending.get(command.invocationId);
     if (pending === undefined) return;
-    this.#pending.delete(command.invocationId);
+    this.#state.pending.delete(command.invocationId);
     pending.signal.removeEventListener("abort", pending.abort);
     if (command.error === undefined) {
       pending.resolve({
@@ -97,11 +103,11 @@ export class ZenXHostToolExecutor implements ToolProvider {
   }
 
   close(reason = "ZenX capability bridge closed"): void {
-    for (const pending of this.#pending.values()) {
+    for (const pending of this.#state.pending.values()) {
       pending.signal.removeEventListener("abort", pending.abort);
       pending.reject(new Error(reason));
     }
-    this.#pending.clear();
+    this.#state.pending.clear();
   }
 }
 
@@ -114,10 +120,13 @@ export function createZenXHostToolEnvironment(options: {
   capabilityProvider: ZenXHostToolExecutor;
   toolEnvironment: ToolEnvironment;
   toolDefinitionProjection: ToolDefinitionProjection;
+  replaceCapabilities(capabilities: ZenXCapabilityHostSnapshot): void;
 } {
+  const invocationState: CapabilityInvocationState = { pending: new Map() };
   const capabilityProvider = new ZenXHostToolExecutor({
     capabilities: options.capabilities,
     send: options.send,
+    state: invocationState,
   });
   const toolEnvironment = new ToolEnvironment({
     providers: [
@@ -128,8 +137,9 @@ export function createZenXHostToolEnvironment(options: {
       capabilityProvider,
     ],
   });
+  let capabilities = structuredClone(options.capabilities);
   const catalog = {
-    availablePlugins: () => structuredClone(options.capabilities.plugins ?? []),
+    availablePlugins: () => structuredClone(capabilities.plugins ?? []),
   };
   toolEnvironment.registerProvider(
     new PluginDiscoveryToolProvider(catalog, toolEnvironment),
@@ -139,5 +149,17 @@ export function createZenXHostToolEnvironment(options: {
     capabilityProvider,
     toolEnvironment,
     toolDefinitionProjection: (items) => projection.definitions(items),
+    replaceCapabilities: (replacement) => {
+      const nextProvider = new ZenXHostToolExecutor({
+        capabilities: replacement,
+        send: options.send,
+        state: invocationState,
+      });
+      const staged = toolEnvironment.stageProvider(nextProvider, {
+        replaceCurrent: true,
+      });
+      staged.publish();
+      capabilities = structuredClone(replacement);
+    },
   };
 }

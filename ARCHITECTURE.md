@@ -30,6 +30,7 @@
 - **Plugin Package Source** — Catalog 为直接 dependency 记录 npm、commit-pinned Git、tarball、稳定本地复制或显式开发 `link:` 来源，实际解析继续使用 pnpm package spec。
 - **Plugin Profile** — ZenX userData 下由普通 `package.json`、`pnpm-lock.yaml`、`node_modules` 和 Catalog 中独立 enablement 组成的 package 环境，只有 profile 的直接 dependencies 可成为插件。
 - **Plugin Profile Generation** — 一次 package mutation 在唯一 identity 的新目录中生成的不可变 profile 内容；Catalog 尚未引用它时只是可丢弃 staging，引用它时才成为已发布 generation。
+- **Plugin Dev Control** — 仅在显式开发模式启用的 Host-owned 鉴权 loopback 入口，把公开 CLI 的 `dev` 请求收敛到目标 ZenX 实例已有的 `dev-link` profile transaction，并在提交后只替换该插件的运行时与 App Server 投影。
 - **ZenX Bundled pnpm** — ZenX 从 App Resources 直接调用的固定版本 pnpm CLI，负责标准依赖解析、SemVer、lockfile、integrity、更新和删除，不依赖用户 PATH 上的 pnpm。
 - **Plugin Package Trust** — 安装即信任 package 代码，但 dependency build scripts 只由 bundled pnpm 按 profile 显式 `allowBuilds` 执行，不引入风险引擎或参数级权限矩阵。
 - **First-party Plugin Tarball** — Browser、Computer、ZenX self-control、Triggers 与 Rooms 的标准 npm tarball，随 App Resources 分发并通过同一个 profile installer 首装或重装。
@@ -350,7 +351,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 Package 分发与 profile transaction 遵守以下边界：
 
 - 开发者 package 以公开 `@zenx/plugin-sdk` 的类型、runtime schema 与 fixture Host 为唯一仓库外入口；fixture Host 只在内存提供 query/UI/storage 行为，`startTurn` 明确拒绝而不复制 Agent、Thread 或 Turn authority。
-- `zenx-plugin create` 生成普通 npm process package，`validate` 从 `package.json#zenx.plugin` 校验当前 v2 manifest、稳定 identity、runtime/tool/UI 关系与包内 runtime 路径；`pack` 必须先通过同一验证再调用标准 `npm pack`，不定义 archive、registry、发布或依赖求解语义。
+- `zenx-plugin create` 生成普通 npm process package，`dev` 在本机鉴权目标实例中消费唯一 `dev-link` transaction 并只 reload 目标插件，`validate` 从 `package.json#zenx.plugin` 校验当前 v2 manifest、稳定 identity、runtime/tool/UI 关系与包内 runtime 路径；`pack` 必须先通过同一验证再调用标准 `npm pack`，不定义 archive、registry、发布或依赖求解语义。
 - Installer 只从 profile `package.json` 的直接 dependencies 建立 Catalog descriptor；即使传递依赖也带有 `zenx.plugin` metadata，它仍只是普通库，不进入 discovery、lifecycle、runtime 或 UI projection。
 - npm spec、commit-pinned Git 来源和 tarball 原样交给 bundled pnpm 并由 lockfile 固定解析结果；稳定本地安装先把所选目录复制进 staging，使之后的源目录修改不改变已发布 generation，`link:` 只由显式 `dev` 流程创建并保留其开发期实时链接语义。
 - Package dependency 变化在串行 mutation 中创建新 generation，并只在其中调用 bundled pnpm；enablement 作为 Catalog 中独立于 `node_modules` 的状态，可在同一串行 Catalog transaction 中复用当前 generation identity。

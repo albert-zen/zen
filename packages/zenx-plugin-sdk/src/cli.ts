@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { requestPluginDevLink } from "./dev-control.js";
 import { validatePluginPackage } from "./schema.js";
 
 const SDK_VERSION = "0.1.0";
@@ -10,7 +11,9 @@ const SDK_VERSION = "0.1.0";
 async function main(): Promise<void> {
   const [command, targetArgument, ...arguments_] = process.argv.slice(2);
   if (targetArgument === undefined) {
-    throw new Error("Usage: zenx-plugin <create|validate|pack> <directory>");
+    throw new Error(
+      "Usage: zenx-plugin <create|dev|validate|pack> <directory>",
+    );
   }
   if (command === "validate") {
     const validated = await validatePluginPackage(targetArgument);
@@ -22,6 +25,22 @@ async function main(): Promise<void> {
   if (command === "pack") {
     const validated = await validatePluginPackage(targetArgument);
     process.stdout.write(await npmPack(validated.packageRoot));
+    return;
+  }
+  if (command === "dev") {
+    const validated = await validatePluginPackage(targetArgument);
+    const result = await requestPluginDevLink(option(arguments_, "--target"), {
+      version: 1,
+      projectDirectory: validated.packageRoot,
+      packageName: validated.packageName,
+      pluginId: validated.manifest.id,
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (result.reload.status === "failed") {
+      throw new Error(
+        `Plugin ${result.pluginId} committed generation ${result.generation}, but target reload failed: ${result.reload.message}`,
+      );
+    }
     return;
   }
   if (command !== "create")

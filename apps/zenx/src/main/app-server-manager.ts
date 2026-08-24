@@ -20,6 +20,7 @@ import {
 } from "./host-messages.js";
 import type {
   ZenXCapabilityHost,
+  ZenXCapabilityHostSnapshot,
   ZenXPostCommitCapabilityRefresh,
 } from "./capabilities/types.js";
 import type {
@@ -104,6 +105,10 @@ export class AppServerManager {
       reject(error: Error): void;
     }
   >();
+  readonly #pendingCapabilityReplacements = new Map<
+    string,
+    { resolve(): void; reject(error: Error): void }
+  >();
   #status: AppServerHostStatus = { type: "stopped" };
   #child: ChildProcess | undefined;
   #client: ZenXProtocolClient | undefined;
@@ -115,10 +120,12 @@ export class AppServerManager {
   #lifecycle = 0;
   #nextThreadSummaryRequest = 1;
   #nextThreadAttachmentRequest = 1;
+  #nextCapabilityReplacementRequest = 1;
   #capabilityRestartTail: Promise<void> = Promise.resolve();
   #connectionPublisher: AppServerConnectionPublisher | undefined;
   #bearerToken: string | undefined;
   #authorityUrl: string | undefined;
+  #publishedCapabilitySnapshot: ZenXCapabilityHostSnapshot | undefined;
 
   constructor(options: AppServerManagerOptions) {
     this.#options = options;
@@ -211,6 +218,9 @@ export class AppServerManager {
     });
 
     try {
+      const capabilities = this.#options.capabilityHost?.hostSnapshot() ?? {
+        definitions: [],
+      };
       const url = await waitForReady(
         child,
         this.#options.startupTimeoutMs ?? 10_000,
@@ -219,9 +229,7 @@ export class AppServerManager {
           config: this.#options.hostConfig,
           bearerToken,
           listen: this.#authorityUrl ?? "ws://127.0.0.1:0",
-          capabilities: this.#options.capabilityHost?.hostSnapshot() ?? {
-            definitions: [],
-          },
+          capabilities,
         },
       );
       if (this.#authorityUrl !== undefined && url !== this.#authorityUrl) {
@@ -239,6 +247,7 @@ export class AppServerManager {
         throw new Error("Zen App Server startup was cancelled");
       }
       this.#client = client;
+      this.#publishedCapabilitySnapshot = structuredClone(capabilities);
       this.#forwardNotifications(client);
       await this.#connectionPublisher?.publish({
         version: 1,
@@ -286,6 +295,55 @@ export class AppServerManager {
     try {
       await this.restartCapabilities();
       return { status: "refreshed" };
+    } catch (error) {
+      return { status: "failed", message: asError(error).message };
+    }
+  }
+
+  async refreshPluginAfterCommit(
+    targetPluginId: string,
+  ): Promise<{ status: "reloaded" } | { status: "failed"; message: string }> {
+    try {
+      if (!/^[a-z][a-z0-9-]{1,62}$/u.test(targetPluginId)) {
+        throw new Error(`Invalid target plugin id: ${targetPluginId}`);
+      }
+      const child = this.#child;
+      const capabilityHost = this.#options.capabilityHost;
+      if (
+        this.#status.type !== "ready" ||
+        child === undefined ||
+        !child.connected ||
+        capabilityHost === undefined
+      ) {
+        throw new Error("Zen App Server is not ready for plugin reload");
+      }
+      const requestId = `capability-replace-${String(this.#nextCapabilityReplacementRequest++)}`;
+      const capabilities = capabilityHost.hostSnapshot();
+      if (this.#publishedCapabilitySnapshot !== undefined) {
+        assertTargetOnlyCapabilityChange(
+          this.#publishedCapabilitySnapshot,
+          capabilities,
+          targetPluginId,
+        );
+      }
+      await new Promise<void>((resolve, reject) => {
+        this.#pendingCapabilityReplacements.set(requestId, { resolve, reject });
+        child.send(
+          {
+            type: "capabilities/replace",
+            requestId,
+            targetPluginId,
+            capabilities,
+          } satisfies HostCommand,
+          (error) => {
+            if (error === null) return;
+            this.#pendingCapabilityReplacements.delete(requestId);
+            reject(error);
+          },
+        );
+      });
+      this.#publishedCapabilitySnapshot = structuredClone(capabilities);
+      return { status: "reloaded" };
     } catch (error) {
       return { status: "failed", message: asError(error).message };
     }
@@ -447,9 +505,13 @@ export class AppServerManager {
     this.#rejectPendingThreadAttachmentRequests(
       new Error("Zen App Server host stopped"),
     );
+    this.#rejectPendingCapabilityReplacements(
+      new Error("Zen App Server host stopped"),
+    );
     await this.#cancelAndSettleCapabilityInvocations();
     this.#client?.close();
     this.#client = undefined;
+    this.#publishedCapabilitySnapshot = undefined;
     const child = this.#child;
     if (child !== undefined && child.exitCode === null) {
       child.send({ type: "shutdown" } satisfies HostCommand);
@@ -578,6 +640,9 @@ export class AppServerManager {
     this.#rejectPendingThreadAttachmentRequests(
       new Error("Zen App Server stopped before returning Thread attachments"),
     );
+    this.#rejectPendingCapabilityReplacements(
+      new Error("Zen App Server stopped before replacing capabilities"),
+    );
     this.#client?.close();
     this.#client = undefined;
     if (!this.#stopping && this.#recoverUnexpectedExits) {
@@ -669,6 +734,17 @@ export class AppServerManager {
         }
         return;
       }
+      if (hostEvent?.type === "capabilities/replaced") {
+        const pending = this.#pendingCapabilityReplacements.get(
+          hostEvent.requestId,
+        );
+        if (pending !== undefined) {
+          this.#pendingCapabilityReplacements.delete(hostEvent.requestId);
+          if (hostEvent.error === undefined) pending.resolve();
+          else pending.reject(new Error(hostEvent.error));
+        }
+        return;
+      }
       if (hostEvent === undefined) {
         const threadSummaryRequestId = readHostMessageRequestId(message);
         if (threadSummaryRequestId !== undefined) {
@@ -690,6 +766,15 @@ export class AppServerManager {
             );
             attachmentPending.reject(
               new Error("Malformed native Thread attachment response"),
+            );
+          }
+          const replacementPending = this.#pendingCapabilityReplacements.get(
+            threadSummaryRequestId,
+          );
+          if (replacementPending !== undefined) {
+            this.#pendingCapabilityReplacements.delete(threadSummaryRequestId);
+            replacementPending.reject(
+              new Error("Malformed capability replacement response"),
             );
           }
         }
@@ -806,6 +891,13 @@ export class AppServerManager {
     }
     this.#pendingThreadAttachmentRequests.clear();
   }
+
+  #rejectPendingCapabilityReplacements(error: Error): void {
+    for (const pending of this.#pendingCapabilityReplacements.values()) {
+      pending.reject(error);
+    }
+    this.#pendingCapabilityReplacements.clear();
+  }
 }
 
 async function createPrivateTokenFile(filePath: string): Promise<string> {
@@ -820,6 +912,34 @@ async function createPrivateTokenFile(filePath: string): Promise<string> {
   }
   if (process.platform !== "win32") await chmod(filePath, 0o600);
   return token;
+}
+
+function assertTargetOnlyCapabilityChange(
+  previous: ZenXCapabilityHostSnapshot,
+  next: ZenXCapabilityHostSnapshot,
+  targetPluginId: string,
+): void {
+  const targetToolNames = new Set(
+    [...(previous.plugins ?? []), ...(next.plugins ?? [])]
+      .filter((plugin) => plugin.id === targetPluginId)
+      .flatMap((plugin) => plugin.tools.map((tool) => tool.name)),
+  );
+  const withoutTarget = (snapshot: ZenXCapabilityHostSnapshot) => ({
+    definitions: snapshot.definitions
+      .filter((definition) => !targetToolNames.has(definition.name))
+      .toSorted((left, right) => left.name.localeCompare(right.name)),
+    plugins: (snapshot.plugins ?? [])
+      .filter((plugin) => plugin.id !== targetPluginId)
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
+  });
+  if (
+    JSON.stringify(withoutTarget(previous)) !==
+    JSON.stringify(withoutTarget(next))
+  ) {
+    throw new Error(
+      `Plugin reload for ${targetPluginId} changed a non-target capability projection`,
+    );
+  }
 }
 
 async function removeTokenFile(filePath: string): Promise<void> {

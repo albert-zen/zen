@@ -15,11 +15,14 @@ import {
   createZenXHostToolEnvironment,
   ZenXHostToolExecutor,
 } from "./capability-tool-executor.js";
+import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
 import { projectThreadAttachments } from "./image-attachments.js";
 
 let server: CodexWebSocketServer | undefined;
 let appServer: HostedZenAppServer | undefined;
 let tools: ZenXHostToolExecutor | undefined;
+let replaceCapabilities:
+  ((capabilities: ZenXCapabilityHostSnapshot) => void) | undefined;
 let shuttingDown = false;
 
 process.on("message", (message: unknown) => {
@@ -45,6 +48,22 @@ async function handleCommand(command: HostCommand): Promise<void> {
   }
   if (command.type === "shutdown") {
     await shutdown();
+    return;
+  }
+  if (command.type === "capabilities/replace") {
+    try {
+      if (replaceCapabilities === undefined) {
+        throw new Error("Zen App Server is not ready");
+      }
+      replaceCapabilities(command.capabilities);
+      send({ type: "capabilities/replaced", requestId: command.requestId });
+    } catch (error) {
+      send({
+        type: "capabilities/replaced",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return;
   }
   if (command.type === "thread-summary/list") {
@@ -106,6 +125,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
     send,
   });
   tools = toolComposition.capabilityProvider;
+  replaceCapabilities = toolComposition.replaceCapabilities;
   appServer = createHostedAppServer({
     ...command.config,
     toolEnvironment: toolComposition.toolEnvironment,
@@ -129,6 +149,7 @@ async function shutdown(): Promise<void> {
   appServer = undefined;
   tools?.close();
   tools = undefined;
+  replaceCapabilities = undefined;
   if (process.connected) process.disconnect();
   process.exit(process.exitCode ?? 0);
 }
