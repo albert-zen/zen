@@ -15,9 +15,9 @@ import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { AgentRuntime } from "../../../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.js";
 import { ShellToolExecutor, ToolEnvironment } from "../../../src/tool.js";
-import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
+import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 import type {
-  ZenXCapabilityConfiguration,
+  ZenXPluginCatalogState,
   ZenXCapabilityPackage,
   ZenXPluginManifestV2,
 } from "../src/main/capabilities/types.js";
@@ -283,12 +283,11 @@ async function fixtureEnvironment() {
   });
   const supervisor = new PluginRuntimeSupervisor(environment);
   const store: {
-    configuration: ZenXCapabilityConfiguration;
-    load(): Promise<ZenXCapabilityConfiguration>;
-    save(configuration: ZenXCapabilityConfiguration): Promise<void>;
+    configuration: ZenXPluginCatalogState;
+    load(): Promise<ZenXPluginCatalogState>;
+    save(configuration: ZenXPluginCatalogState): Promise<void>;
   } = {
     configuration: {
-      grants: {},
       disabled: [],
       uninstalled: [],
       packages: {},
@@ -296,11 +295,11 @@ async function fixtureEnvironment() {
     async load() {
       return structuredClone(this.configuration);
     },
-    async save(configuration: ZenXCapabilityConfiguration) {
+    async save(configuration: ZenXPluginCatalogState) {
       this.configuration = structuredClone(configuration);
     },
   };
-  const registry = new ZenXCapabilityRegistry(store, {
+  const registry = new ZenXPluginCatalog(store, {
     pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
       supervisor,
       registrationFor: bundledPackageRegistration,
@@ -417,7 +416,6 @@ function pluginManifest(options: {
         capabilities: [`${options.id}.run`],
       },
     ],
-    resources: [],
   };
 }
 

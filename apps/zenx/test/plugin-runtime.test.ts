@@ -17,12 +17,12 @@ import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { AgentRuntime } from "../../../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.js";
 import { ToolEnvironment } from "../../../src/tool.js";
-import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
+import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 import type {
   RegisteredZenXCapability,
-  ZenXCapabilityConfiguration,
+  ZenXPluginCatalogState,
   ZenXCapabilityPackage,
-  ZenXCapabilitySnapshot,
+  ZenXPluginSnapshot,
   ZenXPluginManifestV2,
 } from "../src/main/capabilities/types.js";
 import {
@@ -374,10 +374,9 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
     registrationFor: bundledPackageRegistration,
   });
   let failSave = false;
-  const registry = new ZenXCapabilityRegistry(
+  const registry = new ZenXPluginCatalog(
     {
       load: async () => ({
-        grants: {},
         disabled: [],
         uninstalled: [],
         packages: {},
@@ -424,10 +423,9 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
 
   const failedEnvironment = new ToolEnvironment();
   const failedSupervisor = new PluginRuntimeSupervisor(failedEnvironment);
-  const failedRegistry = new ZenXCapabilityRegistry(
+  const failedRegistry = new ZenXPluginCatalog(
     {
       load: async () => ({
-        grants: {},
         disabled: [],
         uninstalled: [],
         packages: {},
@@ -465,10 +463,9 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
       },
     ],
   });
-  const collisionRegistry = new ZenXCapabilityRegistry(
+  const collisionRegistry = new ZenXPluginCatalog(
     {
       load: async () => ({
-        grants: {},
         disabled: [],
         uninstalled: [],
         packages: {},
@@ -494,10 +491,9 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
   );
 
   failSave = false;
-  const startFailure = new ZenXCapabilityRegistry(
+  const startFailure = new ZenXPluginCatalog(
     {
       load: async () => ({
-        grants: {},
         disabled: [],
         uninstalled: [],
         packages: {},
@@ -530,7 +526,7 @@ test("Catalog keeps a staged runtime unpublished until install persistence commi
   const saveStarted = deferred<void>();
   const releaseSave = deferred<void>();
   let starts = 0;
-  const registry = new ZenXCapabilityRegistry(
+  const registry = new ZenXPluginCatalog(
     {
       load: async () => emptyCapabilityConfiguration(),
       save: async () => {
@@ -568,7 +564,7 @@ test("failed install persistence never publishes its staged runtime", async () =
   const saveStarted = deferred<void>();
   const releaseSave = deferred<void>();
   let closes = 0;
-  const registry = new ZenXCapabilityRegistry(
+  const registry = new ZenXPluginCatalog(
     {
       load: async () => emptyCapabilityConfiguration(),
       save: async () => {
@@ -616,7 +612,7 @@ test("disabled reinstall stays installed without staging or publishing a runtime
   const supervisor = new PluginRuntimeSupervisor(environment);
   let starts = 0;
   let durable = emptyCapabilityConfiguration();
-  const registry = new ZenXCapabilityRegistry(
+  const registry = new ZenXPluginCatalog(
     {
       load: async () => structuredClone(durable),
       save: async (configuration) => {
@@ -667,7 +663,7 @@ test("provider conflict fails before Catalog commit and closes the staged runtim
   const supervisor = new PluginRuntimeSupervisor(environment);
   let durable = emptyCapabilityConfiguration();
   let closes = 0;
-  const registry = new ZenXCapabilityRegistry(
+  const registry = new ZenXPluginCatalog(
     {
       load: async () => structuredClone(durable),
       save: async (configuration) => {
@@ -720,7 +716,7 @@ test("failed disable and uninstall close admission during save then restore the 
         gate: ReturnType<typeof deferred<void>>;
       }
     | undefined;
-  const registry = new ZenXCapabilityRegistry(
+  const registry = new ZenXPluginCatalog(
     {
       load: async () => structuredClone(durable),
       save: async (configuration) => {
@@ -786,7 +782,7 @@ test("runtime close failure rolls back disable admission to an enabled provider"
   const supervisor = new PluginRuntimeSupervisor(environment);
   let durable = emptyCapabilityConfiguration();
   let starts = 0;
-  const registry = new ZenXCapabilityRegistry(
+  const registry = new ZenXPluginCatalog(
     {
       load: async () => structuredClone(durable),
       save: async (configuration) => {
@@ -840,9 +836,9 @@ test("throwing Catalog listeners cannot fail lifecycle commits or block later li
   const environment = new ToolEnvironment();
   const supervisor = new PluginRuntimeSupervisor(environment);
   let durable = emptyCapabilityConfiguration();
-  const observed: ZenXCapabilitySnapshot[] = [];
+  const observed: ZenXPluginSnapshot[] = [];
   const warnings: string[] = [];
-  const registry = new ZenXCapabilityRegistry(
+  const registry = new ZenXPluginCatalog(
     {
       load: async () => structuredClone(durable),
       save: async (configuration) => {
@@ -908,10 +904,7 @@ test("throwing Catalog listeners cannot fail lifecycle commits or block later li
   assert.ok(warnings.length >= 3);
   assert.ok(warnings.every((warning) => warning.length < 700));
   assert.equal(
-    observed
-      .at(-1)
-      ?.capabilities.find((capability) => capability.manifest.id === "fixture")
-      ?.enabled,
+    observed.at(-1)?.plugins.find((plugin) => plugin.id === "fixture")?.enabled,
     true,
   );
 });
@@ -950,8 +943,8 @@ function countingRegistrationFor(onStart: () => void) {
   };
 }
 
-function emptyCapabilityConfiguration(): ZenXCapabilityConfiguration {
-  return { grants: {}, disabled: [], uninstalled: [], packages: {} };
+function emptyCapabilityConfiguration(): ZenXPluginCatalogState {
+  return { disabled: [], uninstalled: [], packages: {} };
 }
 
 function deferred<T>(): {
@@ -1084,7 +1077,6 @@ function pluginManifest(): ZenXPluginManifestV2 {
         capabilities: ["fixture.echo"],
       },
     ],
-    resources: [],
   };
 }
 

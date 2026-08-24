@@ -21,8 +21,6 @@ import {
   type ZenXBrowserBackend,
 } from "../src/main/capabilities/browser-provider.js";
 import { hashBundledDirectoryAsset } from "../src/main/capabilities/provider-provisioning.js";
-import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
-import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
 
 test("requested user-session mode never falls back to an isolated provider", async () => {
   const selection = await selectBrowserProvider({
@@ -41,7 +39,7 @@ test("requested user-session mode never falls back to an isolated provider", asy
   );
 });
 
-test("selected user-session provider is registered but hidden until explicitly granted", async () => {
+test("selected user-session provider directly backs the profile package", async () => {
   const backend = stubBrowserBackend();
   const selection = await selectBrowserProvider({
     userDataDirectory: "/tmp/zenx",
@@ -59,23 +57,27 @@ test("selected user-session provider is registered but hidden until explicitly g
   assert.equal(selection.manifest.provider.id, "user-browser-cdp");
   assert.equal(selection.diagnostics[0]?.sessionMode, "user-session");
 
-  const registry = new ZenXCapabilityRegistry(
-    new MemoryZenXCapabilityGrantStore(),
-    { platform: "win32" },
-  );
-  await registry.initialize();
   assert.ok(selection.backend);
-  registry.register(
-    new BrowserZenXCapabilityPackage(selection.backend, selection.manifest),
+  const capabilityPackage = new BrowserZenXCapabilityPackage(
+    selection.backend,
+    selection.manifest,
   );
-  assert.deepEqual(registry.hostSnapshot().definitions, []);
-  await registry.grant("browser");
   assert.ok(
-    registry
-      .hostSnapshot()
-      .definitions.some(({ name }) => name === "browser_list_tabs"),
+    capabilityPackage.manifest.tools.some(
+      ({ name }) => name === "browser_list_tabs",
+    ),
   );
-  await registry.close();
+  assert.deepEqual(
+    await capabilityPackage.invoke("browser_list_tabs", {
+      name: "browser_list_tabs",
+      arguments: { sessionId: "fixture" },
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+      callId: "provider-profile",
+    }),
+    [],
+  );
+  await selection.backend.close();
 });
 
 test("invalid browser modes are explicit instead of masquerading as isolated", async () => {

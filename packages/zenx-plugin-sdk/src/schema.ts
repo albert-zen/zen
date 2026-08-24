@@ -168,18 +168,6 @@ export function validatePluginManifest(value: unknown): ZenXPluginManifestV2 {
     }
     toolNames.add(name);
   }
-  for (const resource of requireArray(value.resources, "Plugin resources")) {
-    assertRecord(resource, `Plugin ${id} resource must be an object`);
-    requireString(resource.id, `Plugin ${id} resource id`);
-    if (!isOneOf(resource.kind, ["skill", "prompt"]))
-      throw new Error(`Plugin ${id} resource has invalid kind`);
-    requireString(resource.title, `Plugin ${id} resource title`);
-    requireString(resource.description, `Plugin ${id} resource description`);
-    if (typeof resource.content !== "string")
-      throw new Error(`Plugin ${id} resource content must be a string`);
-  }
-  if (value.settings !== undefined && !isRecord(value.settings))
-    throw new Error(`Plugin ${id} settings must be an object`);
   if (
     value.storageVersion !== undefined &&
     (!Number.isSafeInteger(value.storageVersion) ||

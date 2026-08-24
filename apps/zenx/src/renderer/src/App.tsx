@@ -6,10 +6,7 @@ import type {
   ApprovalDecision,
 } from "../../main/app-server-manager.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
-import type {
-  ZenXCapabilitySnapshot,
-  ZenXPluginSnapshot,
-} from "../../main/capabilities/types.js";
+import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
 import type {
   ZenXProviderProfile,
@@ -101,8 +98,6 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
-  const [capabilitySnapshot, setCapabilitySnapshot] =
-    useState<ZenXCapabilitySnapshot | null>(null);
   const [pluginSnapshot, setPluginSnapshot] =
     useState<ZenXPluginSnapshot | null>(null);
   const [titleSnapshot, setTitleSnapshot] = useState<ThreadTitleSnapshot>({});
@@ -450,17 +445,6 @@ export function App() {
     void window.zenx.plugins
       .get()
       .then(setPluginSnapshot)
-      .catch((error: unknown) =>
-        setRequestError(`ZenX plugin catalog failed: ${describeError(error)}`),
-      );
-    return dispose;
-  }, []);
-
-  useEffect(() => {
-    const dispose = window.zenx.capabilities.onChange(setCapabilitySnapshot);
-    void window.zenx.capabilities
-      .get()
-      .then(setCapabilitySnapshot)
       .catch((error: unknown) =>
         setRequestError(`ZenX plugin catalog failed: ${describeError(error)}`),
       );
@@ -1107,7 +1091,6 @@ export function App() {
 
       {workspaceOpen && threadDetail !== null ? (
         <WorkspaceDrawer
-          capabilitySnapshot={capabilitySnapshot}
           onClose={() => setWorkspaceOpen(false)}
           settings={selectedSettings}
           thread={threadDetail}
@@ -1410,12 +1393,10 @@ function AgentSurface({
 }
 
 function WorkspaceDrawer({
-  capabilitySnapshot,
   onClose,
   settings,
   thread,
 }: {
-  capabilitySnapshot: ZenXCapabilitySnapshot | null;
   onClose(): void;
   settings: SelectedThreadSettings | null;
   thread: Thread;
@@ -1503,20 +1484,7 @@ function WorkspaceDrawer({
               </p>
             </>
           ) : tab === "artifacts" ? (
-            capabilitySnapshot?.currentScreenshot === undefined ? (
-              <p className="drawer-empty">No live artifacts are available.</p>
-            ) : (
-              <div className="drawer-row">
-                <Icon name="file" />
-                <div>
-                  <strong>Browser observation</strong>
-                  <span>
-                    {capabilitySnapshot.currentScreenshot.width} ×{" "}
-                    {capabilitySnapshot.currentScreenshot.height}
-                  </span>
-                </div>
-              </div>
-            )
+            <p className="drawer-empty">No live artifacts are available.</p>
           ) : (
             <>
               <div className="drawer-row">

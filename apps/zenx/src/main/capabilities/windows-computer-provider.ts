@@ -18,7 +18,7 @@ import {
   MAX_COMPUTER_INSPECTION_CONTROLS,
   type ZenXComputerBackend,
 } from "./computer-provider.js";
-import type { ZenXCapabilityManifest } from "./types.js";
+import type { ZenXPluginManifestV2 } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_WINAPP_STDOUT_BYTES = 2 * 1024 * 1024;
@@ -27,7 +27,7 @@ const WINAPP_INSTALL_COMMAND =
   "winget install Microsoft.winappcli --source winget";
 export const MINIMUM_WINAPP_CLI_VERSION = "0.3.1";
 
-export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
+export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(computerCapabilityManifest),
   version: "1.1.0",
   description:
@@ -97,26 +97,6 @@ export const windowsComputerCapabilityManifest: ZenXCapabilityManifest = {
           };
       }
     }),
-  resources: [
-    {
-      id: "windows-computer-use",
-      kind: "skill",
-      title: "Targeted Windows computer use",
-      description:
-        "Use Microsoft WinApp CLI UI Automation through ZenX's opaque observe-before-act contract.",
-      content:
-        "Target one Windows application by pid or applicationId plus an exact windowTitle. Inspect first, then use only the observationId and targetId returned by the latest computer_inspect. Re-inspect after every action. Semantic invoke and set-value use UI Automation and do not inject global input. Supplied text follows the ordinary set-value path and host/model policy owns credential decisions. Window capture uses WinApp CLI's default WGC/PrintWindow path and never opts into --capture-screen or --focus. If UIA semantics are insufficient, report foreground_required; this provider does not silently inject pointer or keyboard input.",
-    },
-  ],
-  settings: {
-    dependency: "Microsoft WinApp CLI (Public Preview)",
-    executable: "winapp",
-    installCommand: WINAPP_INSTALL_COMMAND,
-    jsonContract:
-      "ui list-windows/inspect/invoke/set-value/wait-for/screenshot --json",
-    minimumVersion: MINIMUM_WINAPP_CLI_VERSION,
-    docs: "https://learn.microsoft.com/windows/apps/dev-tools/winapp-cli/ui-automation",
-  },
 };
 
 export interface WinAppCliDiagnostic {

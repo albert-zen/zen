@@ -3634,7 +3634,7 @@ idle + draft     →  Send</code></pre>
           <button type="button" class="zx-secondary-button" data-local-package>
             <svg class="zx-icon" aria-hidden="true">
               <use href="#zx-hifi-icon-plus"></use></svg
-            >Add local package
+            >Install package
           </button>
         </header>
         <div class="zx-page-scroll">
@@ -3642,9 +3642,8 @@ idle + draft     →  Send</code></pre>
             <div>
               <h2>Extend what Agents can do.</h2>
               <p>
-                Plugins add structured tools and instruction resources.
-                Installation, permission grants, and per-call approval remain
-                separate decisions.
+                Plugins add structured tools and main documents. Installation,
+                lifecycle, and Host tool policy use one profile-managed path.
               </p>
             </div>
           </div>
@@ -3819,7 +3818,7 @@ idle + draft     →  Send</code></pre>
               class="zx-plugin-card"
               data-plugin-card
               data-plugin-status="available"
-              data-plugin-search-text="local capability package manifest development"
+              data-plugin-search-text="npm git tarball local copy development plugin package"
             >
               <div class="zx-plugin-card-head">
                 <span class="zx-plugin-icon"
@@ -3827,24 +3826,24 @@ idle + draft     →  Send</code></pre>
                     <use href="#zx-hifi-icon-plugin"></use></svg
                 ></span>
                 <div>
-                  <h3>Local capability package</h3>
-                  <small>Development source</small>
+                  <h3>Package source</h3>
+                  <small>npm, Git, tarball, local copy, or dev link</small>
                 </div>
                 <span class="zx-plugin-badge">Local</span>
               </div>
               <p>
-                Load a signed or development manifest from this Mac. ZenX
-                validates tools, permissions, resources, and provider
-                availability before activation.
+                Resolve an ordinary npm package into a staged profile. ZenX
+                validates its v2 manifest, runtime, tools, UI, and provider
+                availability before the Catalog commit.
               </p>
               <div class="zx-plugin-card-foot">
-                <span>Manifest required</span
+                <span>Package spec required</span
                 ><button
                   type="button"
                   class="zx-primary-button"
                   data-local-package
                 >
-                  Choose folder
+                  Choose source
                 </button>
               </div>
             </article>
@@ -4128,8 +4127,8 @@ gpt-5.6-terra&#10;gpt-5.6-sol&#10;gpt-5.6-luna</textarea>
                   <div>
                     <h3>Installed plugins</h3>
                     <p>
-                      Enablement, tool grants, per-call approval, and runtime
-                      sandboxing remain independent states.
+                      Lifecycle, Runtime Supervisor admission, and Host tool
+                      policy share the profile-managed Catalog.
                     </p>
                   </div>
                   <span class="zx-account-status">5 installed locally</span>
@@ -4142,7 +4141,7 @@ gpt-5.6-terra&#10;gpt-5.6-sol&#10;gpt-5.6-luna</textarea>
                   <div>
                     <strong>Browser</strong
                     ><span
-                      >Enabled · 3 permissions granted · 8 tools · no Sidebar
+                      >Enabled · isolated provider · 8 tools · no Sidebar
                       contribution</span
                     >
                   </div>
@@ -4163,8 +4162,8 @@ gpt-5.6-terra&#10;gpt-5.6-sol&#10;gpt-5.6-luna</textarea>
                   <div>
                     <strong>Computer</strong
                     ><span
-                      >Enabled · 2 of 4 permissions granted · foreground control
-                      blocked</span
+                      >Enabled · scoped provider · foreground control requires
+                      explicit tool selection</span
                     >
                   </div>
                   <button
@@ -4184,8 +4183,7 @@ gpt-5.6-terra&#10;gpt-5.6-sol&#10;gpt-5.6-luna</textarea>
                   <div>
                     <strong>ZenX self-control</strong
                     ><span
-                      >Enabled · workspace read granted · local device write
-                      blocked</span
+                      >Enabled · profile managed · 9 historical tool names</span
                     >
                   </div>
                   <button
@@ -4253,8 +4251,8 @@ gpt-5.6-terra&#10;gpt-5.6-sol&#10;gpt-5.6-luna</textarea>
                 </div>
                 <div class="zx-settings-row">
                   <div>
-                    <strong>Recent capability use</strong
-                    ><span>browser.inspect · completed · 10:42:18</span>
+                    <strong>Provider diagnostics</strong
+                    ><span>Browser · selected · integrity verified</span>
                   </div>
                   <button type="button" class="zx-quiet-button">
                     View log
@@ -5215,22 +5213,6 @@ gpt-5.6-terra&#10;gpt-5.6-sol&#10;gpt-5.6-luna</textarea>
         showToast(signedIn ? "Signed out locally" : "Subscription connected");
       });
 
-      root.querySelectorAll("[data-capability-toggle]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const granted = button.dataset.granted === "true";
-          button.dataset.granted = String(!granted);
-          button.textContent = granted ? "Grant all" : "Revoke";
-          button.className = granted
-            ? "zx-secondary-button"
-            : "zx-danger-button";
-          showToast(
-            granted
-              ? "Capability revoked · host restart required"
-              : "Capability permissions granted",
-          );
-        });
-      });
-
       const syncPluginState = () => {
         root.querySelectorAll("[data-plugin-toggle]").forEach((button) => {
           const id = button.dataset.pluginToggle;
@@ -5355,7 +5337,7 @@ gpt-5.6-terra&#10;gpt-5.6-sol&#10;gpt-5.6-luna</textarea>
         .querySelectorAll("[data-local-package]")
         .forEach((button) =>
           button.addEventListener("click", () =>
-            showToast("Local package folder picker opened"),
+            showToast("Package source picker opened"),
           ),
         );
 

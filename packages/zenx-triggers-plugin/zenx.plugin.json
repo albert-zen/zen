@@ -416,7 +416,6 @@
       "maxOutputBytes": 65536
     }
   ],
-  "resources": [],
   "schemaVersion": 2,
   "name": "Triggers",
   "compatibility": {

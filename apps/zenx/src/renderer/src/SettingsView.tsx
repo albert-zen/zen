@@ -20,7 +20,7 @@ import {
   getAppearanceController,
   type AppearancePreference,
 } from "./appearance.js";
-import { CapabilitySettings } from "./CapabilitySettings.js";
+import { PluginSettings } from "./PluginSettings.js";
 import { Icon } from "./icons.js";
 import { ProviderLogo, providerLogoKindForIdentity } from "./ProviderLogo.js";
 import { threadModelIdentity, threadTitle } from "./thread-list.js";
@@ -228,7 +228,7 @@ export function SettingsView({
                     Uninstall keeps plugin data until you explicitly delete it.
                   </p>
                 </header>
-                <CapabilitySettings />
+                <PluginSettings />
                 {pluginSnapshot === null ? null : (
                   <PluginSettingsSurfaces snapshot={pluginSnapshot} />
                 )}

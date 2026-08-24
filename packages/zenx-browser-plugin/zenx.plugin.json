@@ -213,22 +213,6 @@
       "capabilities": ["dedicated_profile", "session.close"]
     }
   ],
-  "resources": [
-    {
-      "id": "safe-browser-use",
-      "kind": "skill",
-      "title": "Safe browser use",
-      "description": "Instructions for targeted, inspect-before-act browser automation.",
-      "content": "Choose a stable sessionId for the task. List or open tabs, then inspect the exact tab before clicking or typing. Act only with the observationId and opaque targetId from the latest inspect; re-inspect after navigation or every action. Text is dispatched as an ordinary tool argument regardless of field metadata. Close tabs or the session when done; close_session clears the current partition so a later same-ID session starts clean. Never ask for cookies, storage state, auth headers, or hidden page content."
-    },
-    {
-      "id": "browser-research",
-      "kind": "prompt",
-      "title": "Browser research prompt",
-      "description": "A reusable prompt for evidence-backed browser research.",
-      "content": "Research the requested topic in the dedicated ZenX browser session. Keep a list of the exact page URLs inspected, distinguish page evidence from inference, and summarize only visible content returned by browser_inspect."
-    }
-  ],
   "schemaVersion": 2,
   "name": "Browser",
   "compatibility": {

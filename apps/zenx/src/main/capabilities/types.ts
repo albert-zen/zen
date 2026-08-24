@@ -43,14 +43,6 @@ export interface ZenXCapabilityTool extends ModelTool {
   maxOutputBytes?: number;
 }
 
-export interface ZenXCapabilityResource {
-  id: string;
-  kind: "skill" | "prompt";
-  title: string;
-  description: string;
-  content: string;
-}
-
 export interface ZenXPluginSidebarContribution {
   id: string;
   label: string;
@@ -128,12 +120,16 @@ export interface ZenXPluginUiManifest {
   surfaces: ZenXPluginUiSurface[];
 }
 
-export interface ZenXCapabilityManifestV1 {
-  schemaVersion: 1;
+export interface ZenXPluginManifestV2 {
+  schemaVersion: 2;
   id: string;
-  displayName: string;
+  name: string;
   version: string;
   description: string;
+  compatibility: ZenXPluginCompatibility;
+  runtime: ZenXPluginRuntimeDescriptor;
+  mainDocument: string;
+  storageVersion?: number;
   provider: {
     id: string;
     platforms: string[];
@@ -142,10 +138,8 @@ export interface ZenXCapabilityManifestV1 {
   };
   permissions: ZenXCapabilityPermission[];
   tools: ZenXCapabilityTool[];
-  resources: ZenXCapabilityResource[];
   contributions?: ZenXPluginContributions;
-  settings?: Readonly<Record<string, unknown>>;
-  ui?: { settingsSection?: string };
+  ui?: ZenXPluginUiManifest;
 }
 
 export interface ZenXPluginCompatibility {
@@ -166,26 +160,8 @@ export type ZenXPluginRuntimeDescriptor =
       timeoutMs?: number;
     };
 
-export interface ZenXPluginManifestV2 extends Omit<
-  ZenXCapabilityManifestV1,
-  "schemaVersion" | "displayName" | "ui"
-> {
-  schemaVersion: 2;
-  name: string;
-  compatibility: ZenXPluginCompatibility;
-  runtime: ZenXPluginRuntimeDescriptor;
-  mainDocument: string;
-  storageVersion?: number;
-  ui?: ZenXPluginUiManifest;
-}
-
-export type ZenXCapabilityManifest =
-  ZenXCapabilityManifestV1 | ZenXPluginManifestV2;
-
 export interface ZenXCapabilityPackage {
-  manifest: ZenXCapabilityManifest;
-  /** Absolute manifest path for a trusted local package. */
-  manifestPath?: string;
+  manifest: ZenXPluginManifestV2;
   storage?: {
     version: number;
     migrations?: readonly PluginStorageMigration[];
@@ -201,38 +177,6 @@ export interface ZenXCapabilityPackage {
   close?(): Promise<void> | void;
 }
 
-export type ZenXCapabilityDisposer = () => Promise<void>;
-
-export interface ZenXCapabilityGrant {
-  permissionId: string;
-  scope: ZenXCapabilityPermissionScope;
-}
-
-export interface ZenXCapabilityAuditRecord {
-  id: string;
-  capabilityId: string;
-  providerId: string;
-  toolName: string;
-  callId: string;
-  cwd: string;
-  interactionMode: ZenXCapabilityInteractionMode;
-  startedAt: string;
-  completedAt?: string;
-  status: "running" | "completed" | "failed" | "cancelled";
-  summary?: string;
-}
-
-export interface ZenXCapabilityScreenshotArtifact {
-  artifactPath: string;
-  observationId?: string;
-  status: "captured" | "fallback";
-  reason?: string;
-  width: number;
-  height: number;
-  bytes: number;
-  expiresAt: string;
-}
-
 export interface ZenXCapabilityProviderDiagnostic {
   capabilityId: string;
   providerId: string;
@@ -245,23 +189,6 @@ export interface ZenXCapabilityProviderDiagnostic {
   permissionSummary?: string;
   reason?: string;
   sessionMode?: "isolated-session" | "user-session" | "invalid";
-}
-
-export interface ZenXCapabilitySummary {
-  manifest:
-    | (Omit<ZenXCapabilityManifestV1, "resources"> & {
-        resources: Array<Omit<ZenXCapabilityResource, "content">>;
-      })
-    | (Omit<ZenXPluginManifestV2, "resources"> & {
-        resources: Array<Omit<ZenXCapabilityResource, "content">>;
-      });
-  source: "bundled" | "local";
-  enabled: boolean;
-  available: boolean;
-  unavailableReason?: string;
-  granted: ZenXCapabilityGrant[];
-  enabledTools: string[];
-  blockedTools: string[];
 }
 
 export interface ZenXPluginContributionProjection {
@@ -342,8 +269,10 @@ export interface ZenXPluginSnapshot {
   resultRenderers?: ZenXPluginResultRendererProjection[];
 }
 
-export type ZenXPluginPackageSelectionResult =
-  { canceled: true } | { canceled: false; snapshot: ZenXPluginSnapshot };
+export interface ZenXPluginDiagnostics {
+  providerDiagnostics: ZenXCapabilityProviderDiagnostic[];
+  discoveryErrors: string[];
+}
 
 export type ZenXPostCommitCapabilityRefresh =
   { status: "refreshed" } | { status: "failed"; message: string };
@@ -360,15 +289,6 @@ export type ZenXPluginTarballSelectionResult =
       snapshot: ZenXPluginSnapshot;
       capabilityRefresh: ZenXPostCommitCapabilityRefresh;
     };
-
-export interface ZenXCapabilitySnapshot {
-  capabilities: ZenXCapabilitySummary[];
-  recentInvocations: ZenXCapabilityAuditRecord[];
-  /** Renderer-only live projection; it is intentionally absent from canonical Items. */
-  currentScreenshot?: ZenXCapabilityScreenshotArtifact;
-  providerDiagnostics: ZenXCapabilityProviderDiagnostic[];
-  discoveryErrors: string[];
-}
 
 export interface ZenXCapabilityHostSnapshot {
   definitions: ModelTool[];
@@ -390,16 +310,12 @@ export interface ZenXCapabilityHost {
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
 }
 
-export interface ZenXCapabilityConfigurationStore {
-  load(): Promise<ZenXCapabilityConfiguration>;
-  save(configuration: ZenXCapabilityConfiguration): Promise<void>;
+export interface ZenXPluginCatalogStore {
+  load(): Promise<ZenXPluginCatalogState>;
+  save(configuration: ZenXPluginCatalogState): Promise<void>;
 }
 
-/** Compatibility name for the existing capability-grants persistence seam. */
-export type ZenXCapabilityGrantStore = ZenXCapabilityConfigurationStore;
-
-export interface ZenXCapabilityConfiguration {
-  grants: Record<string, ZenXCapabilityGrant[]>;
+export interface ZenXPluginCatalogState {
   disabled: string[];
   uninstalled?: string[];
   packages?: Record<string, ZenXPluginPackageDescriptor>;
@@ -409,7 +325,6 @@ export interface ZenXCapabilityConfiguration {
 export interface ZenXPluginPackageDescriptor {
   manifest: ZenXPluginManifestV2;
   source: "bundled" | "local";
-  manifestPath?: string;
   profilePackageName?: string;
   profileSource?: ZenXPluginProfileSource;
 }

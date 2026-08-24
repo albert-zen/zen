@@ -13,8 +13,6 @@ import {
   ComputerZenXCapabilityPackage,
   ElectronMacComputerBackend,
 } from "./capabilities/computer-provider.js";
-import { MemoryZenXCapabilityGrantStore } from "./capabilities/grant-store.js";
-import { ZenXCapabilityRegistry } from "./capabilities/registry.js";
 
 const web = createServer((request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
@@ -59,29 +57,23 @@ app.commandLine.appendSwitch("force-renderer-accessibility");
 
 void app.whenReady().then(async () => {
   app.setAccessibilitySupportEnabled(true);
-  const registry = new ZenXCapabilityRegistry(
-    new MemoryZenXCapabilityGrantStore(),
+  const browserPackage = new BrowserZenXCapabilityPackage(
+    new ElectronBrowserBackend(),
   );
+  const computerBackend = new ElectronMacComputerBackend();
+  const computerPackage = new ComputerZenXCapabilityPackage(computerBackend);
   try {
     const port = await listen();
-    await registry.initialize();
-    registry.register(
-      new BrowserZenXCapabilityPackage(new ElectronBrowserBackend()),
-    );
-    const computerBackend = new ElectronMacComputerBackend();
     await computerBackend.prepareForegroundInput(new AbortController().signal);
-    registry.register(new ComputerZenXCapabilityPackage(computerBackend));
-    await registry.grant("browser");
-    await registry.grant("computer");
     const cursorBefore = screen.getCursorScreenPoint();
     const foregroundBefore = await computerBackend.desktopContext();
 
-    const opened = await invoke(registry, "browser_open", {
+    const opened = await invoke(browserPackage, "browser_open", {
       sessionId: "desktop-smoke",
       url: `http://127.0.0.1:${String(port)}/`,
     });
     const tabId = requiredResultString(opened, "tabId");
-    let inspected = (await invoke(registry, "browser_inspect", {
+    let inspected = (await invoke(browserPackage, "browser_inspect", {
       sessionId: "desktop-smoke",
       tabId,
     })) as BrowserInspection;
@@ -96,7 +88,7 @@ void app.whenReady().then(async () => {
     assert.equal(password?.value, undefined);
     assert.equal(password?.actions.includes("type"), true);
     if (password !== undefined) {
-      await invoke(registry, "browser_type", {
+      await invoke(browserPackage, "browser_type", {
         sessionId: "desktop-smoke",
         tabId,
         observationId: inspected.observationId,
@@ -104,12 +96,12 @@ void app.whenReady().then(async () => {
         text: "ordinary-argument",
       });
     }
-    inspected = (await invoke(registry, "browser_inspect", {
+    inspected = (await invoke(browserPackage, "browser_inspect", {
       sessionId: "desktop-smoke",
       tabId,
     })) as BrowserInspection;
     const input = requiredBrowserTarget(inspected, "Name", "type");
-    await invoke(registry, "browser_type", {
+    await invoke(browserPackage, "browser_type", {
       sessionId: "desktop-smoke",
       tabId,
       observationId: inspected.observationId,
@@ -117,7 +109,7 @@ void app.whenReady().then(async () => {
       text: "Browser",
     });
     await assert.rejects(
-      invoke(registry, "browser_click", {
+      invoke(browserPackage, "browser_click", {
         sessionId: "desktop-smoke",
         tabId,
         observationId: inspected.observationId,
@@ -125,12 +117,12 @@ void app.whenReady().then(async () => {
       }),
       /stale or unknown/u,
     );
-    inspected = (await invoke(registry, "browser_inspect", {
+    inspected = (await invoke(browserPackage, "browser_inspect", {
       sessionId: "desktop-smoke",
       tabId,
     })) as BrowserInspection;
     await assert.rejects(
-      invoke(registry, "browser_click", {
+      invoke(browserPackage, "browser_click", {
         sessionId: "desktop-smoke",
         tabId,
         observationId: inspected.observationId,
@@ -139,13 +131,13 @@ void app.whenReady().then(async () => {
       /forged/u,
     );
     const mark = requiredBrowserTarget(inspected, "Mark", "click");
-    await invoke(registry, "browser_click", {
+    await invoke(browserPackage, "browser_click", {
       sessionId: "desktop-smoke",
       tabId,
       observationId: inspected.observationId,
       targetId: mark.targetId,
     });
-    inspected = (await invoke(registry, "browser_inspect", {
+    inspected = (await invoke(browserPackage, "browser_inspect", {
       sessionId: "desktop-smoke",
       tabId,
     })) as BrowserInspection;
@@ -157,7 +149,7 @@ void app.whenReady().then(async () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 5200));
     await assert.rejects(
-      invoke(registry, "browser_click", {
+      invoke(browserPackage, "browser_click", {
         sessionId: "desktop-smoke",
         tabId,
         observationId: inspected.observationId,
@@ -165,7 +157,7 @@ void app.whenReady().then(async () => {
       }),
       /identity-changed/u,
     );
-    inspected = (await invoke(registry, "browser_inspect", {
+    inspected = (await invoke(browserPackage, "browser_inspect", {
       sessionId: "desktop-smoke",
       tabId,
     })) as BrowserInspection;
@@ -174,13 +166,13 @@ void app.whenReady().then(async () => {
       "Next",
       "click",
     );
-    await invoke(registry, "browser_navigate", {
+    await invoke(browserPackage, "browser_navigate", {
       sessionId: "desktop-smoke",
       tabId,
       url: `http://127.0.0.1:${String(port)}/next`,
     });
     await assert.rejects(
-      invoke(registry, "browser_click", {
+      invoke(browserPackage, "browser_click", {
         sessionId: "desktop-smoke",
         tabId,
         observationId: inspected.observationId,
@@ -188,49 +180,57 @@ void app.whenReady().then(async () => {
       }),
       /stale or unknown/u,
     );
-    inspected = (await invoke(registry, "browser_inspect", {
+    inspected = (await invoke(browserPackage, "browser_inspect", {
       sessionId: "desktop-smoke",
       tabId,
     })) as BrowserInspection;
     assert.match(inspected.visibleText, /Navigation complete/u);
 
-    await invoke(registry, "browser_navigate", {
+    await invoke(browserPackage, "browser_navigate", {
       sessionId: "desktop-smoke",
       tabId,
       url: `http://127.0.0.1:${String(port)}/storage-seed`,
     });
-    inspected = (await invoke(registry, "browser_inspect", {
+    inspected = (await invoke(browserPackage, "browser_inspect", {
       sessionId: "desktop-smoke",
       tabId,
     })) as BrowserInspection;
     assert.match(inspected.visibleText, /Storage seeded/u);
-    const closedSeedSession = await invoke(registry, "browser_close_session", {
-      sessionId: "desktop-smoke",
-    });
+    const closedSeedSession = await invoke(
+      browserPackage,
+      "browser_close_session",
+      {
+        sessionId: "desktop-smoke",
+      },
+    );
     assert.equal((closedSeedSession as { closedTabs: number }).closedTabs, 1);
-    const remainingTabs = (await invoke(registry, "browser_list_tabs", {
+    const remainingTabs = (await invoke(browserPackage, "browser_list_tabs", {
       sessionId: "desktop-smoke",
     })) as unknown[];
     assert.deepEqual(remainingTabs, []);
 
-    const reopened = await invoke(registry, "browser_open", {
+    const reopened = await invoke(browserPackage, "browser_open", {
       sessionId: "desktop-smoke",
       url: `http://127.0.0.1:${String(port)}/storage-check`,
     });
     const reopenedTabId = requiredResultString(reopened, "tabId");
-    inspected = (await invoke(registry, "browser_inspect", {
+    inspected = (await invoke(browserPackage, "browser_inspect", {
       sessionId: "desktop-smoke",
       tabId: reopenedTabId,
     })) as BrowserInspection;
     assert.match(inspected.visibleText, /Storage clean/u);
     assert.doesNotMatch(inspected.visibleText, /Storage leaked/u);
-    await invoke(registry, "browser_close", {
+    await invoke(browserPackage, "browser_close", {
       sessionId: "desktop-smoke",
       tabId: reopenedTabId,
     });
-    const closedSession = await invoke(registry, "browser_close_session", {
-      sessionId: "desktop-smoke",
-    });
+    const closedSession = await invoke(
+      browserPackage,
+      "browser_close_session",
+      {
+        sessionId: "desktop-smoke",
+      },
+    );
     assert.equal((closedSession as { closedTabs: number }).closedTabs, 0);
     const cursorAfter = screen.getCursorScreenPoint();
     const foregroundAfter = await computerBackend.desktopContext();
@@ -245,29 +245,25 @@ void app.whenReady().then(async () => {
     console.error("ZenX capability desktop smoke failed", error);
     process.exitCode = 1;
   } finally {
-    await registry.close();
+    await browserPackage.close?.();
+    await computerPackage.close?.();
     await closeWeb();
     app.quit();
   }
 });
 
 async function invoke(
-  registry: ZenXCapabilityRegistry,
+  capabilityPackage: BrowserZenXCapabilityPackage,
   name: string,
   arguments_: Record<string, unknown>,
 ): Promise<unknown> {
-  const result = await registry.execute({
+  return await capabilityPackage.invoke(name, {
     callId: `smoke-${name}`,
     name,
     arguments: arguments_,
     cwd: process.cwd(),
     signal: new AbortController().signal,
   });
-  const parsed = JSON.parse(result.output) as { result?: unknown };
-  if (parsed.result === undefined) {
-    throw new Error(`${name} returned no structured result`);
-  }
-  return parsed.result;
 }
 
 function requiredResultString(value: unknown, key: string): string {

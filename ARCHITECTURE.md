@@ -155,13 +155,12 @@
   `turn/start` 所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
 - **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
-- **ZenXCapabilityRegistry** — ZenX 主进程注册 bundled/local capability manifest、生命周期、
-  provider、结构化工具与完整 UI contribution snapshot；它仍保留旧细粒度 grant 兼容数据。
+- **ZenXPluginCatalog** — ZenX 主进程从 profile 的直接 dependencies 注册 v2 package，原子管理
+  lifecycle、runtime、结构化工具与完整 UI contribution snapshot；所有非 `shell` 能力只走这一路径。
 - **ZenXPluginContribution** — Plugin Catalog 从 enabled package 原子投影受控 sidebar、page/subroute、
   settings、panel、command/menu 与 versioned bundle/surface；它不授予插件 DOM/router 权限。
-- **ZenXCapabilityConfiguration** — 当前骨架在同一原子配置文档中持久化 enablement 与细粒度
-  permission grants，并按顺序重启 capability host；这些 grants 是现状而非目标权限合同，后续
-  Plugin Host 只保留 `full_access` 与可选 `ask_unknown`。
+- **ZenXPluginCatalogState** — Catalog 在同一原子配置文档中持久化 package descriptor、
+  enablement、uninstall 与 profile generation；历史文件位置只为一次性 adoption 保留，不参与 runtime admission。
 - **ZenXCapabilityInteractionMode** — ZenX 把工具声明为不改变全局输入/焦点的 `background_safe`
   、必须接管前台的 `foreground_required` 或在独立桌面执行的 `isolated`，让产品提示、调度和 host policy
   协商实际影响且禁止静默降级。
@@ -183,18 +182,16 @@
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
   artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
-- **ZenXCapabilityLiveProjection** — ZenX 主进程把 capability invocation 的有界顺序状态与最新 Browser screenshot
-  投影给 renderer；它是可丢弃的 live UI 状态，canonical tool call/result 仍是唯一 durable execution history。
-- **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider revoke 或 close 时单调使
-  capability live projection 与 provider-owned artifacts 失效并重建可重建 provider；它不改写 canonical ItemList、
-  grants 或 durable capability history，也不成为第二个 runtime/coordinator。
+- **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider replacement 或 close 时
+  单调使 provider-owned artifacts 失效并重建可重建 backend；它不改写 canonical ItemList、Catalog lifecycle
+  或 durable plugin data，也不成为第二个 runtime/coordinator。
 - **ZenXBundledProviderProvisioning** — 打包 provider 只能由应用资源中的版本与 SHA-256 固定清单解析，实际执行的 browser payload 以有界目录摘要在选择与启动前重验，仅排除清单明确列出的非可执行 host-validation 状态；缺失、离线或校验失败只产生可诊断的 unavailable 状态，不改写 Core 会话语义。
 - **ZenXPlaywrightSessionFence** — Playwright provider 在一个瞬时 CLI session 内串行执行操作，并用稳定 tab/document identity 与 lifecycle revision 围住选择、观察、截图、摘要和关闭；该 fence 不进入 Core 或 durable journal。
 - **ZenXProviderLaunchVerification** — 外部 provider 在实际 spawn 前再次验证绑定的 canonical executable、browser payload、shim companion、manifest digest 与 pinned semantic version；失败只产生显式诊断，不自动改用未验证资产。
 - **ZenXPackagedProviderSmoke** — ZenX 构建验证用真实 resources/providers manifest、asset hash、version pin 与 bundled-only catalog path 检查离线 packaged provisioning；它是一次性测试流程，不是运行时 coordinator 或 durable state。
 - **VerifiedArtifactAcquisition** — ZenX release assembly 只以 artifact name、URL、SHA-256、deadline 与 cache location 取得 digest-addressed immutable file，并在内部以 per-digest 跨进程 transaction 收口 proxy-aware bounded transport、stream size、partial cleanup、no-follow cache revalidation 与 atomic publication；它不成为运行时下载器或第二条 packaging pipeline。
 - **ZenXPackagingRunStaging** — portable app 与 packaged smoke 继续复用同一 provider assembly、digest injection 与 Electron packager，但每次只在私有 run directory 内写 build/resources/app/artifact，以 target lock 拒绝同目标并发并在完整 staging 后发布稳定产物；它不复制 release pipeline。
-- **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 capability registry 暴露 Project/Thread 自控工具，
+- **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 profile-managed Plugin Runtime 暴露 Project/Thread 自控工具，
   只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
   不持有第二套 Project、Thread、Turn、transcript 或调度状态。
 - **ZenXThreadTitleProjection** — ZenX 外层产品按 threadId 持久化 provisional、generating、
@@ -318,7 +315,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   重新可用时可由同一历史事实再次投影，历史 Item 不变。
 - Plugin Package v2 为发现提供的最小 metadata 是稳定 `id`、非空 `name` / short
   `description` / `mainDocument`，以及普通 namespaced tool 的 `name` / `description` /
-  `inputSchema`。v1 capability 缺少这个完整合同，继续走既有兼容 seam，不伪装成可发现 v2 plugin。
+  `inputSchema`；这是所有非 builtin 工具的唯一 manifest 与 discovery 合同。
 - 插件 main document 是首要模型说明；独立 Skills 平台暂缓，现有固定协议
   `skills/list` 不因此获得新的会话语义。
 - 同一模型响应产生的多个工具调用当前仍按顺序执行；同一 Turn 的真正并行执行
@@ -343,8 +340,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   显式 pnpm `allowBuilds` 执行，未列入者保持 blocked，这一 package-manager policy
   不扩展成风险评分或新的权限语义。
 - 不引入 risk scoring、参数级 scope graph、权限矩阵、rules engine 或复杂 sandbox
-  产品框架。当前 capability registry 的 permission scopes/grants 是骨架现状，不能
-  反向定义目标 Plugin Platform。
+  产品框架；package 安装信任与 Host 的 `full_access` / `ask_unknown` 是现有的完整控制边界。
 
 ### 插件生命周期、UI 与 ZAS
 

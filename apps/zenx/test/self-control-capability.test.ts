@@ -27,14 +27,10 @@ import { serveCodexWebSocket } from "../../../src/protocol/codex/websocket.js";
 import {
   MutableAppServerRequestPort,
   ZENX_SELF_CONTROL_CAPABILITY_ID,
-  ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION,
-  ZENX_SELF_CONTROL_WORKSPACE_PERMISSION,
   ZenXSelfControlCapabilityPackage,
   type AppServerRequestPort,
 } from "../src/main/capabilities/self-control-package.js";
-import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
 import type { ZenXCapabilityHost } from "../src/main/capabilities/types.js";
-import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import {
   ZenXProtocolClient,
@@ -251,16 +247,6 @@ test("real ZenX host control tools make active semantics explicit", async () => 
             item.status === "completed",
         ),
     );
-    assert(
-      capabilities
-        .snapshot()
-        .recentInvocations.some(
-          (record) =>
-            record.toolName === "zenx_projects_list" &&
-            record.status === "completed",
-        ),
-    );
-
     await assert.rejects(
       invoke(tools, "zenx_threads_send", {
         threadId,
@@ -811,28 +797,12 @@ class TracerBulletModel implements ModelAdapter {
 }
 
 async function grantedSelfControl(
-  directory: string,
+  _directory: string,
   appServer: AppServerRequestPort,
-): Promise<ZenXCapabilityService> {
-  const capabilities = new ZenXCapabilityService({
-    userDataDirectory: directory,
-    grantStore: new MemoryZenXCapabilityGrantStore(),
-    localDirectory: path.join(directory, "no-local-capabilities"),
-  });
-  await capabilities.initialize();
-  capabilities.register(new ZenXSelfControlCapabilityPackage({ appServer }));
-  assert(
-    capabilities
-      .hostSnapshot()
-      .definitions.every(
-        (definition) => !SELF_CONTROL_TOOL_NAMES.includes(definition.name),
-      ),
-    "self-control tools must stay hidden until explicitly granted",
+): Promise<SelfControlHost> {
+  const capabilities = new SelfControlHost(
+    new ZenXSelfControlCapabilityPackage({ appServer }),
   );
-  await capabilities.grant(ZENX_SELF_CONTROL_CAPABILITY_ID, [
-    ZENX_SELF_CONTROL_WORKSPACE_PERMISSION,
-    ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION,
-  ]);
   assert.deepEqual(
     capabilities
       .hostSnapshot()
@@ -845,13 +815,51 @@ async function grantedSelfControl(
   return capabilities;
 }
 
-function capabilityTools(capabilities: ZenXCapabilityService): ToolExecutor {
+function capabilityTools(capabilities: SelfControlHost): ToolExecutor {
   return {
     definitions: capabilities.hostSnapshot().definitions,
     async execute(invocation: ToolInvocation) {
       return await capabilities.execute(invocation);
     },
   };
+}
+
+class SelfControlHost implements ZenXCapabilityHost {
+  readonly #package: ZenXSelfControlCapabilityPackage;
+
+  constructor(capabilityPackage: ZenXSelfControlCapabilityPackage) {
+    this.#package = capabilityPackage;
+  }
+
+  hostSnapshot() {
+    return {
+      definitions: this.#package.manifest.tools.map(
+        ({ name, description, inputSchema }) => ({
+          name,
+          description,
+          inputSchema: structuredClone(inputSchema),
+        }),
+      ),
+      plugins: [],
+    };
+  }
+
+  async execute(invocation: ToolInvocation) {
+    const result = await this.#package.invoke(invocation.name, invocation);
+    return {
+      output: JSON.stringify({
+        capabilityId: this.#package.manifest.id,
+        provider: this.#package.manifest.provider,
+        tool: invocation.name,
+        interactionMode: "background_safe",
+        capabilities: [],
+        result,
+      }),
+      exitCode: 0,
+    };
+  }
+
+  async close(): Promise<void> {}
 }
 
 function managerFor(

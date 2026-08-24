@@ -40,7 +40,6 @@ export class ZenXWorkbenchFixturePackage implements ZenXCapabilityPackage {
         capabilities: ["workbench.refresh"],
       },
     ],
-    resources: [],
     ui: {
       bundles: [
         {

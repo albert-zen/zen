@@ -122,14 +122,6 @@ export interface ZenXPluginTool {
   maxOutputBytes?: number;
 }
 
-export interface ZenXPluginResource {
-  id: string;
-  kind: "skill" | "prompt";
-  title: string;
-  description: string;
-  content: string;
-}
-
 export interface ZenXPluginUiBundle {
   id: string;
   apiVersion: 1;
@@ -227,9 +219,7 @@ export interface ZenXPluginManifestV2 {
   };
   permissions: ZenXPluginPermission[];
   tools: ZenXPluginTool[];
-  resources: ZenXPluginResource[];
   contributions?: ZenXPluginContributions;
-  settings?: Readonly<Record<string, unknown>>;
   ui?: { bundles: ZenXPluginUiBundle[]; surfaces: ZenXPluginUiSurface[] };
 }
 

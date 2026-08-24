@@ -225,7 +225,6 @@ app.whenReady().then(async () => {
           return triggersPackage;
         }),
       },
-      profileManagedProviders: true,
       bundledManifestSha256: app.isPackaged
         ? PACKAGED_PROVIDER_MANIFEST_SHA256
         : undefined,
@@ -1018,27 +1017,8 @@ function installCapabilityIpc(
   manager: AppServerManager,
   marketplace: MarketplaceCatalogService,
 ): void {
-  ipcMain.handle(ipcChannels.capabilitiesGet, () => capabilities.snapshot());
   ipcMain.handle(ipcChannels.marketplaceGet, () => marketplace.load());
   ipcMain.handle(ipcChannels.pluginsGet, () => capabilities.pluginSnapshot());
-  ipcMain.handle(
-    ipcChannels.capabilitiesGrant,
-    async (_event, capabilityId: unknown, permissionIds: unknown) => {
-      const parsed = capabilityPermissionRequest(capabilityId, permissionIds);
-      await capabilities.grant(parsed.capabilityId, parsed.permissionIds);
-      await manager.restartCapabilities();
-      return capabilities.snapshot();
-    },
-  );
-  ipcMain.handle(
-    ipcChannels.capabilitiesRevoke,
-    async (_event, capabilityId: unknown, permissionIds: unknown) => {
-      const parsed = capabilityPermissionRequest(capabilityId, permissionIds);
-      await capabilities.revoke(parsed.capabilityId, parsed.permissionIds);
-      await manager.restartCapabilities();
-      return capabilities.snapshot();
-    },
-  );
   ipcMain.handle(
     ipcChannels.pluginsSetEnabled,
     async (_event, pluginId: unknown, enabled: unknown) => {
@@ -1048,38 +1028,6 @@ function installCapabilityIpc(
       const snapshot = await capabilities.setEnabled(pluginId, enabled);
       const capabilityRefresh = await manager.refreshCapabilitiesAfterCommit();
       return { snapshot, capabilityRefresh };
-    },
-  );
-  ipcMain.handle(
-    ipcChannels.pluginsSelectPackage,
-    async (event, expectedPluginId: unknown) => {
-      if (
-        expectedPluginId !== undefined &&
-        (typeof expectedPluginId !== "string" || expectedPluginId.length === 0)
-      ) {
-        throw new Error("Invalid expected plugin ID");
-      }
-      const owner = BrowserWindow.fromWebContents(event.sender);
-      const options = {
-        title:
-          expectedPluginId === undefined
-            ? "Install local plugin package"
-            : `Update ${expectedPluginId}`,
-        properties: ["openFile"],
-        filters: [{ name: "ZenX plugin manifest", extensions: ["json"] }],
-      } satisfies Electron.OpenDialogOptions;
-      const result =
-        owner === null
-          ? await dialog.showOpenDialog(options)
-          : await dialog.showOpenDialog(owner, options);
-      if (result.canceled || result.filePaths[0] === undefined)
-        return { canceled: true } as const;
-      const snapshot = await capabilities.installLocalPackage(
-        result.filePaths[0],
-        expectedPluginId as string | undefined,
-      );
-      await manager.restartCapabilities();
-      return { canceled: false, snapshot } as const;
     },
   );
   ipcMain.handle(ipcChannels.pluginsSelectTarball, async (event) => {
@@ -1188,11 +1136,7 @@ function installCapabilityIpc(
   );
   capabilities.onChange((snapshot) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send(ipcChannels.capabilitiesChanged, snapshot);
-      window.webContents.send(
-        ipcChannels.pluginsChanged,
-        capabilities.pluginSnapshot(),
-      );
+      window.webContents.send(ipcChannels.pluginsChanged, snapshot);
     }
   });
 }
@@ -1216,26 +1160,6 @@ function pluginPackageSource(value: unknown): ZenXPluginPackageSource {
     mode: value.mode as ZenXPluginPackageSource["mode"],
     packageSpec: value.packageSpec,
   };
-}
-
-function capabilityPermissionRequest(
-  capabilityId: unknown,
-  permissionIds: unknown,
-): { capabilityId: string; permissionIds?: string[] } {
-  if (typeof capabilityId !== "string" || capabilityId.length === 0) {
-    throw new Error("Invalid capability ID");
-  }
-  if (permissionIds === undefined) return { capabilityId };
-  if (
-    !Array.isArray(permissionIds) ||
-    permissionIds.some(
-      (permissionId) =>
-        typeof permissionId !== "string" || permissionId.length === 0,
-    )
-  ) {
-    throw new Error("Invalid capability permission list");
-  }
-  return { capabilityId, permissionIds };
 }
 
 function isApprovalDecision(value: unknown): value is ApprovalDecision {

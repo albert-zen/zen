@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -7,23 +6,12 @@ import { validatePluginManifest as validatePublicPluginManifest } from "@zenx/pl
 
 import type { ModelTool } from "../../../../../src/model.js";
 import type {
-  ToolExecutionResult,
-  ToolInvocation,
-} from "../../../../../src/tool.js";
-import type {
   RegisteredZenXCapability,
   ZenXAvailablePlugin,
-  ZenXCapabilityAuditRecord,
-  ZenXCapabilityDisposer,
-  ZenXCapabilityGrant,
-  ZenXCapabilityConfigurationStore,
-  ZenXCapabilityHost,
+  ZenXPluginCatalogStore,
   ZenXCapabilityHostSnapshot,
-  ZenXCapabilityManifest,
   ZenXCapabilityPackage,
   ZenXCapabilityProviderDiagnostic,
-  ZenXCapabilitySnapshot,
-  ZenXCapabilityScreenshotArtifact,
   ZenXCapabilityTool,
   ZenXCapabilityInteractionMode,
   ZenXPluginSnapshot,
@@ -31,6 +19,7 @@ import type {
   ZenXPluginPackageDescriptor,
   ZenXPluginProfileSource,
   ZenXPluginManifestV2,
+  ZenXPluginDiagnostics,
   ZenXPluginRuntimeLifecycle,
   ZenXPluginRuntimeStage,
 } from "./types.js";
@@ -41,53 +30,34 @@ import {
 } from "./types.js";
 import type { PluginDiscoveryCatalog } from "../plugin-discovery.js";
 
-export const CAPABILITY_RESOURCE_TOOL = "zenx_capability_resource";
-const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024;
-const MAX_AUDIT_RECORDS = 100;
-
-export interface ZenXCapabilityRegistryOptions {
+export interface ZenXPluginCatalogOptions {
   allowForegroundRequired: boolean;
   platform: string;
   pluginDataDirectory?: string;
   pluginRuntimeLifecycle?: ZenXPluginRuntimeLifecycle;
 }
 
-interface ActiveCapabilityInvocation {
-  capabilityId: string;
-  controller: AbortController;
-  settled: Promise<void>;
-  resolveSettled(): void;
-}
-
-export class ZenXCapabilityRegistry
-  implements ZenXCapabilityHost, PluginDiscoveryCatalog
-{
-  readonly #configurationStore: ZenXCapabilityConfigurationStore;
+export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
+  readonly #configurationStore: ZenXPluginCatalogStore;
   readonly #registered = new Map<string, RegisteredZenXCapability>();
   readonly #catalogPackages = new Map<string, RegisteredZenXCapability>();
   readonly #toolOwners = new Map<
     string,
     { capabilityId: string; tool: ZenXCapabilityTool }
   >();
-  readonly #listeners = new Set<(snapshot: ZenXCapabilitySnapshot) => void>();
-  readonly #audit: ZenXCapabilityAuditRecord[] = [];
-  #currentScreenshot: ZenXCapabilityScreenshotArtifact | undefined;
-  #browserProjectionSequence = 0;
-  readonly #browserInvocationSequences = new Map<string, number>();
+  readonly #listeners = new Set<(snapshot: ZenXPluginSnapshot) => void>();
   readonly #providerDiagnostics: ZenXCapabilityProviderDiagnostic[] = [];
   readonly #discoveryErrors: string[] = [];
-  readonly #options: ZenXCapabilityRegistryOptions;
-  #grants: Record<string, ZenXCapabilityGrant[]> = {};
+  readonly #options: ZenXPluginCatalogOptions;
   #disabled = new Set<string>();
   #uninstalled = new Set<string>();
   #packageDescriptors: Record<string, ZenXPluginPackageDescriptor> = {};
   #profileGeneration: string | undefined;
   #configurationMutationTail: Promise<void> = Promise.resolve();
-  readonly #activeInvocations = new Set<ActiveCapabilityInvocation>();
 
   constructor(
-    configurationStore: ZenXCapabilityConfigurationStore,
-    options: Partial<ZenXCapabilityRegistryOptions> = {},
+    configurationStore: ZenXPluginCatalogStore,
+    options: Partial<ZenXPluginCatalogOptions> = {},
   ) {
     this.#configurationStore = configurationStore;
     this.#options = {
@@ -99,7 +69,6 @@ export class ZenXCapabilityRegistry
 
   async initialize(): Promise<void> {
     const configuration = await this.#configurationStore.load();
-    this.#grants = configuration.grants;
     this.#disabled = new Set(configuration.disabled);
     this.#uninstalled = new Set(configuration.uninstalled ?? []);
     this.#packageDescriptors = structuredClone(configuration.packages ?? {});
@@ -135,48 +104,6 @@ export class ZenXCapabilityRegistry
     }
   }
 
-  register(
-    capabilityPackage: ZenXCapabilityPackage,
-    source: "bundled" | "local" = "bundled",
-  ): ZenXCapabilityDisposer {
-    const manifest = validateManifest(capabilityPackage.manifest);
-    if (
-      manifest.schemaVersion === 2 &&
-      this.#options.pluginRuntimeLifecycle !== undefined
-    ) {
-      throw new Error(
-        `Plugin ${manifest.id} must use the asynchronous install lifecycle`,
-      );
-    }
-    if (this.#catalogPackages.has(manifest.id)) {
-      throw new Error(`Capability ${manifest.id} is already registered`);
-    }
-    const registration = { package: capabilityPackage, source } as const;
-    this.#catalogPackages.set(manifest.id, registration);
-    if (
-      this.#uninstalled.has(manifest.id) ||
-      (manifest.schemaVersion === 2 && this.#disabled.has(manifest.id))
-    ) {
-      return async () => {
-        if (this.#catalogPackages.get(manifest.id) === registration) {
-          this.#catalogPackages.delete(manifest.id);
-        }
-      };
-    }
-    try {
-      this.#validateRegistration(manifest);
-      this.#activateRegistration(registration);
-    } catch (error) {
-      this.#catalogPackages.delete(manifest.id);
-      throw error;
-    }
-    let disposing: Promise<void> | undefined;
-    return () => {
-      disposing ??= this.#removeSuppliedPackage(manifest.id, registration);
-      return disposing;
-    };
-  }
-
   async install(
     capabilityPackage: ZenXCapabilityPackage,
     source: "bundled" | "local" = "local",
@@ -192,9 +119,6 @@ export class ZenXCapabilityRegistry
   ): Promise<void> {
     await this.#serializeConfigurationMutation(async () => {
       const manifest = validateManifest(capabilityPackage.manifest);
-      if (manifest.schemaVersion !== 2) {
-        throw new Error(`Plugin install requires a manifest v2 package`);
-      }
       if (this.#catalogPackages.has(manifest.id)) {
         throw new Error(`Capability ${manifest.id} is already registered`);
       }
@@ -207,24 +131,6 @@ export class ZenXCapabilityRegistry
           throw new Error(
             `Plugin ${manifest.id} does not match its installed package descriptor`,
           );
-        }
-        if (
-          capabilityPackage.manifestPath !== undefined &&
-          capabilityPackage.manifestPath !== stored.manifestPath
-        ) {
-          const nextPackages = {
-            ...this.#packageDescriptors,
-            [manifest.id]: {
-              ...stored,
-              manifestPath: capabilityPackage.manifestPath,
-            },
-          };
-          const nextConfiguration = this.#configuration({
-            packages: nextPackages,
-          });
-          enterCatalogCommit(options);
-          await this.#configurationStore.save(nextConfiguration);
-          this.#packageDescriptors = nextPackages;
         }
         const registration = { package: capabilityPackage, source } as const;
         this.#catalogPackages.set(manifest.id, registration);
@@ -251,9 +157,6 @@ export class ZenXCapabilityRegistry
       const descriptor = {
         manifest: structuredClone(manifest),
         source,
-        ...(capabilityPackage.manifestPath === undefined
-          ? {}
-          : { manifestPath: capabilityPackage.manifestPath }),
         ...(profile === undefined
           ? {}
           : {
@@ -313,9 +216,6 @@ export class ZenXCapabilityRegistry
   ): Promise<void> {
     await this.#serializeConfigurationMutation(async () => {
       const manifest = validateManifest(capabilityPackage.manifest);
-      if (manifest.schemaVersion !== 2) {
-        throw new Error("Plugin update requires a manifest v2 package");
-      }
       const previous = this.#catalogPackages.get(manifest.id);
       const previousDescriptor = this.#packageDescriptors[manifest.id];
       if (previous === undefined || previousDescriptor === undefined) {
@@ -351,9 +251,6 @@ export class ZenXCapabilityRegistry
         ...previousDescriptor,
         manifest: structuredClone(manifest),
         source,
-        ...(capabilityPackage.manifestPath === undefined
-          ? {}
-          : { manifestPath: capabilityPackage.manifestPath }),
         ...(profile === undefined
           ? {}
           : {
@@ -438,9 +335,6 @@ export class ZenXCapabilityRegistry
   ): Promise<void> {
     await this.#serializeConfigurationMutation(async () => {
       const manifest = validateManifest(capabilityPackage.manifest);
-      if (manifest.schemaVersion !== 2) {
-        throw new Error("Bundled profile adoption requires manifest v2");
-      }
       const previousDescriptor = this.#packageDescriptors[manifest.id];
       if (
         previousDescriptor === undefined ||
@@ -516,8 +410,7 @@ export class ZenXCapabilityRegistry
       }
       if (this.#uninstalled.has(pluginId)) return;
       const hadRuntime =
-        supplied?.package.manifest.schemaVersion === 2 &&
-        !this.#disabled.has(pluginId);
+        supplied !== undefined && !this.#disabled.has(pluginId);
       if (hadRuntime && supplied !== undefined) {
         await this.#stopPluginRuntimeWithRollback(pluginId, supplied);
       }
@@ -616,9 +509,6 @@ export class ZenXCapabilityRegistry
   ): Promise<void> {
     await this.#serializeConfigurationMutation(async () => {
       const manifest = validateManifest(capabilityPackage.manifest);
-      if (manifest.schemaVersion !== 2) {
-        throw new Error("Plugin reinstall requires a manifest v2 package");
-      }
       const descriptor = this.#packageDescriptors[manifest.id];
       if (descriptor === undefined || !this.#uninstalled.has(manifest.id)) {
         throw new Error(`Plugin ${manifest.id} is not uninstalled`);
@@ -698,27 +588,14 @@ export class ZenXCapabilityRegistry
     });
   }
 
-  async #removeSuppliedPackage(
-    capabilityId: string,
-    registration: RegisteredZenXCapability,
-  ): Promise<void> {
-    if (this.#catalogPackages.get(capabilityId) !== registration) return;
-    this.#catalogPackages.delete(capabilityId);
-    const active = this.#registered.get(capabilityId);
-    if (active === registration) {
-      await this.#unregisterRegistration(capabilityId, registration);
-    }
-  }
-
   #validateRegistration(
-    manifest: ZenXCapabilityManifest,
+    manifest: ZenXPluginManifestV2,
     replacingPluginId?: string,
   ): void {
     for (const tool of manifest.tools) {
       if (
-        tool.name === CAPABILITY_RESOURCE_TOOL ||
-        (this.#toolOwners.has(tool.name) &&
-          this.#toolOwners.get(tool.name)?.capabilityId !== replacingPluginId)
+        this.#toolOwners.has(tool.name) &&
+        this.#toolOwners.get(tool.name)?.capabilityId !== replacingPluginId
       ) {
         throw new Error(`Capability tool ${tool.name} is already registered`);
       }
@@ -766,17 +643,10 @@ export class ZenXCapabilityRegistry
   ): Promise<void> {
     if (this.#registered.get(capabilityId) !== registered) return;
     this.#registered.delete(capabilityId);
-    if (capabilityId === "browser") this.#clearBrowserProjection();
     for (const tool of registered.package.manifest.tools) {
       this.#toolOwners.delete(tool.name);
     }
     if (stopRuntime) await this.#stopPluginRuntime(capabilityId);
-    if (
-      registered.package.manifest.schemaVersion !== 2 ||
-      this.#options.pluginRuntimeLifecycle === undefined
-    ) {
-      await registered.package.close?.();
-    }
     this.#emit();
   }
 
@@ -786,7 +656,6 @@ export class ZenXCapabilityRegistry
   ): void {
     if (this.#registered.get(capabilityId) !== registered) return;
     this.#registered.delete(capabilityId);
-    if (capabilityId === "browser") this.#clearBrowserProjection();
     for (const tool of registered.package.manifest.tools) {
       this.#toolOwners.delete(tool.name);
     }
@@ -799,12 +668,6 @@ export class ZenXCapabilityRegistry
   }
 
   recordProviderDiagnostic(diagnostic: ZenXCapabilityProviderDiagnostic): void {
-    if (
-      diagnostic.capabilityId === "browser" &&
-      diagnostic.status !== "selected"
-    ) {
-      this.#clearBrowserProjection();
-    }
     const index = this.#providerDiagnostics.findIndex(
       (candidate) =>
         candidate.capabilityId === diagnostic.capabilityId &&
@@ -834,128 +697,11 @@ export class ZenXCapabilityRegistry
     this.#emit();
   }
 
-  async grant(
-    capabilityId: string,
-    permissionIds?: readonly string[],
-  ): Promise<void> {
-    await this.#serializeConfigurationMutation(async () => {
-      const manifest = this.#requireCapability(capabilityId).package.manifest;
-      const selected =
-        permissionIds === undefined
-          ? manifest.permissions
-          : permissionIds.map((permissionId) => {
-              const permission = manifest.permissions.find(
-                (candidate) => candidate.id === permissionId,
-              );
-              if (permission === undefined) {
-                throw new Error(
-                  `Capability ${capabilityId} does not request ${permissionId}`,
-                );
-              }
-              return permission;
-            });
-      const existing = new Map(
-        (this.#grants[capabilityId] ?? []).map((grant) => [
-          grant.permissionId,
-          grant,
-        ]),
-      );
-      for (const permission of selected) {
-        existing.set(permission.id, {
-          permissionId: permission.id,
-          scope: permission.scope,
-        });
-      }
-      const nextGrants = {
-        ...this.#grants,
-        [capabilityId]: [...existing.values()],
-      };
-      await this.#configurationStore.save({
-        ...this.#configuration(),
-        grants: structuredClone(nextGrants),
-      });
-      this.#grants = nextGrants;
-      this.#emit();
-    });
-  }
-
-  async revoke(
-    capabilityId: string,
-    permissionIds?: readonly string[],
-  ): Promise<void> {
-    await this.#serializeConfigurationMutation(async () => {
-      this.#requireCapability(capabilityId);
-      let nextGrants: Record<string, ZenXCapabilityGrant[]>;
-      if (permissionIds === undefined) {
-        const { [capabilityId]: _removed, ...remaining } = this.#grants;
-        nextGrants = remaining;
-      } else {
-        const revoked = new Set(permissionIds);
-        nextGrants = {
-          ...this.#grants,
-          [capabilityId]: (this.#grants[capabilityId] ?? []).filter(
-            (grant) => !revoked.has(grant.permissionId),
-          ),
-        };
-      }
-      await this.#configurationStore.save({
-        ...this.#configuration(),
-        grants: structuredClone(nextGrants),
-      });
-      this.#grants = nextGrants;
-      if (capabilityId === "browser") this.#clearBrowserProjection();
-      this.#emit();
-    });
-  }
-
-  snapshot(): ZenXCapabilitySnapshot {
-    return {
-      capabilities: [...this.#registered.values()].map((registered) => {
-        const manifest = registered.package.manifest;
-        return {
-          manifest: {
-            ...manifest,
-            resources: manifest.resources.map(
-              ({ content: _content, ...resource }) => resource,
-            ),
-          },
-          source: registered.source,
-          enabled: !this.#disabled.has(manifest.id),
-          available: this.#isProviderAvailable(manifest),
-          ...(this.#isProviderAvailable(manifest)
-            ? {}
-            : {
-                unavailableReason: `Provider ${manifest.provider.id} does not support ${this.#options.platform}`,
-              }),
-          granted: structuredClone(this.#grants[manifest.id] ?? []),
-          enabledTools: manifest.tools
-            .filter((tool) => this.#isToolExposed(manifest.id, tool))
-            .map((tool) => tool.name),
-          blockedTools: this.#disabled.has(manifest.id)
-            ? []
-            : manifest.tools
-                .filter(
-                  (tool) =>
-                    this.#hasPermissions(manifest.id, tool.permissions) &&
-                    !this.#isInteractionAllowed(tool.interactionMode),
-                )
-                .map((tool) => tool.name),
-        };
-      }),
-      recentInvocations: structuredClone(this.#audit),
-      ...(this.#currentScreenshot === undefined
-        ? {}
-        : { currentScreenshot: structuredClone(this.#currentScreenshot) }),
-      providerDiagnostics: structuredClone(this.#providerDiagnostics),
-      discoveryErrors: [...this.#discoveryErrors],
-    };
-  }
-
   pluginSnapshot(): ZenXPluginSnapshot {
     const catalog = new Map<
       string,
       {
-        manifest: ZenXCapabilityManifest;
+        manifest: ZenXPluginManifestV2;
         source: "bundled" | "local";
         available: boolean;
       }
@@ -967,7 +713,6 @@ export class ZenXCapabilityRegistry
       });
     }
     for (const registered of this.#catalogPackages.values()) {
-      if (registered.package.manifest.schemaVersion !== 2) continue;
       if (!catalog.has(registered.package.manifest.id)) {
         catalog.set(registered.package.manifest.id, {
           manifest: registered.package.manifest,
@@ -987,11 +732,10 @@ export class ZenXCapabilityRegistry
           : "installed";
       return {
         id: manifest.id,
-        displayName: manifestName(manifest),
+        displayName: manifest.name,
         version: manifest.version,
         description: manifest.description,
-        compatibility:
-          manifest.schemaVersion === 2 ? manifest.compatibility.zenx : "legacy",
+        compatibility: manifest.compatibility.zenx,
         source: entry.source,
         ...(this.#packageDescriptors[manifest.id]?.profileSource === undefined
           ? {}
@@ -1046,7 +790,7 @@ export class ZenXCapabilityRegistry
           left.key.localeCompare(right.key),
       );
     const project = <T extends { id: string }>(
-      select: (manifest: ZenXCapabilityManifest) => readonly T[] | undefined,
+      select: (manifest: ZenXPluginManifestV2) => readonly T[] | undefined,
     ) =>
       enabled.flatMap((registered) => {
         const pluginId = registered.package.manifest.id;
@@ -1059,24 +803,20 @@ export class ZenXCapabilityRegistry
     const bundles = enabled.flatMap((registered) => {
       const pluginId = registered.package.manifest.id;
       const manifest = registered.package.manifest;
-      return manifest.schemaVersion === 2
-        ? (manifest.ui?.bundles ?? []).map((bundle) => ({
-            ...structuredClone(bundle),
-            key: `${pluginId}:${bundle.id}`,
-            pluginId,
-          }))
-        : [];
+      return (manifest.ui?.bundles ?? []).map((bundle) => ({
+        ...structuredClone(bundle),
+        key: `${pluginId}:${bundle.id}`,
+        pluginId,
+      }));
     });
     const surfaces = enabled.flatMap((registered) => {
       const pluginId = registered.package.manifest.id;
       const manifest = registered.package.manifest;
-      return manifest.schemaVersion === 2
-        ? (manifest.ui?.surfaces ?? []).map((surface) => ({
-            ...structuredClone(surface),
-            key: `${pluginId}:${surface.id}`,
-            pluginId,
-          }))
-        : [];
+      return (manifest.ui?.surfaces ?? []).map((surface) => ({
+        ...structuredClone(surface),
+        key: `${pluginId}:${surface.id}`,
+        pluginId,
+      }));
     });
     return {
       plugins,
@@ -1095,6 +835,13 @@ export class ZenXCapabilityRegistry
     };
   }
 
+  diagnostics(): ZenXPluginDiagnostics {
+    return {
+      providerDiagnostics: structuredClone(this.#providerDiagnostics),
+      discoveryErrors: [...this.#discoveryErrors],
+    };
+  }
+
   packageDescriptors(): Record<string, ZenXPluginPackageDescriptor> {
     return structuredClone(this.#packageDescriptors);
   }
@@ -1108,7 +855,6 @@ export class ZenXCapabilityRegistry
       .flatMap((registration) => {
         const manifest = registration.package.manifest;
         if (
-          manifest.schemaVersion !== 2 ||
           this.#disabled.has(manifest.id) ||
           this.#uninstalled.has(manifest.id) ||
           !this.#isProviderAvailable(manifest)
@@ -1144,14 +890,11 @@ export class ZenXCapabilityRegistry
         throw new Error(`Plugin ${capabilityId} is uninstalled`);
       }
       if (enabled === !this.#disabled.has(capabilityId)) return;
-      if (enabled && supplied.package.manifest.schemaVersion === 2) {
-        this.#validateRegistration(supplied.package.manifest);
-      }
-      const runtimeStage =
-        enabled && supplied.package.manifest.schemaVersion === 2
-          ? await this.#stagePluginRuntime(supplied)
-          : undefined;
-      if (!enabled && supplied.package.manifest.schemaVersion === 2) {
+      if (enabled) this.#validateRegistration(supplied.package.manifest);
+      const runtimeStage = enabled
+        ? await this.#stagePluginRuntime(supplied)
+        : undefined;
+      if (!enabled) {
         await this.#stopPluginRuntimeWithRollback(capabilityId, supplied);
       }
       const nextDisabled = new Set(this.#disabled);
@@ -1168,20 +911,12 @@ export class ZenXCapabilityRegistry
       }
       const previousDisabled = this.#disabled;
       this.#disabled = nextDisabled;
-      if (!enabled && capabilityId === "browser") {
-        this.#clearBrowserProjection();
-      }
       this.#emit();
-      if (supplied.package.manifest.schemaVersion !== 2) {
-        if (!enabled) await this.#cancelAndSettle(capabilityId);
-        return;
-      }
       try {
         if (enabled) {
           runtimeStage?.publish();
           this.#activateRegistration(supplied);
         } else {
-          await this.#cancelAndSettle(capabilityId);
           const registered = this.#registered.get(capabilityId);
           if (registered !== undefined) {
             await this.#unregisterRegistration(capabilityId, registered, false);
@@ -1206,7 +941,6 @@ export class ZenXCapabilityRegistry
 
   hostSnapshot(): ZenXCapabilityHostSnapshot {
     const definitions: ModelTool[] = [];
-    const resources: string[] = [];
     for (const registered of this.#registered.values()) {
       const manifest = registered.package.manifest;
       if (this.#disabled.has(manifest.id)) continue;
@@ -1220,111 +954,8 @@ export class ZenXCapabilityRegistry
           });
         }
       }
-      if (
-        manifest.schemaVersion === 1 &&
-        manifest.resources.length > 0 &&
-        this.#hasPermissions(
-          manifest.id,
-          manifest.permissions.map((permission) => permission.id),
-        )
-      ) {
-        resources.push(
-          ...manifest.resources.map(
-            (resource) =>
-              `${manifest.id}/${resource.id} (${resource.kind}): ${resource.description}`,
-          ),
-        );
-      }
-    }
-    if (resources.length > 0) {
-      definitions.push({
-        name: CAPABILITY_RESOURCE_TOOL,
-        description: `Read an installed ZenX capability skill or prompt resource. Available resources: ${resources.join("; ")}`,
-        inputSchema: {
-          type: "object",
-          properties: {
-            capabilityId: { type: "string" },
-            resourceId: { type: "string" },
-          },
-          required: ["capabilityId", "resourceId"],
-          additionalProperties: false,
-        },
-      });
     }
     return { definitions, plugins: this.availablePlugins() };
-  }
-
-  async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
-    const configurationReady = this.#configurationMutationTail;
-    await configurationReady;
-    const audit = this.#startAudit(invocation);
-    try {
-      const output =
-        invocation.name === CAPABILITY_RESOURCE_TOOL
-          ? this.#readResource(invocation.arguments)
-          : await this.#executeProvider(invocation);
-      invocation.signal.throwIfAborted();
-      const result = boundedResult(
-        invocation.name,
-        output.value,
-        output.maxOutputBytes,
-        output.capabilityId,
-        output.provider,
-        output.interactionMode,
-        output.capabilities,
-      );
-      this.#finishAudit(audit, "completed", summarize(result));
-      return { output: result, exitCode: 0 };
-    } catch (error) {
-      const cancelled = invocation.signal.aborted || isAbortError(error);
-      const owner = this.#toolOwners.get(invocation.name);
-      if (owner?.capabilityId === "browser") {
-        this.#clearBrowserProjection(
-          this.#browserInvocationSequences.get(invocation.callId),
-        );
-      }
-      this.#finishAudit(
-        audit,
-        cancelled ? "cancelled" : "failed",
-        describeError(error),
-      );
-      throw error;
-    } finally {
-      this.#browserInvocationSequences.delete(invocation.callId);
-    }
-  }
-
-  async executePluginCommand(
-    pluginId: string,
-    commandId: string,
-    input?: unknown,
-  ): Promise<unknown> {
-    await this.#configurationMutationTail;
-    const registered = this.#registered.get(pluginId);
-    if (
-      registered === undefined ||
-      this.#disabled.has(pluginId) ||
-      this.#uninstalled.has(pluginId)
-    ) {
-      throw new Error(`Plugin UI is not enabled: ${pluginId}`);
-    }
-    const command = registered.package.manifest.contributions?.commands?.find(
-      (candidate) => candidate.id === commandId,
-    );
-    if (command === undefined) {
-      throw new Error(`Unknown plugin command: ${pluginId}:${commandId}`);
-    }
-    const result = await this.execute({
-      callId: `ui-${randomUUID()}`,
-      name: command.tool,
-      arguments: {
-        ...(command.input ?? {}),
-        ...(input === undefined ? {} : { input: structuredClone(input) }),
-      },
-      cwd: process.cwd(),
-      signal: new AbortController().signal,
-    });
-    return JSON.parse(result.output) as unknown;
   }
 
   async readPluginUiHandle(
@@ -1341,7 +972,7 @@ export class ZenXCapabilityRegistry
     return Object.freeze({ pluginId, lifecycle: "enabled" });
   }
 
-  onChange(listener: (snapshot: ZenXCapabilitySnapshot) => void): () => void {
+  onChange(listener: (snapshot: ZenXPluginSnapshot) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
@@ -1354,79 +985,7 @@ export class ZenXCapabilityRegistry
   }
 
   async resetTransient(): Promise<void> {
-    this.#clearBrowserProjection();
     this.#emit();
-  }
-
-  async #executeProvider(invocation: ToolInvocation): Promise<{
-    value: unknown;
-    maxOutputBytes: number;
-    capabilityId: string;
-    provider: { id: string; platforms: string[] };
-    interactionMode: ZenXCapabilityInteractionMode;
-    capabilities: string[];
-  }> {
-    const owner = this.#toolOwners.get(invocation.name);
-    if (owner === undefined) {
-      throw new Error(`Unsupported ZenX capability tool: ${invocation.name}`);
-    }
-    if (this.#disabled.has(owner.capabilityId)) {
-      throw new Error(`Capability ${owner.capabilityId} is disabled`);
-    }
-    if (!this.#hasPermissions(owner.capabilityId, owner.tool.permissions)) {
-      throw new Error(
-        `Capability ${owner.capabilityId} is not granted for ${invocation.name}`,
-      );
-    }
-    const registered = this.#requireCapability(owner.capabilityId);
-    if (!this.#isProviderAvailable(registered.package.manifest)) {
-      throw new Error(
-        `Capability provider ${registered.package.manifest.provider.id} does not support ${this.#options.platform}`,
-      );
-    }
-    if (!this.#isInteractionAllowed(owner.tool.interactionMode)) {
-      throw new Error(
-        `ZenX blocked ${invocation.name}: this operation is foreground_required and could move the global pointer, synthesize foreground keyboard input, or change app/workspace focus. This host is configured for background-safe execution only; granting capability permissions does not override that execution restriction.`,
-      );
-    }
-    invocation.signal.throwIfAborted();
-    const active = activeInvocation(owner.capabilityId);
-    const forwardAbort = (): void => {
-      active.controller.abort(invocation.signal.reason);
-    };
-    if (invocation.signal.aborted) forwardAbort();
-    else
-      invocation.signal.addEventListener("abort", forwardAbort, { once: true });
-    this.#activeInvocations.add(active);
-    try {
-      const effectiveInvocation = {
-        ...invocation,
-        signal: active.controller.signal,
-      };
-      const value = await this.#invokeProvider(
-        registered.package,
-        effectiveInvocation,
-      );
-      effectiveInvocation.signal.throwIfAborted();
-      return {
-        value,
-        maxOutputBytes: owner.tool.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
-        capabilityId: owner.capabilityId,
-        provider: {
-          id: registered.package.manifest.provider.id,
-          platforms: [...registered.package.manifest.provider.platforms],
-        },
-        interactionMode: owner.tool.interactionMode,
-        capabilities: [...owner.tool.capabilities],
-      };
-    } catch (error) {
-      active.controller.signal.throwIfAborted();
-      throw error;
-    } finally {
-      invocation.signal.removeEventListener("abort", forwardAbort);
-      this.#activeInvocations.delete(active);
-      active.resolveSettled();
-    }
   }
 
   async #serializeConfigurationMutation<T>(
@@ -1440,31 +999,11 @@ export class ZenXCapabilityRegistry
     return await result;
   }
 
-  async #cancelAndSettle(capabilityId: string): Promise<void> {
-    const active = [...this.#activeInvocations].filter(
-      (invocation) => invocation.capabilityId === capabilityId,
-    );
-    for (const invocation of active) {
-      invocation.controller.abort(
-        new DOMException(
-          `Capability ${capabilityId} is disabled`,
-          "AbortError",
-        ),
-      );
-    }
-    await Promise.all(
-      active.map(async (invocation) => await invocation.settled),
-    );
-  }
-
   async #stagePluginRuntime(
     registration: RegisteredZenXCapability,
     replaceCurrent = false,
   ): Promise<ZenXPluginRuntimeStage | undefined> {
-    if (
-      registration.package.manifest.schemaVersion !== 2 ||
-      this.#options.pluginRuntimeLifecycle === undefined
-    ) {
+    if (this.#options.pluginRuntimeLifecycle === undefined) {
       return undefined;
     }
     return await this.#options.pluginRuntimeLifecycle.stage(registration, {
@@ -1500,100 +1039,12 @@ export class ZenXCapabilityRegistry
     }
   }
 
-  async #invokeProvider(
-    capabilityPackage: ZenXCapabilityPackage,
-    invocation: ToolInvocation,
-  ): Promise<unknown> {
-    const isBrowser = capabilityPackage.manifest.id === "browser";
-    const sequence = isBrowser ? ++this.#browserProjectionSequence : undefined;
-    if (isBrowser) {
-      this.#currentScreenshot = undefined;
-      this.#browserInvocationSequences.set(invocation.callId, sequence!);
-    }
-    try {
-      const value = await capabilityPackage.invoke(invocation.name, invocation);
-      if (isBrowser && sequence === this.#browserProjectionSequence) {
-        invocation.signal.throwIfAborted();
-        const screenshot = browserScreenshotFrom(value);
-        if (screenshot !== undefined) this.#currentScreenshot = screenshot;
-      }
-      return value;
-    } catch (error) {
-      if (isBrowser && sequence === this.#browserProjectionSequence) {
-        this.#currentScreenshot = undefined;
-      }
-      throw error;
-    }
-  }
-
-  #clearBrowserProjection(sequence?: number): void {
-    if (sequence !== undefined && sequence !== this.#browserProjectionSequence)
-      return;
-    this.#browserProjectionSequence += 1;
-    this.#currentScreenshot = undefined;
-  }
-
-  #readResource(arguments_: Record<string, unknown>): {
-    value: unknown;
-    maxOutputBytes: number;
-    capabilityId: string;
-    provider: { id: string; platforms: string[] };
-    interactionMode: ZenXCapabilityInteractionMode;
-    capabilities: string[];
-  } {
-    const capabilityId = requiredString(arguments_, "capabilityId");
-    const resourceId = requiredString(arguments_, "resourceId");
-    const manifest = this.#requireCapability(capabilityId).package.manifest;
-    if (this.#disabled.has(capabilityId)) {
-      throw new Error(`Capability ${capabilityId} is disabled`);
-    }
-    if (!this.#isProviderAvailable(manifest)) {
-      throw new Error(
-        `Capability provider ${manifest.provider.id} does not support ${this.#options.platform}`,
-      );
-    }
-    if (
-      !this.#hasPermissions(
-        capabilityId,
-        manifest.permissions.map((permission) => permission.id),
-      )
-    ) {
-      throw new Error(`Capability ${capabilityId} is not fully granted`);
-    }
-    const resource = manifest.resources.find(
-      (candidate) => candidate.id === resourceId,
-    );
-    if (resource === undefined) {
-      throw new Error(
-        `Unknown capability resource ${capabilityId}/${resourceId}`,
-      );
-    }
-    return {
-      value: {
-        capabilityId,
-        resourceId,
-        kind: resource.kind,
-        title: resource.title,
-        content: resource.content,
-      },
-      maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
-      capabilityId,
-      provider: {
-        id: manifest.provider.id,
-        platforms: [...manifest.provider.platforms],
-      },
-      interactionMode: "background_safe",
-      capabilities: ["skill_prompt.read"],
-    };
-  }
-
   #isToolExposed(capabilityId: string, tool: ZenXCapabilityTool): boolean {
     return (
       !this.#disabled.has(capabilityId) &&
       this.#isProviderAvailable(
         this.#requireCapability(capabilityId).package.manifest,
       ) &&
-      this.#hasPermissions(capabilityId, tool.permissions) &&
       this.#isInteractionAllowed(tool.interactionMode)
     );
   }
@@ -1604,23 +1055,11 @@ export class ZenXCapabilityRegistry
     );
   }
 
-  #isProviderAvailable(manifest: ZenXCapabilityManifest): boolean {
+  #isProviderAvailable(manifest: ZenXPluginManifestV2): boolean {
     return (
       manifest.provider.platforms.includes(this.#options.platform) ||
       manifest.provider.platforms.includes("*")
     );
-  }
-
-  #hasPermissions(capabilityId: string, required: readonly string[]): boolean {
-    if (
-      this.#catalogPackages.get(capabilityId)?.package.manifest
-        .schemaVersion === 2
-    )
-      return true;
-    const granted = new Set(
-      (this.#grants[capabilityId] ?? []).map((grant) => grant.permissionId),
-    );
-    return required.every((permission) => granted.has(permission));
   }
 
   #requireCapability(capabilityId: string): RegisteredZenXCapability {
@@ -1631,54 +1070,10 @@ export class ZenXCapabilityRegistry
     return registered;
   }
 
-  #startAudit(invocation: ToolInvocation): ZenXCapabilityAuditRecord {
-    const owner = this.#toolOwners.get(invocation.name);
-    const record: ZenXCapabilityAuditRecord = {
-      id: randomUUID(),
-      capabilityId:
-        invocation.name === CAPABILITY_RESOURCE_TOOL
-          ? String(invocation.arguments.capabilityId ?? "unknown")
-          : (owner?.capabilityId ?? "unknown"),
-      providerId:
-        owner === undefined
-          ? invocation.name === CAPABILITY_RESOURCE_TOOL
-            ? (this.#registered.get(
-                String(invocation.arguments.capabilityId ?? "unknown"),
-              )?.package.manifest.provider.id ?? "unknown")
-            : "unknown"
-          : (this.#registered.get(owner.capabilityId)?.package.manifest.provider
-              .id ?? "unknown"),
-      toolName: invocation.name,
-      callId: invocation.callId,
-      cwd: invocation.cwd,
-      interactionMode:
-        invocation.name === CAPABILITY_RESOURCE_TOOL
-          ? "background_safe"
-          : (owner?.tool.interactionMode ?? "background_safe"),
-      startedAt: new Date().toISOString(),
-      status: "running",
-    };
-    this.#audit.unshift(record);
-    this.#audit.splice(MAX_AUDIT_RECORDS);
-    this.#emit();
-    return record;
-  }
-
-  #finishAudit(
-    record: ZenXCapabilityAuditRecord,
-    status: Exclude<ZenXCapabilityAuditRecord["status"], "running">,
-    summary: string,
-  ): void {
-    record.status = status;
-    record.completedAt = new Date().toISOString();
-    record.summary = summarize(summary);
-    this.#emit();
-  }
-
   #emit(): void {
     for (const listener of this.#listeners) {
       try {
-        listener(this.snapshot());
+        listener(this.pluginSnapshot());
       } catch (error) {
         console.warn(
           `ZenX Capability change listener failed after the mutation committed: ${summarize(
@@ -1698,7 +1093,6 @@ export class ZenXCapabilityRegistry
     } = {},
   ) {
     return {
-      grants: structuredClone(this.#grants),
       disabled: [...(overrides.disabled ?? this.#disabled)],
       uninstalled: [...(overrides.uninstalled ?? this.#uninstalled)],
       packages: structuredClone(overrides.packages ?? this.#packageDescriptors),
@@ -1748,14 +1142,9 @@ function isProfileSource(value: unknown): value is ZenXPluginProfileSource {
 }
 
 function validateManifest(
-  manifest: ZenXCapabilityManifest,
-): ZenXCapabilityManifest {
-  if (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2) {
-    throw new Error(
-      `Unsupported capability manifest version: ${String((manifest as { schemaVersion?: unknown }).schemaVersion)}`,
-    );
-  }
-  if (manifest.schemaVersion === 2) validatePublicPluginManifest(manifest);
+  manifest: ZenXPluginManifestV2,
+): ZenXPluginManifestV2 {
+  validatePublicPluginManifest(manifest);
   if (!/^[a-z][a-z0-9-]{1,62}$/u.test(manifest.id)) {
     throw new Error(`Invalid capability id: ${manifest.id}`);
   }
@@ -1766,9 +1155,7 @@ function validateManifest(
   const pageIds = new Set<string>();
   const routeIds = new Set<string>();
   const surfaceIds = new Set(
-    manifest.schemaVersion === 2
-      ? (manifest.ui?.surfaces ?? []).map((surface) => surface.id)
-      : [],
+    (manifest.ui?.surfaces ?? []).map((surface) => surface.id),
   );
   for (const page of pages) {
     if (
@@ -1921,7 +1308,6 @@ function validateManifest(
   const renderedContentTypes = new Set<string>();
   for (const renderer of manifest.contributions?.resultRenderers ?? []) {
     if (
-      manifest.schemaVersion !== 2 ||
       !isContributionId(renderer.id) ||
       rendererIds.has(renderer.id) ||
       !renderer.contentType.startsWith(`${manifest.id}/`) ||
@@ -1983,16 +1369,11 @@ function validateManifest(
   return manifest;
 }
 
-function manifestName(manifest: ZenXCapabilityManifest): string {
-  return manifest.schemaVersion === 2 ? manifest.name : manifest.displayName;
-}
-
 function sameBundledAdoptionManifest(
-  previous: ZenXCapabilityManifest,
+  previous: ZenXPluginManifestV2,
   replacement: ZenXPluginManifestV2,
 ): boolean {
   if (
-    previous.schemaVersion !== 2 ||
     previous.runtime.type !== "bundled" ||
     replacement.runtime.type !== "bundled"
   ) {
@@ -2015,119 +1396,10 @@ function isContributionId(value: string): boolean {
   return /^[a-z][a-z0-9-]{0,62}$/u.test(value);
 }
 
-function activeInvocation(capabilityId: string): ActiveCapabilityInvocation {
-  let resolveSettled!: () => void;
-  const settled = new Promise<void>((resolve) => {
-    resolveSettled = resolve;
-  });
-  return {
-    capabilityId,
-    controller: new AbortController(),
-    settled,
-    resolveSettled,
-  };
-}
-
-function boundedResult(
-  toolName: string,
-  value: unknown,
-  maxBytes: number,
-  capabilityId: string,
-  provider: { id: string; platforms: readonly string[] },
-  interactionMode: ZenXCapabilityInteractionMode,
-  capabilities: readonly string[],
-): string {
-  const envelope = {
-    capabilityId,
-    provider,
-    tool: toolName,
-    interactionMode,
-    capabilities,
-    result: value,
-  };
-  const serialized = JSON.stringify(envelope);
-  if (Buffer.byteLength(serialized, "utf8") <= maxBytes) return serialized;
-  let preview = JSON.stringify(value);
-  const truncated = (): string =>
-    JSON.stringify({
-      capabilityId,
-      provider,
-      tool: toolName,
-      interactionMode,
-      capabilities,
-      resultPreview: preview,
-      truncated: true,
-      originalBytes: Buffer.byteLength(serialized, "utf8"),
-    });
-  let output = truncated();
-  while (Buffer.byteLength(output, "utf8") > maxBytes && preview.length > 0) {
-    const excess = Buffer.byteLength(output, "utf8") - maxBytes;
-    preview = preview.slice(0, Math.max(0, preview.length - excess));
-    output = truncated();
-  }
-  if (Buffer.byteLength(output, "utf8") <= maxBytes) return output;
-  return JSON.stringify({
-    tool: toolName.slice(0, 64),
-    truncated: true,
-    error: "Result metadata exceeded the configured output bound",
-  });
-}
-
-function requiredString(value: Record<string, unknown>, key: string): string {
-  const candidate = value[key];
-  if (typeof candidate !== "string" || candidate.length === 0) {
-    throw new Error(`${key} must be a non-empty string`);
-  }
-  return candidate;
-}
-
 function summarize(value: string): string {
   return value.length <= 512 ? value : `${value.slice(0, 509)}…`;
 }
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
-function browserScreenshotFrom(
-  value: unknown,
-): ZenXCapabilityScreenshotArtifact | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const screenshot = (value as Record<string, unknown>).screenshot;
-  if (
-    typeof screenshot !== "object" ||
-    screenshot === null ||
-    Array.isArray(screenshot)
-  ) {
-    return undefined;
-  }
-  const record = screenshot as Record<string, unknown>;
-  if (
-    typeof record.artifactPath !== "string" ||
-    typeof record.width !== "number" ||
-    typeof record.height !== "number" ||
-    typeof record.bytes !== "number" ||
-    typeof record.expiresAt !== "string" ||
-    (record.status !== "captured" && record.status !== "fallback")
-  ) {
-    return undefined;
-  }
-  return {
-    artifactPath: record.artifactPath,
-    ...(typeof record.observationId === "string"
-      ? { observationId: record.observationId }
-      : {}),
-    status: record.status,
-    ...(typeof record.reason === "string" ? { reason: record.reason } : {}),
-    width: record.width,
-    height: record.height,
-    bytes: record.bytes,
-    expiresAt: record.expiresAt,
-  };
 }

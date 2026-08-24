@@ -15,7 +15,7 @@ import { inflateSync } from "node:zlib";
 import type { BrowserWindow, Session } from "electron";
 
 import type { ToolInvocation } from "../../../../../src/tool.js";
-import type { ZenXCapabilityManifest, ZenXCapabilityPackage } from "./types.js";
+import type { ZenXPluginManifestV2, ZenXCapabilityPackage } from "./types.js";
 
 export interface BrowserTabSummary {
   sessionId: string;
@@ -99,13 +99,17 @@ export interface ZenXBrowserBackend {
   close(): Promise<void> | void;
 }
 
-export const browserCapabilityManifest: ZenXCapabilityManifest = {
-  schemaVersion: 1,
+export const browserCapabilityManifest: ZenXPluginManifestV2 = {
+  schemaVersion: 2,
   id: "browser",
-  displayName: "Browser",
+  name: "Browser",
   version: "1.0.0",
   description:
     "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
+  compatibility: { zenx: ">=0.1.0 <0.2.0" },
+  runtime: { type: "bundled", entry: "zenx/browser" },
+  mainDocument:
+    "Use Browser for bounded tab inspection, navigation, and page interaction.",
   provider: {
     id: "electron-dedicated-browser",
     platforms: ["darwin", "win32", "linux"],
@@ -231,34 +235,15 @@ export const browserCapabilityManifest: ZenXCapabilityManifest = {
       capabilities: ["dedicated_profile", "session.close"],
     },
   ],
-  resources: [
-    {
-      id: "safe-browser-use",
-      kind: "skill",
-      title: "Safe browser use",
-      description:
-        "Instructions for targeted, inspect-before-act browser automation.",
-      content:
-        "Choose a stable sessionId for the task. List or open tabs, then inspect the exact tab before clicking or typing. Act only with the observationId and opaque targetId from the latest inspect; re-inspect after navigation or every action. Text is dispatched as an ordinary tool argument regardless of field metadata. Close tabs or the session when done; close_session clears the current partition so a later same-ID session starts clean. Never ask for cookies, storage state, auth headers, or hidden page content.",
-    },
-    {
-      id: "browser-research",
-      kind: "prompt",
-      title: "Browser research prompt",
-      description: "A reusable prompt for evidence-backed browser research.",
-      content:
-        "Research the requested topic in the dedicated ZenX browser session. Keep a list of the exact page URLs inspected, distinguish page evidence from inference, and summarize only visible content returned by browser_inspect.",
-    },
-  ],
 };
 
 export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
-  readonly manifest: ZenXCapabilityManifest;
+  readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXBrowserBackend;
 
   constructor(
     backend: ZenXBrowserBackend,
-    manifest: ZenXCapabilityManifest = browserCapabilityManifest,
+    manifest: ZenXPluginManifestV2 = browserCapabilityManifest,
   ) {
     this.#backend = backend;
     this.manifest = manifest;

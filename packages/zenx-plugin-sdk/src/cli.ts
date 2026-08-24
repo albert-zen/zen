@@ -91,7 +91,6 @@ async function main(): Promise<void> {
         capabilities: [`${pluginId}.run`],
       },
     ],
-    resources: [],
     runtime: { type: "process", entry: "./runtime.mjs" },
   };
   await Promise.all([

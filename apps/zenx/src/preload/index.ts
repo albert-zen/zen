@@ -27,9 +27,7 @@ import type {
   ZenXProviderCatalogSnapshot,
 } from "../main/settings-service.js";
 import type {
-  ZenXCapabilitySnapshot,
   ZenXPluginSnapshot,
-  ZenXPluginPackageSelectionResult,
   ZenXPluginTarballSelectionResult,
   ZenXPluginMutationResult,
   ZenXPluginPackageSource,
@@ -253,38 +251,6 @@ contextBridge.exposeInMainWorld("zenx", {
       return () => ipcRenderer.off(ipcChannels.titlesChanged, wrapped);
     },
   },
-  capabilities: {
-    get: async (): Promise<ZenXCapabilitySnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.capabilitiesGet),
-    grant: async (
-      capabilityId: string,
-      permissionIds?: string[],
-    ): Promise<ZenXCapabilitySnapshot> =>
-      await ipcRenderer.invoke(
-        ipcChannels.capabilitiesGrant,
-        capabilityId,
-        permissionIds,
-      ),
-    revoke: async (
-      capabilityId: string,
-      permissionIds?: string[],
-    ): Promise<ZenXCapabilitySnapshot> =>
-      await ipcRenderer.invoke(
-        ipcChannels.capabilitiesRevoke,
-        capabilityId,
-        permissionIds,
-      ),
-    onChange: (
-      listener: (snapshot: ZenXCapabilitySnapshot) => void,
-    ): (() => void) => {
-      const wrapped = (
-        _event: Electron.IpcRendererEvent,
-        snapshot: ZenXCapabilitySnapshot,
-      ) => listener(snapshot);
-      ipcRenderer.on(ipcChannels.capabilitiesChanged, wrapped);
-      return () => ipcRenderer.off(ipcChannels.capabilitiesChanged, wrapped);
-    },
-  },
   marketplace: {
     get: async (): Promise<MarketplaceCatalogSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.marketplaceGet),
@@ -300,13 +266,6 @@ contextBridge.exposeInMainWorld("zenx", {
         ipcChannels.pluginsSetEnabled,
         pluginId,
         enabled,
-      ),
-    selectPackage: async (
-      expectedPluginId?: string,
-    ): Promise<ZenXPluginPackageSelectionResult> =>
-      await ipcRenderer.invoke(
-        ipcChannels.pluginsSelectPackage,
-        expectedPluginId,
       ),
     selectTarball: async (): Promise<ZenXPluginTarballSelectionResult> =>
       await ipcRenderer.invoke(ipcChannels.pluginsSelectTarball),

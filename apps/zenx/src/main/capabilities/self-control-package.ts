@@ -8,7 +8,7 @@ import type {
   Thread,
   ThreadItem,
 } from "../../protocol-client/index.js";
-import type { ZenXCapabilityManifest, ZenXCapabilityPackage } from "./types.js";
+import type { ZenXPluginManifestV2, ZenXCapabilityPackage } from "./types.js";
 import { ZenXProjectProjection } from "../project-projection.js";
 
 export const ZENX_SELF_CONTROL_CAPABILITY_ID = "zenx-self-control";
@@ -93,13 +93,17 @@ const MAX_READ_ITEMS = 25;
 const MAX_TEXT_LENGTH = 1_000;
 const MAX_SEND_TEXT_LENGTH = 100_000;
 
-const manifest: ZenXCapabilityManifest = {
-  schemaVersion: 1,
+const manifest: ZenXPluginManifestV2 = {
+  schemaVersion: 2,
   id: ZENX_SELF_CONTROL_CAPABILITY_ID,
-  displayName: "ZenX self-control",
+  name: "ZenX self-control",
   version: "1.0.0",
   description:
     "List derived workspaces and control Zen Threads through typed App Server requests.",
+  compatibility: { zenx: ">=0.1.0 <0.2.0" },
+  runtime: { type: "bundled", entry: "zenx/self-control" },
+  mainDocument:
+    "Use ZenX self-control to inspect projects and manage Threads through the canonical App Server.",
   provider: {
     id: "zenx-app-server",
     platforms: ["*"],
@@ -290,7 +294,6 @@ const manifest: ZenXCapabilityManifest = {
       maxOutputBytes: 64 * 1024,
     },
   ],
-  resources: [],
 };
 const controlToolNames = new Set(manifest.tools.map((tool) => tool.name));
 

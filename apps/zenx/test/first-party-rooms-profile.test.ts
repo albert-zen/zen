@@ -10,10 +10,9 @@ import { packZenXRoomsPlugin } from "../scripts/pack-first-party-plugins.mjs";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { createBundledAutomationPluginService } from "../src/main/automation-plugin-service.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
-import {
-  ZenXRoomsCapabilityPackage,
-  ZENX_ROOMS_CAPABILITY_ID,
-} from "../src/main/capabilities/automation-control-package.js";
+import { ZENX_ROOMS_CAPABILITY_ID } from "../src/main/capabilities/automation-control-package.js";
+import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
+import type { ZenXPluginManifestV2 } from "../src/main/capabilities/types.js";
 import {
   createZenXRoomsProfileLoader,
   ZENX_ROOMS_PACKAGE_NAME,
@@ -64,7 +63,6 @@ test("packaged Rooms installs offline through profile discovery and preserves it
     trustedProfileLoaders: {
       [ZENX_ROOMS_CAPABILITY_ID]: createZenXRoomsProfileLoader(() => domain),
     },
-    localDirectory: path.join(userData, "no-local-packages"),
     bundledProvidersOnly: true,
   });
   const manager = appServerManager(directory, userData, capabilities);
@@ -230,7 +228,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
     assert.deepEqual(capabilities.pluginSnapshot().pages, []);
     await assert.rejects(
       capabilities.execute(invocation("disabled", "zenx_rooms_list", {})),
-      /Unsupported ZenX capability tool/u,
+      /Unsupported tool/u,
     );
     await capabilities.setEnabled(ZENX_ROOMS_CAPABILITY_ID, true);
     await manager.stop();
@@ -250,7 +248,6 @@ test("packaged Rooms installs offline through profile discovery and preserves it
           () => restartedDomain,
         ),
       },
-      localDirectory: path.join(userData, "no-local-packages"),
       bundledProvidersOnly: true,
     });
     try {
@@ -259,9 +256,9 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       const restored = (await restarted.executePluginCommand(
         ZENX_ROOMS_CAPABILITY_ID,
         "list",
-      )) as { result: { rooms: Array<{ name: string }> } };
+      )) as { rooms: Array<{ name: string }> };
       assert.equal(
-        restored.result.rooms.some((room) => room.name === "release"),
+        restored.rooms.some((room) => room.name === "release"),
         true,
       );
     } finally {
@@ -282,7 +279,6 @@ test("packaged Rooms installs offline through profile discovery and preserves it
           () => lifecycleDomain,
         ),
       },
-      localDirectory: path.join(userData, "no-local-packages"),
       bundledProvidersOnly: true,
     });
     try {
@@ -302,9 +298,9 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       const reinstalled = (await lifecycle.executePluginCommand(
         ZENX_ROOMS_CAPABILITY_ID,
         "list",
-      )) as { result: { rooms: Array<{ name: string }> } };
+      )) as { rooms: Array<{ name: string }> };
       assert.equal(
-        reinstalled.result.rooms.some((room) => room.name === "release"),
+        reinstalled.rooms.some((room) => room.name === "release"),
         true,
       );
 
@@ -314,8 +310,8 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       const cleared = (await lifecycle.executePluginCommand(
         ZENX_ROOMS_CAPABILITY_ID,
         "list",
-      )) as { result: { rooms: unknown[] } };
-      assert.deepEqual(cleared.result.rooms, []);
+      )) as { rooms: unknown[] };
+      assert.deepEqual(cleared.rooms, []);
       assert.equal(await readFile(legacyFile, "utf8").then(Boolean), true);
     } finally {
       await lifecycle.close();
@@ -356,7 +352,6 @@ test("packaged Rooms adopts disabled and uninstalled legacy Catalog lifecycle wi
             () => domain,
           ),
         },
-        localDirectory: path.join(userData, "no-local-packages"),
         bundledProvidersOnly: true,
       });
       try {
@@ -436,7 +431,6 @@ test("packaged Rooms refuses bundled adoption across a legacy Catalog identity m
     trustedProfileLoaders: {
       [ZENX_ROOMS_CAPABILITY_ID]: createZenXRoomsProfileLoader(() => domain),
     },
-    localDirectory: path.join(userData, "no-local-packages"),
     bundledProvidersOnly: true,
   });
   try {
@@ -467,7 +461,6 @@ test("an external tarball cannot self-declare the bundled Rooms runtime or trust
   const capabilities = new ZenXCapabilityService({
     userDataDirectory: path.join(directory, "user-data"),
     pnpmCliPath: pnpmCli,
-    localDirectory: path.join(directory, "no-local-packages"),
     bundledProvidersOnly: true,
   });
   try {
@@ -509,25 +502,29 @@ function appServerManager(
 
 async function seedLegacyRoomsCatalog(
   userDataDirectory: string,
-  domain: Awaited<ReturnType<typeof createBundledAutomationPluginService>>,
+  _domain: Awaited<ReturnType<typeof createBundledAutomationPluginService>>,
   lifecycle: "enabled" | "installed" | "uninstalled" = "enabled",
 ): Promise<void> {
-  const legacy = new ZenXCapabilityService({
-    userDataDirectory,
-    localDirectory: path.join(userDataDirectory, "no-local-packages"),
-    bundledProvidersOnly: true,
+  const manifest = JSON.parse(
+    await readFile(
+      fileURLToPath(
+        new URL(
+          "../../../packages/zenx-rooms-plugin/zenx.plugin.json",
+          import.meta.url,
+        ),
+      ),
+      "utf8",
+    ),
+  ) as ZenXPluginManifestV2;
+  await new JsonZenXPluginCatalogStore(
+    path.join(userDataDirectory, "capability-grants.json"),
+  ).save({
+    disabled: lifecycle === "installed" ? [ZENX_ROOMS_CAPABILITY_ID] : [],
+    uninstalled: lifecycle === "uninstalled" ? [ZENX_ROOMS_CAPABILITY_ID] : [],
+    packages: {
+      [ZENX_ROOMS_CAPABILITY_ID]: { manifest, source: "bundled" },
+    },
   });
-  try {
-    await legacy.initialize();
-    await legacy.install(new ZenXRoomsCapabilityPackage(domain), "bundled");
-    if (lifecycle === "installed") {
-      await legacy.setEnabled(ZENX_ROOMS_CAPABILITY_ID, false);
-    } else if (lifecycle === "uninstalled") {
-      await legacy.uninstall(ZENX_ROOMS_CAPABILITY_ID);
-    }
-  } finally {
-    await legacy.close();
-  }
 }
 
 function invocation(

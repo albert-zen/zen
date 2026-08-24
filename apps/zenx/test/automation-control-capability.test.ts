@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ToolInvocation } from "../../../src/tool.js";
-import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
-import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
+import type { ZenXCapabilityPackage } from "../src/main/capabilities/types.js";
+import { MemoryZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
+import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 import {
   ZENX_AUTOMATION_READ_PERMISSION,
   ZENX_AUTOMATION_WRITE_PERMISSION,
@@ -26,7 +27,7 @@ import type {
   ZenXTrigger,
 } from "../src/main/trigger-types.js";
 
-test("automation tools have independent read and write grants", () => {
+test("automation manifests retain independent read and write permissions", () => {
   const capability = new ZenXAutomationControlCapabilityPackage(new FakePort());
   assert.deepEqual(
     capability.manifest.tools.find((tool) => tool.name === "zenx_triggers_list")
@@ -95,15 +96,13 @@ test("Triggers and Rooms are independent bundled plugin manifests", () => {
 });
 
 test("real Triggers and Rooms use the same disable/uninstall/reinstall lifecycle", async () => {
-  const registry = new ZenXCapabilityRegistry(
-    new MemoryZenXCapabilityGrantStore(),
-  );
+  const registry = new ZenXPluginCatalog(new MemoryZenXPluginCatalogStore());
   const port = new FakePort();
+  const triggers = new ZenXTriggersCapabilityPackage(port);
+  const rooms = new ZenXRoomsCapabilityPackage(port);
   await registry.initialize();
-  await registry.install(new ZenXTriggersCapabilityPackage(port), "bundled");
-  await registry.install(new ZenXRoomsCapabilityPackage(port), "bundled");
-  await registry.grant(ZENX_TRIGGERS_CAPABILITY_ID);
-  await registry.grant(ZENX_ROOMS_CAPABILITY_ID);
+  await registry.install(triggers, "bundled");
+  await registry.install(rooms, "bundled");
 
   assert.deepEqual(
     registry.pluginSnapshot().sidebar.map((item) => item.pluginId),
@@ -119,11 +118,7 @@ test("real Triggers and Rooms use the same disable/uninstall/reinstall lifecycle
       .hostSnapshot()
       .definitions.every((tool) => tool.name.startsWith("zenx_rooms_")),
   );
-  await assert.rejects(
-    registry.execute(invocation("zenx_triggers_list", {})),
-    /Unsupported ZenX capability tool/u,
-  );
-  await registry.execute(invocation("zenx_rooms_list", {}));
+  await invoke(rooms, "zenx_rooms_list", {});
 
   await registry.setEnabled(ZENX_TRIGGERS_CAPABILITY_ID, true);
   await registry.uninstall(ZENX_TRIGGERS_CAPABILITY_ID);
@@ -286,7 +281,7 @@ test("Agent automation inputs enforce bounded strings, members, and program env"
 });
 
 async function invoke(
-  capability: ZenXAutomationControlCapabilityPackage,
+  capability: Pick<ZenXCapabilityPackage, "invoke">,
   name: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
@@ -298,19 +293,6 @@ async function invoke(
     callId: `call-${name}`,
   };
   return await capability.invoke(name, invocation);
-}
-
-function invocation(
-  name: string,
-  args: Record<string, unknown>,
-): ToolInvocation {
-  return {
-    name,
-    arguments: args,
-    cwd: process.cwd(),
-    signal: new AbortController().signal,
-    callId: `registry-${name}`,
-  };
 }
 
 class FakePort implements ZenXAutomationControlPort {

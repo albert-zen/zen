@@ -32,15 +32,16 @@ projection instance.
 
 The checked-in implementation now has Plugin Package v2 descriptors and a
 Host-owned Catalog for the `installed` / `enabled` / `uninstalled` lifecycle.
-Bundled Triggers/Rooms and local process packages use the same lifecycle API;
+All five first-party packages and local process packages use the same lifecycle API;
 disable and uninstall revoke their current runtime/tool/sidebar/page
 registration, bundled packages can be reinstalled from the app-supplied
 package, and uninstall preserves namespaced plugin data unless deletion is
-requested separately. Existing capability grants are migrated and retained as
-compatibility data. Zen Core now has the provider-neutral dynamic Tool Environment
+requested separately. Pre-profile Catalog lifecycle facts are adopted once by
+exact bundled identity; historical permission grants never enter runtime admission.
+Zen Core now has the provider-neutral dynamic Tool Environment
 for builtin, plugin, and external provider identities, including Host policy,
 prepared-call stability, execution, and cancellation. ZenX injects builtin
-`shell` and its startup capability snapshot as distinct providers; registry
+`shell` and its startup plugin snapshot as distinct providers; Catalog
 changes still require the existing Host refresh instead of live provider updates.
 The ZP3 Host seam now provides one Plugin Runtime Supervisor and ABI for trusted
 bundled modules, persistent child processes, and HTTP services. It registers each
@@ -50,13 +51,13 @@ and performs no retry or restart. Catalog install/enable stages runtime readines
 publishing tools until persistence commits; disable/uninstall closes new admission first
 and restores the enabled provider on persistence failure. Disabled reinstall stays disabled.
 The desktop composition connects that authority to the hosted AppServer: the
-main-process CapabilityService owns the Catalog, Registry, Supervisor, and plugin
-Tool Environment, while the child host combines its current snapshot with builtin
-`shell`, still-compatible external capabilities, and one persistent `zenx_plugin`
+main-process CapabilityService owns the Catalog, profile lifecycle, Supervisor, and
+plugin Tool Environment, while the child host combines its current plugin snapshot
+with builtin `shell` and one persistent `zenx_plugin`
 provider. Its request-time projection discloses only the selected plugin after
 successful ordinary `read` call/result history, rebuilding the same set from the
 journal after restart and intersecting it with current availability. Disclosed
-calls cross the existing private capability bridge and execute through the main
+calls cross the existing private Host bridge and execute through the main
 Supervisor's stable plugin provider. Human product calls may still route directly
 through the Supervisor without creating an AppServer Turn.
 
@@ -139,9 +140,8 @@ The target contract is:
   new discovery and later schema projections without editing journal history.
 - The target tool policy is only default `full_access` and optional
   `ask_unknown`. The latter keeps Host-owned `approvedTools` / `deniedTools` by
-  stable tool name and asks once for an unknown tool. The current capability
-  grants are implementation facts, not the target permission model; there is no
-  risk scoring, scope graph, or argument-level rules engine.
+  stable tool name and asks once for an unknown tool. There is no legacy package
+  grant layer, risk scoring, scope graph, or argument-level rules engine.
 - Plugin lifecycle is `installed` / `enabled` / `uninstalled`. Bundled plugins
   can also be uninstalled and later reinstalled. Uninstall removes runtime, UI,
   and tool registrations but retains plugin data by default; deleting data is a
@@ -359,29 +359,22 @@ bounded recent context window. Agent replies in the Room link back to their
 source Thread and Turn. Thread watches similarly inject a bounded completed-Turn
 snapshot rather than copying a second authoritative transcript.
 
-## Current capability skeleton
+## Unified plugin lifecycle
 
-ZenX owns a capability registry outside Zen Core. It records bundled or local
-package provider/platform metadata, requested permission scopes, tool
-capabilities and interaction mode, instruction resources, and a recent in-memory
-audit projection. Granting or revoking a package restarts the local host so the
-Agent sees exactly the currently authorized tool definitions.
-Capability grants, per-call approval, and the execution sandbox remain separate
-concepts. A host may impose a background-only execution policy without treating
-that restriction as a missing grant.
+ZenX owns one profile-managed Plugin Catalog outside Zen Core. Profile direct
+dependencies supply v2 manifests, provider/platform metadata, interaction mode,
+tools and controlled UI contributions. The same Catalog snapshot controls
+install, enable, disable, uninstall, reinstall, discovery and runtime admission;
+`shell` remains the sole Agent Runtime builtin.
 
-Capability packages supply the installed-plugin lifecycle and UI projection. A v2
-manifest may declare controlled sidebar, page/subroute, settings, panel,
-command/menu, versioned bundle and surface contributions; the main-process registry
+A v2 manifest may declare controlled sidebar, page/subroute, settings, panel,
+command/menu, versioned bundle and surface contributions; the main-process Catalog
 projects enabled contributions through the typed `window.zenx.plugins` preload
-API and never gives a package DOM or router access. Enablement is persisted next
-to grants in the same atomic capability configuration document, but remains a
-separate field and meaning: disabling removes UI contributions and host tools,
-then aborts and settles already accepted package executions before the
-serialized App Server capability restart completes. Grant, revoke, and
-enablement mutations share one ordered configuration boundary, so concurrent UI
-requests cannot lose the last operation. Permission grants are retained and do
-not imply enablement. Tool-only packages are valid and simply contribute no UI.
+API and never gives a package DOM or router access. Enablement and profile
+generation are persisted in the same atomic Catalog document. Disabling removes
+UI contributions and new tool admission, drains already admitted package calls,
+and refreshes the hosted App Server projection. Tool-only packages are valid and
+simply contribute no UI.
 
 Triggers (`zenx-triggers`) and Rooms (`zenx-rooms`) are complete bundled v2 Plugin
 Packages. Catalog manifests own their generic pages, commands and ordinary
@@ -395,9 +388,8 @@ of current plugin lifecycle.
 ### Bundled self-control provider
 
 The `zenx-self-control` package is a bundled, cross-platform,
-`background_safe` capability. It is hidden from the Agent until its
-workspace-read and local-device-control permissions are granted; grant/revoke
-uses the same host restart behavior as every other package. Its
+`background_safe` plugin. Its enabled lifecycle uses the same profile, Runtime
+Supervisor and hosted App Server projection as every other package. Its
 provider-valid tools are `zenx_projects_list`, `zenx_threads_list`,
 `zenx_threads_create`, `zenx_threads_read`, `zenx_threads_status`,
 `zenx_threads_rename`, `zenx_threads_archive`, `zenx_threads_unarchive`, and
@@ -568,19 +560,15 @@ mature external implementations while retaining a runnable bundled baseline:
   VMware/VirtualBox/Docker/cloud is a useful reference, but no VM lifecycle is
   implemented in this PR. See <https://github.com/xlang-ai/OSWorld>.
 
-Local Plugin Package v2 manifests can be selected from Settings. ZenX records the
-absolute trusted manifest location so the supplied package can be mounted again on
-restart; manifests already placed in Electron `userData/capabilities` remain supported.
-The current process runtime seam requires the entry to stay inside that package
-directory. Schema v1 capability manifests remain
-readable for migration, but new packages use v2 and declare stable identity,
-compatibility, runtime, main document, tools, and controlled UI descriptors:
+Plugin packages can be installed from npm specs, commit-pinned Git sources,
+tarballs, stable local copies, or explicit development links. The profile
+lockfile and Catalog generation identify the restart source. Every package uses
+v2 and declares stable identity, compatibility, runtime, main document, tools,
+and controlled UI descriptors:
 
 Progressive discovery requires a stable id, non-empty name, short description,
 main document, and each ordinary namespaced tool's name, description, and input
-schema. Schema v1 remains readable through the existing capability compatibility
-path, but it is not presented as a discoverable v2 plugin because it has no honest
-main-document contract.
+schema. There is no separate capability manifest reader or discovery path.
 
 ```json
 {
@@ -616,7 +604,6 @@ main-document contract.
       "capabilities": ["example.run"]
     }
   ],
-  "resources": [],
   "ui": {
     "bundles": [
       {
@@ -662,9 +649,7 @@ process once per required step with the internal operation
 The process returns the migrated JSON value. Every step must advance exactly one
 version; a missing/failed/invalid step leaves the prior package and storage active.
 
-The legacy local-capability discovery seam currently launches its executable once
-per request, without a shell, using one bounded JSON stdin/stdout value. The ZP3
-Plugin Runtime process adapter instead keeps one child attached through a bounded
+The Plugin Runtime process adapter keeps one child attached through a bounded
 version-1 JSONL protocol: the child first reports `ready` with exact plugin/package
 identity, then handles `invoke`, `cancel`, and `close` messages and returns matching
 `result` or `error` messages. Malformed, oversized, timed-out, or crashed transports
@@ -672,8 +657,8 @@ fail all affected calls explicitly and are never retried or restarted. The HTTP
 adapter sends the same identity/invocation envelope as one abortable POST and
 validates a bounded matching result envelope; close detaches and aborts outstanding
 requests without asking ZenX to own the remote service lifecycle. Tool
-`maxOutputBytes` remains an integer from 1 KiB through 1 MiB on the capability
-projection. Discovery failures stay visible; there is no durable repair workflow,
+`maxOutputBytes` remains an integer from 1 KiB through 1 MiB on the tool
+declaration. Discovery failures stay visible; there is no durable repair workflow,
 signing, remote plugin discovery, or Marketplace-owned distribution lifecycle.
 
 ## Verification
@@ -693,8 +678,8 @@ The automated integration suite runs the timer → wakeup → App Server Turn �
 streamed response → history chain, explicit cyclic/self relay and cancellation,
 bounded source snapshots, two-member Room routing, strict persisted-state
 validation, long timers, OAuth cleanup, link policy, and local signal routing.
-The self-control tracer explicitly grants its bundled package before exercising
-the child-host capability bridge, derived projects, Thread create/list/read/status,
+The self-control tracer exercises its profile/runtime-backed child-host bridge,
+derived projects, Thread create/list/read/status,
 active `start | steer | replace`, follow-up delivery, bounded redaction, canonical
 command audit, and the real OpenAI subscription tool serialization boundary.
 The packaged capability smoke covers a real hidden dedicated browser
@@ -710,8 +695,8 @@ compiled helper enforces semantic fingerprint/geometry revalidation and rejects
 ambiguous matches, but that path is not claimed as a live third-party-app smoke.
 On Windows, `smoke:windows-computer` launches a deterministic WinForms fixture
 with a real UIA-editable control and drives the real
-`WinAppCliComputerBackend` through `ComputerZenXCapabilityPackage` and the
-capability registry, verifying exact PID/title→HWND resolution, bounded semantic
+`WinAppCliComputerBackend` through the profile-managed Computer package and
+Runtime Supervisor, verifying exact PID/title→HWND resolution, bounded semantic
 inspection, UIA set-value with a bounded native value assertion, a post-action
 re-inspection, and WGC-default scoped capture without `--focus`
 or `--capture-screen`. GitHub CI runs that path on `windows-latest` with Microsoft's

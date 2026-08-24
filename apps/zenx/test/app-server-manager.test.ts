@@ -13,8 +13,6 @@ import {
   ZenXProtocolClient,
 } from "../src/protocol-client/index.js";
 import type { ZenXCapabilityHost } from "../src/main/capabilities/types.js";
-import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
-import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
 import { ZenXAutomationControlCapabilityPackage } from "../src/main/capabilities/automation-control-package.js";
 import { ZenXTriggerService } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
@@ -806,9 +804,26 @@ test("bridges all Agent Room tools through the real child App Server", async () 
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-room-capability-host-"),
   );
-  const registry = new ZenXCapabilityRegistry(
-    new MemoryZenXCapabilityGrantStore(),
-  );
+  let automationPackage!: ZenXAutomationControlCapabilityPackage;
+  const capabilityHost: ZenXCapabilityHost = {
+    hostSnapshot: () => ({
+      definitions: automationPackage.manifest.tools.map(
+        ({ name, description, inputSchema }) => ({
+          name,
+          description,
+          inputSchema: structuredClone(inputSchema),
+        }),
+      ),
+      plugins: [],
+    }),
+    execute: async (invocation) => ({
+      output: JSON.stringify({
+        capabilityId: automationPackage.manifest.id,
+        result: await automationPackage.invoke(invocation.name, invocation),
+      }),
+      exitCode: 0,
+    }),
+  };
   const manager = new AppServerManager({
     entryPath: path.resolve("src/main/app-server-host.ts"),
     tokenFile: path.join(directory, "runtime", "app-server.token"),
@@ -820,7 +835,7 @@ test("bridges all Agent Room tools through the real child App Server", async () 
       approvalPolicy: "never",
       provider: { type: "fake" },
     },
-    capabilityHost: registry,
+    capabilityHost,
     execArgv: ["--import", "tsx"],
     startupTimeoutMs: 10_000,
   });
@@ -828,9 +843,7 @@ test("bridges all Agent Room tools through the real child App Server", async () 
     manager,
     new ZenXTriggerStore(path.join(directory, "triggers.json")),
   );
-  registry.register(new ZenXAutomationControlCapabilityPackage(triggers));
-  await registry.initialize();
-  await registry.grant("zenx-automation-control");
+  automationPackage = new ZenXAutomationControlCapabilityPackage(triggers);
   try {
     await manager.start();
     await triggers.start();

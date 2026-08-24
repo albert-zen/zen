@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
 
 import type {
-  ZenXCapabilitySnapshot,
-  ZenXCapabilitySummary,
   ZenXPluginSnapshot,
   ZenXPluginMutationResult,
   ZenXPluginPackageSource,
@@ -18,9 +16,7 @@ import { Icon } from "./icons.js";
 
 type Confirmation = { pluginId: string; action: "uninstall" | "delete-data" };
 
-export function CapabilitySettings() {
-  const [capabilities, setCapabilities] =
-    useState<ZenXCapabilitySnapshot | null>(null);
+export function PluginSettings() {
   const [plugins, setPlugins] = useState<ZenXPluginSnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -32,26 +28,18 @@ export function CapabilitySettings() {
 
   useEffect(() => {
     let active = true;
-    const disposeCapabilities = window.zenx.capabilities.onChange(
-      (value) => active && setCapabilities(value),
-    );
     const disposePlugins = window.zenx.plugins.onChange(
       (value) => active && setPlugins(value),
     );
-    void Promise.all([
-      window.zenx.capabilities.get(),
-      window.zenx.plugins.get(),
-    ]).then(
-      ([nextCapabilities, nextPlugins]) => {
+    void window.zenx.plugins.get().then(
+      (nextPlugins) => {
         if (!active) return;
-        setCapabilities(nextCapabilities);
         setPlugins(nextPlugins);
       },
       (reason: unknown) => active && setError(describeError(reason)),
     );
     return () => {
       active = false;
-      disposeCapabilities();
       disposePlugins();
     };
   }, []);
@@ -102,29 +90,6 @@ export function CapabilitySettings() {
     );
   };
 
-  const selectPackage = async (expectedPluginId?: string) => {
-    const key =
-      expectedPluginId === undefined ? "install" : `update:${expectedPluginId}`;
-    setBusy(key);
-    setError(null);
-    setNotice(null);
-    try {
-      const result = await window.zenx.plugins.selectPackage(expectedPluginId);
-      if (!result.canceled) {
-        setPlugins(result.snapshot);
-        setNotice(
-          expectedPluginId === undefined
-            ? "Local plugin installed and enabled."
-            : `${expectedPluginId} updated successfully.`,
-        );
-      }
-    } catch (reason) {
-      setError(describeError(reason));
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const selectTarball = async () => {
     setBusy("install-tarball");
     setError(null);
@@ -146,17 +111,13 @@ export function CapabilitySettings() {
     }
   };
 
-  if (capabilities === null || plugins === null) {
+  if (plugins === null) {
     return (
       <div className="page-card settings-card">
         <p>{error ?? "Loading plugins…"}</p>
       </div>
     );
   }
-  const legacyCapabilities = capabilities.capabilities.filter(
-    (capability) => capability.manifest.schemaVersion === 1,
-  );
-
   return (
     <>
       <div className="page-card settings-card plugin-library-head">
@@ -172,13 +133,6 @@ export function CapabilitySettings() {
           </span>
         </div>
         <div className="settings-actions">
-          <button
-            type="button"
-            disabled={busy !== null}
-            onClick={() => void selectPackage()}
-          >
-            {busy === "install" ? "Opening…" : "Install local package"}
-          </button>
           <button
             className="primary-button"
             type="button"
@@ -258,13 +212,11 @@ export function CapabilitySettings() {
                   )
                 }
                 onUpdate={() =>
-                  plugin.profileSource === undefined
-                    ? selectPackage(plugin.id)
-                    : run(
-                        `update:${plugin.id}`,
-                        () => window.zenx.plugins.update(plugin.id),
-                        `${plugin.displayName} updated successfully.`,
-                      )
+                  run(
+                    `update:${plugin.id}`,
+                    () => window.zenx.plugins.update(plugin.id),
+                    `${plugin.displayName} updated successfully.`,
+                  )
                 }
                 onUninstall={() =>
                   run(
@@ -274,13 +226,11 @@ export function CapabilitySettings() {
                   )
                 }
                 onReinstall={() =>
-                  plugin.available
-                    ? run(
-                        `reinstall:${plugin.id}`,
-                        () => window.zenx.plugins.reinstall(plugin.id),
-                        `${plugin.displayName} reinstalled.`,
-                      )
-                    : selectPackage(plugin.id)
+                  run(
+                    `reinstall:${plugin.id}`,
+                    () => window.zenx.plugins.reinstall(plugin.id),
+                    `${plugin.displayName} reinstalled.`,
+                  )
                 }
                 onDeleteData={() =>
                   run(
@@ -294,15 +244,6 @@ export function CapabilitySettings() {
         )}
       </div>
 
-      {legacyCapabilities.length === 0 ? null : (
-        <LegacyCapabilitySettings
-          capabilities={legacyCapabilities}
-          busy={busy}
-          setBusy={setBusy}
-          setCapabilities={setCapabilities}
-          setError={setError}
-        />
-      )}
       {notice ? (
         <div className="settings-success" role="status">
           {notice}
@@ -750,92 +691,6 @@ function sourcePlaceholder(mode: ZenXPluginPackageSource["mode"]): string {
     case "dev-link":
       return "/path/to/plugin";
   }
-}
-
-function LegacyCapabilitySettings({
-  capabilities,
-  busy,
-  setBusy,
-  setCapabilities,
-  setError,
-}: {
-  capabilities: ZenXCapabilitySummary[];
-  busy: string | null;
-  setBusy(value: string | null): void;
-  setCapabilities(value: ZenXCapabilitySnapshot): void;
-  setError(value: string | null): void;
-}) {
-  const setGranted = async (
-    capability: ZenXCapabilitySummary,
-    grant: boolean,
-  ) => {
-    setBusy(`grant:${capability.manifest.id}`);
-    setError(null);
-    try {
-      setCapabilities(
-        grant
-          ? await window.zenx.capabilities.grant(capability.manifest.id)
-          : await window.zenx.capabilities.revoke(capability.manifest.id),
-      );
-    } catch (reason) {
-      setError(describeError(reason));
-    } finally {
-      setBusy(null);
-    }
-  };
-  return (
-    <div className="page-card settings-card legacy-capabilities">
-      <div className="settings-card-head">
-        <div>
-          <h3>Legacy capabilities</h3>
-          <p>
-            Older built-in integrations still use grants until they move to the
-            plugin lifecycle.
-          </p>
-        </div>
-      </div>
-      <div className="capability-list">
-        {capabilities.map((capability) => {
-          const granted =
-            capability.manifest.permissions.length > 0 &&
-            capability.manifest.permissions.length ===
-              capability.granted.length;
-          return (
-            <div className="capability-row" key={capability.manifest.id}>
-              <span className="plugin-icon">
-                <Icon name={pluginIcon(capability.manifest.id)} />
-              </span>
-              <div>
-                <strong>
-                  {capability.manifest.schemaVersion === 1
-                    ? capability.manifest.displayName
-                    : capability.manifest.name}
-                </strong>
-                <span>
-                  {capability.manifest.tools.length} tools ·{" "}
-                  {capability.available
-                    ? "available"
-                    : capability.unavailableReason}
-                </span>
-              </div>
-              <button
-                className={granted ? "danger-button" : "secondary-button"}
-                type="button"
-                disabled={
-                  busy !== null ||
-                  !capability.available ||
-                  capability.manifest.permissions.length === 0
-                }
-                onClick={() => void setGranted(capability, !granted)}
-              >
-                {granted ? "Revoke" : "Grant"}
-              </button>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
 }
 
 export function pluginSpacesForSettings(

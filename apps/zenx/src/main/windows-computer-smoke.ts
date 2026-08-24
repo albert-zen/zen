@@ -6,8 +6,6 @@ import {
   ComputerZenXCapabilityPackage,
   type ComputerInspection,
 } from "./capabilities/computer-provider.js";
-import { ZenXCapabilityRegistry } from "./capabilities/registry.js";
-import { MemoryZenXCapabilityGrantStore } from "./capabilities/grant-store.js";
 import {
   windowsComputerCapabilityManifest,
   WinAppCliComputerBackend,
@@ -26,29 +24,18 @@ const timeout = setTimeout(() => {
 }, 60_000);
 timeout.unref();
 
-const grantStore = new MemoryZenXCapabilityGrantStore();
-const registry = new ZenXCapabilityRegistry(grantStore, {
-  platform: "win32",
-  allowForegroundRequired: false,
-});
 const backend = new WinAppCliComputerBackend({ platform: "win32" });
+const computer = new ComputerZenXCapabilityPackage(
+  backend,
+  windowsComputerCapabilityManifest,
+);
 
 try {
   const diagnostic = await backend.diagnose(controller.signal);
   if (!diagnostic.ready) throw new Error(diagnostic.message);
 
-  await registry.initialize();
-  registry.register(
-    new ComputerZenXCapabilityPackage(
-      backend,
-      windowsComputerCapabilityManifest,
-    ),
-    "bundled",
-  );
-  await registry.grant(windowsComputerCapabilityManifest.id);
-
   const first = await execute<ComputerInspection>(
-    registry,
+    computer,
     "computer_inspect",
     { target },
     controller.signal,
@@ -65,7 +52,7 @@ try {
     target: ComputerInspection["target"];
     characterCount: number;
   }>(
-    registry,
+    computer,
     "computer_set_value",
     { target, control: editor.selector, value: probeText },
     controller.signal,
@@ -82,7 +69,7 @@ try {
   };
 
   const second = await execute<ComputerInspection>(
-    registry,
+    computer,
     "computer_inspect",
     { target: refreshedTarget },
     controller.signal,
@@ -99,7 +86,7 @@ try {
     width: number;
     height: number;
   }>(
-    registry,
+    computer,
     "computer_screenshot",
     { target: refreshedTarget },
     controller.signal,
@@ -119,11 +106,11 @@ try {
   );
 } finally {
   clearTimeout(timeout);
-  await registry.close();
+  await computer.close?.();
 }
 
 async function execute<T>(
-  registry_: ZenXCapabilityRegistry,
+  capabilityPackage: ComputerZenXCapabilityPackage,
   name: string,
   args: Record<string, unknown>,
   signal: AbortSignal,
@@ -135,20 +122,7 @@ async function execute<T>(
     cwd: process.cwd(),
     signal,
   };
-  const execution = await registry_.execute(invocation);
-  if (execution.exitCode !== 0) {
-    throw new Error(
-      `${name} failed with exit code ${String(execution.exitCode)}`,
-    );
-  }
-  const envelope = JSON.parse(execution.output) as {
-    result?: T;
-    truncated?: boolean;
-  };
-  if (envelope.truncated === true || envelope.result === undefined) {
-    throw new Error(`${name} returned no complete result through the registry`);
-  }
-  return envelope.result;
+  return (await capabilityPackage.invoke(name, invocation)) as T;
 }
 
 function parseArguments(values: readonly string[]): Record<string, string> {

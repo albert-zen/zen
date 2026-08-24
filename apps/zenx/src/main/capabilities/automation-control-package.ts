@@ -33,11 +33,10 @@ import {
   withinBytes,
 } from "../trigger-limits.js";
 import type {
-  ZenXCapabilityManifest,
+  ZenXPluginManifestV2,
   ZenXCapabilityPackage,
   ZenXPluginPageContribution,
   ZenXPluginSidebarContribution,
-  ZenXPluginManifestV2,
 } from "./types.js";
 import type { ZenXPluginHostSdkV1 } from "../plugin-host-sdk.js";
 
@@ -124,13 +123,17 @@ const triggerProperties = {
   program: programSchema,
 };
 
-const manifest: ZenXCapabilityManifest = {
-  schemaVersion: 1,
+const manifest: ZenXPluginManifestV2 = {
+  schemaVersion: 2,
   id: ZENX_AUTOMATION_CONTROL_CAPABILITY_ID,
-  displayName: "ZenX Triggers and Rooms",
+  name: "ZenX Triggers and Rooms",
   version: "1.0.0",
   description:
     "Inspect and manage Trigger wakeups and collaborative Rooms through the existing ZenX service.",
+  compatibility: { zenx: ">=0.1.0 <0.2.0" },
+  runtime: { type: "bundled", entry: "zenx/automation-control" },
+  mainDocument:
+    "Use the installed Triggers or Rooms plugin for automation and collaboration.",
   provider: {
     id: "zenx-automation-service",
     platforms: ["*"],
@@ -254,7 +257,6 @@ const manifest: ZenXCapabilityManifest = {
       ["roomId", "text"],
     ),
   ],
-  resources: [],
 };
 
 export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPackage {
@@ -352,7 +354,7 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
 export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
   readonly #delegate: ZenXAutomationControlCapabilityPackage;
   readonly #port: ZenXAutomationControlPort;
-  readonly manifest: ZenXCapabilityManifest;
+  readonly manifest: ZenXPluginManifestV2;
   readonly storage = {
     version: 1,
     initialValue: { triggers: [], history: [] },
@@ -411,7 +413,7 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
 export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
   readonly #delegate: ZenXAutomationControlCapabilityPackage;
   readonly #port: ZenXAutomationControlPort;
-  readonly manifest: ZenXCapabilityManifest;
+  readonly manifest: ZenXPluginManifestV2;
   readonly storage = { version: 1, initialValue: { rooms: [] } } as const;
 
   constructor(port: ZenXAutomationControlPort) {
@@ -469,7 +471,7 @@ export function zenXBundledAutomationPackages(
 }
 
 function automationPluginManifest(
-  source: ZenXCapabilityManifest,
+  source: ZenXPluginManifestV2,
   plugin: {
     id: string;
     displayName: string;
@@ -486,13 +488,18 @@ function automationPluginManifest(
   },
 ): ZenXPluginManifestV2 {
   const {
-    schemaVersion: _schemaVersion,
-    displayName: _displayName,
-    ui: _legacyUi,
+    id: _id,
+    name: _name,
+    description: _description,
+    provider: _provider,
+    permissions: _permissions,
+    tools: _tools,
+    runtime: _runtime,
+    mainDocument: _mainDocument,
+    ui: _ui,
+    contributions: _contributions,
     ...capability
-  } = source.schemaVersion === 1
-    ? source
-    : { ...source, displayName: source.name };
+  } = source;
   return {
     ...structuredClone(capability),
     schemaVersion: 2,

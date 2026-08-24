@@ -32,19 +32,19 @@ import {
 } from "./windows-computer-provider.js";
 import type { WinAppCliRunner } from "./windows-computer-provider.js";
 import type {
-  ZenXCapabilityManifest,
+  ZenXPluginManifestV2,
   ZenXCapabilityProviderDiagnostic,
 } from "./types.js";
 
 export interface ZenXCapabilityProviderSelection<T> {
   backend: T;
-  manifest: ZenXCapabilityManifest;
+  manifest: ZenXPluginManifestV2;
   diagnostics: ZenXCapabilityProviderDiagnostic[];
 }
 
 export interface ZenXOptionalCapabilityProviderSelection<T> {
   backend?: T;
-  manifest: ZenXCapabilityManifest;
+  manifest: ZenXPluginManifestV2;
   diagnostics: ZenXCapabilityProviderDiagnostic[];
 }
 
@@ -389,7 +389,7 @@ function electronBrowserBackend(
   return options.electronBrowserFactory?.() ?? new ElectronBrowserBackend();
 }
 
-function userBrowserManifest(): ZenXCapabilityManifest {
+function userBrowserManifest(): ZenXPluginManifestV2 {
   const manifest = structuredClone(browserCapabilityManifest);
   return {
     ...manifest,
@@ -427,15 +427,6 @@ function userBrowserManifest(): ZenXCapabilityManifest {
         ),
       ],
     })),
-    resources: manifest.resources.map((resource) =>
-      resource.id === "safe-browser-use"
-        ? {
-            ...resource,
-            content:
-              "This provider is attached to a user-opened browser and may use authenticated page state in place. List tabs, inspect the exact tab, and act only with the latest opaque observation and target IDs. Text is dispatched as an ordinary tool argument regardless of field metadata. Never request or return browser session internals such as cookies, storage state, or auth headers. Closing a tab/session detaches ZenX state only and must not close or clear the user's browser/profile.",
-          }
-        : resource,
-    ),
   };
 }
 
@@ -744,7 +735,7 @@ export async function probePeekabooCli(
   };
 }
 
-function playwrightBrowserManifest(): ZenXCapabilityManifest {
+function playwrightBrowserManifest(): ZenXPluginManifestV2 {
   return {
     ...structuredClone(browserCapabilityManifest),
     description:
@@ -778,7 +769,7 @@ function playwrightBrowserManifest(): ZenXCapabilityManifest {
   };
 }
 
-function peekabooComputerManifest(): ZenXCapabilityManifest {
+function peekabooComputerManifest(): ZenXPluginManifestV2 {
   return {
     ...structuredClone(computerCapabilityManifest),
     description:

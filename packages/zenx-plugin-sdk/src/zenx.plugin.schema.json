@@ -14,7 +14,6 @@
     "provider",
     "permissions",
     "tools",
-    "resources",
     "runtime"
   ],
   "properties": {
@@ -91,20 +90,6 @@
         }
       }
     },
-    "resources": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "kind", "title", "description", "content"],
-        "properties": {
-          "id": { "$ref": "#/$defs/nonEmptyString" },
-          "kind": { "enum": ["skill", "prompt"] },
-          "title": { "$ref": "#/$defs/nonEmptyString" },
-          "description": { "$ref": "#/$defs/nonEmptyString" },
-          "content": { "type": "string" }
-        }
-      }
-    },
     "runtime": {
       "oneOf": [
         {
@@ -167,8 +152,7 @@
         }
       }
     },
-    "contributions": { "type": "object" },
-    "settings": { "type": "object" }
+    "contributions": { "type": "object" }
   },
   "$defs": {
     "hostSdkVersion": { "const": 1 },

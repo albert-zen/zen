@@ -54,9 +54,7 @@ export function TriggersPage({ sdk }: PluginUiSurfaceProps) {
   const [recurring, setRecurring] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const refresh = async () => {
-    setData(
-      commandResult(await sdk.commands.execute("list")) as TriggerListResult,
-    );
+    setData((await sdk.commands.execute("list")) as TriggerListResult);
   };
   useEffect(() => {
     void refresh().catch((reason: unknown) => setError(describeError(reason)));
@@ -253,7 +251,7 @@ export function TriggersPanel({ sdk }: PluginUiSurfaceProps) {
   useEffect(() => {
     void sdk.commands
       .execute("list")
-      .then((value) => setData(commandResult(value) as TriggerListResult));
+      .then((value) => setData(value as TriggerListResult));
   }, [sdk]);
   if (threadId === null) return null;
   const wakeups = data.history
@@ -284,9 +282,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const refresh = async () => {
-    const next = commandResult(
-      await sdk.commands.execute("list"),
-    ) as RoomListResult;
+    const next = (await sdk.commands.execute("list")) as RoomListResult;
     setData(next);
     setSelected((current) =>
       current !== null && next.rooms.some((room) => room.id === current)
@@ -450,10 +446,4 @@ function Field({
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function commandResult(value: unknown): unknown {
-  return typeof value === "object" && value !== null && "result" in value
-    ? (value as { result: unknown }).result
-    : value;
 }

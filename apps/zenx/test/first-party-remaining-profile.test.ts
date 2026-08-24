@@ -14,10 +14,10 @@ import {
   type ZenXBrowserBackend,
 } from "../src/main/capabilities/browser-provider.js";
 import type { ZenXComputerBackend } from "../src/main/capabilities/computer-provider.js";
-import { JsonZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
+import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
 import type {
-  ZenXCapabilityConfiguration,
-  ZenXCapabilityConfigurationStore,
+  ZenXPluginCatalogState,
+  ZenXPluginCatalogStore,
   ZenXCapabilityPackage,
 } from "../src/main/capabilities/types.js";
 import {
@@ -50,11 +50,9 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       userDataDirectory: userData,
       resourcesDirectory: resources,
       pnpmCliPath: missingPnpm ? path.join(root, "missing-pnpm.cjs") : pnpmCli,
-      localDirectory: path.join(root, "no-local"),
       bundledProvidersOnly: true,
       browserBackend: browserBackend(),
       computerBackend: computerBackend(),
-      profileManagedProviders: true,
       trustedProfileLoaders: {
         browser: createDelegatingFirstPartyProfileLoader(() =>
           service.browserProfilePackage(),
@@ -137,10 +135,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       playwrightCandidate,
     );
     assert.equal(
-      service
-        .snapshot()
-        .capabilities.find((entry) => entry.manifest.id === "browser")?.manifest
-        .provider.id,
+      service.browserProfilePackage().manifest.provider.id,
       "playwright-cli",
     );
     assert.equal(
@@ -204,7 +199,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       service.pluginSnapshot().plugins.find((plugin) => plugin.id === "browser")
         ?.available,
       true,
-      service.snapshot().discoveryErrors.join("\n"),
+      service.diagnostics().discoveryErrors.join("\n"),
     );
     assert.deepEqual(
       await call(service, "browser_list_tabs", { sessionId: "restart" }),
@@ -230,7 +225,7 @@ test("provider variant admission and Catalog failures retain the old backend and
     ZENX_USER_BROWSER_CDP_ENDPOINT: "http://127.0.0.1:9222",
   };
   const store = new FailOnceConfigurationStore(
-    new JsonZenXCapabilityGrantStore(
+    new JsonZenXPluginCatalogStore(
       path.join(userData, "capability-grants.json"),
     ),
   );
@@ -239,11 +234,9 @@ test("provider variant admission and Catalog failures retain the old backend and
     userDataDirectory: userData,
     resourcesDirectory: resources,
     pnpmCliPath: pnpmCli,
-    grantStore: store,
-    localDirectory: path.join(root, "no-local"),
+    catalogStore: store,
     bundledProvidersOnly: true,
     computerBackend: computerBackend(),
-    profileManagedProviders: true,
     providerCatalogOptions: {
       environment,
       platform: "darwin",
@@ -298,10 +291,7 @@ test("provider variant admission and Catalog failures retain the old backend and
       [],
     );
     assert.equal(
-      service
-        .snapshot()
-        .capabilities.find((entry) => entry.manifest.id === "browser")?.manifest
-        .provider.id,
+      service.browserProfilePackage().manifest.provider.id,
       "electron-dedicated-browser",
     );
     await new Promise((resolve) => setImmediate(resolve));
@@ -341,7 +331,7 @@ test("restart keeps a committed Browser backend isolated from a different curren
         await t.test(`${direction.name}/${outcome}`, async () => {
           const userData = path.join(root, direction.name, outcome);
           const store = new FailOnceConfigurationStore(
-            new JsonZenXCapabilityGrantStore(
+            new JsonZenXPluginCatalogStore(
               path.join(userData, "capability-grants.json"),
             ),
           );
@@ -457,41 +447,7 @@ test("remaining first-party packages adopt every legacy Catalog lifecycle throug
     for (const lifecycle of ["enabled", "installed", "uninstalled"] as const) {
       await t.test(lifecycle, async () => {
         const userData = path.join(root, lifecycle);
-        const legacy = firstPartyService(userData, resources);
-        try {
-          await legacy.initialize();
-          for (const capabilityPackage of [
-            await legacyV2Package(
-              legacy.browserProfilePackage(),
-              "../../../packages/zenx-browser-plugin/zenx.plugin.json",
-            ),
-            await legacyV2Package(
-              legacy.computerProfilePackage(),
-              "../../../packages/zenx-computer-plugin/zenx.plugin.json",
-            ),
-            await legacyV2Package(
-              new ZenXSelfControlCapabilityPackage({
-                appServer: attachedSelfControlPort(),
-              }),
-              "../../../packages/zenx-self-control-plugin/zenx.plugin.json",
-            ),
-            await legacyV2Package(
-              new ZenXTriggersCapabilityPackage(automationPort()),
-              "../../../packages/zenx-triggers-plugin/zenx.plugin.json",
-            ),
-          ]) {
-            await legacy.install(capabilityPackage, "bundled");
-          }
-          for (const pluginId of remainingPluginIds) {
-            if (lifecycle === "installed") {
-              await legacy.setEnabled(pluginId, false);
-            } else if (lifecycle === "uninstalled") {
-              await legacy.uninstall(pluginId);
-            }
-          }
-        } finally {
-          await legacy.close();
-        }
+        await seedPreProfileFirstPartyCatalog(userData, lifecycle);
 
         const adopted = firstPartyService(userData, resources);
         try {
@@ -550,9 +506,7 @@ test("ordinary tarballs cannot claim any remaining first-party trusted runtime",
   const service = new ZenXCapabilityService({
     userDataDirectory: path.join(root, "user-data"),
     pnpmCliPath: pnpmCli,
-    localDirectory: path.join(root, "no-local"),
     bundledProvidersOnly: true,
-    profileManagedProviders: true,
   });
   try {
     await service.initialize();
@@ -585,9 +539,7 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
           userDataDirectory: path.join(root, platform),
           resourcesDirectory: resources,
           pnpmCliPath: pnpmCli,
-          localDirectory: path.join(root, platform, "no-local"),
           bundledProvidersOnly: true,
-          profileManagedProviders: true,
           providerCatalogOptions: { platform, environment: { PATH: "" } },
           trustedProfileLoaders: {
             computer: createDelegatingFirstPartyProfileLoader(() =>
@@ -603,7 +555,7 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
           );
           assert.equal(
             service
-              .snapshot()
+              .diagnostics()
               .providerDiagnostics.some(
                 (diagnostic) =>
                   diagnostic.capabilityId === "computer" &&
@@ -663,11 +615,9 @@ function firstPartyService(
     userDataDirectory,
     resourcesDirectory,
     pnpmCliPath: pnpmCli,
-    localDirectory: path.join(userDataDirectory, "no-local"),
     bundledProvidersOnly: true,
     browserBackend: browserBackend(),
     computerBackend: computerBackend(),
-    profileManagedProviders: true,
     trustedProfileLoaders: {
       browser: createDelegatingFirstPartyProfileLoader(() =>
         service.browserProfilePackage(),
@@ -685,7 +635,7 @@ function firstPartyService(
 function selectorBrowserService(options: {
   userData: string;
   resources: string;
-  store: ZenXCapabilityConfigurationStore;
+  store: ZenXPluginCatalogStore;
   environment: NodeJS.ProcessEnv;
   connectorBackend: ZenXBrowserBackend;
   electronBrowserFactory?: () => ZenXBrowserBackend;
@@ -700,10 +650,8 @@ function selectorBrowserService(options: {
     userDataDirectory: options.userData,
     resourcesDirectory: options.resources,
     pnpmCliPath: pnpmCli,
-    grantStore: options.store,
-    localDirectory: path.join(options.userData, "no-local"),
+    catalogStore: options.store,
     computerBackend: computerBackend(),
-    profileManagedProviders: true,
     providerCatalogOptions: {
       environment: options.environment,
       platform: "darwin",
@@ -735,24 +683,40 @@ function attachedSelfControlPort(): MutableAppServerRequestPort {
   return port;
 }
 
-async function legacyV2Package(
-  capabilityPackage: ZenXCapabilityPackage,
-  manifestUrl: string,
-): Promise<ZenXCapabilityPackage> {
-  const manifest = JSON.parse(
-    await readFile(
-      fileURLToPath(new URL(manifestUrl, import.meta.url)),
-      "utf8",
+async function seedPreProfileFirstPartyCatalog(
+  userDataDirectory: string,
+  lifecycle: "enabled" | "installed" | "uninstalled",
+): Promise<void> {
+  const manifestUrls = [
+    "../../../packages/zenx-browser-plugin/zenx.plugin.json",
+    "../../../packages/zenx-computer-plugin/zenx.plugin.json",
+    "../../../packages/zenx-self-control-plugin/zenx.plugin.json",
+    "../../../packages/zenx-triggers-plugin/zenx.plugin.json",
+  ];
+  const manifests = await Promise.all(
+    manifestUrls.map(
+      async (manifestUrl) =>
+        JSON.parse(
+          await readFile(
+            fileURLToPath(new URL(manifestUrl, import.meta.url)),
+            "utf8",
+          ),
+        ) as ZenXCapabilityPackage["manifest"],
     ),
-  ) as ZenXCapabilityPackage["manifest"];
-  return {
-    manifest,
-    storage: capabilityPackage.storage,
-    start: async (sdk) => await capabilityPackage.start?.(sdk),
-    invoke: async (name, invocation, sdk) =>
-      await capabilityPackage.invoke(name, invocation, sdk),
-    close: async () => await capabilityPackage.close?.(),
-  };
+  );
+  const store = new JsonZenXPluginCatalogStore(
+    path.join(userDataDirectory, "capability-grants.json"),
+  );
+  await store.save({
+    disabled: lifecycle === "installed" ? [...remainingPluginIds] : [],
+    uninstalled: lifecycle === "uninstalled" ? [...remainingPluginIds] : [],
+    packages: Object.fromEntries(
+      manifests.map((manifest) => [
+        manifest.id,
+        { manifest, source: "bundled" as const },
+      ]),
+    ),
+  });
 }
 
 async function browserCandidate(
@@ -789,10 +753,7 @@ async function assertOldProvider(
 ): Promise<void> {
   assert.equal(await committedGeneration(userData), generation);
   assert.equal(
-    service
-      .snapshot()
-      .capabilities.find((entry) => entry.manifest.id === "browser")?.manifest
-      .provider.id,
+    service.browserProfilePackage().manifest.provider.id,
     providerId,
   );
   assert.equal(
@@ -813,11 +774,11 @@ async function committedGeneration(userData: string): Promise<string> {
   return catalog.profileGeneration!;
 }
 
-class FailOnceConfigurationStore implements ZenXCapabilityConfigurationStore {
-  readonly #delegate: ZenXCapabilityConfigurationStore;
+class FailOnceConfigurationStore implements ZenXPluginCatalogStore {
+  readonly #delegate: ZenXPluginCatalogStore;
   #fail = false;
 
-  constructor(delegate: ZenXCapabilityConfigurationStore) {
+  constructor(delegate: ZenXPluginCatalogStore) {
     this.#delegate = delegate;
   }
 
@@ -825,11 +786,11 @@ class FailOnceConfigurationStore implements ZenXCapabilityConfigurationStore {
     this.#fail = true;
   }
 
-  async load(): Promise<ZenXCapabilityConfiguration> {
+  async load(): Promise<ZenXPluginCatalogState> {
     return await this.#delegate.load();
   }
 
-  async save(configuration: ZenXCapabilityConfiguration): Promise<void> {
+  async save(configuration: ZenXPluginCatalogState): Promise<void> {
     if (this.#fail) {
       this.#fail = false;
       throw new Error("fixture Catalog save failure");

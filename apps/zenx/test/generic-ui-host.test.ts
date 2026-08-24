@@ -7,7 +7,7 @@ import { act } from "react";
 import test from "node:test";
 
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
-import { ZenXCapabilityRegistry } from "../src/main/capabilities/registry.js";
+import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 import {
   zenXBundledAutomationPackages,
   type ZenXAutomationControlPort,
@@ -343,9 +343,8 @@ test("product composition renders page, panel, menu and keyboard-operable subrou
 
 test("normal bundled product composition owns real Trigger and Room generic UI", async () => {
   assert.equal(pluginUiRegistry.resolveTrusted(WORKBENCH_UI_ENTRY), undefined);
-  const registry = new ZenXCapabilityRegistry({
+  const registry = new ZenXPluginCatalog({
     load: async () => ({
-      grants: {},
       disabled: [],
       uninstalled: [],
       packages: {},
@@ -402,7 +401,7 @@ test("product shell contains no Trigger or Room ID routing or product IPC", asyn
   assert.doesNotMatch(ipc, /zenx:(?:triggers|rooms):/u);
 });
 
-test("product fixture projects every UI surface and revokes command admission across lifecycle", async () => {
+test("product fixture projects every UI surface and revokes commands across lifecycle", async () => {
   let calls = 0;
   const fixture = new ZenXWorkbenchFixturePackage();
   fixture.invoke = async (_tool, invocation) => {
@@ -410,9 +409,8 @@ test("product fixture projects every UI surface and revokes command admission ac
     calls += 1;
     return { ok: true, calls };
   };
-  const registry = new ZenXCapabilityRegistry({
+  const registry = new ZenXPluginCatalog({
     load: async () => ({
-      grants: {},
       disabled: [],
       uninstalled: [],
       packages: {},
@@ -435,32 +433,51 @@ test("product fixture projects every UI surface and revokes command admission ac
     ],
     [1, 1, 1, 1, 1, 1, 1, 1],
   );
-  const reply = (await registry.executePluginCommand(
-    "workbench",
-    "refresh",
-  )) as { result: { ok: boolean; calls: number } };
-  assert.deepEqual(reply.result, { ok: true, calls: 1 });
+  const command = enabled.commands.find(
+    (candidate) =>
+      candidate.pluginId === "workbench" && candidate.id === "refresh",
+  );
+  assert.ok(command);
+  const reply = await fixture.invoke(command.tool, {
+    name: command.tool,
+    arguments: {},
+    cwd: process.cwd(),
+    signal: new AbortController().signal,
+    callId: "workbench-refresh-1",
+  });
+  assert.deepEqual(reply, { ok: true, calls: 1 });
   assert.equal(calls, 1);
 
   await registry.setEnabled("workbench", false);
   assert.deepEqual(registry.pluginSnapshot().surfaces, []);
   assert.deepEqual(registry.pluginSnapshot().resultRenderers, []);
-  await assert.rejects(
-    registry.executePluginCommand("workbench", "refresh"),
-    /not enabled/u,
+  assert.equal(
+    registry
+      .pluginSnapshot()
+      .commands.some((candidate) => candidate.pluginId === "workbench"),
+    false,
   );
   await registry.setEnabled("workbench", true);
   await registry.uninstall("workbench");
   assert.deepEqual(registry.pluginSnapshot().commands, []);
   await registry.reinstall("workbench");
-  await registry.executePluginCommand("workbench", "refresh");
+  const reinstalled = registry
+    .pluginSnapshot()
+    .commands.find((candidate) => candidate.id === "refresh");
+  assert.ok(reinstalled);
+  await fixture.invoke(reinstalled.tool, {
+    name: reinstalled.tool,
+    arguments: {},
+    cwd: process.cwd(),
+    signal: new AbortController().signal,
+    callId: "workbench-refresh-2",
+  });
   assert.equal(calls, 2);
 });
 
 test("manifest validation rejects dangling surfaces and commands deterministically", async () => {
-  const registry = new ZenXCapabilityRegistry({
+  const registry = new ZenXPluginCatalog({
     load: async () => ({
-      grants: {},
       disabled: [],
       uninstalled: [],
       packages: {},

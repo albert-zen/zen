@@ -5,14 +5,11 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import test from "node:test";
 
-import type {
-  ZenXCapabilitySnapshot,
-  ZenXPluginSnapshot,
-} from "../src/main/capabilities/types.js";
+import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import {
-  CapabilitySettings,
+  PluginSettings,
   pluginSpacesForSettings,
-} from "../src/renderer/src/CapabilitySettings.js";
+} from "../src/renderer/src/PluginSettings.js";
 
 test("Plugin Settings does not offer enable for an uninstalled catalog package", () => {
   const plugins: ZenXPluginSnapshot = {
@@ -70,17 +67,10 @@ test("Plugin Settings exposes the typed tarball installer entry", async () => {
   Object.defineProperty(dom.window, "zenx", {
     configurable: true,
     value: {
-      capabilities: {
-        get: async () => emptyCapabilities,
-        grant: async () => emptyCapabilities,
-        revoke: async () => emptyCapabilities,
-        onChange: () => () => {},
-      },
       marketplace: { get: async () => ({ entries: [] }) },
       plugins: {
         get: async () => emptyPluginSnapshot,
         onChange: () => () => {},
-        selectPackage: async () => ({ canceled: true }),
         selectTarball: async () => {
           selected += 1;
           return {
@@ -101,7 +91,7 @@ test("Plugin Settings exposes the typed tarball installer entry", async () => {
   });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
-    root.render(React.createElement(CapabilitySettings));
+    root.render(React.createElement(PluginSettings));
     await Promise.resolve();
   });
   const button = [...dom.window.document.querySelectorAll("button")].find(
@@ -143,17 +133,10 @@ test("Plugin Settings exposes typed package sources and reports post-commit upda
   Object.defineProperty(dom.window, "zenx", {
     configurable: true,
     value: {
-      capabilities: {
-        get: async () => emptyCapabilities,
-        grant: async () => emptyCapabilities,
-        revoke: async () => emptyCapabilities,
-        onChange: () => () => {},
-      },
       marketplace: { get: async () => ({ entries: [] }) },
       plugins: {
         get: async () => installed,
         onChange: () => () => {},
-        selectPackage: async () => ({ canceled: true }),
         selectTarball: async () => ({ canceled: true }),
         installSource: async (source: unknown) => {
           sources.push(source);
@@ -187,7 +170,7 @@ test("Plugin Settings exposes typed package sources and reports post-commit upda
   });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
-    root.render(React.createElement(CapabilitySettings));
+    root.render(React.createElement(PluginSettings));
     await Promise.resolve();
   });
   const select = dom.window.document.querySelector("select")!;
@@ -270,17 +253,10 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
   Object.defineProperty(dom.window, "zenx", {
     configurable: true,
     value: {
-      capabilities: {
-        get: async () => emptyCapabilities,
-        grant: async () => emptyCapabilities,
-        revoke: async () => emptyCapabilities,
-        onChange: () => () => {},
-      },
       marketplace: { get: async () => await catalog },
       plugins: {
         get: async () => emptyPluginSnapshot,
         onChange: () => () => {},
-        selectPackage: async () => ({ canceled: true }),
         selectTarball: async () => ({ canceled: true }),
         installSource: async (source: unknown) => {
           sources.push(source);
@@ -317,7 +293,7 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
   });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
-    root.render(React.createElement(CapabilitySettings));
+    root.render(React.createElement(PluginSettings));
     await Promise.resolve();
   });
   assert.match(
@@ -468,10 +444,6 @@ test("Marketplace has explicit empty and retryable error states", async () => {
     Object.defineProperty(dom.window, "zenx", {
       configurable: true,
       value: {
-        capabilities: {
-          get: async () => emptyCapabilities,
-          onChange: () => () => {},
-        },
         marketplace: { get: fixture.load },
         plugins: {
           get: async () => emptyPluginSnapshot,
@@ -481,7 +453,7 @@ test("Marketplace has explicit empty and retryable error states", async () => {
     });
     const root = createRoot(dom.window.document.getElementById("root")!);
     await act(async () => {
-      root.render(React.createElement(CapabilitySettings));
+      root.render(React.createElement(PluginSettings));
       await Promise.resolve();
     });
     assert.match(dom.window.document.body.textContent ?? "", fixture.expected);
@@ -506,17 +478,10 @@ test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate
   Object.defineProperty(dom.window, "zenx", {
     configurable: true,
     value: {
-      capabilities: {
-        get: async () => emptyCapabilities,
-        grant: async () => emptyCapabilities,
-        revoke: async () => emptyCapabilities,
-        onChange: () => () => {},
-      },
       marketplace: { get: async () => ({ entries: [] }) },
       plugins: {
         get: async () => enabled,
         onChange: () => () => {},
-        selectPackage: async () => ({ canceled: true }),
         setEnabled: async () => enabled,
         uninstall: async () => {
           calls.push("uninstall");
@@ -531,7 +496,7 @@ test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate
   });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => {
-    root.render(React.createElement(CapabilitySettings));
+    root.render(React.createElement(PluginSettings));
     await Promise.resolve();
   });
   assert.match(dom.window.document.body.textContent ?? "", /enabled/u);
@@ -565,13 +530,6 @@ test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate
   assert.deepEqual(calls, ["uninstall", "delete-data"]);
   await act(async () => root.unmount());
 });
-
-const emptyCapabilities: ZenXCapabilitySnapshot = {
-  capabilities: [],
-  recentInvocations: [],
-  providerDiagnostics: [],
-  discoveryErrors: [],
-};
 
 const emptyPluginSnapshot: ZenXPluginSnapshot = {
   plugins: [],

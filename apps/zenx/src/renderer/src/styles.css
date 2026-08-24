@@ -3157,9 +3157,6 @@ a:focus-visible {
   color: var(--text-accent);
   font-size: 10px;
 }
-.legacy-capabilities {
-  margin-top: 6px;
-}
 .plugin-boundary > div {
   display: grid;
   gap: 4px;
@@ -3178,37 +3175,6 @@ a:focus-visible {
   border-radius: 10px;
   background: linear-gradient(145deg, var(--surface-3), var(--surface));
   color: var(--text-accent);
-}
-.capability-list {
-  display: grid;
-  gap: 7px;
-}
-.capability-row {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 11px;
-  padding: 12px;
-  border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  background: var(--surface-inset);
-}
-.capability-row > div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-.capability-row strong {
-  font-size: 11px;
-  font-weight: 520;
-}
-.capability-row span {
-  overflow: hidden;
-  color: var(--text-3);
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .plugin-switch {
   position: relative;
@@ -3995,13 +3961,6 @@ a:focus-visible {
   }
   .metric strong {
     font-size: 17px;
-  }
-  .capability-row {
-    grid-template-columns: 34px minmax(0, 1fr);
-  }
-  .capability-row > button {
-    grid-column: 2;
-    justify-self: end;
   }
 }
 

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ToolInvocation } from "../../../../../src/tool.js";
-import type { ZenXCapabilityManifest, ZenXCapabilityPackage } from "./types.js";
+import type { ZenXPluginManifestV2, ZenXCapabilityPackage } from "./types.js";
 
 export interface ComputerTarget {
   pid?: number;
@@ -102,13 +102,17 @@ export type ComputerKey =
 
 export const MAX_COMPUTER_INSPECTION_CONTROLS = 32;
 
-export const computerCapabilityManifest: ZenXCapabilityManifest = {
-  schemaVersion: 1,
+export const computerCapabilityManifest: ZenXPluginManifestV2 = {
+  schemaVersion: 2,
   id: "computer",
-  displayName: "Computer",
+  name: "Computer",
   version: "1.0.0",
   description:
     "Negotiated macOS desktop operations: targeted accessibility actions where supported and explicitly labeled, cancellable foreground takeover as the reliable baseline.",
+  compatibility: { zenx: ">=0.1.0 <0.2.0" },
+  runtime: { type: "bundled", entry: "zenx/computer" },
+  mainDocument:
+    "Use Computer for bounded semantic desktop inspection and explicitly labeled interaction.",
   provider: {
     id: "macos-desktop",
     platforms: ["darwin"],
@@ -208,26 +212,15 @@ export const computerCapabilityManifest: ZenXCapabilityManifest = {
     },
     ...foregroundTools(),
   ],
-  resources: [
-    {
-      id: "background-safe-computer-use",
-      kind: "skill",
-      title: "Background-safe computer use",
-      description:
-        "Instructions for app-targeted accessibility actions without foreground takeover.",
-      content:
-        "Prefer structured browser tools for web pages. For native apps, identify a pid or bundleId and optionally an exact window title, inspect that target, then act only with the observationId and opaque targetId from the latest inspect. Re-inspect after every action. Supplied text follows the ordinary set-value path; host/model policy owns credential decisions. Try background-safe semantic press/value/capture first. Those tools must never fall back to pointer motion, foreground keystrokes, app activation, or workspace changes. If accessibility semantics are insufficient and foreground takeover is acceptable, choose an explicitly named computer_foreground_* tool, warn that it affects the user's live desktop, and keep the operation cancellable; otherwise report unsupported.",
-    },
-  ],
 };
 
 export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
-  readonly manifest: ZenXCapabilityManifest;
+  readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXComputerBackend;
 
   constructor(
     backend: ZenXComputerBackend,
-    manifest: ZenXCapabilityManifest = computerCapabilityManifest,
+    manifest: ZenXPluginManifestV2 = computerCapabilityManifest,
   ) {
     this.#backend = backend;
     this.manifest = manifest;
@@ -1110,7 +1103,7 @@ async function runProcess(
   });
 }
 
-function foregroundTools(): ZenXCapabilityManifest["tools"] {
+function foregroundTools(): ZenXPluginManifestV2["tools"] {
   const shared = {
     permissions: ["computer.foreground.control"],
     interactionMode: "foreground_required" as const,

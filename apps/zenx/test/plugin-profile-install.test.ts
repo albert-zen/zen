@@ -22,7 +22,7 @@ import type { CanonicalItem } from "../../../src/item.js";
 import { requestPluginDevLink } from "@zenx/plugin-sdk";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
-import { JsonZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
+import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
 import { BUNDLED_PNPM_VERSION } from "../src/main/plugin-profile.js";
 import {
   MarketplaceCatalogService,
@@ -49,7 +49,6 @@ test("Settings host installs one tarball through the committed profile and Agent
   const tarball = await createPluginTarball(directory);
   const capabilities = new ZenXCapabilityService({
     userDataDirectory: userData,
-    localDirectory: path.join(userData, "no-legacy-capabilities"),
     bundledProvidersOnly: true,
     pnpmCliPath: pnpmCli,
     pnpmEnvironment: {
@@ -548,11 +547,11 @@ test("pnpm, manifest, runtime, UI, and Catalog failures preserve the committed g
       path.join(os.tmpdir(), `zenx-profile-${failure.name}-`),
     );
     const userData = path.join(directory, "user-data");
-    const store = new JsonZenXCapabilityGrantStore(
+    const store = new JsonZenXPluginCatalogStore(
       path.join(userData, "capability-grants.json"),
     );
     let failCatalog = false;
-    const grantStore = {
+    const catalogStore = {
       load: async () => await store.load(),
       save: async (configuration: Parameters<typeof store.save>[0]) => {
         if (failCatalog) throw new Error("catalog fixture failure");
@@ -562,7 +561,7 @@ test("pnpm, manifest, runtime, UI, and Catalog failures preserve the committed g
     const baselineTarball = await createPluginTarball(directory);
     const baseline = profileService(userData, {
       pnpmCliPath: pnpmCli,
-      grantStore,
+      catalogStore,
     });
     try {
       await baseline.initialize();
@@ -582,7 +581,7 @@ test("pnpm, manifest, runtime, UI, and Catalog failures preserve the committed g
         await baseline.close();
         active = profileService(userData, {
           pnpmCliPath: await createFailingPnpm(directory),
-          grantStore,
+          catalogStore,
         });
         await active.initialize();
       }
@@ -659,13 +658,13 @@ test("profile update Catalog failure keeps the old generation and serving runtim
     path.join(os.tmpdir(), "zenx-profile-update-fail-"),
   );
   const userData = path.join(directory, "user-data");
-  const store = new JsonZenXCapabilityGrantStore(
+  const store = new JsonZenXPluginCatalogStore(
     path.join(userData, "capability-grants.json"),
   );
   let failSave = false;
   const service = profileService(userData, {
     pnpmCliPath: pnpmCli,
-    grantStore: {
+    catalogStore: {
       load: async () => await store.load(),
       save: async (configuration) => {
         if (failSave) throw new Error("update Catalog fixture failure");
@@ -1037,7 +1036,7 @@ test("dev install timeout and close after its Catalog fence wait for the committ
   const catalog = blockingCatalog(userData);
   const service = profileService(userData, {
     pnpmCliPath: pnpmCli,
-    grantStore: catalog.store,
+    catalogStore: catalog.store,
   });
   let fences = 0;
   let devControl: ZenXPluginDevControlServer | undefined;
@@ -1121,13 +1120,13 @@ test("dev Catalog save rejection after the fence reports failure without a commi
     directory,
     "fixture-package-save-fail-1.0.0",
   );
-  const delegate = new JsonZenXCapabilityGrantStore(
+  const delegate = new JsonZenXPluginCatalogStore(
     path.join(userData, "capability-grants.json"),
   );
   let fences = 0;
   const service = profileService(userData, {
     pnpmCliPath: pnpmCli,
-    grantStore: {
+    catalogStore: {
       load: async () => await delegate.load(),
       save: async () => {
         assert.equal(fences, 1);
@@ -1203,7 +1202,7 @@ test("dev same-version update commits after a post-fence client disconnect", asy
   const catalog = blockingCatalog(userData);
   const service = profileService(userData, {
     pnpmCliPath: pnpmCli,
-    grantStore: catalog.store,
+    catalogStore: catalog.store,
   });
   let fences = 0;
   let devControl: ZenXPluginDevControlServer | undefined;
@@ -1688,14 +1687,13 @@ function profileService(
 ): ZenXCapabilityService {
   return new ZenXCapabilityService({
     userDataDirectory,
-    localDirectory: path.join(userDataDirectory, "no-legacy-capabilities"),
     bundledProvidersOnly: true,
     ...options,
   });
 }
 
 function blockingCatalog(userDataDirectory: string) {
-  const delegate = new JsonZenXCapabilityGrantStore(
+  const delegate = new JsonZenXPluginCatalogStore(
     path.join(userDataDirectory, "capability-grants.json"),
   );
   let active:
@@ -2027,7 +2025,6 @@ function fixtureManifest(
         capabilities: ["profile.echo"],
       },
     ],
-    resources: [],
     ui: {
       bundles: [
         {

@@ -8,7 +8,7 @@ import {
   ComputerZenXCapabilityPackage,
   type ComputerInspection,
 } from "../src/main/capabilities/computer-provider.js";
-import { MemoryZenXCapabilityGrantStore } from "../src/main/capabilities/grant-store.js";
+import { MemoryZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import {
   runBoundedProcess,
@@ -307,8 +307,7 @@ test("ZenX startup does not expose an incompatible WinApp provider", async () =>
   runner.versionOutput = "winapp 0.3.0\n";
   const service = new ZenXCapabilityService({
     userDataDirectory: directory,
-    localDirectory: path.join(directory, "no-local-capabilities"),
-    grantStore: new MemoryZenXCapabilityGrantStore(),
+    catalogStore: new MemoryZenXPluginCatalogStore(),
     computerBackend: new WinAppCliComputerBackend({
       platform: "win32",
       runner,
@@ -317,14 +316,13 @@ test("ZenX startup does not expose an incompatible WinApp provider", async () =>
   });
   try {
     await service.initialize();
-    const snapshot = service.snapshot();
-    assert.equal(
-      snapshot.capabilities.some(
-        (capability) => capability.manifest.id === "computer",
-      ),
-      false,
+    const snapshot = service.diagnostics();
+    assert.match(
+      snapshot.providerDiagnostics
+        .map((diagnostic) => diagnostic.reason ?? "")
+        .join("\n"),
+      /0\.3\.0.*0\.3\.1/u,
     );
-    assert.match(snapshot.discoveryErrors.join("\n"), /0\.3\.0.*0\.3\.1/u);
     assert.equal(
       service
         .hostSnapshot()

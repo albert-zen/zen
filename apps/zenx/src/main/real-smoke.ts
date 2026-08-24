@@ -20,10 +20,27 @@ import { OpenAiSubscriptionAuthProfile } from "../../../../apps/cli/src/subscrip
 import { AppServerManager } from "./app-server-manager.js";
 import type { BrowserInspection } from "./capabilities/browser-provider.js";
 import {
+  ZENX_ROOMS_CAPABILITY_ID,
+  ZenXTriggersCapabilityPackage,
+  type ZenXAutomationControlPort,
+} from "./capabilities/automation-control-package.js";
+import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
+import {
   MutableAppServerRequestPort,
   ZenXSelfControlCapabilityPackage,
 } from "./capabilities/self-control-package.js";
+import { createBundledAutomationPluginService } from "./automation-plugin-service.js";
 import { ZenXCapabilityService } from "./capability-service.js";
+import {
+  createDelegatingFirstPartyProfileLoader,
+  FIRST_PARTY_PLUGIN_PACKAGES,
+  firstPartyProviderTarball,
+} from "./first-party-profile-loader.js";
+import {
+  createZenXRoomsProfileLoader,
+  ZENX_ROOMS_PACKAGE_NAME,
+  ZENX_ROOMS_TARBALL,
+} from "./rooms-profile-loader.js";
 import { zenXProviderTransport } from "./system-proxy.js";
 import type { ServerNotificationParams } from "../protocol-client/index.js";
 import { ZenXTriggerService } from "./trigger-service.js";
@@ -159,12 +176,39 @@ void app.whenReady().then(async () => {
     }
 
     const port = new MutableAppServerRequestPort();
-    capabilities = new ZenXCapabilityService({ userDataDirectory });
-    await capabilities.initialize();
-    capabilities.register(
-      new ZenXSelfControlCapabilityPackage({ appServer: port }),
-    );
-    await capabilities.grant("zenx-self-control");
+    const selfControlPackage = new ZenXSelfControlCapabilityPackage({
+      appServer: port,
+    });
+    let automationService: ZenXAutomationControlPort | undefined;
+    let triggersPackage: ZenXTriggersCapabilityPackage | undefined;
+    const resourcesDirectory = process.resourcesPath;
+    capabilities = new ZenXCapabilityService({
+      userDataDirectory,
+      bundledProvidersOnly: true,
+      resourcesDirectory,
+      bundledManifestSha256: PACKAGED_PROVIDER_MANIFEST_SHA256,
+      trustedProfileLoaders: {
+        [ZENX_ROOMS_CAPABILITY_ID]: createZenXRoomsProfileLoader(() => {
+          if (automationService === undefined)
+            throw new Error("Rooms automation service is not attached");
+          return automationService;
+        }),
+        browser: createDelegatingFirstPartyProfileLoader(() =>
+          capabilities!.browserProfilePackage(),
+        ),
+        computer: createDelegatingFirstPartyProfileLoader(() =>
+          capabilities!.computerProfilePackage(),
+        ),
+        "zenx-self-control": createDelegatingFirstPartyProfileLoader(
+          () => selfControlPackage,
+        ),
+        "zenx-triggers": createDelegatingFirstPartyProfileLoader(() => {
+          if (triggersPackage === undefined)
+            throw new Error("Triggers automation service is not attached");
+          return triggersPackage;
+        }),
+      },
+    });
 
     manager = new AppServerManager({
       entryPath: path.join(__dirname, "app-server-host.js"),
@@ -175,6 +219,50 @@ void app.whenReady().then(async () => {
       startupTimeoutMs: 20_000,
     });
     await port.attach(manager, workspace);
+    automationService = await createBundledAutomationPluginService({
+      userDataDirectory,
+      appServer: manager,
+    });
+    triggersPackage = new ZenXTriggersCapabilityPackage(automationService);
+    await capabilities.initialize();
+    await capabilities.syncProfileManagedProviderVariants();
+    await capabilities.installBundledPluginPackage(
+      path.join(resourcesDirectory, "plugins", ZENX_ROOMS_TARBALL),
+      {
+        pluginId: ZENX_ROOMS_CAPABILITY_ID,
+        packageName: ZENX_ROOMS_PACKAGE_NAME,
+      },
+    );
+    for (const definition of [
+      FIRST_PARTY_PLUGIN_PACKAGES.browser,
+      FIRST_PARTY_PLUGIN_PACKAGES.computer,
+      FIRST_PARTY_PLUGIN_PACKAGES.selfControl,
+      FIRST_PARTY_PLUGIN_PACKAGES.triggers,
+    ]) {
+      let tarball = definition.tarball;
+      if (definition.pluginId === "browser") {
+        tarball = firstPartyProviderTarball(
+          "browser",
+          capabilities.browserProfilePackage().manifest.provider.id,
+        );
+      } else if (definition.pluginId === "computer") {
+        try {
+          tarball = firstPartyProviderTarball(
+            "computer",
+            capabilities.computerProfilePackage().manifest.provider.id,
+          );
+        } catch {
+          continue;
+        }
+      }
+      await capabilities.installBundledPluginPackage(
+        path.join(resourcesDirectory, "plugins", tarball),
+        {
+          pluginId: definition.pluginId,
+          packageName: definition.packageName,
+        },
+      );
+    }
 
     await check("hosted-app-server", async () => {
       await manager!.start();
@@ -285,7 +373,7 @@ void app.whenReady().then(async () => {
         maxItemsPerTurn: 20,
       });
       assert.match(JSON.stringify(read), /zenx-real-smoke-self-control-send/u);
-      return "projects/list and threads/list/create/send/status/read completed through the granted ZenX self-control package";
+      return "projects/list and threads/list/create/send/status/read completed through the profile-managed ZenX self-control package";
     });
 
     triggers = new ZenXTriggerService(
@@ -371,7 +459,6 @@ void app.whenReady().then(async () => {
       return "A completed source Turn woke a watched Thread, and an explicit Room mention produced a linked Agent Room message";
     });
 
-    await capabilities.grant("browser");
     await check("background-isolated-browser", async () => {
       const { server, port: browserPort } = await startSmokeWebServer();
       webServer = server;
@@ -436,7 +523,6 @@ void app.whenReady().then(async () => {
         "Skipped because ZENX_REAL_SMOKE_FOREGROUND=0",
       );
     } else {
-      await capabilities.grant("computer");
       await check("macos-foreground-computer", async () => {
         let fixture: ForegroundFixture;
         try {
@@ -589,15 +675,11 @@ async function invokeCapability(
     cwd: path.join(rootDirectory, "workspace"),
     signal,
   });
-  const envelope = JSON.parse(result.output) as { result?: unknown };
-  if (
-    typeof envelope.result !== "object" ||
-    envelope.result === null ||
-    Array.isArray(envelope.result)
-  ) {
+  const value = JSON.parse(result.output) as unknown;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`${name} returned no structured object result`);
   }
-  return envelope.result as Record<string, unknown>;
+  return value as Record<string, unknown>;
 }
 
 interface ForegroundFixture {

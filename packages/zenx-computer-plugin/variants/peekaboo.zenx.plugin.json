@@ -356,15 +356,6 @@
       }
     }
   ],
-  "resources": [
-    {
-      "id": "background-safe-computer-use",
-      "kind": "skill",
-      "title": "Background-safe computer use",
-      "description": "Instructions for app-targeted accessibility actions without foreground takeover.",
-      "content": "Prefer structured browser tools for web pages. For native apps, identify a pid or bundleId and optionally an exact window title, inspect that target, then act only with the observationId and opaque targetId from the latest inspect. Re-inspect after every action. Supplied text follows the ordinary set-value path; host/model policy owns credential decisions. Try background-safe semantic press/value/capture first. Those tools must never fall back to pointer motion, foreground keystrokes, app activation, or workspace changes. If accessibility semantics are insufficient and foreground takeover is acceptable, choose an explicitly named computer_foreground_* tool, warn that it affects the user's live desktop, and keep the operation cancellable; otherwise report unsupported."
-    }
-  ],
   "schemaVersion": 2,
   "name": "Computer",
   "compatibility": {

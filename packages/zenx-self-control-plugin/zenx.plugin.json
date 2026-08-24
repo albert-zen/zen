@@ -256,7 +256,6 @@
       "maxOutputBytes": 65536
     }
   ],
-  "resources": [],
   "schemaVersion": 2,
   "name": "ZenX self-control",
   "compatibility": {

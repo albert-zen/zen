@@ -252,22 +252,6 @@
       ]
     }
   ],
-  "resources": [
-    {
-      "id": "safe-browser-use",
-      "kind": "skill",
-      "title": "Safe browser use",
-      "description": "Instructions for targeted, inspect-before-act browser automation.",
-      "content": "This provider is attached to a user-opened browser and may use authenticated page state in place. List tabs, inspect the exact tab, and act only with the latest opaque observation and target IDs. Text is dispatched as an ordinary tool argument regardless of field metadata. Never request or return browser session internals such as cookies, storage state, or auth headers. Closing a tab/session detaches ZenX state only and must not close or clear the user’s browser/profile."
-    },
-    {
-      "id": "browser-research",
-      "kind": "prompt",
-      "title": "Browser research prompt",
-      "description": "A reusable prompt for evidence-backed browser research.",
-      "content": "Research the requested topic in the dedicated ZenX browser session. Keep a list of the exact page URLs inspected, distinguish page evidence from inference, and summarize only visible content returned by browser_inspect."
-    }
-  ],
   "schemaVersion": 2,
   "name": "Browser",
   "compatibility": {

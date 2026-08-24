@@ -21,9 +21,7 @@ import type {
   ZenXSettingsUpdate,
 } from "../../main/host-profile.js";
 import type {
-  ZenXCapabilitySnapshot,
   ZenXPluginSnapshot,
-  ZenXPluginPackageSelectionResult,
   ZenXPluginTarballSelectionResult,
   ZenXPluginMutationResult,
   ZenXPluginPackageSource,
@@ -149,20 +147,6 @@ declare global {
         retry(threadId: string): Promise<ThreadTitleProjection>;
         onChange(listener: (snapshot: ThreadTitleSnapshot) => void): () => void;
       };
-      capabilities: {
-        get(): Promise<ZenXCapabilitySnapshot>;
-        grant(
-          capabilityId: string,
-          permissionIds?: string[],
-        ): Promise<ZenXCapabilitySnapshot>;
-        revoke(
-          capabilityId: string,
-          permissionIds?: string[],
-        ): Promise<ZenXCapabilitySnapshot>;
-        onChange(
-          listener: (snapshot: ZenXCapabilitySnapshot) => void,
-        ): () => void;
-      };
       marketplace: {
         get(): Promise<MarketplaceCatalogSnapshot>;
       };
@@ -172,9 +156,6 @@ declare global {
           pluginId: string,
           enabled: boolean,
         ): Promise<ZenXPluginMutationResult>;
-        selectPackage(
-          expectedPluginId?: string,
-        ): Promise<ZenXPluginPackageSelectionResult>;
         selectTarball(): Promise<ZenXPluginTarballSelectionResult>;
         installSource(
           source: ZenXPluginPackageSource,
