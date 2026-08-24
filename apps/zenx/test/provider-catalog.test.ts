@@ -13,6 +13,7 @@ import {
   probePeekabooCli,
   probePlaywrightCli,
   selectBrowserProvider,
+  selectBrowserProviderVariant,
   selectComputerProvider,
 } from "../src/main/capabilities/provider-catalog.js";
 import {
@@ -85,6 +86,26 @@ test("invalid browser modes are explicit instead of masquerading as isolated", a
   });
   assert.equal(selection.backend, undefined);
   assert.equal(selection.diagnostics[0]?.sessionMode, "invalid");
+});
+
+test("an exact committed Playwright variant never falls back to Electron", async () => {
+  let fallbackCloseCount = 0;
+  const selection = await selectBrowserProviderVariant("playwright-cli", {
+    userDataDirectory: "/tmp/zenx",
+    environment: { PATH: "", ZENX_BROWSER_MODE: "user-session" },
+    platform: "darwin",
+    electronBrowserFactory: () => ({
+      ...stubBrowserBackend(),
+      close: () => {
+        fallbackCloseCount += 1;
+      },
+    }),
+  });
+  assert.equal(selection.backend, undefined);
+  assert.equal(selection.manifest.provider.id, "playwright-cli");
+  assert.equal(selection.diagnostics[0]?.providerId, "playwright-cli");
+  assert.equal(selection.diagnostics[0]?.status, "unavailable");
+  assert.equal(fallbackCloseCount, 1);
 });
 
 test("packaged provider selection never falls back to an unpinned PATH asset", async () => {

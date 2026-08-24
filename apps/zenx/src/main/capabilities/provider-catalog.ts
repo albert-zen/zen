@@ -58,6 +58,8 @@ export interface ZenXCapabilityProviderCatalogOptions {
     endpoint: string,
     signal?: AbortSignal,
   ) => Promise<UserBrowserConnection>;
+  /** Host/test factory; production defaults to the ordinary Electron backend. */
+  electronBrowserFactory?: () => ZenXBrowserBackend;
   /** Set by the packaged app; dev/test keeps explicit PATH discovery. */
   bundledProvidersOnly?: boolean;
   resourcesDirectory?: string;
@@ -183,7 +185,7 @@ export async function selectBrowserProvider(
     bundled?.provider === undefined
   ) {
     return {
-      backend: new ElectronBrowserBackend(),
+      backend: electronBrowserBackend(options),
       manifest: browserCapabilityManifest,
       diagnostics: [
         unavailableDiagnostic(
@@ -208,7 +210,7 @@ export async function selectBrowserProvider(
   );
   if (executable === undefined) {
     return {
-      backend: new ElectronBrowserBackend(),
+      backend: electronBrowserBackend(options),
       manifest: browserCapabilityManifest,
       diagnostics: [
         {
@@ -318,7 +320,7 @@ export async function selectBrowserProvider(
     };
   } catch (error) {
     return {
-      backend: new ElectronBrowserBackend(),
+      backend: electronBrowserBackend(options),
       manifest: browserCapabilityManifest,
       diagnostics: [
         {
@@ -336,6 +338,55 @@ export async function selectBrowserProvider(
       ],
     };
   }
+}
+
+export async function selectBrowserProviderVariant(
+  providerId: string,
+  options: ZenXCapabilityProviderCatalogOptions,
+): Promise<ZenXOptionalCapabilityProviderSelection<ZenXBrowserBackend>> {
+  if (providerId === "electron-dedicated-browser") {
+    return {
+      backend: electronBrowserBackend(options),
+      manifest: browserCapabilityManifest,
+      diagnostics: [electronBrowserDiagnostic("selected")],
+    };
+  }
+  if (providerId !== "playwright-cli" && providerId !== "user-browser-cdp") {
+    throw new Error(`Unknown Browser provider variant: ${providerId}`);
+  }
+  const environment = {
+    ...(options.environment ?? process.env),
+    ZENX_BROWSER_MODE:
+      providerId === "user-browser-cdp" ? "user-session" : "isolated",
+  };
+  const selected = await selectBrowserProvider({ ...options, environment });
+  if (selected.manifest.provider.id === providerId) return selected;
+  await selected.backend?.close();
+  const diagnostic = selected.diagnostics.find(
+    (candidate) => candidate.providerId === providerId,
+  );
+  return {
+    manifest:
+      providerId === "user-browser-cdp"
+        ? userBrowserManifest()
+        : playwrightBrowserManifest(),
+    diagnostics: [
+      diagnostic ??
+        unavailableDiagnostic(
+          "browser",
+          providerId,
+          ["background_safe"],
+          [],
+          `Browser provider ${providerId} is unavailable`,
+        ),
+    ],
+  };
+}
+
+function electronBrowserBackend(
+  options: ZenXCapabilityProviderCatalogOptions,
+): ZenXBrowserBackend {
+  return options.electronBrowserFactory?.() ?? new ElectronBrowserBackend();
 }
 
 function userBrowserManifest(): ZenXCapabilityManifest {

@@ -25,6 +25,7 @@ import {
 import { ZenXCapabilityRegistry } from "./capabilities/registry.js";
 import {
   selectBrowserProvider,
+  selectBrowserProviderVariant,
   selectComputerProvider,
   type ZenXCapabilityProviderCatalogOptions,
 } from "./capabilities/provider-catalog.js";
@@ -85,11 +86,18 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     | "runner"
     | "winAppRunner"
     | "userBrowserConnector"
+    | "electronBrowserFactory"
   >;
   #browserProfilePackage: ZenXCapabilityPackage | undefined;
   #computerProfilePackage: ZenXCapabilityPackage | undefined;
   #stagedBrowserProfilePackage: ZenXCapabilityPackage | undefined;
   #stagedComputerProfilePackage: ZenXCapabilityPackage | undefined;
+  #pendingBrowserProfileSelection:
+    | {
+        capabilityPackage?: ZenXCapabilityPackage;
+        diagnostics: ZenXCapabilitySnapshot["providerDiagnostics"];
+      }
+    | undefined;
   #serviceMutationTail: Promise<void> = Promise.resolve();
   #browserRegistration: ZenXCapabilityDisposer | undefined;
   #computerRegistered = false;
@@ -118,6 +126,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       | "runner"
       | "winAppRunner"
       | "userBrowserConnector"
+      | "electronBrowserFactory"
     >;
   }) {
     this.#pluginToolEnvironment = new ToolEnvironment();
@@ -216,7 +225,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   async initialize(): Promise<void> {
     await this.#registry.initialize();
     if (this.#profileManagedProviders) {
-      await this.#selectBrowserProfileProvider();
+      await this.#initializeBrowserProfileProvider();
       await this.#selectComputerProfileProvider();
     }
     await this.#loadCommittedProfile();
@@ -365,8 +374,50 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     }
   }
 
-  async #selectBrowserProfileProvider(): Promise<void> {
-    const selection = await this.#resolveBrowserProfileProvider();
+  async #initializeBrowserProfileProvider(): Promise<void> {
+    const selected = await this.#resolveBrowserProfileProvider();
+    const descriptor = this.#registry.packageDescriptors().browser;
+    if (
+      descriptor?.source !== "bundled" ||
+      descriptor.profileSource?.mode !== "bundled"
+    ) {
+      this.#pendingBrowserProfileSelection = undefined;
+      this.#publishBrowserProfileSelection(selected);
+      return;
+    }
+    const committedProviderId = descriptor.manifest.provider.id;
+    if (
+      selected.capabilityPackage?.manifest.provider.id === committedProviderId
+    ) {
+      this.#pendingBrowserProfileSelection = undefined;
+      this.#publishBrowserProfileSelection(selected);
+      return;
+    }
+    const committed =
+      await this.#resolveBrowserProfileProviderVariant(committedProviderId);
+    this.#pendingBrowserProfileSelection =
+      this.#registry
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === "browser")?.lifecycle ===
+      "uninstalled"
+        ? undefined
+        : selected;
+    if (
+      this.#pendingBrowserProfileSelection === undefined &&
+      selected.capabilityPackage !== undefined
+    ) {
+      await this.#discardProviderCandidate(
+        "browser",
+        selected.capabilityPackage,
+      );
+    }
+    this.#publishBrowserProfileSelection(committed);
+  }
+
+  #publishBrowserProfileSelection(selection: {
+    capabilityPackage?: ZenXCapabilityPackage;
+    diagnostics: ZenXCapabilitySnapshot["providerDiagnostics"];
+  }): void {
     this.#browserProfilePackage = selection.capabilityPackage;
     this.#registry.replaceProviderDiagnostics("browser", selection.diagnostics);
     if (selection.capabilityPackage === undefined)
@@ -393,6 +444,29 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
             manifest: undefined,
             diagnostics: [],
           };
+    return {
+      capabilityPackage:
+        selection.backend === undefined
+          ? undefined
+          : new BrowserZenXCapabilityPackage(
+              selection.backend,
+              selection.manifest,
+            ),
+      diagnostics: selection.diagnostics,
+    };
+  }
+
+  async #resolveBrowserProfileProviderVariant(providerId: string): Promise<{
+    capabilityPackage?: ZenXCapabilityPackage;
+    diagnostics: ZenXCapabilitySnapshot["providerDiagnostics"];
+  }> {
+    const selection = await selectBrowserProviderVariant(providerId, {
+      ...this.#providerCatalogOptions,
+      userDataDirectory: this.#userDataDirectory,
+      bundledProvidersOnly: this.#bundledProvidersOnly,
+      resourcesDirectory: this.#resourcesDirectory,
+      bundledManifestSha256: this.#bundledManifestSha256,
+    });
     return {
       capabilityPackage:
         selection.backend === undefined
@@ -1056,6 +1130,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     await this.#registry.resetTransient();
     if (this.#profileManagedProviders) {
       if (this.#browserBackend === undefined) {
+        await this.#discardPendingBrowserProfileSelection();
         await this.#applySelectedProviderCandidate(
           "browser",
           await this.#resolveBrowserProfileProvider(),
@@ -1085,10 +1160,37 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   async syncProfileManagedProviderVariants(): Promise<void> {
     if (!this.#profileManagedProviders) return;
-    await this.#serializeServiceMutation(async () => {
-      await this.#syncProviderVariant("browser", this.#browserProfilePackage);
-      await this.#syncProviderVariant("computer", this.#computerProfilePackage);
-    });
+    const pendingBrowser = this.#pendingBrowserProfileSelection;
+    this.#pendingBrowserProfileSelection = undefined;
+    if (pendingBrowser !== undefined) {
+      await this.#applySelectedProviderCandidate("browser", pendingBrowser);
+    } else {
+      await this.#serializeServiceMutation(
+        async () =>
+          await this.#syncProviderVariant(
+            "browser",
+            this.#browserProfilePackage,
+          ),
+      );
+    }
+    await this.#serializeServiceMutation(
+      async () =>
+        await this.#syncProviderVariant(
+          "computer",
+          this.#computerProfilePackage,
+        ),
+    );
+  }
+
+  async #discardPendingBrowserProfileSelection(): Promise<void> {
+    const pending = this.#pendingBrowserProfileSelection;
+    this.#pendingBrowserProfileSelection = undefined;
+    if (pending?.capabilityPackage !== undefined) {
+      await this.#discardProviderCandidate(
+        "browser",
+        pending.capabilityPackage,
+      );
+    }
   }
 
   async #applySelectedProviderCandidate(
@@ -1248,6 +1350,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   async close(): Promise<void> {
+    await this.#discardPendingBrowserProfileSelection();
     await this.#unmountBrowser();
     await this.#registry.close();
     await this.#pluginRuntimeSupervisor.close();

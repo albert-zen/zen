@@ -312,6 +312,143 @@ test("provider variant admission and Catalog failures retain the old backend and
   }
 });
 
+test("restart keeps a committed Browser backend isolated from a different current selector", async (t) => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-browser-restart-variant-"),
+  );
+  const resources = path.join(root, "resources");
+  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  try {
+    for (const direction of [
+      {
+        name: "user-session-to-electron",
+        initialMode: "user-session",
+        selectedMode: "isolated",
+        initialTarball: "zenx-browser-plugin-user-session-1.0.0.tgz",
+      },
+      {
+        name: "electron-to-user-session",
+        initialMode: "isolated",
+        selectedMode: "user-session",
+        initialTarball: "zenx-browser-plugin-electron-1.0.0.tgz",
+      },
+    ] as const) {
+      for (const outcome of [
+        "success",
+        "runtime-admission-failure",
+        "catalog-failure",
+      ] as const) {
+        await t.test(`${direction.name}/${outcome}`, async () => {
+          const userData = path.join(root, direction.name, outcome);
+          const store = new FailOnceConfigurationStore(
+            new JsonZenXCapabilityGrantStore(
+              path.join(userData, "capability-grants.json"),
+            ),
+          );
+          const environment: NodeJS.ProcessEnv = {
+            PATH: "",
+            ZENX_BROWSER_MODE: direction.initialMode,
+            ZENX_USER_BROWSER_CDP_ENDPOINT: "http://127.0.0.1:9222",
+          };
+          const seeded = trackedBrowserBackend("seeded");
+          const first = selectorBrowserService({
+            userData,
+            resources,
+            store,
+            environment,
+            connectorBackend: seeded.backend,
+            electronBrowserFactory: () => seeded.backend,
+          });
+          try {
+            await first.initialize();
+            await first.installBundledPluginPackage(
+              path.join(resources, "plugins", direction.initialTarball),
+              { pluginId: "browser", packageName: "@zenx/browser-plugin" },
+            );
+          } finally {
+            await first.close();
+          }
+          assert.equal(seeded.closed(), 1);
+
+          environment.ZENX_BROWSER_MODE = direction.selectedMode;
+          const committed = trackedBrowserBackend("committed-restart");
+          const candidate = trackedBrowserBackend("selected-candidate");
+          const restarted = selectorBrowserService({
+            userData,
+            resources,
+            store,
+            environment,
+            connectorBackend:
+              direction.selectedMode === "user-session"
+                ? candidate.backend
+                : committed.backend,
+            electronBrowserFactory: () =>
+              direction.selectedMode === "isolated"
+                ? candidate.backend
+                : committed.backend,
+            failBrowserLoadAt:
+              outcome === "runtime-admission-failure" ? 2 : undefined,
+          });
+          try {
+            await restarted.initialize();
+            assert.equal(
+              (
+                (await call(restarted, "browser_list_tabs", {
+                  sessionId: "before-sync",
+                })) as [{ title: string }]
+              )[0].title,
+              "committed-restart",
+            );
+            assert.equal(committed.closed(), 0);
+            assert.equal(candidate.closed(), 0);
+            const generation = await committedGeneration(userData);
+            if (outcome !== "success") {
+              if (outcome === "catalog-failure") store.failNextSave();
+              await assert.rejects(
+                restarted.syncProfileManagedProviderVariants(),
+                outcome === "catalog-failure"
+                  ? /fixture Catalog save failure/u
+                  : /fixture Browser runtime admission failure/u,
+              );
+              assert.equal(await committedGeneration(userData), generation);
+              assert.equal(
+                (
+                  (await call(restarted, "browser_list_tabs", {
+                    sessionId: "after-failure",
+                  })) as [{ title: string }]
+                )[0].title,
+                "committed-restart",
+              );
+              assert.equal(committed.closed(), 0);
+              assert.equal(candidate.closed(), 1);
+            } else {
+              await restarted.syncProfileManagedProviderVariants();
+              assert.notEqual(await committedGeneration(userData), generation);
+              assert.equal(
+                (
+                  (await call(restarted, "browser_list_tabs", {
+                    sessionId: "after-sync",
+                  })) as [{ title: string }]
+                )[0].title,
+                "selected-candidate",
+              );
+              await new Promise((resolve) => setImmediate(resolve));
+              assert.equal(committed.closed(), 1);
+              assert.equal(candidate.closed(), 0);
+            }
+          } finally {
+            await restarted.close();
+          }
+          assert.equal(committed.closed(), 1);
+          assert.equal(candidate.closed(), 1);
+        });
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("remaining first-party packages adopt every legacy Catalog lifecycle through the canonical installer", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zenx-first-party-adopt-"));
   const resources = path.join(root, "resources");
@@ -540,6 +677,53 @@ function firstPartyService(
       ),
       "zenx-self-control": createDelegatingFirstPartyProfileLoader(() => self),
       "zenx-triggers": createDelegatingFirstPartyProfileLoader(() => triggers),
+    },
+  });
+  return service;
+}
+
+function selectorBrowserService(options: {
+  userData: string;
+  resources: string;
+  store: ZenXCapabilityConfigurationStore;
+  environment: NodeJS.ProcessEnv;
+  connectorBackend: ZenXBrowserBackend;
+  electronBrowserFactory?: () => ZenXBrowserBackend;
+  failBrowserLoadAt?: number;
+}): ZenXCapabilityService {
+  let service!: ZenXCapabilityService;
+  let browserLoadCount = 0;
+  const browserLoader = createDelegatingFirstPartyProfileLoader(() =>
+    service.browserProfilePackage(),
+  );
+  service = new ZenXCapabilityService({
+    userDataDirectory: options.userData,
+    resourcesDirectory: options.resources,
+    pnpmCliPath: pnpmCli,
+    grantStore: options.store,
+    localDirectory: path.join(options.userData, "no-local"),
+    computerBackend: computerBackend(),
+    profileManagedProviders: true,
+    providerCatalogOptions: {
+      environment: options.environment,
+      platform: "darwin",
+      userBrowserConnector: async () => ({
+        backend: options.connectorBackend,
+        product: "Fixture/1.0",
+      }),
+      electronBrowserFactory: options.electronBrowserFactory,
+    },
+    trustedProfileLoaders: {
+      browser: (module) => {
+        browserLoadCount += 1;
+        if (browserLoadCount === options.failBrowserLoadAt) {
+          throw new Error("fixture Browser runtime admission failure");
+        }
+        return browserLoader(module);
+      },
+      computer: createDelegatingFirstPartyProfileLoader(() =>
+        service.computerProfilePackage(),
+      ),
     },
   });
   return service;
