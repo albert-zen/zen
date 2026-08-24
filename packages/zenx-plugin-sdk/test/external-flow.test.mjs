@@ -52,7 +52,7 @@ test("an external temp project completes create, public SDK import, validate, an
     };
     const runtime = run(process.execPath, [path.join(target, "runtime.mjs")], {
       cwd: target,
-      input: `${JSON.stringify(invocation)}\n${JSON.stringify({ version: 1, type: "close" })}\n`,
+      input: `${JSON.stringify(invocation)}\n`,
     });
     const messages = runtime.stdout
       .trim()

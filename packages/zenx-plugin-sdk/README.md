@@ -4,7 +4,7 @@ Public ZenX Plugin Package v2 contract for repository and external plugin develo
 
 - TypeScript types for the v2 manifest, process runtime ABI, Host SDK v1, and Generic UI SDK v1.
 - `zenx.plugin.schema.json` plus the matching runtime validator.
-- `runProcessPlugin` for a minimal JSONL process runtime.
+- `runProcessPlugin` for a minimal JSONL process runtime. Each tool receives its input plus an invocation context containing the Host call metadata and an `AbortSignal`; Host `cancel` and `close` abort active calls, and settled cancelled calls emit no result.
 - `createFixturePluginHost` for in-memory SDK tests. Its `startTurn` operation always rejects because the fixture does not own Agent, Thread, or Turn authority.
 - The `zenx-plugin create`, `validate`, and `pack` commands.
 
