@@ -305,10 +305,27 @@ export interface ZenXPluginSummary {
   description?: string;
   compatibility?: string;
   source: "bundled" | "local";
+  profileSource?: ZenXPluginProfileSource;
   lifecycle: "installed" | "enabled" | "uninstalled";
   enabled: boolean;
   available: boolean;
   contributionCount: number;
+}
+
+export type ZenXPluginProfileSourceMode =
+  "bundled" | "npm" | "git" | "tarball" | "local-copy" | "dev-link";
+
+/** User-selected source passed unchanged back through bundled pnpm on reinstall. */
+export interface ZenXPluginPackageSource {
+  mode: ZenXPluginProfileSourceMode;
+  packageSpec: string;
+}
+
+/** Exact source and resolution identity committed with a profile generation. */
+export interface ZenXPluginProfileSource extends ZenXPluginPackageSource {
+  resolvedSpec: string;
+  packageName: string;
+  packageVersion: string;
 }
 
 export interface ZenXPluginSnapshot {
@@ -330,6 +347,11 @@ export type ZenXPluginPackageSelectionResult =
 
 export type ZenXPostCommitCapabilityRefresh =
   { status: "refreshed" } | { status: "failed"; message: string };
+
+export interface ZenXPluginMutationResult {
+  snapshot: ZenXPluginSnapshot;
+  capabilityRefresh: ZenXPostCommitCapabilityRefresh;
+}
 
 export type ZenXPluginTarballSelectionResult =
   | { canceled: true }
@@ -389,6 +411,7 @@ export interface ZenXPluginPackageDescriptor {
   source: "bundled" | "local";
   manifestPath?: string;
   profilePackageName?: string;
+  profileSource?: ZenXPluginProfileSource;
 }
 
 export interface RegisteredZenXCapability {

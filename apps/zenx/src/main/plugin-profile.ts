@@ -11,6 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { validatePluginPackage } from "@zenx/plugin-sdk";
 
@@ -19,6 +20,8 @@ import type { ZenXPluginHostSdkV1 } from "./plugin-host-sdk.js";
 import { ProcessPluginRuntime } from "./plugin-runtime.js";
 import type {
   ZenXCapabilityPackage,
+  ZenXPluginPackageSource,
+  ZenXPluginProfileSource,
   ZenXPluginManifestV2,
 } from "./capabilities/types.js";
 
@@ -36,8 +39,28 @@ export interface StagedProfilePlugin {
   generation: string;
   generationDirectory: string;
   packageName: string;
+  source: ZenXPluginProfileSource;
   capabilityPackage: ZenXCapabilityPackage;
 }
+
+export interface StagedProfileRemoval {
+  generation: string;
+  generationDirectory: string;
+}
+
+export interface ZenXTrustedProfilePluginRuntime {
+  readonly storage?: ZenXCapabilityPackage["storage"];
+  start?(sdk: ZenXPluginHostSdkV1): Promise<void> | void;
+  invoke(
+    toolName: string,
+    invocation: Omit<ToolInvocation, "name">,
+  ): Promise<unknown>;
+  close?(): Promise<void> | void;
+}
+
+export type ZenXTrustedProfilePluginLoader = (
+  module: Readonly<Record<string, unknown>>,
+) => ZenXTrustedProfilePluginRuntime;
 
 export function pluginProfilePaths(
   userDataDirectory: string,
@@ -91,6 +114,24 @@ export async function stagePluginTarball(options: {
   allowBuilds?: Readonly<Record<string, boolean>>;
   removeGeneration?: (directory: string) => Promise<void>;
 }): Promise<StagedProfilePlugin> {
+  return await stagePluginPackage({
+    ...options,
+    source: { mode: "tarball", packageSpec: options.tarballPath },
+  });
+}
+
+/** The single bundled-pnpm generation transaction for every package source. */
+export async function stagePluginPackage(options: {
+  userDataDirectory: string;
+  source: ZenXPluginPackageSource;
+  pnpmCliPath: string;
+  pnpmEnvironment?: NodeJS.ProcessEnv;
+  currentGeneration?: string;
+  expectedPackageName?: string;
+  allowBuilds?: Readonly<Record<string, boolean>>;
+  removeGeneration?: (directory: string) => Promise<void>;
+  trustedLoaders?: Readonly<Record<string, ZenXTrustedProfilePluginLoader>>;
+}): Promise<StagedProfilePlugin> {
   const paths = pluginProfilePaths(options.userDataDirectory);
   const generation = randomUUID();
   const generationDirectory = path.join(paths.generations, generation);
@@ -114,37 +155,120 @@ export async function stagePluginTarball(options: {
       );
     }
 
-    const before = Object.keys(
-      (await readProfilePackageJson(generationDirectory)).dependencies,
+    const before = (await readProfilePackageJson(generationDirectory))
+      .dependencies;
+    const installSpec = await prepareInstallSpec(
+      options.source,
+      generationDirectory,
     );
+    const pnpmArguments =
+      options.source.mode === "npm" &&
+      options.expectedPackageName !== undefined &&
+      (options.source.packageSpec === options.expectedPackageName ||
+        options.source.packageSpec === `${options.expectedPackageName}@latest`)
+        ? ["update", "--latest", options.expectedPackageName]
+        : ["add", "--save-exact", installSpec];
     await runBundledPnpm({
       cliPath: options.pnpmCliPath,
       cwd: generationDirectory,
       environment: options.pnpmEnvironment,
       arguments: [
-        "add",
-        "--save-exact",
+        ...pnpmArguments,
         "--ignore-workspace",
         "--store-dir",
         paths.store,
-        await realpath(path.resolve(options.tarballPath)),
       ],
     });
     const profile = await readProfilePackageJson(generationDirectory);
-    const added = Object.keys(profile.dependencies).filter(
-      (packageName) => !before.includes(packageName),
+    const changed = Object.keys(profile.dependencies).filter(
+      (packageName) =>
+        before[packageName] !== profile.dependencies[packageName],
     );
-    if (added.length !== 1) {
+    const packageName = options.expectedPackageName ?? changed[0];
+    if (
+      packageName === undefined ||
+      profile.dependencies[packageName] === undefined ||
+      (options.expectedPackageName === undefined && changed.length !== 1)
+    ) {
       throw new Error(
-        "Tarball install must add exactly one profile dependency",
+        "Plugin package mutation must resolve exactly one direct profile dependency",
       );
     }
-    const packageName = added[0]!;
     const capabilityPackage = await loadProfilePluginPackage(
       generationDirectory,
       packageName,
+      {
+        allowExternalLink: options.source.mode === "dev-link",
+        sourceMode: options.source.mode,
+        trustedLoaders: options.trustedLoaders,
+      },
     );
-    return { generation, generationDirectory, packageName, capabilityPackage };
+    const packageVersion = capabilityPackage.manifest.version;
+    return {
+      generation,
+      generationDirectory,
+      packageName,
+      source: {
+        ...options.source,
+        packageSpec: canonicalSourceSpec(options.source),
+        resolvedSpec: profile.dependencies[packageName]!,
+        packageName,
+        packageVersion,
+      },
+      capabilityPackage,
+    };
+  } catch (error) {
+    await discardStagedProfileGeneration(
+      generationDirectory,
+      options.removeGeneration,
+    );
+    throw error;
+  }
+}
+
+export async function stagePluginRemoval(options: {
+  userDataDirectory: string;
+  packageName: string;
+  pnpmCliPath: string;
+  pnpmEnvironment?: NodeJS.ProcessEnv;
+  currentGeneration: string;
+  removeGeneration?: (directory: string) => Promise<void>;
+}): Promise<StagedProfileRemoval> {
+  const paths = pluginProfilePaths(options.userDataDirectory);
+  const generation = randomUUID();
+  const generationDirectory = path.join(paths.generations, generation);
+  await mkdir(paths.generations, { recursive: true, mode: 0o700 });
+  try {
+    await cp(
+      generationPath(paths, options.currentGeneration),
+      generationDirectory,
+      { recursive: true },
+    );
+    const before = await readProfilePackageJson(generationDirectory);
+    if (before.dependencies[options.packageName] === undefined) {
+      throw new Error(
+        `Profile dependency ${options.packageName} is not installed`,
+      );
+    }
+    await runBundledPnpm({
+      cliPath: options.pnpmCliPath,
+      cwd: generationDirectory,
+      environment: options.pnpmEnvironment,
+      arguments: [
+        "remove",
+        "--ignore-workspace",
+        "--store-dir",
+        paths.store,
+        options.packageName,
+      ],
+    });
+    const after = await readProfilePackageJson(generationDirectory);
+    if (after.dependencies[options.packageName] !== undefined) {
+      throw new Error(
+        `Profile dependency ${options.packageName} was not removed`,
+      );
+    }
+    return { generation, generationDirectory };
   } catch (error) {
     await discardStagedProfileGeneration(
       generationDirectory,
@@ -157,13 +281,25 @@ export async function stagePluginTarball(options: {
 export async function loadProfilePluginPackage(
   generationDirectory: string,
   packageName: string,
+  options: {
+    allowExternalLink?: boolean;
+    sourceMode?: ZenXPluginPackageSource["mode"];
+    trustedLoaders?: Readonly<Record<string, ZenXTrustedProfilePluginLoader>>;
+  } = {},
 ): Promise<ZenXCapabilityPackage> {
   const generationRoot = await realpath(generationDirectory);
-  const packageRoot = await containedRealpath(
+  const packagePath = path.join(
     generationRoot,
-    path.join(generationRoot, "node_modules", ...packageName.split("/")),
-    `Profile dependency ${packageName}`,
+    "node_modules",
+    ...packageName.split("/"),
   );
+  const packageRoot = options.allowExternalLink
+    ? await realpath(packagePath)
+    : await containedRealpath(
+        generationRoot,
+        packagePath,
+        `Profile dependency ${packageName}`,
+      );
   const validated = await validatePluginPackage(packageRoot);
   if (validated.packageName !== packageName) {
     throw new Error(
@@ -173,9 +309,12 @@ export async function loadProfilePluginPackage(
   const manifest = structuredClone(
     validated.manifest,
   ) as unknown as ZenXPluginManifestV2;
-  if (manifest.runtime?.type !== "process") {
+  if (
+    manifest.runtime?.type !== "process" &&
+    manifest.runtime?.type !== "bundled"
+  ) {
     throw new Error(
-      `Tarball plugin ${packageName} runtime must be process-backed`,
+      `Profile plugin ${packageName} runtime must be process-backed or an admitted bundled runtime`,
     );
   }
   const runtimeEntry = await containedRealpath(
@@ -184,9 +323,17 @@ export async function loadProfilePluginPackage(
     `Plugin runtime for ${packageName}`,
   );
   const bundles = (manifest.ui?.bundles ?? []).map((bundle) => {
-    if (bundle.kind !== "isolated") {
+    if (
+      bundle.kind !== "isolated" &&
+      !(
+        bundle.kind === "trusted" &&
+        manifest.runtime.type === "bundled" &&
+        options.sourceMode === "bundled" &&
+        options.trustedLoaders?.[manifest.id] !== undefined
+      )
+    ) {
       throw new Error(
-        `Tarball plugin ${packageName} UI must use the isolated host`,
+        `Profile plugin ${packageName} UI must use the isolated host`,
       );
     }
     if (Buffer.byteLength(bundle.entry, "utf8") > MAX_UI_BUNDLE_BYTES) {
@@ -195,7 +342,67 @@ export async function loadProfilePluginPackage(
     return bundle;
   });
   if (manifest.ui !== undefined) manifest.ui = { ...manifest.ui, bundles };
-  return new ProfileProcessPluginPackage(manifest, packageRoot, runtimeEntry);
+  if (manifest.runtime.type === "process") {
+    return new ProfileProcessPluginPackage(manifest, packageRoot, runtimeEntry);
+  }
+  const trustedLoader = options.trustedLoaders?.[manifest.id];
+  if (options.sourceMode !== "bundled" || trustedLoader === undefined) {
+    throw new Error(
+      `Profile plugin ${packageName} bundled runtime is not admitted by App Resources`,
+    );
+  }
+  const module = (await import(
+    `${pathToFileURL(runtimeEntry).href}?generation=${encodeURIComponent(path.basename(generationDirectory))}`
+  )) as Readonly<Record<string, unknown>>;
+  return new ProfileTrustedPluginPackage(manifest, trustedLoader(module));
+}
+
+async function prepareInstallSpec(
+  source: ZenXPluginPackageSource,
+  generationDirectory: string,
+): Promise<string> {
+  const packageSpec = source.packageSpec.trim();
+  if (packageSpec.length === 0) throw new Error("Plugin package spec is empty");
+  if (source.mode === "git") {
+    if (!/#(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(packageSpec)) {
+      throw new Error("Git plugin package spec must pin an exact commit");
+    }
+    return packageSpec;
+  }
+  if (source.mode === "tarball" || source.mode === "bundled") {
+    return await realpath(path.resolve(packageSpec));
+  }
+  if (source.mode === "local-copy" || source.mode === "dev-link") {
+    const requested = packageSpec.startsWith("link:")
+      ? packageSpec.slice("link:".length)
+      : packageSpec.startsWith("file:")
+        ? packageSpec.slice("file:".length)
+        : packageSpec;
+    const sourceDirectory = await realpath(path.resolve(requested));
+    if (source.mode === "dev-link") return `link:${sourceDirectory}`;
+    const snapshot = path.join(
+      generationDirectory,
+      ".zenx-sources",
+      randomUUID(),
+    );
+    await mkdir(path.dirname(snapshot), { recursive: true, mode: 0o700 });
+    await cp(sourceDirectory, snapshot, { recursive: true });
+    return `file:${snapshot}`;
+  }
+  if (
+    packageSpec.startsWith("file:") ||
+    packageSpec.startsWith("link:") ||
+    packageSpec.startsWith("git")
+  ) {
+    throw new Error(`npm plugin package spec is invalid: ${packageSpec}`);
+  }
+  return packageSpec;
+}
+
+function canonicalSourceSpec(source: ZenXPluginPackageSource): string {
+  const packageSpec = source.packageSpec.trim();
+  if (source.mode !== "dev-link") return packageSpec;
+  return packageSpec.startsWith("link:") ? packageSpec : `link:${packageSpec}`;
 }
 
 export async function cleanupUnreferencedProfileGenerations(options: {
@@ -307,6 +514,38 @@ class ProfileProcessPluginPackage implements ZenXCapabilityPackage {
   }
 }
 
+class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
+  readonly manifest: ZenXPluginManifestV2;
+  readonly storage?: ZenXCapabilityPackage["storage"];
+  readonly #runtime: ZenXTrustedProfilePluginRuntime;
+
+  constructor(
+    manifest: ZenXPluginManifestV2,
+    runtime: ZenXTrustedProfilePluginRuntime,
+  ) {
+    this.manifest = manifest;
+    this.#runtime = runtime;
+    if (runtime.storage !== undefined) this.storage = runtime.storage;
+  }
+
+  async start(hostSdk: ZenXPluginHostSdkV1): Promise<void> {
+    await this.#runtime.start?.(hostSdk);
+  }
+
+  async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+    return await this.#runtime.invoke(toolName, {
+      callId: invocation.callId,
+      arguments: invocation.arguments,
+      cwd: invocation.cwd,
+      signal: invocation.signal,
+    });
+  }
+
+  async close(): Promise<void> {
+    await this.#runtime.close?.();
+  }
+}
+
 async function writeProfilePackageJson(
   directory: string,
   dependencies: Readonly<Record<string, string>>,
@@ -337,12 +576,16 @@ async function readProfilePackageJson(directory: string): Promise<{
   const parsed = JSON.parse(
     await readFile(path.join(directory, "package.json"), "utf8"),
   ) as unknown;
-  if (!isRecord(parsed) || !isStringRecord(parsed.dependencies)) {
+  if (
+    !isRecord(parsed) ||
+    (parsed.dependencies !== undefined && !isStringRecord(parsed.dependencies))
+  ) {
     throw new Error("ZenX plugin profile package.json is invalid");
   }
   const pnpm = isRecord(parsed.pnpm) ? parsed.pnpm : undefined;
   return {
-    dependencies: { ...parsed.dependencies },
+    dependencies:
+      parsed.dependencies === undefined ? {} : { ...parsed.dependencies },
     ...(pnpm !== undefined && isBooleanRecord(pnpm.allowBuilds)
       ? { pnpm: { allowBuilds: { ...pnpm.allowBuilds } } }
       : {}),

@@ -68,6 +68,7 @@ import {
 } from "./external-zas-smoke.js";
 import { secondInstanceDisposition } from "./desktop-lifecycle.js";
 import { validatePluginHostSdkRequest } from "./plugin-host-sdk.js";
+import type { ZenXPluginPackageSource } from "./capabilities/types.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -877,9 +878,9 @@ function installCapabilityIpc(
       if (typeof pluginId !== "string" || typeof enabled !== "boolean") {
         throw new Error("Invalid plugin enablement request");
       }
-      await capabilities.setEnabled(pluginId, enabled);
-      await manager.restartCapabilities();
-      return capabilities.pluginSnapshot();
+      const snapshot = await capabilities.setEnabled(pluginId, enabled);
+      const capabilityRefresh = await manager.refreshCapabilitiesAfterCommit();
+      return { snapshot, capabilityRefresh };
     },
   );
   ipcMain.handle(
@@ -934,13 +935,35 @@ function installCapabilityIpc(
     return { canceled: false, snapshot, capabilityRefresh } as const;
   });
   ipcMain.handle(
+    ipcChannels.pluginsInstallSource,
+    async (_event, value: unknown) => {
+      const source = pluginPackageSource(value);
+      const snapshot = await capabilities.installPluginPackage(source);
+      const capabilityRefresh = await manager.refreshCapabilitiesAfterCommit();
+      return { snapshot, capabilityRefresh };
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.pluginsUpdate,
+    async (_event, pluginId: unknown, value: unknown) => {
+      if (typeof pluginId !== "string" || pluginId.length === 0) {
+        throw new Error("Invalid plugin update request");
+      }
+      const source =
+        value === undefined ? undefined : pluginPackageSource(value);
+      const snapshot = await capabilities.updatePluginPackage(pluginId, source);
+      const capabilityRefresh = await manager.refreshCapabilitiesAfterCommit();
+      return { snapshot, capabilityRefresh };
+    },
+  );
+  ipcMain.handle(
     ipcChannels.pluginsUninstall,
     async (_event, pluginId: unknown) => {
       if (typeof pluginId !== "string" || pluginId.length === 0)
         throw new Error("Invalid plugin uninstall request");
       const snapshot = await capabilities.uninstall(pluginId);
-      await manager.restartCapabilities();
-      return snapshot;
+      const capabilityRefresh = await manager.refreshCapabilitiesAfterCommit();
+      return { snapshot, capabilityRefresh };
     },
   );
   ipcMain.handle(
@@ -949,8 +972,8 @@ function installCapabilityIpc(
       if (typeof pluginId !== "string" || pluginId.length === 0)
         throw new Error("Invalid plugin reinstall request");
       const snapshot = await capabilities.reinstall(pluginId);
-      await manager.restartCapabilities();
-      return snapshot;
+      const capabilityRefresh = await manager.refreshCapabilitiesAfterCommit();
+      return { snapshot, capabilityRefresh };
     },
   );
   ipcMain.handle(
@@ -1005,6 +1028,27 @@ function installCapabilityIpc(
       );
     }
   });
+}
+
+function pluginPackageSource(value: unknown): ZenXPluginPackageSource {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !("mode" in value) ||
+    !("packageSpec" in value) ||
+    !["npm", "git", "tarball", "local-copy", "dev-link"].includes(
+      String(value.mode),
+    ) ||
+    typeof value.packageSpec !== "string" ||
+    value.packageSpec.trim().length === 0
+  ) {
+    throw new Error("Invalid plugin package source");
+  }
+  return {
+    mode: value.mode as ZenXPluginPackageSource["mode"],
+    packageSpec: value.packageSpec,
+  };
 }
 
 function capabilityPermissionRequest(

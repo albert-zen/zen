@@ -119,6 +119,113 @@ test("Plugin Settings exposes the typed tarball installer entry", async () => {
   await act(async () => root.unmount());
 });
 
+test("Plugin Settings exposes typed package sources and reports post-commit update refresh failures", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    value: dom.window.navigator,
+    configurable: true,
+  });
+  const installed = pluginSnapshot("enabled");
+  installed.plugins[0]!.profileSource = {
+    mode: "npm",
+    packageSpec: "@zenx-test/fixture",
+    resolvedSpec: "1.0.0",
+    packageName: "@zenx-test/fixture",
+    packageVersion: "1.0.0",
+  };
+  const sources: unknown[] = [];
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      capabilities: {
+        get: async () => emptyCapabilities,
+        grant: async () => emptyCapabilities,
+        revoke: async () => emptyCapabilities,
+        onChange: () => () => {},
+      },
+      plugins: {
+        get: async () => installed,
+        onChange: () => () => {},
+        selectPackage: async () => ({ canceled: true }),
+        selectTarball: async () => ({ canceled: true }),
+        installSource: async (source: unknown) => {
+          sources.push(source);
+          return {
+            snapshot: installed,
+            capabilityRefresh: { status: "refreshed" },
+          };
+        },
+        update: async () => ({
+          snapshot: installed,
+          capabilityRefresh: {
+            status: "failed",
+            message: "refresh after update failed",
+          },
+        }),
+        setEnabled: async () => ({
+          snapshot: installed,
+          capabilityRefresh: { status: "refreshed" },
+        }),
+        uninstall: async () => ({
+          snapshot: installed,
+          capabilityRefresh: { status: "refreshed" },
+        }),
+        reinstall: async () => ({
+          snapshot: installed,
+          capabilityRefresh: { status: "refreshed" },
+        }),
+        deleteData: async () => {},
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => {
+    root.render(React.createElement(CapabilitySettings));
+    await Promise.resolve();
+  });
+  const select = dom.window.document.querySelector("select")!;
+  const input = dom.window.document.querySelector("input")!;
+  const button = (label: string) =>
+    [...dom.window.document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === label,
+    ) as HTMLButtonElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      dom.window.HTMLSelectElement.prototype,
+      "value",
+    )!.set!.call(select, "git");
+    select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    Object.getOwnPropertyDescriptor(
+      dom.window.HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(
+      input,
+      "git+file:///fixture#1111111111111111111111111111111111111111",
+    );
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    input.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  });
+  assert.equal(
+    [...select.options].some((option) => option.value === "git"),
+    true,
+  );
+  assert.deepEqual(sources, []);
+  await act(async () => {
+    button("Update…").click();
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /updated successfully\. Agent capability refresh failed: refresh after update failed/u,
+  );
+  await act(async () => root.unmount());
+});
+
 test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate", async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
   Object.assign(globalThis, {

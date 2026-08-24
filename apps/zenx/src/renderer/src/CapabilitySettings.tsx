@@ -4,6 +4,8 @@ import type {
   ZenXCapabilitySnapshot,
   ZenXCapabilitySummary,
   ZenXPluginSnapshot,
+  ZenXPluginMutationResult,
+  ZenXPluginPackageSource,
   ZenXPluginSummary,
 } from "../../main/capabilities/types.js";
 import { Icon } from "./icons.js";
@@ -18,6 +20,9 @@ export function CapabilitySettings() {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sourceMode, setSourceMode] =
+    useState<ZenXPluginPackageSource["mode"]>("npm");
+  const [packageSpec, setPackageSpec] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -47,22 +52,48 @@ export function CapabilitySettings() {
 
   const run = async (
     key: string,
-    operation: () => Promise<ZenXPluginSnapshot | void>,
+    operation: () => Promise<
+      ZenXPluginSnapshot | ZenXPluginMutationResult | void
+    >,
     success: string,
   ) => {
     setBusy(key);
     setError(null);
     setNotice(null);
     try {
-      const next = await operation();
+      const result = await operation();
+      const next =
+        result !== undefined && "snapshot" in result ? result.snapshot : result;
       if (next !== undefined) setPlugins(next);
       setConfirmation(null);
-      setNotice(success);
+      setNotice(
+        result !== undefined &&
+          "capabilityRefresh" in result &&
+          result.capabilityRefresh.status === "failed"
+          ? `${success} Agent capability refresh failed: ${result.capabilityRefresh.message}`
+          : success,
+      );
     } catch (reason) {
       setError(describeError(reason));
     } finally {
       setBusy(null);
     }
+  };
+
+  const installSource = async () => {
+    if (packageSpec.trim().length === 0) {
+      setError("Enter a package spec or source path.");
+      return;
+    }
+    await run(
+      "install-source",
+      () =>
+        window.zenx.plugins.installSource({
+          mode: sourceMode,
+          packageSpec: packageSpec.trim(),
+        }),
+      "Plugin installed and enabled.",
+    );
   };
 
   const selectPackage = async (expectedPluginId?: string) => {
@@ -151,6 +182,42 @@ export function CapabilitySettings() {
             {busy === "install-tarball" ? "Installing…" : "Install tarball"}
           </button>
         </div>
+        <div className="plugin-source-install">
+          <label>
+            Package source
+            <select
+              value={sourceMode}
+              disabled={busy !== null}
+              onChange={(event) =>
+                setSourceMode(
+                  event.target.value as ZenXPluginPackageSource["mode"],
+                )
+              }
+            >
+              <option value="npm">npm registry</option>
+              <option value="git">Git (commit pinned)</option>
+              <option value="local-copy">Local directory copy</option>
+              <option value="dev-link">Development link</option>
+            </select>
+          </label>
+          <label>
+            Package spec or path
+            <input
+              value={packageSpec}
+              disabled={busy !== null}
+              placeholder={sourcePlaceholder(sourceMode)}
+              onChange={(event) => setPackageSpec(event.target.value)}
+            />
+          </label>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={busy !== null || packageSpec.trim().length === 0}
+            onClick={() => void installSource()}
+          >
+            {busy === "install-source" ? "Installing…" : "Install source"}
+          </button>
+        </div>
       </div>
 
       <div className="plugin-lifecycle-list" aria-label="Installed plugins">
@@ -182,7 +249,15 @@ export function CapabilitySettings() {
                     `${plugin.displayName} ${enabled ? "enabled" : "disabled"}.`,
                   )
                 }
-                onUpdate={() => selectPackage(plugin.id)}
+                onUpdate={() =>
+                  plugin.profileSource === undefined
+                    ? selectPackage(plugin.id)
+                    : run(
+                        `update:${plugin.id}`,
+                        () => window.zenx.plugins.update(plugin.id),
+                        `${plugin.displayName} updated successfully.`,
+                      )
+                }
                 onUninstall={() =>
                   run(
                     `uninstall:${plugin.id}`,
@@ -278,9 +353,11 @@ function PluginLifecycleCard({
           </div>
           <p>{plugin.description ?? "No package description provided."}</p>
           <small>
-            {plugin.source === "bundled"
-              ? "Bundled with ZenX"
-              : "Local package"}
+            {plugin.profileSource !== undefined
+              ? profileSourceLabel(plugin.profileSource.mode)
+              : plugin.source === "bundled"
+                ? "Bundled with ZenX"
+                : "Local package"}
             {` · v${plugin.version} · ZenX ${plugin.compatibility ?? "compatibility unknown"}`}
             {` · ${String(plugin.contributionCount)} product contributions`}
           </small>
@@ -393,6 +470,39 @@ function PluginLifecycleCard({
       ) : null}
     </article>
   );
+}
+
+function profileSourceLabel(mode: ZenXPluginPackageSource["mode"]): string {
+  switch (mode) {
+    case "bundled":
+      return "Bundled with ZenX";
+    case "npm":
+      return "npm registry";
+    case "git":
+      return "Commit-pinned Git";
+    case "tarball":
+      return "Tarball";
+    case "local-copy":
+      return "Local directory snapshot";
+    case "dev-link":
+      return "Development link";
+  }
+}
+
+function sourcePlaceholder(mode: ZenXPluginPackageSource["mode"]): string {
+  switch (mode) {
+    case "bundled":
+      return "App Resource package";
+    case "npm":
+      return "@scope/plugin@1.2.3";
+    case "git":
+      return "git+https://…#<commit>";
+    case "tarball":
+      return "/path/to/plugin.tgz";
+    case "local-copy":
+    case "dev-link":
+      return "/path/to/plugin";
+  }
 }
 
 function LegacyCapabilitySettings({

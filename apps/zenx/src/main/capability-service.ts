@@ -1,5 +1,12 @@
 import path from "node:path";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 
 import { ToolEnvironment, type ToolInvocation } from "../../../../src/tool.js";
 import {
@@ -35,6 +42,7 @@ import type {
   ZenXCapabilitySnapshot,
   ZenXCapabilityManifest,
   ZenXPluginSnapshot,
+  ZenXPluginPackageSource,
 } from "./capabilities/types.js";
 import type { PluginHostUiPort } from "./plugin-host-sdk.js";
 import { createZenXPluginHostSdk } from "./plugin-host-sdk.js";
@@ -44,7 +52,9 @@ import {
   loadProfilePluginPackage,
   pluginProfilePaths,
   resolveBundledPnpmCli,
-  stagePluginTarball,
+  stagePluginPackage,
+  stagePluginRemoval,
+  type ZenXTrustedProfilePluginLoader,
 } from "./plugin-profile.js";
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
@@ -62,7 +72,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #pnpmCliPath?: string;
   readonly #pnpmEnvironment?: NodeJS.ProcessEnv;
   readonly #removeProfileGeneration?: (directory: string) => Promise<void>;
-  #profileMutationTail: Promise<void> = Promise.resolve();
+  readonly #trustedProfileLoaders: Readonly<
+    Record<string, ZenXTrustedProfilePluginLoader>
+  >;
+  #serviceMutationTail: Promise<void> = Promise.resolve();
   #browserRegistration: ZenXCapabilityDisposer | undefined;
   #computerRegistered = false;
 
@@ -79,6 +92,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     pnpmCliPath?: string;
     pnpmEnvironment?: NodeJS.ProcessEnv;
     removeProfileGeneration?: (directory: string) => Promise<void>;
+    trustedProfileLoaders?: Readonly<
+      Record<string, ZenXTrustedProfilePluginLoader>
+    >;
   }) {
     this.#pluginToolEnvironment = new ToolEnvironment();
     this.#pluginRuntimeSupervisor = new PluginRuntimeSupervisor(
@@ -164,6 +180,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     this.#pnpmCliPath = options.pnpmCliPath;
     this.#pnpmEnvironment = options.pnpmEnvironment;
     this.#removeProfileGeneration = options.removeProfileGeneration;
+    this.#trustedProfileLoaders = Object.freeze({
+      ...(options.trustedProfileLoaders ?? {}),
+    });
   }
 
   async initialize(): Promise<void> {
@@ -226,14 +245,25 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       pluginProfilePaths(this.#userDataDirectory).generations,
       generation,
     );
+    const lifecycle = new Map(
+      this.#registry
+        .pluginSnapshot()
+        .plugins.map((plugin) => [plugin.id, plugin.lifecycle] as const),
+    );
     for (const descriptor of Object.values(
       this.#registry.packageDescriptors(),
     )) {
       if (descriptor.profilePackageName === undefined) continue;
+      if (lifecycle.get(descriptor.manifest.id) === "uninstalled") continue;
       try {
         const capabilityPackage = await loadProfilePluginPackage(
           generationDirectory,
           descriptor.profilePackageName,
+          {
+            allowExternalLink: descriptor.profileSource?.mode === "dev-link",
+            sourceMode: descriptor.profileSource?.mode,
+            trustedLoaders: this.#trustedProfileLoaders,
+          },
         );
         if (
           JSON.stringify(capabilityPackage.manifest) !==
@@ -378,72 +408,271 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     capabilityPackage: ZenXCapabilityPackage,
     source: "bundled" | "local" = "local",
   ): Promise<ZenXPluginSnapshot> {
-    await this.#registry.install(capabilityPackage, source);
-    return this.pluginSnapshot();
+    return await this.#serializeServiceMutation(async () => {
+      await this.#registry.install(capabilityPackage, source);
+      return this.pluginSnapshot();
+    });
   }
 
   async update(
     capabilityPackage: ZenXCapabilityPackage,
     source: "bundled" | "local" = "local",
   ): Promise<ZenXPluginSnapshot> {
-    await this.#registry.update(capabilityPackage, source);
-    return this.pluginSnapshot();
+    return await this.#serializeServiceMutation(async () => {
+      await this.#registry.update(capabilityPackage, source);
+      return this.pluginSnapshot();
+    });
   }
 
   async installLocalPackage(
     manifestPath: string,
     expectedPluginId?: string,
   ): Promise<ZenXPluginSnapshot> {
-    const capabilityPackage = await loadLocalCapabilityPackage(manifestPath);
-    const pluginId = capabilityPackage.manifest.id;
-    if (expectedPluginId !== undefined && pluginId !== expectedPluginId) {
-      throw new Error(
-        `Selected package is ${pluginId}; choose an update for ${expectedPluginId}`,
+    return await this.#serializeServiceMutation(async () => {
+      const capabilityPackage = await loadLocalCapabilityPackage(manifestPath);
+      const pluginId = capabilityPackage.manifest.id;
+      if (expectedPluginId !== undefined && pluginId !== expectedPluginId) {
+        throw new Error(
+          `Selected package is ${pluginId}; choose an update for ${expectedPluginId}`,
+        );
+      }
+      const current = this.pluginSnapshot().plugins.find(
+        (plugin) => plugin.id === pluginId,
       );
+      if (current === undefined) {
+        await this.#registry.install(capabilityPackage, "local");
+      } else if (current.source !== "local") {
+        throw new Error(
+          `Bundled plugin ${pluginId} cannot be replaced by a local package`,
+        );
+      } else if (current.version !== capabilityPackage.manifest.version) {
+        await this.#registry.update(capabilityPackage, "local");
+        if (current.lifecycle === "uninstalled")
+          await this.#registry.reinstall(pluginId);
+      } else if (current.lifecycle === "uninstalled" || !current.available) {
+        await this.#registry.install(capabilityPackage, "local");
+        if (current.lifecycle === "uninstalled")
+          await this.#registry.reinstall(pluginId);
+      } else {
+        throw new Error(
+          `Plugin ${pluginId} is already version ${current.version}`,
+        );
+      }
+      return this.pluginSnapshot();
+    });
+  }
+
+  async installPluginTarball(tarballPath: string): Promise<ZenXPluginSnapshot> {
+    return await this.installPluginPackage({
+      mode: "tarball",
+      packageSpec: tarballPath,
+    });
+  }
+
+  async installPluginPackage(
+    source: ZenXPluginPackageSource,
+    expectedPluginId?: string,
+  ): Promise<ZenXPluginSnapshot> {
+    if (source.mode === "bundled") {
+      throw new Error("Bundled plugin sources are owned by App Resources");
     }
-    const current = this.pluginSnapshot().plugins.find(
-      (plugin) => plugin.id === pluginId,
+    return await this.#serializeServiceMutation(
+      async () => await this.#mutatePluginPackage(source, expectedPluginId),
     );
-    if (current === undefined) {
-      await this.#registry.install(capabilityPackage, "local");
-    } else if (current.source !== "local") {
-      throw new Error(
-        `Bundled plugin ${pluginId} cannot be replaced by a local package`,
+  }
+
+  async installBundledPluginPackage(
+    tarballPath: string,
+    expected: { pluginId: string; packageName: string },
+  ): Promise<ZenXPluginSnapshot> {
+    const source = await this.#trustedBundledSource(tarballPath);
+    return await this.#serializeServiceMutation(
+      async () =>
+        await this.#mutatePluginPackage(
+          source,
+          expected.pluginId,
+          expected.packageName,
+        ),
+    );
+  }
+
+  async #mutatePluginPackage(
+    source: ZenXPluginPackageSource,
+    expectedPluginId?: string,
+    expectedPackageName?: string,
+  ): Promise<ZenXPluginSnapshot> {
+    const pnpmCliPath = await resolveBundledPnpmCli({
+      resourcesDirectory: this.#resourcesDirectory,
+      overridePath: this.#pnpmCliPath,
+    });
+    const expectedDescriptor =
+      expectedPluginId === undefined
+        ? undefined
+        : this.#registry.packageDescriptors()[expectedPluginId];
+    const staged = await stagePluginPackage({
+      userDataDirectory: this.#userDataDirectory,
+      source,
+      pnpmCliPath,
+      pnpmEnvironment: this.#pnpmEnvironment,
+      currentGeneration: this.#registry.profileGeneration(),
+      expectedPackageName: expectedDescriptor?.profilePackageName,
+      removeGeneration: this.#removeProfileGeneration,
+      trustedLoaders: this.#trustedProfileLoaders,
+    });
+    try {
+      const pluginId = staged.capabilityPackage.manifest.id;
+      if (expectedPluginId !== undefined && pluginId !== expectedPluginId) {
+        throw new Error(
+          `Resolved package is ${pluginId}; expected ${expectedPluginId}`,
+        );
+      }
+      if (
+        expectedPackageName !== undefined &&
+        staged.packageName !== expectedPackageName
+      ) {
+        throw new Error(
+          `Resolved package is ${staged.packageName}; expected ${expectedPackageName}`,
+        );
+      }
+      const current = this.pluginSnapshot().plugins.find(
+        (plugin) => plugin.id === pluginId,
       );
-    } else if (current.version !== capabilityPackage.manifest.version) {
-      await this.#registry.update(capabilityPackage, "local");
-      if (current.lifecycle === "uninstalled")
-        await this.#registry.reinstall(pluginId);
-    } else if (current.lifecycle === "uninstalled" || !current.available) {
-      await this.#registry.install(capabilityPackage, "local");
-      if (current.lifecycle === "uninstalled")
-        await this.#registry.reinstall(pluginId);
-    } else {
-      throw new Error(
-        `Plugin ${pluginId} is already version ${current.version}`,
+      const profile = {
+        generation: staged.generation,
+        packageName: staged.packageName,
+        source: staged.source,
+      };
+      const catalogSource = source.mode === "bundled" ? "bundled" : "local";
+      if (current === undefined) {
+        await this.#registry.install(
+          staged.capabilityPackage,
+          catalogSource,
+          profile,
+        );
+      } else {
+        if (current.lifecycle === "uninstalled") {
+          throw new Error(
+            `Plugin ${pluginId} is uninstalled; use reinstall instead`,
+          );
+        }
+        await this.#registry.update(
+          staged.capabilityPackage,
+          catalogSource,
+          profile,
+        );
+      }
+    } catch (error) {
+      await discardStagedProfileGeneration(
+        staged.generationDirectory,
+        this.#removeProfileGeneration,
       );
+      throw error;
     }
     return this.pluginSnapshot();
   }
 
-  async installPluginTarball(tarballPath: string): Promise<ZenXPluginSnapshot> {
-    return await this.#serializeProfileMutation(async () => {
-      const pnpmCliPath = await resolveBundledPnpmCli({
-        resourcesDirectory: this.#resourcesDirectory,
-        overridePath: this.#pnpmCliPath,
-      });
-      const staged = await stagePluginTarball({
+  async updatePluginPackage(
+    pluginId: string,
+    source?: ZenXPluginPackageSource,
+  ): Promise<ZenXPluginSnapshot> {
+    if (source?.mode === "bundled") {
+      throw new Error(
+        "Bundled plugin updates use their committed App Resource source",
+      );
+    }
+    return await this.#serializeServiceMutation(async () => {
+      const descriptor = this.#registry.packageDescriptors()[pluginId];
+      const stored = descriptor?.profileSource;
+      if (stored === undefined && source === undefined) {
+        throw new Error(`Plugin ${pluginId} has no reusable profile source`);
+      }
+      const selected = source ?? {
+        mode: stored!.mode,
+        packageSpec: stored!.packageSpec,
+      };
+      return await this.#mutatePluginPackage(
+        selected.mode === "bundled"
+          ? await this.#trustedBundledSource(selected.packageSpec)
+          : selected,
+        pluginId,
+      );
+    });
+  }
+
+  async uninstall(pluginId: string): Promise<ZenXPluginSnapshot> {
+    return await this.#serializeServiceMutation(async () => {
+      const descriptor = this.#registry.packageDescriptors()[pluginId];
+      if (
+        descriptor?.profilePackageName === undefined ||
+        this.pluginSnapshot().plugins.find((plugin) => plugin.id === pluginId)
+          ?.lifecycle === "uninstalled"
+      ) {
+        await this.#registry.uninstall(pluginId);
+        return this.pluginSnapshot();
+      }
+      const generation = this.#registry.profileGeneration();
+      if (generation === undefined) {
+        throw new Error(
+          `Plugin ${pluginId} has no committed profile generation`,
+        );
+      }
+      const pnpmCliPath = await this.#resolvePnpm();
+      const staged = await stagePluginRemoval({
         userDataDirectory: this.#userDataDirectory,
-        tarballPath,
+        packageName: descriptor.profilePackageName,
         pnpmCliPath,
         pnpmEnvironment: this.#pnpmEnvironment,
-        currentGeneration: this.#registry.profileGeneration(),
+        currentGeneration: generation,
         removeGeneration: this.#removeProfileGeneration,
       });
       try {
-        await this.#registry.install(staged.capabilityPackage, "local", {
+        await this.#registry.uninstall(pluginId, staged.generation);
+      } catch (error) {
+        await discardStagedProfileGeneration(
+          staged.generationDirectory,
+          this.#removeProfileGeneration,
+        );
+        throw error;
+      }
+      return this.pluginSnapshot();
+    });
+  }
+
+  async reinstall(pluginId: string): Promise<ZenXPluginSnapshot> {
+    return await this.#serializeServiceMutation(async () => {
+      const descriptor = this.#registry.packageDescriptors()[pluginId];
+      if (descriptor?.profileSource === undefined) {
+        await this.#registry.reinstall(pluginId);
+        return this.pluginSnapshot();
+      }
+      const storedSource: ZenXPluginPackageSource = {
+        mode: descriptor.profileSource.mode,
+        packageSpec: descriptor.profileSource.packageSpec,
+      };
+      const source =
+        storedSource.mode === "bundled"
+          ? await this.#trustedBundledSource(storedSource.packageSpec)
+          : storedSource;
+      const staged = await stagePluginPackage({
+        userDataDirectory: this.#userDataDirectory,
+        source,
+        pnpmCliPath: await this.#resolvePnpm(),
+        pnpmEnvironment: this.#pnpmEnvironment,
+        currentGeneration: this.#registry.profileGeneration(),
+        expectedPackageName: descriptor.profilePackageName,
+        removeGeneration: this.#removeProfileGeneration,
+        trustedLoaders: this.#trustedProfileLoaders,
+      });
+      try {
+        if (staged.capabilityPackage.manifest.id !== pluginId) {
+          throw new Error(
+            `Resolved package is ${staged.capabilityPackage.manifest.id}; expected ${pluginId}`,
+          );
+        }
+        await this.#registry.reinstallProfile(staged.capabilityPackage, {
           generation: staged.generation,
           packageName: staged.packageName,
+          source: staged.source,
         });
       } catch (error) {
         await discardStagedProfileGeneration(
@@ -456,18 +685,26 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     });
   }
 
-  async uninstall(pluginId: string): Promise<ZenXPluginSnapshot> {
-    await this.#registry.uninstall(pluginId);
-    return this.pluginSnapshot();
-  }
-
-  async reinstall(pluginId: string): Promise<ZenXPluginSnapshot> {
-    await this.#registry.reinstall(pluginId);
-    return this.pluginSnapshot();
+  async #trustedBundledSource(
+    packageSpec: string,
+  ): Promise<ZenXPluginPackageSource> {
+    if (this.#resourcesDirectory === undefined) {
+      throw new Error("Bundled plugin App Resources are not configured");
+    }
+    const pluginResources = await realpath(
+      path.join(this.#resourcesDirectory, "plugins"),
+    );
+    const trustedPackage = await realpath(packageSpec);
+    if (!trustedPackage.startsWith(`${pluginResources}${path.sep}`)) {
+      throw new Error("Bundled plugin source must be an App Resource package");
+    }
+    return { mode: "bundled", packageSpec: trustedPackage };
   }
 
   async deletePluginData(pluginId: string): Promise<void> {
-    await this.#registry.deleteData(pluginId);
+    await this.#serializeServiceMutation(
+      async () => await this.#registry.deleteData(pluginId),
+    );
   }
 
   async unregister(capabilityId: string): Promise<void> {
@@ -544,8 +781,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     capabilityId: string,
     enabled: boolean,
   ): Promise<ZenXPluginSnapshot> {
-    await this.#registry.setEnabled(capabilityId, enabled);
-    return this.pluginSnapshot();
+    return await this.#serializeServiceMutation(async () => {
+      await this.#registry.setEnabled(capabilityId, enabled);
+      return this.pluginSnapshot();
+    });
   }
 
   onChange(listener: (snapshot: ZenXCapabilitySnapshot) => void): () => void {
@@ -559,9 +798,16 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     if (!this.#computerRegistered) await this.#computerBackend?.close();
   }
 
-  async #serializeProfileMutation<T>(mutation: () => Promise<T>): Promise<T> {
-    const result = this.#profileMutationTail.then(mutation);
-    this.#profileMutationTail = result.then(
+  async #resolvePnpm(): Promise<string> {
+    return await resolveBundledPnpmCli({
+      resourcesDirectory: this.#resourcesDirectory,
+      overridePath: this.#pnpmCliPath,
+    });
+  }
+
+  async #serializeServiceMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const result = this.#serviceMutationTail.then(mutation);
+    this.#serviceMutationTail = result.then(
       () => undefined,
       () => undefined,
     );

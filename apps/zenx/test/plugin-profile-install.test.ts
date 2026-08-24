@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -10,6 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createServer } from "node:http";
 import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -438,6 +440,65 @@ test("pnpm, manifest, runtime, UI, and Catalog failures preserve the committed g
   }
 });
 
+test("profile update Catalog failure keeps the old generation and serving runtime", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-update-fail-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const store = new JsonZenXCapabilityGrantStore(
+    path.join(userData, "capability-grants.json"),
+  );
+  let failSave = false;
+  const service = profileService(userData, {
+    pnpmCliPath: pnpmCli,
+    grantStore: {
+      load: async () => await store.load(),
+      save: async (configuration) => {
+        if (failSave) throw new Error("update Catalog fixture failure");
+        await store.save(configuration);
+      },
+    },
+  });
+  const v1 = await createTarballFixture(directory, {
+    id: "update-failure",
+    packageName: "@zenx-test/update-failure",
+    outputPrefix: "old:",
+  });
+  const v2 = await createTarballFixture(directory, {
+    id: "update-failure",
+    packageName: "@zenx-test/update-failure",
+    version: "2.0.0",
+    outputPrefix: "new:",
+  });
+  try {
+    await service.initialize();
+    await service.installPluginTarball(v1);
+    const before = await readCatalog(userData);
+    failSave = true;
+    await assert.rejects(
+      service.updatePluginPackage("update-failure", {
+        mode: "tarball",
+        packageSpec: v2,
+      }),
+      /update Catalog fixture failure/u,
+    );
+    failSave = false;
+    assert.equal(
+      (await readCatalog(userData)).profileGeneration,
+      before.profileGeneration,
+    );
+    assert.equal(service.pluginSnapshot().plugins[0]?.version, "1.0.0");
+    assert.equal(
+      await invoke(service, "update_failure_echo", "still-serving"),
+      "old:still-serving",
+    );
+  } finally {
+    failSave = false;
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("failed staging cleanup can leave only disk garbage and concurrent installs serialize", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-profile-serial-"),
@@ -487,6 +548,443 @@ test("failed staging cleanup can leave only disk garbage and concurrent installs
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("stable local copies are immutable while explicit development links reload source changes", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-local-"),
+  );
+  const userData = path.join(directory, "user-data");
+  await createTarballFixture(directory, {
+    id: "stable-local",
+    packageName: "@zenx-test/stable-local",
+    outputPrefix: "stable-one:",
+  });
+  await createTarballFixture(directory, {
+    id: "dev-live",
+    packageName: "@zenx-test/dev-live",
+    outputPrefix: "dev-one:",
+  });
+  const stableDirectory = path.join(
+    directory,
+    "fixture-package-stable-local-1.0.0",
+  );
+  const devDirectory = path.join(directory, "fixture-package-dev-live-1.0.0");
+  const service = profileService(userData, { pnpmCliPath: pnpmCli });
+  try {
+    await service.initialize();
+    await service.installPluginPackage({
+      mode: "local-copy",
+      packageSpec: stableDirectory,
+    });
+    await service.installPluginPackage({
+      mode: "dev-link",
+      packageSpec: devDirectory,
+    });
+    assert.equal(
+      await invoke(service, "stable_local_echo", "before"),
+      "stable-one:before",
+    );
+    assert.equal(
+      await invoke(service, "dev_live_echo", "before"),
+      "dev-one:before",
+    );
+
+    await replaceRuntimePrefix(stableDirectory, "stable-one:", "stable-two:");
+    await replaceRuntimePrefix(devDirectory, "dev-one:", "dev-two:");
+    await service.setEnabled("stable-local", false);
+    await service.setEnabled("dev-live", false);
+    await service.setEnabled("stable-local", true);
+    await service.setEnabled("dev-live", true);
+
+    assert.equal(
+      await invoke(service, "stable_local_echo", "after"),
+      "stable-one:after",
+    );
+    assert.equal(
+      await invoke(service, "dev_live_echo", "after"),
+      "dev-two:after",
+    );
+    const sources = service
+      .pluginSnapshot()
+      .plugins.map((plugin) => [plugin.id, plugin.profileSource?.mode]);
+    assert.deepEqual(sources, [
+      ["stable-local", "local-copy"],
+      ["dev-live", "dev-link"],
+    ]);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Git profile sources require and persist an exact commit", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-git-"));
+  const userData = path.join(directory, "user-data");
+  await createTarballFixture(directory, {
+    id: "git-fixture",
+    packageName: "@zenx-test/git-fixture",
+    outputPrefix: "git:",
+  });
+  const repository = path.join(directory, "fixture-package-git-fixture-1.0.0");
+  await run("git", ["init", "-q"], { cwd: repository });
+  await run("git", ["config", "user.email", "fixture@zenx.local"], {
+    cwd: repository,
+  });
+  await run("git", ["config", "user.name", "ZenX Fixture"], {
+    cwd: repository,
+  });
+  await run("git", ["add", "."], { cwd: repository });
+  await run("git", ["commit", "-qm", "fixture"], { cwd: repository });
+  const commit = (
+    await run("git", ["rev-parse", "HEAD"], { cwd: repository })
+  ).stdout.trim();
+  const service = profileService(userData, { pnpmCliPath: pnpmCli });
+  try {
+    await service.initialize();
+    await assert.rejects(
+      service.installPluginPackage({
+        mode: "git",
+        packageSpec: `git+file://${repository}`,
+      }),
+      /pin an exact commit/u,
+    );
+    await service.installPluginPackage({
+      mode: "git",
+      packageSpec: `git+file://${repository}#${commit}`,
+    });
+    assert.equal(
+      await invoke(service, "git_fixture_echo", "commit"),
+      "git:commit",
+    );
+    assert.equal(
+      service.pluginSnapshot().plugins[0]?.profileSource?.packageSpec,
+      `git+file://${repository}#${commit}`,
+    );
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("ordinary package sources cannot claim a Host-trusted bundled runtime", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-trust-"),
+  );
+  const tarball = await createTarballFixture(directory, {
+    id: "untrusted-bundled",
+    packageName: "@zenx-test/untrusted-bundled",
+    runtimeType: "bundled",
+  });
+  const service = profileService(path.join(directory, "user-data"), {
+    pnpmCliPath: pnpmCli,
+  });
+  try {
+    await service.initialize();
+    await assert.rejects(
+      service.installPluginTarball(tarball),
+      /bundled runtime is not admitted by App Resources/u,
+    );
+    assert.deepEqual(service.pluginSnapshot().plugins, []);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("only App Resource packages enter the canonical trusted bundled source", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-bundled-"),
+  );
+  const resourcesDirectory = path.join(directory, "resources");
+  const pluginResources = path.join(resourcesDirectory, "plugins");
+  await mkdir(pluginResources, { recursive: true });
+  const tarball = await createTarballFixture(pluginResources, {
+    id: "trusted-bundled",
+    packageName: "@zenx-test/trusted-bundled",
+    runtimeType: "bundled",
+    runtimeModule: 'export const identity = "app-resource";\n',
+  });
+  const service = profileService(path.join(directory, "user-data"), {
+    pnpmCliPath: pnpmCli,
+    resourcesDirectory,
+    trustedProfileLoaders: {
+      "trusted-bundled": (module) => {
+        assert.equal(module.identity, "app-resource");
+        return {
+          invoke: async (_toolName, invocation) => ({
+            output: `trusted:${String(invocation.arguments.value)}`,
+            exitCode: 0,
+          }),
+        };
+      },
+    },
+  });
+  try {
+    await service.initialize();
+    await assert.rejects(
+      service.installPluginTarball(tarball),
+      /bundled runtime is not admitted by App Resources/u,
+    );
+    await service.installBundledPluginPackage(tarball, {
+      pluginId: "trusted-bundled",
+      packageName: "@zenx-test/trusted-bundled",
+    });
+    assert.equal(
+      service.pluginSnapshot().plugins[0]?.profileSource?.mode,
+      "bundled",
+    );
+    assert.equal(
+      await invoke(service, "trusted_bundled_echo", "resource"),
+      "trusted:resource",
+    );
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("npm specs resolve recommended and exact versions through a local registry", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-npm-"));
+  const userData = path.join(directory, "user-data");
+  const v1 = await createTarballFixture(directory, {
+    id: "npm-fixture",
+    packageName: "@zenx-test/npm-fixture",
+    version: "1.0.0",
+    outputPrefix: "npm-v1:",
+  });
+  const v2 = await createTarballFixture(directory, {
+    id: "npm-fixture",
+    packageName: "@zenx-test/npm-fixture",
+    version: "2.0.0",
+    outputPrefix: "npm-v2:",
+  });
+  const registry = await startFixtureRegistry({ "1.0.0": v1, "2.0.0": v2 });
+  const service = profileService(userData, {
+    pnpmCliPath: pnpmCli,
+    pnpmEnvironment: {
+      ...process.env,
+      npm_config_registry: registry.url,
+    },
+  });
+  try {
+    await service.initialize();
+    registry.setLatest("1.0.0");
+    await service.installPluginPackage({
+      mode: "npm",
+      packageSpec: "@zenx-test/npm-fixture",
+    });
+    assert.equal(
+      await invoke(service, "npm_fixture_echo", "one"),
+      "npm-v1:one",
+    );
+    registry.setLatest("2.0.0");
+    await service.updatePluginPackage("npm-fixture");
+    assert.equal(
+      await invoke(service, "npm_fixture_echo", "two"),
+      "npm-v2:two",
+    );
+    assert.equal(
+      service.pluginSnapshot().plugins[0]?.profileSource?.resolvedSpec,
+      "2.0.0",
+    );
+  } finally {
+    await service.close();
+    await registry.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("profile update, remove, restart, reinstall, enablement, and data deletion share one generation lifecycle", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-life-"));
+  const userData = path.join(directory, "user-data");
+  const firstTarball = await createTarballFixture(directory, {
+    id: "life-fixture",
+    packageName: "@zenx-test/life-fixture",
+    version: "1.0.0",
+    outputPrefix: "v1:",
+  });
+  const secondTarball = await createTarballFixture(directory, {
+    id: "life-fixture",
+    packageName: "@zenx-test/life-fixture",
+    version: "2.0.0",
+    outputPrefix: "v2:",
+  });
+  const service = profileService(userData, { pnpmCliPath: pnpmCli });
+  try {
+    await service.initialize();
+    await service.installPluginTarball(firstTarball);
+    await mkdir(path.join(userData, "plugin-data", "life-fixture"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(userData, "plugin-data", "life-fixture", "state.json"),
+      "preserved",
+    );
+    await Promise.all([
+      service.updatePluginPackage("life-fixture", {
+        mode: "tarball",
+        packageSpec: secondTarball,
+      }),
+      service.setEnabled("life-fixture", false),
+      service.uninstall("life-fixture"),
+    ]);
+    assert.equal(service.pluginSnapshot().plugins[0]?.lifecycle, "uninstalled");
+    assert.equal(service.pluginSnapshot().plugins[0]?.version, "2.0.0");
+    const removedCatalog = await readCatalog(userData);
+    const removedProfile = JSON.parse(
+      await readFile(
+        path.join(
+          userData,
+          "plugin-profile",
+          "generations",
+          removedCatalog.profileGeneration,
+          "package.json",
+        ),
+        "utf8",
+      ),
+    ) as { dependencies: Record<string, string> };
+    assert.deepEqual(removedProfile.dependencies ?? {}, {});
+    assert.equal(
+      await readFile(
+        path.join(userData, "plugin-data", "life-fixture", "state.json"),
+        "utf8",
+      ),
+      "preserved",
+    );
+    await service.close();
+
+    const restarted = profileService(userData, { pnpmCliPath: pnpmCli });
+    try {
+      await restarted.initialize();
+      assert.equal(restarted.pluginSnapshot().plugins[0]?.available, false);
+      await restarted.reinstall("life-fixture");
+      assert.equal(
+        restarted.pluginSnapshot().plugins[0]?.lifecycle,
+        "installed",
+      );
+      await restarted.setEnabled("life-fixture", true);
+      assert.equal(
+        await invoke(restarted, "life_fixture_echo", "again"),
+        "v2:again",
+      );
+      await restarted.setEnabled("life-fixture", false);
+      await restarted.deletePluginData("life-fixture");
+      await assert.rejects(
+        readFile(
+          path.join(userData, "plugin-data", "life-fixture", "state.json"),
+          "utf8",
+        ),
+        /ENOENT/u,
+      );
+    } finally {
+      await restarted.close();
+    }
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+async function invoke(
+  service: ZenXCapabilityService,
+  name: string,
+  value: string,
+): Promise<string> {
+  return (
+    await service.execute({
+      callId: `${name}-${value}`,
+      name,
+      arguments: { value },
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+    })
+  ).output;
+}
+
+async function replaceRuntimePrefix(
+  packageDirectory: string,
+  before: string,
+  after: string,
+): Promise<void> {
+  const runtimePath = path.join(packageDirectory, "runtime.mjs");
+  const source = await readFile(runtimePath, "utf8");
+  assert.match(
+    source,
+    new RegExp(before.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+  );
+  await writeFile(runtimePath, source.replace(before, after));
+}
+
+async function startFixtureRegistry(
+  tarballs: Readonly<Record<string, string>>,
+): Promise<{
+  url: string;
+  setLatest(version: string): void;
+  close(): Promise<void>;
+}> {
+  const payloads = new Map<string, Buffer>();
+  for (const [version, tarball] of Object.entries(tarballs)) {
+    payloads.set(version, await readFile(tarball));
+  }
+  let latest = Object.keys(tarballs)[0]!;
+  let baseUrl = "";
+  const server = createServer((request, response) => {
+    const tarballMatch = /^\/npm-fixture-(\d+\.\d+\.\d+)\.tgz$/u.exec(
+      request.url ?? "",
+    );
+    if (tarballMatch !== null) {
+      const payload = payloads.get(tarballMatch[1]!);
+      if (payload === undefined) {
+        response.writeHead(404).end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.end(payload);
+      return;
+    }
+    const versions = Object.fromEntries(
+      [...payloads].map(([version, payload]) => [
+        version,
+        {
+          name: "@zenx-test/npm-fixture",
+          version,
+          dist: {
+            tarball: `${baseUrl}npm-fixture-${version}.tgz`,
+            shasum: createHash("sha1").update(payload).digest("hex"),
+          },
+        },
+      ]),
+    );
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(
+      JSON.stringify({
+        name: "@zenx-test/npm-fixture",
+        "dist-tags": { latest },
+        versions,
+      }),
+    );
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  assert.ok(address !== null && typeof address !== "string");
+  baseUrl = `http://127.0.0.1:${String(address.port)}/`;
+  return {
+    url: baseUrl,
+    setLatest: (version) => {
+      assert.equal(payloads.has(version), true);
+      latest = version;
+    },
+    close: async () =>
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) =>
+          error === undefined ? resolve() : reject(error),
+        ),
+      ),
+  };
+}
 
 function profileService(
   userDataDirectory: string,
@@ -594,6 +1092,10 @@ interface TarballFixtureOptions {
   runtimeIdentity?: string;
   omitUiEntry?: boolean;
   dependencies?: Record<string, string>;
+  version?: string;
+  outputPrefix?: string;
+  runtimeType?: "process" | "bundled";
+  runtimeModule?: string;
 }
 
 async function createTarballFixture(
@@ -602,7 +1104,11 @@ async function createTarballFixture(
 ): Promise<string> {
   const id = options.id ?? "profile-fixture";
   const packageName = options.packageName ?? "@zenx-test/profile-fixture";
-  const packageDirectory = path.join(directory, `fixture-package-${id}`);
+  const version = options.version ?? "1.0.0";
+  const packageDirectory = path.join(
+    directory,
+    `fixture-package-${id}-${version}`,
+  );
   const tarballs = path.join(directory, "tarballs");
   await mkdir(packageDirectory, { recursive: true });
   await mkdir(tarballs, { recursive: true });
@@ -612,7 +1118,7 @@ async function createTarballFixture(
       `${JSON.stringify(
         {
           name: packageName,
-          version: "1.0.0",
+          version,
           type: "module",
           zenx: { plugin: "zenx.plugin.json" },
           ...(options.dependencies === undefined
@@ -627,21 +1133,28 @@ async function createTarballFixture(
     writeFile(
       path.join(packageDirectory, "zenx.plugin.json"),
       `${JSON.stringify(
-        fixtureManifest(id, options.description, options.omitUiEntry),
+        fixtureManifest(
+          id,
+          options.description,
+          options.omitUiEntry,
+          version,
+          options.runtimeType,
+        ),
         null,
         2,
       )}\n`,
     ),
     writeFile(
       path.join(packageDirectory, "runtime.mjs"),
-      `import readline from "node:readline";
-process.stdout.write(JSON.stringify({version:1,type:"ready",pluginId:${JSON.stringify(options.runtimeIdentity ?? id)},packageVersion:"1.0.0"})+"\\n");
+      options.runtimeModule ??
+        `import readline from "node:readline";
+process.stdout.write(JSON.stringify({version:1,type:"ready",pluginId:${JSON.stringify(options.runtimeIdentity ?? id)},packageVersion:${JSON.stringify(version)}})+"\\n");
 const lines = readline.createInterface({input:process.stdin});
 lines.on("line", (line) => {
   const message = JSON.parse(line);
   if (message.type === "close") process.exit(0);
   if (message.type !== "invoke") return;
-  process.stdout.write(JSON.stringify({version:1,type:"result",id:message.id,result:{output:"profile:"+String(message.arguments.value),exitCode:0}})+"\\n");
+  process.stdout.write(JSON.stringify({version:1,type:"result",id:message.id,result:{output:${JSON.stringify(options.outputPrefix ?? "profile:")}+String(message.arguments.value),exitCode:0}})+"\\n");
 });
 `,
     ),
@@ -662,16 +1175,18 @@ function fixtureManifest(
   id = "profile-fixture",
   description?: string,
   invalidUiEntry = false,
+  version = "1.0.0",
+  runtimeType: "process" | "bundled" = "process",
 ) {
   const toolPrefix = id.replaceAll("-", "_");
   return {
     schemaVersion: 2,
     id,
     name: id === "profile-fixture" ? "Profile fixture" : `Fixture ${id}`,
-    version: "1.0.0",
+    version,
     description: description ?? "Installed from a controlled tarball",
     compatibility: { zenx: ">=0.1.0 <0.2.0" },
-    runtime: { type: "process", entry: "runtime.mjs" },
+    runtime: { type: runtimeType, entry: "runtime.mjs" },
     mainDocument: `Use ${toolPrefix}_echo to echo exact bytes.`,
     provider: {
       id: `${id}-provider`,

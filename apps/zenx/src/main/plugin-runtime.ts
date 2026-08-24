@@ -151,6 +151,7 @@ export class PluginRuntimeSupervisor {
           published = true;
           const staged = this.#staged.get(pluginId);
           if (staged?.token !== token) return;
+          const previous = this.#active.get(pluginId);
           const unregisterProvider = staged.publication.publish();
           this.#staged.delete(pluginId);
           this.#active.set(pluginId, {
@@ -158,6 +159,13 @@ export class PluginRuntimeSupervisor {
             provider: staged.provider,
             unregisterProvider,
           });
+          if (previous !== undefined && previous.token !== token) {
+            void previous.provider.retire().catch((error: unknown) => {
+              console.warn(
+                `Plugin runtime retirement failed after replacement commit: ${describeError(error)}`,
+              );
+            });
+          }
         },
         rollback: async () => {
           await this.#rollback(pluginId, token);

@@ -45,6 +45,8 @@ export const ipcChannels = {
   pluginsSetEnabled: "zenx:plugins:set-enabled",
   pluginsSelectPackage: "zenx:plugins:select-package",
   pluginsSelectTarball: "zenx:plugins:select-tarball",
+  pluginsInstallSource: "zenx:plugins:install-source",
+  pluginsUpdate: "zenx:plugins:update",
   pluginsUninstall: "zenx:plugins:uninstall",
   pluginsReinstall: "zenx:plugins:reinstall",
   pluginsDeleteData: "zenx:plugins:delete-data",

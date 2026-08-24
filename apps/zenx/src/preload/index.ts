@@ -31,6 +31,8 @@ import type {
   ZenXPluginSnapshot,
   ZenXPluginPackageSelectionResult,
   ZenXPluginTarballSelectionResult,
+  ZenXPluginMutationResult,
+  ZenXPluginPackageSource,
 } from "../main/capabilities/types.js";
 import type {
   ThreadTitleProjection,
@@ -288,7 +290,7 @@ contextBridge.exposeInMainWorld("zenx", {
     setEnabled: async (
       pluginId: string,
       enabled: boolean,
-    ): Promise<ZenXPluginSnapshot> =>
+    ): Promise<ZenXPluginMutationResult> =>
       await ipcRenderer.invoke(
         ipcChannels.pluginsSetEnabled,
         pluginId,
@@ -303,9 +305,18 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
     selectTarball: async (): Promise<ZenXPluginTarballSelectionResult> =>
       await ipcRenderer.invoke(ipcChannels.pluginsSelectTarball),
-    uninstall: async (pluginId: string): Promise<ZenXPluginSnapshot> =>
+    installSource: async (
+      source: ZenXPluginPackageSource,
+    ): Promise<ZenXPluginMutationResult> =>
+      await ipcRenderer.invoke(ipcChannels.pluginsInstallSource, source),
+    update: async (
+      pluginId: string,
+      source?: ZenXPluginPackageSource,
+    ): Promise<ZenXPluginMutationResult> =>
+      await ipcRenderer.invoke(ipcChannels.pluginsUpdate, pluginId, source),
+    uninstall: async (pluginId: string): Promise<ZenXPluginMutationResult> =>
       await ipcRenderer.invoke(ipcChannels.pluginsUninstall, pluginId),
-    reinstall: async (pluginId: string): Promise<ZenXPluginSnapshot> =>
+    reinstall: async (pluginId: string): Promise<ZenXPluginMutationResult> =>
       await ipcRenderer.invoke(ipcChannels.pluginsReinstall, pluginId),
     deleteData: async (pluginId: string): Promise<void> =>
       await ipcRenderer.invoke(ipcChannels.pluginsDeleteData, pluginId),
