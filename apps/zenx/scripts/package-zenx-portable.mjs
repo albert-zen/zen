@@ -79,6 +79,11 @@ async function packageZenX(arguments_) {
               buildPath,
               sourceDirectory: path.join(resources, "providers"),
             });
+            await copyBundledPnpmResource({
+              buildPath,
+              sourceDirectory: path.join(root, "node_modules", "pnpm"),
+              expectedVersion: zenxPackage.devDependencies.pnpm,
+            });
           },
         ],
         asar: false,
@@ -222,6 +227,30 @@ export async function stagePackage(options) {
       path.join(options.appDirectory, "node_modules", "ws"),
       { recursive: true },
     );
+    const pluginSdkSource = path.join(
+      options.rootDirectory,
+      "node_modules",
+      "@zenx",
+      "plugin-sdk",
+    );
+    const pluginSdkDestination = path.join(
+      options.appDirectory,
+      "node_modules",
+      "@zenx",
+      "plugin-sdk",
+    );
+    await mkdir(pluginSdkDestination, { recursive: true, mode: 0o700 });
+    await Promise.all([
+      cp(
+        path.join(pluginSdkSource, "package.json"),
+        path.join(pluginSdkDestination, "package.json"),
+      ),
+      cp(
+        path.join(pluginSdkSource, "dist"),
+        path.join(pluginSdkDestination, "dist"),
+        { recursive: true },
+      ),
+    ]);
   } else {
     await cp(path.join(options.outDirectory, "main"), stagedMain, {
       recursive: true,
@@ -244,6 +273,26 @@ export async function copyPackagedProviderResources(options) {
   return destination;
 }
 
+export async function copyBundledPnpmResource(options) {
+  const packageManifest = JSON.parse(
+    await readFile(path.join(options.sourceDirectory, "package.json"), "utf8"),
+  );
+  if (
+    packageManifest.name !== "pnpm" ||
+    (options.expectedVersion !== undefined &&
+      packageManifest.version !== options.expectedVersion)
+  ) {
+    throw new Error(
+      `Bundled pnpm resource version mismatch: ${String(packageManifest.version)}`,
+    );
+  }
+  const resourcesDirectory = path.dirname(options.buildPath);
+  const destination = path.join(resourcesDirectory, "pnpm");
+  await mkdir(resourcesDirectory, { recursive: true, mode: 0o700 });
+  await cp(options.sourceDirectory, destination, { recursive: true });
+  return destination;
+}
+
 export function packageManifest(target, zenxPackage) {
   return target === "app"
     ? {
@@ -252,7 +301,10 @@ export function packageManifest(target, zenxPackage) {
         private: true,
         type: "module",
         main: "out/main/index.js",
-        dependencies: { ws: zenxPackage.dependencies.ws },
+        dependencies: {
+          "@zenx/plugin-sdk": zenxPackage.dependencies["@zenx/plugin-sdk"],
+          ws: zenxPackage.dependencies.ws,
+        },
       }
     : {
         name: "zenx-packaged-provider-smoke",

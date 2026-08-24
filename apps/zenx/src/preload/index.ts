@@ -30,6 +30,7 @@ import type {
   ZenXCapabilitySnapshot,
   ZenXPluginSnapshot,
   ZenXPluginPackageSelectionResult,
+  ZenXPluginTarballSelectionResult,
 } from "../main/capabilities/types.js";
 import type {
   ThreadTitleProjection,
@@ -300,6 +301,8 @@ contextBridge.exposeInMainWorld("zenx", {
         ipcChannels.pluginsSelectPackage,
         expectedPluginId,
       ),
+    selectTarball: async (): Promise<ZenXPluginTarballSelectionResult> =>
+      await ipcRenderer.invoke(ipcChannels.pluginsSelectTarball),
     uninstall: async (pluginId: string): Promise<ZenXPluginSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.pluginsUninstall, pluginId),
     reinstall: async (pluginId: string): Promise<ZenXPluginSnapshot> =>

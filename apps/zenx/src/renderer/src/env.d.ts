@@ -24,6 +24,7 @@ import type {
   ZenXCapabilitySnapshot,
   ZenXPluginSnapshot,
   ZenXPluginPackageSelectionResult,
+  ZenXPluginTarballSelectionResult,
 } from "../../main/capabilities/types.js";
 import type {
   ThreadTitleProjection,
@@ -168,6 +169,7 @@ declare global {
         selectPackage(
           expectedPluginId?: string,
         ): Promise<ZenXPluginPackageSelectionResult>;
+        selectTarball(): Promise<ZenXPluginTarballSelectionResult>;
         uninstall(pluginId: string): Promise<ZenXPluginSnapshot>;
         reinstall(pluginId: string): Promise<ZenXPluginSnapshot>;
         deleteData(pluginId: string): Promise<void>;

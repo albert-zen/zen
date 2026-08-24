@@ -55,6 +55,70 @@ test("Plugin Settings does not offer enable for an uninstalled catalog package",
   );
 });
 
+test("Plugin Settings exposes the typed tarball installer entry", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    value: dom.window.navigator,
+    configurable: true,
+  });
+  let selected = 0;
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      capabilities: {
+        get: async () => emptyCapabilities,
+        grant: async () => emptyCapabilities,
+        revoke: async () => emptyCapabilities,
+        onChange: () => () => {},
+      },
+      plugins: {
+        get: async () => emptyPluginSnapshot,
+        onChange: () => () => {},
+        selectPackage: async () => ({ canceled: true }),
+        selectTarball: async () => {
+          selected += 1;
+          return {
+            canceled: false,
+            snapshot: emptyPluginSnapshot,
+            capabilityRefresh: {
+              status: "failed",
+              message: "refresh fixture failure",
+            },
+          };
+        },
+        setEnabled: async () => emptyPluginSnapshot,
+        uninstall: async () => emptyPluginSnapshot,
+        reinstall: async () => emptyPluginSnapshot,
+        deleteData: async () => {},
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => {
+    root.render(React.createElement(CapabilitySettings));
+    await Promise.resolve();
+  });
+  const button = [...dom.window.document.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent === "Install tarball",
+  ) as HTMLButtonElement | undefined;
+  assert.ok(button);
+  await act(async () => {
+    button.click();
+    await Promise.resolve();
+  });
+  assert.equal(selected, 1);
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /installed and enabled, but Agent capability refresh failed: refresh fixture failure/u,
+  );
+  await act(async () => root.unmount());
+});
+
 test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate", async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
   Object.assign(globalThis, {
@@ -136,6 +200,20 @@ const emptyCapabilities: ZenXCapabilitySnapshot = {
   recentInvocations: [],
   providerDiagnostics: [],
   discoveryErrors: [],
+};
+
+const emptyPluginSnapshot: ZenXPluginSnapshot = {
+  plugins: [],
+  bundles: [],
+  surfaces: [],
+  sidebar: [],
+  pages: [],
+  subroutes: [],
+  settings: [],
+  panels: [],
+  commands: [],
+  menus: [],
+  resultRenderers: [],
 };
 
 function pluginSnapshot(

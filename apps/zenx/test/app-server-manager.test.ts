@@ -248,6 +248,35 @@ test("serializes concurrent capability restarts", async () => {
   }
 });
 
+test("post-commit capability refresh reports failure without rejecting the committed operation", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-post-commit-refresh-"),
+  );
+  const manager = new AppServerManager({
+    entryPath: path.join(directory, "missing-host.cjs"),
+    tokenFile: path.join(directory, "runtime", "app-server.token"),
+    hostConfig: {
+      cwd: directory,
+      dataDirectory: path.join(directory, "data"),
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+    },
+    startupTimeoutMs: 1_000,
+  });
+  try {
+    const result = await manager.refreshCapabilitiesAfterCommit();
+    assert.equal(result.status, "failed");
+    if (result.status === "failed") {
+      assert.match(result.message, /App Server|missing-host/u);
+    }
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("recovers a killed hosted App Server and admits one subsequent Turn", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-crash-"));
   const invocations: string[] = [];

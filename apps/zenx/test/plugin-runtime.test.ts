@@ -614,7 +614,7 @@ test("disabled reinstall stays installed without staging or publishing a runtime
   assert.deepEqual(toolNames(environment), ["fixture_echo"]);
 });
 
-test("publish failure restores durable catalog and closes the staged runtime", async () => {
+test("provider conflict fails before Catalog commit and closes the staged runtime", async () => {
   const environment = new ToolEnvironment({
     providers: [
       {

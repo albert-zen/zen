@@ -914,6 +914,25 @@ function installCapabilityIpc(
       return { canceled: false, snapshot } as const;
     },
   );
+  ipcMain.handle(ipcChannels.pluginsSelectTarball, async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options = {
+      title: "Install ZenX plugin tarball",
+      properties: ["openFile"],
+      filters: [{ name: "npm package tarball", extensions: ["tgz"] }],
+    } satisfies Electron.OpenDialogOptions;
+    const result =
+      owner === null
+        ? await dialog.showOpenDialog(options)
+        : await dialog.showOpenDialog(owner, options);
+    if (result.canceled || result.filePaths[0] === undefined)
+      return { canceled: true } as const;
+    const snapshot = await capabilities.installPluginTarball(
+      result.filePaths[0],
+    );
+    const capabilityRefresh = await manager.refreshCapabilitiesAfterCommit();
+    return { canceled: false, snapshot, capabilityRefresh } as const;
+  });
   ipcMain.handle(
     ipcChannels.pluginsUninstall,
     async (_event, pluginId: unknown) => {

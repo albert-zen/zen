@@ -120,6 +120,12 @@ interface ProviderRegistration {
   definitions: readonly ModelTool[];
 }
 
+export interface StagedToolProviderRegistration {
+  /** Publishes a fully validated provider by in-memory map replacement only. */
+  publish(): () => void;
+  rollback(): void;
+}
+
 export interface ToolDefinitionEntry {
   provider: ToolProviderIdentity;
   definition: ModelTool;
@@ -138,6 +144,8 @@ interface PreparedProviderRegistration {
 export class ToolEnvironment {
   readonly #providers = new Map<string, ProviderRegistration>();
   readonly #tools = new Map<string, ProviderRegistration>();
+  readonly #reservedProviderKeys = new Set<string>();
+  readonly #reservedToolNames = new Set<string>();
   readonly #preparedProviders = new WeakMap<
     PreparedToolInvocation,
     PreparedProviderRegistration
@@ -191,9 +199,19 @@ export class ToolEnvironment {
   }
 
   registerProvider(provider: ToolProvider): () => void {
+    return this.stageProvider(provider).publish();
+  }
+
+  stageProvider(
+    provider: ToolProvider,
+    options: { replaceCurrent?: boolean } = {},
+  ): StagedToolProviderRegistration {
     const identity = Object.freeze({ ...provider.identity });
     const key = providerIdentityKey(identity);
-    if (this.#providers.has(key)) {
+    if (
+      this.#reservedProviderKeys.has(key) ||
+      (this.#providers.has(key) && !options.replaceCurrent)
+    ) {
       throw new Error(`Tool provider is already registered: ${key}`);
     }
     const definitions = provider.definitions.map((definition) =>
@@ -209,18 +227,47 @@ export class ToolEnvironment {
           `Tool provider ${key} defines ${definition.name} more than once`,
         );
       }
-      if (this.#tools.has(definition.name)) {
+      const current = this.#tools.get(definition.name);
+      if (
+        this.#reservedToolNames.has(definition.name) ||
+        (current !== undefined &&
+          (!options.replaceCurrent ||
+            providerIdentityKey(current.identity) !== key))
+      ) {
         throw new Error(`Tool is already registered: ${definition.name}`);
       }
       localNames.add(definition.name);
     }
     const registration = { identity, provider, definitions };
-    this.#providers.set(key, registration);
-    for (const definition of definitions) {
-      this.#tools.set(definition.name, registration);
-    }
-    return () => {
-      this.#unregisterRegistration(key, registration);
+    this.#reservedProviderKeys.add(key);
+    for (const definition of definitions)
+      this.#reservedToolNames.add(definition.name);
+    let state: "staged" | "published" | "rolled-back" = "staged";
+    const releaseReservation = (): void => {
+      this.#reservedProviderKeys.delete(key);
+      for (const definition of definitions)
+        this.#reservedToolNames.delete(definition.name);
+    };
+    return {
+      publish: () => {
+        if (state === "published") {
+          return () => this.#unregisterRegistration(key, registration);
+        }
+        if (state === "rolled-back") return () => {};
+        state = "published";
+        releaseReservation();
+        const current = this.#providers.get(key);
+        if (current !== undefined) this.#unregisterRegistration(key, current);
+        this.#providers.set(key, registration);
+        for (const definition of definitions)
+          this.#tools.set(definition.name, registration);
+        return () => this.#unregisterRegistration(key, registration);
+      },
+      rollback: () => {
+        if (state !== "staged") return;
+        state = "rolled-back";
+        releaseReservation();
+      },
     };
   }
 

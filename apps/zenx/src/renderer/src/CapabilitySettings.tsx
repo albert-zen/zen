@@ -88,6 +88,27 @@ export function CapabilitySettings() {
     }
   };
 
+  const selectTarball = async () => {
+    setBusy("install-tarball");
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await window.zenx.plugins.selectTarball();
+      if (!result.canceled) {
+        setPlugins(result.snapshot);
+        setNotice(
+          result.capabilityRefresh.status === "refreshed"
+            ? "Plugin tarball installed and enabled."
+            : `Plugin tarball installed and enabled, but Agent capability refresh failed: ${result.capabilityRefresh.message}`,
+        );
+      }
+    } catch (reason) {
+      setError(describeError(reason));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (capabilities === null || plugins === null) {
     return (
       <div className="page-card settings-card">
@@ -113,21 +134,33 @@ export function CapabilitySettings() {
             changing the active version.
           </span>
         </div>
-        <button
-          className="primary-button"
-          type="button"
-          disabled={busy !== null}
-          onClick={() => void selectPackage()}
-        >
-          {busy === "install" ? "Opening…" : "Install local package"}
-        </button>
+        <div className="settings-actions">
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void selectPackage()}
+          >
+            {busy === "install" ? "Opening…" : "Install local package"}
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void selectTarball()}
+          >
+            {busy === "install-tarball" ? "Installing…" : "Install tarball"}
+          </button>
+        </div>
       </div>
 
       <div className="plugin-lifecycle-list" aria-label="Installed plugins">
         {plugins.plugins.length === 0 ? (
           <div className="page-card settings-card plugin-empty">
             <strong>No plugins installed</strong>
-            <span>Choose a local manifest to add your first plugin.</span>
+            <span>
+              Choose a package tarball or local manifest to add your first
+              plugin.
+            </span>
           </div>
         ) : (
           plugins.plugins

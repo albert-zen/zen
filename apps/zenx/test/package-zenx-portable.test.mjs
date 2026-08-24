@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   readlink,
   readdir,
   rm,
@@ -16,6 +17,7 @@ import test from "node:test";
 
 import {
   applicationIconForPlatform,
+  copyBundledPnpmResource,
   copyPackagedProviderResources,
   createBuildSnapshot,
   packageManifest,
@@ -23,6 +25,10 @@ import {
   stagePackage,
   withPackagingTargetLock,
 } from "../scripts/package-zenx-portable.mjs";
+import {
+  BUNDLED_PNPM_VERSION,
+  resolveBundledPnpmCli,
+} from "../src/main/plugin-profile.js";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
 
@@ -98,6 +104,65 @@ test("copies packaged provider symlinks verbatim into the platform resources dir
   }
 });
 
+test("copies the fixed pnpm CLI into App Resources instead of relying on PATH", async () => {
+  const zenxPackage = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  assert.equal(zenxPackage.devDependencies.pnpm, BUNDLED_PNPM_VERSION);
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-pnpm-resource-"),
+  );
+  try {
+    const source = path.join(directory, "source", "pnpm");
+    await mkdir(path.join(source, "bin"), { recursive: true });
+    await Promise.all([
+      writeFile(
+        path.join(source, "package.json"),
+        `${JSON.stringify({ name: "pnpm", version: BUNDLED_PNPM_VERSION })}\n`,
+      ),
+      writeFile(path.join(source, "bin", "pnpm.cjs"), "fixed pnpm cli"),
+    ]);
+    const buildPath = path.join(
+      directory,
+      "build",
+      "ZenX.app",
+      "Contents",
+      "Resources",
+      "app",
+    );
+    const destination = await copyBundledPnpmResource({
+      buildPath,
+      sourceDirectory: source,
+      expectedVersion: BUNDLED_PNPM_VERSION,
+    });
+    assert.equal(
+      await readFile(path.join(destination, "bin", "pnpm.cjs"), "utf8"),
+      "fixed pnpm cli",
+    );
+    assert.equal(
+      JSON.parse(await readFile(path.join(destination, "package.json"), "utf8"))
+        .version,
+      BUNDLED_PNPM_VERSION,
+    );
+    assert.equal(
+      await resolveBundledPnpmCli({
+        resourcesDirectory: path.dirname(buildPath),
+      }),
+      await realpath(path.join(destination, "bin", "pnpm.cjs")),
+    );
+    await writeFile(
+      path.join(destination, "package.json"),
+      `${JSON.stringify({ name: "pnpm", version: "0.0.0" })}\n`,
+    );
+    await assert.rejects(
+      resolveBundledPnpmCli({ resourcesDirectory: path.dirname(buildPath) }),
+      new RegExp(`requires bundled pnpm ${BUNDLED_PNPM_VERSION}`, "u"),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("concurrent app and smoke builds use complete private snapshots", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-build-snapshot-test-"),
@@ -120,11 +185,38 @@ test("concurrent app and smoke builds use complete private snapshots", async () 
       mkdir(path.join(rootDirectory, "node_modules", "ws"), {
         recursive: true,
       }),
+      mkdir(
+        path.join(rootDirectory, "node_modules", "@zenx", "plugin-sdk", "dist"),
+        { recursive: true },
+      ),
     ]);
     await writeFile(
       path.join(rootDirectory, "node_modules", "ws", "index.js"),
       "ws",
     );
+    await Promise.all([
+      writeFile(
+        path.join(
+          rootDirectory,
+          "node_modules",
+          "@zenx",
+          "plugin-sdk",
+          "package.json",
+        ),
+        `${JSON.stringify({ name: "@zenx/plugin-sdk", version: "0.1.0" })}\n`,
+      ),
+      writeFile(
+        path.join(
+          rootDirectory,
+          "node_modules",
+          "@zenx",
+          "plugin-sdk",
+          "dist",
+          "index.js",
+        ),
+        "sdk",
+      ),
+    ]);
     const appBuild = createBuildSnapshot(appStaging, async (output) => {
       await writeBuildFixture(output, "app-partial");
       appStarted();
@@ -217,10 +309,23 @@ test("stages the real app without modifying reusable build output", async () => 
     await access(path.join(appDirectory, "out", "preload", "index.cjs"));
     await access(path.join(appDirectory, "out", "renderer", "index.html"));
     await access(path.join(appDirectory, "node_modules", "ws", "index.js"));
+    await access(
+      path.join(
+        appDirectory,
+        "node_modules",
+        "@zenx",
+        "plugin-sdk",
+        "dist",
+        "index.js",
+      ),
+    );
     assert.deepEqual(
       packageManifest("app", {
         version: "0.1.0",
-        dependencies: { ws: "^8.18.3" },
+        dependencies: {
+          "@zenx/plugin-sdk": "0.1.0",
+          ws: "^8.18.3",
+        },
       }),
       {
         name: "zenx",
@@ -228,7 +333,10 @@ test("stages the real app without modifying reusable build output", async () => 
         private: true,
         type: "module",
         main: "out/main/index.js",
-        dependencies: { ws: "^8.18.3" },
+        dependencies: {
+          "@zenx/plugin-sdk": "0.1.0",
+          ws: "^8.18.3",
+        },
       },
     );
   } finally {
@@ -337,12 +445,37 @@ async function createFixture() {
   await mkdir(path.join(rootDirectory, "node_modules", "ws"), {
     recursive: true,
   });
+  await mkdir(
+    path.join(rootDirectory, "node_modules", "@zenx", "plugin-sdk", "dist"),
+    { recursive: true },
+  );
   await Promise.all([
     writeFile(integrityFile, placeholder),
     writeFile(path.join(outDirectory, "main", "app-server-host.js"), "host"),
     writeFile(path.join(outDirectory, "preload", "index.cjs"), "preload"),
     writeFile(path.join(outDirectory, "renderer", "index.html"), "renderer"),
     writeFile(path.join(rootDirectory, "node_modules", "ws", "index.js"), "ws"),
+    writeFile(
+      path.join(
+        rootDirectory,
+        "node_modules",
+        "@zenx",
+        "plugin-sdk",
+        "package.json",
+      ),
+      `${JSON.stringify({ name: "@zenx/plugin-sdk", version: "0.1.0" })}\n`,
+    ),
+    writeFile(
+      path.join(
+        rootDirectory,
+        "node_modules",
+        "@zenx",
+        "plugin-sdk",
+        "dist",
+        "index.js",
+      ),
+      "sdk",
+    ),
   ]);
   return { directory, rootDirectory, outDirectory, integrityFile };
 }

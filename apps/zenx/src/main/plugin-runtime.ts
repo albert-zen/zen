@@ -7,6 +7,7 @@ import type {
   ToolExecutionResult,
   ToolInvocation,
   ToolProvider,
+  StagedToolProviderRegistration,
 } from "../../../../src/tool.js";
 import { normalizeToolExecutionResult } from "../../../../src/tool.js";
 import type {
@@ -64,6 +65,7 @@ interface ActiveRuntime {
 interface StagedRuntime {
   token: object;
   provider: SupervisedPluginProvider;
+  publication: StagedToolProviderRegistration;
 }
 
 /**
@@ -91,7 +93,7 @@ export class PluginRuntimeSupervisor {
   async start(registration: PluginRuntimeRegistration): Promise<void> {
     const staged = await this.stage(registration);
     try {
-      await staged.publish();
+      staged.publish();
     } catch (error) {
       await staged.rollback();
       throw error;
@@ -101,6 +103,7 @@ export class PluginRuntimeSupervisor {
   async stage(
     registration: PluginRuntimeRegistration,
     hostSdk?: ZenXPluginHostSdkV1,
+    options: { replaceCurrent?: boolean } = {},
   ): Promise<ZenXPluginRuntimeStage> {
     return await this.#serializeMutation(async () => {
       validateIdentity(registration.identity);
@@ -131,10 +134,30 @@ export class PluginRuntimeSupervisor {
         registration.definitions,
         runtime,
       );
-      this.#staged.set(pluginId, { token, provider });
+      let publication: StagedToolProviderRegistration;
+      try {
+        publication = this.#toolEnvironment.stageProvider(provider, {
+          replaceCurrent: options.replaceCurrent ?? false,
+        });
+      } catch (error) {
+        await provider.retire();
+        throw error;
+      }
+      this.#staged.set(pluginId, { token, provider, publication });
+      let published = false;
       return {
-        publish: async () => {
-          await this.#publish(pluginId, token);
+        publish: () => {
+          if (published) return;
+          published = true;
+          const staged = this.#staged.get(pluginId);
+          if (staged?.token !== token) return;
+          const unregisterProvider = staged.publication.publish();
+          this.#staged.delete(pluginId);
+          this.#active.set(pluginId, {
+            token,
+            provider: staged.provider,
+            unregisterProvider,
+          });
         },
         rollback: async () => {
           await this.#rollback(pluginId, token);
@@ -143,32 +166,12 @@ export class PluginRuntimeSupervisor {
     });
   }
 
-  async #publish(pluginId: string, token: object): Promise<void> {
-    await this.#serializeMutation(async () => {
-      const staged = this.#staged.get(pluginId);
-      if (staged?.token !== token) {
-        if (this.#active.get(pluginId)?.token === token) return;
-        throw new Error(
-          `Plugin runtime stage is no longer current: ${pluginId}`,
-        );
-      }
-      const unregisterProvider = this.#toolEnvironment.registerProvider(
-        staged.provider,
-      );
-      this.#staged.delete(pluginId);
-      this.#active.set(pluginId, {
-        token,
-        provider: staged.provider,
-        unregisterProvider,
-      });
-    });
-  }
-
   async #rollback(pluginId: string, token: object): Promise<void> {
     await this.#serializeMutation(async () => {
       const staged = this.#staged.get(pluginId);
       if (staged?.token === token) {
         this.#staged.delete(pluginId);
+        staged.publication.rollback();
         await staged.provider.retire();
         return;
       }
@@ -204,6 +207,7 @@ export class PluginRuntimeSupervisor {
       }
       for (const [pluginId, staged] of [...this.#staged]) {
         this.#staged.delete(pluginId);
+        staged.publication.rollback();
         try {
           await staged.provider.retire();
         } catch (error) {
@@ -976,6 +980,7 @@ export class CatalogPluginRuntimeLifecycle implements ZenXPluginRuntimeLifecycle
 
   async stage(
     registration: RegisteredZenXCapability,
+    options: { replaceCurrent?: boolean } = {},
   ): Promise<ZenXPluginRuntimeStage> {
     if (registration.package.manifest.schemaVersion !== 2) {
       throw new Error("Plugin Runtime requires manifest v2");
@@ -988,9 +993,10 @@ export class CatalogPluginRuntimeLifecycle implements ZenXPluginRuntimeLifecycle
       const stage = await this.#supervisor.stage(
         this.#registrationFor(registration),
         prepared?.sdk,
+        options,
       );
       return {
-        publish: async () => await stage.publish(),
+        publish: () => stage.publish(),
         rollback: async () => {
           let runtimeError: unknown;
           try {
@@ -1046,6 +1052,7 @@ export function bundledPackageRegistration(
                 hostSdk,
               ),
             ),
+          close: async () => await registration.package.close?.(),
         },
         hostSdk,
       );

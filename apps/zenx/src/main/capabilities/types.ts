@@ -328,6 +328,17 @@ export interface ZenXPluginSnapshot {
 export type ZenXPluginPackageSelectionResult =
   { canceled: true } | { canceled: false; snapshot: ZenXPluginSnapshot };
 
+export type ZenXPostCommitCapabilityRefresh =
+  { status: "refreshed" } | { status: "failed"; message: string };
+
+export type ZenXPluginTarballSelectionResult =
+  | { canceled: true }
+  | {
+      canceled: false;
+      snapshot: ZenXPluginSnapshot;
+      capabilityRefresh: ZenXPostCommitCapabilityRefresh;
+    };
+
 export interface ZenXCapabilitySnapshot {
   capabilities: ZenXCapabilitySummary[];
   recentInvocations: ZenXCapabilityAuditRecord[];
@@ -370,12 +381,14 @@ export interface ZenXCapabilityConfiguration {
   disabled: string[];
   uninstalled?: string[];
   packages?: Record<string, ZenXPluginPackageDescriptor>;
+  profileGeneration?: string;
 }
 
 export interface ZenXPluginPackageDescriptor {
   manifest: ZenXPluginManifestV2;
   source: "bundled" | "local";
   manifestPath?: string;
+  profilePackageName?: string;
 }
 
 export interface RegisteredZenXCapability {
@@ -387,11 +400,12 @@ export interface RegisteredZenXCapability {
 export interface ZenXPluginRuntimeLifecycle {
   stage(
     registration: RegisteredZenXCapability,
+    options?: { replaceCurrent?: boolean },
   ): Promise<ZenXPluginRuntimeStage>;
   stop(pluginId: string): Promise<void>;
 }
 
 export interface ZenXPluginRuntimeStage {
-  publish(): Promise<void>;
+  publish(): void;
   rollback(): Promise<void>;
 }

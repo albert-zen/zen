@@ -2988,6 +2988,12 @@ a:focus-visible {
   font-size: 9px;
   line-height: 1.55;
 }
+.settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
 .plugin-lifecycle-list {
   display: grid;
   gap: 9px;
@@ -3881,9 +3887,11 @@ a:focus-visible {
   .plugin-library-head .plugin-icon {
     display: none;
   }
-  .plugin-library-head > button,
+  .settings-actions,
   .plugin-confirm > div {
     justify-self: start;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
   .plugin-actions {
     justify-content: flex-start;

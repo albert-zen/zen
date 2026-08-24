@@ -18,7 +18,10 @@ import {
   type HostCommand,
   type ZenXHostConfig,
 } from "./host-messages.js";
-import type { ZenXCapabilityHost } from "./capabilities/types.js";
+import type {
+  ZenXCapabilityHost,
+  ZenXPostCommitCapabilityRefresh,
+} from "./capabilities/types.js";
 import type {
   NativeThreadSummary,
   ThreadSummaryListOptions,
@@ -277,6 +280,15 @@ export class AppServerManager {
       () => undefined,
     );
     await restart;
+  }
+
+  async refreshCapabilitiesAfterCommit(): Promise<ZenXPostCommitCapabilityRefresh> {
+    try {
+      await this.restartCapabilities();
+      return { status: "refreshed" };
+    } catch (error) {
+      return { status: "failed", message: asError(error).message };
+    }
   }
 
   async request<M extends ClientRequestMethod>(

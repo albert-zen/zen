@@ -38,6 +38,14 @@ import type {
 } from "./capabilities/types.js";
 import type { PluginHostUiPort } from "./plugin-host-sdk.js";
 import { createZenXPluginHostSdk } from "./plugin-host-sdk.js";
+import {
+  cleanupUnreferencedProfileGenerations,
+  discardStagedProfileGeneration,
+  loadProfilePluginPackage,
+  pluginProfilePaths,
+  resolveBundledPnpmCli,
+  stagePluginTarball,
+} from "./plugin-profile.js";
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #registry: ZenXCapabilityRegistry;
@@ -51,6 +59,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #bundledProvidersOnly: boolean;
   readonly #resourcesDirectory?: string;
   readonly #bundledManifestSha256?: string;
+  readonly #pnpmCliPath?: string;
+  readonly #pnpmEnvironment?: NodeJS.ProcessEnv;
+  readonly #removeProfileGeneration?: (directory: string) => Promise<void>;
+  #profileMutationTail: Promise<void> = Promise.resolve();
   #browserRegistration: ZenXCapabilityDisposer | undefined;
   #computerRegistered = false;
 
@@ -64,6 +76,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     bundledProvidersOnly?: boolean;
     resourcesDirectory?: string;
     bundledManifestSha256?: string;
+    pnpmCliPath?: string;
+    pnpmEnvironment?: NodeJS.ProcessEnv;
+    removeProfileGeneration?: (directory: string) => Promise<void>;
   }) {
     this.#pluginToolEnvironment = new ToolEnvironment();
     this.#pluginRuntimeSupervisor = new PluginRuntimeSupervisor(
@@ -146,10 +161,14 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     this.#bundledProvidersOnly = options.bundledProvidersOnly ?? false;
     this.#resourcesDirectory = options.resourcesDirectory;
     this.#bundledManifestSha256 = options.bundledManifestSha256;
+    this.#pnpmCliPath = options.pnpmCliPath;
+    this.#pnpmEnvironment = options.pnpmEnvironment;
+    this.#removeProfileGeneration = options.removeProfileGeneration;
   }
 
   async initialize(): Promise<void> {
     await this.#registry.initialize();
+    await this.#loadCommittedProfile();
     await this.#mountBrowser();
     await this.#mountComputer();
     const configuredManifestPaths = new Set<string>();
@@ -194,6 +213,57 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     }
     for (const error of discovered.errors) {
       this.#registry.recordDiscoveryError(error);
+    }
+  }
+
+  async #loadCommittedProfile(): Promise<void> {
+    const generation = this.#registry.profileGeneration();
+    if (generation === undefined) {
+      await this.#cleanupProfileGenerations();
+      return;
+    }
+    const generationDirectory = path.join(
+      pluginProfilePaths(this.#userDataDirectory).generations,
+      generation,
+    );
+    for (const descriptor of Object.values(
+      this.#registry.packageDescriptors(),
+    )) {
+      if (descriptor.profilePackageName === undefined) continue;
+      try {
+        const capabilityPackage = await loadProfilePluginPackage(
+          generationDirectory,
+          descriptor.profilePackageName,
+        );
+        if (
+          JSON.stringify(capabilityPackage.manifest) !==
+          JSON.stringify(descriptor.manifest)
+        ) {
+          throw new Error(
+            `Committed profile package ${descriptor.profilePackageName} does not match its Catalog descriptor`,
+          );
+        }
+        await this.#registry.install(capabilityPackage, descriptor.source);
+      } catch (error) {
+        this.#registry.recordDiscoveryError(
+          `${descriptor.manifest.id}: ${describeError(error)}`,
+        );
+      }
+    }
+    await this.#cleanupProfileGenerations(generation);
+  }
+
+  async #cleanupProfileGenerations(
+    committedGeneration?: string,
+  ): Promise<void> {
+    try {
+      await cleanupUnreferencedProfileGenerations({
+        userDataDirectory: this.#userDataDirectory,
+        committedGeneration,
+        removeGeneration: this.#removeProfileGeneration,
+      });
+    } catch {
+      // Cleanup cannot affect the Catalog-selected generation.
     }
   }
 
@@ -356,6 +426,36 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return this.pluginSnapshot();
   }
 
+  async installPluginTarball(tarballPath: string): Promise<ZenXPluginSnapshot> {
+    return await this.#serializeProfileMutation(async () => {
+      const pnpmCliPath = await resolveBundledPnpmCli({
+        resourcesDirectory: this.#resourcesDirectory,
+        overridePath: this.#pnpmCliPath,
+      });
+      const staged = await stagePluginTarball({
+        userDataDirectory: this.#userDataDirectory,
+        tarballPath,
+        pnpmCliPath,
+        pnpmEnvironment: this.#pnpmEnvironment,
+        currentGeneration: this.#registry.profileGeneration(),
+        removeGeneration: this.#removeProfileGeneration,
+      });
+      try {
+        await this.#registry.install(staged.capabilityPackage, "local", {
+          generation: staged.generation,
+          packageName: staged.packageName,
+        });
+      } catch (error) {
+        await discardStagedProfileGeneration(
+          staged.generationDirectory,
+          this.#removeProfileGeneration,
+        );
+        throw error;
+      }
+      return this.pluginSnapshot();
+    });
+  }
+
   async uninstall(pluginId: string): Promise<ZenXPluginSnapshot> {
     await this.#registry.uninstall(pluginId);
     return this.pluginSnapshot();
@@ -457,6 +557,15 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     await this.#registry.close();
     await this.#pluginRuntimeSupervisor.close();
     if (!this.#computerRegistered) await this.#computerBackend?.close();
+  }
+
+  async #serializeProfileMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const result = this.#profileMutationTail.then(mutation);
+    this.#profileMutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await result;
   }
 }
 

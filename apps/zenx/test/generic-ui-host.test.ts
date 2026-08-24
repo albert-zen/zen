@@ -472,7 +472,7 @@ test("manifest validation rejects dangling surfaces and commands deterministical
   danglingSurface.manifest.contributions!.settings![0]!.surfaceId = "missing";
   await assert.rejects(
     registry.install(danglingSurface, "bundled"),
-    /dangling settings contribution preferences/u,
+    /dangling settings contribution/u,
   );
 
   const duplicateCommand = new ZenXWorkbenchFixturePackage();
@@ -488,7 +488,7 @@ test("manifest validation rejects dangling surfaces and commands deterministical
   invalidIcon.manifest.contributions!.sidebar![0]!.icon = "sparkles" as never;
   await assert.rejects(
     registry.install(invalidIcon, "bundled"),
-    /invalid icon/u,
+    /invalid sidebar contribution/u,
   );
 
   const foreignRenderer = new ZenXWorkbenchFixturePackage();
@@ -496,7 +496,7 @@ test("manifest validation rejects dangling surfaces and commands deterministical
     "other/refresh";
   await assert.rejects(
     registry.install(foreignRenderer, "bundled"),
-    /foreign/u,
+    /invalid result renderer/u,
   );
 
   const duplicateRenderer = new ZenXWorkbenchFixturePackage();
@@ -507,6 +507,6 @@ test("manifest validation rejects dangling surfaces and commands deterministical
   });
   await assert.rejects(
     registry.install(duplicateRenderer, "bundled"),
-    /duplicate/u,
+    /invalid result renderer/u,
   );
 });

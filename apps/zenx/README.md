@@ -82,6 +82,19 @@ Settings now exposes the complete local/bundled package lifecycle through typed
 main/preload IPC: choose a local v2 JSON manifest, install or update it, enable or
 disable it, uninstall/reinstall it, and explicitly delete only its namespaced data
 after the runtime is disabled or uninstalled.
+It also exposes the first standard-package distribution tracer: choose one local
+`.tgz`, resolve it with the exact pnpm CLI shipped in App Resources, and install it
+into a unique immutable generation under temporary/user-selected ZenX `userData`.
+The generated profile uses ordinary `package.json`, `pnpm-lock.yaml`, and
+`node_modules`, records explicit `pnpm.allowBuilds`, and projects only direct
+dependencies into the Catalog. Manifest, isolated UI bytes, Host compatibility,
+and a ready process runtime are prepared before the atomic Catalog snapshot records
+the generation. Package metadata, manifest, runtime containment, and UI relationships
+use the public `@zenx/plugin-sdk` validator; isolated UI entries remain inline HTML.
+Publication after that commit is an in-memory, non-rejecting swap; restart loads only
+the recorded generation. A later AppServer capability refresh failure is reported as
+such without misreporting the already committed installation as failed. npm/Git/
+local-copy/dev-link and the full source/update matrix remain later slices.
 Update validates and stages the replacement runtime/UI/storage migration before the
 catalog changes; a failed stage, migration, catalog save, or publish restores the old
 version and its storage. `ToolResultItem` keeps optional namespaced, JSON-compatible
