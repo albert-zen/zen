@@ -45,28 +45,26 @@ test("Thread overflow stays inert until hover, focus, or an open menu", async ()
   );
 });
 
-test("reorder handles stay visually quiet with keyboard and narrow-width access", async () => {
+test("whole rows expose drag affordance without visible reorder handles", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(styles, /\.reorder-handle/u);
+  assert.match(
+    styles,
+    /\.project-header\.reorderable > \.project-toggle,[\s\S]*\.thread-row-shell\.reorderable > \.thread-row\s*\{[^}]*cursor:\s*grab;/u,
+  );
+});
+
+test("Settings footer hugs its single navigation row", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
   );
   assert.match(
     styles,
-    /\.reorder-handle\s*\{[^}]*opacity: 0;[^}]*pointer-events: none;/su,
-  );
-  assert.doesNotMatch(styles, /\.reorder-handle\s*\{[^}]*visibility: hidden/su);
-  assert.match(
-    styles,
-    /\.project-header:focus-within > \.project-reorder-handle/u,
-  );
-  assert.match(
-    styles,
-    /\.thread-row-shell:focus-within \.thread-reorder-handle/u,
-  );
-  const mobile = styles.slice(styles.indexOf("@media (max-width: 640px)"));
-  assert.match(
-    mobile,
-    /\.thread-reorder-handle,\s*\.project-reorder-handle,\s*\.thread-item-menu > button\s*\{\s*min-width: 44px;\s*min-height: 44px;/su,
+    /\.sidebar-footer\s*\{[^}]*min-height:\s*50px;[^}]*padding:\s*5px 8px;/su,
   );
 });
 

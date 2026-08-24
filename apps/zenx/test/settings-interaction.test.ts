@@ -467,6 +467,25 @@ test("Add provider offers known local and subscription flows without creating ac
     ]) {
       assert.ok(labeledButton(`Add ${name}`));
     }
+    for (const kind of [
+      "siliconflow",
+      "dashscope",
+      "deepseek",
+      "moonshot",
+      "zhipu",
+    ]) {
+      assert.ok(
+        document.querySelector(
+          `.provider-add-choices .provider-logo.${kind} img`,
+        ),
+        `known Provider choice should render the ${kind} brand asset`,
+      );
+    }
+    assert.equal(
+      document.querySelectorAll(".provider-add-choices .provider-logo.generic")
+        .length,
+      0,
+    );
     await click(labeledButtonRequired("Add Local demo"));
     await click(exactButtonRequired("Add provider"));
     await waitFor(() => added);

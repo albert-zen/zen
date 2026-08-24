@@ -536,6 +536,7 @@ a:focus-visible {
   text-transform: uppercase;
 }
 .project-header {
+  position: relative;
   width: 100%;
   min-height: 36px;
   display: flex;
@@ -551,40 +552,13 @@ a:focus-visible {
   color: var(--text-2);
   background: var(--surface-wash);
 }
-.reorder-handle {
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-3);
-  opacity: 0;
-  pointer-events: none;
+.project-header.reorderable > .project-toggle,
+.thread-row-shell.reorderable > .thread-row {
   cursor: grab;
-  transition:
-    opacity 140ms ease,
-    color 140ms ease,
-    background 140ms ease;
 }
-.reorder-handle:active {
+.project-header.reorderable > .project-toggle:active,
+.thread-row-shell.reorderable > .thread-row:active {
   cursor: grabbing;
-}
-.project-reorder-handle {
-  width: 26px;
-  height: 30px;
-  flex: 0 0 26px;
-}
-.project-header:hover > .project-reorder-handle,
-.project-header:focus-within > .project-reorder-handle,
-.project-reorder-handle:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-.reorder-handle:hover,
-.reorder-handle:focus-visible {
-  color: var(--text);
-  background: var(--surface-3);
 }
 .project-toggle {
   min-width: 0;
@@ -710,23 +684,6 @@ a:focus-visible {
 .thread-row-shell {
   position: relative;
   min-width: 0;
-}
-.thread-row-shell.reorderable .thread-row {
-  padding-left: 44px;
-}
-.thread-reorder-handle {
-  position: absolute;
-  z-index: 2;
-  top: 14px;
-  left: 4px;
-  width: 34px;
-  height: 36px;
-}
-.thread-row-shell:hover .thread-reorder-handle,
-.thread-row-shell:focus-within .thread-reorder-handle,
-.thread-reorder-handle:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
 }
 .thread-menu-trigger {
   position: absolute;
@@ -925,26 +882,18 @@ a:focus-visible {
   display: block;
   object-fit: contain;
 }
-.provider-logo.openai {
-  background: #f2f2f2;
-}
-.provider-logo.siliconflow {
-  background: #e9f7ff;
-}
-.provider-logo.dashscope {
-  background: #fff3e8;
-}
-.provider-logo.deepseek {
-  background: #eef1ff;
-}
-.provider-logo.moonshot {
-  background: #eef0ff;
-}
-.provider-logo.zhipu {
-  background: #f2edff;
-}
+.provider-logo.openai,
+.provider-logo.siliconflow,
+.provider-logo.dashscope,
+.provider-logo.deepseek,
+.provider-logo.moonshot,
+.provider-logo.zhipu,
 .provider-logo.qwen {
-  background: #f1eeff;
+  background: var(--surface-3);
+}
+:root:not([data-appearance="light"]) .provider-logo.openai img,
+:root:not([data-appearance="light"]) .provider-logo.zhipu img {
+  filter: invert(1);
 }
 .provider-logo.local {
   background: var(--surface-3);
@@ -955,11 +904,11 @@ a:focus-visible {
   color: var(--text-2);
 }
 .sidebar-footer {
-  min-height: 76px;
+  min-height: 50px;
   display: grid;
   align-content: center;
   gap: 2px;
-  padding: 7px 8px;
+  padding: 5px 8px;
   border-top: 1px solid var(--border-soft);
   color: var(--text-3);
 }
@@ -3742,8 +3691,6 @@ a:focus-visible {
     min-height: 44px;
   }
   .thread-menu-trigger,
-  .thread-reorder-handle,
-  .project-reorder-handle,
   .thread-item-menu > button {
     min-width: 44px;
     min-height: 44px;

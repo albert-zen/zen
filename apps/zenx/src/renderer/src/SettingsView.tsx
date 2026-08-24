@@ -787,7 +787,12 @@ function ModelsPanel({
                   onClick={() => openKnownProviderEditor(preset)}
                   disabled={configured}
                 >
-                  <ProviderLogo kind="generic" />
+                  <ProviderLogo
+                    kind={providerLogoKindForIdentity(
+                      preset.name,
+                      preset.displayName,
+                    )}
+                  />
                   <strong>{preset.displayName}</strong>
                   <span>
                     {configured

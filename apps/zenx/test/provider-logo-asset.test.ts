@@ -6,6 +6,10 @@ const providerLogoSource = await readFile(
   new URL("../src/renderer/src/ProviderLogo.tsx", import.meta.url),
   "utf8",
 );
+const styles = await readFile(
+  new URL("../src/renderer/src/styles.css", import.meta.url),
+  "utf8",
+);
 
 test("known Provider logos use recorded local formal assets", async () => {
   for (const name of ["openai", "siliconflow", "deepseek", "qwen", "zhipu"]) {
@@ -58,4 +62,16 @@ test("known Provider logos use recorded local formal assets", async () => {
   assert.doesNotMatch(providerLogoSource, /object-fit:\s*cover/u);
   assert.doesNotMatch(providerLogoSource, /<svg viewBox="18 18"/u);
   assert.doesNotMatch(providerLogoSource, /M9 2\.7|M3 10\.5|M9 2\.8/u);
+});
+
+test("monochrome Provider marks adapt to ZenX dark and light surfaces", () => {
+  assert.match(
+    styles,
+    /:root:not\(\[data-appearance="light"\]\) \.provider-logo\.openai img,[\s\S]*\.provider-logo\.zhipu img\s*\{[^}]*filter:\s*invert\(1\)/u,
+  );
+  const adaptiveSurfaceRule = styles.match(
+    /\.provider-logo\.openai,[\s\S]*?\{\s*background:\s*var\(--surface-3\);\s*\}/u,
+  )?.[0];
+  assert.ok(adaptiveSurfaceRule);
+  assert.match(adaptiveSurfaceRule, /\.provider-logo\.zhipu,/u);
 });

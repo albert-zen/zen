@@ -650,7 +650,7 @@ function ProjectsView({
         onReorderProject === undefined || group.key === "__unavailable__"
           ? undefined
           : {
-              handleId: sidebarOrderHandleId("project", group.key),
+              controlId: sidebarOrderControlId("project", group.key),
               onDragStart: (event) => {
                 projectDrag.current = group.key;
                 event.dataTransfer.effectAllowed = "move";
@@ -674,7 +674,7 @@ function ProjectsView({
                 if (sourceKey === null || sourceKey === group.key) return;
                 event.preventDefault();
                 void reorderAndRestoreFocus(
-                  sidebarOrderHandleId("project", sourceKey),
+                  sidebarOrderControlId("project", sourceKey),
                   () =>
                     onReorderProject(
                       sourceKey,
@@ -686,6 +686,7 @@ function ProjectsView({
                 );
               },
               onKeyDown: (event) => {
+                if (!event.altKey) return;
                 const target =
                   event.key === "ArrowUp"
                     ? groups[projectIndex - 1]
@@ -696,7 +697,7 @@ function ProjectsView({
                   return;
                 event.preventDefault();
                 void reorderAndRestoreFocus(
-                  sidebarOrderHandleId("project", group.key),
+                  sidebarOrderControlId("project", group.key),
                   () =>
                     onReorderProject(
                       group.key,
@@ -743,7 +744,7 @@ function ProjectsView({
                   return;
                 event.preventDefault();
                 void reorderAndRestoreFocus(
-                  sidebarOrderHandleId("thread", source.threadId),
+                  sidebarOrderControlId("thread", source.threadId),
                   () =>
                     onReorderThread(
                       source.projectKey,
@@ -757,6 +758,7 @@ function ProjectsView({
                 );
               },
               onKeyDown: (threadIndex, threadId, event) => {
+                if (!event.altKey) return;
                 const target =
                   event.key === "ArrowUp"
                     ? group.threads[threadIndex - 1]
@@ -766,7 +768,7 @@ function ProjectsView({
                 if (target === undefined) return;
                 event.preventDefault();
                 void reorderAndRestoreFocus(
-                  sidebarOrderHandleId("thread", threadId),
+                  sidebarOrderControlId("thread", threadId),
                   () =>
                     onReorderThread(
                       group.key,
@@ -791,8 +793,8 @@ function projectLabelForSidebar(workspace: string): string {
 }
 
 interface ProjectReorderHandlers {
-  handleId: string;
-  onDragStart(event: ReactDragEvent<HTMLButtonElement>): void;
+  controlId: string;
+  onDragStart(event: ReactDragEvent<HTMLDivElement>): void;
   onDragEnd(): void;
   onDragOver(event: ReactDragEvent<HTMLElement>): void;
   onDrop(event: ReactDragEvent<HTMLElement>): void;
@@ -800,14 +802,14 @@ interface ProjectReorderHandlers {
 }
 
 interface ThreadReorderHandlers {
-  onDragStart(threadId: string, event: ReactDragEvent<HTMLButtonElement>): void;
+  onDragStart(threadId: string, event: ReactDragEvent<HTMLDivElement>): void;
   onDragEnd(): void;
   onDragOver(threadId: string, event: ReactDragEvent<HTMLDivElement>): void;
   onDrop(threadId: string, event: ReactDragEvent<HTMLDivElement>): void;
   onKeyDown(
     threadIndex: number,
     threadId: string,
-    event: ReactKeyboardEvent<HTMLButtonElement>,
+    event: ReactKeyboardEvent<HTMLElement>,
   ): void;
 }
 
@@ -919,29 +921,35 @@ function ProjectRows({
       onDragOver={projectReorder?.onDragOver}
       onDrop={projectReorder?.onDrop}
     >
-      <div className={`project-header${projectSelected ? " selected" : ""}`}>
-        {projectReorder === undefined ? null : (
-          <button
-            className="reorder-handle project-reorder-handle"
-            type="button"
-            id={projectReorder.handleId}
-            aria-keyshortcuts="ArrowUp ArrowDown"
-            aria-label={`Reorder project ${group.label}. Use Up and Down arrow keys.`}
-            title="Drag to reorder; use Up and Down arrow keys"
-            draggable
-            onDragStart={projectReorder.onDragStart}
-            onDragEnd={projectReorder.onDragEnd}
-            onKeyDown={projectReorder.onKeyDown}
-          >
-            <Icon name="grip" size={14} />
-          </button>
-        )}
+      <div
+        className={`project-header${projectSelected ? " selected" : ""}${projectReorder === undefined ? "" : " reorderable"}`}
+        draggable={projectReorder !== undefined}
+        onDragStart={(event) => {
+          if (
+            (event.target as HTMLElement | null)?.closest(
+              ".project-actions",
+            ) !== null
+          ) {
+            event.preventDefault();
+            return;
+          }
+          projectReorder?.onDragStart(event);
+        }}
+        onDragEnd={projectReorder?.onDragEnd}
+      >
         <button
           className="project-toggle"
           type="button"
+          id={projectReorder?.controlId}
           aria-expanded={open}
+          aria-keyshortcuts={
+            projectReorder === undefined
+              ? undefined
+              : "Alt+ArrowUp Alt+ArrowDown"
+          }
           title={group.workspace ?? undefined}
           onClick={() => setOpen((value) => !value)}
+          onKeyDown={projectReorder?.onKeyDown}
         >
           <Icon name="folder" size={14} />
           <span>{group.label}</span>
@@ -1061,7 +1069,7 @@ function ProjectRows({
               threadReorder === undefined
                 ? undefined
                 : {
-                    handleId: sidebarOrderHandleId("thread", thread.threadId),
+                    controlId: sidebarOrderControlId("thread", thread.threadId),
                     onDragStart: (event) =>
                       threadReorder.onDragStart(thread.threadId, event),
                     onDragEnd: threadReorder.onDragEnd,
@@ -1085,12 +1093,12 @@ function ProjectRows({
 }
 
 interface ThreadRowReorderHandlers {
-  handleId: string;
-  onDragStart(event: ReactDragEvent<HTMLButtonElement>): void;
+  controlId: string;
+  onDragStart(event: ReactDragEvent<HTMLDivElement>): void;
   onDragEnd(): void;
   onDragOver(event: ReactDragEvent<HTMLDivElement>): void;
   onDrop(event: ReactDragEvent<HTMLDivElement>): void;
-  onKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void;
+  onKeyDown(event: ReactKeyboardEvent<HTMLElement>): void;
 }
 
 function ThreadRow({
@@ -1224,6 +1232,19 @@ function ThreadRow({
       ref={rowRef}
       className={`thread-row-shell${reorder === undefined ? "" : " reorderable"}`}
       data-thread-id={thread.threadId}
+      draggable={reorder !== undefined}
+      onDragStart={(event) => {
+        if (
+          (event.target as HTMLElement | null)?.closest(
+            ".thread-menu-trigger, .thread-item-menu",
+          ) !== null
+        ) {
+          event.preventDefault();
+          return;
+        }
+        reorder?.onDragStart(event);
+      }}
+      onDragEnd={reorder?.onDragEnd}
       onDragOver={reorder?.onDragOver}
       onDrop={reorder?.onDrop}
       onKeyDown={(event) => {
@@ -1233,32 +1254,29 @@ function ThreadRow({
         }
       }}
     >
-      {reorder === undefined ? null : (
-        <button
-          className="reorder-handle thread-reorder-handle"
-          type="button"
-          id={reorder.handleId}
-          aria-keyshortcuts="ArrowUp ArrowDown"
-          aria-label={`Reorder ${threadTitle(thread)} within ${threadProject(thread)}. Use Up and Down arrow keys.`}
-          title="Drag to reorder; use Up and Down arrow keys"
-          draggable
-          onDragStart={reorder.onDragStart}
-          onDragEnd={reorder.onDragEnd}
-          onKeyDown={reorder.onKeyDown}
-        >
-          <Icon name="grip" size={14} />
-        </button>
-      )}
       {thread.status === "systemError" ? (
-        <div className={`thread-row system-error${inbox ? " inbox" : ""}`}>
+        <div
+          className={`thread-row system-error${inbox ? " inbox" : ""}`}
+          id={reorder?.controlId}
+          tabIndex={reorder === undefined ? undefined : 0}
+          aria-keyshortcuts={
+            reorder === undefined ? undefined : "Alt+ArrowUp Alt+ArrowDown"
+          }
+          onKeyDown={reorder?.onKeyDown}
+        >
           {contents}
         </div>
       ) : (
         <button
           className={`thread-row${selected ? " selected" : ""}${inbox ? " inbox" : ""}`}
           type="button"
+          id={reorder?.controlId}
           aria-current={selected ? "page" : undefined}
+          aria-keyshortcuts={
+            reorder === undefined ? undefined : "Alt+ArrowUp Alt+ArrowDown"
+          }
           onClick={() => onSelectThread(thread.threadId)}
+          onKeyDown={reorder?.onKeyDown}
         >
           {contents}
         </button>
@@ -1519,7 +1537,7 @@ function enabledMenuItems(container: HTMLElement | null): HTMLButtonElement[] {
   );
 }
 
-function sidebarOrderHandleId(
+function sidebarOrderControlId(
   kind: "project" | "thread",
   identifier: string,
 ): string {
@@ -1536,7 +1554,7 @@ function dropPlacement<T extends HTMLElement>(
 }
 
 async function reorderAndRestoreFocus(
-  handleId: string,
+  controlId: string,
   operation: () => Promise<void>,
   onAttempt?: () => void,
   onError?: (error: unknown, retry: () => Promise<void>) => void,
@@ -1546,10 +1564,10 @@ async function reorderAndRestoreFocus(
     await operation();
   } catch (error) {
     onError?.(error, () =>
-      reorderAndRestoreFocus(handleId, operation, onAttempt, onError),
+      reorderAndRestoreFocus(controlId, operation, onAttempt, onError),
     );
   } finally {
-    const restore = () => document.getElementById(handleId)?.focus();
+    const restore = () => document.getElementById(controlId)?.focus();
     if (typeof requestAnimationFrame === "function") {
       requestAnimationFrame(restore);
     } else {

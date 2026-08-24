@@ -50,12 +50,15 @@ test("keyboard reorder restores focus while preserving selection, Pin, and activ
   await withDom(async (root) => {
     await act(async () => root.render(createElement(OrderingSidebar)));
 
-    const projectA = requiredButton('[aria-label^="Reorder project a."]');
+    const projectA = requiredButton(
+      '[data-project-key="/work/a"] .project-toggle',
+    );
     projectA.focus();
     await act(async () => {
       projectA.dispatchEvent(
         new window.KeyboardEvent("keydown", {
           key: "ArrowDown",
+          altKey: true,
           bubbles: true,
           cancelable: true,
         }),
@@ -72,12 +75,13 @@ test("keyboard reorder restores focus while preserving selection, Pin, and activ
     assert.ok(
       document.querySelector('[data-thread-id="idle"] .thread-item-menu'),
     );
-    const idleHandle = requiredButton('[aria-label^="Reorder idle within"]');
-    idleHandle.focus();
+    const idleRow = requiredButton('[data-thread-id="idle"] .thread-row');
+    idleRow.focus();
     await act(async () => {
-      idleHandle.dispatchEvent(
+      idleRow.dispatchEvent(
         new window.KeyboardEvent("keydown", {
           key: "ArrowUp",
+          altKey: true,
           bubbles: true,
           cancelable: true,
         }),
@@ -92,7 +96,7 @@ test("keyboard reorder restores focus while preserving selection, Pin, and activ
       ),
     ].map((row) => row.dataset.threadId);
     assert.deepEqual(projectAThreads, ["idle", "active"]);
-    assert.equal(document.activeElement, idleHandle);
+    assert.equal(document.activeElement, idleRow);
     assert.ok(
       document.querySelector('[data-thread-id="idle"] .thread-item-menu'),
     );
@@ -118,16 +122,27 @@ test("keyboard reorder restores focus while preserving selection, Pin, and activ
   });
 });
 
-test("reorder handles remain in sequential Tab order while visually quiet", async () => {
+test("whole project and Thread rows are draggable without visible handles", async () => {
   await withDom(async (root) => {
     await act(async () => root.render(createElement(StaticSidebar)));
-    const handles = [
-      ...document.querySelectorAll<HTMLButtonElement>(".reorder-handle"),
+    assert.equal(document.querySelector(".reorder-handle"), null);
+    const projectRows = [
+      ...document.querySelectorAll<HTMLElement>(".project-header"),
     ];
-    assert.ok(handles.length > 0);
-    assert.ok(handles.every((handle) => handle.tabIndex === 0));
+    const threadRows = [
+      ...document.querySelectorAll<HTMLElement>(
+        ".project-group .thread-row-shell",
+      ),
+    ];
+    assert.ok(projectRows.length > 0);
+    assert.ok(threadRows.length > 0);
+    assert.ok(projectRows.every((row) => row.draggable));
+    assert.ok(threadRows.every((row) => row.draggable));
+    const keyboardControls = [
+      ...document.querySelectorAll<HTMLElement>(".project-toggle, .thread-row"),
+    ].filter((control) => control.id.startsWith("sidebar-"));
     assert.deepEqual(
-      handles.map((handle) => handle.id),
+      keyboardControls.map((control) => control.id),
       [
         "sidebar-project-order-%2Fwork%2Fa",
         "sidebar-thread-order-active",
@@ -136,6 +151,37 @@ test("reorder handles remain in sequential Tab order while visually quiet", asyn
         "sidebar-thread-order-other",
       ],
     );
+    assert.ok(
+      keyboardControls.every(
+        (control) =>
+          control.getAttribute("aria-keyshortcuts") ===
+          "Alt+ArrowUp Alt+ArrowDown",
+      ),
+    );
+  });
+});
+
+test("row action buttons never start a reorder drag", async () => {
+  await withDom(async (root) => {
+    await act(async () => root.render(createElement(StaticSidebar)));
+    let dragPublications = 0;
+    const dataTransfer = {
+      dropEffect: "none",
+      effectAllowed: "all",
+      setData: () => {
+        dragPublications += 1;
+        return undefined;
+      },
+    };
+    for (const action of [
+      requiredButton('[aria-label="New thread in a"]'),
+      requiredButton('[data-thread-id="active"] .thread-menu-trigger'),
+    ]) {
+      const event = dragEvent("dragstart", dataTransfer);
+      action.dispatchEvent(event);
+      assert.equal(event.defaultPrevented, true);
+    }
+    assert.equal(dragPublications, 0);
   });
 });
 
@@ -151,7 +197,9 @@ test("native Thread drag refuses a drop in a different Project", async () => {
         }),
       ),
     );
-    const source = requiredButton('[aria-label^="Reorder active within"]');
+    const source = requiredElement<HTMLElement>(
+      '[data-thread-id="active"].thread-row-shell',
+    );
     const target = document.querySelector<HTMLElement>(
       '[data-thread-id="other"]',
     );
@@ -171,12 +219,15 @@ test("native Thread drag refuses a drop in a different Project", async () => {
 test("Sidebar order failure is recoverable without replacing the Thread view", async () => {
   await withDom(async (root) => {
     await act(async () => root.render(createElement(FailingSidebar)));
-    const projectA = requiredButton('[aria-label^="Reorder project a."]');
+    const projectA = requiredButton(
+      '[data-project-key="/work/a"] .project-toggle',
+    );
     projectA.focus();
     await act(async () => {
       projectA.dispatchEvent(
         new window.KeyboardEvent("keydown", {
           key: "ArrowDown",
+          altKey: true,
           bubbles: true,
           cancelable: true,
         }),
@@ -219,7 +270,9 @@ test("Sidebar order failure is recoverable without replacing the Thread view", a
 test("native drag reorders Projects globally and Threads inside one Project", async () => {
   await withDom(async (root) => {
     await act(async () => root.render(createElement(OrderingSidebar)));
-    const projectSource = requiredButton('[aria-label^="Reorder project b."]');
+    const projectSource = requiredElement<HTMLElement>(
+      '[data-project-key="/work/b"] .project-header',
+    );
     const projectTarget = document.querySelector<HTMLElement>(
       '[data-project-key="/work/a"]',
     );
@@ -234,7 +287,9 @@ test("native drag reorders Projects globally and Threads inside one Project", as
     });
     assert.deepEqual(projectKeys(), ["/work/b", "/work/a"]);
 
-    const threadSource = requiredButton('[aria-label^="Reorder idle within"]');
+    const threadSource = requiredElement<HTMLElement>(
+      '[data-thread-id="idle"].thread-row-shell',
+    );
     const threadTarget = document.querySelector<HTMLElement>(
       '[data-thread-id="active"]',
     );
@@ -421,6 +476,12 @@ function requiredButton(selector: string): HTMLButtonElement {
   const button = document.querySelector<HTMLButtonElement>(selector);
   assert.ok(button, `Expected ${selector}`);
   return button;
+}
+
+function requiredElement<T extends HTMLElement>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  assert.ok(element, `Expected ${selector}`);
+  return element;
 }
 
 function projectKeys(): (string | undefined)[] {
