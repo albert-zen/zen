@@ -307,9 +307,73 @@ test("manager ignores unmatched and late malformed summary responses", async () 
   }
 });
 
+test("manager bounds a stalled plugin replacement and ignores its late reply", async () => {
+  const capabilityHost: ZenXCapabilityHost = {
+    hostSnapshot: () => ({ definitions: [] }),
+    execute: async () => ({ output: "ok", exitCode: 0 }),
+  };
+  const fixture = await createFixtureManager(
+    "late-replacement",
+    capabilityHost,
+    { capabilityReplacementTimeoutMs: 20 },
+  );
+  try {
+    await fixture.manager.start();
+    const replacement =
+      await fixture.manager.refreshPluginAfterCommit("target");
+    assert.equal(replacement.status, "failed");
+    if (replacement.status === "failed") {
+      assert.match(replacement.message, /replacement timed out after 20ms/u);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(fixture.manager.status, {
+      type: "ready",
+      reconnected: false,
+    });
+  } finally {
+    await fixture.manager.stop();
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("manager removes a pending plugin replacement when the child exits", async () => {
+  const capabilityHost: ZenXCapabilityHost = {
+    hostSnapshot: () => ({ definitions: [] }),
+    execute: async () => ({ output: "ok", exitCode: 0 }),
+  };
+  const fixture = await createFixtureManager(
+    "exit-replacement",
+    capabilityHost,
+    {
+      capabilityReplacementTimeoutMs: 1_000,
+      recoveryDelaysMs: [1_000],
+    },
+  );
+  try {
+    await fixture.manager.start();
+    const replacement = await within(
+      fixture.manager.refreshPluginAfterCommit("target"),
+    );
+    assert.equal(replacement.status, "failed");
+    if (replacement.status === "failed") {
+      assert.match(
+        replacement.message,
+        /stopped before replacing capabilities/u,
+      );
+    }
+  } finally {
+    await fixture.manager.stop();
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
 async function createFixtureManager(
   mode: string,
   capabilityHost?: ZenXCapabilityHost,
+  options: {
+    capabilityReplacementTimeoutMs?: number;
+    recoveryDelaysMs?: readonly number[];
+  } = {},
 ): Promise<{
   directory: string;
   manager: AppServerManager;
@@ -334,6 +398,7 @@ async function createFixtureManager(
       },
       execArgv: ["--import", "tsx"],
       startupTimeoutMs: 10_000,
+      ...options,
       ...(capabilityHost === undefined ? {} : { capabilityHost }),
     }),
   };

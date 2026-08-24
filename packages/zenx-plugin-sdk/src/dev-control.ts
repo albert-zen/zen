@@ -26,9 +26,17 @@ export interface ZenXPluginDevResult {
   reload: { status: "reloaded" } | { status: "failed"; message: string };
 }
 
+export interface ZenXPluginDevRequestOptions {
+  /** Must remain longer than the target Host's transaction deadline. */
+  timeoutMs?: number;
+}
+
+const DEFAULT_DEV_REQUEST_TIMEOUT_MS = 5 * 60_000;
+
 export async function requestPluginDevLink(
   descriptorFile: string,
   request: ZenXPluginDevRequest,
+  options: ZenXPluginDevRequestOptions = {},
 ): Promise<ZenXPluginDevResult> {
   const descriptor = await readPrivateJsonFile(
     path.resolve(descriptorFile),
@@ -40,24 +48,49 @@ export async function requestPluginDevLink(
   if (token.length === 0 || token.includes("\n") || token.includes("\r")) {
     throw new Error("ZenX plugin dev bearer token is invalid");
   }
-  const response = await fetch(new URL("/v1/plugins/dev", descriptor.url), {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(request),
-  });
-  const body = (await response.json()) as unknown;
-  if (!response.ok) {
-    const message =
-      isRecord(body) && typeof body.message === "string"
-        ? body.message
-        : `ZenX plugin dev target returned HTTP ${String(response.status)}`;
-    throw new Error(message);
+  const timeoutMs = positiveTimeout(
+    options.timeoutMs ?? DEFAULT_DEV_REQUEST_TIMEOUT_MS,
+  );
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    const response = await fetch(new URL("/v1/plugins/dev", descriptor.url), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(request),
+      signal,
+    });
+    const body = (await response.json()) as unknown;
+    if (!response.ok) {
+      const message =
+        isRecord(body) && typeof body.message === "string"
+          ? body.message
+          : `ZenX plugin dev target returned HTTP ${String(response.status)}`;
+      throw new Error(message);
+    }
+    assertDevResult(body);
+    return body;
+  } catch (error) {
+    if (
+      signal.aborted &&
+      signal.reason instanceof DOMException &&
+      signal.reason.name === "TimeoutError"
+    ) {
+      throw new Error(
+        `ZenX plugin dev target timed out after ${String(timeoutMs)}ms`,
+      );
+    }
+    throw error;
   }
-  assertDevResult(body);
-  return body;
+}
+
+function positiveTimeout(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error("ZenX plugin dev timeout must be a positive integer");
+  }
+  return value;
 }
 
 async function readPrivateTextFile(filePath: string): Promise<string> {

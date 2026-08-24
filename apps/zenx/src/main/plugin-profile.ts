@@ -131,12 +131,16 @@ export async function stagePluginPackage(options: {
   allowBuilds?: Readonly<Record<string, boolean>>;
   removeGeneration?: (directory: string) => Promise<void>;
   trustedLoaders?: Readonly<Record<string, ZenXTrustedProfilePluginLoader>>;
+  signal?: AbortSignal;
+  pnpmAbortGraceMs?: number;
 }): Promise<StagedProfilePlugin> {
+  options.signal?.throwIfAborted();
   const paths = pluginProfilePaths(options.userDataDirectory);
   const generation = randomUUID();
   const generationDirectory = path.join(paths.generations, generation);
   await mkdir(paths.generations, { recursive: true, mode: 0o700 });
   try {
+    options.signal?.throwIfAborted();
     if (options.currentGeneration === undefined) {
       await mkdir(generationDirectory, { mode: 0o700 });
       await writeProfilePackageJson(
@@ -157,6 +161,7 @@ export async function stagePluginPackage(options: {
 
     const before = (await readProfilePackageJson(generationDirectory))
       .dependencies;
+    options.signal?.throwIfAborted();
     const installSpec = await prepareInstallSpec(
       options.source,
       generationDirectory,
@@ -178,7 +183,10 @@ export async function stagePluginPackage(options: {
         "--store-dir",
         paths.store,
       ],
+      signal: options.signal,
+      abortGraceMs: options.pnpmAbortGraceMs,
     });
+    options.signal?.throwIfAborted();
     const profile = await readProfilePackageJson(generationDirectory);
     const changed = Object.keys(profile.dependencies).filter(
       (packageName) =>
@@ -203,6 +211,7 @@ export async function stagePluginPackage(options: {
         trustedLoaders: options.trustedLoaders,
       },
     );
+    options.signal?.throwIfAborted();
     const packageVersion = capabilityPackage.manifest.version;
     return {
       generation,
@@ -620,7 +629,10 @@ async function runBundledPnpm(options: {
   cwd: string;
   environment?: NodeJS.ProcessEnv;
   arguments: readonly string[];
+  signal?: AbortSignal;
+  abortGraceMs?: number;
 }): Promise<void> {
+  options.signal?.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -637,23 +649,51 @@ async function runBundledPnpm(options: {
     );
     const output: Buffer[] = [];
     let bytes = 0;
+    let killTimer: NodeJS.Timeout | undefined;
+    let settled = false;
+    const cleanup = (): void => {
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      options.signal?.removeEventListener("abort", abort);
+    };
+    const settle = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const abort = (): void => {
+      if (settled) return;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (!settled) child.kill("SIGKILL");
+      }, options.abortGraceMs ?? 1_000);
+    };
     const append = (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes <= MAX_PNPM_OUTPUT_BYTES) output.push(chunk);
     };
     child.stdout.on("data", append);
     child.stderr.on("data", append);
-    child.once("error", reject);
+    child.once("error", (error) =>
+      settle(
+        options.signal?.aborted === true ? abortError(options.signal) : error,
+      ),
+    );
     child.once("exit", (code, signal) => {
-      if (code === 0) resolve();
+      if (options.signal?.aborted === true) {
+        settle(abortError(options.signal));
+      } else if (code === 0) settle();
       else {
-        reject(
+        settle(
           new Error(
             `Bundled pnpm failed (${signal ?? String(code)}): ${Buffer.concat(output).toString("utf8").slice(0, 4096)}`,
           ),
         );
       }
     });
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted === true) abort();
   });
 }
 
@@ -681,4 +721,10 @@ function isBooleanRecord(value: unknown): value is Record<string, boolean> {
     isRecord(value) &&
     Object.values(value).every((entry) => typeof entry === "boolean")
   );
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Aborted", "AbortError");
 }

@@ -185,6 +185,7 @@ export class ZenXCapabilityRegistry
       packageName: string;
       source: ZenXPluginProfileSource;
     },
+    options: { signal?: AbortSignal } = {},
   ): Promise<void> {
     await this.#serializeConfigurationMutation(async () => {
       const manifest = validateManifest(capabilityPackage.manifest);
@@ -215,6 +216,7 @@ export class ZenXCapabilityRegistry
               manifestPath: capabilityPackage.manifestPath,
             },
           };
+          options.signal?.throwIfAborted();
           await this.#configurationStore.save(
             this.#configuration({ packages: nextPackages }),
           );
@@ -266,6 +268,7 @@ export class ZenXCapabilityRegistry
         ? await this.#stagePluginRuntime(registration)
         : undefined;
       try {
+        options.signal?.throwIfAborted();
         await this.#configurationStore.save(
           this.#configuration({
             packages: nextPackages,
@@ -298,7 +301,10 @@ export class ZenXCapabilityRegistry
       packageName: string;
       source: ZenXPluginProfileSource;
     },
-    options: { allowSameVersionDevReload?: boolean } = {},
+    options: {
+      allowSameVersionDevReload?: boolean;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<void> {
     await this.#serializeConfigurationMutation(async () => {
       const manifest = validateManifest(capabilityPackage.manifest);
@@ -354,6 +360,7 @@ export class ZenXCapabilityRegistry
         if (shouldEnable && profile === undefined) {
           await this.#stopPluginRuntimeWithRollback(manifest.id, previous);
         }
+        options.signal?.throwIfAborted();
         await this.#configurationStore.save(
           this.#configuration({
             packages: nextPackages,

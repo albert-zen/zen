@@ -6,6 +6,8 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 
+import { requestPluginDevLink } from "../dist/index.js";
+
 const cli = path.resolve(import.meta.dirname, "..", "dist", "cli.js");
 
 test("dev validates a project and asks one authenticated target instance for a dev-link mutation", async () => {
@@ -86,6 +88,54 @@ test("dev validates a project and asks one authenticated target instance for a d
       },
     ]);
   } finally {
+    server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dev client bounds a stalled target request", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-dev-stalled-"));
+  const tokenFile = path.join(root, "dev.token");
+  const descriptorFile = path.join(root, "dev.json");
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.write("{");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.notEqual(address, null);
+  assert.equal(typeof address, "object");
+  try {
+    await writeFile(tokenFile, "private-dev-token\n", { mode: 0o600 });
+    await writeFile(
+      descriptorFile,
+      `${JSON.stringify({
+        version: 1,
+        transport: "http",
+        url: `http://127.0.0.1:${address.port}`,
+        authentication: { type: "bearer-file", tokenFile },
+      })}\n`,
+      { mode: 0o600 },
+    );
+    if (process.platform !== "win32") {
+      await chmod(tokenFile, 0o600);
+      await chmod(descriptorFile, 0o600);
+    }
+    await assert.rejects(
+      requestPluginDevLink(
+        descriptorFile,
+        {
+          version: 1,
+          projectDirectory: root,
+          packageName: "stalled-plugin",
+          pluginId: "stalled-plugin",
+        },
+        { timeoutMs: 30 },
+      ),
+      /timed out|aborted/iu,
+    );
+  } finally {
+    server.closeAllConnections();
     server.close();
     await rm(root, { recursive: true, force: true });
   }

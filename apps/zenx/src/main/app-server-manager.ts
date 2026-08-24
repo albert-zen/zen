@@ -49,6 +49,7 @@ export interface AppServerManagerOptions {
   startupTimeoutMs?: number;
   recoveryDelaysMs?: readonly number[];
   capabilityHost?: ZenXCapabilityHost;
+  capabilityReplacementTimeoutMs?: number;
 }
 
 type NotificationListener = (
@@ -327,7 +328,34 @@ export class AppServerManager {
         );
       }
       await new Promise<void>((resolve, reject) => {
-        this.#pendingCapabilityReplacements.set(requestId, { resolve, reject });
+        const timeoutMs = this.#options.capabilityReplacementTimeoutMs ?? 5_000;
+        if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+          reject(
+            new Error(
+              "Capability replacement timeout must be a positive integer",
+            ),
+          );
+          return;
+        }
+        const timer = setTimeout(() => {
+          if (!this.#pendingCapabilityReplacements.delete(requestId)) return;
+          reject(
+            new Error(
+              `Plugin ${targetPluginId} capability replacement timed out after ${String(timeoutMs)}ms`,
+            ),
+          );
+        }, timeoutMs);
+        const pending = {
+          resolve: () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          reject: (error: Error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        };
+        this.#pendingCapabilityReplacements.set(requestId, pending);
         child.send(
           {
             type: "capabilities/replace",
@@ -337,8 +365,8 @@ export class AppServerManager {
           } satisfies HostCommand,
           (error) => {
             if (error === null) return;
-            this.#pendingCapabilityReplacements.delete(requestId);
-            reject(error);
+            if (!this.#pendingCapabilityReplacements.delete(requestId)) return;
+            pending.reject(error);
           },
         );
       });

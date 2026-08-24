@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  access,
   mkdir,
   mkdtemp,
   readFile,
@@ -307,11 +308,15 @@ test("external public fixture completes create, dev target reload, validate, pac
     devControl = await ZenXPluginDevControlServer.start({
       descriptorFile,
       tokenFile: path.join(devUserData, "runtime", "plugin-dev.token"),
-      install: async (request) =>
-        await devCapabilities.devPluginPackage(request.projectDirectory, {
-          pluginId: request.pluginId,
-          packageName: request.packageName,
-        }),
+      install: async (request, signal) =>
+        await devCapabilities.devPluginPackage(
+          request.projectDirectory,
+          {
+            pluginId: request.pluginId,
+            packageName: request.packageName,
+          },
+          { signal },
+        ),
       reload: async (pluginId) =>
         await devManager.refreshPluginAfterCommit(pluginId),
     });
@@ -621,6 +626,32 @@ test("pnpm, manifest, runtime, UI, and Catalog failures preserve the committed g
   }
 });
 
+test("profile process runtime admission uses its manifest start timeout", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-runtime-timeout-"),
+  );
+  const tarball = await createTarballFixture(directory, {
+    id: "runtime-timeout",
+    packageName: "@zenx-test/runtime-timeout",
+    runtimeTimeoutMs: 25,
+    runtimeModule: "setInterval(() => {}, 1000);\n",
+  });
+  const service = profileService(path.join(directory, "user-data"), {
+    pnpmCliPath: pnpmCli,
+  });
+  try {
+    await service.initialize();
+    await assert.rejects(
+      service.installPluginTarball(tarball),
+      /runtime runtime-timeout did not become ready/u,
+    );
+    assert.deepEqual(service.pluginSnapshot().plugins, []);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("profile update Catalog failure keeps the old generation and serving runtime", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-profile-update-fail-"),
@@ -878,6 +909,88 @@ test("explicit dev-link mutation reloads the same plugin version without touchin
     assert.equal(
       (await readCatalog(userData)).profileGeneration,
       committedGeneration,
+    );
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("aborted dev-link pnpm settles and discards staging before returning", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-dev-abort-"),
+  );
+  const userData = path.join(directory, "user-data");
+  await createTarballFixture(directory, {
+    id: "abort-target",
+    packageName: "@zenx-test/abort-target",
+  });
+  const projectDirectory = path.join(
+    directory,
+    "fixture-package-abort-target-1.0.0",
+  );
+  const marker = path.join(directory, "pnpm-started");
+  const controller = new AbortController();
+  const service = profileService(userData, {
+    pnpmCliPath: await createStallingPnpm(directory),
+    pnpmEnvironment: { ...process.env, ZENX_TEST_PNPM_MARKER: marker },
+  });
+  try {
+    await service.initialize();
+    const mutation = service.devPluginPackage(
+      projectDirectory,
+      { pluginId: "abort-target", packageName: "@zenx-test/abort-target" },
+      { signal: controller.signal, pnpmAbortGraceMs: 20 },
+    );
+    await waitForFile(marker);
+    controller.abort(new Error("fixture dev deadline"));
+    await assert.rejects(mutation, /fixture dev deadline/u);
+    assert.deepEqual(service.pluginSnapshot().plugins, []);
+    assert.deepEqual(
+      await readdir(path.join(userData, "plugin-profile", "generations")),
+      [],
+    );
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("dev abort after runtime admission begins rolls back before Catalog commit", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-dev-precommit-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const marker = path.join(directory, "runtime-started");
+  await createTarballFixture(directory, {
+    id: "precommit-target",
+    packageName: "@zenx-test/precommit-target",
+    runtimeTimeoutMs: 500,
+    runtimeModule: delayedReadyRuntime("precommit-target", marker, 80),
+  });
+  const projectDirectory = path.join(
+    directory,
+    "fixture-package-precommit-target-1.0.0",
+  );
+  const controller = new AbortController();
+  const service = profileService(userData, { pnpmCliPath: pnpmCli });
+  try {
+    await service.initialize();
+    const mutation = service.devPluginPackage(
+      projectDirectory,
+      {
+        pluginId: "precommit-target",
+        packageName: "@zenx-test/precommit-target",
+      },
+      { signal: controller.signal },
+    );
+    await waitForFile(marker);
+    controller.abort(new Error("fixture precommit deadline"));
+    await assert.rejects(mutation, /fixture precommit deadline/u);
+    assert.deepEqual(service.pluginSnapshot().plugins, []);
+    assert.deepEqual(
+      await readdir(path.join(userData, "plugin-profile", "generations")),
+      [],
     );
   } finally {
     await service.close();
@@ -1335,6 +1448,51 @@ async function createFailingPnpm(directory: string): Promise<string> {
   return path.join(packageDirectory, "bin", "pnpm.cjs");
 }
 
+async function createStallingPnpm(directory: string): Promise<string> {
+  const packageDirectory = path.join(directory, "stalling-pnpm");
+  await mkdir(path.join(packageDirectory, "bin"), { recursive: true });
+  await Promise.all([
+    writeFile(
+      path.join(packageDirectory, "package.json"),
+      `${JSON.stringify({ name: "pnpm", version: BUNDLED_PNPM_VERSION })}\n`,
+    ),
+    writeFile(
+      path.join(packageDirectory, "bin", "pnpm.cjs"),
+      'require("node:fs").writeFileSync(process.env.ZENX_TEST_PNPM_MARKER, "started"); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);\n',
+    ),
+  ]);
+  return path.join(packageDirectory, "bin", "pnpm.cjs");
+}
+
+async function waitForFile(filePath: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  for (;;) {
+    try {
+      await access(filePath);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (Date.now() >= deadline)
+      throw new Error("Timed out waiting for fixture file");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+function delayedReadyRuntime(
+  pluginId: string,
+  marker: string,
+  delayMs: number,
+): string {
+  return `import { writeFileSync } from "node:fs";
+import readline from "node:readline";
+writeFileSync(${JSON.stringify(marker)}, "started");
+setTimeout(() => process.stdout.write(JSON.stringify({version:1,type:"ready",pluginId:${JSON.stringify(pluginId)},packageVersion:"1.0.0"})+"\\n"), ${String(delayMs)});
+const lines = readline.createInterface({input:process.stdin});
+lines.on("line", (line) => { if (JSON.parse(line).type === "close") process.exit(0); });
+`;
+}
+
 async function createPluginTarball(directory: string): Promise<string> {
   const transitive = await createTarballFixture(directory, {
     id: "transitive-plugin",
@@ -1402,6 +1560,7 @@ interface TarballFixtureOptions {
   outputPrefix?: string;
   runtimeType?: "process" | "bundled";
   runtimeModule?: string;
+  runtimeTimeoutMs?: number;
 }
 
 async function createTarballFixture(
@@ -1445,6 +1604,7 @@ async function createTarballFixture(
           options.omitUiEntry,
           version,
           options.runtimeType,
+          options.runtimeTimeoutMs,
         ),
         null,
         2,
@@ -1483,6 +1643,7 @@ function fixtureManifest(
   invalidUiEntry = false,
   version = "1.0.0",
   runtimeType: "process" | "bundled" = "process",
+  runtimeTimeoutMs?: number,
 ) {
   const toolPrefix = id.replaceAll("-", "_");
   return {
@@ -1492,7 +1653,13 @@ function fixtureManifest(
     version,
     description: description ?? "Installed from a controlled tarball",
     compatibility: { zenx: ">=0.1.0 <0.2.0" },
-    runtime: { type: runtimeType, entry: "runtime.mjs" },
+    runtime: {
+      type: runtimeType,
+      entry: "runtime.mjs",
+      ...(runtimeTimeoutMs === undefined
+        ? {}
+        : { timeoutMs: runtimeTimeoutMs }),
+    },
     mainDocument: `Use ${toolPrefix}_echo to echo exact bytes.`,
     provider: {
       id: `${id}-provider`,

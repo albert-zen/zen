@@ -484,6 +484,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   async devPluginPackage(
     projectDirectory: string,
     expected: { pluginId: string; packageName: string },
+    options: { signal?: AbortSignal; pnpmAbortGraceMs?: number } = {},
   ): Promise<{
     snapshot: ZenXPluginSnapshot;
     generation: string;
@@ -495,6 +496,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         { mode: "dev-link", packageSpec: projectDirectory },
         expected.pluginId,
         expected.packageName,
+        options,
       );
       const generation = this.#registry.profileGeneration();
       if (generation === undefined) {
@@ -528,7 +530,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     source: ZenXPluginPackageSource,
     expectedPluginId?: string,
     expectedPackageName?: string,
+    options: { signal?: AbortSignal; pnpmAbortGraceMs?: number } = {},
   ): Promise<ZenXPluginSnapshot> {
+    options.signal?.throwIfAborted();
     const pnpmCliPath = await resolveBundledPnpmCli({
       resourcesDirectory: this.#resourcesDirectory,
       overridePath: this.#pnpmCliPath,
@@ -546,6 +550,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       expectedPackageName: expectedDescriptor?.profilePackageName,
       removeGeneration: this.#removeProfileGeneration,
       trustedLoaders: this.#trustedProfileLoaders,
+      signal: options.signal,
+      pnpmAbortGraceMs: options.pnpmAbortGraceMs,
     });
     try {
       const pluginId = staged.capabilityPackage.manifest.id;
@@ -613,12 +619,14 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         packageName: staged.packageName,
         source: staged.source,
       };
+      options.signal?.throwIfAborted();
       const catalogSource = source.mode === "bundled" ? "bundled" : "local";
       if (current === undefined) {
         await this.#registry.install(
           staged.capabilityPackage,
           catalogSource,
           profile,
+          { signal: options.signal },
         );
       } else {
         if (current.lifecycle === "uninstalled") {
@@ -630,7 +638,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           staged.capabilityPackage,
           catalogSource,
           profile,
-          { allowSameVersionDevReload: source.mode === "dev-link" },
+          {
+            allowSameVersionDevReload: source.mode === "dev-link",
+            signal: options.signal,
+          },
         );
       }
     } catch (error) {

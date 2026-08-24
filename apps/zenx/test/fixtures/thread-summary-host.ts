@@ -43,6 +43,22 @@ async function handle(command: HostCommand): Promise<void> {
     process.send?.({ type: "ready", url: server.url });
     return;
   }
+  if (command.type === "capabilities/replace") {
+    if (process.env["ZENX_SUMMARY_FIXTURE_MODE"] === "exit-replacement") {
+      process.exit(42);
+    }
+    const reply = () =>
+      process.send?.({
+        type: "capabilities/replaced",
+        requestId: command.requestId,
+      });
+    if (process.env["ZENX_SUMMARY_FIXTURE_MODE"] === "late-replacement") {
+      setTimeout(reply, 80);
+    } else {
+      reply();
+    }
+    return;
+  }
   if (command.type !== "thread-summary/list") return;
 
   const mode = process.env["ZENX_SUMMARY_FIXTURE_MODE"];
