@@ -32,7 +32,11 @@ import {
   withZenXProviderTransports,
   zenXProviderDiscoveryTransport,
 } from "./system-proxy.js";
-import { zenXBundledAutomationPackages } from "./capabilities/automation-control-package.js";
+import {
+  ZenXTriggersCapabilityPackage,
+  ZENX_ROOMS_CAPABILITY_ID,
+  type ZenXAutomationControlPort,
+} from "./capabilities/automation-control-package.js";
 import { createBundledAutomationPluginService } from "./automation-plugin-service.js";
 import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
 import { normalizeTitleOwnershipFailure } from "./thread-title-failure.js";
@@ -69,6 +73,11 @@ import {
 import { secondInstanceDisposition } from "./desktop-lifecycle.js";
 import { validatePluginHostSdkRequest } from "./plugin-host-sdk.js";
 import type { ZenXPluginPackageSource } from "./capabilities/types.js";
+import {
+  createZenXRoomsProfileLoader,
+  ZENX_ROOMS_PACKAGE_NAME,
+  ZENX_ROOMS_TARBALL,
+} from "./rooms-profile-loader.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -156,6 +165,16 @@ app.whenReady().then(async () => {
     documents: app.getPath("documents"),
   });
   installApplicationMenu();
+  let automationService: ZenXAutomationControlPort | undefined;
+  const resourcesDirectory = app.isPackaged
+    ? process.resourcesPath
+    : join(__dirname, "../../resources");
+  const roomsService = (): ZenXAutomationControlPort => {
+    if (automationService === undefined) {
+      throw new Error("Rooms automation service is not attached");
+    }
+    return automationService;
+  };
   settingsService = new ZenXSettingsService({
     userDataDirectory,
     zenDataDirectory,
@@ -168,15 +187,17 @@ app.whenReady().then(async () => {
     capabilityService = new ZenXCapabilityService({
       userDataDirectory,
       bundledProvidersOnly: app.isPackaged,
-      resourcesDirectory: process.resourcesPath,
+      resourcesDirectory,
+      pnpmCliPath: app.isPackaged
+        ? undefined
+        : join(__dirname, "../../../../node_modules/pnpm/bin/pnpm.cjs"),
+      trustedProfileLoaders: {
+        [ZENX_ROOMS_CAPABILITY_ID]: createZenXRoomsProfileLoader(roomsService),
+      },
       bundledManifestSha256: app.isPackaged
         ? PACKAGED_PROVIDER_MANIFEST_SHA256
         : undefined,
     });
-    await capabilityService.initialize();
-    capabilityService.register(
-      new ZenXSelfControlCapabilityPackage({ appServer: selfControlPort }),
-    );
     await settingsService.initialize(process.env);
     await syncProjectProjection(settingsService);
     let startupError: unknown;
@@ -224,18 +245,33 @@ app.whenReady().then(async () => {
       projectProjection,
       imageAttachments,
     );
-    installCapabilityIpc(capabilityService, appServerManager);
     installTitleIpc(titleCoordinator);
-    const automationService = await createBundledAutomationPluginService({
+    automationService = await createBundledAutomationPluginService({
       userDataDirectory,
       appServer: appServerManager,
       titles: titleCoordinator,
     });
-    for (const capabilityPackage of zenXBundledAutomationPackages(
-      automationService,
-    )) {
-      await capabilityService.install(capabilityPackage, "bundled");
+    await capabilityService.initialize();
+    const installedRooms = capabilityService
+      .pluginSnapshot()
+      .plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID);
+    if (installedRooms?.profileSource === undefined) {
+      await capabilityService.installBundledPluginPackage(
+        join(resourcesDirectory, "plugins", ZENX_ROOMS_TARBALL),
+        {
+          pluginId: ZENX_ROOMS_CAPABILITY_ID,
+          packageName: ZENX_ROOMS_PACKAGE_NAME,
+        },
+      );
     }
+    capabilityService.register(
+      new ZenXSelfControlCapabilityPackage({ appServer: selfControlPort }),
+    );
+    await capabilityService.install(
+      new ZenXTriggersCapabilityPackage(automationService),
+      "bundled",
+    );
+    installCapabilityIpc(capabilityService, appServerManager);
     if (startupError === undefined) await appServerManager.start();
     else appServerManager.reportStartupError(startupError);
   } catch (error) {

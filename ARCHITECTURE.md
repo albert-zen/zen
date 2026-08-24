@@ -359,6 +359,7 @@ Package 分发与 profile transaction 遵守以下边界：
 - Catalog snapshot replace 是唯一 durable commit point：失败或中断发生在它之前时，旧 snapshot、generation 和 runtime 继续有效；发生在它之后时，新 snapshot 已是权威，重启只装载其 generation，不从 staging、`node_modules` 或运行中对象猜测状态。
 - 未被 Catalog snapshot 引用的 generation 都是可丢弃 staging；启动时和 mutation 结束后可在没有 live runtime lease 时尽力清理，清理失败最多留下磁盘垃圾，不能发布 package、改变 enablement 或触发 durable recovery。
 - 五个第一方 package 也产出普通 tarball 并随 App Resources 分发；首装、卸载后的重装和第三方 package 共用同一 installer、Catalog、lifecycle、runtime、UI 与 discovery 路径，`shell` 仍是 Agent Runtime builtin。
+- Rooms 是首个完成迁移的第一方 package：App Resources 中的固定 `@zenx/rooms-plugin` tarball 经普通 profile transaction 首装，Catalog 以 bundled source、package name 与 generation 保存唯一 admission；重启只从该 generation 加载。已有的 pre-profile bundled Rooms descriptor 只能由同一 Host-owned transaction 在 package identity 完全匹配时一次性收编，保留 enablement/uninstall 与数据状态且不写第二个 migration authority。只有这项 Host-owned allowlist 可给 installed runtime/trusted UI 注入既有 automation service，外部 package 不能靠 manifest 自行取得 bundled/trusted admission。
 - Marketplace 只读取薄 metadata 目录并把选中的 package spec/版本交给同一 installer；它不保存 package 内容、不成为安装 authority，也不引入 registry backend、发布后台、审核工作流、自定义 store/solver 或签名 PKI。
 
 - Plugin Package 生命周期只有 `installed`、`enabled`、`uninstalled`。Bundled plugin

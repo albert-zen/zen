@@ -537,6 +537,49 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       const current = this.pluginSnapshot().plugins.find(
         (plugin) => plugin.id === pluginId,
       );
+      const adoptsLegacyBundledCatalog =
+        source.mode === "bundled" &&
+        expectedPluginId === pluginId &&
+        expectedPackageName === staged.packageName &&
+        expectedDescriptor?.source === "bundled" &&
+        expectedDescriptor.profilePackageName === undefined &&
+        expectedDescriptor.profileSource === undefined;
+      if (adoptsLegacyBundledCatalog) {
+        let generation = staged.generation;
+        let generationDirectory: string | undefined;
+        if (current?.lifecycle === "uninstalled") {
+          const removed = await stagePluginRemoval({
+            userDataDirectory: this.#userDataDirectory,
+            packageName: staged.packageName,
+            pnpmCliPath,
+            pnpmEnvironment: this.#pnpmEnvironment,
+            currentGeneration: staged.generation,
+            removeGeneration: this.#removeProfileGeneration,
+          });
+          generation = removed.generation;
+          generationDirectory = removed.generationDirectory;
+          await discardStagedProfileGeneration(
+            staged.generationDirectory,
+            this.#removeProfileGeneration,
+          );
+        }
+        try {
+          await this.#registry.adoptBundledProfile(staged.capabilityPackage, {
+            generation,
+            packageName: staged.packageName,
+            source: staged.source,
+          });
+        } catch (error) {
+          if (generationDirectory !== undefined) {
+            await discardStagedProfileGeneration(
+              generationDirectory,
+              this.#removeProfileGeneration,
+            );
+          }
+          throw error;
+        }
+        return this.pluginSnapshot();
+      }
       const profile = {
         generation: staged.generation,
         packageName: staged.packageName,

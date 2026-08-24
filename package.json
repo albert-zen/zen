@@ -5,7 +5,8 @@
   "type": "module",
   "workspaces": [
     "apps/zenx",
-    "packages/zenx-plugin-sdk"
+    "packages/zenx-plugin-sdk",
+    "packages/zenx-rooms-plugin"
   ],
   "bin": {
     "zen": "./dist/apps/cli/src/cli.js"

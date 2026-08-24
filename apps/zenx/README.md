@@ -138,6 +138,11 @@ The target contract is:
   can also be uninstalled and later reinstalled. Uninstall removes runtime, UI,
   and tool registrations but retains plugin data by default; deleting data is a
   separate explicit action.
+- Rooms is the first profile-managed first-party package. Its standard npm
+  tarball ships in App Resources and uses the same profile installer, Catalog,
+  discovery, runtime, UI, and data lifecycle as external packages. Catalog
+  source plus the fixed package allowlist admits its existing trusted
+  automation service and UI; external tarballs cannot self-declare that trust.
 - Generic UI Host supports sidebar, pages/subroutes, settings, panel,
   commands/menu, and result renderers. First-party and third-party plugins use
   the same logical UI SDK, while third-party code runs isolated. Human plugin UI
@@ -175,7 +180,8 @@ a single-file executable. It is written below
 together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
 Linux.
 
-Each packaging command builds a private output snapshot, assembles resources,
+Each packaging command builds a private output snapshot, validates and packs
+the first-party Rooms package with the public plugin developer kit, assembles resources,
 and runs Electron packager in its own `.packaged/runs/` directory, reusing only
 SHA-256-addressed verified archive cache files. The Playwright browser archive
 is pinned per platform in the same provider lock and its complete extracted

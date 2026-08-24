@@ -13,6 +13,7 @@ import {
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { packZenXRoomsPlugin } from "./pack-first-party-plugins.mjs";
 
 const run = promisify(execFile);
 const zenx = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -47,6 +48,7 @@ async function packageZenX(arguments_) {
           ])
         ).stdout,
       );
+      await packZenXRoomsPlugin({ outputDirectory: resources });
       const zenxPackage = JSON.parse(
         await readFile(path.join(zenx, "package.json"), "utf8"),
       );
@@ -83,6 +85,10 @@ async function packageZenX(arguments_) {
               buildPath,
               sourceDirectory: path.join(root, "node_modules", "pnpm"),
               expectedVersion: zenxPackage.devDependencies.pnpm,
+            });
+            await copyFirstPartyPluginResources({
+              buildPath,
+              sourceDirectory: path.join(resources, "plugins"),
             });
           },
         ],
@@ -288,6 +294,14 @@ export async function copyBundledPnpmResource(options) {
   }
   const resourcesDirectory = path.dirname(options.buildPath);
   const destination = path.join(resourcesDirectory, "pnpm");
+  await mkdir(resourcesDirectory, { recursive: true, mode: 0o700 });
+  await cp(options.sourceDirectory, destination, { recursive: true });
+  return destination;
+}
+
+export async function copyFirstPartyPluginResources(options) {
+  const resourcesDirectory = path.dirname(options.buildPath);
+  const destination = path.join(resourcesDirectory, "plugins");
   await mkdir(resourcesDirectory, { recursive: true, mode: 0o700 });
   await cp(options.sourceDirectory, destination, { recursive: true });
   return destination;

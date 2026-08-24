@@ -1,0 +1,230 @@
+{
+  "schemaVersion": 2,
+  "id": "zenx-rooms",
+  "name": "Rooms",
+  "version": "1.0.0",
+  "description": "Manage shared ZenX Room collaboration.",
+  "compatibility": { "zenx": ">=0.1.0 <0.2.0" },
+  "runtime": { "type": "bundled", "entry": "./dist/runtime.js" },
+  "mainDocument": "Use Rooms to manage shared collaboration and explicit member routing.",
+  "storageVersion": 1,
+  "provider": {
+    "id": "zenx-automation-service",
+    "platforms": ["*"],
+    "interactionModes": ["background_safe"],
+    "capabilities": ["zenx.rooms.manage"]
+  },
+  "permissions": [
+    {
+      "id": "zenx-rooms.read",
+      "title": "Read Rooms",
+      "description": "List Rooms and bounded recent messages.",
+      "scope": "workspace"
+    },
+    {
+      "id": "zenx-rooms.write",
+      "title": "Manage Rooms",
+      "description": "Create, update, cancel, and delete Triggers and manage Room collaboration.",
+      "scope": "local-device"
+    }
+  ],
+  "tools": [
+    {
+      "name": "zenx_rooms_list",
+      "description": "List Rooms, members, and bounded recent messages.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_create",
+      "description": "Create a Room with named Thread members.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "maxLength": 256 },
+          "members": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "maxLength": 128 },
+                "threadId": { "type": "string", "maxLength": 512 }
+              },
+              "required": ["name", "threadId"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["name", "members"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_rename",
+      "description": "Rename an existing Room.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": { "type": "string", "maxLength": 512 },
+          "name": { "type": "string", "maxLength": 256 }
+        },
+        "required": ["roomId", "name"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_delete",
+      "description": "Delete a Room when no nonterminal wakeup owns its reply route.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "roomId": { "type": "string", "maxLength": 512 } },
+        "required": ["roomId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_add_member",
+      "description": "Add a named Thread member to a Room.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": { "type": "string", "maxLength": 512 },
+          "name": { "type": "string", "maxLength": 128 },
+          "threadId": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["roomId", "name", "threadId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_remove_member",
+      "description": "Remove a Thread member from a Room.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": { "type": "string", "maxLength": 512 },
+          "threadId": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["roomId", "threadId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_post_message",
+      "description": "Post an Agent-attributed Room message; explicit mentions may wake registered members.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": { "type": "string", "maxLength": 512 },
+          "text": { "type": "string", "maxLength": 8000 }
+        },
+        "required": ["roomId", "text"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    }
+  ],
+  "resources": [],
+  "ui": {
+    "bundles": [
+      {
+        "id": "main",
+        "apiVersion": 1,
+        "kind": "trusted",
+        "entry": "zenx/bundled/rooms-ui"
+      }
+    ],
+    "surfaces": [
+      { "id": "rooms-page", "bundleId": "main", "exportName": "rooms-page" }
+    ]
+  },
+  "contributions": {
+    "pages": [
+      {
+        "id": "rooms",
+        "title": "Rooms",
+        "route": "/plugins/zenx-rooms/rooms",
+        "surfaceId": "rooms-page"
+      }
+    ],
+    "sidebar": [
+      {
+        "id": "rooms",
+        "label": "Rooms",
+        "icon": "users",
+        "pageId": "rooms",
+        "order": 20
+      }
+    ],
+    "commands": [
+      {
+        "id": "list",
+        "title": "List Rooms, members, and bounded recent messages.",
+        "tool": "zenx_rooms_list"
+      },
+      {
+        "id": "create",
+        "title": "Create a Room with named Thread members.",
+        "tool": "zenx_rooms_create"
+      },
+      {
+        "id": "rename",
+        "title": "Rename an existing Room.",
+        "tool": "zenx_rooms_rename"
+      },
+      {
+        "id": "delete",
+        "title": "Delete a Room when no nonterminal wakeup owns its reply route.",
+        "tool": "zenx_rooms_delete"
+      },
+      {
+        "id": "add-member",
+        "title": "Add a named Thread member to a Room.",
+        "tool": "zenx_rooms_add_member"
+      },
+      {
+        "id": "remove-member",
+        "title": "Remove a Thread member from a Room.",
+        "tool": "zenx_rooms_remove_member"
+      },
+      {
+        "id": "post-message",
+        "title": "Post an Agent-attributed Room message; explicit mentions may wake registered members.",
+        "tool": "zenx_rooms_post_message"
+      }
+    ]
+  }
+}

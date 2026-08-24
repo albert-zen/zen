@@ -86,7 +86,13 @@ dependency，同时保留 source tombstone 和默认 plugin data；重装从同�
 `allowBuilds` 执行。pnpm、全部准备期 I/O 与 manifest/runtime/UI 准备和校验完成后，原子 Catalog snapshot
 才提交 generation identity；提交后只做 non-fallible 的已准备对象/admission 内存交换，不再执行 I/O、
 校验或其他可拒绝工作。此前失败或中断继续使用旧 generation，重启也只读取 Catalog 指向的 generation。
-Browser、Computer、ZenX self-control、Triggers 与 Rooms 将作为随应用分发的标准第一方 tarball 走同一路径；薄 Marketplace
+Rooms 已作为随应用分发的标准第一方 tarball 离线首装：它使用公开 SDK 合同打包，在 profile 中成为
+直接 dependency，并与第三方 package 共用 Catalog、runtime、UI、discovery 与
+install/disable/uninstall/reinstall/delete-data 路径；卸载保留既有 Room 数据，重装从 Catalog 指向的
+generation 恢复。升级时，同一 transaction 会把 identity 完全匹配的旧 bundled Rooms Catalog descriptor
+收编进 profile，并原样保留 disabled/uninstalled 与数据状态。只有 Host-owned App Resources allowlist 可以启用其 bundled runtime 与 trusted UI，
+外部 tarball 自报同类信任会被拒绝。Browser、Computer、ZenX self-control 与 Triggers 仍将在后续切片
+迁移到同一路径；薄 Marketplace
 只提供 package metadata 与 installer 入口，不成为 registry、发布后台或新的 package authority。
 
 目标 Plugin Platform 保持 Zen `AgentRuntime` 拥有 provider-neutral agent loop 和 canonical

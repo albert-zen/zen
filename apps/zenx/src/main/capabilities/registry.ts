@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { validatePluginManifest as validatePublicPluginManifest } from "@zenx/plugin-sdk";
 
@@ -400,6 +401,83 @@ export class ZenXCapabilityRegistry
           this.#activateRegistration(previous);
         }
         throw error;
+      }
+    });
+  }
+
+  async adoptBundledProfile(
+    capabilityPackage: ZenXCapabilityPackage,
+    profile: {
+      generation: string;
+      packageName: string;
+      source: ZenXPluginProfileSource;
+    },
+  ): Promise<void> {
+    await this.#serializeConfigurationMutation(async () => {
+      const manifest = validateManifest(capabilityPackage.manifest);
+      if (manifest.schemaVersion !== 2) {
+        throw new Error("Bundled profile adoption requires manifest v2");
+      }
+      const previousDescriptor = this.#packageDescriptors[manifest.id];
+      if (
+        previousDescriptor === undefined ||
+        previousDescriptor.source !== "bundled" ||
+        previousDescriptor.profilePackageName !== undefined ||
+        previousDescriptor.profileSource !== undefined ||
+        profile.source.mode !== "bundled" ||
+        profile.source.packageName !== profile.packageName ||
+        profile.source.packageVersion !== manifest.version
+      ) {
+        throw new Error(
+          `Plugin ${manifest.id} is not an adoptable bundled Catalog package`,
+        );
+      }
+      if (this.#catalogPackages.has(manifest.id)) {
+        throw new Error(
+          `Plugin ${manifest.id} bundled profile adoption requires bootstrap state`,
+        );
+      }
+      if (!sameBundledAdoptionManifest(previousDescriptor.manifest, manifest)) {
+        throw new Error(
+          `Plugin ${manifest.id} bundled profile does not match its Catalog identity`,
+        );
+      }
+      this.#validateRegistration(manifest);
+      const replacement = {
+        package: capabilityPackage,
+        source: "bundled",
+      } as const;
+      const uninstalled = this.#uninstalled.has(manifest.id);
+      const shouldEnable = !uninstalled && !this.#disabled.has(manifest.id);
+      const runtimeStage = shouldEnable
+        ? await this.#stagePluginRuntime(replacement)
+        : undefined;
+      const nextPackages = {
+        ...this.#packageDescriptors,
+        [manifest.id]: {
+          manifest: structuredClone(manifest),
+          source: "bundled",
+          profilePackageName: profile.packageName,
+          profileSource: structuredClone(profile.source),
+        },
+      } satisfies Record<string, ZenXPluginPackageDescriptor>;
+      try {
+        await this.#configurationStore.save(
+          this.#configuration({
+            packages: nextPackages,
+            profileGeneration: profile.generation,
+          }),
+        );
+      } catch (error) {
+        await runtimeStage?.rollback();
+        throw error;
+      }
+      this.#packageDescriptors = nextPackages;
+      this.#profileGeneration = profile.generation;
+      if (!uninstalled) this.#catalogPackages.set(manifest.id, replacement);
+      if (shouldEnable) {
+        runtimeStage?.publish();
+        this.#activateRegistration(replacement);
       }
     });
   }
@@ -1855,6 +1933,30 @@ function validateManifest(
 
 function manifestName(manifest: ZenXCapabilityManifest): string {
   return manifest.schemaVersion === 2 ? manifest.name : manifest.displayName;
+}
+
+function sameBundledAdoptionManifest(
+  previous: ZenXCapabilityManifest,
+  replacement: ZenXPluginManifestV2,
+): boolean {
+  if (
+    previous.schemaVersion !== 2 ||
+    previous.runtime.type !== "bundled" ||
+    replacement.runtime.type !== "bundled"
+  ) {
+    return false;
+  }
+  if ((previous.storageVersion ?? 1) !== (replacement.storageVersion ?? 1)) {
+    return false;
+  }
+  const comparable = (manifest: ZenXPluginManifestV2): unknown => {
+    const { storageVersion: _storageVersion, runtime, ...identity } = manifest;
+    return {
+      ...identity,
+      runtime: { ...runtime, entry: "<bundled-profile-entry>" },
+    };
+  };
+  return isDeepStrictEqual(comparable(previous), comparable(replacement));
 }
 
 function isContributionId(value: string): boolean {

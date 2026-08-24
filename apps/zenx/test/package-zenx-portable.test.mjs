@@ -18,6 +18,7 @@ import test from "node:test";
 import {
   applicationIconForPlatform,
   copyBundledPnpmResource,
+  copyFirstPartyPluginResources,
   copyPackagedProviderResources,
   createBuildSnapshot,
   packageManifest,
@@ -157,6 +158,40 @@ test("copies the fixed pnpm CLI into App Resources instead of relying on PATH", 
     await assert.rejects(
       resolveBundledPnpmCli({ resourcesDirectory: path.dirname(buildPath) }),
       new RegExp(`requires bundled pnpm ${BUNDLED_PNPM_VERSION}`, "u"),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("copies first-party plugin tarballs into App Resources", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-plugin-resource-"),
+  );
+  try {
+    const sourceDirectory = path.join(directory, "source", "plugins");
+    await mkdir(sourceDirectory, { recursive: true });
+    await writeFile(
+      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.0.tgz"),
+      "rooms tarball",
+    );
+    const buildPath = path.join(
+      directory,
+      "ZenX.app",
+      "Contents",
+      "Resources",
+      "app",
+    );
+    const destination = await copyFirstPartyPluginResources({
+      buildPath,
+      sourceDirectory,
+    });
+    assert.equal(
+      await readFile(
+        path.join(destination, "zenx-rooms-plugin-1.0.0.tgz"),
+        "utf8",
+      ),
+      "rooms tarball",
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

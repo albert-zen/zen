@@ -1,0 +1,24 @@
+{
+  "name": "@zenx/rooms-plugin",
+  "version": "1.0.0",
+  "description": "First-party ZenX Rooms plugin",
+  "type": "module",
+  "files": [
+    "dist/runtime.js",
+    "zenx.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "validate": "npm run build && node ../zenx-plugin-sdk/dist/cli.js validate .",
+    "pack": "npm run build && node ../zenx-plugin-sdk/dist/cli.js pack ."
+  },
+  "devDependencies": {
+    "@zenx/plugin-sdk": "0.1.0",
+    "typescript": "^5.9.2"
+  },
+  "zenx": {
+    "plugin": "./zenx.plugin.json"
+  }
+}
