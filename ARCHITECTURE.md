@@ -17,7 +17,7 @@
 - **External Tool Provider** — Tool Environment 把调用路由到 Zen/ZenX 之外服务的 provider，外部服务拥有领域执行，Zen 仍保留 Host policy 与 canonical settlement。
 - **ZenX Host** — 独立于窗口生命周期的桌面宿主进程所有权边界，同时组合 Plugin Host 与 ZAS/AppServer 两项并列服务；关闭窗口不停止 Host，只有显式 Quit 才停止它。
 - **Plugin Host** — ZenX Host 中负责插件 catalog、生命周期、UI/工具注册、Host policy 与 Runtime 路由的服务；它与 ZAS/AppServer 并列，不拥有 Agent、Thread、Turn 或 transcript。
-- **Plugin Catalog** — Plugin Host 对 package descriptor 与安装事实的唯一权威；它把 enabled 作为已安装 package 的独立运行开关，按 Host mutation 顺序原子持久化 lifecycle，并让 bundled/local package 使用同一合同。
+- **Plugin Catalog** — Plugin Host 对已发布 package/profile 状态的唯一 durable 权威与提交点；每个原子 snapshot 记录 profile generation identity、直接 package 安装事实和独立 enablement，并让第一方与第三方 package 使用同一合同。
 - **Plugin Runtime** — 实际执行插件领域行为的运行边界，可以是 bundled module、child process、本地服务或远程服务，失败由调用明确返回且不建立自动修复状态机。
 - **Plugin Runtime ABI** — bundled module、child process 与 HTTP service 共享的 provider-neutral invocation/result、取消与 close 合同；它只传递稳定 package identity、namespaced tool、参数和一次调用上下文，不拥有 Agent 或会话语义。
 - **Plugin Runtime Supervisor** — ZenX Host 持有的瞬时 runtime/provider registry，启动或附着 enabled runtime、向 Tool Environment 原子发布其 tool ownership，并在 disable/uninstall/quit 时先撤销新 admission、再等待已执行调用并关闭 runtime。
@@ -25,7 +25,14 @@
 - **ZenX Plugin Host SDK v1** — Plugin Host 按 package identity 注入的 provider-neutral 公共合同，以 `query / actions / ui / storage` 四组能力让 bundled 与隔离 runtime 使用相同产品语义，而不取得 ZenX 内部 store authority。
 - **ZenX Plugin Storage** — Plugin Host 在 plugin id namespace 下原子持久化一个有界版本化 JSON document，按 package 提供的逐版本 migration 串行前移，disable/uninstall 不删除数据且失败不发布半状态。
 - **ZenX Plugin AppServer Port** — Host SDK 唯一允许修改 Thread 的显式 `actions.threads.startTurn` 边界；它调用既有 AppServer 并返回该 authority 产生的 canonical Item 投影，不复制 Turn 或 transcript。
-- **Plugin Package** — 使用统一 manifest、main document、tools、UI contributions 与数据 namespace 的安装单元，生命周期只有 `installed`、`enabled`、`uninstalled`，bundled 与第三方 package 遵守同一合同。
+- **Plugin Package** — 一个普通 npm package，其 `package.json#zenx.plugin` 定位 `zenx.plugin.json`，由该 manifest 声明 main document、tools、UI contributions 与数据 namespace，生命周期只有 `installed`、`enabled`、`uninstalled`。
+- **Plugin Package Source** — Catalog 为直接 dependency 记录 npm、commit-pinned Git、tarball、稳定本地复制或显式开发 `link:` 来源，实际解析继续使用 pnpm package spec。
+- **Plugin Profile** — ZenX userData 下由普通 `package.json`、`pnpm-lock.yaml`、`node_modules` 和 Catalog 中独立 enablement 组成的 package 环境，只有 profile 的直接 dependencies 可成为插件。
+- **Plugin Profile Generation** — 一次 package mutation 在唯一 identity 的新目录中生成的不可变 profile 内容；Catalog 尚未引用它时只是可丢弃 staging，引用它时才成为已发布 generation。
+- **ZenX Bundled pnpm** — ZenX 从 App Resources 直接调用的固定版本 pnpm CLI，负责标准依赖解析、SemVer、lockfile、integrity、更新和删除，不依赖用户 PATH 上的 pnpm。
+- **Plugin Package Trust** — 安装即信任 package 代码，但 dependency build scripts 只由 bundled pnpm 按 profile 显式 `allowBuilds` 执行，不引入风险引擎或参数级权限矩阵。
+- **First-party Plugin Tarball** — Browser、Computer、ZenX self-control、Triggers 与 Rooms 的标准 npm tarball，随 App Resources 分发并通过同一个 profile installer 首装或重装。
+- **Thin Plugin Marketplace** — 只读 package metadata 目录，只提供 package spec、名称、描述、图标、推荐版本与 curated 状态，选择后仍调用同一个 profile installer。
 - **Plugin Discovery Projection** — 常驻 `zenx_plugin` 工具用普通 `discover` / `read` 调用选择后续模型可见插件能力；选择事实只由既有 tool call/result 推导，不新增 catalog/disclosure Item。
 - **Generic UI Host** — ZenX 为插件提供 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer 的受控宿主 surface，不允许插件直接接管核心 DOM、router 或 Agent 页面语义。
 - **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
@@ -330,11 +337,26 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - 目标工具策略只有两档：默认 `full_access` 直接执行；可选 `ask_unknown` 由 Host
   按稳定 tool name 维护 `approvedTools` / `deniedTools`。未知工具只询问一次，允许后
   加入 approved，拒绝后加入 denied。
+- 安装一个 package 就表示信任其运行代码；dependency build scripts 仍只按 profile
+  显式 pnpm `allowBuilds` 执行，未列入者保持 blocked，这一 package-manager policy
+  不扩展成风险评分或新的权限语义。
 - 不引入 risk scoring、参数级 scope graph、权限矩阵、rules engine 或复杂 sandbox
   产品框架。当前 capability registry 的 permission scopes/grants 是骨架现状，不能
   反向定义目标 Plugin Platform。
 
 ### 插件生命周期、UI 与 ZAS
+
+Package 分发与 profile transaction 遵守以下边界：
+
+- Installer 只从 profile `package.json` 的直接 dependencies 建立 Catalog descriptor；即使传递依赖也带有 `zenx.plugin` metadata，它仍只是普通库，不进入 discovery、lifecycle、runtime 或 UI projection。
+- npm spec、commit-pinned Git 来源和 tarball 原样交给 bundled pnpm 并由 lockfile 固定解析结果；稳定本地安装先把所选目录复制进 staging，使之后的源目录修改不改变已发布 generation，`link:` 只由显式 `dev` 流程创建并保留其开发期实时链接语义。
+- Package dependency 变化在串行 mutation 中创建新 generation，并只在其中调用 bundled pnpm；enablement 作为 Catalog 中独立于 `node_modules` 的状态，可在同一串行 Catalog transaction 中复用当前 generation identity。
+- 新 generation 的 pnpm mutation、`allowBuilds` 约束的 dependency scripts、直接 package metadata、manifest、除 Catalog snapshot replace 自身外的所有文件/进程 I/O、runtime 启动与校验，以及 UI 构造与校验都必须在 durable commit 前成功，并形成可直接发布的未公开对象；此前任何失败只撤销未 admission 的 runtime/UI 并保留旧状态。
+- 原子 Catalog snapshot replace 提交 generation identity 后，只执行 non-fallible 的已准备对象与 admission 内存交换，不再做 I/O、校验、进程启动或其他可拒绝工作；交换完成前旧 runtime 继续承接已 admission 调用，交换后新调用只见新 snapshot。
+- Catalog snapshot replace 是唯一 durable commit point：失败或中断发生在它之前时，旧 snapshot、generation 和 runtime 继续有效；发生在它之后时，新 snapshot 已是权威，重启只装载其 generation，不从 staging、`node_modules` 或运行中对象猜测状态。
+- 未被 Catalog snapshot 引用的 generation 都是可丢弃 staging；启动时和 mutation 结束后可在没有 live runtime lease 时尽力清理，清理失败最多留下磁盘垃圾，不能发布 package、改变 enablement 或触发 durable recovery。
+- 五个第一方 package 也产出普通 tarball 并随 App Resources 分发；首装、卸载后的重装和第三方 package 共用同一 installer、Catalog、lifecycle、runtime、UI 与 discovery 路径，`shell` 仍是 Agent Runtime builtin。
+- Marketplace 只读取薄 metadata 目录并把选中的 package spec/版本交给同一 installer；它不保存 package 内容、不成为安装 authority，也不引入 registry backend、发布后台、审核工作流、自定义 store/solver 或签名 PKI。
 
 - Plugin Package 生命周期只有 `installed`、`enabled`、`uninstalled`。Bundled plugin
   也可以卸载并在以后重装；卸载撤销 runtime/UI/tool 注册但默认保留 plugin data，
@@ -350,8 +372,8 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - Plugin Host 与 ZAS/AppServer 是 ZenX Host 下的并列服务。ZAS 继续由 ZenX Host
   拥有并暴露稳定、带认证的可连接 endpoint；关闭所有窗口不停止 Host，显式 Quit
   才停止。当前阶段不实现 OS daemon、launch agent 或云端 service。
-- 本阶段不建设 marketplace、签名 PKI、dependency solver，也不顺带重构 Provider、
-  图片、attachment 或 compaction。
+- 本阶段只建设上述 thin Marketplace，不建设 registry backend、发布后台、签名 PKI、
+  自定义 package store/dependency solver，也不顺带重构 Provider、图片、attachment 或 compaction。
 
 ## 不变量
 

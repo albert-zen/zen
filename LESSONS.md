@@ -22,8 +22,10 @@
   provider/plugin 能力变化只影响后续投影与调用结果
 - risk scoring、参数级 scope graph、permission rules engine 或复杂 sandbox 产品矩阵；
   工具策略只保留默认 `full_access` 与可选 `ask_unknown`
-- Plugin marketplace、签名 PKI、跨插件 dependency solver；bundled/local 安装生命周期
-  先完整成立，再讨论分发体系
+- 完整 marketplace 平台、registry backend、发布后台、签名 PKI、自定义 package store
+  或跨插件 dependency solver。旧的“本阶段不做 Marketplace”判断是为了先闭合
+  bundled/local 的 Catalog、Lifecycle、Runtime、UI 与安装入口；这些前置条件已经成立，
+  因此现在只把复用同一 installer 的只读 package metadata 目录纳入范围，不扩大为新的分发 authority
 - OS daemon、launch agent、云端 Plugin/ZAS service；本阶段 ZenX Host 只在应用进程中
   跨窗口存活，显式 Quit 后停止
 - 独立 Skills 平台；本阶段插件以 main document 提供首要模型说明
