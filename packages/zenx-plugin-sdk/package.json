@@ -1,0 +1,32 @@
+{
+  "name": "@zenx/plugin-sdk",
+  "version": "0.1.0",
+  "description": "Public ZenX plugin manifest, Host SDK v1 types, fixture Host, and developer CLI",
+  "type": "module",
+  "bin": {
+    "zenx-plugin": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema": "./dist/zenx.plugin.schema.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && cp src/zenx.plugin.schema.json dist/zenx.plugin.schema.json",
+    "test": "npm run build && node --test test/**/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.2"
+  }
+}

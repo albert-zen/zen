@@ -16,6 +16,7 @@ Provider 账户和 workspace 配置由宿主持有，不进入 Thread。
 - `run`、`chat`、`threads`、`app-server` 薄 CLI
 - 独立 IMZen（QQ / Telegram / Feishu / Weixin channel adapters）
 - ZenX Plugin Package lifecycle、Host SDK 与 Generic UI Host（sidebar、page/subroute、settings、panel、command/menu；第三方 iframe 隔离）
+- `@zenx/plugin-sdk` 的公开 manifest/schema、Host SDK/Runtime/UI 类型、fixture Host 与 `create` / `validate` / 标准 npm `pack` 开发命令
 - 既有 tool result 的可选 namespaced structured content，以及缺失插件时仍可读的 JSON/Text fallback renderer
 
 ## 快速验证
@@ -84,6 +85,7 @@ Thread 后续 Turn 使用的模型。活跃 Turn 期间的修改会被 ZAS 拒�
 进入 append-only Thread journal，而 credential 仍留在宿主外部。
 
 IMZen 的配置与运行方法见 [apps/imzen/README.md](apps/imzen/README.md)。
+ZenX 插件开发合同与命令见 [packages/zenx-plugin-sdk/README.md](packages/zenx-plugin-sdk/README.md)。
 
 ## 文档
 

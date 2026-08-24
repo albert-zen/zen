@@ -1,0 +1,36 @@
+# @zenx/plugin-sdk
+
+Public ZenX Plugin Package v2 contract for repository and external plugin development. It contains:
+
+- TypeScript types for the v2 manifest, process runtime ABI, Host SDK v1, and Generic UI SDK v1.
+- `zenx.plugin.schema.json` plus the matching runtime validator.
+- `runProcessPlugin` for a minimal JSONL process runtime.
+- `createFixturePluginHost` for in-memory SDK tests. Its `startTurn` operation always rejects because the fixture does not own Agent, Thread, or Turn authority.
+- The `zenx-plugin create`, `validate`, and `pack` commands.
+
+## Package contract
+
+A plugin is an ordinary npm package. `package.json#zenx.plugin` contains a safe package-relative path to its v2 manifest:
+
+```json
+{
+  "name": "example-plugin",
+  "version": "0.1.0",
+  "zenx": { "plugin": "./zenx.plugin.json" },
+  "dependencies": { "@zenx/plugin-sdk": "^0.1.0" }
+}
+```
+
+The manifest `id` is the stable plugin identity and its `version` must equal the npm package version. Process and bundled runtime entries must resolve to files inside the package. `mainDocument` remains the inline model instruction, while an isolated UI bundle `entry` remains its iframe HTML document; neither is reinterpreted as a filesystem path.
+
+## Commands
+
+```sh
+zenx-plugin create ./example-plugin --name example-plugin --id example-plugin
+zenx-plugin validate ./example-plugin
+zenx-plugin pack ./example-plugin
+```
+
+`create` writes a runnable process plugin with only public SDK imports. `validate` checks current package metadata, manifest v2, identity, compatibility, runtime/tool/UI relationships, and package-contained runtime paths. `pack` runs that validation first and then delegates unchanged archive semantics to `npm pack --json`; it does not implement a ZenX archive, registry, dependency solver, or publisher.
+
+The fixture Host keeps query, UI, and storage behavior in memory. Tests using it do not read or write ZenX user data.
