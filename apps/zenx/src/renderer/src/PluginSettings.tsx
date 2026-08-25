@@ -187,8 +187,8 @@ export function PluginSettings() {
           <div className="page-card settings-card plugin-empty">
             <strong>No plugins installed</strong>
             <span>
-              Choose a package tarball or local manifest to add your first
-              plugin.
+              Choose a package tarball or another package source to add your
+              first plugin.
             </span>
           </div>
         ) : (

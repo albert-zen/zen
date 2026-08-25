@@ -204,7 +204,10 @@ function compareSemver(left: string, right: string): number {
   const parsedRight = parseSemver(right);
   if (parsedLeft === undefined || parsedRight === undefined) return 0;
   for (let index = 0; index < 3; index += 1) {
-    const difference = parsedLeft.core[index]! - parsedRight.core[index]!;
+    const difference = compareNumericIdentifier(
+      parsedLeft.core[index]!,
+      parsedRight.core[index]!,
+    );
     if (difference !== 0) return difference;
   }
   if (parsedLeft.prerelease.length === 0) {
@@ -221,25 +224,27 @@ function compareSemver(left: string, right: string): number {
     if (leftIdentifier === undefined) return -1;
     if (rightIdentifier === undefined) return 1;
     if (leftIdentifier === rightIdentifier) continue;
-    const leftNumber = /^\d+$/u.test(leftIdentifier)
-      ? Number(leftIdentifier)
-      : undefined;
-    const rightNumber = /^\d+$/u.test(rightIdentifier)
-      ? Number(rightIdentifier)
-      : undefined;
-    if (leftNumber !== undefined && rightNumber !== undefined) {
-      return leftNumber - rightNumber;
+    const leftNumeric = /^\d+$/u.test(leftIdentifier);
+    const rightNumeric = /^\d+$/u.test(rightIdentifier);
+    if (leftNumeric && rightNumeric) {
+      return compareNumericIdentifier(leftIdentifier, rightIdentifier);
     }
-    if (leftNumber !== undefined) return -1;
-    if (rightNumber !== undefined) return 1;
-    return leftIdentifier.localeCompare(rightIdentifier);
+    if (leftNumeric) return -1;
+    if (rightNumeric) return 1;
+    return leftIdentifier < rightIdentifier ? -1 : 1;
   }
   return 0;
 }
 
+function compareNumericIdentifier(left: string, right: string): number {
+  if (left.length !== right.length) return left.length < right.length ? -1 : 1;
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 function parseSemver(version: string):
   | {
-      core: readonly [number, number, number];
+      core: readonly [string, string, string];
       prerelease: readonly string[];
     }
   | undefined {
@@ -257,7 +262,7 @@ function parseSemver(version: string):
     return undefined;
   }
   return {
-    core: [Number(match[1]), Number(match[2]), Number(match[3])],
+    core: [match[1]!, match[2]!, match[3]!],
     prerelease,
   };
 }

@@ -97,6 +97,19 @@ test("Marketplace search and installed/update state are joined from the canonica
   );
 });
 
+test("Marketplace update comparison follows SemVer ASCII and arbitrary-precision numeric precedence", () => {
+  assert.equal(updateAvailable("1.0.0-a", "1.0.0-B"), false);
+  assert.equal(updateAvailable("1.0.0-B", "1.0.0-a"), true);
+  assert.equal(
+    updateAvailable("1.0.0-9007199254740992", "1.0.0-9007199254740993"),
+    true,
+  );
+  assert.equal(
+    updateAvailable("9007199254740992.0.0", "9007199254740993.0.0"),
+    true,
+  );
+});
+
 test("catalog load and validation failures do not mutate the caller's plugin snapshot", async () => {
   const plugins = pluginSnapshot("1.0.0");
   const before = structuredClone(plugins);
@@ -246,4 +259,24 @@ function pluginSnapshot(version: string): ZenXPluginSnapshot {
     commands: [],
     menus: [],
   };
+}
+
+function updateAvailable(installed: string, recommended: string): boolean {
+  return marketplaceCatalogView(
+    {
+      entries: [
+        {
+          ...fixtureCatalog.entries[0]!,
+          recommendedVersion: recommended,
+          versions: [
+            {
+              version: recommended,
+              packageSpec: `@fixtures/notes-plugin@${recommended}`,
+            },
+          ],
+        },
+      ],
+    },
+    pluginSnapshot(installed),
+  )[0]!.updateAvailable;
 }

@@ -643,7 +643,7 @@ schema. There is no separate capability manifest reader or discovery path.
 }
 ```
 
-When a later local manifest raises `storageVersion`, ZenX invokes the same trusted
+When a later installed package manifest raises `storageVersion`, ZenX invokes the same trusted
 process once per required step with the internal operation
 `zenx_plugin_storage_migrate` and arguments `{ fromVersion, toVersion, value }`.
 The process returns the migrated JSON value. Every step must advance exactly one

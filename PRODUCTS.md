@@ -85,13 +85,14 @@ dependency，同时保留 source tombstone 和默认 plugin data；重装从同�
 `allowBuilds` 执行。pnpm、全部准备期 I/O 与 manifest/runtime/UI 准备和校验完成后，原子 Catalog snapshot
 才提交 generation identity；提交后只做 non-fallible 的已准备对象/admission 内存交换，不再执行 I/O、
 校验或其他可拒绝工作。此前失败或中断继续使用旧 generation，重启也只读取 Catalog 指向的 generation。
-Rooms 已作为随应用分发的标准第一方 tarball 离线首装：它使用公开 SDK 合同打包，在 profile 中成为
-直接 dependency，并与第三方 package 共用 Catalog、runtime、UI、discovery 与
-install/disable/uninstall/reinstall/delete-data 路径；卸载保留既有 Room 数据，重装从 Catalog 指向的
-generation 恢复。升级时，同一 transaction 会把 identity 完全匹配的旧 bundled Rooms Catalog descriptor
-收编进 profile，并原样保留 disabled/uninstalled 与数据状态。只有 Host-owned App Resources allowlist 可以启用其 bundled runtime 与 trusted UI，
-外部 tarball 自报同类信任会被拒绝。Browser、Computer、ZenX self-control 与 Triggers 仍将在后续切片
-迁移到同一路径。
+Rooms、Browser、Computer、ZenX self-control 与 Triggers 均已作为随应用分发的标准第一方 tarball
+离线首装：它们使用公开 SDK 合同打包，在 profile 中成为直接 dependency，并与第三方 package 共用
+Catalog、runtime、UI、discovery 与 install/disable/uninstall/reinstall/delete-data 路径。卸载默认保留
+各自数据，重装从 Catalog 保存的来源恢复；升级时，同一 transaction 会把 identity 完全匹配的旧 bundled
+Catalog descriptor 收编进 profile，并原样保留 disabled/uninstalled 与数据状态。Browser 与 Computer
+由 Host selector 在随应用提供的固定 provider variants 中选择 exact tarball；不可用平台只保留明确
+diagnostics，不注册虚假能力。只有 Host-owned App Resources allowlist 可以启用 bundled runtime 与 trusted
+UI，外部 tarball 自报同类信任会被拒绝。
 公开 `zenx-plugin dev` 只连接显式开发模式启动的单个本机 Host，复用上述 `dev-link` transaction；同版本
 reload 仅在该显式语义下成立，并只更新目标插件 runtime 与 App Server plugin projection，不重启或替换
 其他插件实例。
