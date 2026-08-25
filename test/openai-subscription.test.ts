@@ -95,7 +95,7 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
             type: "reasoning",
             id: "rs_1",
             summary: [{ type: "summary_text", text: "checked the command" }],
-            encrypted_content: "must-not-persist",
+            encrypted_content: "encrypted-reasoning-state",
           },
         },
         {
@@ -221,6 +221,15 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
   );
 
   assert.deepEqual(events, [
+    {
+      type: "opaque_continuation",
+      continuation: {
+        type: "openai_responses_reasoning",
+        itemId: "rs_1",
+        encryptedContent: "encrypted-reasoning-state",
+        summary: [{ type: "summary_text", text: "checked the command" }],
+      },
+    },
     { type: "reasoning", summary: "checked the command" },
     { type: "text_delta", delta: "done" },
     {
@@ -242,6 +251,7 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
   const body = requestBody(capturedInit);
   assert.equal(body.store, false);
   assert.equal(body.stream, true);
+  assert.deepEqual(body.reasoning, { effort: "medium" });
   assert.equal(body.prompt_cache_key, "thread-one");
   assert.deepEqual(body.tools, [
     {
@@ -279,13 +289,81 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
   assert.equal(JSON.stringify(body).includes("encrypted_content"), false);
 });
 
-test("a fresh adapter rebuilds a tool round only from canonical messages", async () => {
+test("keeps raw reasoning text private while preserving its opaque state", async () => {
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async () =>
+      sseResponse([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_private", summary: [] },
+        },
+        {
+          type: "response.reasoning_text.delta",
+          output_index: 0,
+          delta: "raw chain of thought",
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "reasoning",
+            id: "rs_private",
+            summary: [],
+            content: [{ type: "reasoning_text", text: "raw chain of thought" }],
+            encrypted_content: "encrypted-private-state",
+          },
+        },
+        {
+          type: "response.completed",
+          response: { status: "completed", output: [] },
+        },
+      ]),
+  });
+
+  const events = await collect(adapter.stream(request()));
+  assert.deepEqual(events, [
+    {
+      type: "opaque_continuation",
+      continuation: {
+        type: "openai_responses_reasoning",
+        itemId: "rs_private",
+        encryptedContent: "encrypted-private-state",
+        summary: [],
+      },
+    },
+    { type: "usage", inputTokens: 0, outputTokens: 0 },
+  ]);
+  assert.equal(JSON.stringify(events).includes("raw chain of thought"), false);
+});
+
+test("a fresh adapter replays opaque reasoning for a stateless tool round", async () => {
   const bodies: Array<Record<string, unknown>> = [];
   const responses = [
     sseResponse([
       {
         type: "response.output_item.added",
         output_index: 0,
+        item: {
+          type: "reasoning",
+          id: "rs_first",
+          summary: [],
+        },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "reasoning",
+          id: "rs_first",
+          summary: [],
+          encrypted_content: "provider-private-state",
+        },
+      },
+      {
+        type: "response.output_item.added",
+        output_index: 1,
         item: {
           type: "function_call",
           id: "fc_first",
@@ -296,14 +374,13 @@ test("a fresh adapter rebuilds a tool round only from canonical messages", async
       },
       {
         type: "response.output_item.done",
-        output_index: 0,
+        output_index: 1,
         item: {
           type: "function_call",
           id: "fc_first",
           call_id: "call_first",
           name: "shell",
           arguments: '{"command":"pwd"}',
-          encrypted_content: "provider-private-state",
         },
       },
       {
@@ -363,6 +440,15 @@ test("a fresh adapter rebuilds a tool round only from canonical messages", async
     ),
   );
   assert.deepEqual(firstEvents[0], {
+    type: "opaque_continuation",
+    continuation: {
+      type: "openai_responses_reasoning",
+      itemId: "rs_first",
+      encryptedContent: "provider-private-state",
+      summary: [],
+    },
+  });
+  assert.deepEqual(firstEvents[1], {
     type: "tool_call",
     callId: "call_first|fc_first",
     name: "shell",
@@ -378,6 +464,42 @@ test("a fresh adapter rebuilds a tool round only from canonical messages", async
       request({
         messages: [
           ...initialMessages,
+          {
+            role: "provider_opaque",
+            providerProfileId: "other-profile",
+            modelId: "gpt-5.6-terra",
+            modelResponseId: "response-other-profile",
+            state: {
+              type: "openai_responses_reasoning",
+              itemId: "rs_other_profile",
+              encryptedContent: "wrong-profile-state",
+              summary: [],
+            },
+          },
+          {
+            role: "provider_opaque",
+            providerProfileId: "openai-codex",
+            modelId: "other-model",
+            modelResponseId: "response-other-model",
+            state: {
+              type: "openai_responses_reasoning",
+              itemId: "rs_other_model",
+              encryptedContent: "wrong-model-state",
+              summary: [],
+            },
+          },
+          {
+            role: "provider_opaque",
+            providerProfileId: "openai-codex",
+            modelId: "gpt-5.6-terra",
+            modelResponseId: "response-first",
+            state: {
+              type: "openai_responses_reasoning",
+              itemId: "rs_first",
+              encryptedContent: "provider-private-state",
+              summary: [],
+            },
+          },
           {
             role: "assistant",
             toolCalls: [
@@ -401,14 +523,16 @@ test("a fresh adapter rebuilds a tool round only from canonical messages", async
   );
 
   assert.equal(bodies.length, 2);
-  assert.equal(
-    JSON.stringify(bodies[1]).includes("provider-private-state"),
-    false,
-  );
   assert.deepEqual(bodies[1]?.input, [
     {
       role: "user",
       content: [{ type: "input_text", text: "run pwd" }],
+    },
+    {
+      type: "reasoning",
+      id: "rs_first",
+      encrypted_content: "provider-private-state",
+      summary: [],
     },
     {
       type: "function_call",
@@ -872,6 +996,7 @@ test("aborts promptly while another process owns the profile lock", async () => 
 
 function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
   return {
+    providerProfileId: "openai-codex",
     model: "gpt-5.6-terra",
     reasoningEffort: "medium",
     messages: [],

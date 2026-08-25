@@ -69,6 +69,10 @@ model 或 effort 明确失败。单 profile 的既有裸 model id 仅作为入�
 Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，避免发送
 不完整的 0.146.0 类型。
 
+OpenAI Responses 的 encrypted reasoning 只作为 canonical `provider_opaque_state`
+供匹配的 subscription profile/model 重放；Codex `reasoning` Item 仍只投影 Provider
+给出的 summary，opaque state 不进入 Codex Thread Item、通知或任何 ZenX 展示。
+
 `thread/compact` 不是 Codex 0.146.0 方法。它只接受精确的
 `{ threadId: string }`，等待 Zen 使用 admission 时冻结的当前 Provider selection
 为最新完整 Turn 边界生成、验证并 append canonical context compaction，然后返回

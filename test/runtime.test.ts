@@ -25,6 +25,7 @@ import {
   type ModelEvent,
   type ModelMessage,
   type ModelRequest,
+  type ProviderOpaqueModelMessage,
 } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
@@ -164,6 +165,111 @@ test("preserves credential-matching model and tool trace strings verbatim", asyn
     snapshot.items.find((item) => item.type === "tool_result")?.output,
     credentialBytes,
   );
+});
+
+test("persists opaque provider continuation across restart without public projection", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-continuation-"));
+  const journal = new JsonlThreadJournal(root);
+  const seenContinuations: ProviderOpaqueModelMessage[][] = [];
+  let sample = 0;
+  const model: ModelAdapter = {
+    provider: "openai-codex",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      seenContinuations.push(
+        structuredClone(
+          request.messages.filter(
+            (message): message is ProviderOpaqueModelMessage =>
+              message.role === "provider_opaque",
+          ),
+        ),
+      );
+      sample += 1;
+      if (sample === 1) {
+        yield {
+          type: "opaque_continuation",
+          continuation: {
+            type: "openai_responses_reasoning",
+            itemId: "rs_restart",
+            encryptedContent: "opaque-restart-state",
+            summary: [],
+          },
+        };
+        yield {
+          type: "tool_call",
+          callId: "call-restart",
+          name: "restart_tool",
+          arguments: {},
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const tools: ToolExecutor = {
+    definitions: [
+      {
+        name: "restart_tool",
+        description: "Return a stable result.",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async () => ({ output: "restarted", exitCode: 0 }),
+  };
+
+  try {
+    const first = createServer({ journal, model, tools });
+    const thread = await first.startThread();
+    await (
+      await first.startTurn(thread.id, "continue privately")
+    ).done;
+    assert.match(seenContinuations[1]?.[0]?.modelResponseId ?? "", /\S/u);
+    assert.deepEqual(seenContinuations[1], [
+      {
+        role: "provider_opaque",
+        providerProfileId: "openai-codex",
+        modelId: "fake",
+        modelResponseId: seenContinuations[1]?.[0]?.modelResponseId,
+        state: {
+          type: "openai_responses_reasoning",
+          itemId: "rs_restart",
+          encryptedContent: "opaque-restart-state",
+          summary: [],
+        },
+      },
+    ]);
+
+    const restarted = createServer({ journal, model, tools });
+    const replayed = await restarted.readThread(thread.id);
+    assert.equal(
+      JSON.stringify(projectThread(replayed, { includeTurns: true })).includes(
+        "opaque-restart-state",
+      ),
+      false,
+    );
+    await (
+      await restarted.startTurn(thread.id, "after restart")
+    ).done;
+    assert.equal(
+      seenContinuations.at(-1)?.[0]?.modelResponseId,
+      seenContinuations[1]?.[0]?.modelResponseId,
+    );
+    assert.deepEqual(seenContinuations.at(-1), [
+      {
+        role: "provider_opaque",
+        providerProfileId: "openai-codex",
+        modelId: "fake",
+        modelResponseId: seenContinuations.at(-1)?.[0]?.modelResponseId,
+        state: {
+          type: "openai_responses_reasoning",
+          itemId: "rs_restart",
+          encryptedContent: "opaque-restart-state",
+          summary: [],
+        },
+      },
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("derives each turn model from append-only configuration changes", async () => {

@@ -2,6 +2,7 @@ import {
   contentFromUserMessage,
   textFromUserInput,
   type CanonicalItem,
+  type OpenAiResponsesReasoningState,
   type UserInput,
 } from "./item.js";
 import {
@@ -36,15 +37,25 @@ export interface ToolResultModelMessage {
   exitCode: number;
 }
 
+export interface ProviderOpaqueModelMessage {
+  role: "provider_opaque";
+  providerProfileId: string;
+  modelId: string;
+  modelResponseId: string;
+  state: OpenAiResponsesReasoningState;
+}
+
 export type ModelMessage =
   | TextModelMessage
   | TypedUserModelMessage
   | ToolCallModelMessage
-  | ToolResultModelMessage;
+  | ToolResultModelMessage
+  | ProviderOpaqueModelMessage;
 
 export type ReasoningEffort = string;
 
 export interface ModelRequest {
+  providerProfileId?: string;
   model: string;
   reasoningEffort: ReasoningEffort;
   messages: ModelMessage[];
@@ -66,6 +77,10 @@ export interface ModelTool {
 export type ModelEvent =
   | { type: "text_delta"; delta: string }
   | { type: "reasoning"; summary: string }
+  | {
+      type: "opaque_continuation";
+      continuation: OpenAiResponsesReasoningState;
+    }
   | {
       type: "tool_call";
       callId: string;
@@ -189,6 +204,15 @@ function compileCanonicalModelMessages(
           callId: item.callId,
           text: item.output,
           exitCode: item.exitCode,
+        });
+        break;
+      case "provider_opaque_state":
+        messages.push({
+          role: "provider_opaque",
+          providerProfileId: item.providerProfileId,
+          modelId: item.modelId,
+          modelResponseId: item.modelResponseId,
+          state: structuredClone(item.state),
         });
         break;
       case "failure":

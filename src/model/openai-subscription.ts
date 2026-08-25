@@ -34,8 +34,8 @@ export interface OpenAiSubscriptionModelOptions {
 
 /**
  * A stateless, native adapter for the ChatGPT Codex Responses SSE endpoint.
- * Each request is rebuilt from canonical Zen messages; provider response state
- * is neither cached nor persisted.
+ * Each request is rebuilt from canonical Zen messages and matching opaque
+ * provider state; no continuation authority is kept in adapter memory.
  */
 export class OpenAiSubscriptionModel implements ModelAdapter {
   readonly provider = "openai-codex";
@@ -65,6 +65,13 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     const sessionHint = promptCacheHint(request.sessionId);
     const input: Array<Record<string, unknown>> = [];
     for (const [index, message] of request.messages.entries()) {
+      if (
+        message.role === "provider_opaque" &&
+        (message.providerProfileId !== request.providerProfileId ||
+          message.modelId !== request.model)
+      ) {
+        continue;
+      }
       input.push(
         ...(await toResponsesInput(message, index, this.#attachments)),
       );
@@ -76,6 +83,9 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       instructions: this.#instructions,
       input,
       text: { verbosity: "low" },
+      reasoning: {
+        effort: requiredLabel(request.reasoningEffort, "reasoning effort"),
+      },
       tool_choice: tools.length === 0 ? "none" : "auto",
       parallel_tool_calls: true,
       ...(tools.length === 0 ? {} : { tools }),
@@ -186,6 +196,16 @@ async function toResponsesInput(
   index: number,
   attachments: Pick<AttachmentStore, "read"> | undefined,
 ): Promise<Array<Record<string, unknown>>> {
+  if (message.role === "provider_opaque") {
+    return [
+      {
+        type: "reasoning",
+        id: message.state.itemId,
+        encrypted_content: message.state.encryptedContent,
+        summary: structuredClone(message.state.summary),
+      },
+    ];
+  }
   if (message.role === "user") {
     if ("content" in message) {
       const content: Array<Record<string, unknown>> = [];
@@ -266,7 +286,13 @@ interface StreamState {
 }
 
 type OutputSlot =
-  | { type: "reasoning"; text: string }
+  | {
+      type: "reasoning";
+      text: string;
+      itemId?: string;
+      encryptedContent?: string;
+      summary: Array<{ type: "summary_text"; text: string }>;
+    }
   | { type: "message"; text: string }
   | {
       type: "function_call";
@@ -321,10 +347,7 @@ async function* parseResponsesStream(
       continue;
     }
 
-    if (
-      type === "response.reasoning_summary_text.delta" ||
-      type === "response.reasoning_text.delta"
-    ) {
+    if (type === "response.reasoning_summary_text.delta") {
       const slot = slotFor(state, event, "reasoning");
       const delta = stringField(event, "delta");
       if (slot !== undefined && delta !== undefined) {
@@ -333,10 +356,7 @@ async function* parseResponsesStream(
       continue;
     }
 
-    if (
-      type === "response.reasoning_summary_text.done" ||
-      type === "response.reasoning_text.done"
-    ) {
+    if (type === "response.reasoning_summary_text.done") {
       const slot = slotFor(state, event, "reasoning");
       const text = stringField(event, "text");
       if (slot !== undefined && text !== undefined) {
@@ -459,7 +479,29 @@ async function* finishOutputItem(
   }
 
   if (slot.type === "reasoning") {
-    const finalText = reasoningText(item) || slot.text.replace(/\n\n$/u, "");
+    const itemId = stringField(item, "id") ?? slot.itemId;
+    const encryptedContent =
+      stringField(item, "encrypted_content") ?? slot.encryptedContent;
+    const summary = reasoningSummary(item);
+    const replaySummary = summary.length > 0 ? summary : slot.summary;
+    if (
+      itemId !== undefined &&
+      itemId.length > 0 &&
+      encryptedContent !== undefined &&
+      encryptedContent.length > 0
+    ) {
+      yield {
+        type: "opaque_continuation",
+        continuation: {
+          type: "openai_responses_reasoning",
+          itemId,
+          encryptedContent,
+          summary: structuredClone(replaySummary),
+        },
+      };
+    }
+    const finalText =
+      reasoningSummaryText(replaySummary) || slot.text.replace(/\n\n$/u, "");
     if (finalText.length > 0) {
       yield { type: "reasoning", summary: finalText };
     }
@@ -510,7 +552,15 @@ async function* finishOutputItem(
 function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {
   const type = stringField(item, "type");
   if (type === "reasoning") {
-    return { type, text: reasoningText(item) };
+    const itemId = stringField(item, "id");
+    const encryptedContent = stringField(item, "encrypted_content");
+    return {
+      type,
+      text: reasoningText(item),
+      summary: reasoningSummary(item),
+      ...(itemId === undefined ? {} : { itemId }),
+      ...(encryptedContent === undefined ? {} : { encryptedContent }),
+    };
   }
   if (type === "message") {
     return { type, text: "" };
@@ -650,7 +700,29 @@ function providerEventError(
 }
 
 function reasoningText(item: Record<string, unknown>): string {
-  return textArray(item.summary) || textArray(item.content);
+  return reasoningSummaryText(reasoningSummary(item));
+}
+
+function reasoningSummary(
+  item: Record<string, unknown>,
+): Array<{ type: "summary_text"; text: string }> {
+  if (!Array.isArray(item.summary)) return [];
+  return item.summary.flatMap((part) => {
+    if (!isRecord(part) || stringField(part, "type") !== "summary_text") {
+      return [];
+    }
+    const text = stringField(part, "text");
+    return text === undefined ? [] : [{ type: "summary_text", text }];
+  });
+}
+
+function reasoningSummaryText(
+  summary: readonly { type: "summary_text"; text: string }[],
+): string {
+  return summary
+    .map((part) => part.text)
+    .filter((text) => text.length > 0)
+    .join("\n\n");
 }
 
 function messageText(item: Record<string, unknown>): string {
@@ -668,17 +740,6 @@ function messageText(item: Record<string, unknown>): string {
           : "";
     })
     .join("");
-}
-
-function textArray(value: unknown): string {
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  return value
-    .filter(isRecord)
-    .map((part) => stringField(part, "text") ?? "")
-    .filter((text) => text.length > 0)
-    .join("\n\n");
 }
 
 function parseArguments(value: string): Record<string, unknown> {

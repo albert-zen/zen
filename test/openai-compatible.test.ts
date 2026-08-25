@@ -19,6 +19,7 @@ test("maps Zen context and protects model execution fields", async () => {
     provider: "test-provider",
     defaultParams: {
       temperature: 0,
+      reasoning_effort: "wrong-effort",
       model: "wrong-model",
       messages: [{ role: "user", content: "wrong messages" }],
       tools: [],
@@ -45,6 +46,18 @@ test("maps Zen context and protects model execution fields", async () => {
       request({
         messages: [
           { role: "user", text: "hello" },
+          {
+            role: "provider_opaque",
+            providerProfileId: "subscription-profile",
+            modelId: "test-model",
+            modelResponseId: "response-private",
+            state: {
+              type: "openai_responses_reasoning",
+              itemId: "rs_private",
+              encryptedContent: "must-not-enter-chat",
+              summary: [],
+            },
+          },
           { role: "assistant", text: "calling a tool" },
           {
             role: "assistant",
@@ -78,6 +91,7 @@ test("maps Zen context and protects model execution fields", async () => {
   assert.equal(capturedAuthorization, `Bearer ${fakeKey}`);
   assert.deepEqual(capturedBody, {
     temperature: 0,
+    reasoning_effort: "medium",
     model: "test-model",
     messages: [
       { role: "user", content: "hello" },

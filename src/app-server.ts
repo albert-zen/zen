@@ -1083,6 +1083,7 @@ export class ZenAppServer {
     );
     const summary = await generateContextCompactionSummary({
       adapter: options.selection.adapter,
+      providerProfileId: options.selection.selection.providerProfileId,
       model: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
       messages: sourceMessages,
@@ -1624,6 +1625,7 @@ function automaticCompactionThreshold(contextWindow: number): number {
 
 async function generateContextCompactionSummary(options: {
   adapter: ModelAdapter;
+  providerProfileId: string;
   model: string;
   reasoningEffort: string;
   messages: ModelMessage[];
@@ -1641,6 +1643,7 @@ async function generateContextCompactionSummary(options: {
   ];
   try {
     for await (const event of options.adapter.stream({
+      providerProfileId: options.providerProfileId,
       model: options.model,
       reasoningEffort: options.reasoningEffort,
       messages,
@@ -1666,6 +1669,8 @@ async function generateContextCompactionSummary(options: {
         throw new CompactionSummaryValidationError(
           "Context compaction summary generation must not call tools",
         );
+      } else if (event.type === "opaque_continuation") {
+        continue;
       }
     }
   } catch (error) {

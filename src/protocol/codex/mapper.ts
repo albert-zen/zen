@@ -284,6 +284,8 @@ export function projectCompletedItem(
         summary: [item.summary],
         content: [],
       };
+    case "provider_opaque_state":
+      return null;
     case "tool_call":
       return projectCommandStarted(item, "");
     case "failure":

@@ -78,6 +78,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     const allowedToolNames = new Set(tools.map((tool) => tool.function.name));
     const messages: Readonly<Record<string, unknown>>[] = [];
     for (const message of request.messages) {
+      if (message.role === "provider_opaque") continue;
       messages.push(await toChatMessage(message, this.#attachments));
     }
     const body = serializeRequest({
@@ -86,6 +87,10 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       messages,
       n: 1,
       stream: true,
+      reasoning_effort: requiredLabel(
+        request.reasoningEffort,
+        "reasoning effort",
+      ),
       tools: tools.length > 0 ? tools : undefined,
       tool_choice: tools.length > 0 ? "auto" : undefined,
     });
@@ -211,6 +216,12 @@ async function toChatMessage(
   message: ModelMessage,
   attachments: Pick<AttachmentStore, "read"> | undefined,
 ): Promise<Readonly<Record<string, unknown>>> {
+  if (message.role === "provider_opaque") {
+    throw modelError(
+      "configuration",
+      "Opaque provider state cannot enter OpenAI-compatible chat messages",
+    );
+  }
   if (message.role === "tool") {
     return {
       role: "tool",

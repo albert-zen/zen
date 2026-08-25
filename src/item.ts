@@ -11,6 +11,7 @@ export type ItemType =
   | "user_message"
   | "agent_message"
   | "reasoning"
+  | "provider_opaque_state"
   | "tool_call"
   | "tool_result"
   | "failure";
@@ -157,6 +158,23 @@ export interface ReasoningItem extends ItemBase {
   summary: string;
 }
 
+export interface OpenAiResponsesReasoningState {
+  type: "openai_responses_reasoning";
+  itemId: string;
+  encryptedContent: string;
+  summary: Array<{ type: "summary_text"; text: string }>;
+}
+
+export interface ProviderOpaqueStateItem extends ItemBase {
+  type: "provider_opaque_state";
+  turnId: string;
+  providerProfileId: string;
+  modelId: string;
+  /** Stable id of the model response that produced this state. */
+  modelResponseId: string;
+  state: OpenAiResponsesReasoningState;
+}
+
 export interface ToolCallItem extends ItemBase {
   type: "tool_call";
   turnId: string;
@@ -215,6 +233,7 @@ export type CanonicalItem =
   | UserMessageItem
   | AgentMessageItem
   | ReasoningItem
+  | ProviderOpaqueStateItem
   | ToolCallItem
   | ToolResultItem
   | FailureItem;
