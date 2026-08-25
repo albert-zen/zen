@@ -51,7 +51,7 @@ import type {
   ZenXThreadAttachmentProjection,
 } from "../main/image-attachments.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
-import type { MarketplaceCatalogSnapshot } from "../marketplace.js";
+import type { MarketplaceCatalogLoadSnapshot } from "../marketplace.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -252,7 +252,7 @@ contextBridge.exposeInMainWorld("zenx", {
     },
   },
   marketplace: {
-    get: async (): Promise<MarketplaceCatalogSnapshot> =>
+    get: async (): Promise<MarketplaceCatalogLoadSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.marketplaceGet),
   },
   plugins: {
@@ -269,6 +269,10 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
     selectTarball: async (): Promise<ZenXPluginTarballSelectionResult> =>
       await ipcRenderer.invoke(ipcChannels.pluginsSelectTarball),
+    installBuiltIn: async (
+      pluginId: string,
+    ): Promise<ZenXPluginMutationResult> =>
+      await ipcRenderer.invoke(ipcChannels.pluginsInstallBuiltIn, pluginId),
     installSource: async (
       source: ZenXPluginPackageSource,
     ): Promise<ZenXPluginMutationResult> =>

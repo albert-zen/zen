@@ -168,11 +168,18 @@ The target contract is:
   and active Turns running; activation recreates the UI, while explicit Quit
   revokes discovery and stops the endpoint. This does not create an OS daemon.
 
-The thin read-only Marketplace is package metadata only: search, details, and
-explicit version selection resolve to the same npm profile installer. Publishing,
-reviews, payments, accounts, moderation, signing, dependency solving, same-Turn
-parallel tool execution, and unrelated Provider/image/attachment/compaction
-refactors remain outside this phase.
+Marketplace is the single plugin browsing and management surface. It merges five
+permanent Host-owned built-in entries, read-only external package metadata, and
+installed non-catalog packages into one deduplicated inventory; Installed is a
+filter, not a second section. Built-in install and reinstall select fixed App
+Resources (including the exact current Browser/Computer provider variant) before
+entering the same profile transaction. Provider unavailability and external catalog
+failure remain visible without hiding manageable local entries. npm, Git, tarball,
+local-copy, and dev-link controls live behind the advanced **Install from source…**
+entry. The production external catalog remains empty until the public SDK/package
+has a real publication route. Publishing, reviews, payments, accounts, moderation,
+signing, dependency solving, same-Turn parallel tool execution, and unrelated
+Provider/image/attachment/compaction refactors remain outside this phase.
 
 ## Run
 

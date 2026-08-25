@@ -78,13 +78,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       FIRST_PARTY_PLUGIN_PACKAGES.selfControl,
       FIRST_PARTY_PLUGIN_PACKAGES.triggers,
     ]) {
-      await service.installBundledPluginPackage(
-        path.join(resources, "plugins", definition.tarball),
-        {
-          pluginId: definition.pluginId,
-          packageName: definition.packageName,
-        },
-      );
+      await service.installBuiltInPlugin(definition.pluginId);
     }
     assert.deepEqual(
       service
@@ -207,6 +201,78 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
     );
   } finally {
     await service?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an uninstalled Browser reinstalls the current Host-selected App Resource variant", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-browser-marketplace-reinstall-"),
+  );
+  const resources = path.join(root, "resources");
+  const userData = path.join(root, "user-data");
+  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  const environment: NodeJS.ProcessEnv = {
+    PATH: "",
+    ZENX_BROWSER_MODE: "user-session",
+    ZENX_USER_BROWSER_CDP_ENDPOINT: "http://127.0.0.1:9222",
+  };
+  const initial = trackedBrowserBackend("user-session");
+  const first = selectorBrowserService({
+    userData,
+    resources,
+    store: new JsonZenXPluginCatalogStore(
+      path.join(userData, "capability-grants.json"),
+    ),
+    environment,
+    connectorBackend: initial.backend,
+  });
+  try {
+    await first.initialize();
+    await first.installBuiltInPlugin("browser");
+    await first.uninstall("browser");
+  } finally {
+    await first.close();
+  }
+
+  environment.ZENX_BROWSER_MODE = "isolated";
+  delete environment.ZENX_USER_BROWSER_CDP_ENDPOINT;
+  const selected = trackedBrowserBackend("electron-selected");
+  const restarted = selectorBrowserService({
+    userData,
+    resources,
+    store: new JsonZenXPluginCatalogStore(
+      path.join(userData, "capability-grants.json"),
+    ),
+    environment,
+    connectorBackend: selected.backend,
+    electronBrowserFactory: () => selected.backend,
+  });
+  try {
+    await restarted.initialize();
+    assert.equal(
+      restarted.browserProfilePackage().manifest.provider.id,
+      "electron-dedicated-browser",
+    );
+    await restarted.reinstall("browser");
+    const browser = restarted
+      .pluginSnapshot()
+      .plugins.find((plugin) => plugin.id === "browser");
+    assert.equal(browser?.lifecycle, "enabled");
+    assert.equal(
+      path.basename(browser?.profileSource?.packageSpec ?? ""),
+      "zenx-browser-plugin-electron-1.0.0.tgz",
+    );
+    assert.equal(
+      (
+        (await call(restarted, "browser_list_tabs", {
+          sessionId: "marketplace-reinstall",
+        })) as [{ title: string }]
+      )[0].title,
+      "electron-selected",
+    );
+  } finally {
+    await restarted.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -581,6 +647,31 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
               .pluginSnapshot()
               .plugins.some((plugin) => plugin.id === "computer"),
             false,
+          );
+          assert.deepEqual(
+            service.marketplaceBuiltIns().map((entry) => ({
+              id: entry.pluginId,
+              available: entry.available,
+              reason: entry.unavailableReason,
+            })),
+            [
+              { id: "browser", available: true, reason: undefined },
+              {
+                id: "computer",
+                available: false,
+                reason:
+                  platform === "linux"
+                    ? "No computer provider is available for this platform"
+                    : "Packaged WinApp provider manifest trust anchor is missing",
+              },
+              { id: "zenx-rooms", available: true, reason: undefined },
+              {
+                id: "zenx-self-control",
+                available: true,
+                reason: undefined,
+              },
+              { id: "zenx-triggers", available: true, reason: undefined },
+            ],
           );
         } finally {
           await service.close();

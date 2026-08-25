@@ -1017,7 +1017,18 @@ function installCapabilityIpc(
   manager: AppServerManager,
   marketplace: MarketplaceCatalogService,
 ): void {
-  ipcMain.handle(ipcChannels.marketplaceGet, () => marketplace.load());
+  ipcMain.handle(ipcChannels.marketplaceGet, async () => {
+    const builtIns = capabilities.marketplaceBuiltIns();
+    try {
+      return { ...(await marketplace.load()), builtIns };
+    } catch (error) {
+      return {
+        entries: [],
+        builtIns,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
   ipcMain.handle(ipcChannels.pluginsGet, () => capabilities.pluginSnapshot());
   ipcMain.handle(
     ipcChannels.pluginsSetEnabled,
@@ -1049,6 +1060,17 @@ function installCapabilityIpc(
     const capabilityRefresh = await manager.refreshCapabilitiesAfterCommit();
     return { canceled: false, snapshot, capabilityRefresh } as const;
   });
+  ipcMain.handle(
+    ipcChannels.pluginsInstallBuiltIn,
+    async (_event, pluginId: unknown) => {
+      if (typeof pluginId !== "string" || pluginId.length === 0) {
+        throw new Error("Invalid built-in plugin install request");
+      }
+      const snapshot = await capabilities.installBuiltInPlugin(pluginId);
+      const capabilityRefresh = await manager.refreshCapabilitiesAfterCommit();
+      return { snapshot, capabilityRefresh };
+    },
+  );
   ipcMain.handle(
     ipcChannels.pluginsInstallSource,
     async (_event, value: unknown) => {

@@ -94,8 +94,12 @@ test("Plugin Settings exposes the typed tarball installer entry", async () => {
     root.render(React.createElement(PluginSettings));
     await Promise.resolve();
   });
+  const sourceToggle = [...dom.window.document.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent === "Install from source…",
+  ) as HTMLButtonElement;
+  await act(async () => sourceToggle.click());
   const button = [...dom.window.document.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent === "Install tarball",
+    (candidate) => candidate.textContent === "Choose tarball…",
   ) as HTMLButtonElement | undefined;
   assert.ok(button);
   await act(async () => {
@@ -105,7 +109,7 @@ test("Plugin Settings exposes the typed tarball installer entry", async () => {
   assert.equal(selected, 1);
   assert.match(
     dom.window.document.body.textContent ?? "",
-    /installed and enabled, but Agent capability refresh failed: refresh fixture failure/u,
+    /installed and enabled\. Agent capability refresh failed: refresh fixture failure/u,
   );
   await act(async () => root.unmount());
 });
@@ -173,12 +177,17 @@ test("Plugin Settings exposes typed package sources and reports post-commit upda
     root.render(React.createElement(PluginSettings));
     await Promise.resolve();
   });
-  const select = dom.window.document.querySelector("select")!;
-  const input = dom.window.document.querySelector("input")!;
   const button = (label: string) =>
     [...dom.window.document.querySelectorAll("button")].find(
       (candidate) => candidate.textContent === label,
     ) as HTMLButtonElement;
+  await act(async () => button("Install from source…").click());
+  const select = dom.window.document.querySelector<HTMLSelectElement>(
+    'select[aria-label="Plugin source"]',
+  )!;
+  const input = dom.window.document.querySelector<HTMLInputElement>(
+    ".plugin-source-install input",
+  )!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(
       dom.window.HTMLSelectElement.prototype,
@@ -298,7 +307,7 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
   });
   assert.match(
     dom.window.document.body.textContent ?? "",
-    /Loading Marketplace/u,
+    /Loading plugin inventory/u,
   );
 
   await act(async () => {
@@ -341,7 +350,7 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
     await catalog;
   });
   const search = dom.window.document.querySelector<HTMLInputElement>(
-    'input[aria-label="Search Marketplace"]',
+    'input[aria-label="Search plugins"]',
   );
   assert.ok(search);
   await act(async () => {
@@ -359,7 +368,6 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
     [...dom.window.document.querySelectorAll("button")].find(
       (candidate) => candidate.textContent === label,
     ) as HTMLButtonElement;
-  await act(async () => button("View details").click());
   assert.match(
     dom.window.document.body.textContent ?? "",
     /@fixtures\/notes-plugin/u,
@@ -426,7 +434,7 @@ test("Marketplace has explicit empty and retryable error states", async () => {
       load: async () => {
         throw new Error("catalog offline");
       },
-      expected: /Marketplace unavailable.*catalog offline/u,
+      expected: /External catalog unavailable.*catalog offline/u,
     },
   ]) {
     const dom = new JSDOM('<div id="root"></div>', {
@@ -459,6 +467,170 @@ test("Marketplace has explicit empty and retryable error states", async () => {
     assert.match(dom.window.document.body.textContent ?? "", fixture.expected);
     await act(async () => root.unmount());
   }
+});
+
+test("Marketplace is the single searchable plugin management surface with compact filters and advanced source install", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    value: dom.window.navigator,
+    configurable: true,
+  });
+  const snapshot = structuredClone(emptyPluginSnapshot);
+  snapshot.plugins = [
+    {
+      id: "zenx-rooms",
+      displayName: "Rooms",
+      version: "1.0.0",
+      source: "bundled",
+      profileSource: {
+        mode: "bundled",
+        packageSpec: "/app/plugins/rooms.tgz",
+        resolvedSpec: "file:rooms.tgz",
+        packageName: "@zenx/rooms-plugin",
+        packageVersion: "1.0.0",
+      },
+      lifecycle: "enabled",
+      enabled: true,
+      available: true,
+      contributionCount: 2,
+    },
+    {
+      id: "local-clock",
+      displayName: "Local clock",
+      version: "0.4.0",
+      source: "local",
+      profileSource: {
+        mode: "local-copy",
+        packageSpec: "/fixtures/local-clock",
+        resolvedSpec: "file:local-clock",
+        packageName: "local-clock",
+        packageVersion: "0.4.0",
+      },
+      lifecycle: "installed",
+      enabled: false,
+      available: true,
+      contributionCount: 0,
+    },
+  ];
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      marketplace: {
+        get: async () => ({
+          entries: [],
+          error: "external catalog offline",
+          builtIns: [
+            builtIn("browser", "@zenx/browser-plugin", "Browser", true),
+            builtIn(
+              "computer",
+              "@zenx/computer-plugin",
+              "Computer",
+              false,
+              "Computer control is unavailable on this platform.",
+            ),
+            builtIn("zenx-rooms", "@zenx/rooms-plugin", "Rooms", true),
+            builtIn(
+              "zenx-self-control",
+              "@zenx/self-control-plugin",
+              "ZenX self-control",
+              true,
+            ),
+            builtIn("zenx-triggers", "@zenx/triggers-plugin", "Triggers", true),
+          ],
+        }),
+      },
+      plugins: {
+        get: async () => snapshot,
+        onChange: () => () => {},
+        selectTarball: async () => ({ canceled: true }),
+        installSource: async () => ({
+          snapshot,
+          capabilityRefresh: { status: "refreshed" },
+        }),
+        update: async () => ({
+          snapshot,
+          capabilityRefresh: { status: "refreshed" },
+        }),
+        setEnabled: async () => ({
+          snapshot,
+          capabilityRefresh: { status: "refreshed" },
+        }),
+        uninstall: async () => ({
+          snapshot,
+          capabilityRefresh: { status: "refreshed" },
+        }),
+        reinstall: async () => ({
+          snapshot,
+          capabilityRefresh: { status: "refreshed" },
+        }),
+        deleteData: async () => {},
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => {
+    root.render(React.createElement(PluginSettings));
+    await Promise.resolve();
+  });
+  const text = () => dom.window.document.body.textContent ?? "";
+  const button = (label: string) =>
+    [...dom.window.document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent?.trim() === label,
+    ) as HTMLButtonElement;
+
+  assert.doesNotMatch(text(), /Installed on this device/u);
+  assert.match(text(), /Browser/u);
+  assert.match(text(), /Computer control is unavailable/u);
+  assert.match(text(), /Local clock/u);
+  assert.match(
+    text(),
+    /External catalog unavailable.*external catalog offline/u,
+  );
+  assert.equal(
+    button("Install from source…").getAttribute("aria-expanded"),
+    "false",
+  );
+  assert.equal(
+    dom.window.document.querySelector(".plugin-source-install"),
+    null,
+  );
+
+  await act(async () => button("Installed").click());
+  assert.match(text(), /Rooms/u);
+  assert.match(text(), /Local clock/u);
+  assert.doesNotMatch(text(), /Computer control is unavailable/u);
+
+  await act(async () => button("Built in").click());
+  assert.match(text(), /Computer/u);
+  assert.doesNotMatch(text(), /Local clock/u);
+
+  await act(async () => button("Install from source…").click());
+  assert.equal(
+    button("Install from source…").getAttribute("aria-expanded"),
+    "true",
+  );
+  assert.ok(dom.window.document.querySelector(".plugin-source-install select"));
+  assert.ok(dom.window.document.querySelector(".plugin-source-install input"));
+
+  await act(async () => {
+    button("Choose tarball…").click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  assert.doesNotMatch(text(), /Plugin tarball installed and enabled/u);
+
+  const search = dom.window.document.querySelector<HTMLInputElement>(
+    'input[aria-label="Search plugins"]',
+  );
+  assert.ok(search);
+  Object.assign(search, { attachEvent: () => {}, detachEvent: () => {} });
+  search.focus();
+  assert.equal(dom.window.document.activeElement, search);
+  await act(async () => root.unmount());
 });
 
 test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate", async () => {
@@ -499,7 +671,7 @@ test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate
     root.render(React.createElement(PluginSettings));
     await Promise.resolve();
   });
-  assert.match(dom.window.document.body.textContent ?? "", /enabled/u);
+  assert.match(dom.window.document.body.textContent ?? "", /Enabled/u);
   const button = (label: string) =>
     [...dom.window.document.querySelectorAll("button")].find(
       (candidate) => candidate.textContent === label,
@@ -572,5 +744,23 @@ function pluginSnapshot(
         contributionCount: 2,
       },
     ],
+  };
+}
+
+function builtIn(
+  pluginId: string,
+  packageName: string,
+  name: string,
+  available: boolean,
+  unavailableReason?: string,
+) {
+  return {
+    pluginId,
+    packageName,
+    name,
+    description: `${name} built-in plugin.`,
+    icon: "layers",
+    available,
+    ...(unavailableReason === undefined ? {} : { unavailableReason }),
   };
 }

@@ -34,7 +34,7 @@
 - **ZenX Bundled pnpm** — ZenX 从 App Resources 直接调用的固定版本 pnpm CLI，负责标准依赖解析、SemVer、lockfile、integrity、更新和删除，不依赖用户 PATH 上的 pnpm。
 - **Plugin Package Trust** — 安装即信任 package 代码，但 dependency build scripts 只由 bundled pnpm 按 profile 显式 `allowBuilds` 执行，不引入风险引擎或参数级权限矩阵。
 - **First-party Plugin Tarball** — Browser、Computer、ZenX self-control、Triggers 与 Rooms 的标准 npm tarball，随 App Resources 分发并通过同一个 profile installer 首装或重装。
-- **Thin Plugin Marketplace** — 只读 package metadata 目录，只提供 package spec、名称、描述、图标、推荐版本与 curated 状态，选择后仍调用同一个 profile installer。
+- **Plugin Marketplace Inventory** — ZenX 唯一的插件浏览与管理读模型，把 Host-owned 内置库存、只读外部 package metadata 和 Catalog 中已安装 package 合并去重，所有动作仍委托同一个 profile lifecycle authority。
 - **Plugin Discovery Projection** — 常驻 `zenx_plugin` 工具用普通 `discover` / `read` 调用选择后续模型可见插件能力；选择事实只由既有 tool call/result 推导，不新增 catalog/disclosure Item。
 - **Generic UI Host** — ZenX 为插件提供 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer 的受控宿主 surface，不允许插件直接接管核心 DOM、router 或 Agent 页面语义。
 - **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
@@ -359,7 +359,7 @@ Package 分发与 profile transaction 遵守以下边界：
 - 五个第一方 package 也产出普通 tarball 并随 App Resources 分发；首装、卸载后的重装和第三方 package 共用同一 installer、Catalog、lifecycle、runtime、UI 与 discovery 路径，`shell` 仍是 Agent Runtime builtin。
 - Rooms 是首个完成迁移的第一方 package：App Resources 中的固定 `@zenx/rooms-plugin` tarball 经普通 profile transaction 首装，Catalog 以 bundled source、package name 与 generation 保存唯一 admission；重启只从该 generation 加载。已有的 pre-profile bundled Rooms descriptor 只能由同一 Host-owned transaction 在 package identity 完全匹配时一次性收编，保留 enablement/uninstall 与数据状态且不写第二个 migration authority。只有这项 Host-owned allowlist 可给 installed runtime/trusted UI 注入既有 automation service，外部 package 不能靠 manifest 自行取得 bundled/trusted admission。
 - Browser、Computer、ZenX self-control 与 Triggers 同样由普通 `@zenx/*` tarball 经该 profile transaction 装载；provider selector 先选择既有精确 manifest，再选择 App Resources 中同一 package identity 的固定离线变体。Browser mode 或 Computer provider 改变时，Host 只允许 exact bundled identity/source 进行同版本变体替换，并把 candidate backend、runtime 和 generation 一起 staging，仍以新 generation 的单次 Catalog save 提交；重启时若当前 Browser selector 与 Catalog 变体不同，Catalog 的精确 backend 先独占恢复旧 generation，当前 selector backend 只作为未发布 candidate，因此两个 generation 不共享可关闭的 backend。提交前旧 runtime/backend 继续服务，失败只丢弃 candidate，提交后的 ownership swap 不再执行可失败工作，旧 backend 仅异步退役。外部/local package 不能使用该入口。`zenx-self-control` 为保留既有 canonical `zenx_projects_*` / `zenx_threads_*` 名称，在 SDK package-shape validation 使用固定完整名称集合，而 Host runtime 只对 bundled exact identity/source admission；近似名称和 external/local 同 ID 仍按通用 namespace 拒绝。
-- Marketplace 只读取薄 metadata 目录并把选中的 package spec/版本交给同一 installer；它不保存 package 内容、不成为安装 authority，也不引入 registry backend、发布后台、审核工作流、自定义 store/solver 或签名 PKI。
+- Marketplace 是唯一的插件浏览与管理 surface：Host 永久投影五个内置条目，再与只读外部 metadata 目录及 Catalog 中已安装的非目录 package 合并去重；Installed 只是筛选。内置首次安装/重装从 App Resources 选择 Host-owned fixed tarball，Browser/Computer 使用当前 provider selector 的精确变体，随后仍进入同一 profile transaction；provider 不可用时条目保留并显示原因，不注册虚假 capability。外部目录失败或为空不隐藏本地库存，Marketplace 不保存 package 内容、不成为安装 authority，也不引入 registry backend、发布后台、审核工作流、自定义 store/solver 或签名 PKI。
 
 - Plugin Package 生命周期只有 `installed`、`enabled`、`uninstalled`。Bundled plugin
   也可以卸载并在以后重装；卸载撤销 runtime/UI/tool 注册但默认保留 plugin data，
@@ -375,7 +375,7 @@ Package 分发与 profile transaction 遵守以下边界：
 - Plugin Host 与 ZAS/AppServer 是 ZenX Host 下的并列服务。ZAS 继续由 ZenX Host
   拥有并暴露稳定、带认证的可连接 endpoint；关闭所有窗口不停止 Host，显式 Quit
   才停止。当前阶段不实现 OS daemon、launch agent 或云端 service。
-- 本阶段只建设上述 thin Marketplace，不建设 registry backend、发布后台、签名 PKI、
+- 本阶段只建设上述统一 Marketplace inventory 与只读外部 metadata 目录，不建设 registry backend、发布后台、签名 PKI、
   自定义 package store/dependency solver，也不顺带重构 Provider、图片、attachment 或 compaction。
 
 ## 不变量

@@ -1,6 +1,7 @@
 import type {
   ZenXPluginPackageSource,
   ZenXPluginSnapshot,
+  ZenXPluginSummary,
 } from "./main/capabilities/types.js";
 
 export interface MarketplaceCatalogVersion {
@@ -20,6 +21,42 @@ export interface MarketplaceCatalogEntry {
 
 export interface MarketplaceCatalogSnapshot {
   readonly entries: readonly MarketplaceCatalogEntry[];
+}
+
+export interface MarketplaceCatalogLoadSnapshot extends MarketplaceCatalogSnapshot {
+  readonly builtIns: readonly MarketplaceBuiltInEntry[];
+  readonly error?: string;
+}
+
+export interface MarketplaceBuiltInEntry {
+  readonly pluginId: string;
+  readonly packageName: string;
+  readonly name: string;
+  readonly description: string;
+  readonly icon: string;
+  readonly available: boolean;
+  readonly unavailableReason?: string;
+}
+
+export type MarketplaceInventoryLifecycle =
+  ZenXPluginSummary["lifecycle"] | "available" | "unavailable";
+
+export interface MarketplaceInventoryViewEntry {
+  readonly key: string;
+  readonly pluginId?: string;
+  readonly packageSpec?: string;
+  readonly name: string;
+  readonly description: string;
+  readonly icon: string;
+  readonly source: "built-in" | "catalog" | "source";
+  readonly lifecycle: MarketplaceInventoryLifecycle;
+  readonly available: boolean;
+  readonly unavailableReason?: string;
+  readonly plugin?: ZenXPluginSummary;
+  readonly recommendedVersion?: string;
+  readonly curated: boolean;
+  readonly versions: readonly MarketplaceCatalogVersion[];
+  readonly updateAvailable: boolean;
 }
 
 export interface MarketplaceCatalogViewEntry extends MarketplaceCatalogEntry {
@@ -73,6 +110,111 @@ export function marketplaceCatalogView(
           compareSemver(plugin.version, entry.recommendedVersion) < 0,
       };
     });
+}
+
+/**
+ * One read model for every plugin a person can manage. The Plugin Catalog
+ * snapshot remains the lifecycle authority; this function only composes it
+ * with Host-owned built-ins and read-only external metadata.
+ */
+export function marketplaceInventoryView(
+  catalog: MarketplaceCatalogLoadSnapshot,
+  plugins: ZenXPluginSnapshot,
+): MarketplaceInventoryViewEntry[] {
+  const pluginsById = new Map(
+    plugins.plugins.map((plugin) => [plugin.id, plugin] as const),
+  );
+  const pluginsByPackage = new Map(
+    plugins.plugins.flatMap((plugin) =>
+      plugin.profileSource === undefined
+        ? []
+        : ([[plugin.profileSource.packageName, plugin]] as const),
+    ),
+  );
+  const claimedPluginIds = new Set<string>();
+  const claimedPackages = new Set<string>();
+  const inventory: MarketplaceInventoryViewEntry[] = [];
+
+  // Keep a mixed-version renderer connected to an older Host readable while
+  // the normal production response always supplies this Host-owned inventory.
+  for (const entry of catalog.builtIns ?? []) {
+    const plugin = pluginsById.get(entry.pluginId);
+    claimedPluginIds.add(entry.pluginId);
+    claimedPackages.add(entry.packageName);
+    inventory.push({
+      key: `builtin:${entry.pluginId}`,
+      pluginId: entry.pluginId,
+      packageSpec: entry.packageName,
+      name: entry.name,
+      description: entry.description,
+      icon: entry.icon,
+      source: "built-in",
+      lifecycle:
+        plugin?.lifecycle ?? (entry.available ? "available" : "unavailable"),
+      available: entry.available,
+      ...(entry.unavailableReason === undefined
+        ? {}
+        : { unavailableReason: entry.unavailableReason }),
+      ...(plugin === undefined ? {} : { plugin }),
+      curated: true,
+      versions: [],
+      updateAvailable: false,
+    });
+  }
+
+  for (const entry of catalog.entries) {
+    if (claimedPackages.has(entry.packageSpec)) continue;
+    const plugin = pluginsByPackage.get(entry.packageSpec);
+    if (plugin !== undefined) claimedPluginIds.add(plugin.id);
+    claimedPackages.add(entry.packageSpec);
+    inventory.push({
+      key: `catalog:${entry.packageSpec}`,
+      ...(plugin === undefined ? {} : { pluginId: plugin.id, plugin }),
+      packageSpec: entry.packageSpec,
+      name: entry.name,
+      description: entry.description,
+      icon: entry.icon,
+      source: "catalog",
+      lifecycle: plugin?.lifecycle ?? "available",
+      available: true,
+      recommendedVersion: entry.recommendedVersion,
+      curated: entry.curated,
+      versions: entry.versions,
+      updateAvailable:
+        plugin !== undefined &&
+        plugin.lifecycle !== "uninstalled" &&
+        compareSemver(plugin.version, entry.recommendedVersion) < 0,
+    });
+  }
+
+  for (const plugin of plugins.plugins) {
+    if (
+      claimedPluginIds.has(plugin.id) ||
+      (plugin.profileSource !== undefined &&
+        claimedPackages.has(plugin.profileSource.packageName))
+    ) {
+      continue;
+    }
+    inventory.push({
+      key: `installed:${plugin.id}`,
+      pluginId: plugin.id,
+      ...(plugin.profileSource === undefined
+        ? {}
+        : { packageSpec: plugin.profileSource.packageName }),
+      name: plugin.displayName,
+      description: plugin.description ?? "No package description provided.",
+      icon: "layers",
+      source: "source",
+      lifecycle: plugin.lifecycle,
+      available: plugin.available,
+      plugin,
+      curated: false,
+      versions: [],
+      updateAvailable: false,
+    });
+  }
+
+  return inventory.sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function validateMarketplaceCatalog(

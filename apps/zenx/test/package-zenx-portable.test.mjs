@@ -200,7 +200,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
   }
 });
 
-test("copies the read-only Marketplace catalog into App Resources", async () => {
+test("copies the honestly empty external Marketplace metadata into App Resources", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-marketplace-resource-"),
   );

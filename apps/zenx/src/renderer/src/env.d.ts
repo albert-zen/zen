@@ -49,7 +49,7 @@ import type {
   ZenXThreadAttachmentProjection,
 } from "../../main/image-attachments.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
-import type { MarketplaceCatalogSnapshot } from "../../marketplace.js";
+import type { MarketplaceCatalogLoadSnapshot } from "../../marketplace.js";
 
 declare global {
   interface Window {
@@ -148,7 +148,7 @@ declare global {
         onChange(listener: (snapshot: ThreadTitleSnapshot) => void): () => void;
       };
       marketplace: {
-        get(): Promise<MarketplaceCatalogSnapshot>;
+        get(): Promise<MarketplaceCatalogLoadSnapshot>;
       };
       plugins: {
         get(): Promise<ZenXPluginSnapshot>;
@@ -157,6 +157,7 @@ declare global {
           enabled: boolean,
         ): Promise<ZenXPluginMutationResult>;
         selectTarball(): Promise<ZenXPluginTarballSelectionResult>;
+        installBuiltIn(pluginId: string): Promise<ZenXPluginMutationResult>;
         installSource(
           source: ZenXPluginPackageSource,
         ): Promise<ZenXPluginMutationResult>;

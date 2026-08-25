@@ -54,7 +54,16 @@ import {
   stagePluginRemoval,
   type ZenXTrustedProfilePluginLoader,
 } from "./plugin-profile.js";
-import { firstPartyProviderTarball } from "./first-party-profile-loader.js";
+import {
+  FIRST_PARTY_MARKETPLACE_ENTRIES,
+  FIRST_PARTY_PLUGIN_PACKAGES,
+  firstPartyProviderTarball,
+} from "./first-party-profile-loader.js";
+import type { MarketplaceBuiltInEntry } from "../marketplace.js";
+import {
+  ZENX_ROOMS_PACKAGE_NAME,
+  ZENX_ROOMS_TARBALL,
+} from "./rooms-profile-loader.js";
 
 export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #registry: ZenXPluginCatalog;
@@ -294,24 +303,17 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       this.#publishBrowserProfileSelection(selected);
       return;
     }
+    const lifecycle = this.#registry
+      .pluginSnapshot()
+      .plugins.find((plugin) => plugin.id === "browser")?.lifecycle;
+    if (lifecycle === "uninstalled") {
+      this.#pendingBrowserProfileSelection = undefined;
+      this.#publishBrowserProfileSelection(selected);
+      return;
+    }
     const committed =
       await this.#resolveBrowserProfileProviderVariant(committedProviderId);
-    this.#pendingBrowserProfileSelection =
-      this.#registry
-        .pluginSnapshot()
-        .plugins.find((plugin) => plugin.id === "browser")?.lifecycle ===
-      "uninstalled"
-        ? undefined
-        : selected;
-    if (
-      this.#pendingBrowserProfileSelection === undefined &&
-      selected.capabilityPackage !== undefined
-    ) {
-      await this.#discardProviderCandidate(
-        "browser",
-        selected.capabilityPackage,
-      );
-    }
+    this.#pendingBrowserProfileSelection = selected;
     this.#publishBrowserProfileSelection(committed);
   }
 
@@ -468,6 +470,30 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return this.#registry.diagnostics();
   }
 
+  marketplaceBuiltIns(): MarketplaceBuiltInEntry[] {
+    const diagnostics = this.#registry.diagnostics().providerDiagnostics;
+    return FIRST_PARTY_MARKETPLACE_ENTRIES.map((entry) => {
+      const available =
+        entry.pluginId === "browser"
+          ? this.#browserProfilePackage !== undefined
+          : entry.pluginId === "computer"
+            ? this.#computerProfilePackage !== undefined
+            : true;
+      const diagnostic = diagnostics.find(
+        (candidate) =>
+          candidate.capabilityId === entry.pluginId &&
+          candidate.status === "unavailable",
+      );
+      return {
+        ...entry,
+        available,
+        ...(available || diagnostic?.reason === undefined
+          ? {}
+          : { unavailableReason: diagnostic.reason }),
+      };
+    });
+  }
+
   async installPluginTarball(tarballPath: string): Promise<ZenXPluginSnapshot> {
     return await this.installPluginPackage({
       mode: "tarball",
@@ -535,6 +561,19 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           expected.packageName,
         ),
     );
+  }
+
+  async installBuiltInPlugin(pluginId: string): Promise<ZenXPluginSnapshot> {
+    const definition = this.#builtInPackageDefinition(pluginId);
+    if (
+      this.pluginSnapshot().plugins.some((plugin) => plugin.id === pluginId)
+    ) {
+      throw new Error(`Plugin ${pluginId} already has Catalog lifecycle state`);
+    }
+    return await this.installBundledPluginPackage(definition.tarballPath, {
+      pluginId,
+      packageName: definition.packageName,
+    });
   }
 
   async replaceBundledProviderVariant(
@@ -863,7 +902,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       };
       const source =
         storedSource.mode === "bundled"
-          ? await this.#trustedBundledSource(storedSource.packageSpec)
+          ? await this.#trustedBundledSource(
+              this.#builtInPackageDefinition(pluginId).tarballPath,
+            )
           : storedSource;
       const staged = await stagePluginPackage({
         userDataDirectory: this.#userDataDirectory,
@@ -911,6 +952,51 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       throw new Error("Bundled plugin source must be an App Resource package");
     }
     return { mode: "bundled", packageSpec: trustedPackage };
+  }
+
+  #builtInPackageDefinition(pluginId: string): {
+    packageName: string;
+    tarballPath: string;
+  } {
+    if (this.#resourcesDirectory === undefined) {
+      throw new Error("Bundled plugin App Resources are not configured");
+    }
+    let packageName: string;
+    let tarball: string;
+    switch (pluginId) {
+      case "browser":
+        packageName = FIRST_PARTY_PLUGIN_PACKAGES.browser.packageName;
+        tarball = firstPartyProviderTarball(
+          pluginId,
+          this.browserProfilePackage().manifest.provider.id,
+        );
+        break;
+      case "computer":
+        packageName = FIRST_PARTY_PLUGIN_PACKAGES.computer.packageName;
+        tarball = firstPartyProviderTarball(
+          pluginId,
+          this.computerProfilePackage().manifest.provider.id,
+        );
+        break;
+      case "zenx-rooms":
+        packageName = ZENX_ROOMS_PACKAGE_NAME;
+        tarball = ZENX_ROOMS_TARBALL;
+        break;
+      case "zenx-self-control":
+        packageName = FIRST_PARTY_PLUGIN_PACKAGES.selfControl.packageName;
+        tarball = FIRST_PARTY_PLUGIN_PACKAGES.selfControl.tarball;
+        break;
+      case "zenx-triggers":
+        packageName = FIRST_PARTY_PLUGIN_PACKAGES.triggers.packageName;
+        tarball = FIRST_PARTY_PLUGIN_PACKAGES.triggers.tarball;
+        break;
+      default:
+        throw new Error(`Plugin ${pluginId} is not built into ZenX`);
+    }
+    return {
+      packageName,
+      tarballPath: path.join(this.#resourcesDirectory, "plugins", tarball),
+    };
   }
 
   async deletePluginData(pluginId: string): Promise<void> {

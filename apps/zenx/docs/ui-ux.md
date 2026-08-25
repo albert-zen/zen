@@ -236,7 +236,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - restart-required changes 必须在当前 route 明确反馈 pending、success 和 failure；具体使用顶部或内容区动作、动作名称、何时 enabled/emphasized，待 Settings action contract 确认。
 - 本地 service state 是弱状态信息：Sidebar 左下 Settings row 的最右侧显示一个不单独可点击的状态点，hover tooltip 与 Settings 的 accessible name 提供具体状态；它不再占用独立文字行，也不得盖过用户可执行设置。主区仍保留 starting、reconnecting 与 error 的阻断说明。
 - 未配置 host 的首次启动进入 provider onboarding；Subscription、OpenAI-compatible API 与 local demo 的 credential/configuration 仍遵守 Host/Core 安全边界。
-- Settings → Plugins 是已安装插件的统一管理入口。Agent page 不散落插件管理 UI；它表达 `installed` / `enabled` / `uninstalled` 生命周期、bundled/local 来源、版本与兼容范围，并提供 package source 安装/更新、Enable/Disable、Uninstall/Reinstall 和独立 Delete data。Bundled plugin 也可卸载并以后重装；卸载默认保留数据，破坏性操作使用有焦点的二次确认，错误留在当前面板且不伪装成功。
+- Settings → Plugins / Marketplace 是唯一的插件浏览与管理入口。Agent page 不散落插件管理 UI；五个永久内置条目、外部目录条目与已安装非目录 package 在同一紧凑 inventory 中合并去重，Installed 只是筛选。一个低调的 search/filter rail 是页面的主要结构；npm/Git/tarball/local-copy/dev-link 收进 **Install from source…** 高级入口。每个 inventory row 表达来源、`installed` / `enabled` / `uninstalled` / provider unavailable 状态并原位提供 Enable/Disable、Install/Update、Uninstall/Reinstall 和独立 Delete data。Bundled plugin 也可卸载并以后重装；卸载默认保留数据，破坏性操作使用有焦点的二次确认，外部目录错误与本地生命周期错误各自留在当前面板且不隐藏仍可管理的插件。
 - 插件工具策略只呈现默认 `full_access` 与可选 `ask_unknown`。后者按稳定 tool name 展示 Host-owned approved/denied 结果；未知工具只询问一次。不提供 risk level、scope graph、参数权限矩阵或额外 package grant UX。
 
 ## 5. Responsive 与 accessibility guidance
@@ -284,7 +284,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - `ask_unknown` 首次询问、approved/denied 管理与 restart-required changes 的准确 controls；
 - Triggers / Rooms 的准确 page layout、Trigger 类型展示、Room dependency 提示、Source Thread 跳转、Signal simulator 与 error/retry 文案。
 
-Marketplace、签名、dependency solver、risk scoring 与复杂 permission/sandbox 框架明确不在本阶段，不能以 TBD 名义预埋。Architecture 与当前实现可以定义 package、runtime 和 Trigger/Room 数据边界，但这些事实不会自动决定最终 UI。确认前，原型与 issue 中的具体表现只作为实验或工程 guidance。
+Marketplace 的统一 inventory 已确认并实现；外部 publishing/reviews/payments/accounts backend、签名、dependency solver、risk scoring 与复杂 permission/sandbox 框架明确不在本阶段，不能以 TBD 名义预埋。Architecture 与当前实现可以定义 package、runtime 和 Trigger/Room 数据边界，但这些事实不会自动决定其他尚未确认的 UI。确认前，原型与 issue 中的具体表现只作为实验或工程 guidance。
 
 ## 7. Implementation acceptance
 

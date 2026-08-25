@@ -1,4 +1,5 @@
 import type { ZenXCapabilityPackage } from "./capabilities/types.js";
+import type { MarketplaceBuiltInEntry } from "../marketplace.js";
 import type { ZenXTrustedProfilePluginLoader } from "./plugin-profile.js";
 
 export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
@@ -23,6 +24,50 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
     tarball: "zenx-triggers-plugin-1.0.0.tgz",
   },
 });
+
+export const FIRST_PARTY_MARKETPLACE_ENTRIES = Object.freeze([
+  {
+    pluginId: "browser",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.browser.packageName,
+    name: "Browser",
+    description:
+      "Browse and act on web pages through the selected local provider.",
+    icon: "search",
+  },
+  {
+    pluginId: "computer",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.computer.packageName,
+    name: "Computer",
+    description:
+      "Inspect and control desktop applications with platform-aware actions.",
+    icon: "panel-right",
+  },
+  {
+    pluginId: "zenx-rooms",
+    packageName: "@zenx/rooms-plugin",
+    name: "Rooms",
+    description:
+      "Coordinate shared conversations and route explicit member mentions.",
+    icon: "users",
+  },
+  {
+    pluginId: "zenx-self-control",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.selfControl.packageName,
+    name: "ZenX self-control",
+    description: "Let the Agent work with ZenX Projects, Threads, and turns.",
+    icon: "layers",
+  },
+  {
+    pluginId: "zenx-triggers",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.triggers.packageName,
+    name: "Triggers",
+    description: "Wake Agents from timers, signals, and completed work.",
+    icon: "trigger",
+  },
+] as const satisfies readonly Omit<
+  MarketplaceBuiltInEntry,
+  "available" | "unavailableReason"
+>[]);
 
 export function firstPartyProviderTarball(
   pluginId: string,

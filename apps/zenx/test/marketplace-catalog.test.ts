@@ -5,6 +5,7 @@ import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import {
   MarketplaceCatalogService,
   marketplaceCatalogView,
+  marketplaceInventoryView,
   marketplacePackageSource,
 } from "../src/main/marketplace-catalog.js";
 
@@ -39,7 +40,7 @@ const fixtureCatalog = {
   ],
 };
 
-test("read-only Marketplace loads fixture metadata and maps an explicit version to the canonical npm source", async () => {
+test("external Marketplace metadata maps an explicit version to the canonical npm source", async () => {
   const service = new MarketplaceCatalogService({
     load: async () => fixtureCatalog,
   });
@@ -133,6 +134,136 @@ test("catalog load and validation failures do not mutate the caller's plugin sna
   });
   await assert.rejects(invalid.load(), /recommended version.*is not listed/u);
   assert.deepEqual(plugins, before);
+});
+
+test("Marketplace inventory keeps built-ins and installed non-catalog plugins when the external catalog is unavailable", () => {
+  const plugins = pluginSnapshot("1.0.0");
+  plugins.plugins.push({
+    id: "local-clock",
+    displayName: "Local clock",
+    version: "0.4.0",
+    description: "A locally installed clock.",
+    source: "local",
+    profileSource: {
+      mode: "local-copy",
+      packageSpec: "/fixtures/local-clock",
+      resolvedSpec: "file:local-clock",
+      packageName: "local-clock",
+      packageVersion: "0.4.0",
+    },
+    lifecycle: "installed",
+    enabled: false,
+    available: true,
+    contributionCount: 0,
+  });
+  plugins.plugins.push({
+    id: "browser",
+    displayName: "Browser",
+    version: "1.0.0",
+    description: "Browse pages in an isolated session.",
+    source: "bundled",
+    profileSource: {
+      mode: "bundled",
+      packageSpec: "/app/plugins/browser.tgz",
+      resolvedSpec: "file:browser.tgz",
+      packageName: "@zenx/browser-plugin",
+      packageVersion: "1.0.0",
+    },
+    lifecycle: "uninstalled",
+    enabled: false,
+    available: true,
+    contributionCount: 0,
+  });
+  plugins.plugins.push({
+    id: "computer",
+    displayName: "Computer",
+    version: "1.0.0",
+    description: "Inspect and control desktop applications.",
+    source: "bundled",
+    profileSource: {
+      mode: "bundled",
+      packageSpec: "/app/plugins/computer.tgz",
+      resolvedSpec: "file:computer.tgz",
+      packageName: "@zenx/computer-plugin",
+      packageVersion: "1.0.0",
+    },
+    lifecycle: "installed",
+    enabled: false,
+    available: false,
+    contributionCount: 0,
+  });
+
+  const inventory = marketplaceInventoryView(
+    {
+      entries: fixtureCatalog.entries,
+      error: "catalog offline",
+      builtIns: [
+        {
+          pluginId: "browser",
+          packageName: "@zenx/browser-plugin",
+          name: "Browser",
+          description: "Browse and act on web pages.",
+          icon: "search",
+          available: true,
+        },
+        {
+          pluginId: "computer",
+          packageName: "@zenx/computer-plugin",
+          name: "Computer",
+          description: "Inspect and control desktop applications.",
+          icon: "panel-right",
+          available: false,
+          unavailableReason: "Computer control is not available on Linux.",
+        },
+      ],
+    },
+    plugins,
+  );
+
+  assert.deepEqual(
+    inventory.map((entry) => ({
+      key: entry.key,
+      source: entry.source,
+      lifecycle: entry.lifecycle,
+      reason: entry.unavailableReason,
+    })),
+    [
+      {
+        key: "builtin:browser",
+        source: "built-in",
+        lifecycle: "uninstalled",
+        reason: undefined,
+      },
+      {
+        key: "catalog:@fixtures/calendar-plugin",
+        source: "catalog",
+        lifecycle: "available",
+        reason: undefined,
+      },
+      {
+        key: "builtin:computer",
+        source: "built-in",
+        lifecycle: "installed",
+        reason: "Computer control is not available on Linux.",
+      },
+      {
+        key: "installed:local-clock",
+        source: "source",
+        lifecycle: "installed",
+        reason: undefined,
+      },
+      {
+        key: "catalog:@fixtures/notes-plugin",
+        source: "catalog",
+        lifecycle: "enabled",
+        reason: undefined,
+      },
+    ],
+  );
+  assert.equal(
+    inventory.filter((entry) => entry.pluginId === "browser").length,
+    1,
+  );
 });
 
 test("Marketplace admits only canonical npm identities with matching exact version specs", async () => {

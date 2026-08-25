@@ -1,6 +1,8 @@
 import type { ReactNode, SVGProps } from "react";
 import type { ZenXPluginIconName } from "../../main/capabilities/types.js";
 
+import React from "react";
+
 export type IconName =
   | ZenXPluginIconName
   | "arrow-down"
