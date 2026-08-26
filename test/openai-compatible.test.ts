@@ -47,16 +47,11 @@ test("maps Zen context and protects model execution fields", async () => {
         messages: [
           { role: "user", text: "hello" },
           {
-            role: "provider_opaque",
-            providerProfileId: "subscription-profile",
-            modelId: "test-model",
-            modelResponseId: "response-private",
-            state: {
-              type: "openai_responses_reasoning",
-              itemId: "rs_private",
-              encryptedContent: "must-not-enter-chat",
-              summary: [],
-            },
+            role: "reasoning",
+            summary: "",
+            providerItemId: "rs_private",
+            encryptedContent: "must-not-enter-chat",
+            providerSummary: [],
           },
           { role: "assistant", text: "calling a tool" },
           {

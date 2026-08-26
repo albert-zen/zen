@@ -78,7 +78,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     const allowedToolNames = new Set(tools.map((tool) => tool.function.name));
     const messages: Readonly<Record<string, unknown>>[] = [];
     for (const message of request.messages) {
-      if (message.role === "provider_opaque") continue;
+      if (message.role === "reasoning") continue;
       messages.push(await toChatMessage(message, this.#attachments));
     }
     const body = serializeRequest({
@@ -216,10 +216,10 @@ async function toChatMessage(
   message: ModelMessage,
   attachments: Pick<AttachmentStore, "read"> | undefined,
 ): Promise<Readonly<Record<string, unknown>>> {
-  if (message.role === "provider_opaque") {
+  if (message.role === "reasoning") {
     throw modelError(
       "configuration",
-      "Opaque provider state cannot enter OpenAI-compatible chat messages",
+      "Responses reasoning cannot enter OpenAI-compatible chat messages",
     );
   }
   if (message.role === "tool") {

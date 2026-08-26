@@ -1,8 +1,8 @@
 import {
   contentFromUserMessage,
   textFromUserInput,
+  type CanonicalProviderSelection,
   type CanonicalItem,
-  type OpenAiResponsesReasoningState,
   type UserInput,
 } from "./item.js";
 import {
@@ -37,12 +37,12 @@ export interface ToolResultModelMessage {
   exitCode: number;
 }
 
-export interface ProviderOpaqueModelMessage {
-  role: "provider_opaque";
-  providerProfileId: string;
-  modelId: string;
-  modelResponseId: string;
-  state: OpenAiResponsesReasoningState;
+export interface ReasoningModelMessage {
+  role: "reasoning";
+  summary: string;
+  providerItemId: string;
+  encryptedContent: string;
+  providerSummary: Array<{ type: "summary_text"; text: string }>;
 }
 
 export type ModelMessage =
@@ -50,12 +50,11 @@ export type ModelMessage =
   | TypedUserModelMessage
   | ToolCallModelMessage
   | ToolResultModelMessage
-  | ProviderOpaqueModelMessage;
+  | ReasoningModelMessage;
 
 export type ReasoningEffort = string;
 
 export interface ModelRequest {
-  providerProfileId?: string;
   model: string;
   reasoningEffort: ReasoningEffort;
   messages: ModelMessage[];
@@ -76,10 +75,12 @@ export interface ModelTool {
 
 export type ModelEvent =
   | { type: "text_delta"; delta: string }
-  | { type: "reasoning"; summary: string }
   | {
-      type: "opaque_continuation";
-      continuation: OpenAiResponsesReasoningState;
+      type: "reasoning";
+      summary: string;
+      providerItemId?: string;
+      encryptedContent?: string;
+      providerSummary?: Array<{ type: "summary_text"; text: string }>;
     }
   | {
       type: "tool_call";
@@ -100,10 +101,21 @@ export interface ModelAdapter {
 
 export function compileModelMessages(
   items: readonly CanonicalItem[],
+  targetSelection?: CanonicalProviderSelection,
 ): ModelMessage[] {
+  const turnSelections = new Map<string, CanonicalProviderSelection>();
+  for (const item of items) {
+    if (item.type === "turn_started" && item.selection !== undefined) {
+      turnSelections.set(item.turnId, item.selection);
+    }
+  }
   const compaction = latestCompaction(items);
   if (compaction === undefined) {
-    return compileCanonicalModelMessages(items);
+    return compileCanonicalModelMessages(
+      items,
+      targetSelection,
+      turnSelections,
+    );
   }
   const boundaryIndex = items.findIndex(
     (item) => item.id === compaction.coveredThroughItemId,
@@ -122,17 +134,23 @@ export function compileModelMessages(
     return item;
   });
   return [
-    ...compileCanonicalModelMessages(retained),
+    ...compileCanonicalModelMessages(retained, targetSelection, turnSelections),
     {
       role: "user",
       text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${compaction.summary}`,
     },
-    ...compileCanonicalModelMessages(items.slice(boundaryIndex + 1)),
+    ...compileCanonicalModelMessages(
+      items.slice(boundaryIndex + 1),
+      targetSelection,
+      turnSelections,
+    ),
   ];
 }
 
 function compileCanonicalModelMessages(
   items: readonly CanonicalItem[],
+  targetSelection: CanonicalProviderSelection | undefined,
+  turnSelections: ReadonlyMap<string, CanonicalProviderSelection>,
 ): ModelMessage[] {
   items = orderSteeredMessagesForSampling(items);
   const messages: ModelMessage[] = [];
@@ -206,22 +224,34 @@ function compileCanonicalModelMessages(
           exitCode: item.exitCode,
         });
         break;
-      case "provider_opaque_state":
-        messages.push({
-          role: "provider_opaque",
-          providerProfileId: item.providerProfileId,
-          modelId: item.modelId,
-          modelResponseId: item.modelResponseId,
-          state: structuredClone(item.state),
-        });
+      case "reasoning": {
+        const producingSelection = turnSelections.get(item.turnId);
+        if (
+          targetSelection !== undefined &&
+          producingSelection !== undefined &&
+          producingSelection.providerProfileId ===
+            targetSelection.providerProfileId &&
+          producingSelection.modelId === targetSelection.modelId &&
+          item.providerItemId !== undefined &&
+          item.encryptedContent !== undefined &&
+          item.providerSummary !== undefined
+        ) {
+          messages.push({
+            role: "reasoning",
+            summary: item.summary,
+            providerItemId: item.providerItemId,
+            encryptedContent: item.encryptedContent,
+            providerSummary: structuredClone(item.providerSummary),
+          });
+        }
         break;
+      }
       case "failure":
         messages.push({
           role: "assistant",
           text: `[failure: ${item.message}]`,
         });
         break;
-      case "reasoning":
       case "context_compaction":
       case "thread_configuration_changed":
       case "thread_metadata":

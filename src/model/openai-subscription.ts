@@ -34,8 +34,8 @@ export interface OpenAiSubscriptionModelOptions {
 
 /**
  * A stateless, native adapter for the ChatGPT Codex Responses SSE endpoint.
- * Each request is rebuilt from canonical Zen messages and matching opaque
- * provider state; no continuation authority is kept in adapter memory.
+ * Each request is rebuilt from canonical Zen history, including compatible
+ * encrypted reasoning Items; no continuation authority is kept in memory.
  */
 export class OpenAiSubscriptionModel implements ModelAdapter {
   readonly provider = "openai-codex";
@@ -65,13 +65,6 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     const sessionHint = promptCacheHint(request.sessionId);
     const input: Array<Record<string, unknown>> = [];
     for (const [index, message] of request.messages.entries()) {
-      if (
-        message.role === "provider_opaque" &&
-        (message.providerProfileId !== request.providerProfileId ||
-          message.modelId !== request.model)
-      ) {
-        continue;
-      }
       input.push(
         ...(await toResponsesInput(message, index, this.#attachments)),
       );
@@ -82,6 +75,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       stream: true,
       instructions: this.#instructions,
       input,
+      include: ["reasoning.encrypted_content"],
       text: { verbosity: "low" },
       reasoning: {
         effort: requiredLabel(request.reasoningEffort, "reasoning effort"),
@@ -196,13 +190,13 @@ async function toResponsesInput(
   index: number,
   attachments: Pick<AttachmentStore, "read"> | undefined,
 ): Promise<Array<Record<string, unknown>>> {
-  if (message.role === "provider_opaque") {
+  if (message.role === "reasoning") {
     return [
       {
         type: "reasoning",
-        id: message.state.itemId,
-        encrypted_content: message.state.encryptedContent,
-        summary: structuredClone(message.state.summary),
+        id: message.providerItemId,
+        encrypted_content: message.encryptedContent,
+        summary: structuredClone(message.providerSummary),
       },
     ];
   }
@@ -490,20 +484,21 @@ async function* finishOutputItem(
       encryptedContent !== undefined &&
       encryptedContent.length > 0
     ) {
+      const finalText =
+        reasoningSummaryText(replaySummary) || slot.text.replace(/\n\n$/u, "");
       yield {
-        type: "opaque_continuation",
-        continuation: {
-          type: "openai_responses_reasoning",
-          itemId,
-          encryptedContent,
-          summary: structuredClone(replaySummary),
-        },
+        type: "reasoning",
+        summary: finalText,
+        providerItemId: itemId,
+        encryptedContent,
+        providerSummary: structuredClone(replaySummary),
       };
-    }
-    const finalText =
-      reasoningSummaryText(replaySummary) || slot.text.replace(/\n\n$/u, "");
-    if (finalText.length > 0) {
-      yield { type: "reasoning", summary: finalText };
+    } else {
+      const finalText =
+        reasoningSummaryText(replaySummary) || slot.text.replace(/\n\n$/u, "");
+      if (finalText.length > 0) {
+        yield { type: "reasoning", summary: finalText };
+      }
     }
   } else if (slot.type === "message") {
     const finalText = messageText(item);

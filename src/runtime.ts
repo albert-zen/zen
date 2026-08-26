@@ -7,7 +7,6 @@ import type {
   CanonicalItem,
   FailureItem,
   ReasoningItem,
-  ProviderOpaqueStateItem,
   SandboxMode,
   ToolCallItem,
   ToolResultItem,
@@ -328,7 +327,6 @@ export class AgentRuntime {
     const messages = await options.prepareModelSample(itemId);
 
     for await (const event of options.modelAdapter.stream({
-      providerProfileId: options.configuration.providerProfileId,
       model: options.configuration.model,
       reasoningEffort: options.configuration.reasoningEffort,
       messages,
@@ -358,19 +356,6 @@ export class AgentRuntime {
           itemId,
           delta: event.delta,
         });
-      } else if (event.type === "opaque_continuation") {
-        const providerState: ProviderOpaqueStateItem = {
-          id: this.#id(),
-          threadId: options.thread.id,
-          turnId,
-          createdAt: this.#now(),
-          type: "provider_opaque_state",
-          providerProfileId: options.configuration.providerProfileId,
-          modelId: options.configuration.model,
-          modelResponseId: itemId,
-          state: structuredClone(event.continuation),
-        };
-        await options.commit(providerState);
       } else if (event.type === "reasoning") {
         const reasoning: ReasoningItem = {
           id: this.#id(),
@@ -379,6 +364,15 @@ export class AgentRuntime {
           createdAt: this.#now(),
           type: "reasoning",
           summary: event.summary,
+          ...(event.providerItemId === undefined
+            ? {}
+            : { providerItemId: event.providerItemId }),
+          ...(event.encryptedContent === undefined
+            ? {}
+            : { encryptedContent: event.encryptedContent }),
+          ...(event.providerSummary === undefined
+            ? {}
+            : { providerSummary: structuredClone(event.providerSummary) }),
         };
         await this.#completeItem(reasoning, options);
       } else if (event.type === "tool_call") {

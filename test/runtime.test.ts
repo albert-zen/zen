@@ -21,11 +21,12 @@ import {
 import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
 import {
   FakeModel,
+  compileModelMessages,
   type ModelAdapter,
   type ModelEvent,
   type ModelMessage,
   type ModelRequest,
-  type ProviderOpaqueModelMessage,
+  type ReasoningModelMessage,
 } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
@@ -167,32 +168,30 @@ test("preserves credential-matching model and tool trace strings verbatim", asyn
   );
 });
 
-test("persists opaque provider continuation across restart without public projection", async () => {
+test("persists encrypted content inline on reasoning and derives replay selection", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-continuation-"));
   const journal = new JsonlThreadJournal(root);
-  const seenContinuations: ProviderOpaqueModelMessage[][] = [];
+  const seenReasoning: ReasoningModelMessage[][] = [];
   let sample = 0;
   const model: ModelAdapter = {
     provider: "openai-codex",
     async *stream(request): AsyncIterable<ModelEvent> {
-      seenContinuations.push(
+      seenReasoning.push(
         structuredClone(
           request.messages.filter(
-            (message): message is ProviderOpaqueModelMessage =>
-              message.role === "provider_opaque",
+            (message): message is ReasoningModelMessage =>
+              message.role === "reasoning",
           ),
         ),
       );
       sample += 1;
       if (sample === 1) {
         yield {
-          type: "opaque_continuation",
-          continuation: {
-            type: "openai_responses_reasoning",
-            itemId: "rs_restart",
-            encryptedContent: "opaque-restart-state",
-            summary: [],
-          },
+          type: "reasoning",
+          summary: "",
+          providerItemId: "rs_restart",
+          encryptedContent: "opaque-restart-state",
+          providerSummary: [],
         };
         yield {
           type: "tool_call",
@@ -222,24 +221,27 @@ test("persists opaque provider continuation across restart without public projec
     await (
       await first.startTurn(thread.id, "continue privately")
     ).done;
-    assert.match(seenContinuations[1]?.[0]?.modelResponseId ?? "", /\S/u);
-    assert.deepEqual(seenContinuations[1], [
+    assert.deepEqual(seenReasoning[1], [
       {
-        role: "provider_opaque",
-        providerProfileId: "openai-codex",
-        modelId: "fake",
-        modelResponseId: seenContinuations[1]?.[0]?.modelResponseId,
-        state: {
-          type: "openai_responses_reasoning",
-          itemId: "rs_restart",
-          encryptedContent: "opaque-restart-state",
-          summary: [],
-        },
+        role: "reasoning",
+        summary: "",
+        providerItemId: "rs_restart",
+        encryptedContent: "opaque-restart-state",
+        providerSummary: [],
       },
     ]);
 
     const restarted = createServer({ journal, model, tools });
     const replayed = await restarted.readThread(thread.id);
+    const reasoning = replayed.items.find((item) => item.type === "reasoning");
+    assert.ok(reasoning);
+    assert.equal(reasoning.summary, "");
+    assert.equal(reasoning.providerItemId, "rs_restart");
+    assert.equal(reasoning.encryptedContent, "opaque-restart-state");
+    assert.deepEqual(reasoning.providerSummary, []);
+    assert.equal("providerProfileId" in reasoning, false);
+    assert.equal("modelId" in reasoning, false);
+    assert.equal("reasoningEffort" in reasoning, false);
     assert.equal(
       JSON.stringify(projectThread(replayed, { includeTurns: true })).includes(
         "opaque-restart-state",
@@ -249,24 +251,31 @@ test("persists opaque provider continuation across restart without public projec
     await (
       await restarted.startTurn(thread.id, "after restart")
     ).done;
-    assert.equal(
-      seenContinuations.at(-1)?.[0]?.modelResponseId,
-      seenContinuations[1]?.[0]?.modelResponseId,
-    );
-    assert.deepEqual(seenContinuations.at(-1), [
+    assert.deepEqual(seenReasoning.at(-1), [
       {
-        role: "provider_opaque",
-        providerProfileId: "openai-codex",
-        modelId: "fake",
-        modelResponseId: seenContinuations.at(-1)?.[0]?.modelResponseId,
-        state: {
-          type: "openai_responses_reasoning",
-          itemId: "rs_restart",
-          encryptedContent: "opaque-restart-state",
-          summary: [],
-        },
+        role: "reasoning",
+        summary: "",
+        providerItemId: "rs_restart",
+        encryptedContent: "opaque-restart-state",
+        providerSummary: [],
       },
     ]);
+    assert.equal(
+      compileModelMessages(replayed.items, {
+        providerProfileId: "other-profile",
+        modelId: "fake",
+        reasoningEffort: "medium",
+      }).some((message) => message.role === "reasoning"),
+      false,
+    );
+    assert.equal(
+      compileModelMessages(replayed.items, {
+        providerProfileId: "openai-codex",
+        modelId: "other-model",
+        reasoningEffort: "medium",
+      }).some((message) => message.role === "reasoning"),
+      false,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

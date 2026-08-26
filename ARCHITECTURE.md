@@ -96,8 +96,6 @@
   与其 ModelCatalog 绑定；canonical selection 是
   `providerProfileId / modelId / reasoningEffort` 的原子三元组，Thread 只记录生效选择而不持有 profile 或 credential；
   输入省略 effort 时，目标支持当前 effort 就保留，否则使用目标 model 的默认 effort。
-- **ProviderOpaqueStateItem** — canonical Item 以冻结的 Provider profile、model 与模型响应
-  identity 保存仅供匹配 adapter 精确重放的 opaque provider continuation，公共 transcript、协议投影与其他 Provider 均不可见其内容。
 - **IMZenController** — IMZen 通过 IM Agent SDK typed actions，以及 SDK 明确保留
   的 App Server native Thread profile seam，组合 `/model`、`/permission` 与审批
   快捷命令的产品 UX；`/model` 是当前 typed contracts 外的 Zen native operation，
@@ -463,6 +461,10 @@ message，未来若有则必须置于这些 compaction 输入之前。未包含 
 journal 继续按原始 ItemList 编译。Thread/Turn transcript 始终从完整原始历史派生，
 默认忽略 compaction Item；保留 Item 中的 `AttachmentRef` 仍通过同一 Attachment Store
 在 Provider request boundary 解析。
+
+canonical `reasoning` Item 可在既有 summary 旁内联保存 Provider reasoning item id、
+原始 summary parts 与 `encrypted_content`；这些字段只在它所属 Turn 的
+`turn_started.selection` 与目标 subscription profile/model 兼容时重放，公共协议与展示仍只投影 summary。
 
 ## Item 的三种形态
 
