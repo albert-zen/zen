@@ -77,9 +77,38 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     const tools = request.tools.map(toChatTool);
     const allowedToolNames = new Set(tools.map((tool) => tool.function.name));
     const messages: Readonly<Record<string, unknown>>[] = [];
+    let pendingReasoning = "";
     for (const message of request.messages) {
-      if (message.role === "reasoning") continue;
-      messages.push(await toChatMessage(message, this.#attachments));
+      if (message.role === "reasoning") {
+        if (message.contentVisibility === "public") {
+          pendingReasoning = [pendingReasoning, message.reasoningContent]
+            .filter((part) => part.length > 0)
+            .join("\n\n");
+        }
+        continue;
+      }
+      const encoded = await toChatMessage(message, this.#attachments);
+      if (pendingReasoning.length > 0 && message.role === "assistant") {
+        messages.push({ ...encoded, reasoning_content: pendingReasoning });
+        pendingReasoning = "";
+      } else {
+        if (pendingReasoning.length > 0) {
+          messages.push({
+            role: "assistant",
+            content: null,
+            reasoning_content: pendingReasoning,
+          });
+          pendingReasoning = "";
+        }
+        messages.push(encoded);
+      }
+    }
+    if (pendingReasoning.length > 0) {
+      messages.push({
+        role: "assistant",
+        content: null,
+        reasoning_content: pendingReasoning,
+      });
     }
     const body = serializeRequest({
       ...this.#defaultParams,
@@ -219,7 +248,7 @@ async function toChatMessage(
   if (message.role === "reasoning") {
     throw modelError(
       "configuration",
-      "Responses reasoning cannot enter OpenAI-compatible chat messages",
+      "Semantic reasoning must be encoded with its assistant message",
     );
   }
   if (message.role === "tool") {
@@ -333,6 +362,7 @@ function serializeToolArguments(value: Record<string, unknown>): string {
 interface StreamState {
   finishReason?: string;
   doneSeen: boolean;
+  reasoningContent: string;
   toolCalls: Map<number, ToolCallAccumulator>;
 }
 
@@ -352,6 +382,7 @@ async function* parseChatCompletionStream(
   const sse: SseState = { buffer: "", dataLines: [] };
   const state: StreamState = {
     doneSeen: false,
+    reasoningContent: "",
     toolCalls: new Map(),
   };
   let reachedEof = false;
@@ -420,6 +451,14 @@ async function* parseChatCompletionStream(
       "protocol",
       "OpenAI-compatible model stream omitted its tool call",
     );
+  }
+
+  if (state.reasoningContent.length > 0) {
+    yield {
+      type: "reasoning",
+      reasoningContent: state.reasoningContent,
+      contentVisibility: "public",
+    };
   }
 
   for (const [, call] of [...state.toolCalls.entries()].sort(
@@ -524,6 +563,31 @@ async function* consumePayload(
     }
     if (typeof content === "string" && content.length > 0) {
       yield { type: "text_delta", delta: content };
+    }
+
+    const reasoningContent = delta.reasoning_content;
+    if (
+      reasoningContent !== undefined &&
+      reasoningContent !== null &&
+      typeof reasoningContent !== "string"
+    ) {
+      throw modelError(
+        "protocol",
+        "OpenAI-compatible model stream had invalid reasoning content",
+      );
+    }
+    if (
+      state.finishReason !== undefined &&
+      typeof reasoningContent === "string" &&
+      reasoningContent.length > 0
+    ) {
+      throw modelError(
+        "protocol",
+        "OpenAI-compatible model stream continued after finishing",
+      );
+    }
+    if (typeof reasoningContent === "string") {
+      state.reasoningContent += reasoningContent;
     }
 
     if (delta.tool_calls !== undefined) {

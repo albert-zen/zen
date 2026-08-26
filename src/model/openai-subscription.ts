@@ -191,12 +191,21 @@ async function toResponsesInput(
   attachments: Pick<AttachmentStore, "read"> | undefined,
 ): Promise<Array<Record<string, unknown>>> {
   if (message.role === "reasoning") {
+    if (
+      message.contentVisibility !== "opaque" ||
+      message.providerItemId === undefined
+    ) {
+      return [];
+    }
     return [
       {
         type: "reasoning",
         id: message.providerItemId,
-        encrypted_content: message.encryptedContent,
-        summary: structuredClone(message.providerSummary),
+        encrypted_content: message.reasoningContent,
+        summary:
+          message.summary === undefined
+            ? []
+            : [{ type: "summary_text", text: message.summary }],
       },
     ];
   }
@@ -488,16 +497,21 @@ async function* finishOutputItem(
         reasoningSummaryText(replaySummary) || slot.text.replace(/\n\n$/u, "");
       yield {
         type: "reasoning",
-        summary: finalText,
+        reasoningContent: encryptedContent,
+        contentVisibility: "opaque",
         providerItemId: itemId,
-        encryptedContent,
-        providerSummary: structuredClone(replaySummary),
+        ...(finalText.length === 0 ? {} : { summary: finalText }),
       };
     } else {
       const finalText =
         reasoningSummaryText(replaySummary) || slot.text.replace(/\n\n$/u, "");
       if (finalText.length > 0) {
-        yield { type: "reasoning", summary: finalText };
+        yield {
+          type: "reasoning",
+          reasoningContent: finalText,
+          summary: finalText,
+          contentVisibility: "public",
+        };
       }
     }
   } else if (slot.type === "message") {

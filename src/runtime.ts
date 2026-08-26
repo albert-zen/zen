@@ -363,16 +363,12 @@ export class AgentRuntime {
           turnId,
           createdAt: this.#now(),
           type: "reasoning",
-          summary: event.summary,
+          reasoningContent: event.reasoningContent,
+          contentVisibility: event.contentVisibility,
+          ...(event.summary === undefined ? {} : { summary: event.summary }),
           ...(event.providerItemId === undefined
             ? {}
             : { providerItemId: event.providerItemId }),
-          ...(event.encryptedContent === undefined
-            ? {}
-            : { encryptedContent: event.encryptedContent }),
-          ...(event.providerSummary === undefined
-            ? {}
-            : { providerSummary: structuredClone(event.providerSummary) }),
         };
         await this.#completeItem(reasoning, options);
       } else if (event.type === "tool_call") {

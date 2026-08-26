@@ -39,10 +39,10 @@ export interface ToolResultModelMessage {
 
 export interface ReasoningModelMessage {
   role: "reasoning";
-  summary: string;
-  providerItemId: string;
-  encryptedContent: string;
-  providerSummary: Array<{ type: "summary_text"; text: string }>;
+  reasoningContent: string;
+  summary?: string;
+  contentVisibility: "public" | "opaque";
+  providerItemId?: string;
 }
 
 export type ModelMessage =
@@ -77,10 +77,10 @@ export type ModelEvent =
   | { type: "text_delta"; delta: string }
   | {
       type: "reasoning";
-      summary: string;
+      reasoningContent: string;
+      summary?: string;
+      contentVisibility: "public" | "opaque";
       providerItemId?: string;
-      encryptedContent?: string;
-      providerSummary?: Array<{ type: "summary_text"; text: string }>;
     }
   | {
       type: "tool_call";
@@ -232,16 +232,17 @@ function compileCanonicalModelMessages(
           producingSelection.providerProfileId ===
             targetSelection.providerProfileId &&
           producingSelection.modelId === targetSelection.modelId &&
-          item.providerItemId !== undefined &&
-          item.encryptedContent !== undefined &&
-          item.providerSummary !== undefined
+          item.reasoningContent !== undefined &&
+          item.contentVisibility !== undefined
         ) {
           messages.push({
             role: "reasoning",
-            summary: item.summary,
-            providerItemId: item.providerItemId,
-            encryptedContent: item.encryptedContent,
-            providerSummary: structuredClone(item.providerSummary),
+            reasoningContent: item.reasoningContent,
+            contentVisibility: item.contentVisibility,
+            ...(item.summary === undefined ? {} : { summary: item.summary }),
+            ...(item.providerItemId === undefined
+              ? {}
+              : { providerItemId: item.providerItemId }),
           });
         }
         break;

@@ -224,9 +224,9 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
     {
       type: "reasoning",
       summary: "checked the command",
+      reasoningContent: "encrypted-reasoning-state",
+      contentVisibility: "opaque",
       providerItemId: "rs_1",
-      encryptedContent: "encrypted-reasoning-state",
-      providerSummary: [{ type: "summary_text", text: "checked the command" }],
     },
     { type: "text_delta", delta: "done" },
     {
@@ -324,10 +324,9 @@ test("keeps raw reasoning text private on the existing reasoning event", async (
   assert.deepEqual(events, [
     {
       type: "reasoning",
-      summary: "",
+      reasoningContent: "encrypted-private-state",
+      contentVisibility: "opaque",
       providerItemId: "rs_private",
-      encryptedContent: "encrypted-private-state",
-      providerSummary: [],
     },
     { type: "usage", inputTokens: 0, outputTokens: 0 },
   ]);
@@ -353,7 +352,10 @@ test("a fresh adapter replays existing reasoning history for a stateless tool ro
         item: {
           type: "reasoning",
           id: "rs_first",
-          summary: [],
+          summary: [
+            { type: "summary_text", text: "first step" },
+            { type: "summary_text", text: "second step" },
+          ],
           encrypted_content: "provider-private-state",
         },
       },
@@ -437,10 +439,10 @@ test("a fresh adapter replays existing reasoning history for a stateless tool ro
   );
   assert.deepEqual(firstEvents[0], {
     type: "reasoning",
-    summary: "",
+    reasoningContent: "provider-private-state",
+    summary: "first step\n\nsecond step",
+    contentVisibility: "opaque",
     providerItemId: "rs_first",
-    encryptedContent: "provider-private-state",
-    providerSummary: [],
   });
   assert.deepEqual(firstEvents[1], {
     type: "tool_call",
@@ -460,10 +462,10 @@ test("a fresh adapter replays existing reasoning history for a stateless tool ro
           ...initialMessages,
           {
             role: "reasoning",
-            summary: "",
+            reasoningContent: "provider-private-state",
+            summary: "first step\n\nsecond step",
+            contentVisibility: "opaque",
             providerItemId: "rs_first",
-            encryptedContent: "provider-private-state",
-            providerSummary: [],
           },
           {
             role: "assistant",
@@ -497,7 +499,7 @@ test("a fresh adapter replays existing reasoning history for a stateless tool ro
       type: "reasoning",
       id: "rs_first",
       encrypted_content: "provider-private-state",
-      summary: [],
+      summary: [{ type: "summary_text", text: "first step\n\nsecond step" }],
     },
     {
       type: "function_call",

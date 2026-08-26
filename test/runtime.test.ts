@@ -30,7 +30,10 @@ import {
 } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
-import { projectThread } from "../src/protocol/codex/mapper.js";
+import {
+  projectCompletedItem,
+  projectThread,
+} from "../src/protocol/codex/mapper.js";
 import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
 import {
   InMemoryThreadMetadataStore,
@@ -115,7 +118,12 @@ test("preserves credential-matching model and tool trace strings verbatim", asyn
         return;
       }
       yield { type: "text_delta", delta: credentialBytes };
-      yield { type: "reasoning", summary: credentialBytes };
+      yield {
+        type: "reasoning",
+        reasoningContent: credentialBytes,
+        summary: credentialBytes,
+        contentVisibility: "public",
+      };
       yield {
         type: "tool_call",
         callId: credentialBytes,
@@ -168,7 +176,7 @@ test("preserves credential-matching model and tool trace strings verbatim", asyn
   );
 });
 
-test("persists encrypted content inline on reasoning and derives replay selection", async () => {
+test("persists opaque reasoning semantics and derives replay selection", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-continuation-"));
   const journal = new JsonlThreadJournal(root);
   const seenReasoning: ReasoningModelMessage[][] = [];
@@ -188,10 +196,9 @@ test("persists encrypted content inline on reasoning and derives replay selectio
       if (sample === 1) {
         yield {
           type: "reasoning",
-          summary: "",
+          reasoningContent: "opaque-restart-state",
+          contentVisibility: "opaque",
           providerItemId: "rs_restart",
-          encryptedContent: "opaque-restart-state",
-          providerSummary: [],
         };
         yield {
           type: "tool_call",
@@ -224,10 +231,9 @@ test("persists encrypted content inline on reasoning and derives replay selectio
     assert.deepEqual(seenReasoning[1], [
       {
         role: "reasoning",
-        summary: "",
+        reasoningContent: "opaque-restart-state",
+        contentVisibility: "opaque",
         providerItemId: "rs_restart",
-        encryptedContent: "opaque-restart-state",
-        providerSummary: [],
       },
     ]);
 
@@ -235,10 +241,16 @@ test("persists encrypted content inline on reasoning and derives replay selectio
     const replayed = await restarted.readThread(thread.id);
     const reasoning = replayed.items.find((item) => item.type === "reasoning");
     assert.ok(reasoning);
-    assert.equal(reasoning.summary, "");
+    assert.equal(reasoning.summary, undefined);
     assert.equal(reasoning.providerItemId, "rs_restart");
-    assert.equal(reasoning.encryptedContent, "opaque-restart-state");
-    assert.deepEqual(reasoning.providerSummary, []);
+    assert.equal(reasoning.reasoningContent, "opaque-restart-state");
+    assert.equal(reasoning.contentVisibility, "opaque");
+    assert.deepEqual(projectCompletedItem(reasoning), {
+      type: "reasoning",
+      id: reasoning.id,
+      summary: [],
+      content: [],
+    });
     assert.equal("providerProfileId" in reasoning, false);
     assert.equal("modelId" in reasoning, false);
     assert.equal("reasoningEffort" in reasoning, false);
@@ -254,10 +266,9 @@ test("persists encrypted content inline on reasoning and derives replay selectio
     assert.deepEqual(seenReasoning.at(-1), [
       {
         role: "reasoning",
-        summary: "",
+        reasoningContent: "opaque-restart-state",
+        contentVisibility: "opaque",
         providerItemId: "rs_restart",
-        encryptedContent: "opaque-restart-state",
-        providerSummary: [],
       },
     ]);
     assert.equal(
@@ -279,6 +290,59 @@ test("persists encrypted content inline on reasoning and derives replay selectio
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("projects public semantic reasoning and keeps legacy summaries readable", () => {
+  const base = {
+    threadId: "thread-reasoning",
+    turnId: "turn-reasoning",
+    createdAt: "2026-08-26T00:00:00.000Z",
+  };
+  assert.deepEqual(
+    projectCompletedItem({
+      ...base,
+      id: "reasoning-public",
+      type: "reasoning",
+      reasoningContent: "visible reasoning",
+      contentVisibility: "public",
+    }),
+    {
+      type: "reasoning",
+      id: "reasoning-public",
+      summary: [],
+      content: ["visible reasoning"],
+    },
+  );
+  assert.deepEqual(
+    projectCompletedItem({
+      ...base,
+      id: "reasoning-summary",
+      type: "reasoning",
+      reasoningContent: "visible reasoning",
+      summary: "provider summary",
+      contentVisibility: "public",
+    }),
+    {
+      type: "reasoning",
+      id: "reasoning-summary",
+      summary: ["provider summary"],
+      content: [],
+    },
+  );
+  assert.deepEqual(
+    projectCompletedItem({
+      ...base,
+      id: "reasoning-legacy",
+      type: "reasoning",
+      summary: "legacy summary",
+    }),
+    {
+      type: "reasoning",
+      id: "reasoning-legacy",
+      summary: ["legacy summary"],
+      content: [],
+    },
+  );
 });
 
 test("derives each turn model from append-only configuration changes", async () => {
@@ -1555,6 +1619,7 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
           {
             index: 0,
             delta: {
+              reasoning_content: "tool reasoning",
               tool_calls: [
                 {
                   index: 0,
@@ -1638,7 +1703,9 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
       (message) =>
         typeof message === "object" &&
         message !== null &&
-        "tool_calls" in message,
+        "tool_calls" in message &&
+        "reasoning_content" in message &&
+        message.reasoning_content === "tool reasoning",
     ),
   );
   assert(
@@ -1652,6 +1719,12 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
   );
   const snapshot = await server.readThread(thread.id);
   assert.equal(snapshot.turns[0]?.status, "completed");
+  const compatibleReasoning = snapshot.items.find(
+    (item) => item.type === "reasoning",
+  );
+  assert.ok(compatibleReasoning);
+  assert.equal(compatibleReasoning.reasoningContent, "tool reasoning");
+  assert.equal(compatibleReasoning.contentVisibility, "public");
   assert.equal(
     snapshot.items.find((item) => item.type === "agent_message")?.text,
     "provider complete",

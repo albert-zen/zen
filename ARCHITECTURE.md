@@ -462,9 +462,10 @@ journal 继续按原始 ItemList 编译。Thread/Turn transcript 始终从完整
 默认忽略 compaction Item；保留 Item 中的 `AttachmentRef` 仍通过同一 Attachment Store
 在 Provider request boundary 解析。
 
-canonical `reasoning` Item 可在既有 summary 旁内联保存 Provider reasoning item id、
-原始 summary parts 与 `encrypted_content`；这些字段只在它所属 Turn 的
-`turn_started.selection` 与目标 subscription profile/model 兼容时重放，公共协议与展示仍只投影 summary。
+canonical `reasoning` Item 用 `reasoningContent`、可选 `summary` 与显式
+`contentVisibility` 统一表达公开或 opaque reasoning，并只在 adapter 确实需要 round-trip
+identity 时保留 `providerItemId`；Core 不解释 reasoning content 的 Provider 编码，重放仍要求
+它所属 Turn 的 `turn_started.selection` 与目标 profile/model 兼容，公共协议只展示允许公开的语义内容。
 
 ## Item 的三种形态
 

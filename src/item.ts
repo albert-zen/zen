@@ -151,15 +151,25 @@ export interface AgentMessageItem extends ItemBase {
   text: string;
 }
 
-export interface ReasoningItem extends ItemBase {
-  type: "reasoning";
-  turnId: string;
-  summary: string;
-  /** Provider replay fields; absent on legacy or summary-only reasoning. */
-  providerItemId?: string;
-  encryptedContent?: string;
-  providerSummary?: Array<{ type: "summary_text"; text: string }>;
-}
+export type ReasoningItem =
+  | (ItemBase & {
+      type: "reasoning";
+      turnId: string;
+      reasoningContent: string;
+      summary?: string;
+      contentVisibility: "public" | "opaque";
+      /** Stable provider identity retained only when its adapter requires replay. */
+      providerItemId?: string;
+    })
+  /** Existing summary-only journals remain readable without a rewrite. */
+  | (ItemBase & {
+      type: "reasoning";
+      turnId: string;
+      summary: string;
+      reasoningContent?: never;
+      contentVisibility?: never;
+      providerItemId?: never;
+    });
 
 export interface ToolCallItem extends ItemBase {
   type: "tool_call";

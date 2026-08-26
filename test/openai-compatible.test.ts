@@ -48,14 +48,12 @@ test("maps Zen context and protects model execution fields", async () => {
           { role: "user", text: "hello" },
           {
             role: "reasoning",
-            summary: "",
-            providerItemId: "rs_private",
-            encryptedContent: "must-not-enter-chat",
-            providerSummary: [],
+            reasoningContent: "public compatible reasoning",
+            contentVisibility: "public",
           },
-          { role: "assistant", text: "calling a tool" },
           {
             role: "assistant",
+            text: "calling a tool",
             toolCalls: [
               {
                 callId: "call-1",
@@ -90,10 +88,10 @@ test("maps Zen context and protects model execution fields", async () => {
     model: "test-model",
     messages: [
       { role: "user", content: "hello" },
-      { role: "assistant", content: "calling a tool" },
       {
         role: "assistant",
-        content: null,
+        content: "calling a tool",
+        reasoning_content: "public compatible reasoning",
         tool_calls: [
           {
             id: "call-1",
@@ -176,6 +174,40 @@ test("parses SSE split at every byte including a multibyte character", async () 
   assert.deepEqual(await collect(adapter.stream(request())), [
     { type: "text_delta", delta: "你" },
     { type: "usage", inputTokens: 3, outputTokens: 1 },
+  ]);
+});
+
+test("captures compatible reasoning_content as public semantic reasoning", async () => {
+  const adapter = adapterReturning(
+    streamResponse([
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: { reasoning_content: "check " },
+            finish_reason: null,
+          },
+        ],
+      }),
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: { reasoning_content: "complete" },
+            finish_reason: "stop",
+          },
+        ],
+      }),
+      "[DONE]",
+    ]),
+  );
+
+  assert.deepEqual(await collect(adapter.stream(request())), [
+    {
+      type: "reasoning",
+      reasoningContent: "check complete",
+      contentVisibility: "public",
+    },
   ]);
 });
 

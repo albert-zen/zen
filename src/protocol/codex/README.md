@@ -69,11 +69,11 @@ model 或 effort 明确失败。单 profile 的既有裸 model id 仅作为入�
 Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，避免发送
 不完整的 0.146.0 类型。
 
-OpenAI Responses 的 encrypted reasoning 与 Provider item id 内联保存在既有 canonical
-`reasoning` Item；只有 summary 投影到 Codex Thread Item、通知与 ZenX 展示，
-`encrypted_content` 仅在产生它的 Turn selection 与目标 subscription profile/model 兼容时重放。
-Subscription 的 `store: false` Responses 请求固定携带
-`include: ["reasoning.encrypted_content"]` 以取得该字段。
+canonical `reasoning` Item 只使用 provider-neutral reasoning content、可选 summary、
+public/opaque visibility 与 round-trip 必需的可选 Provider item identity。Opaque content
+永不进入 Codex Thread Item、通知或 ZenX 展示；public content 有 summary 时投影 summary，
+否则投影公开 content。产生它的 Turn selection 必须与目标 profile/model 兼容才进入模型重放。
+各 ModelAdapter 独自负责目标 API 的私有 reasoning 请求与响应形态，不把 wire 结构带入 Core。
 
 `thread/compact` 不是 Codex 0.146.0 方法。它只接受精确的
 `{ threadId: string }`，等待 Zen 使用 admission 时冻结的当前 Provider selection
