@@ -126,6 +126,129 @@ test("maps Zen context and protects model execution fields", async () => {
   });
 });
 
+test("encodes provider-specific reasoning replay contracts", async (t) => {
+  await t.test("DeepSeek replays only tool-call reasoning", async () => {
+    const body = await captureRequestBody({
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-reasoner",
+      messages: reasoningHistory(),
+      tools: [shellTool()],
+    });
+
+    assert.equal("reasoning_effort" in body, false);
+    assert.deepEqual(body.messages, [
+      { role: "user", content: "run pwd" },
+      {
+        role: "assistant",
+        content: "using shell",
+        reasoning_content: "tool reasoning",
+        tool_calls: [
+          {
+            id: "call-1",
+            type: "function",
+            function: { name: "shell", arguments: '{"command":"pwd"}' },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "call-1",
+        content: "Exit code: 0\n/workspace",
+      },
+      { role: "assistant", content: "done" },
+    ]);
+  });
+
+  await t.test("Qwen omits reasoning history by default", async () => {
+    const body = await captureRequestBody({
+      provider: "dashscope",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model: "qwen3.8-max",
+      defaultParams: { reasoning_effort: "unsupported" },
+      messages: reasoningHistory(),
+      tools: [shellTool()],
+    });
+
+    assert.equal("reasoning_effort" in body, false);
+    assert.deepEqual(
+      (body.messages as Readonly<Record<string, unknown>>[]).map(
+        (message) => "reasoning_content" in message,
+      ),
+      [false, false, false, false],
+    );
+  });
+
+  await t.test(
+    "Qwen replays complete reasoning when preservation is enabled",
+    async () => {
+      const body = await captureRequestBody({
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model: "qwen3.8-max",
+        defaultParams: { preserve_thinking: true },
+        messages: reasoningHistory(),
+        tools: [shellTool()],
+      });
+
+      assert.equal(body.preserve_thinking, true);
+      assert.deepEqual(
+        (body.messages as Readonly<Record<string, unknown>>[])
+          .filter((message) => message.role === "assistant")
+          .map((message) => message.reasoning_content),
+        ["tool reasoning", "final reasoning"],
+      );
+    },
+  );
+
+  await t.test(
+    "GLM replays interleaved tool reasoning and enables tool streaming",
+    async () => {
+      const body = await captureRequestBody({
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model: "glm-5.2",
+        defaultParams: { tool_stream: false },
+        messages: reasoningHistory(),
+        tools: [shellTool()],
+      });
+
+      assert.equal("reasoning_effort" in body, false);
+      assert.equal(body.tool_stream, true);
+      const assistants = (
+        body.messages as Readonly<Record<string, unknown>>[]
+      ).filter((message) => message.role === "assistant");
+      assert.equal(assistants[0]?.reasoning_content, "tool reasoning");
+      assert.equal("reasoning_content" in assistants[1]!, false);
+    },
+  );
+
+  await t.test(
+    "GLM replays ordinary reasoning only in preserved mode",
+    async () => {
+      const body = await captureRequestBody({
+        provider: "zhipu",
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+        model: "glm-5.3",
+        defaultParams: {
+          thinking: { type: "enabled", clear_thinking: false },
+        },
+        messages: reasoningHistory(),
+        tools: [shellTool()],
+      });
+
+      assert.equal(body.reasoning_effort, "medium");
+      assert.equal(body.tool_stream, true);
+      assert.deepEqual(
+        (body.messages as Readonly<Record<string, unknown>>[])
+          .filter((message) => message.role === "assistant")
+          .map((message) => message.reasoning_content),
+        ["tool reasoning", "final reasoning"],
+      );
+    },
+  );
+});
+
 test("removes configured tools when a request exposes no tools", async () => {
   let capturedBody: Readonly<Record<string, unknown>> = {};
   const adapter = new OpenAiCompatibleModel({
@@ -559,6 +682,70 @@ function adapterReturning(response: Response): OpenAiCompatibleModel {
     apiKey: fakeKey,
     fetch: (async () => response) as typeof fetch,
   });
+}
+
+async function captureRequestBody(options: {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  defaultParams?: Readonly<Record<string, unknown>>;
+  messages: ModelRequest["messages"];
+  tools?: ModelRequest["tools"];
+}): Promise<Readonly<Record<string, unknown>>> {
+  let body: Readonly<Record<string, unknown>> = {};
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: options.baseUrl,
+    apiKey: fakeKey,
+    provider: options.provider,
+    ...(options.defaultParams === undefined
+      ? {}
+      : { defaultParams: options.defaultParams }),
+    fetch: (async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Readonly<
+        Record<string, unknown>
+      >;
+      return streamResponse(["[DONE]"]);
+    }) as typeof fetch,
+  });
+  await collect(
+    adapter.stream(
+      request({
+        model: options.model,
+        messages: options.messages,
+        tools: options.tools ?? [],
+      }),
+    ),
+  );
+  return body;
+}
+
+function reasoningHistory(): ModelRequest["messages"] {
+  return [
+    { role: "user", text: "run pwd" },
+    {
+      role: "reasoning",
+      reasoningContent: "tool reasoning",
+      contentVisibility: "public",
+    },
+    {
+      role: "assistant",
+      text: "using shell",
+      toolCalls: [
+        {
+          callId: "call-1",
+          name: "shell",
+          arguments: { command: "pwd" },
+        },
+      ],
+    },
+    { role: "tool", callId: "call-1", text: "/workspace", exitCode: 0 },
+    {
+      role: "reasoning",
+      reasoningContent: "final reasoning",
+      contentVisibility: "public",
+    },
+    { role: "assistant", text: "done" },
+  ];
 }
 
 function request(overrides: Partial<ModelRequest> = {}): ModelRequest {

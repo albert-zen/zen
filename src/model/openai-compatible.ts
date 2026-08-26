@@ -76,6 +76,12 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     request.signal.throwIfAborted();
     const tools = request.tools.map(toChatTool);
     const allowedToolNames = new Set(tools.map((tool) => tool.function.name));
+    const reasoningPolicy = compatibleReasoningPolicy({
+      provider: this.provider,
+      endpoint: this.#endpoint,
+      model: request.model,
+      defaultParams: this.#defaultParams,
+    });
     const messages: Readonly<Record<string, unknown>>[] = [];
     let pendingReasoning = "";
     for (const message of request.messages) {
@@ -88,22 +94,30 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         continue;
       }
       const encoded = await toChatMessage(message, this.#attachments);
-      if (pendingReasoning.length > 0 && message.role === "assistant") {
-        messages.push({ ...encoded, reasoning_content: pendingReasoning });
-        pendingReasoning = "";
-      } else {
-        if (pendingReasoning.length > 0) {
+      if (pendingReasoning.length > 0) {
+        if (shouldReplayReasoning(reasoningPolicy.replay, message)) {
+          messages.push({ ...encoded, reasoning_content: pendingReasoning });
+          pendingReasoning = "";
+          continue;
+        }
+        if (
+          reasoningPolicy.replay === "all-assistant" &&
+          message.role !== "assistant"
+        ) {
           messages.push({
             role: "assistant",
             content: null,
             reasoning_content: pendingReasoning,
           });
-          pendingReasoning = "";
         }
-        messages.push(encoded);
+        pendingReasoning = "";
       }
+      messages.push(encoded);
     }
-    if (pendingReasoning.length > 0) {
+    if (
+      pendingReasoning.length > 0 &&
+      reasoningPolicy.replay === "all-assistant"
+    ) {
       messages.push({
         role: "assistant",
         content: null,
@@ -116,10 +130,12 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       messages,
       n: 1,
       stream: true,
-      reasoning_effort: requiredLabel(
-        request.reasoningEffort,
-        "reasoning effort",
-      ),
+      reasoning_effort: reasoningPolicy.forwardReasoningEffort
+        ? requiredLabel(request.reasoningEffort, "reasoning effort")
+        : undefined,
+      ...(reasoningPolicy.enableToolStream
+        ? { tool_stream: tools.length > 0 ? true : undefined }
+        : {}),
       tools: tools.length > 0 ? tools : undefined,
       tool_choice: tools.length > 0 ? "auto" : undefined,
     });
@@ -175,6 +191,91 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       allowedToolNames,
     );
   }
+}
+
+type ReasoningReplay = "none" | "tool-calls" | "all-assistant";
+
+interface CompatibleReasoningPolicy {
+  replay: ReasoningReplay;
+  forwardReasoningEffort: boolean;
+  enableToolStream: boolean;
+}
+
+function compatibleReasoningPolicy(options: {
+  provider: string;
+  endpoint: string;
+  model: string;
+  defaultParams: Readonly<Record<string, unknown>>;
+}): CompatibleReasoningPolicy {
+  const provider = options.provider.toLowerCase();
+  const endpoint = options.endpoint.toLowerCase();
+  const model = requiredLabel(options.model, "model").toLowerCase();
+  const familyModel = model.split("/").at(-1) ?? model;
+  const isDashScope =
+    provider.includes("dashscope") ||
+    endpoint.includes("dashscope.aliyuncs.com");
+  const isZhipu =
+    provider.includes("zhipu") || endpoint.includes("bigmodel.cn");
+
+  if (/^qwen3\.8(?:-|$)/u.test(familyModel)) {
+    return {
+      replay:
+        options.defaultParams["preserve_thinking"] === true
+          ? "all-assistant"
+          : "none",
+      forwardReasoningEffort: false,
+      enableToolStream: false,
+    };
+  }
+
+  if (/^glm-5\.(?:2|3)(?:-|$)/u.test(familyModel)) {
+    return {
+      replay: glmPreservedThinking(options.defaultParams)
+        ? "all-assistant"
+        : "tool-calls",
+      forwardReasoningEffort: isZhipu && !isDashScope,
+      enableToolStream: true,
+    };
+  }
+
+  if (/^deepseek(?:-|$)/u.test(familyModel) || provider === "deepseek") {
+    return {
+      replay: "tool-calls",
+      forwardReasoningEffort: false,
+      enableToolStream: false,
+    };
+  }
+
+  return {
+    replay: "all-assistant",
+    forwardReasoningEffort: true,
+    enableToolStream: false,
+  };
+}
+
+function glmPreservedThinking(
+  defaultParams: Readonly<Record<string, unknown>>,
+): boolean {
+  const thinking = defaultParams["thinking"];
+  return (
+    typeof thinking === "object" &&
+    thinking !== null &&
+    !Array.isArray(thinking) &&
+    (thinking as Readonly<Record<string, unknown>>)["clear_thinking"] === false
+  );
+}
+
+function shouldReplayReasoning(
+  replay: ReasoningReplay,
+  message: ModelMessage,
+): boolean {
+  if (message.role !== "assistant") return false;
+  if (replay === "all-assistant") return true;
+  return (
+    replay === "tool-calls" &&
+    "toolCalls" in message &&
+    message.toolCalls.length > 0
+  );
 }
 
 async function readProviderError(

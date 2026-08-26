@@ -470,7 +470,10 @@ ModelAdapter 的 reasoning stream 只传递 provider-neutral lifecycle correlati
 或 content delta；Runtime 为同一 lifecycle 分配一个稳定 canonical Item id，完成时只 append
 一次完整 `reasoning` Item。OpenAI subscription 只把可公开 summary 作为 transient delta，
 opaque content 永不流向公共事件；OpenAI-compatible 的公开 `reasoning_content` 则作为 content
-delta 实时投影。失败或中断只丢弃内存中的 correlation/buffer，不留下不完整 canonical Item。
+delta 实时投影。保存 canonical reasoning 与把它编码进后续请求是两个边界：Core 保留完整标准
+Item，adapter 按目标 Provider/model 的工具续接或 preserved-thinking 合同决定是否回传，并只发送
+该合同支持的推理与流式工具参数。失败或中断只丢弃内存中的 correlation/buffer，不留下不完整
+canonical Item。
 
 ## Item 的三种形态
 

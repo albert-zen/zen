@@ -14,7 +14,8 @@ import {
 } from "../src/renderer/src/composer-state.js";
 const { createElement } = React;
 Object.assign(globalThis, { React });
-const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
+const { ThreadView, reasoningDetailText } =
+  await import("../src/renderer/src/ThreadView.js");
 
 const noop = async () => undefined;
 
@@ -88,6 +89,36 @@ test("assistant messages retain running reasoning and tool disclosure affordance
   assert.match(
     html,
     /class="trace-toggle"[^>]*aria-expanded="false"[\s\S]*Reasoned and used rg[\s\S]*2 items/u,
+  );
+});
+
+test("reasoning detail prefers summaries and falls back to public content", () => {
+  assert.equal(
+    reasoningDetailText({
+      type: "reasoning",
+      id: "reasoning-summary",
+      summary: ["Provider summary"],
+      content: ["Public reasoning"],
+    }),
+    "Provider summary",
+  );
+  assert.equal(
+    reasoningDetailText({
+      type: "reasoning",
+      id: "reasoning-public",
+      summary: [],
+      content: ["Public reasoning"],
+    }),
+    "Public reasoning",
+  );
+  assert.equal(
+    reasoningDetailText({
+      type: "reasoning",
+      id: "reasoning-opaque",
+      summary: [],
+      content: [],
+    }),
+    "No reasoning summary was provided.",
   );
 });
 

@@ -643,13 +643,7 @@ function TraceDetail({
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
   if (item.type === "reasoning") {
-    return (
-      <div className="trace-detail">
-        {item.summary.length === 0
-          ? "No reasoning summary was provided."
-          : item.summary.join("\n")}
-      </div>
-    );
+    return <div className="trace-detail">{reasoningDetailText(item)}</div>;
   }
   if (item.type !== "commandExecution") return null;
   return (
@@ -667,6 +661,15 @@ function TraceDetail({
       />
     </div>
   );
+}
+
+export function reasoningDetailText(
+  item: Extract<ThreadItem, { type: "reasoning" }>,
+): string {
+  const summary = item.summary.join("\n");
+  if (summary.length > 0) return summary;
+  const content = item.content.join("\n");
+  return content.length > 0 ? content : "No reasoning summary was provided.";
 }
 
 function UserMessage({
