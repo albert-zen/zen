@@ -270,6 +270,14 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
     },
     { type: "usage", inputTokens: 12, outputTokens: 7 },
   ]);
+  const streamedSummary = events
+    .filter((event) => event.type === "reasoning_summary_delta")
+    .map((event) => event.delta)
+    .join("");
+  const completedReasoning = events.find((event) => event.type === "reasoning");
+  assert(completedReasoning?.type === "reasoning");
+  assert.equal(streamedSummary, "checked\n\nthe command");
+  assert.equal(streamedSummary, completedReasoning.summary);
   assert.equal(capturedUrl, "https://example.test/backend-api/codex/responses");
   const headers = new Headers(capturedInit?.headers);
   assert.equal(headers.get("authorization"), `Bearer ${secretAccessToken}`);
@@ -318,6 +326,37 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
     },
   ]);
   assert.equal(JSON.stringify(body.input).includes("encrypted_content"), false);
+});
+
+test("ignores an empty subscription reasoning output without opening a lifecycle", async () => {
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async () =>
+      sseResponse([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_empty", summary: [] },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_empty", summary: [] },
+        },
+        {
+          type: "response.completed",
+          response: {
+            status: "completed",
+            output: [],
+            usage: { input_tokens: 3, output_tokens: 0 },
+          },
+        },
+      ]),
+  });
+
+  assert.deepEqual(await collect(adapter.stream(request())), [
+    { type: "usage", inputTokens: 3, outputTokens: 0 },
+  ]);
 });
 
 test("keeps raw reasoning text private on the existing reasoning event", async () => {

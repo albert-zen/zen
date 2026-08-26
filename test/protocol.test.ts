@@ -11,6 +11,7 @@ import { ZenAppServer } from "../src/app-server.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import type { ModelAdapter } from "../src/model.js";
+import { OpenAiSubscriptionModel } from "../src/model/openai-subscription.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import {
   CodexClient,
@@ -38,6 +39,37 @@ function testHost(
     provider: { type: "fake" },
     journal: new InMemoryThreadJournal(),
     threadMetadata: new InMemoryThreadMetadataStore(),
+  });
+}
+
+function modelTestHost(model: ModelAdapter): ZenAppServer {
+  const profile = model.provider;
+  return new ZenAppServer({
+    journal: new InMemoryThreadJournal(),
+    runtime: new AgentRuntime({ tools: new ShellToolExecutor() }),
+    providerRegistry: new ProviderRegistry([
+      {
+        providerProfileId: profile,
+        adapter: model,
+        modelCatalog: new StaticModelCatalog([
+          {
+            id: "reasoning-model",
+            isDefault: true,
+            supportedReasoningEfforts: ["medium"],
+            defaultReasoningEffort: "medium",
+          },
+        ]),
+      },
+    ]),
+    threadMetadata: new InMemoryThreadMetadataStore(),
+    defaults: {
+      cwd: process.cwd(),
+      providerProfileId: profile,
+      modelId: "reasoning-model",
+      reasoningEffort: "medium",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
   });
 }
 
@@ -83,34 +115,7 @@ test("projects correlated reasoning summary and content streams with canonical i
       };
     },
   };
-  const profile = model.provider;
-  const appServer = new ZenAppServer({
-    journal: new InMemoryThreadJournal(),
-    runtime: new AgentRuntime({ tools: new ShellToolExecutor() }),
-    providerRegistry: new ProviderRegistry([
-      {
-        providerProfileId: profile,
-        adapter: model,
-        modelCatalog: new StaticModelCatalog([
-          {
-            id: "reasoning-model",
-            isDefault: true,
-            supportedReasoningEfforts: ["medium"],
-            defaultReasoningEffort: "medium",
-          },
-        ]),
-      },
-    ]),
-    threadMetadata: new InMemoryThreadMetadataStore(),
-    defaults: {
-      cwd: process.cwd(),
-      providerProfileId: profile,
-      modelId: "reasoning-model",
-      reasoningEffort: "medium",
-      sandbox: "danger-full-access",
-      approvalPolicy: "never",
-    },
-  });
+  const appServer = modelTestHost(model);
   const messages: JsonRpcMessage[] = [];
   const completed = deferred<void>();
   const connection = new CodexConnection({
@@ -248,6 +253,125 @@ test("projects correlated reasoning summary and content streams with canonical i
     ]);
     assert.equal(
       JSON.stringify(notifications).includes("opaque-provider-payload"),
+      false,
+    );
+  } finally {
+    connection.close();
+  }
+});
+
+test("ignores empty subscription reasoning without a dangling protocol item", async () => {
+  const encode = (value: unknown): string =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const accessToken = `${encode({ alg: "none" })}.${encode({
+    "https://api.openai.com/auth": { chatgpt_account_id: "acct_protocol" },
+  })}.signature`;
+  const events = [
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { type: "reasoning", id: "rs_empty", summary: [] },
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { type: "reasoning", id: "rs_empty", summary: [] },
+    },
+    {
+      type: "response.output_item.added",
+      output_index: 1,
+      item: { type: "message", id: "msg_answer", content: [] },
+    },
+    {
+      type: "response.output_text.delta",
+      output_index: 1,
+      delta: "answer",
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 1,
+      item: {
+        type: "message",
+        id: "msg_answer",
+        content: [{ type: "output_text", text: "answer" }],
+      },
+    },
+    {
+      type: "response.completed",
+      response: {
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 2, output_tokens: 1 },
+      },
+    },
+  ];
+  const model = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken }),
+    fetch: async () =>
+      new Response(
+        `${events
+          .map((event) => `data: ${JSON.stringify(event)}\r\n\r\n`)
+          .join("")}data: [DONE]\r\n\r\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+  });
+  const appServer = modelTestHost(model);
+  const messages: JsonRpcMessage[] = [];
+  const completed = deferred<void>();
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    send: (message) => {
+      messages.push(message);
+      if ("method" in message && message.method === "turn/completed") {
+        completed.resolve();
+      }
+    },
+  });
+
+  try {
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await connection.receive({ method: "initialized" });
+    await connection.receive({ id: 2, method: "thread/start", params: {} });
+    const started = messages.find(
+      (message) => "result" in message && String(message.id) === "2",
+    );
+    assert(started !== undefined && "result" in started);
+    const thread = responseResult<Record<string, unknown>>(
+      started.result,
+      "thread",
+    );
+    await connection.receive({
+      id: 3,
+      method: "turn/start",
+      params: { threadId: thread.id, input: [{ type: "text", text: "go" }] },
+    });
+    await within(completed.promise);
+
+    assert.equal(
+      messages.some(
+        (message) =>
+          "method" in message &&
+          (message.method === "item/started" ||
+            message.method === "item/completed") &&
+          isRecord(message.params) &&
+          isRecord(message.params.item) &&
+          message.params.item.type === "reasoning",
+      ),
+      false,
+    );
+    assert.equal(
+      messages.some(
+        (message) => "method" in message && message.method === "error",
+      ),
+      false,
+    );
+    const snapshot = await appServer.readThread(String(thread.id));
+    assert.equal(snapshot.turns[0]?.status, "completed");
+    assert.equal(
+      snapshot.items.some(
+        (item) => item.type === "reasoning" || item.type === "failure",
+      ),
       false,
     );
   } finally {

@@ -293,6 +293,7 @@ type OutputSlot =
   | {
       type: "reasoning";
       text: string;
+      pendingSummarySeparator: boolean;
       itemId?: string;
       encryptedContent?: string;
       summary: Array<{ type: "summary_text"; text: string }>;
@@ -347,16 +348,6 @@ async function* parseResponsesStream(
         const slot = outputSlot(item);
         if (slot !== undefined) {
           state.slots.set(outputIndex, slot);
-          if (
-            slot.type === "reasoning" &&
-            !state.startedReasoningIndexes.has(outputIndex)
-          ) {
-            state.startedReasoningIndexes.add(outputIndex);
-            yield {
-              type: "reasoning_started",
-              reasoningId: reasoningStreamId(outputIndex),
-            };
-          }
         }
       }
       continue;
@@ -372,20 +363,16 @@ async function* parseResponsesStream(
         delta !== undefined &&
         delta.length > 0
       ) {
-        if (!state.startedReasoningIndexes.has(outputIndex)) {
-          state.startedReasoningIndexes.add(outputIndex);
-          yield {
-            type: "reasoning_started",
-            reasoningId: reasoningStreamId(outputIndex),
-          };
-        }
-        const separator = slot.text.endsWith("\n\n") ? "\n\n" : "";
+        const started = startReasoningEvent(state, outputIndex);
+        if (started !== undefined) yield started;
+        const separator = slot.pendingSummarySeparator ? "\n\n" : "";
+        slot.pendingSummarySeparator = false;
         yield {
           type: "reasoning_summary_delta",
           reasoningId: reasoningStreamId(outputIndex),
           delta: separator + delta,
         };
-        slot.text += delta;
+        slot.text += separator + delta;
       }
       continue;
     }
@@ -402,7 +389,7 @@ async function* parseResponsesStream(
     if (type === "response.reasoning_summary_part.done") {
       const slot = slotFor(state, event, "reasoning");
       if (slot !== undefined && slot.text.length > 0) {
-        slot.text += "\n\n";
+        slot.pendingSummarySeparator = true;
       }
       continue;
     }
@@ -513,13 +500,6 @@ async function* finishOutputItem(
   }
 
   if (slot.type === "reasoning") {
-    if (!state.startedReasoningIndexes.has(outputIndex)) {
-      state.startedReasoningIndexes.add(outputIndex);
-      yield {
-        type: "reasoning_started",
-        reasoningId: reasoningStreamId(outputIndex),
-      };
-    }
     const itemId = stringField(item, "id") ?? slot.itemId;
     const encryptedContent =
       stringField(item, "encrypted_content") ?? slot.encryptedContent;
@@ -531,8 +511,9 @@ async function* finishOutputItem(
       encryptedContent !== undefined &&
       encryptedContent.length > 0
     ) {
-      const finalText =
-        reasoningSummaryText(replaySummary) || slot.text.replace(/\n\n$/u, "");
+      const finalText = reasoningSummaryText(replaySummary) || slot.text;
+      const started = startReasoningEvent(state, outputIndex);
+      if (started !== undefined) yield started;
       yield {
         type: "reasoning",
         reasoningId: reasoningStreamId(outputIndex),
@@ -542,9 +523,10 @@ async function* finishOutputItem(
         ...(finalText.length === 0 ? {} : { summary: finalText }),
       };
     } else {
-      const finalText =
-        reasoningSummaryText(replaySummary) || slot.text.replace(/\n\n$/u, "");
+      const finalText = reasoningSummaryText(replaySummary) || slot.text;
       if (finalText.length > 0) {
+        const started = startReasoningEvent(state, outputIndex);
+        if (started !== undefined) yield started;
         yield {
           type: "reasoning",
           reasoningId: reasoningStreamId(outputIndex),
@@ -602,6 +584,18 @@ function reasoningStreamId(outputIndex: number): string {
   return `reasoning:${String(outputIndex)}`;
 }
 
+function startReasoningEvent(
+  state: StreamState,
+  outputIndex: number,
+): ModelEvent | undefined {
+  if (state.startedReasoningIndexes.has(outputIndex)) return undefined;
+  state.startedReasoningIndexes.add(outputIndex);
+  return {
+    type: "reasoning_started",
+    reasoningId: reasoningStreamId(outputIndex),
+  };
+}
+
 function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {
   const type = stringField(item, "type");
   if (type === "reasoning") {
@@ -610,6 +604,7 @@ function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {
     return {
       type,
       text: reasoningText(item),
+      pendingSummarySeparator: false,
       summary: reasoningSummary(item),
       ...(itemId === undefined ? {} : { itemId }),
       ...(encryptedContent === undefined ? {} : { encryptedContent }),
