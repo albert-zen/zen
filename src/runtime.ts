@@ -52,6 +52,20 @@ export type RuntimeEvent =
       itemId: string;
       delta: string;
     }
+  | {
+      type: "reasoning_summary_delta";
+      threadId: string;
+      turnId: string;
+      itemId: string;
+      delta: string;
+    }
+  | {
+      type: "reasoning_content_delta";
+      threadId: string;
+      turnId: string;
+      itemId: string;
+      delta: string;
+    }
   | { type: "item_completed"; item: CanonicalItem }
   | {
       type: "token_usage";
@@ -323,6 +337,22 @@ export class AgentRuntime {
       name: string;
       arguments: Record<string, unknown>;
     }> = [];
+    const reasoningItems = new Map<string, string>();
+
+    const ensureReasoningItem = (reasoningId: string): string => {
+      const existing = reasoningItems.get(reasoningId);
+      if (existing !== undefined) return existing;
+      const reasoningItemId = this.#id();
+      reasoningItems.set(reasoningId, reasoningItemId);
+      options.emit({
+        type: "item_started",
+        threadId: options.thread.id,
+        turnId,
+        itemId: reasoningItemId,
+        itemType: "reasoning",
+      });
+      return reasoningItemId;
+    };
 
     const messages = await options.prepareModelSample(itemId);
 
@@ -356,9 +386,36 @@ export class AgentRuntime {
           itemId,
           delta: event.delta,
         });
+      } else if (event.type === "reasoning_started") {
+        ensureReasoningItem(event.reasoningId);
+      } else if (
+        event.type === "reasoning_summary_delta" ||
+        event.type === "reasoning_content_delta"
+      ) {
+        if (event.delta.length === 0) continue;
+        options.emit({
+          type: event.type,
+          threadId: options.thread.id,
+          turnId,
+          itemId: ensureReasoningItem(event.reasoningId),
+          delta: event.delta,
+        });
       } else if (event.type === "reasoning") {
+        const reasoningItemId =
+          event.reasoningId === undefined
+            ? this.#id()
+            : ensureReasoningItem(event.reasoningId);
+        if (event.reasoningId === undefined) {
+          options.emit({
+            type: "item_started",
+            threadId: options.thread.id,
+            turnId,
+            itemId: reasoningItemId,
+            itemType: "reasoning",
+          });
+        }
         const reasoning: ReasoningItem = {
-          id: this.#id(),
+          id: reasoningItemId,
           threadId: options.thread.id,
           turnId,
           createdAt: this.#now(),
@@ -370,7 +427,11 @@ export class AgentRuntime {
             ? {}
             : { providerItemId: event.providerItemId }),
         };
-        await this.#completeItem(reasoning, options);
+        await options.commit(reasoning);
+        options.emit({ type: "item_completed", item: reasoning });
+        if (event.reasoningId !== undefined) {
+          reasoningItems.delete(event.reasoningId);
+        }
       } else if (event.type === "tool_call") {
         toolCalls.push({
           callId: event.callId,
@@ -386,6 +447,10 @@ export class AgentRuntime {
           outputTokens: event.outputTokens,
         });
       }
+    }
+
+    if (reasoningItems.size > 0) {
+      throw new Error("Model stream ended with incomplete reasoning");
     }
 
     if (!started && toolCalls.length === 0) {

@@ -75,8 +75,20 @@ export interface ModelTool {
 
 export type ModelEvent =
   | { type: "text_delta"; delta: string }
+  | { type: "reasoning_started"; reasoningId: string }
+  | {
+      type: "reasoning_summary_delta";
+      reasoningId: string;
+      delta: string;
+    }
+  | {
+      type: "reasoning_content_delta";
+      reasoningId: string;
+      delta: string;
+    }
   | {
       type: "reasoning";
+      reasoningId?: string;
       reasoningContent: string;
       summary?: string;
       contentVisibility: "public" | "opaque";

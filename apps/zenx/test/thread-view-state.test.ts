@@ -67,6 +67,66 @@ test("streams agent text in memory and replaces it with the completed item", () 
   assert.equal(current.status.type, "idle");
 });
 
+test("streams reasoning summary and content in memory before canonical completion", () => {
+  const running = turn("turn-reasoning", "inProgress");
+  let current = thread([running]);
+  current = applyThreadViewNotification(current, "item/started", {
+    threadId: current.id,
+    turnId: running.id,
+    item: reasoningItem("reasoning-1"),
+    startedAtMs: 20_000,
+  });
+  current = applyThreadViewNotification(
+    current,
+    "item/reasoning/summaryPartAdded",
+    {
+      threadId: current.id,
+      turnId: running.id,
+      itemId: "reasoning-1",
+      summaryIndex: 0,
+    },
+  );
+  for (const delta of ["checked ", "the plan"]) {
+    current = applyThreadViewNotification(
+      current,
+      "item/reasoning/summaryTextDelta",
+      {
+        threadId: current.id,
+        turnId: running.id,
+        itemId: "reasoning-1",
+        summaryIndex: 0,
+        delta,
+      },
+    );
+  }
+  for (const delta of ["public ", "thought"]) {
+    current = applyThreadViewNotification(current, "item/reasoning/textDelta", {
+      threadId: current.id,
+      turnId: running.id,
+      itemId: "reasoning-1",
+      contentIndex: 0,
+      delta,
+    });
+  }
+  assert.deepEqual(reasoningValue(current), {
+    type: "reasoning",
+    id: "reasoning-1",
+    summary: ["checked the plan"],
+    content: ["public thought"],
+  });
+
+  current = applyThreadViewNotification(current, "item/completed", {
+    threadId: current.id,
+    turnId: running.id,
+    item: reasoningItem("reasoning-1", ["canonical summary"], []),
+    completedAtMs: 21_000,
+  });
+  assert.deepEqual(
+    reasoningValue(current),
+    reasoningItem("reasoning-1", ["canonical summary"], []),
+  );
+});
+
 test("streams command output and replaces it with the completed projection", () => {
   const running = turn("turn-command", "inProgress", [
     commandItem("command-1", "inProgress", null),
@@ -228,6 +288,14 @@ function commandItem(
   };
 }
 
+function reasoningItem(
+  id: string,
+  summary: string[] = [],
+  content: string[] = [],
+): ThreadItem {
+  return { type: "reasoning", id, summary, content };
+}
+
 function agentText(value: Thread): string | undefined {
   const item = value.turns[0]?.items[0];
   return item?.type === "agentMessage" ? item.text : undefined;
@@ -236,4 +304,8 @@ function agentText(value: Thread): string | undefined {
 function commandOutput(value: Thread): string | null | undefined {
   const item = value.turns[0]?.items[0];
   return item?.type === "commandExecution" ? item.aggregatedOutput : undefined;
+}
+
+function reasoningValue(value: Thread): ThreadItem | undefined {
+  return value.turns[0]?.items.find((item) => item.type === "reasoning");
 }

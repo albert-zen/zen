@@ -193,7 +193,16 @@ test("captures compatible reasoning_content as public semantic reasoning", async
         choices: [
           {
             index: 0,
-            delta: { reasoning_content: "complete" },
+            delta: { content: "answer ", reasoning_content: "" },
+            finish_reason: null,
+          },
+        ],
+      }),
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: { content: "done", reasoning_content: "complete" },
             finish_reason: "stop",
           },
         ],
@@ -203,8 +212,22 @@ test("captures compatible reasoning_content as public semantic reasoning", async
   );
 
   assert.deepEqual(await collect(adapter.stream(request())), [
+    { type: "reasoning_started", reasoningId: "reasoning:0" },
+    {
+      type: "reasoning_content_delta",
+      reasoningId: "reasoning:0",
+      delta: "check ",
+    },
+    { type: "text_delta", delta: "answer " },
+    { type: "text_delta", delta: "done" },
+    {
+      type: "reasoning_content_delta",
+      reasoningId: "reasoning:0",
+      delta: "complete",
+    },
     {
       type: "reasoning",
+      reasoningId: "reasoning:0",
       reasoningContent: "check complete",
       contentVisibility: "public",
     },

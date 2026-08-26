@@ -363,6 +363,7 @@ interface StreamState {
   finishReason?: string;
   doneSeen: boolean;
   reasoningContent: string;
+  reasoningStarted: boolean;
   toolCalls: Map<number, ToolCallAccumulator>;
 }
 
@@ -383,6 +384,7 @@ async function* parseChatCompletionStream(
   const state: StreamState = {
     doneSeen: false,
     reasoningContent: "",
+    reasoningStarted: false,
     toolCalls: new Map(),
   };
   let reachedEof = false;
@@ -456,6 +458,7 @@ async function* parseChatCompletionStream(
   if (state.reasoningContent.length > 0) {
     yield {
       type: "reasoning",
+      reasoningId: "reasoning:0",
       reasoningContent: state.reasoningContent,
       contentVisibility: "public",
     };
@@ -586,7 +589,16 @@ async function* consumePayload(
         "OpenAI-compatible model stream continued after finishing",
       );
     }
-    if (typeof reasoningContent === "string") {
+    if (typeof reasoningContent === "string" && reasoningContent.length > 0) {
+      if (!state.reasoningStarted) {
+        state.reasoningStarted = true;
+        yield { type: "reasoning_started", reasoningId: "reasoning:0" };
+      }
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "reasoning:0",
+        delta: reasoningContent,
+      };
       state.reasoningContent += reasoningContent;
     }
 

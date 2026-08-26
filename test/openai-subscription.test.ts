@@ -86,7 +86,21 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
         {
           type: "response.reasoning_summary_text.delta",
           output_index: 0,
-          delta: "checked the command",
+          delta: "checked",
+        },
+        {
+          type: "response.reasoning_summary_text.delta",
+          output_index: 0,
+          delta: "",
+        },
+        {
+          type: "response.reasoning_summary_part.done",
+          output_index: 0,
+        },
+        {
+          type: "response.reasoning_summary_text.delta",
+          output_index: 0,
+          delta: "the command",
         },
         {
           type: "response.output_item.done",
@@ -94,7 +108,10 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
           item: {
             type: "reasoning",
             id: "rs_1",
-            summary: [{ type: "summary_text", text: "checked the command" }],
+            summary: [
+              { type: "summary_text", text: "checked" },
+              { type: "summary_text", text: "the command" },
+            ],
             encrypted_content: "encrypted-reasoning-state",
           },
         },
@@ -166,7 +183,11 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
                 summary: [
                   {
                     type: "summary_text",
-                    text: "checked the command",
+                    text: "checked",
+                  },
+                  {
+                    type: "summary_text",
+                    text: "the command",
                   },
                 ],
               },
@@ -221,9 +242,21 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
   );
 
   assert.deepEqual(events, [
+    { type: "reasoning_started", reasoningId: "reasoning:0" },
+    {
+      type: "reasoning_summary_delta",
+      reasoningId: "reasoning:0",
+      delta: "checked",
+    },
+    {
+      type: "reasoning_summary_delta",
+      reasoningId: "reasoning:0",
+      delta: "\n\nthe command",
+    },
     {
       type: "reasoning",
-      summary: "checked the command",
+      reasoningId: "reasoning:0",
+      summary: "checked\n\nthe command",
       reasoningContent: "encrypted-reasoning-state",
       contentVisibility: "opaque",
       providerItemId: "rs_1",
@@ -322,8 +355,10 @@ test("keeps raw reasoning text private on the existing reasoning event", async (
 
   const events = await collect(adapter.stream(request()));
   assert.deepEqual(events, [
+    { type: "reasoning_started", reasoningId: "reasoning:0" },
     {
       type: "reasoning",
+      reasoningId: "reasoning:0",
       reasoningContent: "encrypted-private-state",
       contentVisibility: "opaque",
       providerItemId: "rs_private",
@@ -438,13 +473,18 @@ test("a fresh adapter replays existing reasoning history for a stateless tool ro
     ),
   );
   assert.deepEqual(firstEvents[0], {
+    type: "reasoning_started",
+    reasoningId: "reasoning:0",
+  });
+  assert.deepEqual(firstEvents[1], {
     type: "reasoning",
+    reasoningId: "reasoning:0",
     reasoningContent: "provider-private-state",
     summary: "first step\n\nsecond step",
     contentVisibility: "opaque",
     providerItemId: "rs_first",
   });
-  assert.deepEqual(firstEvents[1], {
+  assert.deepEqual(firstEvents[2], {
     type: "tool_call",
     callId: "call_first|fc_first",
     name: "shell",

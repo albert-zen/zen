@@ -466,6 +466,11 @@ canonical `reasoning` Item 用 `reasoningContent`、可选 `summary` 与显式
 `contentVisibility` 统一表达公开或 opaque reasoning，并只在 adapter 确实需要 round-trip
 identity 时保留 `providerItemId`；Core 不解释 reasoning content 的 Provider 编码，重放仍要求
 它所属 Turn 的 `turn_started.selection` 与目标 profile/model 兼容，公共协议只展示允许公开的语义内容。
+ModelAdapter 的 reasoning stream 只传递 provider-neutral lifecycle correlation、summary delta
+或 content delta；Runtime 为同一 lifecycle 分配一个稳定 canonical Item id，完成时只 append
+一次完整 `reasoning` Item。OpenAI subscription 只把可公开 summary 作为 transient delta，
+opaque content 永不流向公共事件；OpenAI-compatible 的公开 `reasoning_content` 则作为 content
+delta 实时投影。失败或中断只丢弃内存中的 correlation/buffer，不留下不完整 canonical Item。
 
 ## Item 的三种形态
 
@@ -473,7 +478,8 @@ identity 时保留 `providerItemId`；Core 不解释 reasoning content 的 Provi
 
 1. **canonical Item** — 进入 ItemList，持久化、可重放。
 2. **transient delta** — 仅通过 App Server 实时下发用于流式显示，**不写 journal**；
-   Item 完成后一次性追加完整体。
+   Item 完成后一次性追加完整体。Reasoning 的 summary/content delta 是分开的公开通道，
+   opaque reasoning 只能走 summary 通道。
 3. **协议事件** — ItemList 状态变化向 wire protocol 的投影，不是独立状态。
 
 Turn 边界对齐 Codex rollout 语义：canonical `turn_started` 开始 Turn，

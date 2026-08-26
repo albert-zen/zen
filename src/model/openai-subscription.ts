@@ -283,6 +283,7 @@ function assistantTextInput(
 
 interface StreamState {
   slots: Map<number, OutputSlot>;
+  startedReasoningIndexes: Set<number>;
   emittedToolCalls: Set<string>;
   finishedOutputIndexes: Set<number>;
   terminalSeen: boolean;
@@ -313,6 +314,7 @@ async function* parseResponsesStream(
 ): AsyncIterable<ModelEvent> {
   const state: StreamState = {
     slots: new Map(),
+    startedReasoningIndexes: new Set(),
     emittedToolCalls: new Set(),
     finishedOutputIndexes: new Set(),
     terminalSeen: false,
@@ -345,6 +347,16 @@ async function* parseResponsesStream(
         const slot = outputSlot(item);
         if (slot !== undefined) {
           state.slots.set(outputIndex, slot);
+          if (
+            slot.type === "reasoning" &&
+            !state.startedReasoningIndexes.has(outputIndex)
+          ) {
+            state.startedReasoningIndexes.add(outputIndex);
+            yield {
+              type: "reasoning_started",
+              reasoningId: reasoningStreamId(outputIndex),
+            };
+          }
         }
       }
       continue;
@@ -353,7 +365,26 @@ async function* parseResponsesStream(
     if (type === "response.reasoning_summary_text.delta") {
       const slot = slotFor(state, event, "reasoning");
       const delta = stringField(event, "delta");
-      if (slot !== undefined && delta !== undefined) {
+      const outputIndex = numberField(event, "output_index");
+      if (
+        slot !== undefined &&
+        outputIndex !== undefined &&
+        delta !== undefined &&
+        delta.length > 0
+      ) {
+        if (!state.startedReasoningIndexes.has(outputIndex)) {
+          state.startedReasoningIndexes.add(outputIndex);
+          yield {
+            type: "reasoning_started",
+            reasoningId: reasoningStreamId(outputIndex),
+          };
+        }
+        const separator = slot.text.endsWith("\n\n") ? "\n\n" : "";
+        yield {
+          type: "reasoning_summary_delta",
+          reasoningId: reasoningStreamId(outputIndex),
+          delta: separator + delta,
+        };
         slot.text += delta;
       }
       continue;
@@ -482,6 +513,13 @@ async function* finishOutputItem(
   }
 
   if (slot.type === "reasoning") {
+    if (!state.startedReasoningIndexes.has(outputIndex)) {
+      state.startedReasoningIndexes.add(outputIndex);
+      yield {
+        type: "reasoning_started",
+        reasoningId: reasoningStreamId(outputIndex),
+      };
+    }
     const itemId = stringField(item, "id") ?? slot.itemId;
     const encryptedContent =
       stringField(item, "encrypted_content") ?? slot.encryptedContent;
@@ -497,6 +535,7 @@ async function* finishOutputItem(
         reasoningSummaryText(replaySummary) || slot.text.replace(/\n\n$/u, "");
       yield {
         type: "reasoning",
+        reasoningId: reasoningStreamId(outputIndex),
         reasoningContent: encryptedContent,
         contentVisibility: "opaque",
         providerItemId: itemId,
@@ -508,6 +547,7 @@ async function* finishOutputItem(
       if (finalText.length > 0) {
         yield {
           type: "reasoning",
+          reasoningId: reasoningStreamId(outputIndex),
           reasoningContent: finalText,
           summary: finalText,
           contentVisibility: "public",
@@ -556,6 +596,10 @@ async function* finishOutputItem(
 
   state.slots.delete(outputIndex);
   state.finishedOutputIndexes.add(outputIndex);
+}
+
+function reasoningStreamId(outputIndex: number): string {
+  return `reasoning:${String(outputIndex)}`;
 }
 
 function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {

@@ -42,6 +42,9 @@ Server notifications：
 - `turn/started`
 - `item/started`
 - `item/agentMessage/delta`
+- `item/reasoning/summaryPartAdded`
+- `item/reasoning/summaryTextDelta`
+- `item/reasoning/textDelta`
 - `item/commandExecution/outputDelta`
 - `item/completed`
 - `serverRequest/resolved`
@@ -74,6 +77,13 @@ public/opaque visibility 与 round-trip 必需的可选 Provider item identity�
 永不进入 Codex Thread Item、通知或 ZenX 展示；public content 有 summary 时投影 summary，
 否则投影公开 content。产生它的 Turn selection 必须与目标 profile/model 兼容才进入模型重放。
 各 ModelAdapter 独自负责目标 API 的私有 reasoning 请求与响应形态，不把 wire 结构带入 Core。
+实时 reasoning 使用标准 Item lifecycle：先发送一个 summary/content 为空的
+`item/started`，summary 首次出现时发送一次 index 0 的
+`item/reasoning/summaryPartAdded`，随后分别通过 index 0 的 summary/text delta 通知增量，
+最后以同一 item id 发送 canonical `item/completed`。这些 delta 只存在于连接与 ZenX
+内存状态，不写 journal；subscription 的 opaque content 绝不发 text delta，只有公开 summary
+可以流式展示，compatible 的公开 reasoning content 才使用 text delta。失败或中断不会伪造
+completed reasoning Item。
 
 `thread/compact` 不是 Codex 0.146.0 方法。它只接受精确的
 `{ threadId: string }`，等待 Zen 使用 admission 时冻结的当前 Provider selection

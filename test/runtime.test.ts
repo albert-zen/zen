@@ -882,6 +882,194 @@ test("journal stores only complete canonical items, never deltas", async () => {
   }
 });
 
+test("streams one correlated reasoning lifecycle and journals one complete item", async () => {
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-reasoning-stream-test-"),
+  );
+  const model: ModelAdapter = {
+    provider: "reasoning-stream-test",
+    async *stream(): AsyncIterable<ModelEvent> {
+      yield { type: "reasoning_started", reasoningId: "sample-reasoning" };
+      yield {
+        type: "reasoning_summary_delta",
+        reasoningId: "sample-reasoning",
+        delta: "summary ",
+      };
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "sample-reasoning",
+        delta: "public ",
+      };
+      yield {
+        type: "reasoning_summary_delta",
+        reasoningId: "sample-reasoning",
+        delta: "complete",
+      };
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "sample-reasoning",
+        delta: "content",
+      };
+      yield {
+        type: "reasoning",
+        reasoningId: "sample-reasoning",
+        reasoningContent: "public content",
+        summary: "summary complete",
+        contentVisibility: "public",
+      };
+      yield { type: "text_delta", delta: "answer" };
+    },
+  };
+  const server = createServer({
+    model,
+    journal: new JsonlThreadJournal(temporaryDirectory),
+  });
+  const events: AppServerEvent[] = [];
+  server.subscribe((event) => events.push(event));
+
+  try {
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "stream reasoning")
+    ).done;
+
+    const reasoningStarted = events.find(
+      (event) =>
+        event.type === "item_started" && event.itemType === "reasoning",
+    );
+    assert(reasoningStarted?.type === "item_started");
+    const reasoningEvents = events.filter(
+      (event) =>
+        event.type === "reasoning_summary_delta" ||
+        event.type === "reasoning_content_delta",
+    );
+    assert.deepEqual(
+      reasoningEvents.map((event) => ({
+        type: event.type,
+        itemId: event.itemId,
+        delta: event.delta,
+      })),
+      [
+        {
+          type: "reasoning_summary_delta",
+          itemId: reasoningStarted.itemId,
+          delta: "summary ",
+        },
+        {
+          type: "reasoning_content_delta",
+          itemId: reasoningStarted.itemId,
+          delta: "public ",
+        },
+        {
+          type: "reasoning_summary_delta",
+          itemId: reasoningStarted.itemId,
+          delta: "complete",
+        },
+        {
+          type: "reasoning_content_delta",
+          itemId: reasoningStarted.itemId,
+          delta: "content",
+        },
+      ],
+    );
+    const completed = events.find(
+      (event) =>
+        event.type === "item_completed" && event.item.type === "reasoning",
+    );
+    assert(
+      completed?.type === "item_completed" &&
+        completed.item.type === "reasoning",
+    );
+    assert.equal(completed.item.id, reasoningStarted.itemId);
+    assert.equal(completed.item.summary, "summary complete");
+    assert.equal(completed.item.reasoningContent, "public content");
+
+    const journal = await readFile(
+      path.join(temporaryDirectory, `${thread.id}.jsonl`),
+      "utf8",
+    );
+    const records = journal
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as CanonicalItem);
+    assert.equal(records.filter((item) => item.type === "reasoning").length, 1);
+    assert.equal(journal.includes("reasoning_summary_delta"), false);
+    assert.equal(journal.includes("reasoning_content_delta"), false);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("failed reasoning streams leave no incomplete canonical reasoning", async () => {
+  const model: ModelAdapter = {
+    provider: "reasoning-stream-failure",
+    async *stream(): AsyncIterable<ModelEvent> {
+      yield { type: "reasoning_started", reasoningId: "failed-reasoning" };
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "failed-reasoning",
+        delta: "transient only",
+      };
+      throw new Error("reasoning stream failed");
+    },
+  };
+  const server = createServer({ model });
+  const events: AppServerEvent[] = [];
+  server.subscribe((event) => events.push(event));
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "fail reasoning")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(
+    snapshot.items.some((item) => item.type === "reasoning"),
+    false,
+  );
+  assert(events.some((event) => event.type === "reasoning_content_delta"));
+  assert.equal(
+    snapshot.items.find((item) => item.type === "failure")?.message,
+    "reasoning stream failed",
+  );
+});
+
+test("aborted reasoning streams leave no incomplete canonical reasoning", async () => {
+  const streamed = testDeferred<void>();
+  const model: ModelAdapter = {
+    provider: "reasoning-stream-abort",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      yield { type: "reasoning_started", reasoningId: "aborted-reasoning" };
+      yield {
+        type: "reasoning_summary_delta",
+        reasoningId: "aborted-reasoning",
+        delta: "transient summary",
+      };
+      streamed.resolve();
+      request.signal.throwIfAborted();
+      await new Promise<void>((_resolve, reject) => {
+        request.signal.addEventListener(
+          "abort",
+          () => reject(request.signal.reason),
+          { once: true },
+        );
+      });
+    },
+  };
+  const server = createServer({ model });
+  const thread = await server.startThread();
+  const turn = await server.startTurn(thread.id, "abort reasoning");
+  await streamed.promise;
+  await server.interruptTurn(thread.id, turn.id);
+  await turn.done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(
+    snapshot.items.some((item) => item.type === "reasoning"),
+    false,
+  );
+  assert.equal(snapshot.turns[0]?.status, "interrupted");
+});
+
 test("partial model deltas are not canonicalized when the model ends incomplete", async () => {
   const incompleteModel: ModelAdapter = {
     provider: "incomplete-test",

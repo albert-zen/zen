@@ -7,7 +7,11 @@ import test from "node:test";
 import { png1x1, shellPrintCommand } from "./fixtures.js";
 
 import { createHostedAppServer } from "../apps/cli/src/host.js";
+import { ZenAppServer } from "../src/app-server.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
+import { StaticModelCatalog } from "../src/model-catalog.js";
+import type { ModelAdapter } from "../src/model.js";
+import { ProviderRegistry } from "../src/provider-registry.js";
 import {
   CodexClient,
   CodexClientError,
@@ -18,6 +22,8 @@ import { encodeModelKey } from "../src/protocol/codex/model-key.js";
 import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { isRecord, type JsonRpcMessage } from "../src/protocol/codex/wire.js";
+import { AgentRuntime } from "../src/runtime.js";
+import { ShellToolExecutor } from "../src/tool.js";
 
 function testHost(
   approvalPolicy: "always" | "never" = "never",
@@ -34,6 +40,220 @@ function testHost(
     threadMetadata: new InMemoryThreadMetadataStore(),
   });
 }
+
+test("projects correlated reasoning summary and content streams with canonical item ids", async () => {
+  const model: ModelAdapter = {
+    provider: "reasoning-stream",
+    async *stream() {
+      yield { type: "reasoning_started", reasoningId: "summary-0" };
+      yield {
+        type: "reasoning_summary_delta",
+        reasoningId: "summary-0",
+        delta: "checked ",
+      };
+      yield {
+        type: "reasoning_summary_delta",
+        reasoningId: "summary-0",
+        delta: "the plan",
+      };
+      yield {
+        type: "reasoning",
+        reasoningId: "summary-0",
+        reasoningContent: "opaque-provider-payload",
+        summary: "checked the plan",
+        contentVisibility: "opaque",
+      };
+      yield { type: "text_delta", delta: "interleaved answer" };
+      yield { type: "reasoning_started", reasoningId: "content-0" };
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "content-0",
+        delta: "public ",
+      };
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "content-0",
+        delta: "thought",
+      };
+      yield {
+        type: "reasoning",
+        reasoningId: "content-0",
+        reasoningContent: "public thought",
+        contentVisibility: "public",
+      };
+    },
+  };
+  const profile = model.provider;
+  const appServer = new ZenAppServer({
+    journal: new InMemoryThreadJournal(),
+    runtime: new AgentRuntime({ tools: new ShellToolExecutor() }),
+    providerRegistry: new ProviderRegistry([
+      {
+        providerProfileId: profile,
+        adapter: model,
+        modelCatalog: new StaticModelCatalog([
+          {
+            id: "reasoning-model",
+            isDefault: true,
+            supportedReasoningEfforts: ["medium"],
+            defaultReasoningEffort: "medium",
+          },
+        ]),
+      },
+    ]),
+    threadMetadata: new InMemoryThreadMetadataStore(),
+    defaults: {
+      cwd: process.cwd(),
+      providerProfileId: profile,
+      modelId: "reasoning-model",
+      reasoningEffort: "medium",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  });
+  const messages: JsonRpcMessage[] = [];
+  const completed = deferred<void>();
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    send: (message) => {
+      messages.push(message);
+      if ("method" in message && message.method === "turn/completed") {
+        completed.resolve();
+      }
+    },
+  });
+
+  try {
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await connection.receive({ method: "initialized" });
+    await connection.receive({ id: 2, method: "thread/start", params: {} });
+    const started = messages.find(
+      (message) => "result" in message && String(message.id) === "2",
+    );
+    assert(started !== undefined && "result" in started);
+    const thread = responseResult<Record<string, unknown>>(
+      started.result,
+      "thread",
+    );
+    await connection.receive({
+      id: 3,
+      method: "turn/start",
+      params: { threadId: thread.id, input: [{ type: "text", text: "go" }] },
+    });
+    await within(completed.promise);
+
+    const notifications = messages.filter(
+      (message): message is Extract<JsonRpcMessage, { method: string }> =>
+        "method" in message,
+    );
+    const reasoningStarted = notifications.filter(
+      (message) =>
+        message.method === "item/started" &&
+        isRecord(message.params) &&
+        isRecord(message.params.item) &&
+        message.params.item.type === "reasoning",
+    );
+    assert.equal(reasoningStarted.length, 2);
+    const summaryId = String(
+      (reasoningStarted[0]?.params as { item: { id: string } }).item.id,
+    );
+    const contentId = String(
+      (reasoningStarted[1]?.params as { item: { id: string } }).item.id,
+    );
+    assert.deepEqual(
+      notifications
+        .filter((message) =>
+          [
+            "item/reasoning/summaryPartAdded",
+            "item/reasoning/summaryTextDelta",
+            "item/reasoning/textDelta",
+          ].includes(message.method),
+        )
+        .map((message) => ({ method: message.method, params: message.params })),
+      [
+        {
+          method: "item/reasoning/summaryPartAdded",
+          params: {
+            threadId: thread.id,
+            turnId: (reasoningStarted[0]?.params as { turnId: string }).turnId,
+            itemId: summaryId,
+            summaryIndex: 0,
+          },
+        },
+        {
+          method: "item/reasoning/summaryTextDelta",
+          params: {
+            threadId: thread.id,
+            turnId: (reasoningStarted[0]?.params as { turnId: string }).turnId,
+            itemId: summaryId,
+            delta: "checked ",
+            summaryIndex: 0,
+          },
+        },
+        {
+          method: "item/reasoning/summaryTextDelta",
+          params: {
+            threadId: thread.id,
+            turnId: (reasoningStarted[0]?.params as { turnId: string }).turnId,
+            itemId: summaryId,
+            delta: "the plan",
+            summaryIndex: 0,
+          },
+        },
+        {
+          method: "item/reasoning/textDelta",
+          params: {
+            threadId: thread.id,
+            turnId: (reasoningStarted[1]?.params as { turnId: string }).turnId,
+            itemId: contentId,
+            delta: "public ",
+            contentIndex: 0,
+          },
+        },
+        {
+          method: "item/reasoning/textDelta",
+          params: {
+            threadId: thread.id,
+            turnId: (reasoningStarted[1]?.params as { turnId: string }).turnId,
+            itemId: contentId,
+            delta: "thought",
+            contentIndex: 0,
+          },
+        },
+      ],
+    );
+    const completedReasoning = notifications
+      .filter(
+        (message) =>
+          message.method === "item/completed" &&
+          isRecord(message.params) &&
+          isRecord(message.params.item) &&
+          message.params.item.type === "reasoning",
+      )
+      .map((message) => (message.params as { item: unknown }).item);
+    assert.deepEqual(completedReasoning, [
+      {
+        type: "reasoning",
+        id: summaryId,
+        summary: ["checked the plan"],
+        content: [],
+      },
+      {
+        type: "reasoning",
+        id: contentId,
+        summary: [],
+        content: ["public thought"],
+      },
+    ]);
+    assert.equal(
+      JSON.stringify(notifications).includes("opaque-provider-payload"),
+      false,
+    );
+  } finally {
+    connection.close();
+  }
+});
 
 test("imports Codex localImage and image inputs before canonical turn/start", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-protocol-image-"));
