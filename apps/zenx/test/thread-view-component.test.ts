@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
 import * as React from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
@@ -12,10 +14,9 @@ import {
   emptyComposerState,
   type ComposerState,
 } from "../src/renderer/src/composer-state.js";
-const { createElement } = React;
+const { act, createElement } = React;
 Object.assign(globalThis, { React });
-const { ThreadView, reasoningDetailText } =
-  await import("../src/renderer/src/ThreadView.js");
+const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
 
 const noop = async () => undefined;
 
@@ -92,34 +93,130 @@ test("assistant messages retain running reasoning and tool disclosure affordance
   );
 });
 
-test("reasoning detail prefers summaries and falls back to public content", () => {
-  assert.equal(
-    reasoningDetailText({
-      type: "reasoning",
-      id: "reasoning-summary",
-      summary: ["Provider summary"],
-      content: ["Public reasoning"],
-    }),
-    "Provider summary",
-  );
-  assert.equal(
-    reasoningDetailText({
-      type: "reasoning",
-      id: "reasoning-public",
-      summary: [],
-      content: ["Public reasoning"],
-    }),
-    "Public reasoning",
-  );
-  assert.equal(
-    reasoningDetailText({
-      type: "reasoning",
-      id: "reasoning-opaque",
-      summary: [],
-      content: [],
-    }),
-    "No reasoning summary was provided.",
-  );
+test("public reasoning with a summary expands from summary to full content", async () => {
+  await withDom(async (root) => {
+    const row = await openReasoningRow(
+      root,
+      reasoningItem(
+        "reasoning-public-summary",
+        ["Provider summary"],
+        ["Full public reasoning"],
+      ),
+    );
+    const toggle = requiredWithin<HTMLButtonElement>(
+      row,
+      ":scope > .trace-item-toggle",
+    );
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(
+      requiredWithin(toggle, ":scope > span").textContent,
+      "Provider summary",
+    );
+
+    await act(async () => toggle.click());
+    const detail = requiredWithin(row, ":scope > .trace-detail");
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    assert.equal(detail.textContent, "Full public reasoning");
+    assert.doesNotMatch(detail.textContent ?? "", /Provider summary/u);
+  });
+});
+
+test("public reasoning without a summary keeps a neutral expandable label", async () => {
+  await withDom(async (root) => {
+    const row = await openReasoningRow(
+      root,
+      reasoningItem("reasoning-public", [], ["Full public reasoning"]),
+    );
+    const toggle = requiredWithin<HTMLButtonElement>(
+      row,
+      ":scope > .trace-item-toggle",
+    );
+    assert.equal(
+      requiredWithin(toggle, ":scope > span").textContent,
+      "Reasoning details",
+    );
+
+    await act(async () => toggle.click());
+    assert.equal(
+      requiredWithin(row, ":scope > .trace-detail").textContent,
+      "Full public reasoning",
+    );
+  });
+});
+
+test("opaque reasoning with a summary is a static summary row", async () => {
+  await withDom(async (root) => {
+    const row = await openReasoningRow(
+      root,
+      reasoningItem("reasoning-opaque-summary", ["Provider summary"], []),
+    );
+    const label = requiredWithin(row, ":scope > .trace-item-static > span");
+    assert.equal(label.textContent, "Provider summary");
+    assert.equal(row.querySelector(":scope > button"), null);
+    assert.equal(row.querySelector("[aria-expanded]"), null);
+    assert.equal(row.querySelector('[data-icon="chevron-down"]'), null);
+    assert.equal(row.querySelector(".trace-detail"), null);
+  });
+});
+
+test("opaque reasoning without a summary exposes only a neutral static row", async () => {
+  await withDom(async (root) => {
+    const row = await openReasoningRow(
+      root,
+      reasoningItem("reasoning-opaque", [], []),
+    );
+    assert.equal(
+      requiredWithin(row, ":scope > .trace-item-static > span").textContent,
+      "Reasoning details",
+    );
+    assert.equal(row.querySelector(":scope > button"), null);
+    assert.equal(row.querySelector("[aria-expanded]"), null);
+    assert.equal(row.querySelector('[data-icon="chevron-down"]'), null);
+    assert.equal(row.querySelector(".trace-detail"), null);
+  });
+});
+
+test("streamed public content turns a static row into an expandable completed item", async () => {
+  await withDom(async (root) => {
+    const id = "reasoning-stream";
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [reasoningItem(id, [], [])]),
+    );
+    await act(async () => requiredButton(".trace-toggle").click());
+    assert.ok(document.querySelector(".trace-item-static"));
+    assert.equal(document.querySelector(".trace-item-toggle"), null);
+
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        reasoningItem(id, [], ["Streaming public reasoning"]),
+      ]),
+    );
+    assert.equal(
+      requiredButton(".trace-toggle").getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.equal(
+      requiredButton(".trace-item-toggle").getAttribute("aria-expanded"),
+      "false",
+    );
+
+    await renderInteractive(
+      root,
+      turnWithItems("completed", [
+        reasoningItem(id, [], ["Streaming public reasoning"]),
+      ]),
+    );
+    await act(async () => requiredButton(".turn-toggle").click());
+    await act(async () => requiredButton(".trace-toggle").click());
+    const toggle = requiredButton(".trace-item-toggle");
+    await act(async () => toggle.click());
+    assert.equal(
+      requiredElement(".trace-detail").textContent,
+      "Streaming public reasoning",
+    );
+  });
 });
 
 test("resumed user messages expose canonical attachments with accessible preview names", () => {
@@ -230,6 +327,82 @@ function renderTurns(
   );
 }
 
+async function openReasoningRow(
+  root: Root,
+  item: Extract<ThreadItem, { type: "reasoning" }>,
+): Promise<HTMLElement> {
+  await renderInteractive(root, turnWithItems("inProgress", [item]));
+  await act(async () => requiredButton(".trace-toggle").click());
+  return requiredElement<HTMLElement>(".trace-item");
+}
+
+async function renderInteractive(root: Root, value: Turn): Promise<void> {
+  await act(async () =>
+    root.render(
+      createElement(ThreadView, {
+        approvals: [],
+        composer: emptyComposerState(),
+        thread: thread([value]),
+        onDraftChange: () => undefined,
+        onInterrupt: noop,
+        onRespondToApproval: noop,
+        onSubmit: noop,
+      }),
+    ),
+  );
+}
+
+async function withDom(run: (root: Root) => Promise<void>): Promise<void> {
+  const dom = new JSDOM(
+    "<!doctype html><html><body><div id=root></div></body></html>",
+    { url: "http://localhost" },
+  );
+  const previous = {
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    Node: globalThis.Node,
+    window: globalThis.window,
+  };
+  Object.assign(globalThis, {
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    window: dom.window,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const container = document.getElementById("root");
+  assert.ok(container);
+  const root = createRoot(container);
+  try {
+    await run(root);
+  } finally {
+    await act(async () => root.unmount());
+    Object.assign(globalThis, previous, {
+      IS_REACT_ACT_ENVIRONMENT: undefined,
+    });
+    dom.window.close();
+  }
+}
+
+function requiredButton(selector: string): HTMLButtonElement {
+  return requiredElement<HTMLButtonElement>(selector);
+}
+
+function requiredElement<T extends Element = HTMLElement>(selector: string): T {
+  const value = document.querySelector<T>(selector);
+  assert.ok(value, `Expected ${selector}`);
+  return value;
+}
+
+function requiredWithin<T extends Element = HTMLElement>(
+  parent: ParentNode,
+  selector: string,
+): T {
+  const value = parent.querySelector<T>(selector);
+  assert.ok(value, `Expected ${selector}`);
+  return value;
+}
+
 function thread(turns: Turn[]): Thread {
   return {
     id: "thread-1",
@@ -307,6 +480,14 @@ function reasoning(summary: string): ThreadItem {
     summary: [summary],
     content: [],
   };
+}
+
+function reasoningItem(
+  id: string,
+  summary: string[],
+  content: string[],
+): Extract<ThreadItem, { type: "reasoning" }> {
+  return { type: "reasoning", id, summary, content };
 }
 
 function command(value: string): ThreadItem {
