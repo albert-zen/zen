@@ -121,10 +121,12 @@ export class ZenXSettingsService {
       options.userDataDirectory,
       "openai-subscription-auth.json",
     );
+    this.#projectPlatform = options.projectPlatform ?? process.platform;
     this.#profileStore =
       options.profileStore ??
       new ZenXHostProfileStore(
         path.join(options.userDataDirectory, "host-profile.json"),
+        this.#projectPlatform,
       );
     this.#subscription =
       options.subscription ??
@@ -133,7 +135,6 @@ export class ZenXSettingsService {
       options.subscriptionFactory ??
       ((profilePath) => new OpenAiSubscriptionAuthProfile(profilePath));
     this.#vault = options.vault;
-    this.#projectPlatform = options.projectPlatform ?? process.platform;
     this.#projectRealpath = options.projectRealpath;
     this.#providerFetchFactory =
       options.providerFetchFactory ?? createProviderFetch;
@@ -625,7 +626,7 @@ export class ZenXSettingsService {
       const entries = snapshot.entries;
       if (entries.some((entry) => entry.key === candidateKey)) return false;
       const isFirst = current.workspace === null;
-      const next = validateCanonicalWorkspaceProfile(
+      const next = validateHostProfile(
         {
           ...current,
           workspace: isFirst
@@ -656,7 +657,7 @@ export class ZenXSettingsService {
       if (nextWorkspaces.length === current.workspaces.length) return false;
       const defaultRemoved =
         current.workspace !== null && snapshot.defaultKey === key;
-      const next = validateCanonicalWorkspaceProfile(
+      const next = validateHostProfile(
         {
           ...current,
           workspace: defaultRemoved
@@ -687,7 +688,7 @@ export class ZenXSettingsService {
         throw new Error("Workspace is not configured");
       if (current.workspace !== null && snapshot.defaultKey === key)
         return false;
-      const next = validateCanonicalWorkspaceProfile(
+      const next = validateHostProfile(
         { ...current, workspace: selected },
         this.#projectPlatform,
       );
@@ -712,7 +713,7 @@ export class ZenXSettingsService {
         throw new Error("Workspace is not configured");
       if (current.lastUsedWorkspace !== null && snapshot.lastUsedKey === key)
         return;
-      const next = validateCanonicalWorkspaceProfile(
+      const next = validateHostProfile(
         {
           ...current,
           lastUsedWorkspace: selected,
@@ -993,7 +994,7 @@ async function canonicalWorkspaceSnapshot(
   platform: NodeJS.Platform,
   resolveRealpath: ProjectRealpath | undefined,
 ): Promise<CanonicalWorkspaceSnapshot> {
-  const validated = validateCanonicalWorkspaceProfile(profile, platform);
+  const validated = validateHostProfile(profile, platform);
   const candidates =
     validated.workspace === null
       ? validated.workspaces
@@ -1025,7 +1026,7 @@ async function canonicalWorkspaceSnapshot(
     lastUsedIndex === undefined
       ? null
       : (identities[lastUsedIndex]?.key ?? null);
-  const normalized = validateCanonicalWorkspaceProfile(
+  const normalized = validateHostProfile(
     {
       ...validated,
       workspace:
@@ -1048,20 +1049,6 @@ async function canonicalWorkspaceSnapshot(
     defaultKey,
     lastUsedKey,
   });
-}
-
-function validateCanonicalWorkspaceProfile(
-  profile: ZenXHostProfile,
-  platform: NodeJS.Platform,
-): ZenXHostProfile {
-  const validated = validateHostProfile(profile);
-  if (platform === process.platform) return validated;
-  return {
-    ...validated,
-    workspace: profile.workspace,
-    workspaces: [...profile.workspaces],
-    lastUsedWorkspace: profile.lastUsedWorkspace,
-  };
 }
 
 function profileFromLegacy(

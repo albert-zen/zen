@@ -549,6 +549,27 @@ test("adds an absolute target-platform workspace without host conversion", async
       workspace,
     );
     assert.equal(resolved.includes(workspace), true);
+
+    const reloaded = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(
+        path.join(directory, "credentials.vault"),
+        encryption,
+      ),
+      subscription: idleSubscription(),
+      projectPlatform,
+      projectRealpath: async (candidate) => candidate,
+    });
+    await reloaded.initialize({});
+    assert.equal(
+      (await reloaded.publicSettings()).profile.workspace,
+      workspace,
+    );
+    assert.equal(
+      (await reloaded.publicSettings()).profile.lastUsedWorkspace,
+      workspace,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

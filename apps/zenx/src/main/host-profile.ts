@@ -12,6 +12,7 @@ import {
   type ModelCatalogEntryInput,
 } from "../../../../src/model-catalog.js";
 import type { ZenXHostConfig } from "./host-messages.js";
+import { resolveProjectPath } from "./project-projection.js";
 
 export type ZenXProviderConnection =
   | { type: "fake"; displayName: string }
@@ -125,13 +126,21 @@ const MAX_MODELS_PER_PROFILE = 1_024;
 
 export class ZenXHostProfileStore {
   readonly #filePath: string;
+  readonly #projectPlatform: NodeJS.Platform;
 
-  constructor(filePath: string) {
+  constructor(
+    filePath: string,
+    projectPlatform: NodeJS.Platform = process.platform,
+  ) {
     this.#filePath = path.resolve(filePath);
+    this.#projectPlatform = projectPlatform;
   }
 
   async read(fallback: ZenXHostProfile): Promise<ZenXHostProfile> {
-    return (await this.readOptional()) ?? validateHostProfile(fallback);
+    return (
+      (await this.readOptional()) ??
+      validateHostProfile(fallback, this.#projectPlatform)
+    );
   }
 
   async readOptional(): Promise<ZenXHostProfile | undefined> {
@@ -160,11 +169,14 @@ export class ZenXHostProfileStore {
     const migratedV2 = isLegacyHostProfileV2(value);
     const migrated = migratedV1 || migratedV2;
     const decoded = migratedV1
-      ? migrateLegacyHostProfile(value)
+      ? migrateLegacyHostProfile(value, this.#projectPlatform)
       : migratedV2
-        ? migrateHostProfileV2(value)
-        : validateHostProfile(value);
-    const profile = applyBuiltInModelCatalogPresets(decoded);
+        ? migrateHostProfileV2(value, this.#projectPlatform)
+        : validateHostProfile(value, this.#projectPlatform);
+    const profile = applyBuiltInModelCatalogPresets(
+      decoded,
+      this.#projectPlatform,
+    );
     if (migrated || JSON.stringify(profile) !== JSON.stringify(decoded)) {
       await this.write(profile);
     }
@@ -172,7 +184,7 @@ export class ZenXHostProfileStore {
   }
 
   async write(profile: ZenXHostProfile): Promise<void> {
-    const validated = validateHostProfile(profile);
+    const validated = validateHostProfile(profile, this.#projectPlatform);
     const directory = path.dirname(this.#filePath);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const temporary = `${this.#filePath}.${process.pid}.${randomUUID()}.tmp`;
@@ -190,7 +202,10 @@ export class ZenXHostProfileStore {
   }
 }
 
-export function validateHostProfile(value: unknown): ZenXHostProfile {
+export function validateHostProfile(
+  value: unknown,
+  projectPlatform: NodeJS.Platform = process.platform,
+): ZenXHostProfile {
   if (!isRecord(value) || value.version !== 3) {
     throw new Error("ZenX host profile is invalid");
   }
@@ -230,11 +245,19 @@ export function validateHostProfile(value: unknown): ZenXHostProfile {
   const workspace =
     value.workspace === null
       ? null
-      : path.resolve(nonEmpty(value.workspace, "workspace"));
-  const workspaces = normalizeWorkspaces(value.workspaces, workspace);
+      : resolveProjectPath(
+          nonEmpty(value.workspace, "workspace"),
+          projectPlatform,
+        );
+  const workspaces = normalizeWorkspaces(
+    value.workspaces,
+    workspace,
+    projectPlatform,
+  );
   const lastUsedWorkspace = normalizeLastUsedWorkspace(
     value.lastUsedWorkspace,
     workspaces,
+    projectPlatform,
   );
   return {
     version: 3,
@@ -283,7 +306,10 @@ export function migratedProviderProfileId(
   return provider.name;
 }
 
-export function migrateLegacyHostProfile(value: unknown): ZenXHostProfile {
+export function migrateLegacyHostProfile(
+  value: unknown,
+  projectPlatform: NodeJS.Platform = process.platform,
+): ZenXHostProfile {
   if (!isLegacyHostProfile(value)) {
     throw new Error("ZenX legacy host profile is invalid");
   }
@@ -302,22 +328,28 @@ export function migrateLegacyHostProfile(value: unknown): ZenXHostProfile {
   }
   // v1 allowed an independent title model outside its selectable catalog.
   if (!models.includes(titleModel)) models.push(titleModel);
-  return migrateHostProfileV2({
-    version: 2,
-    onboardingComplete: value.onboardingComplete === true,
-    providerProfiles: [{ ...provider, providerProfileId, models }],
-    defaultModel: { providerProfileId, modelId: defaultModel },
-    titleModel: { providerProfileId, modelId: titleModel },
-    workspace: value.workspace,
-    workspaces: value.workspaces,
-    lastUsedWorkspace: value.lastUsedWorkspace,
-    approvalPolicy: value.approvalPolicy,
-    pinnedThreadIds: value.pinnedThreadIds,
-    sidebarOrder: value.sidebarOrder,
-  });
+  return migrateHostProfileV2(
+    {
+      version: 2,
+      onboardingComplete: value.onboardingComplete === true,
+      providerProfiles: [{ ...provider, providerProfileId, models }],
+      defaultModel: { providerProfileId, modelId: defaultModel },
+      titleModel: { providerProfileId, modelId: titleModel },
+      workspace: value.workspace,
+      workspaces: value.workspaces,
+      lastUsedWorkspace: value.lastUsedWorkspace,
+      approvalPolicy: value.approvalPolicy,
+      pinnedThreadIds: value.pinnedThreadIds,
+      sidebarOrder: value.sidebarOrder,
+    },
+    projectPlatform,
+  );
 }
 
-export function migrateHostProfileV2(value: unknown): ZenXHostProfile {
+export function migrateHostProfileV2(
+  value: unknown,
+  projectPlatform: NodeJS.Platform = process.platform,
+): ZenXHostProfile {
   if (!isLegacyHostProfileV2(value)) {
     throw new Error("ZenX v2 host profile is invalid");
   }
@@ -335,14 +367,17 @@ export function migrateHostProfileV2(value: unknown): ZenXHostProfile {
   if (new Set(profileIds).size !== profileIds.length) {
     throw new Error("ZenX Provider profile ids must be unique");
   }
-  return validateHostProfile({
-    ...value,
-    version: 3,
-    providerProfiles: legacyProfiles.map((profile) => ({
-      ...profile,
-      models: structuredLegacyModelCatalog(profile.type, profile.models),
-    })),
-  });
+  return validateHostProfile(
+    {
+      ...value,
+      version: 3,
+      providerProfiles: legacyProfiles.map((profile) => ({
+        ...profile,
+        models: structuredLegacyModelCatalog(profile.type, profile.models),
+      })),
+    },
+    projectPlatform,
+  );
 }
 
 export function hostConfigFromProfile(
@@ -583,8 +618,9 @@ export function structuredLegacyModelCatalog(
 
 export function applyBuiltInModelCatalogPresets(
   profile: ZenXHostProfile,
+  projectPlatform: NodeJS.Platform = process.platform,
 ): ZenXHostProfile {
-  const validated = validateHostProfile(profile);
+  const validated = validateHostProfile(profile, projectPlatform);
   const providerProfiles = validated.providerProfiles.map((provider) => {
     if (provider.type !== "openai-subscription") return provider;
     const existingById = new Map(
@@ -605,7 +641,10 @@ export function applyBuiltInModelCatalogPresets(
       models: [...presetModels, ...existingById.values()],
     };
   });
-  return validateHostProfile({ ...validated, providerProfiles });
+  return validateHostProfile(
+    { ...validated, providerProfiles },
+    projectPlatform,
+  );
 }
 
 function validateModelReference(
@@ -753,35 +792,45 @@ function normalizePinnedThreadIds(value: unknown): string[] {
 function normalizeLastUsedWorkspace(
   value: unknown,
   workspaces: readonly string[],
+  projectPlatform: NodeJS.Platform,
 ): string | null {
   if (value === undefined || value === null) return null;
-  const key = workspaceKey(nonEmpty(value, "last used workspace"));
+  const key = workspaceKey(
+    nonEmpty(value, "last used workspace"),
+    projectPlatform,
+  );
   return (
-    workspaces.find((workspace) => workspaceKey(workspace) === key) ?? null
+    workspaces.find(
+      (workspace) => workspaceKey(workspace, projectPlatform) === key,
+    ) ?? null
   );
 }
 
 function normalizeWorkspaces(
   value: unknown,
   workspace: string | null,
+  projectPlatform: NodeJS.Platform,
 ): string[] {
   if (value !== undefined && !Array.isArray(value))
     throw new Error("ZenX workspace list is invalid");
   const candidates = ((value ?? []) as unknown[]).map((entry) =>
-    path.resolve(nonEmpty(entry, "workspace")),
+    resolveProjectPath(nonEmpty(entry, "workspace"), projectPlatform),
   );
   if (workspace !== null) candidates.unshift(workspace);
   const unique = new Map<string, string>();
   for (const candidate of candidates) {
-    const key = workspaceKey(candidate);
+    const key = workspaceKey(candidate, projectPlatform);
     if (!unique.has(key)) unique.set(key, candidate);
   }
   return [...unique.values()];
 }
 
-export function workspaceKey(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+export function workspaceKey(
+  value: string,
+  projectPlatform: NodeJS.Platform = process.platform,
+): string {
+  const resolved = resolveProjectPath(value, projectPlatform);
+  return projectPlatform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function nonEmpty(value: unknown, label: string): string {
