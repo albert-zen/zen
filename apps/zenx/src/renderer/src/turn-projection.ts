@@ -3,7 +3,12 @@ import type { ThreadItem, Turn } from "../../protocol-client/index.js";
 export type TurnDisplayNode =
   | { kind: "agent"; item: Extract<ThreadItem, { type: "agentMessage" }> }
   | {
-      kind: "trace";
+      kind: "traceItem";
+      id: string;
+      item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>;
+    }
+  | {
+      kind: "traceGroup";
       id: string;
       items: Array<
         Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>
@@ -42,12 +47,17 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
   > = [];
   const flushTrace = () => {
     if (traceItems.length === 0) return;
-    history.push({
-      kind: "trace",
-      id: traceItems.map((item) => item.id).join(":"),
-      summary: traceSummary(traceItems),
-      items: traceItems,
-    });
+    const id = traceItems[0]!.id;
+    history.push(
+      traceItems.length === 1
+        ? { kind: "traceItem", id, item: traceItems[0]! }
+        : {
+            kind: "traceGroup",
+            id,
+            summary: traceSummary(traceItems),
+            items: traceItems,
+          },
+    );
     traceItems = [];
   };
   for (const item of historySource) {

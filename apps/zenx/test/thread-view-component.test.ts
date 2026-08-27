@@ -135,6 +135,136 @@ test("assistant messages retain running reasoning and tool disclosure affordance
   );
 });
 
+test("renders one trace Item directly and wraps only a sequence of two or more", () => {
+  const singleton = renderTurns([
+    turnWithItems("inProgress", [reasoning("Mapped the rendering path")]),
+  ]);
+  assert.match(singleton, /class="trace-item trace-singleton"/u);
+  assert.doesNotMatch(singleton, /class="trace-group"/u);
+  assert.doesNotMatch(singleton, /[>]1 items[<]/u);
+
+  const grouped = renderTurns([
+    turnWithItems("inProgress", [
+      reasoning("Mapped the rendering path"),
+      command("rg ThreadView"),
+    ]),
+  ]);
+  assert.match(grouped, /class="trace-group"/u);
+  assert.match(grouped, /[>]2 items[<]/u);
+});
+
+test("singleton promotion preserves its disclosure and focused button", async () => {
+  await withDom(async (root) => {
+    const first = reasoningItem(
+      "reasoning-promote",
+      ["Mapped the rendering path"],
+      ["Public reasoning"],
+    );
+    await renderInteractive(root, turnWithItems("inProgress", [first]));
+    const singletonToggle = requiredButton(".trace-singleton > button");
+    singletonToggle.focus();
+    await act(async () => singletonToggle.click());
+    assert.equal(singletonToggle.getAttribute("aria-expanded"), "true");
+
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        first,
+        commandItem("command-promote", "rg ThreadView"),
+      ]),
+    );
+    const groupToggle = requiredButton(".trace-group > .trace-toggle");
+    assert.equal(groupToggle, singletonToggle);
+    assert.equal(document.activeElement, groupToggle);
+    assert.equal(groupToggle.getAttribute("aria-expanded"), "true");
+  });
+});
+
+test("collapsed singleton promotes to a collapsed trace group", async () => {
+  await withDom(async (root) => {
+    const first = reasoningItem(
+      "reasoning-promote-closed",
+      ["Mapped the rendering path"],
+      ["Public reasoning"],
+    );
+    await renderInteractive(root, turnWithItems("inProgress", [first]));
+    assert.equal(
+      requiredButton(".trace-singleton > button").getAttribute("aria-expanded"),
+      "false",
+    );
+
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        first,
+        commandItem("command-promote-closed", "rg ThreadView"),
+      ]),
+    );
+    assert.equal(
+      requiredButton(".trace-group > .trace-toggle").getAttribute(
+        "aria-expanded",
+      ),
+      "false",
+    );
+  });
+});
+
+test("streaming append preserves an explicitly closed trace group", async () => {
+  await withDom(async (root) => {
+    const first = reasoningItem("reasoning-close", ["Mapped"], []);
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        first,
+        commandItem("command-close-a", "rg ThreadView"),
+      ]),
+    );
+    const toggle = requiredButton(".trace-toggle");
+    await act(async () => toggle.click());
+    await act(async () => toggle.click());
+    toggle.focus();
+
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        first,
+        commandItem("command-close-a", "rg ThreadView"),
+        commandItem("command-close-b", "npm test"),
+      ]),
+    );
+    const updated = requiredButton(".trace-toggle");
+    assert.equal(updated, toggle);
+    assert.equal(document.activeElement, updated);
+    assert.equal(updated.getAttribute("aria-expanded"), "false");
+  });
+});
+
+test("terminal transition folds intermediate trace before Turn history reopens", async () => {
+  await withDom(async (root) => {
+    const items = [
+      reasoningItem("reasoning-terminal", ["Mapped"], []),
+      commandItem("command-terminal", "npm test"),
+    ];
+    await renderInteractive(root, turnWithItems("inProgress", items));
+    await act(async () => requiredButton(".trace-toggle").click());
+    assert.equal(
+      requiredButton(".trace-toggle").getAttribute("aria-expanded"),
+      "true",
+    );
+
+    await renderInteractive(
+      root,
+      turnWithItems("completed", [...items, agent("Done")]),
+    );
+    assert.equal(document.querySelector(".trace-toggle"), null);
+    await act(async () => requiredButton(".turn-toggle").click());
+    assert.equal(
+      requiredButton(".trace-toggle").getAttribute("aria-expanded"),
+      "false",
+    );
+  });
+});
+
 test("public reasoning with a summary expands from summary to full content", async () => {
   await withDom(async (root) => {
     const row = await openReasoningRow(
@@ -257,7 +387,6 @@ test("streamed public content turns a static row into an expandable completed it
       root,
       turnWithItems("inProgress", [reasoningItem(id, [], [])]),
     );
-    await act(async () => requiredButton(".trace-toggle").click());
     assert.ok(document.querySelector(".trace-item-static"));
     assert.equal(document.querySelector(".trace-item-toggle"), null);
 
@@ -266,10 +395,6 @@ test("streamed public content turns a static row into an expandable completed it
       turnWithItems("inProgress", [
         reasoningItem(id, [], ["Streaming public reasoning"]),
       ]),
-    );
-    assert.equal(
-      requiredButton(".trace-toggle").getAttribute("aria-expanded"),
-      "true",
     );
     assert.equal(
       requiredButton(".trace-item-toggle").getAttribute("aria-expanded"),
@@ -283,7 +408,6 @@ test("streamed public content turns a static row into an expandable completed it
       ]),
     );
     await act(async () => requiredButton(".turn-toggle").click());
-    await act(async () => requiredButton(".trace-toggle").click());
     const toggle = requiredButton(".trace-item-toggle");
     await act(async () => toggle.click());
     assert.equal(
@@ -408,8 +532,7 @@ async function openReasoningRow(
   item: Extract<ThreadItem, { type: "reasoning" }>,
 ): Promise<HTMLElement> {
   await renderInteractive(root, turnWithItems("inProgress", [item]));
-  await act(async () => requiredButton(".trace-toggle").click());
-  return requiredElement<HTMLElement>(".trace-item");
+  return requiredElement<HTMLElement>(".trace-singleton");
 }
 
 async function renderInteractive(root: Root, value: Turn): Promise<void> {
@@ -567,9 +690,13 @@ function reasoningItem(
 }
 
 function command(value: string): ThreadItem {
+  return commandItem("command-1", value);
+}
+
+function commandItem(id: string, value: string): ThreadItem {
   return {
     type: "commandExecution",
-    id: "command-1",
+    id,
     pluginId: null,
     scriptPath: null,
     command: value,

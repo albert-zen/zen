@@ -1370,6 +1370,10 @@ a:focus-visible {
   max-width: 760px;
   min-width: 0;
 }
+.trace-singleton {
+  max-width: 760px;
+  min-width: 0;
+}
 .trace-toggle {
   width: 100%;
   min-height: 34px;

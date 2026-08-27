@@ -578,7 +578,7 @@ function DisplayNode({
   return node.kind === "agent" ? (
     <AgentMessage item={node.item} />
   ) : (
-    <TraceGroup
+    <TraceSequence
       node={node}
       pluginSnapshot={pluginSnapshot}
       pluginUiRegistry={pluginUiRegistry}
@@ -586,52 +586,67 @@ function DisplayNode({
   );
 }
 
-function TraceGroup({
+function TraceSequence({
   node,
   pluginSnapshot,
   pluginUiRegistry,
 }: {
-  node: Extract<TurnDisplayNode, { kind: "trace" }>;
+  node: Extract<TurnDisplayNode, { kind: "traceItem" | "traceGroup" }>;
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
+  const grouped = node.kind === "traceGroup";
+  const singleton = node.kind === "traceItem" ? node.item : null;
+  const singletonExpandable =
+    singleton !== null && traceItemExpandable(singleton);
+  const toggleExpanded = () => {
+    setExpanded((current) => {
+      if (current) setOpenItems(new Set());
+      return !current;
+    });
+  };
   return (
-    <section className="trace-group">
-      <button
-        className="trace-toggle"
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => {
-          setExpanded((value) => !value);
-          if (expanded) setOpenItems(new Set());
-        }}
-      >
-        <Icon name="layers" size={15} />
-        <span>{node.summary}</span>
-        <small>{node.items.length} items</small>
-        <Icon name="chevron-down" size={13} />
-      </button>
-      {expanded ? (
+    <section className={grouped ? "trace-group" : "trace-item trace-singleton"}>
+      {grouped ? (
+        <button
+          className="trace-toggle"
+          type="button"
+          aria-expanded={expanded}
+          onClick={toggleExpanded}
+        >
+          <Icon name="layers" size={15} />
+          <span>{node.summary}</span>
+          <small>{node.items.length} items</small>
+          <Icon name="chevron-down" size={13} />
+        </button>
+      ) : singletonExpandable ? (
+        <button
+          className="trace-item-toggle"
+          type="button"
+          aria-expanded={expanded}
+          onClick={toggleExpanded}
+        >
+          <TraceItemHeader item={singleton} expandable />
+        </button>
+      ) : (
+        <div className="trace-item-static">
+          <TraceItemHeader item={singleton!} expandable={false} />
+        </div>
+      )}
+      {!grouped && expanded && singletonExpandable ? (
+        <TraceDetail
+          item={singleton}
+          pluginSnapshot={pluginSnapshot}
+          pluginUiRegistry={pluginUiRegistry}
+        />
+      ) : null}
+      {grouped && expanded ? (
         <div className="trace-items">
           {node.items.map((item) => {
             const open = openItems.has(item.id);
-            const expandable =
-              item.type !== "reasoning" ||
-              reasoningContentText(item).trim().length > 0;
-            const header = (
-              <>
-                <Icon
-                  name={item.type === "reasoning" ? "reasoning" : "terminal"}
-                  size={14}
-                />
-                <strong>{item.type === "reasoning" ? "Think" : "Tool"}</strong>
-                <span>{traceItemLabel(item)}</span>
-                <StatusMark item={item} />
-                {expandable ? <Icon name="chevron-down" size={13} /> : null}
-              </>
-            );
+            const expandable = traceItemExpandable(item);
             return (
               <div className="trace-item" key={item.id}>
                 {expandable ? (
@@ -648,10 +663,12 @@ function TraceGroup({
                       })
                     }
                   >
-                    {header}
+                    <TraceItemHeader item={item} expandable />
                   </button>
                 ) : (
-                  <div className="trace-item-static">{header}</div>
+                  <div className="trace-item-static">
+                    <TraceItemHeader item={item} expandable={false} />
+                  </div>
                 )}
                 {open && expandable ? (
                   <TraceDetail
@@ -666,6 +683,35 @@ function TraceGroup({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function TraceItemHeader({
+  item,
+  expandable,
+}: {
+  item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>;
+  expandable: boolean;
+}) {
+  return (
+    <>
+      <Icon
+        name={item.type === "reasoning" ? "reasoning" : "terminal"}
+        size={14}
+      />
+      <strong>{item.type === "reasoning" ? "Think" : "Tool"}</strong>
+      <span>{traceItemLabel(item)}</span>
+      <StatusMark item={item} />
+      {expandable ? <Icon name="chevron-down" size={13} /> : null}
+    </>
+  );
+}
+
+function traceItemExpandable(
+  item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>,
+): boolean {
+  return (
+    item.type !== "reasoning" || reasoningContentText(item).trim().length > 0
   );
 }
 
