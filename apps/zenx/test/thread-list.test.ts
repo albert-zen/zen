@@ -332,6 +332,30 @@ test("configures a derived Project before starting its Thread", async () => {
   ]);
 });
 
+test("waits for the successful Project Thread post-start commit", async () => {
+  const commitEntered = deferred<void>();
+  const releaseCommit = deferred<void>();
+  let completed = false;
+
+  const pending = startProjectThread(
+    "/work/committed",
+    async () => undefined,
+    async () => ({ id: "thread-committed" }),
+    async () => {
+      commitEntered.resolve();
+      await releaseCommit.promise;
+    },
+  ).then(() => {
+    completed = true;
+  });
+  await commitEntered.promise;
+  assert.equal(completed, false);
+
+  releaseCommit.resolve();
+  await pending;
+  assert.equal(completed, true);
+});
+
 test("presents trigger wakeups without leaking raw system prompts", () => {
   const wakeup = [
     "[ZenX trigger wakeup]",
@@ -431,4 +455,15 @@ function project(key: string, threadIds: string[]) {
     isDefault: false,
     threadIds,
   };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((onResolve) => {
+    resolve = onResolve;
+  });
+  return { promise, resolve };
 }

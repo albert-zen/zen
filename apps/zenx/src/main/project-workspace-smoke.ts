@@ -147,15 +147,37 @@ async function waitForProjectThread(
   window: BrowserWindow,
   project: string,
 ): Promise<void> {
-  await waitForRenderer(
-    window,
-    `(() => {
-      const action = ${buttonLookup(`New thread in ${project}`)};
-      return action instanceof HTMLButtonElement &&
-        action.closest(".project-group")?.querySelector(".thread-row-shell") instanceof HTMLElement;
-    })()`,
-    `Thread created inside Project ${project}`,
-  );
+  try {
+    await waitForRenderer(
+      window,
+      `(() => {
+        const action = ${buttonLookup(`New thread in ${project}`)};
+        return action instanceof HTMLButtonElement &&
+          action.closest(".project-group")?.querySelector(".thread-row-shell") instanceof HTMLElement;
+      })()`,
+      `Thread created inside Project ${project}`,
+    );
+  } catch (error) {
+    const diagnostics = await window.webContents.executeJavaScript(
+      `Promise.all([
+        window.zenx.threads.list({ archived: false }),
+        window.zenx.projects.get({ archived: false }),
+      ]).then(([threads, projects]) => ({
+        threads,
+        projects,
+        groups: Array.from(document.querySelectorAll(".project-group")).map((group) => ({
+          text: group.textContent?.trim().replace(/\\s+/gu, " "),
+          actions: Array.from(group.querySelectorAll("button")).map((button) => button.getAttribute("aria-label")),
+          rows: group.querySelectorAll(".thread-row-shell").length,
+        })),
+        error: document.querySelector('[role="alert"]')?.textContent?.trim() ?? null,
+      }))`,
+      true,
+    );
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; diagnostics=${JSON.stringify(diagnostics)}`,
+    );
+  }
 }
 
 async function waitForRenderer(

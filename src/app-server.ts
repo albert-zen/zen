@@ -1492,7 +1492,7 @@ export class ZenAppServer {
         .selection;
     }
     if (input.model === undefined && input.reasoningEffort === undefined) {
-      return structuredClone(current);
+      return selectionFrom(current);
     }
     return this.#requireSelection(
       {

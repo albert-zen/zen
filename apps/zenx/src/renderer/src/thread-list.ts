@@ -81,11 +81,11 @@ export async function startProjectThread<T>(
   workspace: string,
   configure: (workspace: string) => Promise<unknown>,
   start: (params: { cwd: string }) => Promise<T>,
-  onStarted: (workspace: string) => void,
+  onStarted: (workspace: string) => unknown | Promise<unknown>,
 ): Promise<T> {
   await configure(workspace);
   const result = await start(projectThreadStartParams(workspace));
-  onStarted(workspace);
+  await onStarted(workspace);
   return result;
 }
 

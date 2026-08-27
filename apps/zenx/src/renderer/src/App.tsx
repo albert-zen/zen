@@ -135,6 +135,11 @@ export function App() {
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
+  const [newThreadFailure, setNewThreadFailure] = useState<{
+    workspace: string;
+    message: string;
+  } | null>(null);
+  const [newThreadPending, setNewThreadPending] = useState(false);
   const [approvals, setApprovals] = useState<ApprovalCardState[]>([]);
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [providerProfiles, setProviderProfiles] = useState<
@@ -558,7 +563,8 @@ export function App() {
     if (newThreadPendingRef.current) return;
     newThreadPendingRef.current = true;
     const epoch = ++selectionEpoch.current;
-    setThreadLoading(true);
+    setNewThreadPending(true);
+    setNewThreadFailure(null);
     setThreadError(null);
     setModelUpdateError(null);
     try {
@@ -566,11 +572,14 @@ export function App() {
         workspace,
         async (candidate) => await window.zenx.settings.addWorkspace(candidate),
         async (params) => await window.zenx.projects.startThread(params.cwd),
-        (startedWorkspace) => {
-          void window.zenx.settings
-            .markWorkspaceUsed(startedWorkspace)
-            .then(() => loadProjects())
-            .catch((error: unknown) => setRequestError(describeError(error)));
+        async (startedWorkspace) => {
+          try {
+            await window.zenx.settings.markWorkspaceUsed(startedWorkspace);
+          } catch (error) {
+            setRequestError(describeError(error));
+          }
+          await loadThreadSummaries();
+          await loadProjects();
         },
       );
       if (selectionEpoch.current !== epoch) return;
@@ -583,13 +592,11 @@ export function App() {
       setThreadAttachments({});
       setThreadUsage(undefined);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
-      await loadThreadSummaries();
     } catch (error) {
-      if (selectionEpoch.current === epoch)
-        setThreadError(describeError(error));
+      setNewThreadFailure({ workspace, message: describeError(error) });
     } finally {
       newThreadPendingRef.current = false;
-      if (selectionEpoch.current === epoch) setThreadLoading(false);
+      setNewThreadPending(false);
     }
   };
 
@@ -974,7 +981,7 @@ export function App() {
           else void newThread(workspace);
         }}
         onAddProject={() => setProjectPickerIntent("add-project")}
-        newThreadDisabled={threadLoading}
+        newThreadDisabled={newThreadPending}
         onRemoveProject={(workspace) => {
           void window.zenx.settings
             .removeWorkspace(workspace)
@@ -1015,6 +1022,22 @@ export function App() {
       />
 
       <main className="workspace">
+        {newThreadFailure === null ? null : (
+          <div className="new-thread-error-banner" role="alert">
+            <div>
+              <strong>New thread failed</strong>
+              <span>{newThreadFailure.message}</span>
+            </div>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={newThreadPending}
+              onClick={() => void newThread(newThreadFailure.workspace)}
+            >
+              Try again
+            </button>
+          </div>
+        )}
         {page === "settings" ? (
           <SettingsView
             archivedError={threadListErrors.archived}
@@ -1125,7 +1148,7 @@ export function App() {
             }
             threadDetail={threadDetail}
             threadError={threadError}
-            threadLoading={threadLoading}
+            threadLoading={threadLoading || newThreadPending}
             titleProjection={
               selectedSummary === null
                 ? undefined

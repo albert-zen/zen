@@ -153,6 +153,7 @@ Add Project 使用只读的内部目录 picker。Windows/Linux 不安装 Electro
 选择 Project，不把 Documents、进程 cwd 或默认 Project 当作隐式替代。
 Project row 的 quick-create 始终以被点击 Project 的 canonical workspace 发起 `thread/start`；
 New thread 因缺少可用 Project 而打开目录 picker 时，确认目录会继续完成 Thread 创建，而不只添加 Project。
+创建成功后 ZenX 在解除 pending 前刷新 Thread summaries 与 Project projection；失败在用户当前页面明确显示并可原位重试。
 
 固定版本 T3 Code 仍是机会型兼容目标：它可以通过协议直接把 Zen 当 provider
 驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。

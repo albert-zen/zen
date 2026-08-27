@@ -39,6 +39,41 @@ test("Project-scoped Thread start resolves the configured workspace and never fa
   assert.deepEqual(starts, [{ cwd: "C:\\Users\\two-one\\Documents" }]);
 });
 
+test("Project-scoped Thread start rejects authorization from a removed configuration revision", async () => {
+  const authorizationEntered = deferred<void>();
+  const releaseAuthorization = deferred<void>();
+  let holdAuthorization = false;
+  const projection = new ZenXProjectProjection("linux", async (candidate) => {
+    if (holdAuthorization && candidate === "/work/requested") {
+      authorizationEntered.resolve();
+      await releaseAuthorization.promise;
+      return "/work/authorized";
+    }
+    return candidate;
+  });
+  await projection.updateConfiguration(
+    ["/work/authorized"],
+    "/work/authorized",
+  );
+  holdAuthorization = true;
+  let starts = 0;
+
+  const pending = startConfiguredProjectThread(
+    projection,
+    "/work/requested",
+    async () => {
+      starts += 1;
+      return { threadId: "stale-thread" };
+    },
+  );
+  await authorizationEntered.promise;
+  await projection.updateConfiguration([], null);
+  releaseAuthorization.resolve();
+
+  await assert.rejects(pending, /not configured/u);
+  assert.equal(starts, 0);
+});
+
 test("projects share Windows case-insensitive identity and keep empty configured workspaces", async () => {
   const projection = new ZenXProjectProjection("win32");
   await projection.updateConfiguration(
@@ -463,4 +498,18 @@ async function exerciseAliasRetarget(type: "dir" | "junction"): Promise<void> {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(reason?: unknown): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
 }
