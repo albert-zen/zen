@@ -584,9 +584,9 @@ test("self-control Thread filters use one canonicalization snapshot", async () =
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-control-filter-snapshot-"),
   );
-  const alias = path.join(directory, "alias");
-  const physical = path.join(directory, "physical");
-  const retargeted = path.join(directory, "retargeted");
+  const alias = "/work/alias";
+  const physical = "/work/physical";
+  const retargeted = "/work/retargeted";
   let aliasResolutions = 0;
   const projection = new ZenXProjectProjection("linux", async (candidate) => {
     if (candidate !== alias) return candidate;

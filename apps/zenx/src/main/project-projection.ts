@@ -37,6 +37,7 @@ interface ProjectConfigurationSnapshot {
 
 const nodeProjectRealpath: ProjectRealpath = async (candidate) =>
   await realpath(candidate);
+const lexicalProjectRealpath: ProjectRealpath = async (candidate) => candidate;
 
 /** Shared ZenX product projection; it owns workspace configuration, never Project or Thread state. */
 export class ZenXProjectProjection {
@@ -51,10 +52,11 @@ export class ZenXProjectProjection {
 
   constructor(
     platform: NodeJS.Platform = process.platform,
-    resolveRealpath: ProjectRealpath = nodeProjectRealpath,
+    resolveRealpath?: ProjectRealpath,
   ) {
     this.#platform = platform;
-    this.#realpath = resolveRealpath;
+    this.#realpath =
+      resolveRealpath ?? defaultProjectRealpath(platform, process.platform);
   }
 
   async updateConfiguration(
@@ -230,7 +232,7 @@ export class ZenXProjectProjection {
 export async function projectPathKey(
   value: string,
   platform: NodeJS.Platform = process.platform,
-  resolveRealpath: ProjectRealpath = nodeProjectRealpath,
+  resolveRealpath?: ProjectRealpath,
 ): Promise<string> {
   return (await projectPathSnapshot([value], platform, resolveRealpath))[0]!
     .key;
@@ -239,9 +241,11 @@ export async function projectPathKey(
 export async function projectPathSnapshot(
   values: readonly string[],
   platform: NodeJS.Platform = process.platform,
-  resolveRealpath: ProjectRealpath = nodeProjectRealpath,
+  resolveRealpath?: ProjectRealpath,
 ): Promise<ProjectPathSnapshot> {
   const pathApi = projectPathApi(platform);
+  const realpathForPlatform =
+    resolveRealpath ?? defaultProjectRealpath(platform, process.platform);
   const pending = new Map<string, Promise<string>>();
   const identities = await Promise.all(
     values.map(async (value) => {
@@ -252,9 +256,11 @@ export async function projectPathSnapshot(
           : displayPath;
       let key = pending.get(lexicalKey);
       if (key === undefined) {
-        key = projectPathIdentity(displayPath, platform, resolveRealpath).then(
-          (identity) => identity.key,
-        );
+        key = projectPathIdentity(
+          displayPath,
+          platform,
+          realpathForPlatform,
+        ).then((identity) => identity.key);
         pending.set(lexicalKey, key);
       }
       return Object.freeze({ displayPath, key: await key });
@@ -306,6 +312,11 @@ async function projectPathIdentity(
     }
   }
 
+  if (!pathApi.isAbsolute(canonicalPath)) {
+    canonicalPath = displayPath;
+    unresolved.length = 0;
+  }
+
   const physicalPath = pathApi.normalize(
     pathApi.join(canonicalPath, ...unresolved),
   );
@@ -327,4 +338,13 @@ export function resolveProjectPath(
 
 function projectPathApi(platform: NodeJS.Platform): path.PlatformPath {
   return platform === "win32" ? path.win32 : path.posix;
+}
+
+function defaultProjectRealpath(
+  platform: NodeJS.Platform,
+  hostPlatform: NodeJS.Platform,
+): ProjectRealpath {
+  return platform === hostPlatform
+    ? nodeProjectRealpath
+    : lexicalProjectRealpath;
 }

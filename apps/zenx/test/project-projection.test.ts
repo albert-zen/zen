@@ -62,6 +62,44 @@ test("logical Linux paths use POSIX semantics independently of the host", () => 
   );
 });
 
+test("a non-host logical platform defaults to lexical identity", async () => {
+  await withAliasedDirectory(
+    process.platform === "win32" ? "junction" : "dir",
+    async ({ physical, alias }) => {
+      const logicalPlatform = process.platform;
+      const simulatedHost = logicalPlatform === "win32" ? "linux" : "win32";
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      assert.notEqual(descriptor, undefined);
+      Object.defineProperty(process, "platform", {
+        ...descriptor,
+        value: simulatedHost,
+      });
+      let projection: ZenXProjectProjection;
+      try {
+        projection = new ZenXProjectProjection(logicalPlatform);
+      } finally {
+        Object.defineProperty(process, "platform", descriptor!);
+      }
+
+      assert.notEqual(
+        await projection.canonicalKey(alias),
+        await projection.canonicalKey(physical),
+      );
+    },
+  );
+});
+
+test("logical Linux rejects a Windows-host realpath result", async () => {
+  assert.equal(
+    await projectPathKey(
+      "/work/historical",
+      "linux",
+      async () => "D:\\work\\historical",
+    ),
+    "/work/historical",
+  );
+});
+
 test("Windows case aliases share one resolution per operation", async () => {
   let resolutions = 0;
   const projection = new ZenXProjectProjection("win32", async (candidate) => {
@@ -188,14 +226,14 @@ test(
   },
 );
 
-test("falls back to the lexical absolute path when realpath is unavailable", async () => {
-  const permissionDenied = Object.assign(new Error("permission denied"), {
-    code: "EACCES",
+test("falls back to the logical lexical path for non-EACCES realpath failures", async () => {
+  const unavailable = Object.assign(new Error("operation unavailable"), {
+    code: "EPERM",
   });
   const projection = new ZenXProjectProjection("linux", async () => {
-    throw permissionDenied;
+    throw unavailable;
   });
-  const workspace = path.resolve("unreadable-workspace");
+  const workspace = "/work/unreadable";
 
   await projection.updateConfiguration([workspace], workspace, workspace);
   const snapshot = await projection.project([
@@ -208,8 +246,8 @@ test("falls back to the lexical absolute path when realpath is unavailable", asy
 });
 
 test("a slower obsolete configuration refresh cannot replace a newer one", async () => {
-  const slowWorkspace = path.resolve("slow-workspace");
-  const fastWorkspace = path.resolve("fast-workspace");
+  const slowWorkspace = "/work/slow";
+  const fastWorkspace = "/work/fast";
   let announceSlow!: () => void;
   const slowStarted = new Promise<void>((resolve) => {
     announceSlow = resolve;
@@ -240,9 +278,9 @@ test("a slower obsolete configuration refresh cannot replace a newer one", async
 });
 
 test("configuration, default, and last-used share one identity snapshot", async () => {
-  const alias = path.resolve("single-snapshot-alias");
-  const first = path.resolve("single-snapshot-first");
-  const retargeted = path.resolve("single-snapshot-retargeted");
+  const alias = "/work/single-snapshot-alias";
+  const first = "/work/single-snapshot-first";
+  const retargeted = "/work/single-snapshot-retargeted";
   let aliasResolutions = 0;
   const projection = new ZenXProjectProjection("linux", async (candidate) => {
     if (candidate !== alias) return candidate;
@@ -285,8 +323,8 @@ test(
 );
 
 test("configured paths reconcile after realpath fallback recovers", async () => {
-  const alias = path.resolve("temporarily-unavailable-alias");
-  const physical = path.resolve("physical-after-recovery");
+  const alias = "/work/temporarily-unavailable-alias";
+  const physical = "/work/physical-after-recovery";
   const permissionDenied = Object.assign(new Error("permission denied"), {
     code: "EACCES",
   });
@@ -312,8 +350,8 @@ test("configured paths reconcile after realpath fallback recovers", async () => 
 });
 
 test("nearest-ancestor resolution rechecks a path that appears mid-flight", async () => {
-  const alias = path.resolve("appearing-alias");
-  const physical = path.resolve("appearing-physical");
+  const alias = "/work/appearing-alias";
+  const physical = "/work/appearing-physical";
   let missing = true;
   const key = await projectPathKey(alias, "linux", async (candidate) => {
     if (candidate === alias && missing) {

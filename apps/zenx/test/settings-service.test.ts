@@ -520,9 +520,9 @@ test("workspace mutations retry one filesystem identity change", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-settings-identity-retry-"),
   );
-  const first = path.join(directory, "first");
-  const second = path.join(directory, "second");
-  const alias = path.join(directory, "alias");
+  const first = "/work/first";
+  const second = "/work/second";
+  const alias = "/work/alias";
   let aliasResolutions = 0;
   try {
     const service = new ZenXSettingsService({
@@ -558,9 +558,9 @@ test("workspace mutations fail after bounded identity revalidation", async () =>
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-settings-identity-unstable-"),
   );
-  const first = path.join(directory, "first");
-  const second = path.join(directory, "second");
-  const alias = path.join(directory, "alias");
+  const first = "/work/first";
+  const second = "/work/second";
+  const alias = "/work/alias";
   let aliasResolutions = 0;
   try {
     const service = new ZenXSettingsService({
