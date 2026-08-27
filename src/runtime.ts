@@ -6,6 +6,7 @@ import type {
   ApprovalPolicy,
   CanonicalItem,
   FailureItem,
+  ModelUsageItem,
   ReasoningItem,
   SandboxMode,
   ToolCallItem,
@@ -74,6 +75,8 @@ export type RuntimeEvent =
       turnId: string;
       inputTokens: number;
       outputTokens: number;
+      cachedInputTokens?: number;
+      reasoningOutputTokens?: number;
     }
   | {
       type: "turn_completed";
@@ -339,6 +342,14 @@ export class AgentRuntime {
       arguments: Record<string, unknown>;
     }> = [];
     const reasoningItems = new Map<string, string>();
+    let latestUsage:
+      | {
+          inputTokens: number;
+          cachedInputTokens?: number;
+          outputTokens: number;
+          reasoningOutputTokens?: number;
+        }
+      | undefined;
 
     const ensureReasoningItem = (reasoningId: string): string => {
       const existing = reasoningItems.get(reasoningId);
@@ -357,96 +368,128 @@ export class AgentRuntime {
 
     const messages = await options.prepareModelSample(itemId);
 
-    for await (const event of options.modelAdapter.stream({
-      model: options.configuration.model,
-      reasoningEffort: options.configuration.reasoningEffort,
-      messages,
-      tools: (
-        this.#toolDefinitionProjection?.(options.thread.items) ??
-        this.#tools.definitions
-      ).map((definition) => structuredClone(definition)),
-      signal: options.signal,
-      sessionId: options.thread.id,
-    })) {
-      if (event.type === "text_delta") {
-        if (!started) {
-          started = true;
+    try {
+      for await (const event of options.modelAdapter.stream({
+        model: options.configuration.model,
+        reasoningEffort: options.configuration.reasoningEffort,
+        messages,
+        tools: (
+          this.#toolDefinitionProjection?.(options.thread.items) ??
+          this.#tools.definitions
+        ).map((definition) => structuredClone(definition)),
+        signal: options.signal,
+        sessionId: options.thread.id,
+      })) {
+        if (event.type === "text_delta") {
+          if (!started) {
+            started = true;
+            options.emit({
+              type: "item_started",
+              threadId: options.thread.id,
+              turnId,
+              itemId,
+              itemType: "agent_message",
+            });
+          }
+          text += event.delta;
           options.emit({
-            type: "item_started",
+            type: "item_delta",
             threadId: options.thread.id,
             turnId,
             itemId,
-            itemType: "agent_message",
+            delta: event.delta,
           });
-        }
-        text += event.delta;
-        options.emit({
-          type: "item_delta",
-          threadId: options.thread.id,
-          turnId,
-          itemId,
-          delta: event.delta,
-        });
-      } else if (event.type === "reasoning_started") {
-        ensureReasoningItem(event.reasoningId);
-      } else if (
-        event.type === "reasoning_summary_delta" ||
-        event.type === "reasoning_content_delta"
-      ) {
-        if (event.delta.length === 0) continue;
-        options.emit({
-          type: event.type,
-          threadId: options.thread.id,
-          turnId,
-          itemId: ensureReasoningItem(event.reasoningId),
-          delta: event.delta,
-        });
-      } else if (event.type === "reasoning") {
-        const reasoningItemId =
-          event.reasoningId === undefined
-            ? this.#id()
-            : ensureReasoningItem(event.reasoningId);
-        if (event.reasoningId === undefined) {
+        } else if (event.type === "reasoning_started") {
+          ensureReasoningItem(event.reasoningId);
+        } else if (
+          event.type === "reasoning_summary_delta" ||
+          event.type === "reasoning_content_delta"
+        ) {
+          if (event.delta.length === 0) continue;
           options.emit({
-            type: "item_started",
+            type: event.type,
             threadId: options.thread.id,
             turnId,
-            itemId: reasoningItemId,
-            itemType: "reasoning",
+            itemId: ensureReasoningItem(event.reasoningId),
+            delta: event.delta,
+          });
+        } else if (event.type === "reasoning") {
+          const reasoningItemId =
+            event.reasoningId === undefined
+              ? this.#id()
+              : ensureReasoningItem(event.reasoningId);
+          if (event.reasoningId === undefined) {
+            options.emit({
+              type: "item_started",
+              threadId: options.thread.id,
+              turnId,
+              itemId: reasoningItemId,
+              itemType: "reasoning",
+            });
+          }
+          const reasoning: ReasoningItem = {
+            id: reasoningItemId,
+            threadId: options.thread.id,
+            turnId,
+            createdAt: this.#now(),
+            type: "reasoning",
+            reasoningContent: event.reasoningContent,
+            contentVisibility: event.contentVisibility,
+            ...(event.summary === undefined ? {} : { summary: event.summary }),
+            ...(event.providerItemId === undefined
+              ? {}
+              : { providerItemId: event.providerItemId }),
+          };
+          await options.commit(reasoning);
+          options.emit({ type: "item_completed", item: reasoning });
+          if (event.reasoningId !== undefined) {
+            reasoningItems.delete(event.reasoningId);
+          }
+        } else if (event.type === "tool_call") {
+          toolCalls.push({
+            callId: event.callId,
+            name: event.name,
+            arguments: event.arguments,
+          });
+        } else {
+          latestUsage = {
+            inputTokens: event.inputTokens,
+            ...(event.cachedInputTokens === undefined
+              ? {}
+              : { cachedInputTokens: event.cachedInputTokens }),
+            outputTokens: event.outputTokens,
+            ...(event.reasoningOutputTokens === undefined
+              ? {}
+              : { reasoningOutputTokens: event.reasoningOutputTokens }),
+          };
+          options.emit({
+            type: "token_usage",
+            threadId: options.thread.id,
+            turnId,
+            inputTokens: event.inputTokens,
+            outputTokens: event.outputTokens,
+            ...(event.cachedInputTokens === undefined
+              ? {}
+              : { cachedInputTokens: event.cachedInputTokens }),
+            ...(event.reasoningOutputTokens === undefined
+              ? {}
+              : { reasoningOutputTokens: event.reasoningOutputTokens }),
           });
         }
-        const reasoning: ReasoningItem = {
-          id: reasoningItemId,
+      }
+    } finally {
+      if (latestUsage !== undefined) {
+        const usage: ModelUsageItem = {
+          id: this.#id(),
           threadId: options.thread.id,
           turnId,
           createdAt: this.#now(),
-          type: "reasoning",
-          reasoningContent: event.reasoningContent,
-          contentVisibility: event.contentVisibility,
-          ...(event.summary === undefined ? {} : { summary: event.summary }),
-          ...(event.providerItemId === undefined
-            ? {}
-            : { providerItemId: event.providerItemId }),
+          type: "model_usage",
+          modelResponseId: itemId,
+          ...latestUsage,
         };
-        await options.commit(reasoning);
-        options.emit({ type: "item_completed", item: reasoning });
-        if (event.reasoningId !== undefined) {
-          reasoningItems.delete(event.reasoningId);
-        }
-      } else if (event.type === "tool_call") {
-        toolCalls.push({
-          callId: event.callId,
-          name: event.name,
-          arguments: event.arguments,
-        });
-      } else {
-        options.emit({
-          type: "token_usage",
-          threadId: options.thread.id,
-          turnId,
-          inputTokens: event.inputTokens,
-          outputTokens: event.outputTokens,
-        });
+        await options.commit(usage);
+        options.emit({ type: "item_completed", item: usage });
       }
     }
 

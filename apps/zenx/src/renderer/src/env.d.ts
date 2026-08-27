@@ -50,6 +50,7 @@ import type {
 } from "../../main/image-attachments.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../../marketplace.js";
+import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 
 declare global {
   interface Window {
@@ -90,6 +91,9 @@ declare global {
         import(images: readonly ZenXImageImport[]): Promise<ZenXImageDraft[]>;
         read(attachment: AttachmentRef): Promise<Uint8Array>;
         forThread(threadId: string): Promise<ZenXThreadAttachmentProjection>;
+      };
+      modelUsage: {
+        forThread(threadId: string): Promise<ModelUsageProjection>;
       };
       projects: {
         get(

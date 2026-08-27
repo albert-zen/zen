@@ -26,6 +26,9 @@ Interrupt & send；Provider/onboarding、安全 Markdown、Trigger / Watching / 
 安装、启停、卸载、重装与独立删除数据的产品入口已经完成。
 ZenX 的产品读取模型来自 ZAS 原生 `ThreadSummary` 查询，并经 Electron main/preload
 typed IPC 暴露；Codex Thread DTO 只属于兼容协议 adapter，不定义 ZenX 产品模型。
+ZenX 同样经 host-local typed projection 从 canonical `model_usage` Items 展示 Thread/Turn
+的 input/output token 与 token-weighted cache hit rate；cache 明细缺失时明确显示 Unknown，
+不扩展固定 Codex wire protocol，也不估算费率、货币或成本。
 高保真 renderer 的当前 UI/UX 合同单独维护在 `apps/zenx/docs/ui-ux.md`，本文件不重复
 具体布局。Thread 的重命名、归档与取消归档全部通过既有 App Server 操作；Archive
 作为可逆的安全删除替代，不提供永久删除，也不在活动 Turn 期间暗改 Thread 设置。

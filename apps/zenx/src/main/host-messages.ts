@@ -7,6 +7,10 @@ import { isNativeThreadSummary } from "../../../../src/thread-summary.js";
 import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
 import type { JsonValue } from "../../../../src/item.js";
 import {
+  isModelUsageProjection,
+  type ModelUsageProjection,
+} from "../../../../src/model-usage.js";
+import {
   isAttachmentRef,
   type ZenXThreadAttachmentProjection,
 } from "./image-attachments.js";
@@ -41,6 +45,7 @@ export type HostCommand =
       requestId: string;
       threadId: string;
     }
+  | { type: "thread-usage/read"; requestId: string; threadId: string }
   | {
       type: "capabilities/replace";
       requestId: string;
@@ -73,6 +78,18 @@ export type HostEvent =
       requestId: string;
       attachments: ZenXThreadAttachmentProjection;
       error?: never;
+    }
+  | {
+      type: "thread-usage/result";
+      requestId: string;
+      usage: ModelUsageProjection;
+      error?: never;
+    }
+  | {
+      type: "thread-usage/result";
+      requestId: string;
+      usage?: never;
+      error: string;
     }
   | {
       type: "thread-attachments/result";
@@ -127,6 +144,9 @@ export function isHostCommand(value: unknown): value is HostCommand {
     (type === "thread-attachments/read" &&
       typeof command.requestId === "string" &&
       typeof command.threadId === "string") ||
+    (type === "thread-usage/read" &&
+      typeof command.requestId === "string" &&
+      typeof command.threadId === "string") ||
     (type === "thread-summary/list" &&
       typeof command.requestId === "string" &&
       isThreadSummaryListOptions(command.options))
@@ -168,6 +188,7 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     summaries?: unknown;
     error?: unknown;
     attachments?: unknown;
+    usage?: unknown;
   };
   const hasSummaries = Object.prototype.hasOwnProperty.call(event, "summaries");
   const hasError = Object.prototype.hasOwnProperty.call(event, "error");
@@ -175,6 +196,7 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     event,
     "attachments",
   );
+  const hasUsage = Object.prototype.hasOwnProperty.call(event, "usage");
   return (
     (event.type === "ready" && typeof event.url === "string") ||
     (event.type === "error" && typeof event.message === "string") ||
@@ -187,6 +209,10 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
         !hasError &&
         isThreadAttachmentProjection(event.attachments)) ||
         (!hasAttachments && hasError && typeof event.error === "string"))) ||
+    (event.type === "thread-usage/result" &&
+      typeof event.requestId === "string" &&
+      ((hasUsage && !hasError && isModelUsageProjection(event.usage)) ||
+        (!hasUsage && hasError && typeof event.error === "string"))) ||
     (event.type === "thread-summary/result" &&
       typeof event.requestId === "string" &&
       ((hasSummaries &&

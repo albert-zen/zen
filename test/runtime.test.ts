@@ -176,6 +176,53 @@ test("preserves credential-matching model and tool trace strings verbatim", asyn
   );
 });
 
+test("persists only the latest usage for a model response even when the stream later fails", async () => {
+  const model: ModelAdapter = {
+    provider: "usage-provider",
+    async *stream(): AsyncIterable<ModelEvent> {
+      yield {
+        type: "usage",
+        inputTokens: 10,
+        cachedInputTokens: 4,
+        outputTokens: 2,
+      };
+      yield {
+        type: "usage",
+        inputTokens: 12,
+        cachedInputTokens: 8,
+        outputTokens: 3,
+        reasoningOutputTokens: 1,
+      };
+      throw new Error("request failed after usage");
+    },
+  };
+  const server = createServer({ model });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "measure usage")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  const usage = snapshot.items.filter((item) => item.type === "model_usage");
+  assert.equal(usage.length, 1);
+  assert.deepEqual(usage[0], {
+    id: usage[0]?.id,
+    threadId: thread.id,
+    turnId: usage[0]?.turnId,
+    createdAt: usage[0]?.createdAt,
+    type: "model_usage",
+    modelResponseId: usage[0]?.modelResponseId,
+    inputTokens: 12,
+    cachedInputTokens: 8,
+    outputTokens: 3,
+    reasoningOutputTokens: 1,
+  });
+  assert.equal(
+    snapshot.items.find((item) => item.type === "turn_completed")?.status,
+    "failed",
+  );
+});
+
 test("persists opaque reasoning semantics and derives replay selection", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-continuation-"));
   const journal = new JsonlThreadJournal(root);
@@ -863,6 +910,7 @@ test("runs a deterministic in-memory turn from append-only items", async () => {
       "thread_metadata",
       "turn_started",
       "user_message",
+      "model_usage",
       "agent_message",
       "turn_completed",
     ],
@@ -903,6 +951,7 @@ test("journal stores only complete canonical items, never deltas", async () => {
         "thread_metadata",
         "turn_started",
         "user_message",
+        "model_usage",
         "agent_message",
         "turn_completed",
       ],

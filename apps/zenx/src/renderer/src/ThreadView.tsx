@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
+import type {
+  ModelUsageAggregate,
+  ModelUsageProjection,
+} from "../../../../../src/model-usage.js";
 
 import type { ApprovalDecision } from "../../main/app-server-manager.js";
 import type { TriggerHistoryEntry } from "../../main/trigger-types.js";
@@ -48,6 +52,7 @@ interface ThreadViewProps {
   switchingModel?: boolean;
   thread: Thread;
   threadAttachments?: ZenXThreadAttachmentProjection;
+  threadUsage?: ModelUsageProjection;
   wakeups?: readonly TriggerHistoryEntry[];
   watching?: boolean;
   pluginSnapshot?: ZenXPluginSnapshot | null;
@@ -86,6 +91,7 @@ export function ThreadView({
   switchingModel = false,
   thread,
   threadAttachments = {},
+  threadUsage,
   wakeups = [],
   watching = false,
   pluginSnapshot = null,
@@ -209,6 +215,12 @@ export function ThreadView({
         }}
       >
         <div className="messages-inner">
+          {threadUsage === undefined ||
+          threadUsage.thread.responseCount === 0 ? null : (
+            <div className="thread-usage">
+              {usageLabel(threadUsage.thread, "Thread cache")}
+            </div>
+          )}
           {thread.turns.length === 0 ? (
             <div className="thread-empty">
               <div className="empty-glyph" aria-hidden="true">
@@ -226,6 +238,7 @@ export function ThreadView({
                 index={index}
                 key={turn.id}
                 turn={turn}
+                usage={threadUsage?.turns[turn.id]}
                 wakeups={wakeups}
                 attachments={threadAttachments}
                 onOpenImage={(attachment, name, trigger) =>
@@ -450,6 +463,7 @@ function TurnBlock({
   onReadAttachment,
   pluginSnapshot,
   pluginUiRegistry,
+  usage,
 }: {
   turn: Turn;
   index: number;
@@ -463,6 +477,7 @@ function TurnBlock({
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
+  usage?: ModelUsageAggregate;
 }) {
   const projection = useMemo(() => projectTurn(turn), [turn]);
   const [expanded, setExpanded] = useState(false);
@@ -493,12 +508,18 @@ function TurnBlock({
           onClick={() => setExpanded((value) => !value)}
         >
           <span>{completedTurnLabel(turn)}</span>
+          {usage === undefined ? null : (
+            <small className="turn-usage">{usageLabel(usage, "Cache")}</small>
+          )}
           <Icon name="chevron-down" size={14} />
         </button>
       ) : (
         <div className="turn-running-label" aria-live="polite">
           <span className="mini-spinner" aria-hidden="true" />
           <span>Working</span>
+          {usage === undefined ? null : (
+            <small className="turn-usage">{usageLabel(usage, "Cache")}</small>
+          )}
         </div>
       )}
       {!complete || expanded ? (
@@ -527,6 +548,22 @@ function TurnBlock({
       )}
     </section>
   );
+}
+
+function usageLabel(usage: ModelUsageAggregate, prefix: string): string {
+  const cache =
+    usage.cacheHitRate === undefined
+      ? `${prefix} unknown`
+      : `${prefix} ${String(Math.round(usage.cacheHitRate * 100))}%`;
+  return `${cache} · ${formatTokenCount(usage.inputTokens)} in · ${formatTokenCount(usage.outputTokens)} out`;
+}
+
+function formatTokenCount(value: number): string {
+  if (value < 1_000) return String(value);
+  return new Intl.NumberFormat("en", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
 }
 
 function DisplayNode({

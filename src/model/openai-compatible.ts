@@ -807,9 +807,14 @@ function parseChunk(payload: string): Readonly<Record<string, unknown>> {
   return record(value, "stream chunk");
 }
 
-function readUsage(
-  value: unknown,
-): { inputTokens: number; outputTokens: number } | undefined {
+function readUsage(value: unknown):
+  | {
+      inputTokens: number;
+      cachedInputTokens?: number;
+      outputTokens: number;
+      reasoningOutputTokens?: number;
+    }
+  | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
@@ -822,7 +827,46 @@ function readUsage(
       "OpenAI-compatible model stream had invalid usage",
     );
   }
-  return { inputTokens, outputTokens };
+  const promptDetails = optionalRecord(usage.prompt_tokens_details);
+  const completionDetails = optionalRecord(usage.completion_tokens_details);
+  const openAiCached = optionalTokenCount(
+    promptDetails?.cached_tokens,
+    inputTokens,
+  );
+  const deepSeekHit = optionalTokenCount(
+    usage.prompt_cache_hit_tokens,
+    inputTokens,
+  );
+  const deepSeekMiss = optionalTokenCount(
+    usage.prompt_cache_miss_tokens,
+    inputTokens,
+  );
+  const cachedInputTokens =
+    openAiCached ??
+    deepSeekHit ??
+    (deepSeekMiss === undefined ? undefined : inputTokens - deepSeekMiss);
+  const reasoningOutputTokens = optionalTokenCount(
+    completionDetails?.reasoning_tokens,
+    outputTokens,
+  );
+  return {
+    inputTokens,
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    outputTokens,
+    ...(reasoningOutputTokens === undefined ? {} : { reasoningOutputTokens }),
+  };
+}
+
+function optionalRecord(
+  value: unknown,
+): Readonly<Record<string, unknown>> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+function optionalTokenCount(value: unknown, total: number): number | undefined {
+  return isTokenCount(value) && value <= total ? value : undefined;
 }
 
 function isTokenCount(value: unknown): value is number {

@@ -205,7 +205,12 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
                 arguments: '{"command":"pwd"}',
               },
             ],
-            usage: { input_tokens: 12, output_tokens: 7 },
+            usage: {
+              input_tokens: 12,
+              input_tokens_details: { cached_tokens: 9 },
+              output_tokens: 7,
+              output_tokens_details: { reasoning_tokens: 4 },
+            },
           },
         },
       ]);
@@ -268,7 +273,13 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
       name: "shell",
       arguments: { command: "pwd" },
     },
-    { type: "usage", inputTokens: 12, outputTokens: 7 },
+    {
+      type: "usage",
+      inputTokens: 12,
+      cachedInputTokens: 9,
+      outputTokens: 7,
+      reasoningOutputTokens: 4,
+    },
   ]);
   const streamedSummary = events
     .filter((event) => event.type === "reasoning_summary_delta")
@@ -356,6 +367,49 @@ test("ignores an empty subscription reasoning output without opening a lifecycle
 
   assert.deepEqual(await collect(adapter.stream(request())), [
     { type: "usage", inputTokens: 3, outputTokens: 0 },
+  ]);
+});
+
+test("keeps invalid optional subscription usage unknown while preserving zero", async () => {
+  const invalidValues = [
+    ["null", "null"],
+    ["non-number", '"9"'],
+    ["negative", "-1"],
+    ["positive infinity", "1e400"],
+    ["negative infinity", "-1e400"],
+  ] as const;
+
+  for (const [label, value] of invalidValues) {
+    const adapter = new OpenAiSubscriptionModel({
+      acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+      fetch: async () =>
+        rawSseResponse(
+          `{"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":12,"input_tokens_details":{"cached_tokens":${value}},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":${value}}}}}`,
+        ),
+    });
+
+    assert.deepEqual(
+      await collect(adapter.stream(request())),
+      [{ type: "usage", inputTokens: 12, outputTokens: 7 }],
+      label,
+    );
+  }
+
+  const zeroAdapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async () =>
+      rawSseResponse(
+        '{"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":12,"input_tokens_details":{"cached_tokens":0},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":0}}}}',
+      ),
+  });
+  assert.deepEqual(await collect(zeroAdapter.stream(request())), [
+    {
+      type: "usage",
+      inputTokens: 12,
+      cachedInputTokens: 0,
+      outputTokens: 7,
+      reasoningOutputTokens: 0,
+    },
   ]);
 });
 
@@ -1085,6 +1139,13 @@ function sseResponse(events: readonly Record<string, unknown>[]): Response {
       headers: { "content-type": "text/event-stream" },
     },
   );
+}
+
+function rawSseResponse(event: string): Response {
+  return new Response(`data: ${event}\r\n\r\ndata: [DONE]\r\n\r\n`, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
 }
 
 function jwt(id: string, marker = "default"): string {

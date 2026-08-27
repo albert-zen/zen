@@ -50,6 +50,7 @@ import type {
   ZenXImageImport,
   ZenXThreadAttachmentProjection,
 } from "../main/image-attachments.js";
+import type { ModelUsageProjection } from "../../../../src/model-usage.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../marketplace.js";
 
@@ -137,6 +138,10 @@ contextBridge.exposeInMainWorld("zenx", {
       threadId: string,
     ): Promise<ZenXThreadAttachmentProjection> =>
       await ipcRenderer.invoke(ipcChannels.threadAttachmentsRead, threadId),
+  },
+  modelUsage: {
+    forThread: async (threadId: string): Promise<ModelUsageProjection> =>
+      await ipcRenderer.invoke(ipcChannels.threadUsageRead, threadId),
   },
   projects: {
     get: async (

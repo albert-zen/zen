@@ -46,6 +46,8 @@
 - **ContextCompactionItem** — Zen 在完整 Turn 边界生成并追加的 provider-neutral
   context summary；它记录覆盖边界、稳定有序的保留 Item、冻结的 Provider selection、
   版本化算法与 token usage，使后续模型上下文和重启投影都只由 append-only ItemList 推导。
+- **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
+  保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
   ThreadMetadataStore 归约为可持久化、可删除重建的原生 `ThreadSummary` /
   `CurrentMetadata` 列表读取模型；它只加速产品读取，不成为新的权威状态。
@@ -437,6 +439,15 @@ Thread 的用户展示名称、置顶与归档等产品状态不改变 Agent 下
 不进入 canonical ItemList。ZAS 可以知道、持久化并通过 App Server 同步这些
 状态；客户端当前选中的 Thread 仍是每个客户端或 conversation binding 的状态，
 ZAS 不保存全局 `currentThreadId`。
+
+Provider usage 会改变用户对一次模型执行历史的理解，因此作为 `model_usage`
+canonical Item 与 `modelResponseId`、Turn 关联；它不是只在 live stream 存活的 latency/debug
+telemetry。`inputTokens` 始终是包含 cached 部分的 total input，uncached input 只能由
+`inputTokens - cachedInputTokens` 派生。Provider 未报告 cached 或 reasoning 明细时字段保持缺失，
+不能补成零。同一 response 在 stream 中先后出现 provisional/final usage 时 Runtime 只追加最后一份；
+重放旧的重复 response usage 时 projection 也按 journal 顺序取最后一份，避免重复计数。即使 usage
+之后 request 失败，已经报告的最后一份 usage 仍须先落盘。Turn/Thread cache hit rate 只对报告
+cached 数据的 response 做 token-weighted 归约：`sum(cachedInputTokens) / sum(inputTokens)`。
 
 手动 context compaction 只在没有 active / incomplete Turn 时取最新
 `turn_completed` 作为覆盖边界；调用者不能指定任意 Item。Zen 以 admission 时

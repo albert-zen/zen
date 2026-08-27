@@ -69,8 +69,9 @@ model 或 effort 明确失败。单 profile 的既有裸 model id 仅作为入�
 同名 model 跨 profile 时必须使用 opaque key。T3 总会发送的
 `default` collaboration envelope 只作为接入端 UI 元数据接受：其中 model
 与 reasoning effort 必须匹配本次原子 selection；developer instructions 不进入
-Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，避免发送
-不完整的 0.146.0 类型。
+Thread，也不覆盖 Zen 的 Agent 行为。canonical `model_usage` 与实时 token usage
+都不投影到 wire，避免发送不完整的 0.146.0 类型；ZenX 只通过 Host-local typed
+projection 从同一 ItemList 读取 Turn/Thread usage，不新增协议通知。
 
 canonical `reasoning` Item 只使用 provider-neutral reasoning content、可选 summary、
 public/opaque visibility 与 round-trip 必需的可选 Provider item identity。Opaque content
