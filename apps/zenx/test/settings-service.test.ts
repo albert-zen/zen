@@ -516,6 +516,44 @@ test(
   async () => await exerciseQueuedAliasRetarget("junction"),
 );
 
+test("adds an absolute target-platform workspace without host conversion", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-settings-target-platform-"),
+  );
+  const projectPlatform = process.platform === "win32" ? "linux" : "win32";
+  const workspace =
+    projectPlatform === "win32" ? "C:\\Work\\Second" : "/work/second";
+  const resolved: string[] = [];
+  try {
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(
+        path.join(directory, "credentials.vault"),
+        encryption,
+      ),
+      subscription: idleSubscription(),
+      projectPlatform,
+      projectRealpath: async (candidate) => {
+        resolved.push(candidate);
+        return candidate;
+      },
+    });
+    await service.initialize({});
+
+    assert.equal(await service.addWorkspace(workspace), true);
+    await service.markWorkspaceUsed(workspace);
+    assert.equal((await service.publicSettings()).profile.workspace, workspace);
+    assert.equal(
+      (await service.publicSettings()).profile.lastUsedWorkspace,
+      workspace,
+    );
+    assert.equal(resolved.includes(workspace), true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("workspace mutations retry one filesystem identity change", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-settings-identity-retry-"),

@@ -7,7 +7,10 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 
-import { packZenXFirstPartyPlugins } from "../scripts/pack-first-party-plugins.mjs";
+import {
+  firstPartyPluginStagingPrefix,
+  packZenXFirstPartyPlugins,
+} from "../scripts/pack-first-party-plugins.mjs";
 import { firstPartyProviderTarball } from "../src/main/first-party-profile-loader.ts";
 
 const run = promisify(execFile);
@@ -51,6 +54,19 @@ const providerVariants = new Map([
     ["computer", "1.1.0", "microsoft-winapp-cli", 4],
   ],
 ]);
+
+test("first-party plugin staging shares the destination volume", () => {
+  const pluginsDirectory = path.join(
+    os.tmpdir(),
+    "destination-volume",
+    "plugins",
+  );
+
+  assert.equal(
+    path.dirname(firstPartyPluginStagingPrefix(pluginsDirectory)),
+    pluginsDirectory,
+  );
+});
 
 test("all first-party plugins validate and pack as self-contained ordinary npm tarballs", async () => {
   const directory = await mkdtemp(

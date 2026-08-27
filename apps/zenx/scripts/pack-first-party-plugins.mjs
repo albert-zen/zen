@@ -8,7 +8,6 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -100,10 +99,12 @@ export async function packZenXRoomsPlugin(options) {
 }
 
 async function packFirstPartyPlugin(definition, options) {
-  const pluginsDirectory = path.join(options.outputDirectory, "plugins");
+  const pluginsDirectory = path.resolve(options.outputDirectory, "plugins");
   await mkdir(pluginsDirectory, { recursive: true, mode: 0o700 });
   await runNpm(["run", "build", "--workspace", definition.packageName]);
-  const staging = await mkdtemp(path.join(os.tmpdir(), "zenx-plugin-pack-"));
+  const staging = await mkdtemp(
+    firstPartyPluginStagingPrefix(pluginsDirectory),
+  );
   try {
     const packageDirectory = path.join(staging, "package");
     await cp(
@@ -155,6 +156,10 @@ async function packFirstPartyPlugin(definition, options) {
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
+}
+
+export function firstPartyPluginStagingPrefix(pluginsDirectory) {
+  return path.join(pluginsDirectory, ".zenx-plugin-pack-");
 }
 
 async function preparePluginSdk() {
