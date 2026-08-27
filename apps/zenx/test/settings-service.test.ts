@@ -540,7 +540,8 @@ test("workspace mutations retry one filesystem identity change", async () => {
         return aliasResolutions === 1 ? first : second;
       },
     });
-    await service.initialize({ ZENX_CWD: second });
+    await service.initialize({});
+    assert.equal(await service.addWorkspace(second), true);
 
     await service.markWorkspaceUsed(alias);
 
@@ -578,7 +579,8 @@ test("workspace mutations fail after bounded identity revalidation", async () =>
         return aliasResolutions % 2 === 1 ? first : second;
       },
     });
-    await service.initialize({ ZENX_CWD: second });
+    await service.initialize({});
+    assert.equal(await service.addWorkspace(second), true);
 
     await assert.rejects(
       async () => await service.markWorkspaceUsed(alias),
