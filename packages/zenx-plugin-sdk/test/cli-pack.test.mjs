@@ -5,7 +5,29 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
+import { npmInvocation } from "../dist/npm-invocation.mjs";
+
 const cli = path.resolve(import.meta.dirname, "..", "dist", "cli.js");
+
+test("Windows npm execution uses Node and preserves every argument boundary", () => {
+  assert.deepEqual(
+    npmInvocation(["pack", "--json", "C:\\Plugin Work\\safe & literal"], {
+      platform: "win32",
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      npmExecPath:
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+    }),
+    {
+      executable: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+        "pack",
+        "--json",
+        "C:\\Plugin Work\\safe & literal",
+      ],
+    },
+  );
+});
 
 test("pack validates then delegates to npm pack and produces its standard tarball", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zenx-pack-"));

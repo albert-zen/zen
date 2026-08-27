@@ -49,25 +49,20 @@ export async function runProjectWorkspaceAcceptance(
       await clickButton(options.window, config.fixture);
       await clickButton(options.window, config.projectA);
       await clickButton(options.window, "Add folder");
-      await waitForButton(
-        options.window,
-        `Remove ${config.projectA} from ZenX`,
-      );
+      await clickButton(options.window, `More actions for ${config.projectA}`);
+      await waitForButton(options.window, "Remove from ZenX");
+      await clickButton(options.window, `More actions for ${config.projectA}`);
 
       await clickButton(options.window, "Add project");
       await clickButton(options.window, config.fixture);
       await clickButton(options.window, config.projectB);
       await clickButton(options.window, "Add folder");
-      await waitForButton(
-        options.window,
-        `Remove ${config.projectB} from ZenX`,
-      );
+      await clickButton(options.window, `More actions for ${config.projectB}`);
+      await waitForButton(options.window, "Remove from ZenX");
 
-      await clickButton(
-        options.window,
-        `Make ${config.projectB} the default project`,
-      );
-      await clickButton(options.window, `Remove ${config.projectA} from ZenX`);
+      await clickButton(options.window, "Set as default");
+      await clickButton(options.window, `More actions for ${config.projectA}`);
+      await clickButton(options.window, "Remove from ZenX");
       await waitForProjectState(options.window, config, false);
     } else {
       await waitForProjectState(options.window, config, true);
@@ -134,8 +129,8 @@ async function waitForProjectState(
   config: ProjectWorkspaceAcceptanceConfig,
   restarted: boolean,
 ): Promise<void> {
-  const present = `Remove ${config.projectB} from ZenX`;
-  const absent = `Remove ${config.projectA} from ZenX`;
+  const present = `More actions for ${config.projectB}`;
+  const absent = `More actions for ${config.projectA}`;
   await waitForRenderer(
     window,
     `(() => ${buttonLookup(present)} !== undefined && ${buttonLookup(absent)} === undefined)()`,

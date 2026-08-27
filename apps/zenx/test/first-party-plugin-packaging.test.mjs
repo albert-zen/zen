@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 
-import { packZenXFirstPartyPlugins } from "../scripts/pack-first-party-plugins.mjs";
+import {
+  firstPartyPluginStagingPrefix,
+  packZenXFirstPartyPlugins,
+} from "../scripts/pack-first-party-plugins.mjs";
 import { firstPartyProviderTarball } from "../src/main/first-party-profile-loader.ts";
 
 const run = promisify(execFile);
+const repositoryRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 const expected = [
   ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.0.tgz"],
@@ -49,6 +54,19 @@ const providerVariants = new Map([
     ["computer", "1.1.0", "microsoft-winapp-cli", 4],
   ],
 ]);
+
+test("first-party plugin staging shares the destination volume", () => {
+  const pluginsDirectory = path.join(
+    os.tmpdir(),
+    "destination-volume",
+    "plugins",
+  );
+
+  assert.equal(
+    path.dirname(firstPartyPluginStagingPrefix(pluginsDirectory)),
+    pluginsDirectory,
+  );
+});
 
 test("all first-party plugins validate and pack as self-contained ordinary npm tarballs", async () => {
   const directory = await mkdtemp(
@@ -123,6 +141,50 @@ test("all first-party plugins validate and pack as self-contained ordinary npm t
   }
 });
 
+test("direct packaging establishes the plugin SDK clean-output prerequisite", async () => {
+  const fixture = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-clean-plugin-packaging-"),
+  );
+  try {
+    await Promise.all([
+      cp(
+        path.join(repositoryRoot, "packages", "zenx-plugin-sdk"),
+        path.join(fixture, "packages", "zenx-plugin-sdk"),
+        { recursive: true, filter: cleanSourceFilter },
+      ),
+      cp(
+        path.join(repositoryRoot, "packages", "zenx-rooms-plugin"),
+        path.join(fixture, "packages", "zenx-rooms-plugin"),
+        { recursive: true, filter: cleanSourceFilter },
+      ),
+      cp(
+        path.join(repositoryRoot, "apps", "zenx", "scripts"),
+        path.join(fixture, "apps", "zenx", "scripts"),
+        { recursive: true },
+      ),
+      cp(
+        path.join(repositoryRoot, "package.json"),
+        path.join(fixture, "package.json"),
+      ),
+      cp(
+        path.join(repositoryRoot, "tsconfig.json"),
+        path.join(fixture, "tsconfig.json"),
+      ),
+    ]);
+    await installFixtureDependencies(fixture);
+    const { packZenXRoomsPlugin } = await import(
+      `${pathToFileURL(path.join(fixture, "apps", "zenx", "scripts", "pack-first-party-plugins.mjs")).href}?clean=${Date.now()}`
+    );
+    const output = path.join(fixture, "output");
+
+    const tarball = await packZenXRoomsPlugin({ outputDirectory: output });
+
+    assert.equal(path.basename(tarball), "zenx-rooms-plugin-1.0.0.tgz");
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
 test("Host provider selection maps every real manifest variant deterministically", () => {
   assert.deepEqual(
     [
@@ -151,3 +213,38 @@ test("Host provider selection maps every real manifest variant deterministically
     /No provider variant/u,
   );
 });
+
+function cleanSourceFilter(source) {
+  return !["dist", "node_modules"].includes(path.basename(source));
+}
+
+async function installFixtureDependencies(fixture) {
+  const fixtureModules = path.join(fixture, "node_modules");
+  await Promise.all([
+    mkdir(path.join(fixtureModules, "@types"), { recursive: true }),
+    mkdir(path.join(fixtureModules, "@zenx"), { recursive: true }),
+    cp(
+      path.join(repositoryRoot, "node_modules", ".bin"),
+      path.join(fixtureModules, ".bin"),
+      { recursive: true },
+    ),
+  ]);
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  await Promise.all([
+    symlink(
+      path.join(repositoryRoot, "node_modules", "typescript"),
+      path.join(fixtureModules, "typescript"),
+      linkType,
+    ),
+    symlink(
+      path.join(repositoryRoot, "node_modules", "@types", "node"),
+      path.join(fixtureModules, "@types", "node"),
+      linkType,
+    ),
+    symlink(
+      path.join(fixture, "packages", "zenx-plugin-sdk"),
+      path.join(fixtureModules, "@zenx", "plugin-sdk"),
+      linkType,
+    ),
+  ]);
+}

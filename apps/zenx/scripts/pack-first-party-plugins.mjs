@@ -8,10 +8,11 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+
+import { npmInvocation } from "../../../packages/zenx-plugin-sdk/src/npm-invocation.mjs";
 
 const run = promisify(execFile);
 const zenxRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -77,6 +78,7 @@ function plugin(packageName, directory, tarball, manifest) {
 }
 
 export async function packZenXFirstPartyPlugins(options) {
+  await preparePluginSdk();
   const packed = [];
   for (const definition of FIRST_PARTY_PLUGINS) {
     packed.push(await packFirstPartyPlugin(definition, options));
@@ -85,6 +87,7 @@ export async function packZenXFirstPartyPlugins(options) {
 }
 
 export async function packZenXRoomsPlugin(options) {
+  await preparePluginSdk();
   return (
     await packFirstPartyPlugin(
       FIRST_PARTY_PLUGINS.find(
@@ -96,14 +99,12 @@ export async function packZenXRoomsPlugin(options) {
 }
 
 async function packFirstPartyPlugin(definition, options) {
-  const pluginsDirectory = path.join(options.outputDirectory, "plugins");
+  const pluginsDirectory = path.resolve(options.outputDirectory, "plugins");
   await mkdir(pluginsDirectory, { recursive: true, mode: 0o700 });
-  await run(
-    process.platform === "win32" ? "npm.cmd" : "npm",
-    ["run", "build", "--workspace", definition.packageName],
-    { cwd: repositoryRoot },
+  await runNpm(["run", "build", "--workspace", definition.packageName]);
+  const staging = await mkdtemp(
+    firstPartyPluginStagingPrefix(pluginsDirectory),
   );
-  const staging = await mkdtemp(path.join(os.tmpdir(), "zenx-plugin-pack-"));
   try {
     const packageDirectory = path.join(staging, "package");
     await cp(
@@ -155,6 +156,19 @@ async function packFirstPartyPlugin(definition, options) {
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
+}
+
+export function firstPartyPluginStagingPrefix(pluginsDirectory) {
+  return path.join(pluginsDirectory, ".zenx-plugin-pack-");
+}
+
+async function preparePluginSdk() {
+  await runNpm(["run", "build", "--workspace", "@zenx/plugin-sdk"]);
+}
+
+async function runNpm(args) {
+  const invocation = npmInvocation(args);
+  await run(invocation.executable, invocation.args, { cwd: repositoryRoot });
 }
 
 if (

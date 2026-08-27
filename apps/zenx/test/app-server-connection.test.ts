@@ -270,16 +270,35 @@ test("unexpected child recovery preserves the published URL and bearer authority
         title: "ZX1 recovery test",
         version: "0.1.0",
       },
-      reconnect: { maxAttempts: 8, minDelayMs: 25, maxDelayMs: 100 },
     });
     const thread = (await external.request("thread/start", {})).thread;
-    const reconnected = deferred<void>();
-    external.onStatus((status) => {
-      if (status.type === "ready" && status.reconnected) reconnected.resolve();
+    const managerRecovered = deferred<void>();
+    const externalReconnected = deferred<void>();
+    const disposeManagerStatus = manager.onStatus((status) => {
+      if (status.type === "ready" && status.reconnected) {
+        managerRecovered.resolve();
+      }
     });
-    process.kill(manager.processId!, "SIGKILL");
+    const disposeExternalStatus = external.onStatus((status) => {
+      if (status.type === "ready" && status.reconnected) {
+        externalReconnected.resolve();
+      }
+    });
+    const originalProcessId = manager.processId;
+    assert.notEqual(originalProcessId, undefined);
+    process.kill(originalProcessId!, "SIGKILL");
 
-    await within(reconnected.promise);
+    try {
+      await within(
+        Promise.all([managerRecovered.promise, externalReconnected.promise]),
+        12_000,
+        "manager and external App Server recovery",
+      );
+    } finally {
+      disposeManagerStatus();
+      disposeExternalStatus();
+    }
+    assert.notEqual(manager.processId, originalProcessId);
     assert.equal(await readFile(descriptorFile, "utf8"), descriptorSource);
     assert.equal(
       (await external.request("thread/resume", { threadId: thread.id })).thread
@@ -356,14 +375,23 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function within<T>(promise: Promise<T>, timeoutMs = 5_000): Promise<T> {
-  return await Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error("Timed out waiting for test event")),
-        timeoutMs,
-      ),
-    ),
-  ]);
+async function within<T>(
+  promise: Promise<T>,
+  timeoutMs = 5_000,
+  label = "test event",
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out waiting for ${label}`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }

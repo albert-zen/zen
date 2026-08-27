@@ -44,6 +44,7 @@ import {
   type ProjectPathSnapshot,
   type ProjectRealpath,
   projectPathSnapshot,
+  resolveProjectPath,
 } from "./project-projection.js";
 
 const MAX_WORKSPACE_IDENTITY_ATTEMPTS = 2;
@@ -120,10 +121,12 @@ export class ZenXSettingsService {
       options.userDataDirectory,
       "openai-subscription-auth.json",
     );
+    this.#projectPlatform = options.projectPlatform ?? process.platform;
     this.#profileStore =
       options.profileStore ??
       new ZenXHostProfileStore(
         path.join(options.userDataDirectory, "host-profile.json"),
+        this.#projectPlatform,
       );
     this.#subscription =
       options.subscription ??
@@ -132,7 +135,6 @@ export class ZenXSettingsService {
       options.subscriptionFactory ??
       ((profilePath) => new OpenAiSubscriptionAuthProfile(profilePath));
     this.#vault = options.vault;
-    this.#projectPlatform = options.projectPlatform ?? process.platform;
     this.#projectRealpath = options.projectRealpath;
     this.#providerFetchFactory =
       options.providerFetchFactory ?? createProviderFetch;
@@ -612,7 +614,7 @@ export class ZenXSettingsService {
   async addWorkspace(workspace: string): Promise<boolean> {
     const candidate = workspace.trim();
     if (candidate.length === 0) throw new Error("Workspace is required");
-    const resolved = path.resolve(candidate);
+    const resolved = resolveProjectPath(candidate, this.#projectPlatform);
     return await this.#queueProfileOperation(async () => {
       const snapshot = await this.#stableWorkspaceSnapshot(
         this.#requireProfile(),
@@ -624,11 +626,16 @@ export class ZenXSettingsService {
       const entries = snapshot.entries;
       if (entries.some((entry) => entry.key === candidateKey)) return false;
       const isFirst = current.workspace === null;
-      const next = validateHostProfile({
-        ...current,
-        workspace: isFirst ? candidateIdentity.displayPath : current.workspace,
-        workspaces: [...current.workspaces, candidateIdentity.displayPath],
-      });
+      const next = validateHostProfile(
+        {
+          ...current,
+          workspace: isFirst
+            ? candidateIdentity.displayPath
+            : current.workspace,
+          workspaces: [...current.workspaces, candidateIdentity.displayPath],
+        },
+        this.#projectPlatform,
+      );
       await this.#profileStore.write(next);
       this.#profile = next;
       return isFirst;
@@ -650,13 +657,16 @@ export class ZenXSettingsService {
       if (nextWorkspaces.length === current.workspaces.length) return false;
       const defaultRemoved =
         current.workspace !== null && snapshot.defaultKey === key;
-      const next = validateHostProfile({
-        ...current,
-        workspace: defaultRemoved
-          ? (nextWorkspaces[0] ?? null)
-          : current.workspace,
-        workspaces: nextWorkspaces,
-      });
+      const next = validateHostProfile(
+        {
+          ...current,
+          workspace: defaultRemoved
+            ? (nextWorkspaces[0] ?? null)
+            : current.workspace,
+          workspaces: nextWorkspaces,
+        },
+        this.#projectPlatform,
+      );
       await this.#profileStore.write(next);
       this.#profile = next;
       return defaultRemoved;
@@ -678,7 +688,10 @@ export class ZenXSettingsService {
         throw new Error("Workspace is not configured");
       if (current.workspace !== null && snapshot.defaultKey === key)
         return false;
-      const next = validateHostProfile({ ...current, workspace: selected });
+      const next = validateHostProfile(
+        { ...current, workspace: selected },
+        this.#projectPlatform,
+      );
       await this.#profileStore.write(next);
       this.#profile = next;
       return true;
@@ -700,10 +713,13 @@ export class ZenXSettingsService {
         throw new Error("Workspace is not configured");
       if (current.lastUsedWorkspace !== null && snapshot.lastUsedKey === key)
         return;
-      const next = validateHostProfile({
-        ...current,
-        lastUsedWorkspace: selected,
-      });
+      const next = validateHostProfile(
+        {
+          ...current,
+          lastUsedWorkspace: selected,
+        },
+        this.#projectPlatform,
+      );
       await this.#profileStore.write(next);
       this.#profile = next;
     });
@@ -978,7 +994,7 @@ async function canonicalWorkspaceSnapshot(
   platform: NodeJS.Platform,
   resolveRealpath: ProjectRealpath | undefined,
 ): Promise<CanonicalWorkspaceSnapshot> {
-  const validated = validateHostProfile(profile);
+  const validated = validateHostProfile(profile, platform);
   const candidates =
     validated.workspace === null
       ? validated.workspaces
@@ -1010,18 +1026,21 @@ async function canonicalWorkspaceSnapshot(
     lastUsedIndex === undefined
       ? null
       : (identities[lastUsedIndex]?.key ?? null);
-  const normalized = validateHostProfile({
-    ...validated,
-    workspace:
-      defaultKey === null
-        ? null
-        : (unique.get(defaultKey)?.displayPath ?? null),
-    workspaces: entries.map((entry) => entry.displayPath),
-    lastUsedWorkspace:
-      lastUsedKey === null
-        ? null
-        : (unique.get(lastUsedKey)?.displayPath ?? null),
-  });
+  const normalized = validateHostProfile(
+    {
+      ...validated,
+      workspace:
+        defaultKey === null
+          ? null
+          : (unique.get(defaultKey)?.displayPath ?? null),
+      workspaces: entries.map((entry) => entry.displayPath),
+      lastUsedWorkspace:
+        lastUsedKey === null
+          ? null
+          : (unique.get(lastUsedKey)?.displayPath ?? null),
+    },
+    platform,
+  );
   return Object.freeze({
     profile: normalized,
     entries,

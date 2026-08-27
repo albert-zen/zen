@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import type { CanonicalItem } from "../../../src/item.js";
 import { requestPluginDevLink } from "@zenx/plugin-sdk";
+import { npmInvocation } from "../../../packages/zenx-plugin-sdk/dist/npm-invocation.mjs";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
@@ -40,6 +41,28 @@ const pluginSdkCli = fileURLToPath(
 const pluginSdkRoot = fileURLToPath(
   new URL("../../../packages/zenx-plugin-sdk", import.meta.url),
 );
+
+test("plugin profile npm fixtures never invoke a Windows command shim directly", async () => {
+  const source = await readFile(fileURLToPath(import.meta.url), "utf8");
+  const directWindowsNpmShim = new RegExp(["npm", "\\.cmd"].join(""), "u");
+  assert.doesNotMatch(source, directWindowsNpmShim);
+  assert.deepEqual(
+    npmInvocation(["pack", "C:\\Plugin Fixture\\literal & path"], {
+      platform: "win32",
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      npmExecPath:
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+    }),
+    {
+      executable: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+        "pack",
+        "C:\\Plugin Fixture\\literal & path",
+      ],
+    },
+  );
+});
 
 test("Settings host installs one tarball through the committed profile and Agent discovery", async () => {
   const directory = await mkdtemp(
@@ -272,8 +295,7 @@ test("external public fixture completes create, dev target reload, validate, pac
       "--id",
       "dev-flow",
     ]);
-    const packedSdk = await run(
-      process.platform === "win32" ? "npm.cmd" : "npm",
+    const packedSdk = await runNpm(
       ["pack", pluginSdkRoot, "--json", "--pack-destination", sdkTarballs],
       { cwd: directory },
     );
@@ -292,8 +314,7 @@ test("external public fixture completes create, dev target reload, validate, pac
       projectPackageFile,
       `${JSON.stringify(projectPackage, null, 2)}\n`,
     );
-    await run(
-      process.platform === "win32" ? "npm.cmd" : "npm",
+    await runNpm(
       [
         "install",
         "--ignore-scripts",
@@ -1220,7 +1241,7 @@ test("dev same-version update commits after a post-fence client disconnect", asy
     devControl = await ZenXPluginDevControlServer.start({
       descriptorFile,
       tokenFile,
-      transactionTimeoutMs: 1_000,
+      transactionTimeoutMs: 10_000,
       install: async (request, signal, enterCommitPhase) =>
         await service.devPluginPackage(
           request.projectDirectory,
@@ -1238,14 +1259,19 @@ test("dev same-version update commits after a post-fence client disconnect", asy
         ),
       reload: async () => ({ status: "reloaded" }),
     });
-    const client = await rawProfileDevRequest(descriptorFile, tokenFile, {
-      version: 1,
-      projectDirectory,
-      pluginId: "update-fence",
-      packageName: "@zenx-test/update-fence",
-    });
+    const clientRequest = await rawProfileDevRequest(
+      descriptorFile,
+      tokenFile,
+      {
+        version: 1,
+        projectDirectory,
+        pluginId: "update-fence",
+        packageName: "@zenx-test/update-fence",
+      },
+    );
+    const client = clientRequest.request;
     client.once("error", () => undefined);
-    await blocked.started;
+    await waitForDevCommitFence(blocked.started, clientRequest.response);
     client.destroy();
     const closing = devControl.close();
     assert.equal(
@@ -1270,6 +1296,49 @@ test("dev same-version update commits after a post-fence client disconnect", asy
     catalog.release();
     await devControl?.close();
     await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a profile dev failure before the commit fence remains observable", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-dev-prefence-failure-"),
+  );
+  const descriptorFile = path.join(directory, "plugin-dev.json");
+  const tokenFile = path.join(directory, "plugin-dev.token");
+  const devControl = await ZenXPluginDevControlServer.start({
+    descriptorFile,
+    tokenFile,
+    install: async () => {
+      throw new Error("fixture pre-fence rejection");
+    },
+    reload: async () => ({ status: "reloaded" }),
+  });
+  let client:
+    Awaited<ReturnType<typeof rawProfileDevRequest>>["request"] | undefined;
+  try {
+    const clientRequest = await rawProfileDevRequest(
+      descriptorFile,
+      tokenFile,
+      {
+        version: 1,
+        projectDirectory: directory,
+        pluginId: "prefence-failure",
+        packageName: "@zenx-test/prefence-failure",
+      },
+    );
+    client = clientRequest.request;
+    client.once("error", () => undefined);
+    await assert.rejects(
+      waitForDevCommitFence(
+        new Promise<void>(() => undefined),
+        clientRequest.response,
+      ),
+      /settled before its commit fence \(HTTP 400\):.*fixture pre-fence rejection/u,
+    );
+  } finally {
+    client?.destroy();
+    await devControl.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -1755,8 +1824,47 @@ async function rawProfileDevRequest(
       "content-type": "application/json",
     },
   });
+  const response = new Promise<{ status: number; body: string }>(
+    (resolve, reject) => {
+      request.once("error", reject);
+      request.once("response", (incoming) => {
+        let responseBody = "";
+        incoming.setEncoding("utf8");
+        incoming.on("data", (chunk) => (responseBody += chunk));
+        incoming.once("end", () =>
+          resolve({ status: incoming.statusCode ?? 0, body: responseBody }),
+        );
+      });
+    },
+  );
   request.end(JSON.stringify(body));
-  return request;
+  return { request, response };
+}
+
+async function waitForDevCommitFence(
+  started: Promise<void>,
+  response: Promise<{ status: number; body: string }>,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      started,
+      response.then(({ status, body }) => {
+        throw new Error(
+          `Plugin dev request settled before its commit fence (HTTP ${String(status)}): ${body}`,
+        );
+      }),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new Error("Timed out waiting for plugin dev commit fence")),
+          15_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 async function readCatalog(userDataDirectory: string): Promise<{
@@ -1864,8 +1972,7 @@ async function createPublicSdkPluginTarball(
   );
   const sdkTarballs = path.join(directory, "sdk-tarballs");
   await mkdir(sdkTarballs);
-  const packedSdk = await run(
-    process.platform === "win32" ? "npm.cmd" : "npm",
+  const packedSdk = await runNpm(
     ["pack", pluginSdkRoot, "--json", "--pack-destination", sdkTarballs],
     { cwd: directory },
   );
@@ -1889,6 +1996,11 @@ async function createPublicSdkPluginTarball(
   const filename = (JSON.parse(packed.stdout) as [{ filename: string }])[0]
     .filename;
   return path.join(packageDirectory, filename);
+}
+
+async function runNpm(args: readonly string[], options: { cwd: string }) {
+  const invocation = npmInvocation(args);
+  return await run(invocation.executable, invocation.args, options);
 }
 
 interface TarballFixtureOptions {

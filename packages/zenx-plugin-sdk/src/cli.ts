@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { requestPluginDevLink } from "./dev-control.js";
+import { npmInvocation } from "./npm-invocation.mjs";
 import { validatePluginPackage } from "./schema.js";
 
 const SDK_VERSION = "0.1.0";
@@ -107,11 +108,11 @@ async function main(): Promise<void> {
 }
 
 async function npmPack(directory: string): Promise<string> {
-  const executable = process.platform === "win32" ? "npm.cmd" : "npm";
+  const invocation = npmInvocation(["pack", "--json"]);
   return await new Promise<string>((resolve, reject) => {
     execFile(
-      executable,
-      ["pack", "--json"],
+      invocation.executable,
+      invocation.args,
       { cwd: directory, encoding: "utf8", maxBuffer: 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error !== null) {
