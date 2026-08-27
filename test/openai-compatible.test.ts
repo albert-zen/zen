@@ -475,7 +475,12 @@ test("parses SSE split at every byte including a multibyte character", async () 
     sse(
       chunk({
         choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-        usage: { prompt_tokens: 3, completion_tokens: 1 },
+        usage: {
+          prompt_tokens: 3,
+          completion_tokens: 1,
+          prompt_tokens_details: { cached_tokens: 2 },
+          completion_tokens_details: { reasoning_tokens: 1 },
+        },
       }),
       "\r\n",
     ),
@@ -488,6 +493,54 @@ test("parses SSE split at every byte including a multibyte character", async () 
 
   assert.deepEqual(await collect(adapter.stream(request())), [
     { type: "text_delta", delta: "你" },
+    {
+      type: "usage",
+      inputTokens: 3,
+      cachedInputTokens: 2,
+      outputTokens: 1,
+      reasoningOutputTokens: 1,
+    },
+  ]);
+});
+
+test("normalizes DeepSeek cache hit and miss usage without changing total input", async () => {
+  const adapter = adapterReturning(
+    streamResponse([
+      chunk({
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: {
+          prompt_tokens: 13,
+          completion_tokens: 5,
+          prompt_cache_hit_tokens: 8,
+          prompt_cache_miss_tokens: 5,
+        },
+      }),
+      "[DONE]",
+    ]),
+  );
+
+  assert.deepEqual(await collect(adapter.stream(request())), [
+    {
+      type: "usage",
+      inputTokens: 13,
+      cachedInputTokens: 8,
+      outputTokens: 5,
+    },
+  ]);
+});
+
+test("leaves cache usage unknown when the provider omits cache fields", async () => {
+  const adapter = adapterReturning(
+    streamResponse([
+      chunk({
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 3, completion_tokens: 1 },
+      }),
+      "[DONE]",
+    ]),
+  );
+
+  assert.deepEqual(await collect(adapter.stream(request())), [
     { type: "usage", inputTokens: 3, outputTokens: 1 },
   ]);
 });

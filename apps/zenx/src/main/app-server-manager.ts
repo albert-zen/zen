@@ -28,6 +28,7 @@ import type {
   ThreadSummaryListOptions,
 } from "../../../../src/thread-summary.js";
 import type { ZenXThreadAttachmentProjection } from "./image-attachments.js";
+import type { ModelUsageProjection } from "../../../../src/model-usage.js";
 import { AppServerConnectionPublisher } from "./app-server-connection.js";
 
 export type AppServerHostStatus =
@@ -106,6 +107,13 @@ export class AppServerManager {
       reject(error: Error): void;
     }
   >();
+  readonly #pendingThreadUsageRequests = new Map<
+    string,
+    {
+      resolve(usage: ModelUsageProjection): void;
+      reject(error: Error): void;
+    }
+  >();
   readonly #pendingCapabilityReplacements = new Map<
     string,
     { resolve(): void; reject(error: Error): void }
@@ -121,6 +129,7 @@ export class AppServerManager {
   #lifecycle = 0;
   #nextThreadSummaryRequest = 1;
   #nextThreadAttachmentRequest = 1;
+  #nextThreadUsageRequest = 1;
   #nextCapabilityReplacementRequest = 1;
   #capabilityRestartTail: Promise<void> = Promise.resolve();
   #connectionPublisher: AppServerConnectionPublisher | undefined;
@@ -454,6 +463,34 @@ export class AppServerManager {
     );
   }
 
+  async readThreadUsage(threadId: string): Promise<ModelUsageProjection> {
+    if (
+      this.#status.type !== "ready" ||
+      this.#child === undefined ||
+      !this.#child.connected
+    ) {
+      const detail =
+        this.#status.type === "error" ? `: ${this.#status.message}` : "";
+      throw new Error(`Zen App Server is not ready${detail}`);
+    }
+    const requestId = `thread-usage-${String(this.#nextThreadUsageRequest++)}`;
+    return await new Promise<ModelUsageProjection>((resolve, reject) => {
+      this.#pendingThreadUsageRequests.set(requestId, { resolve, reject });
+      this.#child!.send(
+        {
+          type: "thread-usage/read",
+          requestId,
+          threadId,
+        } satisfies HostCommand,
+        (error) => {
+          if (error === null) return;
+          this.#pendingThreadUsageRequests.delete(requestId);
+          reject(error);
+        },
+      );
+    });
+  }
+
   onStatus(listener: (status: AppServerHostStatus) => void): () => void {
     this.#statusListeners.add(listener);
     return () => this.#statusListeners.delete(listener);
@@ -531,6 +568,9 @@ export class AppServerManager {
       new Error("Zen App Server host stopped"),
     );
     this.#rejectPendingThreadAttachmentRequests(
+      new Error("Zen App Server host stopped"),
+    );
+    this.#rejectPendingThreadUsageRequests(
       new Error("Zen App Server host stopped"),
     );
     this.#rejectPendingCapabilityReplacements(
@@ -671,6 +711,9 @@ export class AppServerManager {
     this.#rejectPendingThreadAttachmentRequests(
       new Error("Zen App Server stopped before returning Thread attachments"),
     );
+    this.#rejectPendingThreadUsageRequests(
+      new Error("Zen App Server stopped before returning Thread usage"),
+    );
     this.#rejectPendingCapabilityReplacements(
       new Error("Zen App Server stopped before replacing capabilities"),
     );
@@ -765,6 +808,18 @@ export class AppServerManager {
         }
         return;
       }
+      if (hostEvent?.type === "thread-usage/result") {
+        const pending = this.#pendingThreadUsageRequests.get(
+          hostEvent.requestId,
+        );
+        if (pending !== undefined) {
+          this.#pendingThreadUsageRequests.delete(hostEvent.requestId);
+          if (hostEvent.error !== undefined)
+            pending.reject(new Error(hostEvent.error));
+          else pending.resolve(hostEvent.usage);
+        }
+        return;
+      }
       if (hostEvent?.type === "capabilities/replaced") {
         const pending = this.#pendingCapabilityReplacements.get(
           hostEvent.requestId,
@@ -797,6 +852,15 @@ export class AppServerManager {
             );
             attachmentPending.reject(
               new Error("Malformed native Thread attachment response"),
+            );
+          }
+          const usagePending = this.#pendingThreadUsageRequests.get(
+            threadSummaryRequestId,
+          );
+          if (usagePending !== undefined) {
+            this.#pendingThreadUsageRequests.delete(threadSummaryRequestId);
+            usagePending.reject(
+              new Error("Malformed native Thread usage response"),
             );
           }
           const replacementPending = this.#pendingCapabilityReplacements.get(
@@ -921,6 +985,13 @@ export class AppServerManager {
       pending.reject(error);
     }
     this.#pendingThreadAttachmentRequests.clear();
+  }
+
+  #rejectPendingThreadUsageRequests(error: Error): void {
+    for (const pending of this.#pendingThreadUsageRequests.values()) {
+      pending.reject(error);
+    }
+    this.#pendingThreadUsageRequests.clear();
   }
 
   #rejectPendingCapabilityReplacements(error: Error): void {

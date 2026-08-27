@@ -205,7 +205,12 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
                 arguments: '{"command":"pwd"}',
               },
             ],
-            usage: { input_tokens: 12, output_tokens: 7 },
+            usage: {
+              input_tokens: 12,
+              input_tokens_details: { cached_tokens: 9 },
+              output_tokens: 7,
+              output_tokens_details: { reasoning_tokens: 4 },
+            },
           },
         },
       ]);
@@ -268,7 +273,13 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
       name: "shell",
       arguments: { command: "pwd" },
     },
-    { type: "usage", inputTokens: 12, outputTokens: 7 },
+    {
+      type: "usage",
+      inputTokens: 12,
+      cachedInputTokens: 9,
+      outputTokens: 7,
+      reasoningOutputTokens: 4,
+    },
   ]);
   const streamedSummary = events
     .filter((event) => event.type === "reasoning_summary_delta")

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
+import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
   AppServerHostStatus,
   ApprovalDecision,
@@ -163,6 +164,9 @@ export function App() {
   >({});
   const [threadAttachments, setThreadAttachments] =
     useState<ZenXThreadAttachmentProjection>({});
+  const [threadUsage, setThreadUsage] = useState<
+    ModelUsageProjection | undefined
+  >();
 
   const confirmPinnedThreadIds = (threadIds: readonly string[]) => {
     const confirmed = [...threadIds];
@@ -273,6 +277,7 @@ export function App() {
     setSelectedThreadId(threadId);
     setThreadDetail(null);
     setThreadAttachments({});
+    setThreadUsage(undefined);
     setSelectedSettings(null);
     setModelUpdateError(null);
     setThreadLifecycleError(null);
@@ -280,13 +285,15 @@ export function App() {
     setThreadError(null);
     void loadComposerCatalog();
     try {
-      const [result, attachments] = await Promise.all([
+      const [result, attachments, usage] = await Promise.all([
         window.zenx.protocol.request("thread/resume", { threadId }),
         window.zenx.imageAttachments.forThread(threadId),
+        window.zenx.modelUsage.forThread(threadId),
       ]);
       if (selectionEpoch.current !== epoch) return;
       setThreadDetail(result.thread);
       setThreadAttachments(attachments);
+      setThreadUsage(usage);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
       void window.zenx.settings
         .markWorkspaceUsed(result.thread.cwd)
@@ -375,6 +382,19 @@ export function App() {
         );
         if (method === "item/completed") {
           const event = params as ServerNotificationParams["item/completed"];
+          if (selectedThreadIdRef.current === event.threadId) {
+            void window.zenx.modelUsage
+              .forThread(event.threadId)
+              .then((usage) => {
+                if (selectedThreadIdRef.current === event.threadId)
+                  setThreadUsage(usage);
+              })
+              .catch((error: unknown) =>
+                setRequestError(
+                  `Thread usage could not be loaded: ${describeError(error)}`,
+                ),
+              );
+          }
           if (
             event.item.type === "userMessage" &&
             selectedThreadIdRef.current === event.threadId
@@ -995,6 +1015,7 @@ export function App() {
             pluginSnapshot={pluginSnapshot}
             composerStates={composerStates}
             threadAttachments={threadAttachments}
+            threadUsage={threadUsage}
             models={models}
             providerProfiles={providerProfiles}
             modelCatalogError={modelCatalogError}
@@ -1119,6 +1140,7 @@ function AgentSurface({
   pluginSnapshot,
   composerStates,
   threadAttachments,
+  threadUsage,
   models,
   providerProfiles,
   modelCatalogError,
@@ -1159,6 +1181,7 @@ function AgentSurface({
   pluginSnapshot: ZenXPluginSnapshot | null;
   composerStates: Record<string, ComposerState>;
   threadAttachments: ZenXThreadAttachmentProjection;
+  threadUsage: ModelUsageProjection | undefined;
   models: ModelSummary[];
   providerProfiles: ZenXProviderProfile[];
   modelCatalogError: string | null;
@@ -1367,6 +1390,7 @@ function AgentSurface({
             pluginSnapshot={pluginSnapshot}
             pluginUiRegistry={pluginUiRegistry}
             threadAttachments={threadAttachments}
+            threadUsage={threadUsage}
             wakeups={[]}
             watching={false}
             onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}

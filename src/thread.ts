@@ -53,6 +53,9 @@ export class Thread {
     if (this.#items.some((existing) => existing.id === item.id)) {
       throw new Error(`Duplicate item id ${item.id}`);
     }
+    if (item.type === "model_usage") {
+      validateModelUsage(item);
+    }
     if (item.type === "context_compaction") {
       validateContextCompactionItem(this.#items, item);
       const current = this.effectiveConfiguration();
@@ -159,6 +162,36 @@ export class Thread {
       throw new Error(`Thread ${this.id} has no metadata item`);
     }
     return configuration;
+  }
+}
+
+function validateModelUsage(
+  item: Extract<CanonicalItem, { type: "model_usage" }>,
+): void {
+  if (item.modelResponseId.length === 0) {
+    throw new Error("Model usage requires a model response id");
+  }
+  for (const [name, value] of [
+    ["inputTokens", item.inputTokens],
+    ["outputTokens", item.outputTokens],
+    ["cachedInputTokens", item.cachedInputTokens],
+    ["reasoningOutputTokens", item.reasoningOutputTokens],
+  ] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+      throw new Error(`Model usage ${name} must be a non-negative integer`);
+    }
+  }
+  if (
+    item.cachedInputTokens !== undefined &&
+    item.cachedInputTokens > item.inputTokens
+  ) {
+    throw new Error("Cached input tokens cannot exceed total input tokens");
+  }
+  if (
+    item.reasoningOutputTokens !== undefined &&
+    item.reasoningOutputTokens > item.outputTokens
+  ) {
+    throw new Error("Reasoning output tokens cannot exceed output tokens");
   }
 }
 

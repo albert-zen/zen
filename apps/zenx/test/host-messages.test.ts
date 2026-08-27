@@ -189,6 +189,63 @@ test("validates exclusive canonical Thread attachment projections", () => {
   );
 });
 
+test("validates exclusive canonical Thread usage projections", () => {
+  const usage = {
+    thread: {
+      responseCount: 2,
+      inputTokens: 100,
+      cachedInputTokens: 25,
+      outputTokens: 10,
+      cacheHitRate: 0.25,
+    },
+    turns: {
+      "turn-1": {
+        responseCount: 2,
+        inputTokens: 100,
+        cachedInputTokens: 25,
+        outputTokens: 10,
+        cacheHitRate: 0.25,
+      },
+    },
+  };
+  assert.equal(
+    isHostEvent({
+      type: "thread-usage/result",
+      requestId: "usage",
+      usage,
+    }),
+    true,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-usage/result",
+      requestId: "unknown-cache",
+      usage: {
+        thread: { responseCount: 1, inputTokens: 10, outputTokens: 2 },
+        turns: {},
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-usage/result",
+      requestId: "bad-rate",
+      usage: { ...usage, thread: { ...usage.thread, cacheHitRate: 2 } },
+    }),
+    false,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-usage/result",
+      requestId: "ambiguous",
+      usage,
+      error: "fixture error",
+    }),
+    false,
+  );
+});
+
 test("host event validation is total for hostile object access", () => {
   const hostile = new Proxy(
     {},

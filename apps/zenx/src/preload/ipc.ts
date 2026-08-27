@@ -12,6 +12,7 @@ export const ipcChannels = {
   imageAttachmentsImport: "zenx:image-attachments:import",
   imageAttachmentsRead: "zenx:image-attachments:read",
   threadAttachmentsRead: "zenx:thread-attachments:read",
+  threadUsageRead: "zenx:thread-usage:read",
   projectsGet: "zenx:projects:get",
   settingsGet: "zenx:settings:get",
   settingsSave: "zenx:settings:save",

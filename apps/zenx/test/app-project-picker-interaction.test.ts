@@ -937,6 +937,12 @@ async function mountApp(
       read: async () => new Uint8Array(),
       forThread: async () => ({}),
     },
+    modelUsage: {
+      forThread: async () => ({
+        thread: { responseCount: 0, inputTokens: 0, outputTokens: 0 },
+        turns: {},
+      }),
+    },
     projects: {
       get: async () =>
         options.projectsGet === undefined

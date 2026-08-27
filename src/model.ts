@@ -103,7 +103,11 @@ export type ModelEvent =
   | {
       type: "usage";
       inputTokens: number;
+      /** Total input tokens served from a Provider cache, when reported. */
+      cachedInputTokens?: number;
       outputTokens: number;
+      /** Output tokens spent on reasoning, when reported separately. */
+      reasoningOutputTokens?: number;
     };
 
 export interface ModelAdapter {
@@ -266,6 +270,7 @@ function compileCanonicalModelMessages(
         });
         break;
       case "context_compaction":
+      case "model_usage":
       case "thread_configuration_changed":
       case "thread_metadata":
       case "turn_aborted":

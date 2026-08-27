@@ -7,6 +7,7 @@ import test from "node:test";
 
 import type { Thread, ThreadItem, Turn } from "../src/protocol-client/index.js";
 import type { AttachmentRef } from "../../../src/attachment.js";
+import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import { projectCompletedItem } from "../../../src/protocol/codex/mapper.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
 import {
@@ -73,6 +74,46 @@ test("assistant messages omit the identity row while preserving metadata and con
     /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
   );
   assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
+});
+
+test("renders compact token-weighted cache usage for the Thread and each Turn", () => {
+  const html = renderTurns(
+    [
+      turnWithItems("completed", [user("request"), agent("Done")], 1_000),
+      { ...turnWithItems("completed", [agent("Again")]), id: "turn-2" },
+    ],
+    [],
+    emptyComposerState(),
+    {},
+    {
+      thread: {
+        responseCount: 3,
+        inputTokens: 200,
+        cachedInputTokens: 50,
+        outputTokens: 25,
+        cacheHitRate: 1 / 3,
+      },
+      turns: {
+        "turn-1": {
+          responseCount: 2,
+          inputTokens: 150,
+          cachedInputTokens: 40,
+          outputTokens: 17,
+          cacheHitRate: 0.4,
+        },
+        "turn-2": {
+          responseCount: 1,
+          inputTokens: 50,
+          outputTokens: 8,
+        },
+      },
+    },
+  );
+
+  assert.match(html, /Thread cache 33% · 200 in · 25 out/u);
+  assert.match(html, /Cache 40% · 150 in · 17 out/u);
+  assert.match(html, /Cache unknown · 50 in · 8 out/u);
+  assert.doesNotMatch(html, /Cache 0% · 50 in/u);
 });
 
 test("assistant messages retain running reasoning and tool disclosure affordances", () => {
@@ -345,6 +386,7 @@ function renderTurns(
   approvals: readonly ApprovalCardState[] = [],
   composer: ComposerState = emptyComposerState(),
   threadAttachments: Parameters<typeof ThreadView>[0]["threadAttachments"] = {},
+  threadUsage?: ModelUsageProjection,
 ) {
   return renderToStaticMarkup(
     createElement(ThreadView, {
@@ -352,6 +394,7 @@ function renderTurns(
       composer,
       thread: thread(turns),
       threadAttachments,
+      threadUsage,
       onDraftChange: () => undefined,
       onInterrupt: noop,
       onRespondToApproval: noop,
