@@ -51,6 +51,8 @@ export interface ZenXHostProfile {
   workspaces: string[];
   lastUsedWorkspace: string | null;
   approvalPolicy: "always" | "never";
+  /** Omitted means tool rounds are unlimited. */
+  maxToolRounds?: number;
   pinnedThreadIds: string[];
   sidebarOrder: ZenXSidebarOrder;
 }
@@ -62,6 +64,7 @@ export type ZenXSettingsUpdate = Pick<
   | "defaultModel"
   | "titleModel"
   | "approvalPolicy"
+  | "maxToolRounds"
 >;
 
 export interface ZenXProviderEditOptions {
@@ -242,6 +245,7 @@ export function validateHostProfile(
   if (value.approvalPolicy !== "always" && value.approvalPolicy !== "never") {
     throw new Error("ZenX approval policy is invalid");
   }
+  const maxToolRounds = optionalMaximumToolRounds(value.maxToolRounds);
   const workspace =
     value.workspace === null
       ? null
@@ -269,6 +273,7 @@ export function validateHostProfile(
     workspaces,
     lastUsedWorkspace,
     approvalPolicy: value.approvalPolicy,
+    ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
     pinnedThreadIds: normalizePinnedThreadIds(value.pinnedThreadIds),
     sidebarOrder: normalizeSidebarOrder(value.sidebarOrder),
   };
@@ -395,6 +400,9 @@ export function hostConfigFromProfile(
     cwd: validated.workspace ?? path.resolve(options.fallbackWorkspace),
     dataDirectory: options.dataDirectory,
     approvalPolicy: validated.approvalPolicy,
+    ...(validated.maxToolRounds === undefined
+      ? {}
+      : { maxToolRounds: validated.maxToolRounds }),
     providers: validated.providerProfiles.map((providerProfile) => ({
       ...providerRuntimeCatalog(providerProfile, validated.defaultModel),
       providerProfileId: providerProfile.providerProfileId,
@@ -831,6 +839,14 @@ export function workspaceKey(
 ): string {
   const resolved = resolveProjectPath(value, projectPlatform);
   return projectPlatform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function optionalMaximumToolRounds(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error("ZenX maximum tool rounds must be a positive safe integer");
+  }
+  return value as number;
 }
 
 function nonEmpty(value: unknown, label: string): string {

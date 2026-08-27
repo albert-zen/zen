@@ -370,7 +370,11 @@ test("automatic compaction freezes admitted selection across a concurrent settin
   assert.equal(compacted.reasoningEffort, "medium");
 });
 
-test("automatic compaction failure rejects the Turn handle once without append or retry", async () => {
+test("automatic compaction failure does not fail a completed Turn", async (t) => {
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (...arguments_: unknown[]) => {
+    warnings.push(String(arguments_[0]));
+  });
   let normalCalls = 0;
   let summaryCalls = 0;
   const journal = new InMemoryThreadJournal();
@@ -396,9 +400,10 @@ test("automatic compaction failure rejects the Turn handle once without append o
   const thread = await server.startThread();
 
   const first = await server.startTurn(thread.id, "one");
-  await expectAppServerCode(first.done, "automatic_compaction_failed");
+  await first.done;
   let snapshot = await server.readThread(thread.id);
   assert.equal(summaryCalls, 1);
+  assert.equal(snapshot.turns[0]?.status, "completed");
   assert.equal(
     snapshot.items.filter((item) => item.type === "turn_completed").length,
     1,
@@ -409,9 +414,10 @@ test("automatic compaction failure rejects the Turn handle once without append o
   );
 
   const second = await server.startTurn(thread.id, "two");
-  await expectAppServerCode(second.done, "automatic_compaction_failed");
+  await second.done;
   snapshot = await server.readThread(thread.id);
   assert.equal(summaryCalls, 2);
+  assert.equal(snapshot.turns[1]?.status, "completed");
   assert.equal(
     snapshot.items.filter((item) => item.type === "turn_completed").length,
     2,
@@ -457,16 +463,23 @@ test("automatic compaction failure rejects the Turn handle once without append o
     persistenceThread.id,
     "persist",
   );
-  await expectAppServerCode(
-    persistenceHandle.done,
-    "automatic_compaction_failed",
-  );
+  await persistenceHandle.done;
   assert.equal(persistenceSummaryCalls, 1);
+  assert.equal(
+    (await persistence.readThread(persistenceThread.id)).turns[0]?.status,
+    "completed",
+  );
   assert.equal(
     (await persistenceBacking.read(persistenceThread.id)).some(
       (item) => item.type === "context_compaction",
     ),
     false,
+  );
+  assert.equal(warnings.length, 3);
+  assert(
+    warnings.every((warning) =>
+      warning.startsWith("Could not automatically compact completed Turn"),
+    ),
   );
 });
 

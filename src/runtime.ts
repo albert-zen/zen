@@ -112,7 +112,7 @@ export class AgentRuntime {
   readonly #tools: ToolEnvironment;
   readonly #id: () => string;
   readonly #now: () => string;
-  readonly #maxToolRounds: number;
+  readonly #maxToolRounds: number | undefined;
   readonly #toolDefinitionProjection: ToolDefinitionProjection | undefined;
 
   constructor(options: {
@@ -137,7 +137,14 @@ export class AgentRuntime {
     }
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
-    this.#maxToolRounds = options.maxToolRounds ?? 8;
+    if (
+      options.maxToolRounds !== undefined &&
+      (!Number.isSafeInteger(options.maxToolRounds) ||
+        options.maxToolRounds < 1)
+    ) {
+      throw new Error("Maximum tool rounds must be a positive safe integer");
+    }
+    this.#maxToolRounds = options.maxToolRounds;
     this.#toolDefinitionProjection = options.toolDefinitionProjection;
   }
 
@@ -201,7 +208,7 @@ export class AgentRuntime {
           });
           return;
         }
-        if (round >= this.#maxToolRounds) {
+        if (this.#maxToolRounds !== undefined && round >= this.#maxToolRounds) {
           throw new Error(
             `Model exceeded ${String(this.#maxToolRounds)} tool rounds`,
           );

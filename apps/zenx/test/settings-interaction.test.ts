@@ -931,6 +931,50 @@ test("General switches Appearance immediately without restarting the host", asyn
   }
 });
 
+test("General exposes an optional maximum tool round setting", async () => {
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    save: async (profile) => {
+      saved.push(profile);
+      return { ...settings, profile: { ...settings.profile, ...profile } };
+    },
+  });
+  try {
+    const maximum = await waitFor(() => requiredInput("Maximum tool rounds"));
+    assert.equal(maximum.type, "number");
+    assert.equal(maximum.value, "");
+    assert.equal(maximum.min, "1");
+    assert.equal(maximum.step, "1");
+    assert.match(
+      document.getElementById("max-tool-rounds-help")?.textContent ?? "",
+      /blank for unlimited/u,
+    );
+
+    await changeControl(maximum, "0");
+    await act(async () => {
+      maximum.dispatchEvent(new window.Event("focusout", { bubbles: true }));
+      await Promise.resolve();
+    });
+    assert.equal(maximum.getAttribute("aria-invalid"), "true");
+    assert.match(
+      document.getElementById("max-tool-rounds-error")?.textContent ?? "",
+      /whole number of 1 or more/u,
+    );
+    assert.equal(exactButtonRequired("Apply & restart").disabled, true);
+
+    await changeControl(maximum, "12");
+    assert.equal(maximum.hasAttribute("aria-invalid"), false);
+    const apply = exactButtonRequired("Apply & restart");
+    assert.equal(apply.disabled, false);
+    await click(apply);
+
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0]?.maxToolRounds, 12);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 interface Harness {
   dom: JSDOM;
   root: Root;

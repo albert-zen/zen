@@ -65,9 +65,29 @@ test("round-trips credential-free v3 profiles and builds all host registry entri
       ["qwen3", "deepseek-r1", "gpt-5.6-luna"],
     );
     assert.deepEqual(config.defaultSelection, profile.defaultModel);
+    assert.equal(config.maxToolRounds, undefined);
     assert.equal(JSON.stringify(read).includes("secret"), false);
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("validates and projects an opt-in maximum tool round setting", () => {
+  const configured = validateHostProfile({ ...profile, maxToolRounds: 24 });
+  const config = hostConfigFromProfile(configured, {
+    dataDirectory: path.join(os.tmpdir(), "data"),
+    subscriptionProfilePath: path.join(os.tmpdir(), "auth"),
+    fallbackWorkspace: path.join(os.tmpdir(), "fallback"),
+    apiKeys: { local: "secret" },
+  });
+
+  assert.equal(configured.maxToolRounds, 24);
+  assert.equal(config.maxToolRounds, 24);
+  for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(
+      () => validateHostProfile({ ...profile, maxToolRounds: invalid }),
+      /maximum tool rounds/u,
+    );
   }
 });
 

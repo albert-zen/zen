@@ -1006,11 +1006,18 @@ export class ZenAppServer {
         status: "completed",
       };
       await this.#commit(thread, completed);
-      await this.#compactCompletedTurnAutomatically({
-        thread,
-        completed,
-        ...automaticCompaction,
-      });
+      try {
+        await this.#compactCompletedTurnAutomatically({
+          thread,
+          completed,
+          ...automaticCompaction,
+        });
+      } catch (error) {
+        console.warn(
+          `Could not automatically compact completed Turn ${turnId}`,
+          error,
+        );
+      }
       return true;
     });
   }
@@ -1525,7 +1532,15 @@ export class ZenAppServer {
 
   #emit(event: AppServerEvent): void {
     for (const subscriber of this.#subscribers) {
-      subscriber(event);
+      try {
+        subscriber(event);
+      } catch (error) {
+        this.#subscribers.delete(subscriber);
+        console.warn(
+          "Removed a failing Zen App Server event subscriber",
+          error,
+        );
+      }
     }
   }
 }
