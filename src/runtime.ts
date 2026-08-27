@@ -20,6 +20,7 @@ import type { ModelAdapter, ModelMessage, ModelTool } from "./model.js";
 import type { Thread } from "./thread.js";
 import {
   ToolEnvironment,
+  ToolResultNormalizationError,
   toolProviderFromExecutor,
   type ApprovalHandler,
   type ToolExecutionResult,
@@ -484,11 +485,12 @@ export class AgentRuntime {
         toolCall,
         {
           output: `Tool preparation failed: ${describeError(error)}`,
-          exitCode: options.signal.aborted || isAbortError(error) ? 130 : 1,
+          exitCode: options.signal.aborted ? 130 : 1,
         },
         options,
       );
-      throw error;
+      if (options.signal.aborted) throw error;
+      return;
     }
 
     let decision: ApprovalDecision;
@@ -517,12 +519,13 @@ export class AgentRuntime {
       await this.#completeToolResult(
         toolCall,
         {
-          output: `Tool approval did not complete: ${describeError(error)}`,
-          exitCode: options.signal.aborted || isAbortError(error) ? 130 : 1,
+          output: `Tool admission failed: ${describeError(error)}`,
+          exitCode: options.signal.aborted ? 130 : 1,
         },
         options,
       );
-      throw error;
+      if (options.signal.aborted) throw error;
+      return;
     }
 
     if (decision === "cancel") {
@@ -541,16 +544,21 @@ export class AgentRuntime {
       try {
         result = await this.#tools.execute(prepared);
       } catch (error) {
-        const interrupted = options.signal.aborted || isAbortError(error);
+        const interrupted = options.signal.aborted;
+        const phase =
+          error instanceof ToolResultNormalizationError
+            ? "Tool result normalization failed"
+            : "Tool execution failed";
         await this.#completeToolResult(
           toolCall,
           {
-            output: `Tool execution failed: ${describeError(error)}`,
+            output: `${phase}: ${describeError(error)}`,
             exitCode: interrupted ? 130 : 1,
           },
           options,
         );
-        throw error;
+        if (interrupted) throw error;
+        return;
       }
     }
 

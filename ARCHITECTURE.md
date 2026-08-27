@@ -320,6 +320,12 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   `skills/list` 不因此获得新的会话语义。
 - 同一模型响应产生的多个工具调用当前仍按顺序执行；同一 Turn 的真正并行执行
   是后续效率优化，不属于本阶段。
+- 每条 canonical `tool_call` 必须恰好结算一条 canonical `tool_result`。prepare、
+  Host admission、provider execution 或 result normalization 的局部失败以简洁错误和
+  非零 exit code 形成该结果，继续执行同一模型响应中后续调用并进入下一次模型采样；
+  不额外写 `failure` 或把 Turn 标记为 failed。
+- 显式用户取消或 Turn abort 仍是中断 Turn 的控制流；模型流、journal append、Runtime
+  不变量等非工具局部失败仍按既有 Turn failure 语义终止，不能伪装成 tool result。
 
 ### 历史、结果与能力变化
 

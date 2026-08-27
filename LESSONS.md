@@ -31,6 +31,8 @@
 - 独立 Skills 平台；本阶段插件以 main document 提供首要模型说明
 - 同一 Turn 的并行工具执行，以及借 Plugin Platform 顺带进行 Provider、图片、
   attachment 或 compaction 重构
+- 工具失败后的自动重试、fallback、自愈或 durable recovery 状态机；工具局部失败只
+  结算一次 canonical failed result 并让模型决定下一步
 - 覆盖率门禁、按层重复跑的测试矩阵
 - 与 zen-legacy 的数据、协议、接口兼容
 

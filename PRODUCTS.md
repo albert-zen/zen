@@ -104,6 +104,9 @@ Host policy、路由和回写，插件或外部服务拥有实际领域执行。
 child process、本地服务或远程服务。模型初始只看到 builtin tools 与 `zenx_plugin`：`discover`
 返回 id/name/short description/status，`read` 返回 main document/tool index，随后采样才披露所选
 插件的普通 namespaced schemas。整个过程只使用既有 tool call/result，不新增 discovery Item。
+工具 prepare、admission、execution 或 result normalization 的局部失败会形成唯一 failed tool result；
+同一模型响应中的后续调用仍按顺序执行，随后模型可读取全部结果继续 Turn。只有显式用户/Turn
+取消会中断这条工具路径；模型、journal 与 Runtime 失败仍保留既有 Turn failure 语义。
 
 目标插件生命周期只有 installed / enabled / uninstalled；bundled plugin 同样可卸载、以后重装，
 卸载默认保留数据，删除数据是独立动作。目标权限只有默认 `full_access` 与可选 `ask_unknown`；后者
