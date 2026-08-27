@@ -11,12 +11,14 @@
     "prepare:first-party-plugins": "node ./scripts/pack-first-party-plugins.mjs ./resources",
     "prebuild": "npm run prepare:first-party-plugins",
     "build": "electron-vite build",
+    "build:prepared": "electron-vite build",
     "brand:generate": "node ./scripts/generate-brand-assets.mjs",
     "brand:check": "node ./scripts/generate-brand-assets.mjs --check",
     "pretypecheck": "npm run prepare:plugin-sdk",
     "typecheck": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false",
     "pretest": "npm run prepare:first-party-plugins",
     "test": "tsx --test test/**/*.test.ts test/**/*.test.mjs",
+    "test:prepared": "tsx --test test/**/*.test.ts test/**/*.test.mjs",
     "test:project-identity": "tsx --test test/project-projection.test.ts test/settings-service.test.ts test/self-control-capability.test.ts",
     "stress:hosted-flakes": "node ./scripts/stress-hosted-flakes.mjs",
     "smoke:capabilities": "npm run smoke:packaged",
@@ -30,7 +32,7 @@
     "smoke:windows-projects": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-project-workspace-smoke.ps1",
     "smoke:windows-user-browser": "tsx src/main/user-browser-smoke.ts",
     "smoke:providers": "npm run build && electron ./out/main/provider-smoke.js",
-    "check": "npm run brand:check && npm run typecheck && npm test && npm run build"
+    "check": "npm run brand:check && npm run typecheck && npm run prepare:first-party-plugins && npm run test:prepared && npm run build:prepared"
   },
   "dependencies": {
     "@zenx/plugin-sdk": "0.1.0",
