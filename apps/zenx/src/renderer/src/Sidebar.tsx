@@ -50,6 +50,7 @@ interface SidebarProps {
   ): Promise<void>;
   onModeChange(mode: SidebarMode): void;
   onNewThread(workspace?: string): void;
+  newThreadDisabled?: boolean;
   onAddProject(): void;
   onRemoveProject(workspace: string): void;
   onSetDefaultProject(workspace: string): void;
@@ -82,6 +83,7 @@ export function Sidebar({
   onReorderThread,
   onModeChange,
   onNewThread,
+  newThreadDisabled = false,
   onAddProject,
   onRemoveProject,
   onSetDefaultProject,
@@ -211,9 +213,10 @@ export function Sidebar({
                   ? projectChooserOpen
                   : undefined
               }
+              disabled={newThreadDisabled}
               onClick={() => {
                 if (configuredProjects.length === 0) {
-                  onAddProject();
+                  onNewThread();
                   return;
                 }
                 if (lastUsedProject !== undefined) {
@@ -242,6 +245,7 @@ export function Sidebar({
                     key={project.key}
                     type="button"
                     title={project.workspace}
+                    disabled={newThreadDisabled}
                     onClick={() => {
                       setProjectChooserOpen(false);
                       onNewThread(project.workspace);
@@ -361,6 +365,7 @@ export function Sidebar({
                   projects={projects}
                   sidebarOrder={sidebarOrder}
                   onNewThread={onNewThread}
+                  newThreadDisabled={newThreadDisabled}
                   onRemoveProject={onRemoveProject}
                   onSetDefaultProject={onSetDefaultProject}
                   onSelectThread={onSelectThread}
@@ -576,6 +581,7 @@ function ProjectsView({
   projects,
   sidebarOrder,
   onNewThread,
+  newThreadDisabled,
   onRemoveProject,
   onSetDefaultProject,
   threads,
@@ -596,6 +602,7 @@ function ProjectsView({
   projects: ZenXProjectProjectionSnapshot;
   sidebarOrder: ZenXSidebarOrder;
   onNewThread(workspace?: string): void;
+  newThreadDisabled: boolean;
   onRemoveProject(workspace: string): void;
   onSetDefaultProject(workspace: string): void;
   threads: readonly NativeThreadSummary[];
@@ -639,6 +646,7 @@ function ProjectsView({
       onChangeThreadPinned={onChangeThreadPinned}
       onRenameThread={onRenameThread}
       onNewThread={onNewThread}
+      newThreadDisabled={newThreadDisabled}
       onRemoveProject={onRemoveProject}
       onSetDefaultProject={onSetDefaultProject}
       onSelectThread={onSelectThread}
@@ -816,6 +824,7 @@ interface ThreadReorderHandlers {
 function ProjectRows({
   group,
   onNewThread,
+  newThreadDisabled,
   onRemoveProject,
   onSetDefaultProject,
   selectedThreadId,
@@ -832,6 +841,7 @@ function ProjectRows({
 }: {
   group: ReturnType<typeof deriveProjectGroups>[number];
   onNewThread(workspace?: string): void;
+  newThreadDisabled: boolean;
   onRemoveProject(workspace: string): void;
   onSetDefaultProject(workspace: string): void;
   selectedThreadId: string | null;
@@ -961,6 +971,7 @@ function ProjectRows({
               type="button"
               aria-label={`New thread in ${group.label}`}
               title="New thread here"
+              disabled={newThreadDisabled}
               onClick={() => onNewThread(group.workspace!)}
             >
               <Icon name="compose" size={13} />

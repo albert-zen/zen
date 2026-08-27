@@ -108,6 +108,21 @@ test("requires one visible default while hidden models remain addressable", () =
   assert.equal(catalog.get("model-hidden")?.hidden, true);
 });
 
+test("startThread preserves an explicit cwd over the host default", async () => {
+  const server = createServer();
+  const requestedCwd = path.join(process.cwd(), "project-thread-cwd-override");
+
+  const thread = await server.startThread({ cwd: requestedCwd });
+
+  assert.equal(thread.cwd, requestedCwd);
+  assert.equal(
+    thread.items.find(
+      (item): item is ThreadMetadataItem => item.type === "thread_metadata",
+    )?.cwd,
+    requestedCwd,
+  );
+});
+
 test("preserves credential-matching model and tool trace strings verbatim", async () => {
   const credentialBytes = "credential-bytes";
   const model: ModelAdapter = {

@@ -14,6 +14,7 @@ export const ipcChannels = {
   threadAttachmentsRead: "zenx:thread-attachments:read",
   threadUsageRead: "zenx:thread-usage:read",
   projectsGet: "zenx:projects:get",
+  projectThreadStart: "zenx:projects:thread-start",
   settingsGet: "zenx:settings:get",
   settingsSave: "zenx:settings:save",
   providerAdd: "zenx:settings:provider-add",

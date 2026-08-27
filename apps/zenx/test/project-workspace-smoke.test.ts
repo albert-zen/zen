@@ -130,6 +130,8 @@ test("packaged Project acceptance opens each Project menu before its actions", a
       "Add folder",
       "More actions for project-b",
       "Remove from ZenX",
+      "New thread in project-b",
+      "New thread in project-b",
       "Set as default",
       "More actions for project-a",
       "Remove from ZenX",

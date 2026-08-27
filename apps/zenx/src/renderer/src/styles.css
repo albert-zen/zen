@@ -972,6 +972,7 @@ a:focus-visible {
 }
 
 .workspace {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -982,6 +983,39 @@ a:focus-visible {
       transparent 60%
     ),
     var(--main);
+}
+.new-thread-error-banner {
+  position: absolute;
+  z-index: 20;
+  top: 72px;
+  right: 22px;
+  left: 22px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 52%, var(--border));
+  border-radius: 10px;
+  background: var(--surface-danger);
+  box-shadow: var(--shadow-medium);
+  color: var(--danger);
+}
+.new-thread-error-banner > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.new-thread-error-banner strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+}
+.new-thread-error-banner span {
+  overflow-wrap: anywhere;
+  font-size: 10px;
 }
 .agent-surface,
 .product-page {
@@ -3927,6 +3961,11 @@ a:focus-visible {
   .product-page {
     width: 100%;
     height: 100%;
+  }
+  .new-thread-error-banner {
+    top: 68px;
+    right: 12px;
+    left: 12px;
   }
   .agent-surface,
   .product-page {

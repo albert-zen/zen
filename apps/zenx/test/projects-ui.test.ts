@@ -31,7 +31,7 @@ const baseProps = {
   threads: [],
 };
 
-test("no-project sidebar keeps explicit Add project and non-creating New thread guidance", async () => {
+test("no-project sidebar keeps explicit Add project and New thread guidance", async () => {
   Object.assign(globalThis, { React });
   const { Sidebar } = await import("../src/renderer/src/Sidebar.js");
   const html = renderToStaticMarkup(

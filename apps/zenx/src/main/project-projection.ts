@@ -22,6 +22,21 @@ export interface ZenXProjectProjectionSnapshot {
 
 export type ProjectRealpath = (candidate: string) => Promise<string>;
 
+export async function startConfiguredProjectThread<T>(
+  projection: ZenXProjectProjection,
+  workspace: unknown,
+  start: (params: { cwd: string }) => Promise<T>,
+): Promise<T> {
+  if (typeof workspace !== "string" || workspace.trim().length === 0) {
+    throw new Error("Invalid Project workspace");
+  }
+  const configuredWorkspace = await projection.configuredWorkspace(workspace);
+  if (configuredWorkspace === null) {
+    throw new Error("Project workspace is not configured");
+  }
+  return await start({ cwd: configuredWorkspace });
+}
+
 export interface ProjectPathIdentity {
   readonly displayPath: string;
   readonly key: string;
@@ -30,6 +45,7 @@ export interface ProjectPathIdentity {
 export type ProjectPathSnapshot = readonly ProjectPathIdentity[];
 
 interface ProjectConfigurationSnapshot {
+  readonly revision: number;
   readonly workspaces: readonly string[];
   readonly defaultWorkspace: string | null;
   readonly lastUsedWorkspace: string | null;
@@ -44,6 +60,7 @@ export class ZenXProjectProjection {
   readonly #platform: NodeJS.Platform;
   readonly #realpath: ProjectRealpath;
   #configuration: ProjectConfigurationSnapshot = Object.freeze({
+    revision: 0,
     workspaces: Object.freeze([]),
     defaultWorkspace: null,
     lastUsedWorkspace: null,
@@ -98,6 +115,7 @@ export class ZenXProjectProjection {
         : (unique.get(lastUsedKey)?.displayPath ?? null);
     if (revision !== this.#configurationRevision) return;
     this.#configuration = Object.freeze({
+      revision,
       workspaces: Object.freeze(nextWorkspaces),
       defaultWorkspace: nextDefaultWorkspace,
       lastUsedWorkspace: nextLastUsedWorkspace,
@@ -197,11 +215,19 @@ export class ZenXProjectProjection {
   }
 
   async configuredWorkspace(value: string): Promise<string | null> {
+    const revision = this.#configurationRevision;
     const configuration = this.#configuration;
+    if (configuration.revision !== revision) return null;
     const identities = await this.#canonicalSnapshot([
       ...configuration.workspaces,
       value,
     ]);
+    if (
+      this.#configurationRevision !== revision ||
+      this.#configuration !== configuration
+    ) {
+      return null;
+    }
     const requested = identities.at(-1);
     if (requested === undefined) return null;
     return (

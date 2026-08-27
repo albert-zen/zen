@@ -48,11 +48,20 @@ test("desktop Choose project opens the existing directory picker", async () => {
 });
 
 test("zero-Project New thread opens the existing directory picker", async () => {
-  const harness = await mountApp({
-    projects: [],
-    unavailableThreadIds: [],
-    lastUsedWorkspace: null,
-  });
+  const startedWorkspaces: string[] = [];
+  const harness = await mountApp(
+    {
+      projects: [],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: null,
+    },
+    {
+      startProjectThread: async (workspace) => {
+        startedWorkspaces.push(workspace);
+        return started(liveThread(), workspace);
+      },
+    },
+  );
   try {
     const newThread = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(".new-thread-action"),
@@ -64,6 +73,252 @@ test("zero-Project New thread opens the existing directory picker", async () => 
       document.querySelector('[role="dialog"]')?.textContent ?? "",
       /Add a project folder/u,
     );
+    await act(async () => exactButton("Add folder")?.click());
+    await waitFor(() => startedWorkspaces.length === 1);
+    assert.deepEqual(startedWorkspaces, ["/"]);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("Project quick-create keeps the clicked workspace authoritative and fences duplicate starts", async () => {
+  const selectedWorkspace = "/work/documents";
+  const startResponse = deferred<ReturnType<typeof started>>();
+  const scopedStarts: string[] = [];
+  const genericStarts: unknown[] = [];
+  const projects: ZenXProjectProjectionSnapshot = {
+    projects: [
+      {
+        key: "/work/documents",
+        workspace: selectedWorkspace,
+        configured: true,
+        isDefault: false,
+        threadIds: [],
+      },
+      {
+        key: "/work",
+        workspace: "/work",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work",
+  };
+  const harness = await mountApp(projects, {
+    startProjectThread: async (workspace) => {
+      scopedStarts.push(workspace);
+      return await startResponse.promise;
+    },
+    request: async (method, params) => {
+      if (method === "thread/start") {
+        genericStarts.push(params);
+        return await startResponse.promise;
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const createInDocuments = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="New thread in documents"]',
+      ),
+    );
+    await act(async () => {
+      createInDocuments.click();
+      createInDocuments.click();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => scopedStarts.length + genericStarts.length === 1);
+    assert.deepEqual(scopedStarts, [selectedWorkspace]);
+    assert.deepEqual(genericStarts, []);
+    assert.equal(createInDocuments.disabled, true);
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.disabled,
+      true,
+    );
+
+    await act(async () => {
+      startResponse.resolve(started(liveThread(), selectedWorkspace));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("successful Project quick-create commits profile, summaries, and projection before settling", async () => {
+  const workspace = "/work/zen";
+  const profileCommit = deferred<ReturnType<typeof publicSettings>>();
+  let committed = false;
+  let starts = 0;
+  const emptyProjects: ZenXProjectProjectionSnapshot = {
+    projects: [
+      {
+        key: workspace,
+        workspace,
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: workspace,
+  };
+  const populatedProjects: ZenXProjectProjectionSnapshot = {
+    ...emptyProjects,
+    projects: [{ ...emptyProjects.projects[0]!, threadIds: ["thread-1"] }],
+  };
+  const harness = await mountApp(emptyProjects, {
+    markWorkspaceUsed: async () => {
+      const result = await profileCommit.promise;
+      committed = true;
+      return result;
+    },
+    projectsGet: async () => (committed ? populatedProjects : emptyProjects),
+    startProjectThread: async () => {
+      starts += 1;
+      return started(liveThread(), workspace);
+    },
+    threads: async (archived) =>
+      !archived && committed ? [summary(false)] : [],
+  });
+  try {
+    const create = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="New thread in zen"]',
+      ),
+    );
+    await act(async () => create.click());
+    await waitFor(() => starts === 1);
+    assert.equal(
+      document.querySelector(".project-group .thread-row-shell"),
+      null,
+    );
+
+    await act(async () => {
+      profileCommit.resolve(publicSettings([]));
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      document.querySelector(".project-group .thread-row-shell"),
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("New thread failure stays visible on Settings and retries in place", async () => {
+  const projects: ZenXProjectProjectionSnapshot = {
+    projects: [
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work/zen",
+  };
+  let starts = 0;
+  const populatedProjects: ZenXProjectProjectionSnapshot = {
+    ...projects,
+    projects: [{ ...projects.projects[0]!, threadIds: ["thread-1"] }],
+  };
+  const harness = await mountApp(projects, {
+    projectsGet: async () => (starts >= 2 ? populatedProjects : projects),
+    startProjectThread: async (workspace) => {
+      starts += 1;
+      if (starts === 1) throw new Error("runtime offline");
+      return started(liveThread(), workspace);
+    },
+    threads: async (archived) =>
+      !archived && starts >= 2 ? [summary(false)] : [],
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")?.click(),
+    );
+    await waitFor(() => /Settings/u.test(document.body.textContent ?? ""));
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New thread in zen"]')
+        ?.click(),
+    );
+
+    const retry = await waitFor(() => exactButton("Try again"));
+    assert.match(document.body.textContent ?? "", /New thread failed/u);
+    assert.match(document.body.textContent ?? "", /runtime offline/u);
+    assert.match(document.body.textContent ?? "", /Settings/u);
+
+    await act(async () => retry.click());
+    await waitFor(() => starts === 2);
+    await waitFor(() => /Thread one/u.test(document.body.textContent ?? ""));
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("Project quick-create releases its loading fence after selection epoch changes and failure", async () => {
+  const firstStart = deferred<ReturnType<typeof started>>();
+  let starts = 0;
+  const projects: ZenXProjectProjectionSnapshot = {
+    projects: [
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: true,
+        threadIds: ["thread-1"],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work/zen",
+  };
+  const harness = await mountApp(projects, {
+    request: async (method) => {
+      if (method === "thread/resume") return resumed(liveThread());
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    startProjectThread: async (workspace) => {
+      starts += 1;
+      if (starts === 1) return await firstStart.promise;
+      return started(liveThread(), workspace);
+    },
+    threads: async (archived) => (archived ? [] : [summary(false)]),
+  });
+  try {
+    const create = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="New thread in zen"]',
+      ),
+    );
+    await act(async () => create.click());
+    await waitFor(() => starts === 1);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")?.click(),
+    );
+    await waitFor(() => /Thread one/u.test(document.body.textContent ?? ""));
+    await act(async () => {
+      firstStart.reject(new Error("first start failed"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const retryCreate = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>(
+        '[aria-label="New thread in zen"]',
+      );
+      return button !== null && !button.disabled ? button : null;
+    });
+    assert.match(document.body.textContent ?? "", /first start failed/u);
+    await act(async () => retryCreate.click());
+    await waitFor(() => starts === 2);
   } finally {
     await unmountApp(harness);
   }
@@ -879,7 +1134,11 @@ async function mountApp(
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
     models?: ModelSummary[];
+    markWorkspaceUsed?(
+      workspace: string,
+    ): Promise<ReturnType<typeof publicSettings>>;
     projectsGet?(): Promise<ZenXProjectProjectionSnapshot>;
+    startProjectThread?(workspace: string): Promise<unknown>;
     setPinnedThreadIds?(
       threadIds: readonly string[],
     ): Promise<ReturnType<typeof publicSettings>>;
@@ -948,6 +1207,12 @@ async function mountApp(
         options.projectsGet === undefined
           ? projects
           : await options.projectsGet(),
+      startThread: async (workspace: string) => {
+        if (options.startProjectThread === undefined) {
+          throw new Error(`Unexpected Project Thread start: ${workspace}`);
+        }
+        return await options.startProjectThread(workspace);
+      },
     },
     settings: {
       get: async () => currentSettings,
@@ -958,7 +1223,10 @@ async function mountApp(
         currentSettings = publicSettings([...threadIds]);
         return currentSettings;
       },
-      markWorkspaceUsed: async () => currentSettings,
+      markWorkspaceUsed: async (workspace: string) =>
+        options.markWorkspaceUsed === undefined
+          ? currentSettings
+          : await options.markWorkspaceUsed(workspace),
       onManualCodeRequested: () => () => undefined,
       addWorkspace: async () => ({ profile: { onboardingComplete: true } }),
       getDirectoryBrowser: async () => ({
@@ -1146,6 +1414,19 @@ function runningThread(): Thread {
 
 function resumed(thread: Thread) {
   return { thread, model: "fake", modelProvider: "fake" };
+}
+
+function started(thread: Thread, cwd: string) {
+  return {
+    ...resumed({ ...thread, cwd }),
+    approvalPolicy: "never" as const,
+    approvalsReviewer: "user" as const,
+    cwd,
+    instructionSources: [],
+    reasoningEffort: "medium",
+    sandbox: { type: "dangerFullAccess" as const },
+    serviceTier: null,
+  };
 }
 
 async function mountThreadApp(

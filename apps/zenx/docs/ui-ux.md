@@ -104,6 +104,8 @@ Thread
 
 - Projects 标题旁提供 icon-only **Add project**，具备 tooltip、accessible name、focus state 和完整 hit target。
 - Add project 使用 ZenX 只读 directory picker；Thread 创建最终必须解析为明确的 cwd，并消费同一个 canonical Project projection。
+- Project quick-create 一旦呈现，必须把被点击 Project 作为唯一创建作用域；默认或最近 Project 不能覆盖它。New thread 打开 directory picker 时，确认目录必须继续完成原始的 Thread 创建意图，不能退化成只添加 Project。
+- New thread 的 pending 状态只由该创建操作拥有；创建成功后再解除 pending 并刷新 summaries / Project projection，失败则在当前页面显示可重试的明确反馈。
 - **Experiment / TBD：** Project quick-create 是否保留、全局 New thread 是否复用 last-used Project，以及 last-used 失效时是否直接打开 picker，均属于最终 New thread IA 的待定部分。不得把 Documents、`process.cwd()` 或隐藏默认 Project 当成已经确认的产品 fallback。
 
 ### 3.4 原生应用菜单与按需面板
