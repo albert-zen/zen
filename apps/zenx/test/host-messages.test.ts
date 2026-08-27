@@ -230,8 +230,54 @@ test("validates exclusive canonical Thread usage projections", () => {
   assert.equal(
     isHostEvent({
       type: "thread-usage/result",
+      requestId: "subset-boundary",
+      usage: {
+        thread: {
+          responseCount: 1,
+          inputTokens: 10,
+          cachedInputTokens: 10,
+          outputTokens: 2,
+          reasoningOutputTokens: 2,
+          cacheHitRate: 1,
+        },
+        turns: {},
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-usage/result",
       requestId: "bad-rate",
       usage: { ...usage, thread: { ...usage.thread, cacheHitRate: 2 } },
+    }),
+    false,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-usage/result",
+      requestId: "cached-input-exceeds-input",
+      usage: {
+        ...usage,
+        thread: { ...usage.thread, cachedInputTokens: 101 },
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "thread-usage/result",
+      requestId: "reasoning-output-exceeds-output",
+      usage: {
+        ...usage,
+        turns: {
+          ...usage.turns,
+          "turn-1": {
+            ...usage.turns["turn-1"],
+            reasoningOutputTokens: 11,
+          },
+        },
+      },
     }),
     false,
   );

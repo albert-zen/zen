@@ -49,14 +49,19 @@ export function isModelUsageProjection(
 
 function isAggregate(value: unknown): value is ModelUsageAggregate {
   if (!isRecord(value)) return false;
+  const inputTokens = value.inputTokens;
+  const cachedInputTokens = value.cachedInputTokens;
+  const outputTokens = value.outputTokens;
+  const reasoningOutputTokens = value.reasoningOutputTokens;
   return (
     isCount(value.responseCount) &&
-    isCount(value.inputTokens) &&
-    isCount(value.outputTokens) &&
-    (value.cachedInputTokens === undefined ||
-      isCount(value.cachedInputTokens)) &&
-    (value.reasoningOutputTokens === undefined ||
-      isCount(value.reasoningOutputTokens)) &&
+    isCount(inputTokens) &&
+    isCount(outputTokens) &&
+    (cachedInputTokens === undefined ||
+      (isCount(cachedInputTokens) && cachedInputTokens <= inputTokens)) &&
+    (reasoningOutputTokens === undefined ||
+      (isCount(reasoningOutputTokens) &&
+        reasoningOutputTokens <= outputTokens)) &&
     (value.cacheHitRate === undefined ||
       (typeof value.cacheHitRate === "number" &&
         Number.isFinite(value.cacheHitRate) &&

@@ -917,7 +917,9 @@ function tokenCount(value: unknown): number {
 }
 
 function optionalTokenCount(value: unknown): number | undefined {
-  return value === undefined ? undefined : tokenCount(value);
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function recordField(
