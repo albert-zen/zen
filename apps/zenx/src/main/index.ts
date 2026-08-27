@@ -73,21 +73,14 @@ import {
 import { secondInstanceDisposition } from "./desktop-lifecycle.js";
 import { validatePluginHostSdkRequest } from "./plugin-host-sdk.js";
 import type { ZenXPluginPackageSource } from "./capabilities/types.js";
-import {
-  createZenXRoomsProfileLoader,
-  ZENX_ROOMS_PACKAGE_NAME,
-  ZENX_ROOMS_TARBALL,
-} from "./rooms-profile-loader.js";
+import { createZenXRoomsProfileLoader } from "./rooms-profile-loader.js";
 import {
   JsonFileMarketplaceCatalogTransport,
   MarketplaceCatalogService,
 } from "./marketplace-catalog.js";
 import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
-import {
-  createDelegatingFirstPartyProfileLoader,
-  FIRST_PARTY_PLUGIN_PACKAGES,
-  firstPartyProviderTarball,
-} from "./first-party-profile-loader.js";
+import { createDelegatingFirstPartyProfileLoader } from "./first-party-profile-loader.js";
+import { installZenXBundledPluginsAtStartup } from "./bundled-plugin-startup.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -290,74 +283,10 @@ app.whenReady().then(async () => {
     triggersPackage = new ZenXTriggersCapabilityPackage(automationService);
     await capabilityService.initialize();
     await capabilityService.syncProfileManagedProviderVariants();
-    const installedRooms = capabilityService
-      .pluginSnapshot()
-      .plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID);
-    if (installedRooms?.profileSource === undefined) {
-      await capabilityService.installBundledPluginPackage(
-        join(resourcesDirectory, "plugins", ZENX_ROOMS_TARBALL),
-        {
-          pluginId: ZENX_ROOMS_CAPABILITY_ID,
-          packageName: ZENX_ROOMS_PACKAGE_NAME,
-        },
-      );
-    }
-    for (const definition of [
-      FIRST_PARTY_PLUGIN_PACKAGES.browser,
-      FIRST_PARTY_PLUGIN_PACKAGES.computer,
-      FIRST_PARTY_PLUGIN_PACKAGES.selfControl,
-      FIRST_PARTY_PLUGIN_PACKAGES.triggers,
-    ]) {
-      if (
-        definition.pluginId === "computer" &&
-        (() => {
-          try {
-            capabilityService!.computerProfilePackage();
-            return false;
-          } catch {
-            return true;
-          }
-        })()
-      )
-        continue;
-      if (
-        definition.pluginId === "browser" &&
-        (() => {
-          try {
-            capabilityService!.browserProfilePackage();
-            return false;
-          } catch {
-            return true;
-          }
-        })()
-      )
-        continue;
-      const installed = capabilityService
-        .pluginSnapshot()
-        .plugins.find((plugin) => plugin.id === definition.pluginId);
-      if (installed?.profileSource === undefined) {
-        const tarball =
-          definition.pluginId === "browser"
-            ? firstPartyProviderTarball(
-                "browser",
-                capabilityService.browserProfilePackage().manifest.provider.id,
-              )
-            : definition.pluginId === "computer"
-              ? firstPartyProviderTarball(
-                  "computer",
-                  capabilityService.computerProfilePackage().manifest.provider
-                    .id,
-                )
-              : definition.tarball;
-        await capabilityService.installBundledPluginPackage(
-          join(resourcesDirectory, "plugins", tarball),
-          {
-            pluginId: definition.pluginId,
-            packageName: definition.packageName,
-          },
-        );
-      }
-    }
+    await installZenXBundledPluginsAtStartup(
+      capabilityService,
+      resourcesDirectory,
+    );
     installCapabilityIpc(capabilityService, appServerManager, marketplace);
     if (startupError === undefined) {
       await appServerManager.start();
