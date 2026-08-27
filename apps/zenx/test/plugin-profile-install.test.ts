@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import type { CanonicalItem } from "../../../src/item.js";
 import { requestPluginDevLink } from "@zenx/plugin-sdk";
+import { npmInvocation } from "../../../packages/zenx-plugin-sdk/dist/npm-invocation.mjs";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
@@ -40,6 +41,28 @@ const pluginSdkCli = fileURLToPath(
 const pluginSdkRoot = fileURLToPath(
   new URL("../../../packages/zenx-plugin-sdk", import.meta.url),
 );
+
+test("plugin profile npm fixtures never invoke a Windows command shim directly", async () => {
+  const source = await readFile(fileURLToPath(import.meta.url), "utf8");
+  const directWindowsNpmShim = new RegExp(["npm", "\\.cmd"].join(""), "u");
+  assert.doesNotMatch(source, directWindowsNpmShim);
+  assert.deepEqual(
+    npmInvocation(["pack", "C:\\Plugin Fixture\\literal & path"], {
+      platform: "win32",
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      npmExecPath:
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+    }),
+    {
+      executable: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+        "pack",
+        "C:\\Plugin Fixture\\literal & path",
+      ],
+    },
+  );
+});
 
 test("Settings host installs one tarball through the committed profile and Agent discovery", async () => {
   const directory = await mkdtemp(
@@ -272,8 +295,7 @@ test("external public fixture completes create, dev target reload, validate, pac
       "--id",
       "dev-flow",
     ]);
-    const packedSdk = await run(
-      process.platform === "win32" ? "npm.cmd" : "npm",
+    const packedSdk = await runNpm(
       ["pack", pluginSdkRoot, "--json", "--pack-destination", sdkTarballs],
       { cwd: directory },
     );
@@ -292,8 +314,7 @@ test("external public fixture completes create, dev target reload, validate, pac
       projectPackageFile,
       `${JSON.stringify(projectPackage, null, 2)}\n`,
     );
-    await run(
-      process.platform === "win32" ? "npm.cmd" : "npm",
+    await runNpm(
       [
         "install",
         "--ignore-scripts",
@@ -1864,8 +1885,7 @@ async function createPublicSdkPluginTarball(
   );
   const sdkTarballs = path.join(directory, "sdk-tarballs");
   await mkdir(sdkTarballs);
-  const packedSdk = await run(
-    process.platform === "win32" ? "npm.cmd" : "npm",
+  const packedSdk = await runNpm(
     ["pack", pluginSdkRoot, "--json", "--pack-destination", sdkTarballs],
     { cwd: directory },
   );
@@ -1889,6 +1909,11 @@ async function createPublicSdkPluginTarball(
   const filename = (JSON.parse(packed.stdout) as [{ filename: string }])[0]
     .filename;
   return path.join(packageDirectory, filename);
+}
+
+async function runNpm(args: readonly string[], options: { cwd: string }) {
+  const invocation = npmInvocation(args);
+  return await run(invocation.executable, invocation.args, options);
 }
 
 interface TarballFixtureOptions {
