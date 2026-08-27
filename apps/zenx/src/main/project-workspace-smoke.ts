@@ -60,6 +60,9 @@ export async function runProjectWorkspaceAcceptance(
       await clickButton(options.window, `More actions for ${config.projectB}`);
       await waitForButton(options.window, "Remove from ZenX");
 
+      await clickButton(options.window, `New thread in ${config.projectB}`);
+      await waitForProjectThread(options.window, config.projectB);
+
       await clickButton(options.window, "Set as default");
       await clickButton(options.window, `More actions for ${config.projectA}`);
       await clickButton(options.window, "Remove from ZenX");
@@ -137,6 +140,21 @@ async function waitForProjectState(
     restarted
       ? "persisted Project state after restart"
       : "Project removal to settle",
+  );
+}
+
+async function waitForProjectThread(
+  window: BrowserWindow,
+  project: string,
+): Promise<void> {
+  await waitForRenderer(
+    window,
+    `(() => {
+      const action = ${buttonLookup(`New thread in ${project}`)};
+      return action instanceof HTMLButtonElement &&
+        action.closest(".project-group")?.querySelector(".thread-row-shell") instanceof HTMLElement;
+    })()`,
+    `Thread created inside Project ${project}`,
   );
 }
 

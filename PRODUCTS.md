@@ -151,6 +151,8 @@ Add Project 使用只读的内部目录 picker。Windows/Linux 不安装 Electro
 只保留系统合规的最小 native menu；这些都属于桌面产品外层，不改变 Core 或 wire protocol。
 顶部 New thread 只使用 host profile 中仍有效的最近使用 workspace；没有记录时由用户明确
 选择 Project，不把 Documents、进程 cwd 或默认 Project 当作隐式替代。
+Project row 的 quick-create 始终以被点击 Project 的 canonical workspace 发起 `thread/start`；
+New thread 因缺少可用 Project 而打开目录 picker 时，确认目录会继续完成 Thread 创建，而不只添加 Project。
 
 固定版本 T3 Code 仍是机会型兼容目标：它可以通过协议直接把 Zen 当 provider
 驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。

@@ -7,8 +7,37 @@ import test from "node:test";
 import {
   projectPathKey,
   resolveProjectPath,
+  startConfiguredProjectThread,
   ZenXProjectProjection,
 } from "../src/main/project-projection.js";
+
+test("Project-scoped Thread start resolves the configured workspace and never falls back", async () => {
+  const projection = new ZenXProjectProjection("win32");
+  await projection.updateConfiguration(
+    ["D:\\Work", "C:\\Users\\two-one\\Documents"],
+    "D:\\Work",
+  );
+  const starts: Array<{ cwd: string }> = [];
+
+  const result = await startConfiguredProjectThread(
+    projection,
+    "c:\\users\\two-one\\documents",
+    async (params) => {
+      starts.push(params);
+      return { threadId: "documents-thread" };
+    },
+  );
+
+  assert.deepEqual(result, { threadId: "documents-thread" });
+  assert.deepEqual(starts, [{ cwd: "C:\\Users\\two-one\\Documents" }]);
+  await assert.rejects(
+    startConfiguredProjectThread(projection, "E:\\Unconfigured", async () => {
+      throw new Error("must not start");
+    }),
+    /not configured/u,
+  );
+  assert.deepEqual(starts, [{ cwd: "C:\\Users\\two-one\\Documents" }]);
+});
 
 test("projects share Windows case-insensitive identity and keep empty configured workspaces", async () => {
   const projection = new ZenXProjectProjection("win32");

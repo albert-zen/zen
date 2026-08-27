@@ -99,6 +99,9 @@ declare global {
         get(
           options?: ThreadSummaryListOptions,
         ): Promise<ZenXProjectProjectionSnapshot>;
+        startThread(
+          workspace: string,
+        ): Promise<ClientRequestResults["thread/start"]>;
       };
       settings: {
         get(): Promise<PublicHostSettings>;

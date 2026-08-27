@@ -86,6 +86,7 @@ const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
 
 export function App() {
   const selectionEpoch = useRef(0);
+  const newThreadPendingRef = useRef(false);
   const threadUsageLoadEpoch = useRef(0);
   const threadSummaryLoadEpoch = useRef(0);
   const projectLoadEpoch = useRef(0);
@@ -99,7 +100,9 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
-  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  const [projectPickerIntent, setProjectPickerIntent] = useState<
+    "add-project" | "new-thread" | null
+  >(null);
   const [pluginSnapshot, setPluginSnapshot] =
     useState<ZenXPluginSnapshot | null>(null);
   const [titleSnapshot, setTitleSnapshot] = useState<ThreadTitleSnapshot>({});
@@ -510,13 +513,13 @@ export function App() {
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (projectPickerOpen) setProjectPickerOpen(false);
+      if (projectPickerIntent !== null) setProjectPickerIntent(null);
       else if (workspaceOpen) setWorkspaceOpen(false);
       else if (sidebarOpen) setSidebarOpen(false);
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [projectPickerOpen, sidebarOpen, workspaceOpen]);
+  }, [projectPickerIntent, sidebarOpen, workspaceOpen]);
 
   const activeSummaries = threadSummaries.map((summary) =>
     titleSnapshot[summary.threadId]?.title === undefined
@@ -552,6 +555,8 @@ export function App() {
   const lastUsedWorkspace = lastUsedProjectWorkspace(projects);
 
   const newThread = async (workspace: string) => {
+    if (newThreadPendingRef.current) return;
+    newThreadPendingRef.current = true;
     const epoch = ++selectionEpoch.current;
     setThreadLoading(true);
     setThreadError(null);
@@ -560,8 +565,7 @@ export function App() {
       const result = await startProjectThread(
         workspace,
         async (candidate) => await window.zenx.settings.addWorkspace(candidate),
-        async (params) =>
-          await window.zenx.protocol.request("thread/start", params),
+        async (params) => await window.zenx.projects.startThread(params.cwd),
         (startedWorkspace) => {
           void window.zenx.settings
             .markWorkspaceUsed(startedWorkspace)
@@ -584,6 +588,7 @@ export function App() {
       if (selectionEpoch.current === epoch)
         setThreadError(describeError(error));
     } finally {
+      newThreadPendingRef.current = false;
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
   };
@@ -965,9 +970,11 @@ export function App() {
           }
         }}
         onNewThread={(workspace) => {
-          if (workspace !== undefined) void newThread(workspace);
+          if (workspace === undefined) setProjectPickerIntent("new-thread");
+          else void newThread(workspace);
         }}
-        onAddProject={() => setProjectPickerOpen(true)}
+        onAddProject={() => setProjectPickerIntent("add-project")}
+        newThreadDisabled={threadLoading}
         onRemoveProject={(workspace) => {
           void window.zenx.settings
             .removeWorkspace(workspace)
@@ -1083,10 +1090,10 @@ export function App() {
               (project) => project.configured,
             )}
             hasLastUsedProject={lastUsedWorkspace !== null}
-            onAddProject={() => setProjectPickerOpen(true)}
+            onAddProject={() => setProjectPickerIntent("add-project")}
             onNewThread={() => {
               if (lastUsedWorkspace !== null) void newThread(lastUsedWorkspace);
-              else setProjectPickerOpen(true);
+              else setProjectPickerIntent("new-thread");
             }}
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
@@ -1135,15 +1142,20 @@ export function App() {
           thread={threadDetail}
         />
       ) : null}
-      {projectPickerOpen ? (
+      {projectPickerIntent !== null ? (
         <DirectoryPicker
-          onCancel={() => setProjectPickerOpen(false)}
+          onCancel={() => setProjectPickerIntent(null)}
           onSelect={(workspace) => {
+            if (projectPickerIntent === "new-thread") {
+              setProjectPickerIntent(null);
+              void newThread(workspace);
+              return;
+            }
             void window.zenx.settings
               .addWorkspace(workspace)
               .then(async () => {
                 await loadProjects();
-                setProjectPickerOpen(false);
+                setProjectPickerIntent(null);
               })
               .catch((error: unknown) => setRequestError(describeError(error)));
           }}

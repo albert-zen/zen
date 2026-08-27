@@ -64,6 +64,7 @@
   realpath 不可用时退回 lexical absolute path，配置刷新按 latest-wins 发布且不长期缓存 filesystem identity，
   每次投影、筛选、创建或 workspace mutation 从一份不可变的 canonicalization snapshot 派生，mutation
   在既有队列内有界重验；最近使用项由同一 host profile 持有且失效时不隐式回退，
+  Project 作用域的新建意图以 typed IPC 进入 main、重新解析已配置 workspace 后才调用 App Server `thread/start`，
   它不拥有 Project、Thread、journal 或 durable coordination 状态。
 - **ZenXDirectoryBrowser** — ZenX main 把 home、documents、Windows drive / POSIX root 与
   canonical 只读目录枚举投影给内部 picker；symlink/junction 只解析为目录目标，不修改文件系统。

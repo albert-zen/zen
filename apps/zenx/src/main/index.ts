@@ -51,7 +51,10 @@ import {
 } from "./capabilities/self-control-package.js";
 import { installApplicationMenu } from "./application-menu.js";
 import { ZenXDirectoryBrowser } from "./directory-browser.js";
-import { ZenXProjectProjection } from "./project-projection.js";
+import {
+  startConfiguredProjectThread,
+  ZenXProjectProjection,
+} from "./project-projection.js";
 import {
   projectWorkspaceAcceptanceConfigPath,
   runProjectWorkspaceAcceptance,
@@ -580,6 +583,15 @@ function installProtocolIpc(
     );
   });
   ipcMain.handle(
+    ipcChannels.projectThreadStart,
+    async (_event, workspace: unknown) =>
+      await startConfiguredProjectThread(
+        projects,
+        workspace,
+        async (params) => await manager.request("thread/start", params),
+      ),
+  );
+  ipcMain.handle(
     ipcChannels.request,
     async (_event, method: unknown, params: unknown) => {
       if (!isClientRequestMethod(method)) {
@@ -689,6 +701,7 @@ function installFailedProtocolIpc(message: string): void {
     ipcChannels.imageAttachmentsRead,
     ipcChannels.threadAttachmentsRead,
     ipcChannels.threadUsageRead,
+    ipcChannels.projectThreadStart,
   ]) {
     ipcMain.handle(channel, () => {
       throw new Error(`Zen App Server is not ready: ${message}`);

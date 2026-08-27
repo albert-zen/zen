@@ -22,6 +22,21 @@ export interface ZenXProjectProjectionSnapshot {
 
 export type ProjectRealpath = (candidate: string) => Promise<string>;
 
+export async function startConfiguredProjectThread<T>(
+  projection: ZenXProjectProjection,
+  workspace: unknown,
+  start: (params: { cwd: string }) => Promise<T>,
+): Promise<T> {
+  if (typeof workspace !== "string" || workspace.trim().length === 0) {
+    throw new Error("Invalid Project workspace");
+  }
+  const configuredWorkspace = await projection.configuredWorkspace(workspace);
+  if (configuredWorkspace === null) {
+    throw new Error("Project workspace is not configured");
+  }
+  return await start({ cwd: configuredWorkspace });
+}
+
 export interface ProjectPathIdentity {
   readonly displayPath: string;
   readonly key: string;
