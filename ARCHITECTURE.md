@@ -475,6 +475,14 @@ Item，adapter 按目标 Provider/model 的工具续接或 preserved-thinking �
 该合同支持的推理与流式工具参数。失败或中断只丢弃内存中的 correlation/buffer，不留下不完整
 canonical Item。
 
+Reasoning control 只有一个权威：UI/Core 在 Turn admission 时冻结 canonical
+`reasoningEffort`，ModelAdapter 只把该值翻译为目标模型支持的 wire 字段。OpenAI-compatible
+`defaultParams` 不得包含 `reasoning_effort` 或 `thinking_budget`；这两项会形成第二控制权威，
+因此在 adapter 配置边界明确失败。Qwen 3.8 只发送 canonical effort 对应的
+`reasoning_effort`，不发送 `thinking_budget`；不支持 effort 的 Provider 继续省略 wire effort。
+`preserve_thinking` 与 Provider 各自形态的 `clear_thinking` 只控制历史 reasoning replay，
+不覆盖或抑制 Turn effort。
+
 ## Item 的三种形态
 
 写 journal 之前必须分清，否则会重新长出两套状态：

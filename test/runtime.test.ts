@@ -1907,14 +1907,29 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
     model,
     modelCatalog: new StaticModelCatalog([
       { id: "fake", isDefault: true },
-      { id: "provider-model" },
+      {
+        id: "vendor/qwen3.8-max",
+        supportedReasoningEfforts: ["medium", "high"],
+        defaultReasoningEffort: "medium",
+      },
     ]),
   });
-  const thread = await server.startThread({ model: "provider-model" });
+  const thread = await server.startThread({
+    model: "vendor/qwen3.8-max",
+    reasoningEffort: "high",
+  });
   const turn = await server.startTurn(thread.id, "use the tool");
   await turn.done;
 
   assert.equal(requestBodies.length, 2);
+  assert.deepEqual(
+    requestBodies.map((body) => body.reasoning_effort),
+    ["high", "high"],
+  );
+  assert.equal(
+    requestBodies.some((body) => "thinking_budget" in body),
+    false,
+  );
   const secondMessages = requestBodies[1]?.messages;
   assert(Array.isArray(secondMessages));
   assert(

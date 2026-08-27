@@ -19,7 +19,6 @@ test("maps Zen context and protects model execution fields", async () => {
     provider: "test-provider",
     defaultParams: {
       temperature: 0,
-      reasoning_effort: "wrong-effort",
       model: "wrong-model",
       messages: [{ role: "user", content: "wrong messages" }],
       tools: [],
@@ -126,12 +125,33 @@ test("maps Zen context and protects model execution fields", async () => {
   });
 });
 
+test("rejects raw reasoning controls that would create a second authority", () => {
+  for (const [control, value] of [
+    ["reasoning_effort", "xhigh"],
+    ["thinking_budget", 4096],
+  ] as const) {
+    assert.throws(
+      () =>
+        new OpenAiCompatibleModel({
+          baseUrl: "https://provider.test/v1",
+          apiKey: fakeKey,
+          defaultParams: { [control]: value },
+        }),
+      (error: unknown) =>
+        error instanceof OpenAiCompatibleModelError &&
+        error.kind === "configuration" &&
+        error.message.includes(control),
+    );
+  }
+});
+
 test("encodes provider-specific reasoning replay contracts", async (t) => {
   await t.test("DeepSeek replays only tool-call reasoning", async () => {
     const body = await captureRequestBody({
       provider: "deepseek",
       baseUrl: "https://api.deepseek.com",
       model: "deepseek-reasoner",
+      reasoningEffort: "high",
       messages: reasoningHistory(),
       tools: [shellTool()],
     });
@@ -165,11 +185,13 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
       provider: "custom-provider",
       baseUrl: "https://provider.test/v1",
       model: "vendor/qwen3.8-max",
+      reasoningEffort: "high",
       messages: reasoningHistory(),
       tools: [shellTool()],
     });
 
-    assert.equal(body.reasoning_effort, "medium");
+    assert.equal(body.reasoning_effort, "high");
+    assert.equal("thinking_budget" in body, false);
     assert.deepEqual(
       (body.messages as Readonly<Record<string, unknown>>[])
         .filter((message) => message.role === "assistant")
@@ -219,55 +241,6 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
   });
 
   await t.test(
-    "Qwen preserves an explicitly configured effort and avoids a thinking-budget conflict",
-    async (t) => {
-      await t.test("configured effort", async () => {
-        const body = await captureRequestBody({
-          provider: "dashscope",
-          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-          model: "qwen3.8-max",
-          defaultParams: { reasoning_effort: "xhigh" },
-          messages: [],
-        });
-
-        assert.equal(body.reasoning_effort, "xhigh");
-      });
-
-      await t.test("configured thinking budget", async () => {
-        const body = await captureRequestBody({
-          provider: "dashscope",
-          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-          model: "qwen3.8-max",
-          defaultParams: { thinking_budget: 4096 },
-          messages: [],
-        });
-
-        assert.equal(body.thinking_budget, 4096);
-        assert.equal("reasoning_effort" in body, false);
-      });
-
-      await t.test(
-        "configured thinking budget wins over configured effort",
-        async () => {
-          const body = await captureRequestBody({
-            provider: "dashscope",
-            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            model: "qwen3.8-max",
-            defaultParams: {
-              thinking_budget: 4096,
-              reasoning_effort: "xhigh",
-            },
-            messages: [],
-          });
-
-          assert.equal(body.thinking_budget, 4096);
-          assert.equal("reasoning_effort" in body, false);
-        },
-      );
-    },
-  );
-
-  await t.test(
     "DashScope GLM preserves complete reasoning by default and forwards effort",
     async (t) => {
       const body = await captureRequestBody({
@@ -275,12 +248,14 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
         baseUrl:
           "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
         model: "glm-5.2",
+        reasoningEffort: "high",
         defaultParams: { tool_stream: false },
         messages: reasoningHistory(),
         tools: [shellTool()],
       });
 
-      assert.equal(body.reasoning_effort, "medium");
+      assert.equal(body.reasoning_effort, "high");
+      assert.equal("thinking_budget" in body, false);
       assert.equal(body.tool_stream, true);
       const assistants = (
         body.messages as Readonly<Record<string, unknown>>[]
@@ -288,15 +263,13 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
       assert.equal(assistants[0]?.reasoning_content, "tool reasoning");
       assert.equal(assistants[1]?.reasoning_content, "final reasoning");
 
-      await t.test("explicit false preserves configured effort", async () => {
+      await t.test("explicit false preserves canonical effort", async () => {
         const configured = await captureRequestBody({
           provider: "dashscope",
           baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
           model: "glm-5.2",
-          defaultParams: {
-            clear_thinking: false,
-            reasoning_effort: "xhigh",
-          },
+          reasoningEffort: "xhigh",
+          defaultParams: { clear_thinking: false },
           messages: reasoningHistory(),
           tools: [shellTool()],
         });
@@ -395,11 +368,13 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
           provider: "zhipu",
           baseUrl: "https://open.bigmodel.cn/api/paas/v4",
           model: "glm-5.3",
+          reasoningEffort: "high",
           messages: reasoningHistory(),
           tools: [shellTool()],
         });
 
-        assert.equal(body.reasoning_effort, "medium");
+        assert.equal(body.reasoning_effort, "high");
+        assert.equal("thinking_budget" in body, false);
         const assistants = (
           body.messages as Readonly<Record<string, unknown>>[]
         ).filter((message) => message.role === "assistant");
@@ -446,6 +421,22 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
           assert.equal("reasoning_content" in assistants[1]!, false);
         },
       );
+    },
+  );
+
+  await t.test(
+    "unknown compatible fallback forwards canonical effort",
+    async () => {
+      const body = await captureRequestBody({
+        provider: "custom-provider",
+        baseUrl: "https://provider.test/v1",
+        model: "custom-model",
+        reasoningEffort: "xhigh",
+        messages: [],
+      });
+
+      assert.equal(body.reasoning_effort, "xhigh");
+      assert.equal("thinking_budget" in body, false);
     },
   );
 });
@@ -889,6 +880,7 @@ async function captureRequestBody(options: {
   provider: string;
   baseUrl: string;
   model: string;
+  reasoningEffort?: string;
   defaultParams?: Readonly<Record<string, unknown>>;
   messages: ModelRequest["messages"];
   tools?: ModelRequest["tools"];
@@ -912,6 +904,7 @@ async function captureRequestBody(options: {
     adapter.stream(
       request({
         model: options.model,
+        reasoningEffort: options.reasoningEffort ?? "medium",
         messages: options.messages,
         tools: options.tools ?? [],
       }),

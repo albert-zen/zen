@@ -115,6 +115,11 @@ selection change，不增加 Zen 私有字段或第二种协议。协议 adapter
 Core 在目标支持当前值时保留它，否则使用目标 model 默认值，再形成 canonical
 selection。活跃 Turn 保留启动时 selection，更新只影响下一 Turn。
 
+该 selection 中冻结的 `reasoningEffort` 是唯一 reasoning-control 权威。Provider adapter
+可以按目标合同省略或映射 wire effort，但 OpenAI-compatible `defaultParams` 不能再设置
+`reasoning_effort` 或 `thinking_budget` 来覆盖、抑制或替代它；冲突配置在 Host preflight
+阶段明确失败。Replay 专用的 `preserve_thinking` / `clear_thinking` 参数不改变这项权威。
+
 `thread/list` 在本目录内把 ZAS 原生 `ThreadSummary` 查询结果映射为固定版本的
 Codex Thread DTO；wire DTO 不定义 ZAS 或 ZenX 的产品读取模型。它当前只接受
 `archived`、`limit` 与 `cursor`。非终页返回的 opaque

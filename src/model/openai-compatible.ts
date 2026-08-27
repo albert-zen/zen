@@ -67,7 +67,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       options.provider ?? "openai-compatible",
       "provider",
     );
-    this.#defaultParams = options.defaultParams ?? {};
+    this.#defaultParams = compatibleDefaultParams(options.defaultParams ?? {});
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#attachments = options.attachments;
   }
@@ -132,7 +132,6 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       stream: true,
       reasoning_effort: compatibleReasoningEffort({
         policy: reasoningPolicy,
-        defaultParams: this.#defaultParams,
         requestEffort: request.reasoningEffort,
       }),
       ...(reasoningPolicy.enableToolStream
@@ -200,8 +199,6 @@ type ReasoningReplay = "none" | "tool-calls" | "all-assistant";
 interface CompatibleReasoningPolicy {
   replay: ReasoningReplay;
   forwardReasoningEffort: boolean;
-  configuredReasoningEffortWins: boolean;
-  reasoningEffortConflictsWithThinkingBudget: boolean;
   enableToolStream: boolean;
 }
 
@@ -227,8 +224,6 @@ function compatibleReasoningPolicy(options: {
           ? "none"
           : "all-assistant",
       forwardReasoningEffort: true,
-      configuredReasoningEffortWins: true,
-      reasoningEffortConflictsWithThinkingBudget: true,
       enableToolStream: false,
     };
   }
@@ -243,8 +238,6 @@ function compatibleReasoningPolicy(options: {
           ? "all-assistant"
           : "tool-calls",
       forwardReasoningEffort: isDashScope || isZhipu,
-      configuredReasoningEffortWins: isDashScope,
-      reasoningEffortConflictsWithThinkingBudget: false,
       enableToolStream: true,
     };
   }
@@ -253,8 +246,6 @@ function compatibleReasoningPolicy(options: {
     return {
       replay: "tool-calls",
       forwardReasoningEffort: false,
-      configuredReasoningEffortWins: false,
-      reasoningEffortConflictsWithThinkingBudget: false,
       enableToolStream: false,
     };
   }
@@ -262,10 +253,23 @@ function compatibleReasoningPolicy(options: {
   return {
     replay: "all-assistant",
     forwardReasoningEffort: true,
-    configuredReasoningEffortWins: false,
-    reasoningEffortConflictsWithThinkingBudget: false,
     enableToolStream: false,
   };
+}
+
+function compatibleDefaultParams(
+  value: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const snapshot = { ...value };
+  for (const control of ["reasoning_effort", "thinking_budget"] as const) {
+    if (Object.hasOwn(snapshot, control)) {
+      throw modelError(
+        "configuration",
+        `OpenAI-compatible defaultParams.${control} conflicts with canonical reasoning effort`,
+      );
+    }
+  }
+  return snapshot;
 }
 
 function isDashScopeHostname(hostname: string): boolean {
@@ -301,22 +305,9 @@ function zhipuPreservedThinking(
 
 function compatibleReasoningEffort(options: {
   policy: CompatibleReasoningPolicy;
-  defaultParams: Readonly<Record<string, unknown>>;
   requestEffort: string;
 }): unknown {
   if (!options.policy.forwardReasoningEffort) return undefined;
-  if (
-    options.policy.reasoningEffortConflictsWithThinkingBudget &&
-    Object.hasOwn(options.defaultParams, "thinking_budget")
-  ) {
-    return undefined;
-  }
-  if (
-    options.policy.configuredReasoningEffortWins &&
-    Object.hasOwn(options.defaultParams, "reasoning_effort")
-  ) {
-    return options.defaultParams["reasoning_effort"];
-  }
   return requiredLabel(options.requestEffort, "reasoning effort");
 }
 
