@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { packZenXFirstPartyPlugins } from "../scripts/pack-first-party-plugins.mjs";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { ZenXTriggersCapabilityPackage } from "../src/main/capabilities/automation-control-package.js";
 import type { ZenXAutomationControlPort } from "../src/main/capabilities/automation-control-package.js";
@@ -32,6 +31,17 @@ import {
 const pnpmCli = fileURLToPath(
   new URL("../../../node_modules/pnpm/bin/pnpm.cjs", import.meta.url),
 );
+const preparedPluginsDirectory = fileURLToPath(
+  new URL("../resources/plugins/", import.meta.url),
+);
+
+async function copyPreparedFirstPartyPlugins(
+  outputDirectory: string,
+): Promise<void> {
+  await cp(preparedPluginsDirectory, path.join(outputDirectory, "plugins"), {
+    recursive: true,
+  });
+}
 
 test("remaining first-party tarballs install, invoke, cycle lifecycle, and restart offline", async () => {
   const root = await mkdtemp(
@@ -39,7 +49,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
   );
   const userData = path.join(root, "user-data");
   const resources = path.join(root, "resources");
-  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  await copyPreparedFirstPartyPlugins(resources);
   const selfPort = new MutableAppServerRequestPort();
   await selfPort.attach({ request: async () => ({ data: [] }) as never });
   const self = new ZenXSelfControlCapabilityPackage({ appServer: selfPort });
@@ -211,7 +221,7 @@ test("an uninstalled Browser reinstalls the current Host-selected App Resource v
   );
   const resources = path.join(root, "resources");
   const userData = path.join(root, "user-data");
-  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  await copyPreparedFirstPartyPlugins(resources);
   const environment: NodeJS.ProcessEnv = {
     PATH: "",
     ZENX_BROWSER_MODE: "user-session",
@@ -283,7 +293,7 @@ test("provider variant admission and Catalog failures retain the old backend and
   );
   const userData = path.join(root, "user-data");
   const resources = path.join(root, "resources");
-  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  await copyPreparedFirstPartyPlugins(resources);
   const oldBackend = trackedBrowserBackend("old");
   const environment: NodeJS.ProcessEnv = {
     PATH: "",
@@ -343,7 +353,7 @@ test("provider variant admission and Catalog failures retain the old backend and
     await assert.rejects(service.resetTransient());
     await assertOldProvider(service, userData, committed, "user-browser-cdp");
 
-    await packZenXFirstPartyPlugins({ outputDirectory: resources });
+    await copyPreparedFirstPartyPlugins(resources);
     store.failNextSave();
     await assert.rejects(
       service.resetTransient(),
@@ -373,7 +383,7 @@ test("restart keeps a committed Browser backend isolated from a different curren
     path.join(os.tmpdir(), "zenx-browser-restart-variant-"),
   );
   const resources = path.join(root, "resources");
-  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  await copyPreparedFirstPartyPlugins(resources);
   try {
     for (const direction of [
       {
@@ -508,7 +518,7 @@ test("restart keeps a committed Browser backend isolated from a different curren
 test("remaining first-party packages adopt every legacy Catalog lifecycle through the canonical installer", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zenx-first-party-adopt-"));
   const resources = path.join(root, "resources");
-  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  await copyPreparedFirstPartyPlugins(resources);
   try {
     for (const lifecycle of ["enabled", "installed", "uninstalled"] as const) {
       await t.test(lifecycle, async () => {
@@ -568,7 +578,7 @@ test("ordinary tarballs cannot claim any remaining first-party trusted runtime",
     path.join(os.tmpdir(), "zenx-first-party-untrusted-"),
   );
   const resources = path.join(root, "resources");
-  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  await copyPreparedFirstPartyPlugins(resources);
   const service = new ZenXCapabilityService({
     userDataDirectory: path.join(root, "user-data"),
     pnpmCliPath: pnpmCli,
@@ -596,7 +606,7 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
     path.join(os.tmpdir(), "zenx-computer-profile-gates-"),
   );
   const resources = path.join(root, "resources");
-  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  await copyPreparedFirstPartyPlugins(resources);
   try {
     for (const platform of ["linux", "win32"] as const) {
       await t.test(platform, async () => {
