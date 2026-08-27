@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   readdir,
   rm,
   writeFile,
@@ -194,6 +195,85 @@ test("Settings host installs one tarball through the committed profile and Agent
   } finally {
     await manager.stop();
     await capabilities.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a second profile install rebuilds links inside the new generation", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-generation-links-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const resourcesDirectory = path.join(directory, "resources");
+  const pluginResources = path.join(resourcesDirectory, "plugins");
+  await mkdir(pluginResources, { recursive: true });
+  const firstTarball = await createTarballFixture(pluginResources, {
+    id: "generation-first",
+    packageName: "@zenx-test/generation-first",
+    runtimeType: "bundled",
+    runtimeModule: 'export const identity = "first";\n',
+  });
+  const secondTarball = await createTarballFixture(pluginResources, {
+    id: "generation-second",
+    packageName: "@zenx-test/generation-second",
+    runtimeType: "bundled",
+    runtimeModule: 'export const identity = "second";\n',
+  });
+  const service = profileService(userData, {
+    pnpmCliPath: pnpmCli,
+    resourcesDirectory,
+    trustedProfileLoaders: {
+      "generation-first": () => ({
+        invoke: async () => ({ output: "first", exitCode: 0 }),
+      }),
+      "generation-second": () => ({
+        invoke: async () => ({ output: "second", exitCode: 0 }),
+      }),
+    },
+  });
+  try {
+    await service.initialize();
+    await service.installBundledPluginPackage(firstTarball, {
+      pluginId: "generation-first",
+      packageName: "@zenx-test/generation-first",
+    });
+    const firstCatalog = await readCatalog(userData);
+    await service.installBundledPluginPackage(secondTarball, {
+      pluginId: "generation-second",
+      packageName: "@zenx-test/generation-second",
+    });
+    const secondCatalog = await readCatalog(userData);
+    assert.notEqual(
+      secondCatalog.profileGeneration,
+      firstCatalog.profileGeneration,
+    );
+    assert.deepEqual(
+      service
+        .pluginSnapshot()
+        .plugins.map(({ id }) => id)
+        .sort(),
+      ["generation-first", "generation-second"],
+    );
+    const secondGeneration = path.join(
+      userData,
+      "plugin-profile",
+      "generations",
+      secondCatalog.profileGeneration,
+    );
+    const firstPackage = await realpath(
+      path.join(
+        secondGeneration,
+        "node_modules",
+        "@zenx-test",
+        "generation-first",
+      ),
+    );
+    assert.ok(
+      firstPackage.startsWith(`${secondGeneration}${path.sep}`),
+      `${firstPackage} must stay inside ${secondGeneration}`,
+    );
+  } finally {
+    await service.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

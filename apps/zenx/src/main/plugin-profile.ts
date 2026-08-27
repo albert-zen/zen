@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   access,
   cp,
+  copyFile,
   mkdir,
   readFile,
   realpath,
@@ -150,17 +151,11 @@ export async function stagePluginPackage(options: {
       );
     } else {
       const current = generationPath(paths, options.currentGeneration);
-      await cp(current, generationDirectory, { recursive: true });
-      const currentPackage = await readProfilePackageJson(generationDirectory);
-      await writeProfilePackageJson(
+      await stageProfileDependencyState(
+        current,
         generationDirectory,
-        currentPackage.dependencies,
-        options.allowBuilds ?? currentPackage.pnpm?.allowBuilds ?? {},
+        options.allowBuilds,
       );
-      await rm(path.join(generationDirectory, "node_modules"), {
-        recursive: true,
-        force: true,
-      });
       await runBundledPnpm({
         cliPath: options.pnpmCliPath,
         cwd: generationDirectory,
@@ -266,12 +261,10 @@ export async function stagePluginRemoval(options: {
   const generationDirectory = path.join(paths.generations, generation);
   await mkdir(paths.generations, { recursive: true, mode: 0o700 });
   try {
-    await cp(
+    const before = await stageProfileDependencyState(
       generationPath(paths, options.currentGeneration),
       generationDirectory,
-      { recursive: true },
     );
-    const before = await readProfilePackageJson(generationDirectory);
     if (before.dependencies[options.packageName] === undefined) {
       throw new Error(
         `Profile dependency ${options.packageName} is not installed`,
@@ -594,6 +587,30 @@ async function writeProfilePackageJson(
     )}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
+}
+
+async function stageProfileDependencyState(
+  currentGenerationDirectory: string,
+  stagedGenerationDirectory: string,
+  allowBuilds?: Readonly<Record<string, boolean>>,
+): Promise<{
+  dependencies: Record<string, string>;
+  pnpm?: { allowBuilds?: Record<string, boolean> };
+}> {
+  const currentPackage = await readProfilePackageJson(
+    currentGenerationDirectory,
+  );
+  await mkdir(stagedGenerationDirectory, { mode: 0o700 });
+  await copyFile(
+    path.join(currentGenerationDirectory, "pnpm-lock.yaml"),
+    path.join(stagedGenerationDirectory, "pnpm-lock.yaml"),
+  );
+  await writeProfilePackageJson(
+    stagedGenerationDirectory,
+    currentPackage.dependencies,
+    allowBuilds ?? currentPackage.pnpm?.allowBuilds ?? {},
+  );
+  return currentPackage;
 }
 
 async function readProfilePackageJson(directory: string): Promise<{
