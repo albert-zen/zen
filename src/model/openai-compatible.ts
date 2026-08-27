@@ -130,9 +130,11 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       messages,
       n: 1,
       stream: true,
-      reasoning_effort: reasoningPolicy.forwardReasoningEffort
-        ? requiredLabel(request.reasoningEffort, "reasoning effort")
-        : undefined,
+      reasoning_effort: compatibleReasoningEffort({
+        policy: reasoningPolicy,
+        defaultParams: this.#defaultParams,
+        requestEffort: request.reasoningEffort,
+      }),
       ...(reasoningPolicy.enableToolStream
         ? { tool_stream: tools.length > 0 ? true : undefined }
         : {}),
@@ -198,6 +200,8 @@ type ReasoningReplay = "none" | "tool-calls" | "all-assistant";
 interface CompatibleReasoningPolicy {
   replay: ReasoningReplay;
   forwardReasoningEffort: boolean;
+  configuredReasoningEffortWins: boolean;
+  reasoningEffortConflictsWithThinkingBudget: boolean;
   enableToolStream: boolean;
 }
 
@@ -208,32 +212,39 @@ function compatibleReasoningPolicy(options: {
   defaultParams: Readonly<Record<string, unknown>>;
 }): CompatibleReasoningPolicy {
   const provider = options.provider.toLowerCase();
-  const endpoint = options.endpoint.toLowerCase();
+  const endpointHostname = new URL(options.endpoint).hostname.toLowerCase();
   const model = requiredLabel(options.model, "model").toLowerCase();
   const familyModel = model.split("/").at(-1) ?? model;
   const isDashScope =
-    provider.includes("dashscope") ||
-    endpoint.includes("dashscope.aliyuncs.com");
+    provider.includes("dashscope") || isDashScopeHostname(endpointHostname);
   const isZhipu =
-    provider.includes("zhipu") || endpoint.includes("bigmodel.cn");
+    provider.includes("zhipu") || endpointHostname.endsWith(".bigmodel.cn");
 
   if (/^qwen3\.8(?:-|$)/u.test(familyModel)) {
     return {
       replay:
-        options.defaultParams["preserve_thinking"] === true
-          ? "all-assistant"
-          : "none",
-      forwardReasoningEffort: false,
+        options.defaultParams["preserve_thinking"] === false
+          ? "none"
+          : "all-assistant",
+      forwardReasoningEffort: true,
+      configuredReasoningEffortWins: true,
+      reasoningEffortConflictsWithThinkingBudget: true,
       enableToolStream: false,
     };
   }
 
   if (/^glm-5\.(?:2|3)(?:-|$)/u.test(familyModel)) {
     return {
-      replay: glmPreservedThinking(options.defaultParams)
-        ? "all-assistant"
-        : "tool-calls",
-      forwardReasoningEffort: isZhipu && !isDashScope,
+      replay: isDashScope
+        ? options.defaultParams["clear_thinking"] === true
+          ? "none"
+          : "all-assistant"
+        : zhipuPreservedThinking(options.defaultParams)
+          ? "all-assistant"
+          : "tool-calls",
+      forwardReasoningEffort: isDashScope || isZhipu,
+      configuredReasoningEffortWins: isDashScope,
+      reasoningEffortConflictsWithThinkingBudget: false,
       enableToolStream: true,
     };
   }
@@ -242,6 +253,8 @@ function compatibleReasoningPolicy(options: {
     return {
       replay: "tool-calls",
       forwardReasoningEffort: false,
+      configuredReasoningEffortWins: false,
+      reasoningEffortConflictsWithThinkingBudget: false,
       enableToolStream: false,
     };
   }
@@ -249,11 +262,21 @@ function compatibleReasoningPolicy(options: {
   return {
     replay: "all-assistant",
     forwardReasoningEffort: true,
+    configuredReasoningEffortWins: false,
+    reasoningEffortConflictsWithThinkingBudget: false,
     enableToolStream: false,
   };
 }
 
-function glmPreservedThinking(
+function isDashScopeHostname(hostname: string): boolean {
+  return (
+    hostname === "dashscope.aliyuncs.com" ||
+    hostname === "dashscope-intl.aliyuncs.com" ||
+    hostname.endsWith(".maas.aliyuncs.com")
+  );
+}
+
+function zhipuPreservedThinking(
   defaultParams: Readonly<Record<string, unknown>>,
 ): boolean {
   const thinking = defaultParams["thinking"];
@@ -263,6 +286,27 @@ function glmPreservedThinking(
     !Array.isArray(thinking) &&
     (thinking as Readonly<Record<string, unknown>>)["clear_thinking"] === false
   );
+}
+
+function compatibleReasoningEffort(options: {
+  policy: CompatibleReasoningPolicy;
+  defaultParams: Readonly<Record<string, unknown>>;
+  requestEffort: string;
+}): unknown {
+  if (!options.policy.forwardReasoningEffort) return undefined;
+  if (
+    options.policy.configuredReasoningEffortWins &&
+    Object.hasOwn(options.defaultParams, "reasoning_effort")
+  ) {
+    return options.defaultParams["reasoning_effort"];
+  }
+  if (
+    options.policy.reasoningEffortConflictsWithThinkingBudget &&
+    Object.hasOwn(options.defaultParams, "thinking_budget")
+  ) {
+    return undefined;
+  }
+  return requiredLabel(options.requestEffort, "reasoning effort");
 }
 
 function shouldReplayReasoning(
