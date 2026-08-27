@@ -245,6 +245,25 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
         assert.equal(body.thinking_budget, 4096);
         assert.equal("reasoning_effort" in body, false);
       });
+
+      await t.test(
+        "configured thinking budget wins over configured effort",
+        async () => {
+          const body = await captureRequestBody({
+            provider: "dashscope",
+            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model: "qwen3.8-max",
+            defaultParams: {
+              thinking_budget: 4096,
+              reasoning_effort: "xhigh",
+            },
+            messages: [],
+          });
+
+          assert.equal(body.thinking_budget, 4096);
+          assert.equal("reasoning_effort" in body, false);
+        },
+      );
     },
   );
 
@@ -314,24 +333,57 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
   );
 
   await t.test(
-    "DashScope workspace detection rejects lookalike hostnames",
-    async () => {
-      const body = await captureRequestBody({
-        provider: "custom-provider",
-        baseUrl:
-          "https://workspace.cn-beijing.maas.aliyuncs.com.evil.test/compatible-mode/v1",
-        model: "glm-5.2",
-        defaultParams: { clear_thinking: false },
-        messages: reasoningHistory(),
-        tools: [shellTool()],
-      });
+    "recognizes only documented DashScope host shapes",
+    async (t) => {
+      for (const hostname of [
+        "dashscope.aliyuncs.com",
+        "dashscope-intl.aliyuncs.com",
+        "workspace.cn-beijing.maas.aliyuncs.com",
+        "llm-abc.ap-southeast-1.maas.aliyuncs.com",
+      ]) {
+        await t.test(`accepts ${hostname}`, async () => {
+          const body = await captureRequestBody({
+            provider: "custom-provider",
+            baseUrl: `https://${hostname}/compatible-mode/v1`,
+            model: "glm-5.2",
+            messages: reasoningHistory(),
+            tools: [shellTool()],
+          });
 
-      assert.equal("reasoning_effort" in body, false);
-      const assistants = (
-        body.messages as Readonly<Record<string, unknown>>[]
-      ).filter((message) => message.role === "assistant");
-      assert.equal(assistants[0]?.reasoning_content, "tool reasoning");
-      assert.equal("reasoning_content" in assistants[1]!, false);
+          assert.equal(body.reasoning_effort, "medium");
+          assert.deepEqual(
+            (body.messages as Readonly<Record<string, unknown>>[])
+              .filter((message) => message.role === "assistant")
+              .map((message) => message.reasoning_content),
+            ["tool reasoning", "final reasoning"],
+          );
+        });
+      }
+
+      for (const hostname of [
+        "cn-beijing.maas.aliyuncs.com",
+        "extra.workspace.cn-beijing.maas.aliyuncs.com",
+        "workspace.cn-beijing.maas.aliyuncs.com.evil.test",
+        "workspace.cn-beijing.other.aliyuncs.com",
+      ]) {
+        await t.test(`rejects ${hostname}`, async () => {
+          const body = await captureRequestBody({
+            provider: "custom-provider",
+            baseUrl: `https://${hostname}/compatible-mode/v1`,
+            model: "glm-5.2",
+            defaultParams: { clear_thinking: false },
+            messages: reasoningHistory(),
+            tools: [shellTool()],
+          });
+
+          assert.equal("reasoning_effort" in body, false);
+          const assistants = (
+            body.messages as Readonly<Record<string, unknown>>[]
+          ).filter((message) => message.role === "assistant");
+          assert.equal(assistants[0]?.reasoning_content, "tool reasoning");
+          assert.equal("reasoning_content" in assistants[1]!, false);
+        });
+      }
     },
   );
 

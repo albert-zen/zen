@@ -269,10 +269,21 @@ function compatibleReasoningPolicy(options: {
 }
 
 function isDashScopeHostname(hostname: string): boolean {
-  return (
+  if (
     hostname === "dashscope.aliyuncs.com" ||
-    hostname === "dashscope-intl.aliyuncs.com" ||
-    hostname.endsWith(".maas.aliyuncs.com")
+    hostname === "dashscope-intl.aliyuncs.com"
+  ) {
+    return true;
+  }
+  const labels = hostname.split(".");
+  const dnsLabel = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
+  return (
+    labels.length === 5 &&
+    dnsLabel.test(labels[0]!) &&
+    dnsLabel.test(labels[1]!) &&
+    labels[2] === "maas" &&
+    labels[3] === "aliyuncs" &&
+    labels[4] === "com"
   );
 }
 
@@ -295,16 +306,16 @@ function compatibleReasoningEffort(options: {
 }): unknown {
   if (!options.policy.forwardReasoningEffort) return undefined;
   if (
-    options.policy.configuredReasoningEffortWins &&
-    Object.hasOwn(options.defaultParams, "reasoning_effort")
-  ) {
-    return options.defaultParams["reasoning_effort"];
-  }
-  if (
     options.policy.reasoningEffortConflictsWithThinkingBudget &&
     Object.hasOwn(options.defaultParams, "thinking_budget")
   ) {
     return undefined;
+  }
+  if (
+    options.policy.configuredReasoningEffortWins &&
+    Object.hasOwn(options.defaultParams, "reasoning_effort")
+  ) {
+    return options.defaultParams["reasoning_effort"];
   }
   return requiredLabel(options.requestEffort, "reasoning effort");
 }
