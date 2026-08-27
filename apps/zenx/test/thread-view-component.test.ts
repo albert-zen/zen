@@ -136,6 +136,47 @@ test("singleton promotion preserves its disclosure and focused button", async ()
     assert.equal(groupToggle, singletonToggle);
     assert.equal(document.activeElement, groupToggle);
     assert.equal(groupToggle.getAttribute("aria-expanded"), "true");
+    assert.equal(
+      requiredElement(".trace-group .trace-item .trace-detail").textContent,
+      "Public reasoning",
+    );
+
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        reasoningItem(
+          "reasoning-promote",
+          ["Mapped the rendering path"],
+          ["Updated public reasoning"],
+        ),
+        commandItem("command-promote", "rg ThreadView"),
+      ]),
+    );
+    assert.equal(requiredButton(".trace-group > .trace-toggle"), groupToggle);
+    assert.equal(document.activeElement, groupToggle);
+    assert.equal(
+      requiredElement(".trace-group .trace-item .trace-detail").textContent,
+      "Updated public reasoning",
+    );
+  });
+});
+
+test("tool singleton promotion preserves its open detail", async () => {
+  await withDom(async (root) => {
+    const first = commandItem("command-promote-first", "rg ThreadView");
+    await renderInteractive(root, turnWithItems("inProgress", [first]));
+    await act(async () => requiredButton(".trace-singleton > button").click());
+
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        first,
+        reasoningItem("reasoning-promote-second", ["Mapped"], []),
+      ]),
+    );
+    const detail = requiredElement(".trace-group .trace-item .trace-detail");
+    assert.equal(requiredWithin(detail, "code").textContent, "rg ThreadView");
+    assert.match(detail.textContent ?? "", /ThreadView\.tsx/u);
   });
 });
 

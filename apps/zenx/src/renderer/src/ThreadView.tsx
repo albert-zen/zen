@@ -567,6 +567,9 @@ function TraceSequence({
   const toggleExpanded = () => {
     setExpanded((current) => {
       if (current) setOpenItems(new Set());
+      else if (singleton !== null && singletonExpandable) {
+        setOpenItems(new Set([singleton.id]));
+      }
       return !current;
     });
   };
