@@ -98,6 +98,11 @@ test("projects correlated reasoning summary and content streams with canonical i
       yield { type: "text_delta", delta: "interleaved answer" };
       yield { type: "reasoning_started", reasoningId: "content-0" };
       yield {
+        type: "reasoning_summary_delta",
+        reasoningId: "content-0",
+        delta: "public summary",
+      };
+      yield {
         type: "reasoning_content_delta",
         reasoningId: "content-0",
         delta: "public ",
@@ -111,6 +116,7 @@ test("projects correlated reasoning summary and content streams with canonical i
         type: "reasoning",
         reasoningId: "content-0",
         reasoningContent: "public thought",
+        summary: "public summary",
         contentVisibility: "public",
       };
     },
@@ -207,6 +213,25 @@ test("projects correlated reasoning summary and content streams with canonical i
           },
         },
         {
+          method: "item/reasoning/summaryPartAdded",
+          params: {
+            threadId: thread.id,
+            turnId: (reasoningStarted[1]?.params as { turnId: string }).turnId,
+            itemId: contentId,
+            summaryIndex: 0,
+          },
+        },
+        {
+          method: "item/reasoning/summaryTextDelta",
+          params: {
+            threadId: thread.id,
+            turnId: (reasoningStarted[1]?.params as { turnId: string }).turnId,
+            itemId: contentId,
+            delta: "public summary",
+            summaryIndex: 0,
+          },
+        },
+        {
           method: "item/reasoning/textDelta",
           params: {
             threadId: thread.id,
@@ -247,7 +272,7 @@ test("projects correlated reasoning summary and content streams with canonical i
       {
         type: "reasoning",
         id: contentId,
-        summary: [],
+        summary: ["public summary"],
         content: ["public thought"],
       },
     ]);

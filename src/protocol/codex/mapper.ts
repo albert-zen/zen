@@ -283,9 +283,7 @@ export function projectCompletedItem(
         id: item.id,
         summary: item.summary === undefined ? [] : [item.summary],
         content:
-          item.contentVisibility === "public" && item.summary === undefined
-            ? [item.reasoningContent]
-            : [],
+          item.contentVisibility === "public" ? [item.reasoningContent] : [],
       };
     case "tool_call":
       return projectCommandStarted(item, "");

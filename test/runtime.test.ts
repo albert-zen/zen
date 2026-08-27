@@ -326,6 +326,37 @@ test("projects public semantic reasoning and keeps legacy summaries readable", (
       type: "reasoning",
       id: "reasoning-summary",
       summary: ["provider summary"],
+      content: ["visible reasoning"],
+    },
+  );
+  assert.deepEqual(
+    projectCompletedItem({
+      ...base,
+      id: "reasoning-opaque-summary",
+      type: "reasoning",
+      reasoningContent: "private reasoning",
+      summary: "provider summary",
+      contentVisibility: "opaque",
+    }),
+    {
+      type: "reasoning",
+      id: "reasoning-opaque-summary",
+      summary: ["provider summary"],
+      content: [],
+    },
+  );
+  assert.deepEqual(
+    projectCompletedItem({
+      ...base,
+      id: "reasoning-opaque",
+      type: "reasoning",
+      reasoningContent: "private reasoning",
+      contentVisibility: "opaque",
+    }),
+    {
+      type: "reasoning",
+      id: "reasoning-opaque",
+      summary: [],
       content: [],
     },
   );

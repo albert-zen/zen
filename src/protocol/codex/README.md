@@ -74,8 +74,8 @@ Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，�
 
 canonical `reasoning` Item 只使用 provider-neutral reasoning content、可选 summary、
 public/opaque visibility 与 round-trip 必需的可选 Provider item identity。Opaque content
-永不进入 Codex Thread Item、通知或 ZenX 展示；public content 有 summary 时投影 summary，
-否则投影公开 content。产生它的 Turn selection 必须与目标 profile/model 兼容才进入模型重放。
+永不进入 Codex Thread Item、通知或 ZenX 展示；public content 始终投影为公开 content，
+可选 summary 独立投影为折叠标签。产生它的 Turn selection 必须与目标 profile/model 兼容才进入模型重放。
 各 ModelAdapter 独自负责目标 API 的私有 reasoning 请求与响应形态，不把 wire 结构带入 Core。
 实时 reasoning 使用标准 Item lifecycle：先发送一个 summary/content 为空的
 `item/started`，summary 首次出现时发送一次 index 0 的

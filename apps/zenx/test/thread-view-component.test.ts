@@ -7,6 +7,7 @@ import test from "node:test";
 
 import type { Thread, ThreadItem, Turn } from "../src/protocol-client/index.js";
 import type { AttachmentRef } from "../../../src/attachment.js";
+import { projectCompletedItem } from "../../../src/protocol/codex/mapper.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
 import {
   addComposerImages,
@@ -118,6 +119,38 @@ test("public reasoning with a summary expands from summary to full content", asy
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
     assert.equal(detail.textContent, "Full public reasoning");
     assert.doesNotMatch(detail.textContent ?? "", /Provider summary/u);
+  });
+});
+
+test("projected public reasoning keeps its summary label and expandable content", async () => {
+  const projected = projectCompletedItem({
+    type: "reasoning",
+    id: "reasoning-projected-public-summary",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    createdAt: "2026-08-27T00:00:00.000Z",
+    reasoningContent: "Projected public reasoning",
+    summary: "Projected provider summary",
+    contentVisibility: "public",
+  });
+  assert.ok(projected?.type === "reasoning");
+
+  await withDom(async (root) => {
+    const row = await openReasoningRow(root, projected);
+    const toggle = requiredWithin<HTMLButtonElement>(
+      row,
+      ":scope > .trace-item-toggle",
+    );
+    assert.equal(
+      requiredWithin(toggle, ":scope > span").textContent,
+      "Projected provider summary",
+    );
+
+    await act(async () => toggle.click());
+    assert.equal(
+      requiredWithin(row, ":scope > .trace-detail").textContent,
+      "Projected public reasoning",
+    );
   });
 });
 
