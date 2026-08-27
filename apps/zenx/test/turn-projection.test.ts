@@ -18,11 +18,31 @@ test("groups only consecutive reasoning and tool Items", () => {
   assert.equal(projection.userItems.length, 1);
   assert.deepEqual(
     projection.history.map((node) =>
-      node.kind === "trace" ? [node.kind, node.items.length] : [node.kind],
+      node.kind === "traceGroup" ? [node.kind, node.items.length] : [node.kind],
     ),
-    [["agent"], ["trace", 2], ["agent"], ["trace", 1]],
+    [["agent"], ["traceGroup", 2], ["agent"], ["traceItem"]],
   );
   assert.equal(projection.finalItem, null);
+});
+
+test("projects a singleton trace Item directly and promotes it with stable identity", () => {
+  const singleton = projectTurn(
+    turn("inProgress", [reasoning("reason-a", "Mapped Items")]),
+  ).history[0];
+  const grouped = projectTurn(
+    turn("inProgress", [
+      reasoning("reason-a", "Mapped Items"),
+      command("tool-a", "rg files"),
+    ]),
+  ).history[0];
+
+  assert.deepEqual(singleton, {
+    kind: "traceItem",
+    id: "reason-a",
+    item: reasoning("reason-a", "Mapped Items"),
+  });
+  assert.equal(grouped?.kind, "traceGroup");
+  assert.equal(grouped?.id, "reason-a");
 });
 
 test("completed turns reserve the last Agent Message as the final result", () => {
