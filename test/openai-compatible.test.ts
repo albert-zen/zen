@@ -545,6 +545,113 @@ test("leaves cache usage unknown when the provider omits cache fields", async ()
   ]);
 });
 
+test("ignores invalid optional compatible usage while preserving required totals", async (t) => {
+  const invalidDetails = [
+    {
+      name: "invalid detail values",
+      usage: {
+        prompt_tokens_details: { cached_tokens: "2" },
+        completion_tokens_details: { reasoning_tokens: "1" },
+      },
+    },
+    {
+      name: "details exceeding their totals",
+      usage: {
+        prompt_tokens_details: { cached_tokens: 4 },
+        completion_tokens_details: { reasoning_tokens: 2 },
+      },
+    },
+    {
+      name: "invalid detail containers",
+      usage: {
+        prompt_tokens_details: [],
+        completion_tokens_details: "invalid",
+      },
+    },
+    {
+      name: "invalid DeepSeek cache hit",
+      usage: { prompt_cache_hit_tokens: 4 },
+    },
+    {
+      name: "invalid DeepSeek cache miss",
+      usage: { prompt_cache_miss_tokens: 4 },
+    },
+  ] as const;
+
+  for (const scenario of invalidDetails) {
+    await t.test(scenario.name, async () => {
+      const adapter = adapterReturning(
+        streamResponse([
+          chunk({
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: {
+              prompt_tokens: 3,
+              completion_tokens: 1,
+              ...scenario.usage,
+            },
+          }),
+          "[DONE]",
+        ]),
+      );
+
+      assert.deepEqual(await collect(adapter.stream(request())), [
+        { type: "usage", inputTokens: 3, outputTokens: 1 },
+      ]);
+    });
+  }
+});
+
+test("preserves valid zero compatible usage details", async () => {
+  const adapter = adapterReturning(
+    streamResponse([
+      chunk({
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: {
+          prompt_tokens: 3,
+          completion_tokens: 1,
+          prompt_tokens_details: { cached_tokens: 0 },
+          completion_tokens_details: { reasoning_tokens: 0 },
+        },
+      }),
+      "[DONE]",
+    ]),
+  );
+
+  assert.deepEqual(await collect(adapter.stream(request())), [
+    {
+      type: "usage",
+      inputTokens: 3,
+      cachedInputTokens: 0,
+      outputTokens: 1,
+      reasoningOutputTokens: 0,
+    },
+  ]);
+});
+
+test("still rejects invalid required compatible usage totals", async (t) => {
+  for (const usage of [
+    { prompt_tokens: "3", completion_tokens: 1 },
+    { prompt_tokens: 3, completion_tokens: -1 },
+  ]) {
+    await t.test(JSON.stringify(usage), async () => {
+      const adapter = adapterReturning(
+        streamResponse([
+          chunk({
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage,
+          }),
+          "[DONE]",
+        ]),
+      );
+
+      await assert.rejects(
+        collect(adapter.stream(request())),
+        /OpenAI-compatible model stream had invalid usage/u,
+      );
+    });
+  }
+});
+
 test("captures compatible reasoning_content as public semantic reasoning", async () => {
   const adapter = adapterReturning(
     streamResponse([

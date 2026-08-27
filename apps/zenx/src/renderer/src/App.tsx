@@ -86,6 +86,7 @@ const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
 
 export function App() {
   const selectionEpoch = useRef(0);
+  const threadUsageLoadEpoch = useRef(0);
   const threadSummaryLoadEpoch = useRef(0);
   const projectLoadEpoch = useRef(0);
   const selectedThreadIdRef = useRef<string | null>(null);
@@ -266,8 +267,31 @@ export function App() {
     }
   };
 
+  const refreshThreadUsage = (threadId: string) => {
+    const epoch = ++threadUsageLoadEpoch.current;
+    void window.zenx.modelUsage
+      .forThread(threadId)
+      .then((usage) => {
+        if (
+          selectedThreadIdRef.current === threadId &&
+          threadUsageLoadEpoch.current === epoch
+        )
+          setThreadUsage(usage);
+      })
+      .catch((error: unknown) => {
+        if (
+          selectedThreadIdRef.current === threadId &&
+          threadUsageLoadEpoch.current === epoch
+        )
+          setRequestError(
+            `Thread usage could not be loaded: ${describeError(error)}`,
+          );
+      });
+  };
+
   const resumeThread = async (threadId: string, preserveNavigation = false) => {
     const epoch = ++selectionEpoch.current;
+    const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
     if (!preserveNavigation) {
       setPage("agent");
@@ -293,7 +317,7 @@ export function App() {
       if (selectionEpoch.current !== epoch) return;
       setThreadDetail(result.thread);
       setThreadAttachments(attachments);
-      setThreadUsage(usage);
+      if (threadUsageLoadEpoch.current === usageEpoch) setThreadUsage(usage);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
       void window.zenx.settings
         .markWorkspaceUsed(result.thread.cwd)
@@ -380,21 +404,13 @@ export function App() {
             ? null
             : applyThreadViewNotification(current, method, params),
         );
+        if (method === "item/completed" || method === "turn/completed") {
+          const event = params as { threadId: string };
+          if (selectedThreadIdRef.current === event.threadId)
+            refreshThreadUsage(event.threadId);
+        }
         if (method === "item/completed") {
           const event = params as ServerNotificationParams["item/completed"];
-          if (selectedThreadIdRef.current === event.threadId) {
-            void window.zenx.modelUsage
-              .forThread(event.threadId)
-              .then((usage) => {
-                if (selectedThreadIdRef.current === event.threadId)
-                  setThreadUsage(usage);
-              })
-              .catch((error: unknown) =>
-                setRequestError(
-                  `Thread usage could not be loaded: ${describeError(error)}`,
-                ),
-              );
-          }
           if (
             event.item.type === "userMessage" &&
             selectedThreadIdRef.current === event.threadId
@@ -555,11 +571,13 @@ export function App() {
       );
       if (selectionEpoch.current !== epoch) return;
       selectedThreadIdRef.current = result.thread.id;
+      threadUsageLoadEpoch.current += 1;
       setPage("agent");
       setSidebarOpen(false);
       setSelectedThreadId(result.thread.id);
       setThreadDetail(result.thread);
       setThreadAttachments({});
+      setThreadUsage(undefined);
       setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
       await loadThreadSummaries();
     } catch (error) {

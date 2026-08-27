@@ -827,52 +827,28 @@ function readUsage(value: unknown):
       "OpenAI-compatible model stream had invalid usage",
     );
   }
-  const promptDetails = optionalRecord(
-    usage.prompt_tokens_details,
-    "prompt token details",
-  );
-  const completionDetails = optionalRecord(
-    usage.completion_tokens_details,
-    "completion token details",
-  );
+  const promptDetails = optionalRecord(usage.prompt_tokens_details);
+  const completionDetails = optionalRecord(usage.completion_tokens_details);
   const openAiCached = optionalTokenCount(
     promptDetails?.cached_tokens,
-    "cached input tokens",
+    inputTokens,
   );
   const deepSeekHit = optionalTokenCount(
     usage.prompt_cache_hit_tokens,
-    "cache hit input tokens",
+    inputTokens,
   );
   const deepSeekMiss = optionalTokenCount(
     usage.prompt_cache_miss_tokens,
-    "cache miss input tokens",
+    inputTokens,
   );
   const cachedInputTokens =
     openAiCached ??
     deepSeekHit ??
     (deepSeekMiss === undefined ? undefined : inputTokens - deepSeekMiss);
-  if (
-    cachedInputTokens !== undefined &&
-    (cachedInputTokens < 0 || cachedInputTokens > inputTokens)
-  ) {
-    throw modelError(
-      "protocol",
-      "OpenAI-compatible model stream had invalid cached input usage",
-    );
-  }
   const reasoningOutputTokens = optionalTokenCount(
     completionDetails?.reasoning_tokens,
-    "reasoning output tokens",
+    outputTokens,
   );
-  if (
-    reasoningOutputTokens !== undefined &&
-    reasoningOutputTokens > outputTokens
-  ) {
-    throw modelError(
-      "protocol",
-      "OpenAI-compatible model stream had invalid reasoning output usage",
-    );
-  }
   return {
     inputTokens,
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
@@ -883,22 +859,14 @@ function readUsage(value: unknown):
 
 function optionalRecord(
   value: unknown,
-  label: string,
 ): Readonly<Record<string, unknown>> | undefined {
-  return value === undefined || value === null
-    ? undefined
-    : record(value, label);
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
 }
 
-function optionalTokenCount(value: unknown, label: string): number | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (!isTokenCount(value)) {
-    throw modelError(
-      "protocol",
-      `OpenAI-compatible model stream had invalid ${label}`,
-    );
-  }
-  return value;
+function optionalTokenCount(value: unknown, total: number): number | undefined {
+  return isTokenCount(value) && value <= total ? value : undefined;
 }
 
 function isTokenCount(value: unknown): value is number {
