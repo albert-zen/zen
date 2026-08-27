@@ -89,6 +89,7 @@ export function SettingsView({
         defaultModel: draft.defaultModel,
         titleModel: draft.titleModel,
         approvalPolicy: draft.approvalPolicy,
+        maxToolRounds: draft.maxToolRounds,
       });
       setSettings(value);
       setDraft(value.profile);
@@ -1874,6 +1875,13 @@ function GeneralPanel({
   const [appearance, setAppearance] = useState<AppearancePreference>(() =>
     appearanceController.getPreference(),
   );
+  const [maximumInput, setMaximumInput] = useState(
+    draft.maxToolRounds?.toString() ?? "",
+  );
+  const [maximumError, setMaximumError] = useState<string | null>(null);
+  useEffect(() => {
+    setMaximumInput(draft.maxToolRounds?.toString() ?? "");
+  }, [draft.maxToolRounds]);
   return (
     <>
       <header>
@@ -1939,7 +1947,55 @@ function GeneralPanel({
               <option value="never">Full access</option>
             </select>
           </label>
+          <label className="field">
+            <span>Maximum tool rounds</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={maximumInput}
+              aria-describedby={
+                maximumError === null
+                  ? "max-tool-rounds-help"
+                  : "max-tool-rounds-help max-tool-rounds-error"
+              }
+              aria-invalid={maximumError === null ? undefined : true}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                setMaximumInput(value);
+                if (value === "") {
+                  setMaximumError(null);
+                  setDraft({ ...draft, maxToolRounds: undefined });
+                  return;
+                }
+                if (!/^\d+$/u.test(value)) return;
+                const maximum = Number(value);
+                if (!Number.isSafeInteger(maximum) || maximum < 1) return;
+                setMaximumError(null);
+                setDraft({ ...draft, maxToolRounds: maximum });
+              }}
+              onBlur={() => {
+                if (
+                  maximumInput !== "" &&
+                  (!/^\d+$/u.test(maximumInput) ||
+                    !Number.isSafeInteger(Number(maximumInput)) ||
+                    Number(maximumInput) < 1)
+                ) {
+                  setMaximumError("Enter a whole number of 1 or more.");
+                }
+              }}
+            />
+            {maximumError === null ? null : (
+              <small id="max-tool-rounds-error" className="form-error">
+                {maximumError}
+              </small>
+            )}
+          </label>
         </div>
+        <p id="max-tool-rounds-help" className="settings-note">
+          Leave blank for unlimited. A finite maximum stops a Turn that keeps
+          requesting tools after that many model rounds.
+        </p>
         <p className="settings-note">
           Add, remove, and select Projects from the Projects sidebar. Folder
           selection always uses the ZenX directory picker.

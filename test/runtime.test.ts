@@ -925,6 +925,132 @@ test("runs a deterministic in-memory turn from append-only items", async () => {
   assert.equal(events.at(-1)?.type, "turn_completed");
 });
 
+test("allows more than eight tool rounds when no maximum is configured", async () => {
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "many-tools",
+    async *stream(): AsyncIterable<ModelEvent> {
+      samples += 1;
+      if (samples <= 10) {
+        yield {
+          type: "tool_call",
+          callId: `call-${String(samples)}`,
+          name: "continue",
+          arguments: {},
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "finished" };
+    },
+  };
+  const tools: ToolExecutor = {
+    definitions: [
+      {
+        name: "continue",
+        description: "Continue the deterministic fixture.",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async () => ({ output: "continue", exitCode: 0 }),
+  };
+  const server = createServer({ model, tools });
+  const thread = await server.startThread();
+
+  await (
+    await server.startTurn(thread.id, "keep working")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(samples, 11);
+  assert.equal(snapshot.turns[0]?.status, "completed");
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "tool_result").length,
+    10,
+  );
+  assert.equal(
+    snapshot.items.find((item) => item.type === "agent_message")?.text,
+    "finished",
+  );
+});
+
+test("honors an explicitly configured maximum tool round count", async () => {
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "bounded-tools",
+    async *stream(): AsyncIterable<ModelEvent> {
+      samples += 1;
+      yield {
+        type: "tool_call",
+        callId: `call-${String(samples)}`,
+        name: "continue",
+        arguments: {},
+      };
+    },
+  };
+  const tools: ToolExecutor = {
+    definitions: [
+      {
+        name: "continue",
+        description: "Continue the deterministic fixture.",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async () => ({ output: "continue", exitCode: 0 }),
+  };
+  const runtime = new AgentRuntime({ tools, maxToolRounds: 2 });
+  const server = createServer({ model, runtime });
+  const thread = await server.startThread();
+
+  await (
+    await server.startTurn(thread.id, "stop after two")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(samples, 3);
+  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "tool_result").length,
+    2,
+  );
+  assert.match(
+    snapshot.items.find((item) => item.type === "failure")?.message ?? "",
+    /exceeded 2 tool rounds/u,
+  );
+  for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(
+      () => new AgentRuntime({ tools, maxToolRounds: invalid }),
+      /Maximum tool rounds/u,
+    );
+  }
+});
+
+test("event observers cannot fail or strand a Turn", async (t) => {
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (...arguments_: unknown[]) => {
+    warnings.push(String(arguments_[0]));
+  });
+  const server = createServer();
+  let observed = 0;
+  server.subscribe(() => {
+    throw new Error("observer failed");
+  });
+  server.subscribe(() => {
+    observed += 1;
+  });
+  const thread = await server.startThread();
+
+  await (
+    await server.startTurn(thread.id, "hello")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns[0]?.status, "completed");
+  assert(observed > 0);
+  assert.deepEqual(warnings, [
+    "Removed a failing Zen App Server event subscriber",
+  ]);
+});
+
 test("journal stores only complete canonical items, never deltas", async () => {
   const temporaryDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zen-journal-test-"),

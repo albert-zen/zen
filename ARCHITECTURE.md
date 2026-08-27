@@ -257,7 +257,7 @@
   admission-failure audit，确保 65th admission-failure 事实不会被同一 mutation 淘汰。
 
 **Project 不存在于 Zen Core**：Runtime 需要的只是某次执行的环境
-（cwd、model、tool policy）。App Server 从协议请求与宿主配置解析这些输入并
+（cwd、model、tool policy，以及可选的 tool-round 上限）。App Server 从协议请求与宿主配置解析这些输入并
 转交 Runtime；credential 只由宿主的外部配置解析，不进入协议或 Thread。
 Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派生的分组视图，
 不是运行时容器。
@@ -303,6 +303,8 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 
 - AgentRuntime 始终拥有模型采样、provider-neutral tool loop，以及 canonical
   `tool_call` / `tool_result` 的编译和记录；Plugin Runtime 不能拥有自己的 AgentRuntime。
+- tool loop 默认没有轮数上限；Host 可以显式配置正整数 `maxToolRounds`，未配置时
+  Runtime 不得因为累计工具轮数终止健康 Turn。
 - Tool Environment 同时组合 Builtin、Plugin 与 External Tool Providers。Zen 解析
   stable tool name、执行 Host policy、路由与回写；插件或外部服务可以拥有实际领域执行。
 - 模型初始只看到 builtin tools 与一个稳定入口 `zenx_plugin`。`discover` 只返回
@@ -460,9 +462,9 @@ journal append 失败都明确返回且不追加 compaction Item，不隐藏重�
 `contextWindow` 判断自动 compaction；只有 Provider 实际报告的有效 `inputTokens`
 达到窗口的 80% 整数上界才执行，多次采样或 tool round 取观察到的最高 input context。
 Unknown window、缺失或无效 usage、非成功 Turn 与已覆盖边界都不猜测、不追加。
-自动生成、验证或 persistence 必须在成功 Turn handle settle 前完成；失败通过既有
-Turn execution error surface 明确返回且不重试，已完成 Turn 的原始 canonical trace
-保持不变。
+自动生成、验证或 persistence 在成功 Turn handle settle 前尝试一次；失败只记录 Host
+诊断，不得把已经 canonical completed 的 Turn 重新投影为 failed，也不在同一 Turn 内重试。
+下一次达到条件的 completed Turn 可以再次尝试，已完成 Turn 的原始 canonical trace 保持不变。
 
 `context_compaction` canonical Item 记录 `coveredThroughItemId`、原样 summary、
 稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
@@ -630,7 +632,8 @@ Zen 只在 Codex 0.146.0 没有等价原子语义时增加明确命名的协议�
 AbortController，以及可从 active Turn Item 重建的 SoftSteerDeliveryAnchor，
 不把它们当成会话事实。Thread 的 runtime append、steer、interrupt 与终态提交
 经过同一个 mutation boundary 线性化，禁止 canonical 用户消息落到 terminal
-Item 之后。跨 Thread 直接并发运行，没有
+Item 之后。App Server event subscriber 只是瞬时投影观察者；抛异常的 subscriber
+会被隔离并移除，不得反向改变 Turn 或 canonical append。跨 Thread 直接并发运行，没有
 ProjectCoordinator、调度队列或可持久化的 scheduler。进程崩了就崩了：重启后
 从 journal 恢复 Thread 内容，未完成的 Turn 派生为中断，由用户重发。
 

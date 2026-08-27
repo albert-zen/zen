@@ -454,6 +454,7 @@ export class ZenXSettingsService {
             defaultModel: settings.defaultModel,
             titleModel: settings.titleModel,
             approvalPolicy: settings.approvalPolicy,
+            maxToolRounds: settings.maxToolRounds,
           }),
           [],
         )

@@ -426,6 +426,38 @@ test("merges stale Settings fields without overwriting a newer Project mutation"
   }
 });
 
+test("persists and clears the optional maximum tool round setting", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-tool-round-settings-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({});
+    const initial = (await service.publicSettings()).profile;
+    assert.equal(initial.maxToolRounds, undefined);
+
+    await service.save({ ...initial, maxToolRounds: 12 });
+    assert.equal((await service.publicSettings()).profile.maxToolRounds, 12);
+    assert.equal((await service.hostConfig()).maxToolRounds, 12);
+
+    const restarted = settingsFor(directory, inactiveSubscription());
+    await restarted.initialize({});
+    const persisted = (await restarted.publicSettings()).profile;
+    assert.equal(persisted.maxToolRounds, 12);
+
+    const unlimited = { ...persisted };
+    delete unlimited.maxToolRounds;
+    await restarted.save(unlimited);
+    assert.equal(
+      (await restarted.publicSettings()).profile.maxToolRounds,
+      undefined,
+    );
+    assert.equal((await restarted.hostConfig()).maxToolRounds, undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("restores the previous credential when profile persistence fails", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-profile-persistence-failure-"),

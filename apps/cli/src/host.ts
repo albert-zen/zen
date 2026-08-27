@@ -87,6 +87,8 @@ export interface ZenHostOptions {
   threadSummaryProjection?: ThreadSummaryProjection;
   toolEnvironment?: ToolEnvironment;
   toolDefinitionProjection?: ToolDefinitionProjection;
+  /** Omit to allow the model to use as many tool rounds as the Turn needs. */
+  maxToolRounds?: number;
   /** Compatibility input for callers that still provide one static executor. */
   tools?: ToolExecutor;
   attachments?: AttachmentStore;
@@ -209,6 +211,9 @@ export function createHostedAppServer(
       ...(options.toolDefinitionProjection === undefined
         ? {}
         : { toolDefinitionProjection: options.toolDefinitionProjection }),
+      ...(options.maxToolRounds === undefined
+        ? {}
+        : { maxToolRounds: options.maxToolRounds }),
     }),
     providerRegistry: new ProviderRegistry(profiles),
     threadMetadata:
