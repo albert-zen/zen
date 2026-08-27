@@ -605,6 +605,15 @@ async function stageProfileDependencyState(
     path.join(currentGenerationDirectory, "pnpm-lock.yaml"),
     path.join(stagedGenerationDirectory, "pnpm-lock.yaml"),
   );
+  try {
+    await cp(
+      path.join(currentGenerationDirectory, ".zenx-sources"),
+      path.join(stagedGenerationDirectory, ".zenx-sources"),
+      { recursive: true },
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   await writeProfilePackageJson(
     stagedGenerationDirectory,
     currentPackage.dependencies,
