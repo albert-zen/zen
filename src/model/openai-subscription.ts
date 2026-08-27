@@ -34,8 +34,8 @@ export interface OpenAiSubscriptionModelOptions {
 
 /**
  * A stateless, native adapter for the ChatGPT Codex Responses SSE endpoint.
- * Each request is rebuilt from canonical Zen messages; provider response state
- * is neither cached nor persisted.
+ * Each request is rebuilt from canonical Zen history, including compatible
+ * encrypted reasoning Items; no continuation authority is kept in memory.
  */
 export class OpenAiSubscriptionModel implements ModelAdapter {
   readonly provider = "openai-codex";
@@ -75,7 +75,11 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       stream: true,
       instructions: this.#instructions,
       input,
+      include: ["reasoning.encrypted_content"],
       text: { verbosity: "low" },
+      reasoning: {
+        effort: requiredLabel(request.reasoningEffort, "reasoning effort"),
+      },
       tool_choice: tools.length === 0 ? "none" : "auto",
       parallel_tool_calls: true,
       ...(tools.length === 0 ? {} : { tools }),
@@ -186,6 +190,25 @@ async function toResponsesInput(
   index: number,
   attachments: Pick<AttachmentStore, "read"> | undefined,
 ): Promise<Array<Record<string, unknown>>> {
+  if (message.role === "reasoning") {
+    if (
+      message.contentVisibility !== "opaque" ||
+      message.providerItemId === undefined
+    ) {
+      return [];
+    }
+    return [
+      {
+        type: "reasoning",
+        id: message.providerItemId,
+        encrypted_content: message.reasoningContent,
+        summary:
+          message.summary === undefined
+            ? []
+            : [{ type: "summary_text", text: message.summary }],
+      },
+    ];
+  }
   if (message.role === "user") {
     if ("content" in message) {
       const content: Array<Record<string, unknown>> = [];
@@ -260,13 +283,21 @@ function assistantTextInput(
 
 interface StreamState {
   slots: Map<number, OutputSlot>;
+  startedReasoningIndexes: Set<number>;
   emittedToolCalls: Set<string>;
   finishedOutputIndexes: Set<number>;
   terminalSeen: boolean;
 }
 
 type OutputSlot =
-  | { type: "reasoning"; text: string }
+  | {
+      type: "reasoning";
+      text: string;
+      pendingSummarySeparator: boolean;
+      itemId?: string;
+      encryptedContent?: string;
+      summary: Array<{ type: "summary_text"; text: string }>;
+    }
   | { type: "message"; text: string }
   | {
       type: "function_call";
@@ -284,6 +315,7 @@ async function* parseResponsesStream(
 ): AsyncIterable<ModelEvent> {
   const state: StreamState = {
     slots: new Map(),
+    startedReasoningIndexes: new Set(),
     emittedToolCalls: new Set(),
     finishedOutputIndexes: new Set(),
     terminalSeen: false,
@@ -321,22 +353,31 @@ async function* parseResponsesStream(
       continue;
     }
 
-    if (
-      type === "response.reasoning_summary_text.delta" ||
-      type === "response.reasoning_text.delta"
-    ) {
+    if (type === "response.reasoning_summary_text.delta") {
       const slot = slotFor(state, event, "reasoning");
       const delta = stringField(event, "delta");
-      if (slot !== undefined && delta !== undefined) {
-        slot.text += delta;
+      const outputIndex = numberField(event, "output_index");
+      if (
+        slot !== undefined &&
+        outputIndex !== undefined &&
+        delta !== undefined &&
+        delta.length > 0
+      ) {
+        const started = startReasoningEvent(state, outputIndex);
+        if (started !== undefined) yield started;
+        const separator = slot.pendingSummarySeparator ? "\n\n" : "";
+        slot.pendingSummarySeparator = false;
+        yield {
+          type: "reasoning_summary_delta",
+          reasoningId: reasoningStreamId(outputIndex),
+          delta: separator + delta,
+        };
+        slot.text += separator + delta;
       }
       continue;
     }
 
-    if (
-      type === "response.reasoning_summary_text.done" ||
-      type === "response.reasoning_text.done"
-    ) {
+    if (type === "response.reasoning_summary_text.done") {
       const slot = slotFor(state, event, "reasoning");
       const text = stringField(event, "text");
       if (slot !== undefined && text !== undefined) {
@@ -348,7 +389,7 @@ async function* parseResponsesStream(
     if (type === "response.reasoning_summary_part.done") {
       const slot = slotFor(state, event, "reasoning");
       if (slot !== undefined && slot.text.length > 0) {
-        slot.text += "\n\n";
+        slot.pendingSummarySeparator = true;
       }
       continue;
     }
@@ -459,9 +500,41 @@ async function* finishOutputItem(
   }
 
   if (slot.type === "reasoning") {
-    const finalText = reasoningText(item) || slot.text.replace(/\n\n$/u, "");
-    if (finalText.length > 0) {
-      yield { type: "reasoning", summary: finalText };
+    const itemId = stringField(item, "id") ?? slot.itemId;
+    const encryptedContent =
+      stringField(item, "encrypted_content") ?? slot.encryptedContent;
+    const summary = reasoningSummary(item);
+    const replaySummary = summary.length > 0 ? summary : slot.summary;
+    if (
+      itemId !== undefined &&
+      itemId.length > 0 &&
+      encryptedContent !== undefined &&
+      encryptedContent.length > 0
+    ) {
+      const finalText = reasoningSummaryText(replaySummary) || slot.text;
+      const started = startReasoningEvent(state, outputIndex);
+      if (started !== undefined) yield started;
+      yield {
+        type: "reasoning",
+        reasoningId: reasoningStreamId(outputIndex),
+        reasoningContent: encryptedContent,
+        contentVisibility: "opaque",
+        providerItemId: itemId,
+        ...(finalText.length === 0 ? {} : { summary: finalText }),
+      };
+    } else {
+      const finalText = reasoningSummaryText(replaySummary) || slot.text;
+      if (finalText.length > 0) {
+        const started = startReasoningEvent(state, outputIndex);
+        if (started !== undefined) yield started;
+        yield {
+          type: "reasoning",
+          reasoningId: reasoningStreamId(outputIndex),
+          reasoningContent: finalText,
+          summary: finalText,
+          contentVisibility: "public",
+        };
+      }
     }
   } else if (slot.type === "message") {
     const finalText = messageText(item);
@@ -507,10 +580,35 @@ async function* finishOutputItem(
   state.finishedOutputIndexes.add(outputIndex);
 }
 
+function reasoningStreamId(outputIndex: number): string {
+  return `reasoning:${String(outputIndex)}`;
+}
+
+function startReasoningEvent(
+  state: StreamState,
+  outputIndex: number,
+): ModelEvent | undefined {
+  if (state.startedReasoningIndexes.has(outputIndex)) return undefined;
+  state.startedReasoningIndexes.add(outputIndex);
+  return {
+    type: "reasoning_started",
+    reasoningId: reasoningStreamId(outputIndex),
+  };
+}
+
 function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {
   const type = stringField(item, "type");
   if (type === "reasoning") {
-    return { type, text: reasoningText(item) };
+    const itemId = stringField(item, "id");
+    const encryptedContent = stringField(item, "encrypted_content");
+    return {
+      type,
+      text: reasoningText(item),
+      pendingSummarySeparator: false,
+      summary: reasoningSummary(item),
+      ...(itemId === undefined ? {} : { itemId }),
+      ...(encryptedContent === undefined ? {} : { encryptedContent }),
+    };
   }
   if (type === "message") {
     return { type, text: "" };
@@ -650,7 +748,29 @@ function providerEventError(
 }
 
 function reasoningText(item: Record<string, unknown>): string {
-  return textArray(item.summary) || textArray(item.content);
+  return reasoningSummaryText(reasoningSummary(item));
+}
+
+function reasoningSummary(
+  item: Record<string, unknown>,
+): Array<{ type: "summary_text"; text: string }> {
+  if (!Array.isArray(item.summary)) return [];
+  return item.summary.flatMap((part) => {
+    if (!isRecord(part) || stringField(part, "type") !== "summary_text") {
+      return [];
+    }
+    const text = stringField(part, "text");
+    return text === undefined ? [] : [{ type: "summary_text", text }];
+  });
+}
+
+function reasoningSummaryText(
+  summary: readonly { type: "summary_text"; text: string }[],
+): string {
+  return summary
+    .map((part) => part.text)
+    .filter((text) => text.length > 0)
+    .join("\n\n");
 }
 
 function messageText(item: Record<string, unknown>): string {
@@ -668,17 +788,6 @@ function messageText(item: Record<string, unknown>): string {
           : "";
     })
     .join("");
-}
-
-function textArray(value: unknown): string {
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  return value
-    .filter(isRecord)
-    .map((part) => stringField(part, "text") ?? "")
-    .filter((text) => text.length > 0)
-    .join("\n\n");
 }
 
 function parseArguments(value: string): Record<string, unknown> {

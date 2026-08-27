@@ -67,7 +67,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       options.provider ?? "openai-compatible",
       "provider",
     );
-    this.#defaultParams = options.defaultParams ?? {};
+    this.#defaultParams = compatibleDefaultParams(options.defaultParams ?? {});
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#attachments = options.attachments;
   }
@@ -76,9 +76,53 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     request.signal.throwIfAborted();
     const tools = request.tools.map(toChatTool);
     const allowedToolNames = new Set(tools.map((tool) => tool.function.name));
+    const reasoningPolicy = compatibleReasoningPolicy({
+      provider: this.provider,
+      endpoint: this.#endpoint,
+      model: request.model,
+      defaultParams: this.#defaultParams,
+    });
     const messages: Readonly<Record<string, unknown>>[] = [];
+    let pendingReasoning = "";
     for (const message of request.messages) {
-      messages.push(await toChatMessage(message, this.#attachments));
+      if (message.role === "reasoning") {
+        if (message.contentVisibility === "public") {
+          pendingReasoning = [pendingReasoning, message.reasoningContent]
+            .filter((part) => part.length > 0)
+            .join("\n\n");
+        }
+        continue;
+      }
+      const encoded = await toChatMessage(message, this.#attachments);
+      if (pendingReasoning.length > 0) {
+        if (shouldReplayReasoning(reasoningPolicy.replay, message)) {
+          messages.push({ ...encoded, reasoning_content: pendingReasoning });
+          pendingReasoning = "";
+          continue;
+        }
+        if (
+          reasoningPolicy.replay === "all-assistant" &&
+          message.role !== "assistant"
+        ) {
+          messages.push({
+            role: "assistant",
+            content: null,
+            reasoning_content: pendingReasoning,
+          });
+        }
+        pendingReasoning = "";
+      }
+      messages.push(encoded);
+    }
+    if (
+      pendingReasoning.length > 0 &&
+      reasoningPolicy.replay === "all-assistant"
+    ) {
+      messages.push({
+        role: "assistant",
+        content: null,
+        reasoning_content: pendingReasoning,
+      });
     }
     const body = serializeRequest({
       ...this.#defaultParams,
@@ -86,6 +130,13 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       messages,
       n: 1,
       stream: true,
+      reasoning_effort: compatibleReasoningEffort({
+        policy: reasoningPolicy,
+        requestEffort: request.reasoningEffort,
+      }),
+      ...(reasoningPolicy.enableToolStream
+        ? { tool_stream: tools.length > 0 ? true : undefined }
+        : {}),
       tools: tools.length > 0 ? tools : undefined,
       tool_choice: tools.length > 0 ? "auto" : undefined,
     });
@@ -141,6 +192,136 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       allowedToolNames,
     );
   }
+}
+
+type ReasoningReplay = "none" | "tool-calls" | "all-assistant";
+
+interface CompatibleReasoningPolicy {
+  replay: ReasoningReplay;
+  forwardReasoningEffort: boolean;
+  enableToolStream: boolean;
+}
+
+function compatibleReasoningPolicy(options: {
+  provider: string;
+  endpoint: string;
+  model: string;
+  defaultParams: Readonly<Record<string, unknown>>;
+}): CompatibleReasoningPolicy {
+  const provider = options.provider.toLowerCase();
+  const endpointHostname = new URL(options.endpoint).hostname.toLowerCase();
+  const model = requiredLabel(options.model, "model").toLowerCase();
+  const familyModel = model.split("/").at(-1) ?? model;
+  const isDashScope =
+    provider.includes("dashscope") || isDashScopeHostname(endpointHostname);
+  const isZhipu =
+    provider.includes("zhipu") || endpointHostname.endsWith(".bigmodel.cn");
+
+  if (/^qwen3\.8(?:-|$)/u.test(familyModel)) {
+    return {
+      replay:
+        options.defaultParams["preserve_thinking"] === false
+          ? "none"
+          : "all-assistant",
+      forwardReasoningEffort: true,
+      enableToolStream: false,
+    };
+  }
+
+  if (/^glm-5\.(?:2|3)(?:-|$)/u.test(familyModel)) {
+    return {
+      replay: isDashScope
+        ? options.defaultParams["clear_thinking"] === true
+          ? "none"
+          : "all-assistant"
+        : zhipuPreservedThinking(options.defaultParams)
+          ? "all-assistant"
+          : "tool-calls",
+      forwardReasoningEffort: isDashScope || isZhipu,
+      enableToolStream: true,
+    };
+  }
+
+  if (/^deepseek(?:-|$)/u.test(familyModel) || provider === "deepseek") {
+    return {
+      replay: "tool-calls",
+      forwardReasoningEffort: false,
+      enableToolStream: false,
+    };
+  }
+
+  return {
+    replay: "all-assistant",
+    forwardReasoningEffort: true,
+    enableToolStream: false,
+  };
+}
+
+function compatibleDefaultParams(
+  value: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const snapshot = { ...value };
+  for (const control of ["reasoning_effort", "thinking_budget"] as const) {
+    if (Object.hasOwn(snapshot, control)) {
+      throw modelError(
+        "configuration",
+        `OpenAI-compatible defaultParams.${control} conflicts with canonical reasoning effort`,
+      );
+    }
+  }
+  return snapshot;
+}
+
+function isDashScopeHostname(hostname: string): boolean {
+  if (
+    hostname === "dashscope.aliyuncs.com" ||
+    hostname === "dashscope-intl.aliyuncs.com"
+  ) {
+    return true;
+  }
+  const labels = hostname.split(".");
+  const dnsLabel = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
+  return (
+    labels.length === 5 &&
+    dnsLabel.test(labels[0]!) &&
+    dnsLabel.test(labels[1]!) &&
+    labels[2] === "maas" &&
+    labels[3] === "aliyuncs" &&
+    labels[4] === "com"
+  );
+}
+
+function zhipuPreservedThinking(
+  defaultParams: Readonly<Record<string, unknown>>,
+): boolean {
+  const thinking = defaultParams["thinking"];
+  return (
+    typeof thinking === "object" &&
+    thinking !== null &&
+    !Array.isArray(thinking) &&
+    (thinking as Readonly<Record<string, unknown>>)["clear_thinking"] === false
+  );
+}
+
+function compatibleReasoningEffort(options: {
+  policy: CompatibleReasoningPolicy;
+  requestEffort: string;
+}): unknown {
+  if (!options.policy.forwardReasoningEffort) return undefined;
+  return requiredLabel(options.requestEffort, "reasoning effort");
+}
+
+function shouldReplayReasoning(
+  replay: ReasoningReplay,
+  message: ModelMessage,
+): boolean {
+  if (message.role !== "assistant") return false;
+  if (replay === "all-assistant") return true;
+  return (
+    replay === "tool-calls" &&
+    "toolCalls" in message &&
+    message.toolCalls.length > 0
+  );
 }
 
 async function readProviderError(
@@ -211,6 +392,12 @@ async function toChatMessage(
   message: ModelMessage,
   attachments: Pick<AttachmentStore, "read"> | undefined,
 ): Promise<Readonly<Record<string, unknown>>> {
+  if (message.role === "reasoning") {
+    throw modelError(
+      "configuration",
+      "Semantic reasoning must be encoded with its assistant message",
+    );
+  }
   if (message.role === "tool") {
     return {
       role: "tool",
@@ -322,6 +509,8 @@ function serializeToolArguments(value: Record<string, unknown>): string {
 interface StreamState {
   finishReason?: string;
   doneSeen: boolean;
+  reasoningContent: string;
+  reasoningStarted: boolean;
   toolCalls: Map<number, ToolCallAccumulator>;
 }
 
@@ -341,6 +530,8 @@ async function* parseChatCompletionStream(
   const sse: SseState = { buffer: "", dataLines: [] };
   const state: StreamState = {
     doneSeen: false,
+    reasoningContent: "",
+    reasoningStarted: false,
     toolCalls: new Map(),
   };
   let reachedEof = false;
@@ -409,6 +600,15 @@ async function* parseChatCompletionStream(
       "protocol",
       "OpenAI-compatible model stream omitted its tool call",
     );
+  }
+
+  if (state.reasoningContent.length > 0) {
+    yield {
+      type: "reasoning",
+      reasoningId: "reasoning:0",
+      reasoningContent: state.reasoningContent,
+      contentVisibility: "public",
+    };
   }
 
   for (const [, call] of [...state.toolCalls.entries()].sort(
@@ -513,6 +713,40 @@ async function* consumePayload(
     }
     if (typeof content === "string" && content.length > 0) {
       yield { type: "text_delta", delta: content };
+    }
+
+    const reasoningContent = delta.reasoning_content;
+    if (
+      reasoningContent !== undefined &&
+      reasoningContent !== null &&
+      typeof reasoningContent !== "string"
+    ) {
+      throw modelError(
+        "protocol",
+        "OpenAI-compatible model stream had invalid reasoning content",
+      );
+    }
+    if (
+      state.finishReason !== undefined &&
+      typeof reasoningContent === "string" &&
+      reasoningContent.length > 0
+    ) {
+      throw modelError(
+        "protocol",
+        "OpenAI-compatible model stream continued after finishing",
+      );
+    }
+    if (typeof reasoningContent === "string" && reasoningContent.length > 0) {
+      if (!state.reasoningStarted) {
+        state.reasoningStarted = true;
+        yield { type: "reasoning_started", reasoningId: "reasoning:0" };
+      }
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "reasoning:0",
+        delta: reasoningContent,
+      };
+      state.reasoningContent += reasoningContent;
     }
 
     if (delta.tool_calls !== undefined) {

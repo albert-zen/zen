@@ -281,8 +281,9 @@ export function projectCompletedItem(
       return {
         type: "reasoning",
         id: item.id,
-        summary: [item.summary],
-        content: [],
+        summary: item.summary === undefined ? [] : [item.summary],
+        content:
+          item.contentVisibility === "public" ? [item.reasoningContent] : [],
       };
     case "tool_call":
       return projectCommandStarted(item, "");

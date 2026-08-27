@@ -158,7 +158,12 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
         yield { type: "usage", inputTokens: 80, outputTokens: 4 };
         return;
       }
-      yield { type: "reasoning", summary: "reasoning bytes" };
+      yield {
+        type: "reasoning",
+        reasoningContent: "reasoning bytes",
+        summary: "reasoning bytes",
+        contentVisibility: "public",
+      };
       yield { type: "text_delta", delta: "answer bytes" };
       yield { type: "usage", inputTokens: 79, outputTokens: 5 };
     },
@@ -217,6 +222,14 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
     JSON.stringify(projectThread(completed, { includeTurns: true })),
   );
   assert.equal(requests.length, 3);
+  assert(
+    requests[2]?.messages.some(
+      (message) =>
+        message.role === "reasoning" &&
+        message.reasoningContent === "reasoning bytes" &&
+        message.contentVisibility === "public",
+    ),
+  );
 });
 
 test("automatic compaction does not guess below threshold, without usage, or with an unknown window", async (t) => {

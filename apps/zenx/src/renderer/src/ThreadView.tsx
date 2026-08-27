@@ -580,33 +580,43 @@ function TraceGroup({
         <div className="trace-items">
           {node.items.map((item) => {
             const open = openItems.has(item.id);
+            const expandable =
+              item.type !== "reasoning" ||
+              reasoningContentText(item).trim().length > 0;
+            const header = (
+              <>
+                <Icon
+                  name={item.type === "reasoning" ? "reasoning" : "terminal"}
+                  size={14}
+                />
+                <strong>{item.type === "reasoning" ? "Think" : "Tool"}</strong>
+                <span>{traceItemLabel(item)}</span>
+                <StatusMark item={item} />
+                {expandable ? <Icon name="chevron-down" size={13} /> : null}
+              </>
+            );
             return (
               <div className="trace-item" key={item.id}>
-                <button
-                  className="trace-item-toggle"
-                  type="button"
-                  aria-expanded={open}
-                  onClick={() =>
-                    setOpenItems((current) => {
-                      const next = new Set(current);
-                      if (next.has(item.id)) next.delete(item.id);
-                      else next.add(item.id);
-                      return next;
-                    })
-                  }
-                >
-                  <Icon
-                    name={item.type === "reasoning" ? "reasoning" : "terminal"}
-                    size={14}
-                  />
-                  <strong>
-                    {item.type === "reasoning" ? "Think" : "Tool"}
-                  </strong>
-                  <span>{traceItemLabel(item)}</span>
-                  <StatusMark item={item} />
-                  <Icon name="chevron-down" size={13} />
-                </button>
-                {open ? (
+                {expandable ? (
+                  <button
+                    className="trace-item-toggle"
+                    type="button"
+                    aria-expanded={open}
+                    onClick={() =>
+                      setOpenItems((current) => {
+                        const next = new Set(current);
+                        if (next.has(item.id)) next.delete(item.id);
+                        else next.add(item.id);
+                        return next;
+                      })
+                    }
+                  >
+                    {header}
+                  </button>
+                ) : (
+                  <div className="trace-item-static">{header}</div>
+                )}
+                {open && expandable ? (
                   <TraceDetail
                     item={item}
                     pluginSnapshot={pluginSnapshot}
@@ -643,13 +653,7 @@ function TraceDetail({
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
   if (item.type === "reasoning") {
-    return (
-      <div className="trace-detail">
-        {item.summary.length === 0
-          ? "No reasoning summary was provided."
-          : item.summary.join("\n")}
-      </div>
-    );
+    return <div className="trace-detail">{reasoningContentText(item)}</div>;
   }
   if (item.type !== "commandExecution") return null;
   return (
@@ -667,6 +671,12 @@ function TraceDetail({
       />
     </div>
   );
+}
+
+function reasoningContentText(
+  item: Extract<ThreadItem, { type: "reasoning" }>,
+): string {
+  return item.content.join("\n");
 }
 
 function UserMessage({
@@ -957,7 +967,8 @@ function ApprovalBar({
 
 function traceItemLabel(item: ThreadItem): string {
   if (item.type === "reasoning") {
-    return item.summary[0] ?? "Reasoning details";
+    const summary = item.summary.join("\n").trim();
+    return summary.length > 0 ? summary : "Reasoning details";
   }
   return item.type === "commandExecution"
     ? commandLabel(item.command)

@@ -86,7 +86,21 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
         {
           type: "response.reasoning_summary_text.delta",
           output_index: 0,
-          delta: "checked the command",
+          delta: "checked",
+        },
+        {
+          type: "response.reasoning_summary_text.delta",
+          output_index: 0,
+          delta: "",
+        },
+        {
+          type: "response.reasoning_summary_part.done",
+          output_index: 0,
+        },
+        {
+          type: "response.reasoning_summary_text.delta",
+          output_index: 0,
+          delta: "the command",
         },
         {
           type: "response.output_item.done",
@@ -94,8 +108,11 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
           item: {
             type: "reasoning",
             id: "rs_1",
-            summary: [{ type: "summary_text", text: "checked the command" }],
-            encrypted_content: "must-not-persist",
+            summary: [
+              { type: "summary_text", text: "checked" },
+              { type: "summary_text", text: "the command" },
+            ],
+            encrypted_content: "encrypted-reasoning-state",
           },
         },
         {
@@ -166,7 +183,11 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
                 summary: [
                   {
                     type: "summary_text",
-                    text: "checked the command",
+                    text: "checked",
+                  },
+                  {
+                    type: "summary_text",
+                    text: "the command",
                   },
                 ],
               },
@@ -221,7 +242,25 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
   );
 
   assert.deepEqual(events, [
-    { type: "reasoning", summary: "checked the command" },
+    { type: "reasoning_started", reasoningId: "reasoning:0" },
+    {
+      type: "reasoning_summary_delta",
+      reasoningId: "reasoning:0",
+      delta: "checked",
+    },
+    {
+      type: "reasoning_summary_delta",
+      reasoningId: "reasoning:0",
+      delta: "\n\nthe command",
+    },
+    {
+      type: "reasoning",
+      reasoningId: "reasoning:0",
+      summary: "checked\n\nthe command",
+      reasoningContent: "encrypted-reasoning-state",
+      contentVisibility: "opaque",
+      providerItemId: "rs_1",
+    },
     { type: "text_delta", delta: "done" },
     {
       type: "tool_call",
@@ -231,6 +270,14 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
     },
     { type: "usage", inputTokens: 12, outputTokens: 7 },
   ]);
+  const streamedSummary = events
+    .filter((event) => event.type === "reasoning_summary_delta")
+    .map((event) => event.delta)
+    .join("");
+  const completedReasoning = events.find((event) => event.type === "reasoning");
+  assert(completedReasoning?.type === "reasoning");
+  assert.equal(streamedSummary, "checked\n\nthe command");
+  assert.equal(streamedSummary, completedReasoning.summary);
   assert.equal(capturedUrl, "https://example.test/backend-api/codex/responses");
   const headers = new Headers(capturedInit?.headers);
   assert.equal(headers.get("authorization"), `Bearer ${secretAccessToken}`);
@@ -242,6 +289,8 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
   const body = requestBody(capturedInit);
   assert.equal(body.store, false);
   assert.equal(body.stream, true);
+  assert.deepEqual(body.include, ["reasoning.encrypted_content"]);
+  assert.deepEqual(body.reasoning, { effort: "medium" });
   assert.equal(body.prompt_cache_key, "thread-one");
   assert.deepEqual(body.tools, [
     {
@@ -276,16 +325,117 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
       output: "Exit code: 0\nfirst",
     },
   ]);
-  assert.equal(JSON.stringify(body).includes("encrypted_content"), false);
+  assert.equal(JSON.stringify(body.input).includes("encrypted_content"), false);
 });
 
-test("a fresh adapter rebuilds a tool round only from canonical messages", async () => {
+test("ignores an empty subscription reasoning output without opening a lifecycle", async () => {
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async () =>
+      sseResponse([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_empty", summary: [] },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_empty", summary: [] },
+        },
+        {
+          type: "response.completed",
+          response: {
+            status: "completed",
+            output: [],
+            usage: { input_tokens: 3, output_tokens: 0 },
+          },
+        },
+      ]),
+  });
+
+  assert.deepEqual(await collect(adapter.stream(request())), [
+    { type: "usage", inputTokens: 3, outputTokens: 0 },
+  ]);
+});
+
+test("keeps raw reasoning text private on the existing reasoning event", async () => {
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async () =>
+      sseResponse([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_private", summary: [] },
+        },
+        {
+          type: "response.reasoning_text.delta",
+          output_index: 0,
+          delta: "raw chain of thought",
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "reasoning",
+            id: "rs_private",
+            summary: [],
+            content: [{ type: "reasoning_text", text: "raw chain of thought" }],
+            encrypted_content: "encrypted-private-state",
+          },
+        },
+        {
+          type: "response.completed",
+          response: { status: "completed", output: [] },
+        },
+      ]),
+  });
+
+  const events = await collect(adapter.stream(request()));
+  assert.deepEqual(events, [
+    { type: "reasoning_started", reasoningId: "reasoning:0" },
+    {
+      type: "reasoning",
+      reasoningId: "reasoning:0",
+      reasoningContent: "encrypted-private-state",
+      contentVisibility: "opaque",
+      providerItemId: "rs_private",
+    },
+    { type: "usage", inputTokens: 0, outputTokens: 0 },
+  ]);
+  assert.equal(JSON.stringify(events).includes("raw chain of thought"), false);
+});
+
+test("a fresh adapter replays existing reasoning history for a stateless tool round", async () => {
   const bodies: Array<Record<string, unknown>> = [];
   const responses = [
     sseResponse([
       {
         type: "response.output_item.added",
         output_index: 0,
+        item: {
+          type: "reasoning",
+          id: "rs_first",
+          summary: [],
+        },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "reasoning",
+          id: "rs_first",
+          summary: [
+            { type: "summary_text", text: "first step" },
+            { type: "summary_text", text: "second step" },
+          ],
+          encrypted_content: "provider-private-state",
+        },
+      },
+      {
+        type: "response.output_item.added",
+        output_index: 1,
         item: {
           type: "function_call",
           id: "fc_first",
@@ -296,14 +446,13 @@ test("a fresh adapter rebuilds a tool round only from canonical messages", async
       },
       {
         type: "response.output_item.done",
-        output_index: 0,
+        output_index: 1,
         item: {
           type: "function_call",
           id: "fc_first",
           call_id: "call_first",
           name: "shell",
           arguments: '{"command":"pwd"}',
-          encrypted_content: "provider-private-state",
         },
       },
       {
@@ -363,6 +512,18 @@ test("a fresh adapter rebuilds a tool round only from canonical messages", async
     ),
   );
   assert.deepEqual(firstEvents[0], {
+    type: "reasoning_started",
+    reasoningId: "reasoning:0",
+  });
+  assert.deepEqual(firstEvents[1], {
+    type: "reasoning",
+    reasoningId: "reasoning:0",
+    reasoningContent: "provider-private-state",
+    summary: "first step\n\nsecond step",
+    contentVisibility: "opaque",
+    providerItemId: "rs_first",
+  });
+  assert.deepEqual(firstEvents[2], {
     type: "tool_call",
     callId: "call_first|fc_first",
     name: "shell",
@@ -378,6 +539,13 @@ test("a fresh adapter rebuilds a tool round only from canonical messages", async
       request({
         messages: [
           ...initialMessages,
+          {
+            role: "reasoning",
+            reasoningContent: "provider-private-state",
+            summary: "first step\n\nsecond step",
+            contentVisibility: "opaque",
+            providerItemId: "rs_first",
+          },
           {
             role: "assistant",
             toolCalls: [
@@ -401,14 +569,16 @@ test("a fresh adapter rebuilds a tool round only from canonical messages", async
   );
 
   assert.equal(bodies.length, 2);
-  assert.equal(
-    JSON.stringify(bodies[1]).includes("provider-private-state"),
-    false,
-  );
   assert.deepEqual(bodies[1]?.input, [
     {
       role: "user",
       content: [{ type: "input_text", text: "run pwd" }],
+    },
+    {
+      type: "reasoning",
+      id: "rs_first",
+      encrypted_content: "provider-private-state",
+      summary: [{ type: "summary_text", text: "first step\n\nsecond step" }],
     },
     {
       type: "function_call",

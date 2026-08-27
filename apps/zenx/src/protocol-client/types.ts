@@ -198,6 +198,26 @@ export interface ServerNotificationParams {
     itemId: string;
     delta: string;
   };
+  "item/reasoning/summaryPartAdded": {
+    threadId: string;
+    turnId: string;
+    itemId: string;
+    summaryIndex: number;
+  };
+  "item/reasoning/summaryTextDelta": {
+    threadId: string;
+    turnId: string;
+    itemId: string;
+    delta: string;
+    summaryIndex: number;
+  };
+  "item/reasoning/textDelta": {
+    threadId: string;
+    turnId: string;
+    itemId: string;
+    delta: string;
+    contentIndex: number;
+  };
   "item/commandExecution/outputDelta": {
     threadId: string;
     turnId: string;

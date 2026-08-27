@@ -597,7 +597,10 @@ export class ZenAppServer {
                       );
                     }
                     active.deliveryAnchorId = modelResponseId;
-                    return compileModelMessages(thread.items);
+                    return compileModelMessages(
+                      thread.items,
+                      resolved.selection,
+                    );
                   }),
                 commitFinal: async (message, modelResponseId) =>
                   await this.#commitFinalResponse(
@@ -1080,6 +1083,7 @@ export class ZenAppServer {
   }): Promise<ContextCompactionItem> {
     const sourceMessages = compileModelMessages(
       options.thread.items.slice(0, options.boundary.index + 1),
+      options.selection.selection,
     );
     const summary = await generateContextCompactionSummary({
       adapter: options.selection.adapter,

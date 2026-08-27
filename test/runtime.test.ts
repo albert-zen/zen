@@ -21,14 +21,19 @@ import {
 import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
 import {
   FakeModel,
+  compileModelMessages,
   type ModelAdapter,
   type ModelEvent,
   type ModelMessage,
   type ModelRequest,
+  type ReasoningModelMessage,
 } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
-import { projectThread } from "../src/protocol/codex/mapper.js";
+import {
+  projectCompletedItem,
+  projectThread,
+} from "../src/protocol/codex/mapper.js";
 import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
 import {
   InMemoryThreadMetadataStore,
@@ -113,7 +118,12 @@ test("preserves credential-matching model and tool trace strings verbatim", asyn
         return;
       }
       yield { type: "text_delta", delta: credentialBytes };
-      yield { type: "reasoning", summary: credentialBytes };
+      yield {
+        type: "reasoning",
+        reasoningContent: credentialBytes,
+        summary: credentialBytes,
+        contentVisibility: "public",
+      };
       yield {
         type: "tool_call",
         callId: credentialBytes,
@@ -163,6 +173,206 @@ test("preserves credential-matching model and tool trace strings verbatim", asyn
   assert.equal(
     snapshot.items.find((item) => item.type === "tool_result")?.output,
     credentialBytes,
+  );
+});
+
+test("persists opaque reasoning semantics and derives replay selection", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-continuation-"));
+  const journal = new JsonlThreadJournal(root);
+  const seenReasoning: ReasoningModelMessage[][] = [];
+  let sample = 0;
+  const model: ModelAdapter = {
+    provider: "openai-codex",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      seenReasoning.push(
+        structuredClone(
+          request.messages.filter(
+            (message): message is ReasoningModelMessage =>
+              message.role === "reasoning",
+          ),
+        ),
+      );
+      sample += 1;
+      if (sample === 1) {
+        yield {
+          type: "reasoning",
+          reasoningContent: "opaque-restart-state",
+          contentVisibility: "opaque",
+          providerItemId: "rs_restart",
+        };
+        yield {
+          type: "tool_call",
+          callId: "call-restart",
+          name: "restart_tool",
+          arguments: {},
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const tools: ToolExecutor = {
+    definitions: [
+      {
+        name: "restart_tool",
+        description: "Return a stable result.",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async () => ({ output: "restarted", exitCode: 0 }),
+  };
+
+  try {
+    const first = createServer({ journal, model, tools });
+    const thread = await first.startThread();
+    await (
+      await first.startTurn(thread.id, "continue privately")
+    ).done;
+    assert.deepEqual(seenReasoning[1], [
+      {
+        role: "reasoning",
+        reasoningContent: "opaque-restart-state",
+        contentVisibility: "opaque",
+        providerItemId: "rs_restart",
+      },
+    ]);
+
+    const restarted = createServer({ journal, model, tools });
+    const replayed = await restarted.readThread(thread.id);
+    const reasoning = replayed.items.find((item) => item.type === "reasoning");
+    assert.ok(reasoning);
+    assert.equal(reasoning.summary, undefined);
+    assert.equal(reasoning.providerItemId, "rs_restart");
+    assert.equal(reasoning.reasoningContent, "opaque-restart-state");
+    assert.equal(reasoning.contentVisibility, "opaque");
+    assert.deepEqual(projectCompletedItem(reasoning), {
+      type: "reasoning",
+      id: reasoning.id,
+      summary: [],
+      content: [],
+    });
+    assert.equal("providerProfileId" in reasoning, false);
+    assert.equal("modelId" in reasoning, false);
+    assert.equal("reasoningEffort" in reasoning, false);
+    assert.equal(
+      JSON.stringify(projectThread(replayed, { includeTurns: true })).includes(
+        "opaque-restart-state",
+      ),
+      false,
+    );
+    await (
+      await restarted.startTurn(thread.id, "after restart")
+    ).done;
+    assert.deepEqual(seenReasoning.at(-1), [
+      {
+        role: "reasoning",
+        reasoningContent: "opaque-restart-state",
+        contentVisibility: "opaque",
+        providerItemId: "rs_restart",
+      },
+    ]);
+    assert.equal(
+      compileModelMessages(replayed.items, {
+        providerProfileId: "other-profile",
+        modelId: "fake",
+        reasoningEffort: "medium",
+      }).some((message) => message.role === "reasoning"),
+      false,
+    );
+    assert.equal(
+      compileModelMessages(replayed.items, {
+        providerProfileId: "openai-codex",
+        modelId: "other-model",
+        reasoningEffort: "medium",
+      }).some((message) => message.role === "reasoning"),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("projects public semantic reasoning and keeps legacy summaries readable", () => {
+  const base = {
+    threadId: "thread-reasoning",
+    turnId: "turn-reasoning",
+    createdAt: "2026-08-26T00:00:00.000Z",
+  };
+  assert.deepEqual(
+    projectCompletedItem({
+      ...base,
+      id: "reasoning-public",
+      type: "reasoning",
+      reasoningContent: "visible reasoning",
+      contentVisibility: "public",
+    }),
+    {
+      type: "reasoning",
+      id: "reasoning-public",
+      summary: [],
+      content: ["visible reasoning"],
+    },
+  );
+  assert.deepEqual(
+    projectCompletedItem({
+      ...base,
+      id: "reasoning-summary",
+      type: "reasoning",
+      reasoningContent: "visible reasoning",
+      summary: "provider summary",
+      contentVisibility: "public",
+    }),
+    {
+      type: "reasoning",
+      id: "reasoning-summary",
+      summary: ["provider summary"],
+      content: ["visible reasoning"],
+    },
+  );
+  assert.deepEqual(
+    projectCompletedItem({
+      ...base,
+      id: "reasoning-opaque-summary",
+      type: "reasoning",
+      reasoningContent: "private reasoning",
+      summary: "provider summary",
+      contentVisibility: "opaque",
+    }),
+    {
+      type: "reasoning",
+      id: "reasoning-opaque-summary",
+      summary: ["provider summary"],
+      content: [],
+    },
+  );
+  assert.deepEqual(
+    projectCompletedItem({
+      ...base,
+      id: "reasoning-opaque",
+      type: "reasoning",
+      reasoningContent: "private reasoning",
+      contentVisibility: "opaque",
+    }),
+    {
+      type: "reasoning",
+      id: "reasoning-opaque",
+      summary: [],
+      content: [],
+    },
+  );
+  assert.deepEqual(
+    projectCompletedItem({
+      ...base,
+      id: "reasoning-legacy",
+      type: "reasoning",
+      summary: "legacy summary",
+    }),
+    {
+      type: "reasoning",
+      id: "reasoning-legacy",
+      summary: ["legacy summary"],
+      content: [],
+    },
   );
 });
 
@@ -701,6 +911,194 @@ test("journal stores only complete canonical items, never deltas", async () => {
   } finally {
     await rm(temporaryDirectory, { recursive: true });
   }
+});
+
+test("streams one correlated reasoning lifecycle and journals one complete item", async () => {
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-reasoning-stream-test-"),
+  );
+  const model: ModelAdapter = {
+    provider: "reasoning-stream-test",
+    async *stream(): AsyncIterable<ModelEvent> {
+      yield { type: "reasoning_started", reasoningId: "sample-reasoning" };
+      yield {
+        type: "reasoning_summary_delta",
+        reasoningId: "sample-reasoning",
+        delta: "summary ",
+      };
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "sample-reasoning",
+        delta: "public ",
+      };
+      yield {
+        type: "reasoning_summary_delta",
+        reasoningId: "sample-reasoning",
+        delta: "complete",
+      };
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "sample-reasoning",
+        delta: "content",
+      };
+      yield {
+        type: "reasoning",
+        reasoningId: "sample-reasoning",
+        reasoningContent: "public content",
+        summary: "summary complete",
+        contentVisibility: "public",
+      };
+      yield { type: "text_delta", delta: "answer" };
+    },
+  };
+  const server = createServer({
+    model,
+    journal: new JsonlThreadJournal(temporaryDirectory),
+  });
+  const events: AppServerEvent[] = [];
+  server.subscribe((event) => events.push(event));
+
+  try {
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "stream reasoning")
+    ).done;
+
+    const reasoningStarted = events.find(
+      (event) =>
+        event.type === "item_started" && event.itemType === "reasoning",
+    );
+    assert(reasoningStarted?.type === "item_started");
+    const reasoningEvents = events.filter(
+      (event) =>
+        event.type === "reasoning_summary_delta" ||
+        event.type === "reasoning_content_delta",
+    );
+    assert.deepEqual(
+      reasoningEvents.map((event) => ({
+        type: event.type,
+        itemId: event.itemId,
+        delta: event.delta,
+      })),
+      [
+        {
+          type: "reasoning_summary_delta",
+          itemId: reasoningStarted.itemId,
+          delta: "summary ",
+        },
+        {
+          type: "reasoning_content_delta",
+          itemId: reasoningStarted.itemId,
+          delta: "public ",
+        },
+        {
+          type: "reasoning_summary_delta",
+          itemId: reasoningStarted.itemId,
+          delta: "complete",
+        },
+        {
+          type: "reasoning_content_delta",
+          itemId: reasoningStarted.itemId,
+          delta: "content",
+        },
+      ],
+    );
+    const completed = events.find(
+      (event) =>
+        event.type === "item_completed" && event.item.type === "reasoning",
+    );
+    assert(
+      completed?.type === "item_completed" &&
+        completed.item.type === "reasoning",
+    );
+    assert.equal(completed.item.id, reasoningStarted.itemId);
+    assert.equal(completed.item.summary, "summary complete");
+    assert.equal(completed.item.reasoningContent, "public content");
+
+    const journal = await readFile(
+      path.join(temporaryDirectory, `${thread.id}.jsonl`),
+      "utf8",
+    );
+    const records = journal
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as CanonicalItem);
+    assert.equal(records.filter((item) => item.type === "reasoning").length, 1);
+    assert.equal(journal.includes("reasoning_summary_delta"), false);
+    assert.equal(journal.includes("reasoning_content_delta"), false);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("failed reasoning streams leave no incomplete canonical reasoning", async () => {
+  const model: ModelAdapter = {
+    provider: "reasoning-stream-failure",
+    async *stream(): AsyncIterable<ModelEvent> {
+      yield { type: "reasoning_started", reasoningId: "failed-reasoning" };
+      yield {
+        type: "reasoning_content_delta",
+        reasoningId: "failed-reasoning",
+        delta: "transient only",
+      };
+      throw new Error("reasoning stream failed");
+    },
+  };
+  const server = createServer({ model });
+  const events: AppServerEvent[] = [];
+  server.subscribe((event) => events.push(event));
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "fail reasoning")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(
+    snapshot.items.some((item) => item.type === "reasoning"),
+    false,
+  );
+  assert(events.some((event) => event.type === "reasoning_content_delta"));
+  assert.equal(
+    snapshot.items.find((item) => item.type === "failure")?.message,
+    "reasoning stream failed",
+  );
+});
+
+test("aborted reasoning streams leave no incomplete canonical reasoning", async () => {
+  const streamed = testDeferred<void>();
+  const model: ModelAdapter = {
+    provider: "reasoning-stream-abort",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      yield { type: "reasoning_started", reasoningId: "aborted-reasoning" };
+      yield {
+        type: "reasoning_summary_delta",
+        reasoningId: "aborted-reasoning",
+        delta: "transient summary",
+      };
+      streamed.resolve();
+      request.signal.throwIfAborted();
+      await new Promise<void>((_resolve, reject) => {
+        request.signal.addEventListener(
+          "abort",
+          () => reject(request.signal.reason),
+          { once: true },
+        );
+      });
+    },
+  };
+  const server = createServer({ model });
+  const thread = await server.startThread();
+  const turn = await server.startTurn(thread.id, "abort reasoning");
+  await streamed.promise;
+  await server.interruptTurn(thread.id, turn.id);
+  await turn.done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(
+    snapshot.items.some((item) => item.type === "reasoning"),
+    false,
+  );
+  assert.equal(snapshot.turns[0]?.status, "interrupted");
 });
 
 test("partial model deltas are not canonicalized when the model ends incomplete", async () => {
@@ -1440,6 +1838,7 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
           {
             index: 0,
             delta: {
+              reasoning_content: "tool reasoning",
               tool_calls: [
                 {
                   index: 0,
@@ -1508,14 +1907,29 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
     model,
     modelCatalog: new StaticModelCatalog([
       { id: "fake", isDefault: true },
-      { id: "provider-model" },
+      {
+        id: "vendor/qwen3.8-max",
+        supportedReasoningEfforts: ["medium", "high"],
+        defaultReasoningEffort: "medium",
+      },
     ]),
   });
-  const thread = await server.startThread({ model: "provider-model" });
+  const thread = await server.startThread({
+    model: "vendor/qwen3.8-max",
+    reasoningEffort: "high",
+  });
   const turn = await server.startTurn(thread.id, "use the tool");
   await turn.done;
 
   assert.equal(requestBodies.length, 2);
+  assert.deepEqual(
+    requestBodies.map((body) => body.reasoning_effort),
+    ["high", "high"],
+  );
+  assert.equal(
+    requestBodies.some((body) => "thinking_budget" in body),
+    false,
+  );
   const secondMessages = requestBodies[1]?.messages;
   assert(Array.isArray(secondMessages));
   assert(
@@ -1523,7 +1937,9 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
       (message) =>
         typeof message === "object" &&
         message !== null &&
-        "tool_calls" in message,
+        "tool_calls" in message &&
+        "reasoning_content" in message &&
+        message.reasoning_content === "tool reasoning",
     ),
   );
   assert(
@@ -1537,6 +1953,12 @@ test("runs an OpenAI-compatible tool round through the same Runtime and ItemList
   );
   const snapshot = await server.readThread(thread.id);
   assert.equal(snapshot.turns[0]?.status, "completed");
+  const compatibleReasoning = snapshot.items.find(
+    (item) => item.type === "reasoning",
+  );
+  assert.ok(compatibleReasoning);
+  assert.equal(compatibleReasoning.reasoningContent, "tool reasoning");
+  assert.equal(compatibleReasoning.contentVisibility, "public");
   assert.equal(
     snapshot.items.find((item) => item.type === "agent_message")?.text,
     "provider complete",

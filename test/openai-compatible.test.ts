@@ -45,9 +45,14 @@ test("maps Zen context and protects model execution fields", async () => {
       request({
         messages: [
           { role: "user", text: "hello" },
-          { role: "assistant", text: "calling a tool" },
+          {
+            role: "reasoning",
+            reasoningContent: "public compatible reasoning",
+            contentVisibility: "public",
+          },
           {
             role: "assistant",
+            text: "calling a tool",
             toolCalls: [
               {
                 callId: "call-1",
@@ -78,13 +83,14 @@ test("maps Zen context and protects model execution fields", async () => {
   assert.equal(capturedAuthorization, `Bearer ${fakeKey}`);
   assert.deepEqual(capturedBody, {
     temperature: 0,
+    reasoning_effort: "medium",
     model: "test-model",
     messages: [
       { role: "user", content: "hello" },
-      { role: "assistant", content: "calling a tool" },
       {
         role: "assistant",
-        content: null,
+        content: "calling a tool",
+        reasoning_content: "public compatible reasoning",
         tool_calls: [
           {
             id: "call-1",
@@ -117,6 +123,322 @@ test("maps Zen context and protects model execution fields", async () => {
     ],
     tool_choice: "auto",
   });
+});
+
+test("rejects raw reasoning controls that would create a second authority", () => {
+  for (const [control, value] of [
+    ["reasoning_effort", "xhigh"],
+    ["thinking_budget", 4096],
+  ] as const) {
+    assert.throws(
+      () =>
+        new OpenAiCompatibleModel({
+          baseUrl: "https://provider.test/v1",
+          apiKey: fakeKey,
+          defaultParams: { [control]: value },
+        }),
+      (error: unknown) =>
+        error instanceof OpenAiCompatibleModelError &&
+        error.kind === "configuration" &&
+        error.message.includes(control),
+    );
+  }
+});
+
+test("encodes provider-specific reasoning replay contracts", async (t) => {
+  await t.test("DeepSeek replays only tool-call reasoning", async () => {
+    const body = await captureRequestBody({
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-reasoner",
+      reasoningEffort: "high",
+      messages: reasoningHistory(),
+      tools: [shellTool()],
+    });
+
+    assert.equal("reasoning_effort" in body, false);
+    assert.deepEqual(body.messages, [
+      { role: "user", content: "run pwd" },
+      {
+        role: "assistant",
+        content: "using shell",
+        reasoning_content: "tool reasoning",
+        tool_calls: [
+          {
+            id: "call-1",
+            type: "function",
+            function: { name: "shell", arguments: '{"command":"pwd"}' },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "call-1",
+        content: "Exit code: 0\n/workspace",
+      },
+      { role: "assistant", content: "done" },
+    ]);
+  });
+
+  await t.test("Qwen preserves complete reasoning by default", async () => {
+    const body = await captureRequestBody({
+      provider: "custom-provider",
+      baseUrl: "https://provider.test/v1",
+      model: "vendor/qwen3.8-max",
+      reasoningEffort: "high",
+      messages: reasoningHistory(),
+      tools: [shellTool()],
+    });
+
+    assert.equal(body.reasoning_effort, "high");
+    assert.equal("thinking_budget" in body, false);
+    assert.deepEqual(
+      (body.messages as Readonly<Record<string, unknown>>[])
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.reasoning_content),
+      ["tool reasoning", "final reasoning"],
+    );
+  });
+
+  await t.test("Qwen honors explicit preservation settings", async (t) => {
+    await t.test("enabled", async () => {
+      const body = await captureRequestBody({
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model: "qwen3.8-max",
+        defaultParams: { preserve_thinking: true },
+        messages: reasoningHistory(),
+        tools: [shellTool()],
+      });
+
+      assert.equal(body.preserve_thinking, true);
+      assert.deepEqual(
+        (body.messages as Readonly<Record<string, unknown>>[])
+          .filter((message) => message.role === "assistant")
+          .map((message) => message.reasoning_content),
+        ["tool reasoning", "final reasoning"],
+      );
+    });
+
+    await t.test("disabled", async () => {
+      const body = await captureRequestBody({
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model: "qwen3.8-max",
+        defaultParams: { preserve_thinking: false },
+        messages: reasoningHistory(),
+        tools: [shellTool()],
+      });
+
+      assert.equal(body.preserve_thinking, false);
+      assert.deepEqual(
+        (body.messages as Readonly<Record<string, unknown>>[]).map(
+          (message) => "reasoning_content" in message,
+        ),
+        [false, false, false, false],
+      );
+    });
+  });
+
+  await t.test(
+    "DashScope GLM preserves complete reasoning by default and forwards effort",
+    async (t) => {
+      const body = await captureRequestBody({
+        provider: "custom-provider",
+        baseUrl:
+          "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        model: "glm-5.2",
+        reasoningEffort: "high",
+        defaultParams: { tool_stream: false },
+        messages: reasoningHistory(),
+        tools: [shellTool()],
+      });
+
+      assert.equal(body.reasoning_effort, "high");
+      assert.equal("thinking_budget" in body, false);
+      assert.equal(body.tool_stream, true);
+      const assistants = (
+        body.messages as Readonly<Record<string, unknown>>[]
+      ).filter((message) => message.role === "assistant");
+      assert.equal(assistants[0]?.reasoning_content, "tool reasoning");
+      assert.equal(assistants[1]?.reasoning_content, "final reasoning");
+
+      await t.test("explicit false preserves canonical effort", async () => {
+        const configured = await captureRequestBody({
+          provider: "dashscope",
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          model: "glm-5.2",
+          reasoningEffort: "xhigh",
+          defaultParams: { clear_thinking: false },
+          messages: reasoningHistory(),
+          tools: [shellTool()],
+        });
+
+        assert.equal(configured.clear_thinking, false);
+        assert.equal(configured.reasoning_effort, "xhigh");
+        assert.deepEqual(
+          (configured.messages as Readonly<Record<string, unknown>>[])
+            .filter((message) => message.role === "assistant")
+            .map((message) => message.reasoning_content),
+          ["tool reasoning", "final reasoning"],
+        );
+      });
+
+      await t.test("explicit true clears all reasoning history", async () => {
+        const cleared = await captureRequestBody({
+          provider: "dashscope",
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          model: "glm-5.2",
+          defaultParams: { clear_thinking: true },
+          messages: reasoningHistory(),
+          tools: [shellTool()],
+        });
+
+        assert.equal(cleared.clear_thinking, true);
+        assert.deepEqual(
+          (cleared.messages as Readonly<Record<string, unknown>>[]).map(
+            (message) => "reasoning_content" in message,
+          ),
+          [false, false, false, false],
+        );
+      });
+    },
+  );
+
+  await t.test(
+    "recognizes only documented DashScope host shapes",
+    async (t) => {
+      for (const hostname of [
+        "dashscope.aliyuncs.com",
+        "dashscope-intl.aliyuncs.com",
+        "workspace.cn-beijing.maas.aliyuncs.com",
+        "llm-abc.ap-southeast-1.maas.aliyuncs.com",
+      ]) {
+        await t.test(`accepts ${hostname}`, async () => {
+          const body = await captureRequestBody({
+            provider: "custom-provider",
+            baseUrl: `https://${hostname}/compatible-mode/v1`,
+            model: "glm-5.2",
+            messages: reasoningHistory(),
+            tools: [shellTool()],
+          });
+
+          assert.equal(body.reasoning_effort, "medium");
+          assert.deepEqual(
+            (body.messages as Readonly<Record<string, unknown>>[])
+              .filter((message) => message.role === "assistant")
+              .map((message) => message.reasoning_content),
+            ["tool reasoning", "final reasoning"],
+          );
+        });
+      }
+
+      for (const hostname of [
+        "cn-beijing.maas.aliyuncs.com",
+        "extra.workspace.cn-beijing.maas.aliyuncs.com",
+        "workspace.cn-beijing.maas.aliyuncs.com.evil.test",
+        "workspace.cn-beijing.other.aliyuncs.com",
+      ]) {
+        await t.test(`rejects ${hostname}`, async () => {
+          const body = await captureRequestBody({
+            provider: "custom-provider",
+            baseUrl: `https://${hostname}/compatible-mode/v1`,
+            model: "glm-5.2",
+            defaultParams: { clear_thinking: false },
+            messages: reasoningHistory(),
+            tools: [shellTool()],
+          });
+
+          assert.equal("reasoning_effort" in body, false);
+          const assistants = (
+            body.messages as Readonly<Record<string, unknown>>[]
+          ).filter((message) => message.role === "assistant");
+          assert.equal(assistants[0]?.reasoning_content, "tool reasoning");
+          assert.equal("reasoning_content" in assistants[1]!, false);
+        });
+      }
+    },
+  );
+
+  await t.test(
+    "Zhipu GLM uses nested preserved-thinking settings",
+    async (t) => {
+      await t.test("standard API default", async () => {
+        const body = await captureRequestBody({
+          provider: "zhipu",
+          baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+          model: "glm-5.3",
+          reasoningEffort: "high",
+          messages: reasoningHistory(),
+          tools: [shellTool()],
+        });
+
+        assert.equal(body.reasoning_effort, "high");
+        assert.equal("thinking_budget" in body, false);
+        const assistants = (
+          body.messages as Readonly<Record<string, unknown>>[]
+        ).filter((message) => message.role === "assistant");
+        assert.equal(assistants[0]?.reasoning_content, "tool reasoning");
+        assert.equal("reasoning_content" in assistants[1]!, false);
+      });
+
+      await t.test("explicit preserved mode", async () => {
+        const body = await captureRequestBody({
+          provider: "zhipu",
+          baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+          model: "glm-5.3",
+          defaultParams: {
+            thinking: { type: "enabled", clear_thinking: false },
+          },
+          messages: reasoningHistory(),
+          tools: [shellTool()],
+        });
+
+        assert.deepEqual(
+          (body.messages as Readonly<Record<string, unknown>>[])
+            .filter((message) => message.role === "assistant")
+            .map((message) => message.reasoning_content),
+          ["tool reasoning", "final reasoning"],
+        );
+      });
+
+      await t.test(
+        "top-level DashScope setting does not enable preservation",
+        async () => {
+          const body = await captureRequestBody({
+            provider: "zhipu",
+            baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+            model: "glm-5.3",
+            defaultParams: { clear_thinking: false },
+            messages: reasoningHistory(),
+            tools: [shellTool()],
+          });
+
+          const assistants = (
+            body.messages as Readonly<Record<string, unknown>>[]
+          ).filter((message) => message.role === "assistant");
+          assert.equal(assistants[0]?.reasoning_content, "tool reasoning");
+          assert.equal("reasoning_content" in assistants[1]!, false);
+        },
+      );
+    },
+  );
+
+  await t.test(
+    "unknown compatible fallback forwards canonical effort",
+    async () => {
+      const body = await captureRequestBody({
+        provider: "custom-provider",
+        baseUrl: "https://provider.test/v1",
+        model: "custom-model",
+        reasoningEffort: "xhigh",
+        messages: [],
+      });
+
+      assert.equal(body.reasoning_effort, "xhigh");
+      assert.equal("thinking_budget" in body, false);
+    },
+  );
 });
 
 test("removes configured tools when a request exposes no tools", async () => {
@@ -167,6 +489,63 @@ test("parses SSE split at every byte including a multibyte character", async () 
   assert.deepEqual(await collect(adapter.stream(request())), [
     { type: "text_delta", delta: "你" },
     { type: "usage", inputTokens: 3, outputTokens: 1 },
+  ]);
+});
+
+test("captures compatible reasoning_content as public semantic reasoning", async () => {
+  const adapter = adapterReturning(
+    streamResponse([
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: { reasoning_content: "check " },
+            finish_reason: null,
+          },
+        ],
+      }),
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: { content: "answer ", reasoning_content: "" },
+            finish_reason: null,
+          },
+        ],
+      }),
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: { content: "done", reasoning_content: "complete" },
+            finish_reason: "stop",
+          },
+        ],
+      }),
+      "[DONE]",
+    ]),
+  );
+
+  assert.deepEqual(await collect(adapter.stream(request())), [
+    { type: "reasoning_started", reasoningId: "reasoning:0" },
+    {
+      type: "reasoning_content_delta",
+      reasoningId: "reasoning:0",
+      delta: "check ",
+    },
+    { type: "text_delta", delta: "answer " },
+    { type: "text_delta", delta: "done" },
+    {
+      type: "reasoning_content_delta",
+      reasoningId: "reasoning:0",
+      delta: "complete",
+    },
+    {
+      type: "reasoning",
+      reasoningId: "reasoning:0",
+      reasoningContent: "check complete",
+      contentVisibility: "public",
+    },
   ]);
 });
 
@@ -495,6 +874,72 @@ function adapterReturning(response: Response): OpenAiCompatibleModel {
     apiKey: fakeKey,
     fetch: (async () => response) as typeof fetch,
   });
+}
+
+async function captureRequestBody(options: {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  reasoningEffort?: string;
+  defaultParams?: Readonly<Record<string, unknown>>;
+  messages: ModelRequest["messages"];
+  tools?: ModelRequest["tools"];
+}): Promise<Readonly<Record<string, unknown>>> {
+  let body: Readonly<Record<string, unknown>> = {};
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: options.baseUrl,
+    apiKey: fakeKey,
+    provider: options.provider,
+    ...(options.defaultParams === undefined
+      ? {}
+      : { defaultParams: options.defaultParams }),
+    fetch: (async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Readonly<
+        Record<string, unknown>
+      >;
+      return streamResponse(["[DONE]"]);
+    }) as typeof fetch,
+  });
+  await collect(
+    adapter.stream(
+      request({
+        model: options.model,
+        reasoningEffort: options.reasoningEffort ?? "medium",
+        messages: options.messages,
+        tools: options.tools ?? [],
+      }),
+    ),
+  );
+  return body;
+}
+
+function reasoningHistory(): ModelRequest["messages"] {
+  return [
+    { role: "user", text: "run pwd" },
+    {
+      role: "reasoning",
+      reasoningContent: "tool reasoning",
+      contentVisibility: "public",
+    },
+    {
+      role: "assistant",
+      text: "using shell",
+      toolCalls: [
+        {
+          callId: "call-1",
+          name: "shell",
+          arguments: { command: "pwd" },
+        },
+      ],
+    },
+    { role: "tool", callId: "call-1", text: "/workspace", exitCode: 0 },
+    {
+      role: "reasoning",
+      reasoningContent: "final reasoning",
+      contentVisibility: "public",
+    },
+    { role: "assistant", text: "done" },
+  ];
 }
 
 function request(overrides: Partial<ModelRequest> = {}): ModelRequest {

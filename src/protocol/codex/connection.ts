@@ -68,6 +68,7 @@ export class CodexConnection {
     }
   >();
   readonly #toolCalls = new Map<string, ToolCallItem>();
+  readonly #reasoningSummaryParts = new Set<string>();
   readonly #subscribedThreads = new Set<string>();
   readonly #unsubscribe: () => void;
   #initializedRequest = false;
@@ -723,6 +724,21 @@ export class CodexConnection {
             startedAtMs: Date.now(),
           },
         });
+      } else if (event.itemType === "reasoning") {
+        this.#send({
+          method: "item/started",
+          params: {
+            threadId: event.threadId,
+            turnId: event.turnId,
+            item: {
+              type: "reasoning",
+              id: event.itemId,
+              summary: [],
+              content: [],
+            },
+            startedAtMs: Date.now(),
+          },
+        });
       }
       return;
     }
@@ -738,14 +754,67 @@ export class CodexConnection {
       });
       return;
     }
+    if (event.type === "reasoning_summary_delta") {
+      const key = reasoningItemKey(event.threadId, event.turnId, event.itemId);
+      if (!this.#reasoningSummaryParts.has(key)) {
+        this.#reasoningSummaryParts.add(key);
+        this.#send({
+          method: "item/reasoning/summaryPartAdded",
+          params: {
+            threadId: event.threadId,
+            turnId: event.turnId,
+            itemId: event.itemId,
+            summaryIndex: 0,
+          },
+        });
+      }
+      this.#send({
+        method: "item/reasoning/summaryTextDelta",
+        params: {
+          threadId: event.threadId,
+          turnId: event.turnId,
+          itemId: event.itemId,
+          delta: event.delta,
+          summaryIndex: 0,
+        },
+      });
+      return;
+    }
+    if (event.type === "reasoning_content_delta") {
+      this.#send({
+        method: "item/reasoning/textDelta",
+        params: {
+          threadId: event.threadId,
+          turnId: event.turnId,
+          itemId: event.itemId,
+          delta: event.delta,
+          contentIndex: 0,
+        },
+      });
+      return;
+    }
     if (event.type === "token_usage") {
       return;
     }
     if (event.type === "item_completed") {
+      if (event.item.type === "reasoning" && event.item.turnId !== undefined) {
+        this.#reasoningSummaryParts.delete(
+          reasoningItemKey(
+            event.item.threadId,
+            event.item.turnId,
+            event.item.id,
+          ),
+        );
+      }
       await this.#projectCompletedItem(event.item);
       return;
     }
 
+    for (const key of this.#reasoningSummaryParts) {
+      if (key.startsWith(`${event.threadId}\u0000${event.turnId}\u0000`)) {
+        this.#reasoningSummaryParts.delete(key);
+      }
+    }
     const snapshot = await this.#appServer.readThread(event.threadId);
     const turn = snapshot.turns.find(
       (candidate) => candidate.id === event.turnId,
@@ -1043,6 +1112,14 @@ export class CodexConnection {
       },
     });
   }
+}
+
+function reasoningItemKey(
+  threadId: string,
+  turnId: string,
+  itemId: string,
+): string {
+  return `${threadId}\u0000${turnId}\u0000${itemId}`;
 }
 
 function isCodexModelListRunnable(entry: ListedProviderModel): boolean {

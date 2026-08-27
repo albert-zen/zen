@@ -42,6 +42,9 @@ Server notifications：
 - `turn/started`
 - `item/started`
 - `item/agentMessage/delta`
+- `item/reasoning/summaryPartAdded`
+- `item/reasoning/summaryTextDelta`
+- `item/reasoning/textDelta`
 - `item/commandExecution/outputDelta`
 - `item/completed`
 - `serverRequest/resolved`
@@ -68,6 +71,19 @@ model 或 effort 明确失败。单 profile 的既有裸 model id 仅作为入�
 与 reasoning effort 必须匹配本次原子 selection；developer instructions 不进入
 Thread，也不覆盖 Zen 的 Agent 行为。实时 token usage 暂不投影，避免发送
 不完整的 0.146.0 类型。
+
+canonical `reasoning` Item 只使用 provider-neutral reasoning content、可选 summary、
+public/opaque visibility 与 round-trip 必需的可选 Provider item identity。Opaque content
+永不进入 Codex Thread Item、通知或 ZenX 展示；public content 始终投影为公开 content，
+可选 summary 独立投影为折叠标签。产生它的 Turn selection 必须与目标 profile/model 兼容才进入模型重放。
+各 ModelAdapter 独自负责目标 API 的私有 reasoning 请求与响应形态，不把 wire 结构带入 Core。
+实时 reasoning 使用标准 Item lifecycle：先发送一个 summary/content 为空的
+`item/started`，summary 首次出现时发送一次 index 0 的
+`item/reasoning/summaryPartAdded`，随后分别通过 index 0 的 summary/text delta 通知增量，
+最后以同一 item id 发送 canonical `item/completed`。这些 delta 只存在于连接与 ZenX
+内存状态，不写 journal；subscription 的 opaque content 绝不发 text delta，只有公开 summary
+可以流式展示，compatible 的公开 reasoning content 才使用 text delta。失败或中断不会伪造
+completed reasoning Item。
 
 `thread/compact` 不是 Codex 0.146.0 方法。它只接受精确的
 `{ threadId: string }`，等待 Zen 使用 admission 时冻结的当前 Provider selection
@@ -98,6 +114,11 @@ selection change，不增加 Zen 私有字段或第二种协议。协议 adapter
 稳定 `providerProfileId / modelId` 与可选的显式 effort 交给 Core；省略 effort 时
 Core 在目标支持当前值时保留它，否则使用目标 model 默认值，再形成 canonical
 selection。活跃 Turn 保留启动时 selection，更新只影响下一 Turn。
+
+该 selection 中冻结的 `reasoningEffort` 是唯一 reasoning-control 权威。Provider adapter
+可以按目标合同省略或映射 wire effort，但 OpenAI-compatible `defaultParams` 不能再设置
+`reasoning_effort` 或 `thinking_budget` 来覆盖、抑制或替代它；冲突配置在 Host preflight
+阶段明确失败。Replay 专用的 `preserve_thinking` / `clear_thinking` 参数不改变这项权威。
 
 `thread/list` 在本目录内把 ZAS 原生 `ThreadSummary` 查询结果映射为固定版本的
 Codex Thread DTO；wire DTO 不定义 ZAS 或 ZenX 的产品读取模型。它当前只接受

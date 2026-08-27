@@ -59,6 +59,49 @@ export function applyThreadViewNotification(
       ),
     );
   }
+  if (method === "item/reasoning/summaryPartAdded") {
+    const event =
+      params as ServerNotificationParams["item/reasoning/summaryPartAdded"];
+    if (event.threadId !== thread.id) return thread;
+    return updateTurnItems(thread, event.turnId, (items) =>
+      items.map((item) => {
+        if (item.id !== event.itemId || item.type !== "reasoning") return item;
+        const summary = [...item.summary];
+        while (summary.length <= event.summaryIndex) summary.push("");
+        return { ...item, summary };
+      }),
+    );
+  }
+  if (method === "item/reasoning/summaryTextDelta") {
+    const event =
+      params as ServerNotificationParams["item/reasoning/summaryTextDelta"];
+    if (event.threadId !== thread.id) return thread;
+    return updateTurnItems(thread, event.turnId, (items) =>
+      items.map((item) => {
+        if (item.id !== event.itemId || item.type !== "reasoning") return item;
+        const summary = [...item.summary];
+        while (summary.length <= event.summaryIndex) summary.push("");
+        summary[event.summaryIndex] =
+          (summary[event.summaryIndex] ?? "") + event.delta;
+        return { ...item, summary };
+      }),
+    );
+  }
+  if (method === "item/reasoning/textDelta") {
+    const event =
+      params as ServerNotificationParams["item/reasoning/textDelta"];
+    if (event.threadId !== thread.id) return thread;
+    return updateTurnItems(thread, event.turnId, (items) =>
+      items.map((item) => {
+        if (item.id !== event.itemId || item.type !== "reasoning") return item;
+        const content = [...item.content];
+        while (content.length <= event.contentIndex) content.push("");
+        content[event.contentIndex] =
+          (content[event.contentIndex] ?? "") + event.delta;
+        return { ...item, content };
+      }),
+    );
+  }
   if (method === "item/commandExecution/outputDelta") {
     const event =
       params as ServerNotificationParams["item/commandExecution/outputDelta"];

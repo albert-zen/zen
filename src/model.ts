@@ -1,6 +1,7 @@
 import {
   contentFromUserMessage,
   textFromUserInput,
+  type CanonicalProviderSelection,
   type CanonicalItem,
   type UserInput,
 } from "./item.js";
@@ -36,11 +37,20 @@ export interface ToolResultModelMessage {
   exitCode: number;
 }
 
+export interface ReasoningModelMessage {
+  role: "reasoning";
+  reasoningContent: string;
+  summary?: string;
+  contentVisibility: "public" | "opaque";
+  providerItemId?: string;
+}
+
 export type ModelMessage =
   | TextModelMessage
   | TypedUserModelMessage
   | ToolCallModelMessage
-  | ToolResultModelMessage;
+  | ToolResultModelMessage
+  | ReasoningModelMessage;
 
 export type ReasoningEffort = string;
 
@@ -65,7 +75,25 @@ export interface ModelTool {
 
 export type ModelEvent =
   | { type: "text_delta"; delta: string }
-  | { type: "reasoning"; summary: string }
+  | { type: "reasoning_started"; reasoningId: string }
+  | {
+      type: "reasoning_summary_delta";
+      reasoningId: string;
+      delta: string;
+    }
+  | {
+      type: "reasoning_content_delta";
+      reasoningId: string;
+      delta: string;
+    }
+  | {
+      type: "reasoning";
+      reasoningId?: string;
+      reasoningContent: string;
+      summary?: string;
+      contentVisibility: "public" | "opaque";
+      providerItemId?: string;
+    }
   | {
       type: "tool_call";
       callId: string;
@@ -85,10 +113,21 @@ export interface ModelAdapter {
 
 export function compileModelMessages(
   items: readonly CanonicalItem[],
+  targetSelection?: CanonicalProviderSelection,
 ): ModelMessage[] {
+  const turnSelections = new Map<string, CanonicalProviderSelection>();
+  for (const item of items) {
+    if (item.type === "turn_started" && item.selection !== undefined) {
+      turnSelections.set(item.turnId, item.selection);
+    }
+  }
   const compaction = latestCompaction(items);
   if (compaction === undefined) {
-    return compileCanonicalModelMessages(items);
+    return compileCanonicalModelMessages(
+      items,
+      targetSelection,
+      turnSelections,
+    );
   }
   const boundaryIndex = items.findIndex(
     (item) => item.id === compaction.coveredThroughItemId,
@@ -107,17 +146,23 @@ export function compileModelMessages(
     return item;
   });
   return [
-    ...compileCanonicalModelMessages(retained),
+    ...compileCanonicalModelMessages(retained, targetSelection, turnSelections),
     {
       role: "user",
       text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${compaction.summary}`,
     },
-    ...compileCanonicalModelMessages(items.slice(boundaryIndex + 1)),
+    ...compileCanonicalModelMessages(
+      items.slice(boundaryIndex + 1),
+      targetSelection,
+      turnSelections,
+    ),
   ];
 }
 
 function compileCanonicalModelMessages(
   items: readonly CanonicalItem[],
+  targetSelection: CanonicalProviderSelection | undefined,
+  turnSelections: ReadonlyMap<string, CanonicalProviderSelection>,
 ): ModelMessage[] {
   items = orderSteeredMessagesForSampling(items);
   const messages: ModelMessage[] = [];
@@ -191,13 +236,35 @@ function compileCanonicalModelMessages(
           exitCode: item.exitCode,
         });
         break;
+      case "reasoning": {
+        const producingSelection = turnSelections.get(item.turnId);
+        if (
+          targetSelection !== undefined &&
+          producingSelection !== undefined &&
+          producingSelection.providerProfileId ===
+            targetSelection.providerProfileId &&
+          producingSelection.modelId === targetSelection.modelId &&
+          item.reasoningContent !== undefined &&
+          item.contentVisibility !== undefined
+        ) {
+          messages.push({
+            role: "reasoning",
+            reasoningContent: item.reasoningContent,
+            contentVisibility: item.contentVisibility,
+            ...(item.summary === undefined ? {} : { summary: item.summary }),
+            ...(item.providerItemId === undefined
+              ? {}
+              : { providerItemId: item.providerItemId }),
+          });
+        }
+        break;
+      }
       case "failure":
         messages.push({
           role: "assistant",
           text: `[failure: ${item.message}]`,
         });
         break;
-      case "reasoning":
       case "context_compaction":
       case "thread_configuration_changed":
       case "thread_metadata":
