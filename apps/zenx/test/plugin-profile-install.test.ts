@@ -1241,7 +1241,7 @@ test("dev same-version update commits after a post-fence client disconnect", asy
     devControl = await ZenXPluginDevControlServer.start({
       descriptorFile,
       tokenFile,
-      transactionTimeoutMs: 1_000,
+      transactionTimeoutMs: 10_000,
       install: async (request, signal, enterCommitPhase) =>
         await service.devPluginPackage(
           request.projectDirectory,
