@@ -14,6 +14,7 @@ import test from "node:test";
 
 import {
   captureProcessTableCommandOutput,
+  processTableTimeoutMs,
   ZenXTriggerProgramRunner,
   realWindowsProcessOperations,
   terminateWindowsProcessIdentity,
@@ -24,6 +25,11 @@ import {
 } from "../src/main/trigger-program-runner.js";
 
 const runner = new ZenXTriggerProgramRunner();
+
+test("Windows process-table observation has bounded cold-start headroom", () => {
+  assert.equal(processTableTimeoutMs("win32"), 8_000);
+  assert.equal(processTableTimeoutMs("darwin"), 750);
+});
 
 test("timed-out process observation settles its exact helper before rejecting", async () => {
   let helperClosed = false;

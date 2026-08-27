@@ -241,7 +241,7 @@ export async function projectPathSnapshot(
   platform: NodeJS.Platform = process.platform,
   resolveRealpath: ProjectRealpath = nodeProjectRealpath,
 ): Promise<ProjectPathSnapshot> {
-  const pathApi = platform === "win32" ? path.win32 : path;
+  const pathApi = projectPathApi(platform);
   const pending = new Map<string, Promise<string>>();
   const identities = await Promise.all(
     values.map(async (value) => {
@@ -268,7 +268,7 @@ async function projectPathIdentity(
   platform: NodeJS.Platform,
   resolveRealpath: ProjectRealpath,
 ): Promise<ProjectPathIdentity> {
-  const pathApi = platform === "win32" ? path.win32 : path;
+  const pathApi = projectPathApi(platform);
   const displayPath = pathApi.resolve(value);
   const unresolved: string[] = [];
   let cursor = displayPath;
@@ -316,4 +316,15 @@ async function projectPathIdentity(
         ? physicalPath.toLocaleLowerCase("en-US")
         : physicalPath,
   });
+}
+
+export function resolveProjectPath(
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return projectPathApi(platform).resolve(value);
+}
+
+function projectPathApi(platform: NodeJS.Platform): path.PlatformPath {
+  return platform === "win32" ? path.win32 : path.posix;
 }

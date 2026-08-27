@@ -28,7 +28,6 @@ const PROGRAM_QUIESCENCE_TIMEOUT_MS =
 const PROGRAM_QUIESCENCE_PASSES = 2;
 const PROGRAM_QUIESCENCE_POLL_MS = 40;
 const MAX_PROGRAM_STDERR_BYTES = 8 * 1_024;
-const PROCESS_TABLE_TIMEOUT_MS = process.platform === "win32" ? 4_000 : 750;
 const MAX_PROCESS_TABLE_BYTES = 128 * 1_024;
 const WINDOWS_IDENTITY_TERMINATION_TIMEOUT_MS = 4_000;
 
@@ -36,6 +35,10 @@ export interface TriggerProgramRunInput {
   invocationId: string;
   stage: TriggerProgramStage;
   event: unknown;
+}
+
+export function processTableTimeoutMs(platform: NodeJS.Platform): number {
+  return platform === "win32" ? 8_000 : 750;
 }
 
 export interface TriggerProgramRunResult {
@@ -1093,7 +1096,8 @@ export async function captureProcessTableCommandOutput(
     onSpawn?: (child: ChildProcess) => void;
   } = {},
 ): Promise<string> {
-  const timeoutMs = options.timeoutMs ?? PROCESS_TABLE_TIMEOUT_MS;
+  const timeoutMs =
+    options.timeoutMs ?? processTableTimeoutMs(process.platform);
   const maxOutputBytes = options.maxOutputBytes ?? MAX_PROCESS_TABLE_BYTES;
   const overflowError = `process-table snapshot exceeded its ${
     maxOutputBytes === MAX_PROCESS_TABLE_BYTES

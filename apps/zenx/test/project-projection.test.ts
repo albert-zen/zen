@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   projectPathKey,
+  resolveProjectPath,
   ZenXProjectProjection,
 } from "../src/main/project-projection.js";
 
@@ -51,6 +52,13 @@ test("POSIX project identity preserves case", async () => {
   assert.notEqual(
     await projectPathKey("/Work/Zen", "linux"),
     await projectPathKey("/work/zen", "linux"),
+  );
+});
+
+test("logical Linux paths use POSIX semantics independently of the host", () => {
+  assert.equal(
+    resolveProjectPath("/work/historical", "linux"),
+    "/work/historical",
   );
 });
 
