@@ -6,11 +6,22 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import type { CanonicalItem } from "../../../src/item.js";
-import { packZenXRoomsPlugin } from "../scripts/pack-first-party-plugins.mjs";
+import {
+  packZenXFirstPartyPlugins,
+  packZenXRoomsPlugin,
+} from "../scripts/pack-first-party-plugins.mjs";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { createBundledAutomationPluginService } from "../src/main/automation-plugin-service.js";
+import { installZenXBundledPluginsAtStartup } from "../src/main/bundled-plugin-startup.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
-import { ZENX_ROOMS_CAPABILITY_ID } from "../src/main/capabilities/automation-control-package.js";
+import {
+  ZenXTriggersCapabilityPackage,
+  ZENX_ROOMS_CAPABILITY_ID,
+} from "../src/main/capabilities/automation-control-package.js";
+import {
+  MutableAppServerRequestPort,
+  ZenXSelfControlCapabilityPackage,
+} from "../src/main/capabilities/self-control-package.js";
 import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
 import type { ZenXPluginManifestV2 } from "../src/main/capabilities/types.js";
 import {
@@ -19,6 +30,7 @@ import {
 } from "../src/main/rooms-profile-loader.js";
 import type { ZenXTriggerAppServerPort } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
+import { createDelegatingFirstPartyProfileLoader } from "../src/main/first-party-profile-loader.js";
 
 const pnpmCli = fileURLToPath(
   new URL("../../../node_modules/pnpm/bin/pnpm.cjs", import.meta.url),
@@ -447,6 +459,88 @@ test("packaged Rooms refuses bundled adoption across a legacy Catalog identity m
       undefined,
     );
   } finally {
+    await capabilities.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("packaged startup isolates a Rooms identity mismatch and starts with a later first-party plugin", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-bundled-startup-isolation-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const resources = path.join(directory, "resources");
+  await packZenXFirstPartyPlugins({ outputDirectory: resources });
+  const appServer = {
+    request: async () => {
+      throw new Error("Startup fixture must not start an automation Turn");
+    },
+    onNotification: () => () => {},
+  } as ZenXTriggerAppServerPort;
+  const domain = await createBundledAutomationPluginService({
+    userDataDirectory: userData,
+    appServer,
+  });
+  const selfControlPort = new MutableAppServerRequestPort();
+  const selfControlPackage = new ZenXSelfControlCapabilityPackage({
+    appServer: selfControlPort,
+  });
+  await seedLegacyRoomsCatalog(userData, domain);
+  const catalogFile = path.join(userData, "capability-grants.json");
+  const catalog = JSON.parse(await readFile(catalogFile, "utf8")) as {
+    packages: Record<
+      string,
+      { manifest: ZenXPluginManifestV2 & { resources?: unknown[] } }
+    >;
+  };
+  catalog.packages[ZENX_ROOMS_CAPABILITY_ID]!.manifest.resources = [];
+  await writeFile(catalogFile, `${JSON.stringify(catalog, null, 2)}\n`);
+  const triggersPackage = new ZenXTriggersCapabilityPackage(domain);
+  const capabilities = new ZenXCapabilityService({
+    userDataDirectory: userData,
+    resourcesDirectory: resources,
+    pnpmCliPath: pnpmCli,
+    trustedProfileLoaders: {
+      [ZENX_ROOMS_CAPABILITY_ID]: createZenXRoomsProfileLoader(() => domain),
+      "zenx-triggers": createDelegatingFirstPartyProfileLoader(
+        () => triggersPackage,
+      ),
+      "zenx-self-control": createDelegatingFirstPartyProfileLoader(
+        () => selfControlPackage,
+      ),
+    },
+    bundledProvidersOnly: true,
+  });
+  const manager = appServerManager(directory, userData, capabilities);
+  try {
+    await selfControlPort.attach(manager);
+    await capabilities.initialize();
+    await installZenXBundledPluginsAtStartup(capabilities, resources);
+
+    const plugins = capabilities.pluginSnapshot().plugins;
+    assert.equal(
+      plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID)
+        ?.profileSource,
+      undefined,
+    );
+    assert.equal(
+      plugins.find((plugin) => plugin.id === "zenx-triggers")?.profileSource
+        ?.mode,
+      "bundled",
+    );
+    assert.match(
+      capabilities.diagnostics().discoveryErrors.join("\n"),
+      /zenx-rooms: .*does not match its Catalog identity/u,
+    );
+
+    await manager.start();
+    assert.equal(manager.status.type, "ready");
+    assert.equal(
+      typeof (await manager.request("thread/start", {})).thread.id,
+      "string",
+    );
+  } finally {
+    await manager.stop();
     await capabilities.close();
     await rm(directory, { recursive: true, force: true });
   }

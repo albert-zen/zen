@@ -470,6 +470,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return this.#registry.diagnostics();
   }
 
+  recordBundledPluginStartupError(pluginId: string, error: unknown): void {
+    this.#registry.recordDiscoveryError(`${pluginId}: ${describeError(error)}`);
+  }
+
   marketplaceBuiltIns(): MarketplaceBuiltInEntry[] {
     const diagnostics = this.#registry.diagnostics().providerDiagnostics;
     return FIRST_PARTY_MARKETPLACE_ENTRIES.map((entry) => {
