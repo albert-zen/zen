@@ -1409,7 +1409,7 @@ test("cancelled approval records results for the cancelled and abandoned calls",
   assert.equal(snapshot.turns[0]?.status, "interrupted");
 });
 
-test("approval errors record results for the failed and abandoned calls", async () => {
+test("approval errors settle each call and let the model continue", async () => {
   const server = createServer({
     approvalPolicy: "always",
     model: createTwoCallModel(),
@@ -1429,15 +1429,21 @@ test("approval errors record results for the failed and abandoned calls", async 
     results.map((result) => [result.callId, result.exitCode]),
     [
       ["call_one", 1],
-      ["call_two", 125],
+      ["call_two", 1],
     ],
   );
-  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert(!snapshot.items.some((item) => item.type === "failure"));
+  assert.equal(snapshot.turns[0]?.status, "completed");
 });
 
-test("execution errors record results for the failed and abandoned calls", async () => {
-  const tools = createStubTools(async () => {
-    throw new Error("execution exploded");
+test("execution errors settle one result and do not abandon later calls", async () => {
+  const executed: string[] = [];
+  const tools = createStubTools(async (invocation) => {
+    executed.push(invocation.callId);
+    if (invocation.callId === "call_one") {
+      throw new Error("execution exploded");
+    }
+    return { output: "second completed", exitCode: 0 };
   });
   const server = createServer({ model: createTwoCallModel(), tools });
   const thread = await server.startThread();
@@ -1451,10 +1457,112 @@ test("execution errors record results for the failed and abandoned calls", async
     results.map((result) => [result.callId, result.exitCode]),
     [
       ["call_one", 1],
-      ["call_two", 125],
+      ["call_two", 0],
     ],
   );
-  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.deepEqual(executed, ["call_one", "call_two"]);
+  assert(!snapshot.items.some((item) => item.type === "failure"));
+  assert.equal(snapshot.turns[0]?.status, "completed");
+});
+
+test("a provider AbortError is tool-local unless the Turn signal is aborted", async () => {
+  const tools = createStubTools(async (invocation) => {
+    if (invocation.callId === "call_one") {
+      throw new DOMException("provider stopped its operation", "AbortError");
+    }
+    return { output: "second completed", exitCode: 0 };
+  });
+  const server = createServer({ model: createTwoCallModel(), tools });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "provider abort")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assertEveryToolCallHasOneResult(snapshot.items);
+  const results = snapshot.items.filter((item) => item.type === "tool_result");
+  assert.deepEqual(
+    results.map((result) => [result.callId, result.exitCode]),
+    [
+      ["call_one", 1],
+      ["call_two", 0],
+    ],
+  );
+  assert(!snapshot.items.some((item) => item.type === "turn_aborted"));
+  assert.equal(snapshot.turns[0]?.status, "completed");
+});
+
+test("preparation errors settle one result and let later calls run", async () => {
+  const model: ModelAdapter = {
+    provider: "prepare-failure-test",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (request.messages.some((message) => message.role === "tool")) {
+        yield { type: "text_delta", delta: "tools complete" };
+        return;
+      }
+      yield {
+        type: "tool_call",
+        callId: "call_missing",
+        name: "missing_tool",
+        arguments: {},
+      };
+      yield {
+        type: "tool_call",
+        callId: "call_shell",
+        name: "shell",
+        arguments: { command: "printf prepared" },
+      };
+    },
+  };
+  const server = createServer({ model });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "prepare tools")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assertEveryToolCallHasOneResult(snapshot.items);
+  const results = snapshot.items.filter((item) => item.type === "tool_result");
+  assert.deepEqual(
+    results.map((result) => [result.callId, result.exitCode]),
+    [
+      ["call_missing", 1],
+      ["call_shell", 0],
+    ],
+  );
+  assert.match(results[0]?.output ?? "", /Unsupported tool: missing_tool/u);
+  assert(!snapshot.items.some((item) => item.type === "failure"));
+  assert.equal(snapshot.turns[0]?.status, "completed");
+});
+
+test("result normalization errors become failed results and the loop continues", async () => {
+  const tools = createStubTools(async (invocation) =>
+    invocation.callId === "call_one"
+      ? ({ output: 42, exitCode: 0 } as unknown as {
+          output: string;
+          exitCode: number;
+        })
+      : { output: "normalized", exitCode: 0 },
+  );
+  const server = createServer({ model: createTwoCallModel(), tools });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "normalize tools")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assertEveryToolCallHasOneResult(snapshot.items);
+  const results = snapshot.items.filter((item) => item.type === "tool_result");
+  assert.deepEqual(
+    results.map((result) => [result.callId, result.exitCode]),
+    [
+      ["call_one", 1],
+      ["call_two", 0],
+    ],
+  );
+  assert.match(results[0]?.output ?? "", /invalid output or exit code/u);
+  assert(!snapshot.items.some((item) => item.type === "failure"));
+  assert.equal(snapshot.turns[0]?.status, "completed");
 });
 
 test("interrupting an approval records results even when the handler ignores abort", async () => {

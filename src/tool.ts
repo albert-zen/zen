@@ -388,10 +388,12 @@ export class ToolEnvironment {
     const provider = this.#requirePrepared(prepared).provider;
     try {
       prepared.invocation.signal.throwIfAborted();
-      return normalizeToolExecutionResult(
-        await provider.execute(prepared.invocation),
-        prepared.provider,
-      );
+      const result = await provider.execute(prepared.invocation);
+      try {
+        return normalizeToolExecutionResult(result, prepared.provider);
+      } catch (error) {
+        throw new ToolResultNormalizationError(error);
+      }
     } finally {
       this.#releasePrepared(prepared);
     }
@@ -413,6 +415,13 @@ export class ToolEnvironment {
     registration.released = true;
     this.#preparedProviders.delete(prepared);
     registration.release?.();
+  }
+}
+
+export class ToolResultNormalizationError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ToolResultNormalizationError";
   }
 }
 
