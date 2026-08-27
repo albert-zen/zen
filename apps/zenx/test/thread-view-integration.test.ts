@@ -58,6 +58,22 @@ test("projects a streamed tool turn from the hosted App Server", async () => {
         (item) => item.type === "agentMessage" && item.text.length > 0,
       ),
     );
+    const usageComplete = deferred<void>();
+    const disposeUsage = manager.onNotification((method) => {
+      if (method === "turn/completed") usageComplete.resolve();
+    });
+    const usageTurn = await manager.request("turn/start", {
+      threadId: projected.id,
+      input: [{ type: "text", text: "usage sample" }],
+    });
+    await within(usageComplete.promise);
+    disposeUsage();
+    const usage = await manager.readThreadUsage(projected.id);
+    assert.equal(usage.thread.responseCount, 1);
+    assert.equal(usage.thread.cachedInputTokens, undefined);
+    assert.equal(usage.thread.cacheHitRate, undefined);
+    assert.ok(usage.thread.inputTokens > 0);
+    assert.deepEqual(usage.turns[usageTurn.turn.id], usage.thread);
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });

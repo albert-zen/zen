@@ -468,10 +468,20 @@ async function* parseResponsesStream(
       }
       const usage =
         response === undefined ? undefined : recordValue(response.usage);
+      const inputDetails = recordValue(usage?.input_tokens_details);
+      const outputDetails = recordValue(usage?.output_tokens_details);
+      const cachedInputTokens = optionalTokenCount(inputDetails?.cached_tokens);
+      const reasoningOutputTokens = optionalTokenCount(
+        outputDetails?.reasoning_tokens,
+      );
       yield {
         type: "usage",
         inputTokens: tokenCount(usage?.input_tokens),
+        ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
         outputTokens: tokenCount(usage?.output_tokens),
+        ...(reasoningOutputTokens === undefined
+          ? {}
+          : { reasoningOutputTokens }),
       };
       break;
     }
@@ -904,6 +914,10 @@ function tokenCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : 0;
+}
+
+function optionalTokenCount(value: unknown): number | undefined {
+  return value === undefined ? undefined : tokenCount(value);
 }
 
 function recordField(

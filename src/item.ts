@@ -10,6 +10,7 @@ export type ItemType =
   | "turn_replacement_requested"
   | "user_message"
   | "agent_message"
+  | "model_usage"
   | "reasoning"
   | "tool_call"
   | "tool_result"
@@ -151,6 +152,20 @@ export interface AgentMessageItem extends ItemBase {
   text: string;
 }
 
+/** Provider-reported usage for one stable model response. */
+export interface ModelUsageItem extends ItemBase {
+  type: "model_usage";
+  turnId: string;
+  modelResponseId: string;
+  /** Total input tokens, including cached input. */
+  inputTokens: number;
+  /** Cached subset of inputTokens; absent when the Provider did not report it. */
+  cachedInputTokens?: number;
+  outputTokens: number;
+  /** Reasoning subset of outputTokens, when reported separately. */
+  reasoningOutputTokens?: number;
+}
+
 export type ReasoningItem =
   | (ItemBase & {
       type: "reasoning";
@@ -228,6 +243,7 @@ export type CanonicalItem =
   | TurnReplacementRequestedItem
   | UserMessageItem
   | AgentMessageItem
+  | ModelUsageItem
   | ReasoningItem
   | ToolCallItem
   | ToolResultItem

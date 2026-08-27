@@ -289,6 +289,7 @@ export function projectCompletedItem(
       return projectCommandStarted(item, "");
     case "failure":
     case "context_compaction":
+    case "model_usage":
     case "thread_configuration_changed":
     case "thread_metadata":
     case "tool_result":

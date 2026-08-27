@@ -559,6 +559,14 @@ function installProtocolIpc(
       return await manager.readThreadAttachments(threadId);
     },
   );
+  ipcMain.handle(
+    ipcChannels.threadUsageRead,
+    async (_event, threadId: unknown) => {
+      if (typeof threadId !== "string" || threadId.length === 0)
+        throw new Error("Invalid Thread usage query");
+      return await manager.readThreadUsage(threadId);
+    },
+  );
   ipcMain.handle(ipcChannels.projectsGet, async (_event, options: unknown) => {
     const threads = await manager.listThreadSummaries(
       readThreadSummaryListOptions(options),
@@ -680,6 +688,7 @@ function installFailedProtocolIpc(message: string): void {
     ipcChannels.imageAttachmentsImport,
     ipcChannels.imageAttachmentsRead,
     ipcChannels.threadAttachmentsRead,
+    ipcChannels.threadUsageRead,
   ]) {
     ipcMain.handle(channel, () => {
       throw new Error(`Zen App Server is not ready: ${message}`);
