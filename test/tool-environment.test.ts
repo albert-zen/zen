@@ -165,7 +165,7 @@ test("structured result admission rejects non-JSON, cyclic, oversized, and forei
   }
 });
 
-test("invalid structured content settles its tool call with existing failure semantics", async () => {
+test("invalid structured content settles its tool call and lets the model continue", async () => {
   const provider: ToolProvider = {
     identity: { kind: "plugin", id: "fixture" },
     definitions: [
@@ -192,7 +192,11 @@ test("invalid structured content settles its tool call with existing failure sem
   assert.equal(results.length, 1);
   assert.equal(results[0]!.exitCode, 1);
   assert.match(results[0]!.output, /does not own/u);
-  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.equal(snapshot.turns[0]?.status, "completed");
+  assert.equal(
+    snapshot.items.some((item) => item.type === "failure"),
+    false,
+  );
   assert.equal(
     snapshot.items.some(
       (item) =>
