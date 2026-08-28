@@ -8,23 +8,67 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
+import type { ZenXImageDraft } from "../src/main/image-attachments.js";
 import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projection.js";
 import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
-const { App } = await import("../src/renderer/src/App.js");
+const {
+  App,
+  acquireDraftPromotionLease,
+  optimisticThreadSummary,
+  releaseDraftPromotionLease,
+} = await import("../src/renderer/src/App.js");
 
 interface AppHarness {
   dom: JSDOM;
   root: Root;
 }
 
+function oneProject(): ZenXProjectProjectionSnapshot {
+  return {
+    projects: [
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: false,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work/zen",
+  };
+}
+
+test("optimistic summary preserves Thread seconds, identity, and idle status", () => {
+  const value = optimisticThreadSummary(
+    started(liveThread(), "/work/zen"),
+    "preview",
+  );
+  assert.equal(value.createdAt, new Date(1_000).toISOString());
+  assert.equal(value.updatedAt, new Date(2_000).toISOString());
+  assert.equal(value.threadId, "thread-1");
+  assert.equal(value.status, "idle");
+  assert.equal(value.currentMetadata.cwd, "/work/zen");
+});
+
+test("draft promotion leases delete released mappings", () => {
+  const leases = new Map<string, number>();
+  const promotions = new Map([["draft-1", "thread-1"]]);
+  acquireDraftPromotionLease(leases, "draft-1");
+  releaseDraftPromotionLease(leases, promotions, "draft-1");
+  assert.equal(leases.size, 0);
+  assert.equal(promotions.size, 0);
+});
+
 test("New thread stays local, switches Project, and creates on first Send", async () => {
   const selectedStart = deferred<ReturnType<typeof started>>();
   let projectReads = 0;
   let addWorkspaceCalls = 0;
   let markWorkspaceCalls = 0;
+  const projectMutationOrder: string[] = [];
   const startedWorkspaces: string[] = [];
   const turnStarts: Array<{
     clientUserMessageId?: string;
@@ -54,6 +98,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
   const harness = await mountApp(projects, {
     addWorkspace: async () => {
       addWorkspaceCalls += 1;
+      projectMutationOrder.push("add");
     },
     markWorkspaceUsed: async () => {
       markWorkspaceCalls += 1;
@@ -76,6 +121,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
       throw new Error(`Unexpected protocol request: ${method}`);
     },
     startProjectThread: async (workspace) => {
+      projectMutationOrder.push("start");
       startedWorkspaces.push(workspace);
       const value = await selectedStart.promise;
       created = true;
@@ -131,6 +177,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
     await invokeButtonClick(send, 2);
     await waitFor(() => startedWorkspaces.length === 1);
     assert.deepEqual(startedWorkspaces, ["/work/documents"]);
+    assert.deepEqual(projectMutationOrder, ["add", "start"]);
     assert.equal(turnStarts.length, 0);
     assert.equal(
       document.querySelector('[role="menu"][aria-label="Choose a Project"]'),
@@ -212,6 +259,59 @@ test("abandoning an untouched new-thread draft performs no Project mutation", as
     assert.equal(addWorkspaceCalls, 0);
     assert.equal(markWorkspaceCalls, 0);
     assert.equal(projectReads, readsBeforeDraft);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("pending draft image pick follows promotion and releases its lease", async () => {
+  const pick = deferred<ZenXImageDraft[]>();
+  const create = deferred<ReturnType<typeof started>>();
+  const harness = await mountApp(oneProject(), {
+    pickImages: async () => pick.promise,
+    startProjectThread: async () => create.promise,
+    request: async (method) => {
+      if (method === "turn/start") return {};
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Add images"]')
+        ?.click(),
+    );
+    await setTextareaValue(composer, "Create with a late image");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click(),
+    );
+    await act(async () => create.resolve(started(liveThread(), "/work/zen")));
+    await waitFor(() => document.querySelector("#thread-composer"));
+    await act(async () =>
+      pick.resolve([
+        {
+          id: "late-image",
+          name: "late.png",
+          attachment: {
+            type: "attachment",
+            sha256: "a".repeat(64),
+            mediaType: "image/png",
+            byteLength: 4,
+            width: 1,
+            height: 1,
+          },
+        },
+      ]),
+    );
+    await waitFor(() =>
+      document.querySelector('[aria-label="Remove late.png"]'),
+    );
   } finally {
     await unmountApp(harness);
   }
@@ -400,6 +500,59 @@ test("turn failure retries on the created Thread with the stable message id", as
   }
 });
 
+test("late create rejection restores the latest draft and stable submission id", async () => {
+  const firstCreate = deferred<ReturnType<typeof started>>();
+  const ids: string[] = [];
+  let creates = 0;
+  const harness = await mountApp(oneProject(), {
+    startProjectThread: async (workspace) => {
+      creates += 1;
+      if (creates === 1) return firstCreate.promise;
+      return started(liveThread(), workspace);
+    },
+    request: async (method, params) => {
+      if (method === "turn/start") {
+        ids.push(
+          (params as { clientUserMessageId: string }).clientUserMessageId,
+        );
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Submitted first");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click(),
+    );
+    await setTextareaValue(composer, "Latest queued edit");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")?.click(),
+    );
+    await act(async () => firstCreate.reject(new Error("create rejected")));
+    await waitFor(() => exactButton("Restore draft"));
+    assert.match(document.body.textContent ?? "", /Settings/u);
+    await act(async () => exactButton("Restore draft")?.click());
+    const restored = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    assert.equal(restored.value, "Latest queued edit");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click(),
+    );
+    await waitFor(() => ids.length === 1);
+    assert.equal(creates, 2);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("a pending first Send finishes without stealing a newer navigation", async () => {
   const createResponse = deferred<ReturnType<typeof started>>();
   let created = false;
@@ -508,6 +661,21 @@ test("New thread without a last-used Project opens an unselected draft menu", as
     assert.equal(starts, 0);
 
     await act(async () => {
+      menu.dispatchEvent(
+        new window.KeyboardEvent("keydown", { bubbles: true, key: "Tab" }),
+      );
+    });
+    assert.equal(
+      document.querySelector('[role="menu"][aria-label="Choose a Project"]'),
+      null,
+    );
+    assert.notEqual(document.activeElement, trigger);
+    await act(async () => trigger.click());
+    await waitFor(
+      () => document.activeElement?.getAttribute("role") === "menuitemradio",
+    );
+
+    await act(async () => {
       document.dispatchEvent(
         new window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
       );
@@ -517,6 +685,18 @@ test("New thread without a last-used Project opens an unselected draft menu", as
       document.querySelector('[role="menu"][aria-label="Choose a Project"]'),
       null,
     );
+    assert.equal(document.activeElement, trigger);
+    await act(async () => trigger.click());
+    await waitFor(
+      () => document.activeElement?.getAttribute("role") === "menuitemradio",
+    );
+    await act(async () => {
+      document
+        .querySelector<HTMLElement>(".new-thread-draft-empty")
+        ?.dispatchEvent(
+          new window.MouseEvent("pointerdown", { bubbles: true }),
+        );
+    });
     assert.equal(document.activeElement, trigger);
   } finally {
     await unmountApp(harness);
@@ -667,6 +847,52 @@ test("summary failure stays non-covering after real Thread promotion", async () 
       document.body.textContent ?? "",
       /ZenX could not load data/u,
     );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("title and mark-used failures are dismissible without covering the conversation", async () => {
+  let turnStarts = 0;
+  const harness = await mountApp(oneProject(), {
+    observeTitle: async () => {
+      throw new Error("title staging failed");
+    },
+    markWorkspaceUsed: async () => {
+      throw new Error("mark used failed");
+    },
+    startProjectThread: async (workspace) => started(liveThread(), workspace),
+    request: async (method) => {
+      if (method === "turn/start") {
+        turnStarts += 1;
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Ancillary failures are not fatal");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click(),
+    );
+    await waitFor(() => turnStarts === 1);
+    assert.ok(document.querySelector("#thread-composer"));
+    const notice = await waitFor(() =>
+      document.querySelector<HTMLElement>(".app-notice[role=alert]"),
+    );
+    assert.match(
+      notice.textContent ?? "",
+      /(title staging failed|mark used failed)/u,
+    );
+    await act(async () => exactButton("Dismiss")?.click());
+    assert.equal(document.querySelector(".app-notice"), null);
+    assert.ok(document.querySelector("#thread-composer"));
   } finally {
     await unmountApp(harness);
   }
@@ -910,6 +1136,36 @@ test("packaged startup clears a transient Project failure after the App Server b
       document.querySelector<HTMLButtonElement>(".settings-nav-row")?.title,
       "Local service error: host exited",
     );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("zero-Project picker cancel fences delayed and duplicate folder selection", async () => {
+  const add = deferred<void>();
+  let adds = 0;
+  const harness = await mountApp(
+    { projects: [], unavailableThreadIds: [], lastUsedWorkspace: null },
+    {
+      addWorkspace: async () => {
+        adds += 1;
+        return add.promise;
+      },
+    },
+  );
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    await waitFor(() => document.querySelector('[role="dialog"]'));
+    const addFolder = exactButton("Add folder");
+    assert.ok(addFolder);
+    await invokeButtonClick(addFolder, 2);
+    assert.equal(adds, 1);
+    await act(async () => exactButton("Cancel")?.click());
+    await act(async () => add.resolve());
+    assert.equal(document.querySelector("#thread-composer"), null);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
   } finally {
     await unmountApp(harness);
   }
@@ -1647,6 +1903,7 @@ async function mountApp(
     ): Promise<ReturnType<typeof publicSettings>>;
     request?(method: string, params?: unknown): Promise<unknown>;
     observeTitle?(): Promise<undefined>;
+    pickImages?(): Promise<ZenXImageDraft[]>;
     threads?(archived: boolean): Promise<NativeThreadSummary[]>;
   } = {},
 ): Promise<AppHarness> {
@@ -1694,7 +1951,8 @@ async function mountApp(
         options.threads === undefined ? [] : await options.threads(archived),
     },
     imageAttachments: {
-      pick: async () => [],
+      pick: async () =>
+        options.pickImages === undefined ? [] : await options.pickImages(),
       import: async () => [],
       read: async () => new Uint8Array(),
       forThread: async () => ({}),

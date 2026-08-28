@@ -231,6 +231,12 @@ export function App() {
   };
 
   const confirmNewThreadDraft = (draft: NewThreadDraft | null) => {
+    if (
+      draft === null &&
+      newThreadDraftRef.current !== null &&
+      newThreadPendingDraftRef.current?.id === newThreadDraftRef.current.id
+    )
+      newThreadPendingDraftRef.current = newThreadDraftRef.current;
     newThreadDraftRef.current = draft;
     setNewThreadDraft(draft);
   };
@@ -715,20 +721,15 @@ export function App() {
   };
 
   const acquireNewThreadImageLease = (draftId: string) => {
-    newThreadImageLeasesRef.current.set(
-      draftId,
-      (newThreadImageLeasesRef.current.get(draftId) ?? 0) + 1,
-    );
+    acquireDraftPromotionLease(newThreadImageLeasesRef.current, draftId);
   };
 
   const releaseNewThreadImageLease = (draftId: string) => {
-    const remaining = (newThreadImageLeasesRef.current.get(draftId) ?? 1) - 1;
-    if (remaining > 0) {
-      newThreadImageLeasesRef.current.set(draftId, remaining);
-      return;
-    }
-    newThreadImageLeasesRef.current.delete(draftId);
-    newThreadPromotionsRef.current.delete(draftId);
+    releaseDraftPromotionLease(
+      newThreadImageLeasesRef.current,
+      newThreadPromotionsRef.current,
+      draftId,
+    );
   };
 
   const deliverComposerSubmission = async (
@@ -853,25 +854,7 @@ export function App() {
       await window.zenx.settings.addWorkspace(workspace);
       const result = await window.zenx.projects.startThread(workspace);
       createdThreadId = result.thread.id;
-      setOptimisticSummary({
-        threadId: createdThreadId,
-        currentMetadata: {
-          model: result.model,
-          provider: result.modelProvider,
-          cwd: result.cwd,
-          sandbox: "danger-full-access",
-          approvalPolicy:
-            result.approvalPolicy === "on-request"
-              ? "always"
-              : result.approvalPolicy,
-        },
-        archived: false,
-        createdAt: new Date(result.thread.createdAt * 1_000).toISOString(),
-        updatedAt: new Date(result.thread.updatedAt * 1_000).toISOString(),
-        name: result.thread.name ?? "New thread",
-        preview: submission.text,
-        status: "idle",
-      });
+      setOptimisticSummary(optimisticThreadSummary(result, submission.text));
       newThreadPromotionsRef.current.set(draftId, createdThreadId);
       if (!newThreadImageLeasesRef.current.has(draftId))
         newThreadPromotionsRef.current.delete(draftId);
@@ -2407,6 +2390,56 @@ function defaultDraftSettings(
 function projectLabel(workspace: string): string {
   const normalized = workspace.replace(/[\\/]+$/u, "");
   return normalized.split(/[\\/]/u).filter(Boolean).at(-1) ?? workspace;
+}
+
+export function optimisticThreadSummary(
+  result: {
+    thread: Thread;
+    model: string;
+    modelProvider: string;
+    cwd: string;
+    approvalPolicy: "never" | "on-request";
+  },
+  preview: string,
+): NativeThreadSummary {
+  return {
+    threadId: result.thread.id,
+    currentMetadata: {
+      model: result.model,
+      provider: result.modelProvider,
+      cwd: result.cwd,
+      sandbox: "danger-full-access",
+      approvalPolicy:
+        result.approvalPolicy === "on-request" ? "always" : "never",
+    },
+    archived: false,
+    createdAt: new Date(result.thread.createdAt * 1_000).toISOString(),
+    updatedAt: new Date(result.thread.updatedAt * 1_000).toISOString(),
+    name: result.thread.name ?? "New thread",
+    preview,
+    status: "idle",
+  };
+}
+
+export function acquireDraftPromotionLease(
+  leases: Map<string, number>,
+  draftId: string,
+): void {
+  leases.set(draftId, (leases.get(draftId) ?? 0) + 1);
+}
+
+export function releaseDraftPromotionLease(
+  leases: Map<string, number>,
+  promotions: Map<string, string>,
+  draftId: string,
+): void {
+  const remaining = (leases.get(draftId) ?? 1) - 1;
+  if (remaining > 0) {
+    leases.set(draftId, remaining);
+    return;
+  }
+  leases.delete(draftId);
+  promotions.delete(draftId);
 }
 
 function projectDisplayLabel(
