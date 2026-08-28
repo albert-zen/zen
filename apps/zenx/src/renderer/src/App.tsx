@@ -956,7 +956,7 @@ export function App() {
             });
           }}
         >
-          <Icon name="tree" size={15} />
+          <Icon name="panel-left" size={15} />
         </button>
       </div>
       <Sidebar

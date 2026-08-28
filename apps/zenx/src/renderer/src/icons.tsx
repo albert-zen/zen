@@ -23,6 +23,7 @@ export type IconName =
   | "more"
   | "paperclip"
   | "panel-right"
+  | "panel-left"
   | "pin"
   | "pin-off"
   | "reasoning"
@@ -120,6 +121,12 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <rect x="1.8" y="2.2" width="12.4" height="11.6" rx="1.5" />
       <path d="M10.2 2.2v11.6" />
+    </>
+  ),
+  "panel-left": (
+    <>
+      <rect x="1.8" y="2.2" width="12.4" height="11.6" rx="1.5" />
+      <path d="M5.8 2.2v11.6" />
     </>
   ),
   pin: (

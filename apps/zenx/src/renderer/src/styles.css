@@ -211,7 +211,7 @@ a:focus-visible {
 }
 @media (min-width: 641px) {
   .app-shell.sidebar-collapsed {
-    grid-template-columns: 68px minmax(0, 1fr);
+    grid-template-columns: 0 minmax(0, 1fr);
   }
   .window-titlebar {
     position: absolute;
@@ -245,23 +245,15 @@ a:focus-visible {
     color: var(--text);
     background: var(--surface-2);
   }
-  .sidebar-collapsed .sidebar-header {
-    padding-inline: 14px;
-  }
-  .sidebar-collapsed .brand-row {
-    justify-content: center;
-  }
-  .sidebar-collapsed .brand-wordmark,
-  .sidebar-collapsed .brand-actions,
-  .sidebar-collapsed .plugin-spaces,
-  .sidebar-collapsed .new-thread-control,
-  .sidebar-collapsed .sidebar-view,
-  .sidebar-collapsed .sidebar-scroll,
-  .sidebar-collapsed .sidebar-footer {
+  .sidebar-collapsed .sidebar {
     display: none;
   }
-  .sidebar-collapsed .brand-mark {
-    margin-top: 2px;
+  .sidebar-collapsed .workspace-header,
+  .sidebar-collapsed .page-header {
+    padding-left: 122px;
+  }
+  .app-shell .sidebar-header {
+    padding-top: 44px;
   }
 }
 .sidebar {

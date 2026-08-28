@@ -79,3 +79,27 @@ test("plugin page and panel collapse to one usable narrow desktop column", async
     /\.plugin-page-scroll\s*\{\s*grid-template-columns: minmax\(0, 1fr\);\s*padding: 14px;/su,
   );
 });
+
+test("desktop sidebar collapse hides the panel and reserves the native title bar", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const desktop = styles.slice(0, styles.indexOf("@media (max-width: 640px)"));
+  assert.match(
+    desktop,
+    /\.app-shell\.sidebar-collapsed\s*\{[^}]*grid-template-columns:\s*0\s+minmax\(0, 1fr\);/su,
+  );
+  assert.match(
+    desktop,
+    /\.sidebar-collapsed \.sidebar\s*\{[^}]*display: none;/su,
+  );
+  assert.match(
+    desktop,
+    /\.app-shell \.sidebar-header\s*\{[^}]*padding-top: 44px;/su,
+  );
+  assert.match(
+    desktop,
+    /\.sidebar-collapsed \.workspace-header,[\s\S]*padding-left: 122px;/u,
+  );
+});
