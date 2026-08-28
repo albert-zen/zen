@@ -64,21 +64,35 @@ test("pending approvals render in the bottom zone next to the composer", () => {
 });
 
 test("message controls are Turn-backed, accessible, and stable while hovering", () => {
+  const completedAt = new Date();
+  completedAt.setHours(12, 34, 0, 0);
   const html = renderTurns([
-    turnWithItems(
-      "completed",
-      [user("Copy this *raw* Markdown"), agent("Answer")],
-      1_000,
-    ),
+    {
+      ...turnWithItems(
+        "completed",
+        [user("Copy this *raw* Markdown"), agent("Answer")],
+        1_000,
+      ),
+      completedAt: Math.floor(completedAt.getTime() / 1_000),
+    },
   ]);
 
   assert.match(html, /class="message-actions user-message-actions"/u);
   assert.match(html, /aria-label="Copy user message"/u);
-  assert.match(html, /class="message-time"[^>]*>Completed /u);
   assert.match(html, /class="message-actions assistant-message-actions"/u);
   assert.match(html, /aria-label="Copy assistant message"/u);
-  assert.match(html, /class="message-time"[^>]*>Completed /u);
+  assert.equal((html.match(/data-icon="copy"/gu) ?? []).length, 2);
+  assert.doesNotMatch(html, />Copy<|>Completed /u);
   assert.equal((html.match(/class="message-time"/gu) ?? []).length, 2);
+  const todayTime = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(completedAt);
+  assert.equal(
+    (html.match(new RegExp(`>${todayTime}</time>`, "gu")) ?? []).length,
+    2,
+  );
 });
 
 test("running Turns do not invent a completion timestamp in message controls", () => {
@@ -91,18 +105,51 @@ test("running Turns do not invent a completion timestamp in message controls", (
   assert.match(html, /aria-label="Copy user message"/u);
 });
 
-test("terminal Turn timestamps keep their actual status", () => {
-  for (const [status, label] of [
-    ["completed", "Completed"],
-    ["interrupted", "Interrupted"],
-    ["failed", "Failed"],
-  ] as const) {
+test("terminal Turn timestamps show time only today and add a date across local days", () => {
+  const today = new Date();
+  today.setHours(12, 34, 0, 0);
+  const todayTime = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(today);
+  for (const status of ["completed", "interrupted", "failed"] as const) {
     const html = renderTurns([
-      turnWithItems(status, [user(`${label} request`), agent(label)]),
+      {
+        ...turnWithItems(status, [user(`${status} request`), agent(status)]),
+        completedAt: Math.floor(today.getTime() / 1_000),
+      },
     ]);
 
-    assert.match(html, new RegExp(`class="message-time"[^>]*>${label} `, "u"));
+    assert.equal(
+      (html.match(new RegExp(`>${todayTime}</time>`, "gu")) ?? []).length,
+      2,
+    );
+    assert.doesNotMatch(html, />(?:Completed|Interrupted|Failed) /u);
   }
+
+  const otherDay = new Date(today);
+  otherDay.setDate(today.getDate() === 1 ? 2 : today.getDate() - 1);
+  const otherDate = new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(otherDay);
+  const otherTime = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(otherDay);
+  const html = renderTurns([
+    {
+      ...turnWithItems("completed", [user("Earlier"), agent("Earlier answer")]),
+      completedAt: Math.floor(otherDay.getTime() / 1_000),
+    },
+  ]);
+  assert.equal(
+    (html.match(new RegExp(`>${otherDate} ${otherTime}</time>`, "gu")) ?? [])
+      .length,
+    2,
+  );
 });
 
 test("reasoning detail uses the safe Markdown renderer", async () => {
@@ -170,8 +217,9 @@ test("renders compact token-weighted cache usage for the Thread and each Turn", 
   );
 
   assert.match(html, /Thread cache 33% · 200 in · 25 out/u);
-  assert.match(html, /Cache 40% · 150 in · 17 out/u);
-  assert.match(html, /Cache unknown · 50 in · 8 out/u);
+  assert.equal((html.match(/Cache 40% · 150 in · 17 out/gu) ?? []).length, 1);
+  assert.equal((html.match(/Cache unknown · 50 in · 8 out/gu) ?? []).length, 1);
+  assert.doesNotMatch(html, /class="turn-usage"/u);
   assert.doesNotMatch(html, /Cache 0% · 50 in/u);
 });
 
