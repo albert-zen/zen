@@ -791,7 +791,10 @@ test("packaged startup clears a transient Project failure after the App Server b
       await Promise.resolve();
     });
     await waitFor(() => projectCalls === 1);
-    assert.match(document.body.textContent ?? "", /ZenX could not load data/u);
+    assert.match(
+      document.body.textContent ?? "",
+      /Zen App Server is not ready/u,
+    );
     assert.doesNotMatch(
       document.body.textContent ?? "",
       /Zen App Server stopped/u,

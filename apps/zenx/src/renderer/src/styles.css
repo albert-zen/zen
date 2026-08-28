@@ -4285,3 +4285,23 @@ a:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+/* Ordinary renderer failures stay visible without replacing the conversation. */
+.app-notice {
+  position: fixed;
+  z-index: 30;
+  top: 76px;
+  left: 50%;
+  display: flex;
+  max-width: min(640px, calc(100vw - 32px));
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  transform: translateX(-50%);
+}
+
+.app-notice button {
+  color: var(--text-secondary);
+}

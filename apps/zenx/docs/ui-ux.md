@@ -1,6 +1,8 @@
 # ZenX UI/UX decisions
 
-更新日期：2026-08-23
+更新日期：2026-08-28
+
+New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 
 ## 1. 文档权威与规则等级
 
@@ -98,15 +100,14 @@ Thread
 - **Settings** 是左下常规导航 row，不是浮动齿轮 tile。
 - 插件只能使用受控 Plugin spaces contribution slot；它们不能重排、隐藏或覆写 Inbox、New thread、Projects/Threads 或 Settings。
 
-**Experiment / TBD — New thread IA：** 是否使用独立全宽文字 row、它相对 Plugin spaces / Projects 的准确顺序，以及全局入口与 Project quick-create 的关系都尚未决定。现有原型与 issue 中的排布只能作为实验，不能据此锁定最终导航。
+New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视觉顺序仍可继续迭代，但全局入口与 Project 内入口的选择和创建语义已经确定。
 
 ### 3.3 Project 与 Thread 创建
 
 - Projects 标题旁提供 icon-only **Add project**，具备 tooltip、accessible name、focus state 和完整 hit target。
 - Add project 使用 ZenX 只读 directory picker；Thread 创建最终必须解析为明确的 cwd，并消费同一个 canonical Project projection。
-- Project quick-create 一旦呈现，必须把被点击 Project 作为唯一创建作用域；默认或最近 Project 不能覆盖它。New thread 打开 directory picker 时，确认目录必须继续完成原始的 Thread 创建意图，不能退化成只添加 Project。
-- New thread 的 pending 状态只由该创建操作拥有；创建成功后再解除 pending 并刷新 summaries / Project projection，失败则在当前页面显示可重试的明确反馈。
-- **Experiment / TBD：** Project quick-create 是否保留、全局 New thread 是否复用 last-used Project，以及 last-used 失效时是否直接打开 picker，均属于最终 New thread IA 的待定部分。不得把 Documents、`process.cwd()` 或隐藏默认 Project 当成已经确认的产品 fallback。
+- Project 内入口把被点击 Project 作为唯一作用域；全局入口使用仍有效的 last-used Project，否则要求用户明确选择。不得用默认 Project、Documents 或 `process.cwd()` 隐式替代。
+- 点击入口、切换 Project 或目录确认只更新非持久本地 draft；第一条有效 Send 才配置 Project、创建 Thread，并立即启动 Turn，不等待 summaries / Project projection。失败必须不遮盖当前页面，并提供恢复 draft 的直接重试路径。
 
 ### 3.4 原生应用菜单与按需面板
 
@@ -329,7 +330,7 @@ ThreadView
 - [ ] 默认是 active Thread Sidebar + Chat 两栏；Inbox 只由品牌区 icon 切换。
 - [ ] Sidebar 无 Active/Archived segmented control；Archived Threads 只在 Settings 管理并可 Unarchive。
 - [ ] 产品壳保留正式 ZenX logo/wordmark 位置；Thread Provider logo 不替代产品标识。
-- [ ] Add project 可发现、可聚焦，并遵守 canonical Project cwd 规则；New thread 最终 IA 不作为本轮验收合同。
+- [ ] Add project 可发现、可聚焦并遵守 canonical cwd；New thread 在首次有效 Send 前不创建 Thread，且全局/Project 内入口遵守各自已确认的选择语义。
 - [ ] canonical cwd aliases 归一为一个 Project，同时保留稳定 display path。
 - [ ] Pin 只改变 profile-local Sidebar prominence，不改变 Inbox/runtime/scheduling；不假定独立 Pinned section 或排序。
 - [ ] Project 可在 Sidebar 全局拖动排序；Thread 只可在 owning Project 内排序，跨 Project drop 不产生 mutation，也不改变 cwd/Project identity。

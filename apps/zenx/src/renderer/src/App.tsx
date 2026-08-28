@@ -97,7 +97,9 @@ export function App() {
   const selectionEpoch = useRef(0);
   const newThreadPendingRef = useRef(false);
   const newThreadDraftRef = useRef<NewThreadDraft | null>(null);
+  const newThreadPendingDraftRef = useRef<NewThreadDraft | null>(null);
   const newThreadPromotionsRef = useRef(new Map<string, string>());
+  const newThreadImageLeasesRef = useRef(new Map<string, number>());
   const projectPickerOperationEpoch = useRef(0);
   const projectPickerPendingRef = useRef(false);
   const projectPickerIntentRef = useRef<"add-project" | "new-thread" | null>(
@@ -180,6 +182,10 @@ export function App() {
     }
   });
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [optimisticSummary, setOptimisticSummary] =
+    useState<NativeThreadSummary | null>(null);
+  const [recoverableDraft, setRecoverableDraft] =
+    useState<NewThreadDraft | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [threadLifecycleBusy, setThreadLifecycleBusy] = useState(false);
   const [threadLifecycleError, setThreadLifecycleError] = useState<
@@ -608,7 +614,10 @@ export function App() {
   const selectedSummary =
     [...activeSummaries, ...archivedSummaries].find(
       (summary) => summary.threadId === selectedThreadId,
-    ) ?? null;
+    ) ??
+    (optimisticSummary?.threadId === selectedThreadId
+      ? optimisticSummary
+      : null);
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
   const pluginContributions = loadedPluginContributions(pluginSnapshot);
   const genericPluginTarget =
@@ -689,6 +698,11 @@ export function App() {
     draftId: string,
     update: (state: ComposerState) => ComposerState,
   ) => {
+    if (newThreadPendingDraftRef.current?.id === draftId)
+      newThreadPendingDraftRef.current = {
+        ...newThreadPendingDraftRef.current,
+        composer: update(newThreadPendingDraftRef.current.composer),
+      };
     if (newThreadDraftRef.current?.id === draftId) {
       updateNewThreadDraft((draft) => ({
         ...draft,
@@ -698,6 +712,23 @@ export function App() {
     }
     const threadId = newThreadPromotionsRef.current.get(draftId);
     if (threadId !== undefined) updateComposer(threadId, update);
+  };
+
+  const acquireNewThreadImageLease = (draftId: string) => {
+    newThreadImageLeasesRef.current.set(
+      draftId,
+      (newThreadImageLeasesRef.current.get(draftId) ?? 0) + 1,
+    );
+  };
+
+  const releaseNewThreadImageLease = (draftId: string) => {
+    const remaining = (newThreadImageLeasesRef.current.get(draftId) ?? 1) - 1;
+    if (remaining > 0) {
+      newThreadImageLeasesRef.current.set(draftId, remaining);
+      return;
+    }
+    newThreadImageLeasesRef.current.delete(draftId);
+    newThreadPromotionsRef.current.delete(draftId);
   };
 
   const deliverComposerSubmission = async (
@@ -808,6 +839,7 @@ export function App() {
     );
     if (startedComposer === current.composer) return;
     const startedDraft = { ...current, composer: startedComposer };
+    newThreadPendingDraftRef.current = startedDraft;
     confirmNewThreadDraft(startedDraft);
     const submission = startedComposer.submission;
     if (submission === null || submission.status !== "pending") return;
@@ -821,7 +853,28 @@ export function App() {
       await window.zenx.settings.addWorkspace(workspace);
       const result = await window.zenx.projects.startThread(workspace);
       createdThreadId = result.thread.id;
+      setOptimisticSummary({
+        threadId: createdThreadId,
+        currentMetadata: {
+          model: result.model,
+          provider: result.modelProvider,
+          cwd: result.cwd,
+          sandbox: "danger-full-access",
+          approvalPolicy:
+            result.approvalPolicy === "on-request"
+              ? "always"
+              : result.approvalPolicy,
+        },
+        archived: false,
+        createdAt: new Date(result.thread.createdAt * 1_000).toISOString(),
+        updatedAt: new Date(result.thread.updatedAt * 1_000).toISOString(),
+        name: result.thread.name ?? "New thread",
+        preview: submission.text,
+        status: "idle",
+      });
       newThreadPromotionsRef.current.set(draftId, createdThreadId);
+      if (!newThreadImageLeasesRef.current.has(draftId))
+        newThreadPromotionsRef.current.delete(draftId);
       const activeDraft = newThreadDraftRef.current;
       const promotedComposer =
         activeDraft?.id === draftId &&
@@ -892,6 +945,20 @@ export function App() {
               message,
             ),
           }));
+        } else {
+          const latestDraft =
+            newThreadPendingDraftRef.current?.id === draftId
+              ? newThreadPendingDraftRef.current
+              : startedDraft;
+          setRecoverableDraft({
+            ...latestDraft,
+            composer: failComposerSubmission(
+              latestDraft.composer,
+              submission.clientUserMessageId,
+              message,
+            ),
+          });
+          setRequestError(`New Thread could not be created: ${message}`);
         }
       } else {
         updateComposer(createdThreadId, (state) =>
@@ -903,6 +970,7 @@ export function App() {
         );
       }
     } finally {
+      newThreadPendingDraftRef.current = null;
       newThreadPendingRef.current = false;
       setNewThreadPending(false);
     }
@@ -1262,6 +1330,44 @@ export function App() {
         threads={activeSummaries}
       />
 
+      {projectError !== null || requestError !== null ? (
+        <div className="app-notice" role="alert">
+          <span>{projectError ?? requestError}</span>
+          {recoverableDraft !== null ? (
+            <button
+              type="button"
+              onClick={() => {
+                selectionEpoch.current += 1;
+                setPage("agent");
+                selectedThreadIdRef.current = null;
+                setSelectedThreadId(null);
+                setThreadDetail(null);
+                setThreadAttachments({});
+                setThreadUsage(undefined);
+                setSelectedSettings(null);
+                setThreadError(null);
+                setWorkspaceOpen(false);
+                confirmNewThreadDraft(recoverableDraft);
+                setRecoverableDraft(null);
+                setRequestError(null);
+              }}
+            >
+              Restore draft
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              setProjectError(null);
+              setRequestError(null);
+              setRecoverableDraft(null);
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+
       <main className="workspace">
         {page === "settings" ? (
           <SettingsView
@@ -1334,17 +1440,23 @@ export function App() {
             onImportNewThreadImages={async (files) => {
               const draftId = newThreadDraftRef.current?.id;
               if (draftId === undefined) return;
-              const imports = await Promise.all(
-                files.map(async (file) => ({
-                  name: file.name,
-                  mediaType: file.type,
-                  bytes: new Uint8Array(await file.arrayBuffer()),
-                })),
-              );
-              const images = await window.zenx.imageAttachments.import(imports);
-              updateNewThreadComposer(draftId, (state) =>
-                addComposerImages(state, images),
-              );
+              acquireNewThreadImageLease(draftId);
+              try {
+                const imports = await Promise.all(
+                  files.map(async (file) => ({
+                    name: file.name,
+                    mediaType: file.type,
+                    bytes: new Uint8Array(await file.arrayBuffer()),
+                  })),
+                );
+                const images =
+                  await window.zenx.imageAttachments.import(imports);
+                updateNewThreadComposer(draftId, (state) =>
+                  addComposerImages(state, images),
+                );
+              } finally {
+                releaseNewThreadImageLease(draftId);
+              }
             }}
             onPickImages={async (threadId) => {
               const images = await window.zenx.imageAttachments.pick();
@@ -1355,10 +1467,15 @@ export function App() {
             onPickNewThreadImages={async () => {
               const draftId = newThreadDraftRef.current?.id;
               if (draftId === undefined) return;
-              const images = await window.zenx.imageAttachments.pick();
-              updateNewThreadComposer(draftId, (state) =>
-                addComposerImages(state, images),
-              );
+              acquireNewThreadImageLease(draftId);
+              try {
+                const images = await window.zenx.imageAttachments.pick();
+                updateNewThreadComposer(draftId, (state) =>
+                  addComposerImages(state, images),
+                );
+              } finally {
+                releaseNewThreadImageLease(draftId);
+              }
             }}
             onRemoveImage={(threadId, imageId) =>
               updateComposer(threadId, (state) =>
@@ -1412,7 +1529,6 @@ export function App() {
             }}
             onSubmit={submitComposer}
             onSubmitNewThread={submitNewThreadDraft}
-            requestError={projectError ?? requestError}
             selectedSettings={selectedSettings}
             selectedSummary={selectedSummary}
             serverStatus={serverStatus}
@@ -1488,7 +1604,6 @@ function AgentSurface({
   onRetryTitle,
   onSubmit,
   onSubmitNewThread,
-  requestError,
   selectedSettings,
   selectedSummary,
   serverStatus,
@@ -1548,7 +1663,6 @@ function AgentSurface({
     intent: ComposerIntent,
     expectedTurnId: string | null,
   ): Promise<void>;
-  requestError: string | null;
   selectedSettings: SelectedThreadSettings | null;
   selectedSummary: NativeThreadSummary | null;
   serverStatus: AppServerHostStatus;
@@ -1662,17 +1776,11 @@ function AgentSurface({
         </header>
       )}
 
-      {serverStatus.type === "error" || requestError !== null ? (
+      {serverStatus.type === "error" ? (
         <EmptyState
           error
-          title={
-            serverStatus.type === "error"
-              ? "Zen App Server stopped"
-              : "ZenX could not load data"
-          }
-          detail={
-            serverStatus.type === "error" ? serverStatus.message : requestError!
-          }
+          title="Zen App Server stopped"
+          detail={serverStatus.message}
         />
       ) : serverStatus.type !== "ready" ? (
         <EmptyState

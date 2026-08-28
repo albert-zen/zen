@@ -3,6 +3,8 @@
 所有接入端平级，都只通过 App Server 协议工作。任何接入端都不得拥有
 自己的 Agent、Thread、Turn 或调度语义。
 
+ZenX 的全局 New thread 采用最近使用的 Project，Project 内入口采用该精确 Project；两者只打开本地 draft，选择目录不会创建 Thread，第一条有效 Send 才配置 Project、创建真实 Thread，并且不等待辅助投影就立即启动 Turn。失败必须明确、可恢复且不遮盖可用会话。
+
 ## 第一客户端
 
 **自建薄 Zen CLI** 是首个稳定接入端，只覆盖启动 / 恢复 Thread、发送消息、
@@ -151,9 +153,7 @@ Add Project 使用只读的内部目录 picker。Windows/Linux 不安装 Electro
 只保留系统合规的最小 native menu；这些都属于桌面产品外层，不改变 Core 或 wire protocol。
 顶部 New thread 只使用 host profile 中仍有效的最近使用 workspace；没有记录时由用户明确
 选择 Project，不把 Documents、进程 cwd 或默认 Project 当作隐式替代。
-Project row 的 quick-create 始终以被点击 Project 的 canonical workspace 发起 `thread/start`；
-New thread 因缺少可用 Project 而打开目录 picker 时，确认目录会继续完成 Thread 创建，而不只添加 Project。
-创建成功后 ZenX 在解除 pending 前刷新 Thread summaries 与 Project projection；失败在用户当前页面明确显示并可原位重试。
+Project row 的 New thread 始终选择被点击 Project 的 canonical workspace；全局入口使用仍有效的最近 workspace，否则要求用户明确选择。点击入口、切换 Project 或确认目录都只维护 Renderer 本地 draft，不创建 Thread；第一条有效 Send 才配置 Project、创建真实 Thread，并立即启动 Turn，不等待 summaries 或 Project projection。失败以不遮盖当前页面的明确通知呈现，并可恢复原 draft 重试。
 
 固定版本 T3 Code 仍是机会型兼容目标：它可以通过协议直接把 Zen 当 provider
 驱动，但不会替代 ZenX 的外层产品能力，也不会反向扩大 Zen Core。
