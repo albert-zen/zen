@@ -109,6 +109,32 @@ test("desktop sidebar collapse hides the panel and reserves the native title bar
   );
 });
 
+test("compact macOS chrome clears the traffic lights without changing other platforms", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const mobile = styles.slice(styles.indexOf("@media (max-width: 640px)"));
+  assert.match(
+    mobile,
+    /\.workspace-header,\s*\.page-header\s*\{[^}]*padding:\s*0 8px;/su,
+  );
+  assert.match(
+    mobile,
+    /\.app-shell\.mac-titlebar \.workspace-header,\s*\.app-shell\.mac-titlebar \.page-header\s*\{[^}]*padding-left:\s*122px;/su,
+  );
+  assert.match(
+    mobile,
+    /\.app-shell\.mac-titlebar \.sidebar-header\s*\{[^}]*padding-top:\s*44px;/su,
+  );
+  assert.match(mobile, /\.mobile-menu\s*\{[^}]*display:\s*inline-grid;/su);
+  assert.match(
+    mobile,
+    /\.app-shell\.mac-titlebar \.mobile-menu\s*\{[^}]*display:\s*none;/su,
+  );
+  assert.doesNotMatch(mobile, /\.window-titlebar\s*\{[^}]*display:\s*none;/su);
+});
+
 test("title-bar DOM and collapsed classes are gated to macOS", async () => {
   const app = await readFile(
     new URL("../src/renderer/src/App.tsx", import.meta.url),

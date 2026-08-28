@@ -209,41 +209,41 @@ a:focus-visible {
   background: var(--main);
   isolation: isolate;
 }
+.window-titlebar {
+  position: absolute;
+  z-index: 40;
+  inset: 0 0 auto;
+  height: 38px;
+  pointer-events: none;
+  -webkit-app-region: drag;
+}
+.window-sidebar-toggle {
+  position: absolute;
+  top: 7px;
+  left: 76px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-3);
+  background: transparent;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+}
+.window-sidebar-toggle:hover,
+.window-sidebar-toggle[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--surface-2);
+}
 @media (min-width: 641px) {
   .app-shell.sidebar-collapsed {
     grid-template-columns: 0 minmax(0, 1fr);
-  }
-  .window-titlebar {
-    position: absolute;
-    z-index: 40;
-    inset: 0 0 auto;
-    height: 38px;
-    pointer-events: none;
-    -webkit-app-region: drag;
-  }
-  .window-sidebar-toggle {
-    position: absolute;
-    top: 7px;
-    left: 76px;
-    width: 26px;
-    height: 26px;
-    display: grid;
-    place-items: center;
-    padding: 0;
-    border: 0;
-    border-radius: 7px;
-    color: var(--text-3);
-    background: transparent;
-    pointer-events: auto;
-    -webkit-app-region: no-drag;
-    transition:
-      color 160ms ease,
-      background 160ms ease;
-  }
-  .window-sidebar-toggle:hover,
-  .window-sidebar-toggle[aria-pressed="true"] {
-    color: var(--text);
-    background: var(--surface-2);
   }
   .sidebar-collapsed .sidebar {
     display: none;
@@ -3985,9 +3985,6 @@ a:focus-visible {
   .app-shell {
     display: block;
   }
-  .window-titlebar {
-    display: none;
-  }
   .sidebar {
     position: absolute;
     inset: 0 auto 0 0;
@@ -4030,8 +4027,18 @@ a:focus-visible {
     gap: 8px;
     padding: 0 8px;
   }
+  .app-shell.mac-titlebar .workspace-header,
+  .app-shell.mac-titlebar .page-header {
+    padding-left: 122px;
+  }
+  .app-shell.mac-titlebar .sidebar-header {
+    padding-top: 44px;
+  }
   .mobile-menu {
     display: inline-grid;
+  }
+  .app-shell.mac-titlebar .mobile-menu {
+    display: none;
   }
   .icon-button {
     width: 44px;

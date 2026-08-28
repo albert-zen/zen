@@ -709,6 +709,48 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
   }
 });
 
+test("macOS title-bar toggle controls the compact sidebar without changing desktop collapse preference", async () => {
+  const harness = await mountApp({
+    projects: [],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  });
+  try {
+    Object.defineProperty(harness.dom.window, "innerWidth", {
+      configurable: true,
+      value: 480,
+    });
+    await act(async () =>
+      harness.dom.window.dispatchEvent(new harness.dom.window.Event("resize")),
+    );
+
+    const toggle = document.querySelector<HTMLButtonElement>(
+      ".window-sidebar-toggle",
+    );
+    assert.ok(toggle);
+    assert.equal(toggle.getAttribute("aria-label"), "Expand sidebar");
+    assert.equal(document.querySelector(".sidebar.open"), null);
+
+    await act(async () => toggle.click());
+    assert.ok(document.querySelector(".sidebar.open"));
+    assert.equal(toggle.getAttribute("aria-label"), "Collapse sidebar");
+
+    await act(async () => toggle.click());
+    assert.equal(document.querySelector(".sidebar.open"), null);
+
+    Object.defineProperty(harness.dom.window, "innerWidth", {
+      configurable: true,
+      value: 800,
+    });
+    await act(async () =>
+      harness.dom.window.dispatchEvent(new harness.dom.window.Event("resize")),
+    );
+    assert.equal(toggle.getAttribute("aria-label"), "Collapse sidebar");
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("Sidebar archive clears the selected Chat and opens its Settings restore entry", async () => {
   let archived = false;
   let persistedPins = ["thread-1"];

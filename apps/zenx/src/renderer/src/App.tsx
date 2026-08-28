@@ -85,6 +85,7 @@ import { ThreadView } from "./ThreadView.js";
 
 type ProductPage = string;
 const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
+const COMPACT_LAYOUT_MAX_WIDTH = 640;
 
 export function App() {
   const isMacPlatform = window.zenx.platform === "darwin";
@@ -101,6 +102,9 @@ export function App() {
   const profilePreferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [compactLayout, setCompactLayout] = useState(
+    () => window.innerWidth <= COMPACT_LAYOUT_MAX_WIDTH,
+  );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     if (!isMacPlatform) return false;
     try {
@@ -124,6 +128,7 @@ export function App() {
     [],
   );
   const [pinnedThreadIds, setPinnedThreadIds] = useState<string[]>([]);
+
   const [sidebarOrder, setSidebarOrder] =
     useState<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
   const [archivedThreadSummaries, setArchivedThreadSummaries] = useState<
@@ -187,6 +192,13 @@ export function App() {
   const [threadUsage, setThreadUsage] = useState<
     ModelUsageProjection | undefined
   >();
+
+  useEffect(() => {
+    const updateCompactLayout = () =>
+      setCompactLayout(window.innerWidth <= COMPACT_LAYOUT_MAX_WIDTH);
+    window.addEventListener("resize", updateCompactLayout);
+    return () => window.removeEventListener("resize", updateCompactLayout);
+  }, []);
 
   const confirmPinnedThreadIds = (threadIds: readonly string[]) => {
     const confirmed = [...threadIds];
@@ -937,6 +949,8 @@ export function App() {
     }
   };
 
+  const sidebarHidden = compactLayout ? !sidebarOpen : sidebarCollapsed;
+
   return (
     <div
       className={`app-shell${isMacPlatform ? " mac-titlebar" : ""}${isMacPlatform && sidebarCollapsed ? " sidebar-collapsed" : ""}`}
@@ -946,12 +960,14 @@ export function App() {
           <button
             className="window-sidebar-toggle"
             type="button"
-            aria-label={
-              sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
-            }
+            aria-label={sidebarHidden ? "Expand sidebar" : "Collapse sidebar"}
             aria-controls="zenx-sidebar"
-            aria-pressed={sidebarCollapsed}
+            aria-pressed={sidebarHidden}
             onClick={() => {
+              if (compactLayout) {
+                setSidebarOpen((open) => !open);
+                return;
+              }
               setSidebarCollapsed((collapsed) => {
                 const next = !collapsed;
                 try {
