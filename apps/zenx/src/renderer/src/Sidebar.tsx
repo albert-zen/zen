@@ -172,6 +172,7 @@ export function Sidebar({
   return (
     <>
       <aside
+        id="zenx-sidebar"
         className={`sidebar${open ? " open" : ""}`}
         aria-label="Projects and threads"
       >

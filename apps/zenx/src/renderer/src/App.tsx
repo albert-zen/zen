@@ -68,6 +68,7 @@ import {
   derivePinnedThreads,
   EMPTY_SIDEBAR_ORDER,
   readSidebarMode,
+  readSidebarCollapsed,
   threadHasActiveTurn,
   lastUsedProjectWorkspace,
   moveSidebarProject,
@@ -75,6 +76,7 @@ import {
   startProjectThread,
   threadTitle,
   writeSidebarMode,
+  writeSidebarCollapsed,
   type SidebarMode,
 } from "./thread-list.js";
 import { applyThreadViewNotification } from "./thread-view-state.js";
@@ -98,6 +100,13 @@ export function App() {
   const profilePreferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return readSidebarCollapsed(window.localStorage);
+    } catch {
+      return false;
+    }
+  });
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [projectPickerIntent, setProjectPickerIntent] = useState<
@@ -927,7 +936,29 @@ export function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+      <div className="window-titlebar">
+        <button
+          className="window-sidebar-toggle"
+          type="button"
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-controls="zenx-sidebar"
+          aria-pressed={sidebarCollapsed}
+          onClick={() => {
+            setSidebarCollapsed((collapsed) => {
+              const next = !collapsed;
+              try {
+                writeSidebarCollapsed(window.localStorage, next);
+              } catch {
+                // The preference remains valid for this window.
+              }
+              return next;
+            });
+          }}
+        >
+          <Icon name="tree" size={15} />
+        </button>
+      </div>
       <Sidebar
         liveThread={threadDetail}
         mode={sidebarMode}

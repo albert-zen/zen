@@ -5,11 +5,33 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
+import {
+  readSidebarCollapsed,
+  writeSidebarCollapsed,
+} from "../src/renderer/src/thread-list.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const { Sidebar } = await import("../src/renderer/src/Sidebar.js");
 
 const noop = () => undefined;
+
+test("sidebar collapsed preference round-trips through storage", () => {
+  let value: string | null = null;
+  const storage = {
+    getItem: () => value,
+    setItem: (_key: string, next: string) => {
+      value = next;
+    },
+  };
+
+  assert.equal(readSidebarCollapsed(storage), false);
+  writeSidebarCollapsed(storage, true);
+  assert.equal(value, "true");
+  assert.equal(readSidebarCollapsed(storage), true);
+  writeSidebarCollapsed(storage, false);
+  assert.equal(value, "false");
+  assert.equal(readSidebarCollapsed(storage), false);
+});
 
 test("collapsed Projects remain recoverable without an Archived scope", async () => {
   const dom = new JSDOM(

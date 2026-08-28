@@ -130,6 +130,9 @@ function createWindow(): BrowserWindow {
     minHeight: 560,
     show: false,
     backgroundColor: "#0b0d10",
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" as const }
+      : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,

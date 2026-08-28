@@ -104,6 +104,19 @@ export function writeSidebarMode(
   storage.setItem("zenx-sidebar-mode", mode);
 }
 
+export function readSidebarCollapsed(
+  storage: Pick<SidebarStorage, "getItem">,
+): boolean {
+  return storage.getItem("zenx-sidebar-collapsed") === "true";
+}
+
+export function writeSidebarCollapsed(
+  storage: Pick<SidebarStorage, "setItem">,
+  collapsed: boolean,
+): void {
+  storage.setItem("zenx-sidebar-collapsed", String(collapsed));
+}
+
 export function threadHasActiveTurn(
   thread: NativeThreadSummary,
   liveThread: Thread | null,
