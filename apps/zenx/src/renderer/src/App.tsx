@@ -208,6 +208,11 @@ export function App() {
     opener?.focus();
   }, []);
 
+  const sidebarVisible = compactLayout
+    ? sidebarOpen
+    : !isMacPlatform || !sidebarCollapsed;
+  const sidebarHidden = !sidebarVisible;
+
   useEffect(() => {
     const updateCompactLayout = () =>
       setCompactLayout(window.innerWidth <= COMPACT_LAYOUT_MAX_WIDTH);
@@ -972,11 +977,6 @@ export function App() {
       setThreadLifecycleBusy(false);
     }
   };
-
-  const sidebarVisible = compactLayout
-    ? sidebarOpen
-    : !isMacPlatform || !sidebarCollapsed;
-  const sidebarHidden = !sidebarVisible;
 
   return (
     <div
