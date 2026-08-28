@@ -252,7 +252,7 @@ a:focus-visible {
   .sidebar-collapsed .page-header {
     padding-left: 122px;
   }
-  .app-shell .sidebar-header {
+  .app-shell.mac-titlebar .sidebar-header {
     padding-top: 44px;
   }
 }

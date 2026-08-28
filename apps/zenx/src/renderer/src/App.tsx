@@ -939,7 +939,7 @@ export function App() {
 
   return (
     <div
-      className={`app-shell${isMacPlatform && sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      className={`app-shell${isMacPlatform ? " mac-titlebar" : ""}${isMacPlatform && sidebarCollapsed ? " sidebar-collapsed" : ""}`}
     >
       {isMacPlatform ? (
         <div className="window-titlebar">

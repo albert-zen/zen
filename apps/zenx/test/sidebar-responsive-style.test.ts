@@ -96,7 +96,11 @@ test("desktop sidebar collapse hides the panel and reserves the native title bar
   );
   assert.match(
     desktop,
-    /\.app-shell \.sidebar-header\s*\{[^}]*padding-top: 44px;/su,
+    /\.app-shell\.mac-titlebar \.sidebar-header\s*\{[^}]*padding-top: 44px;/su,
+  );
+  assert.doesNotMatch(
+    desktop,
+    /(?<!mac-titlebar)\.app-shell \.sidebar-header\s*\{[^}]*padding-top: 44px;/su,
   );
   assert.match(
     desktop,
@@ -118,5 +122,6 @@ test("title-bar DOM and collapsed classes are gated to macOS", async () => {
     app,
     /isMacPlatform && sidebarCollapsed \? " sidebar-collapsed" : ""/u,
   );
+  assert.match(app, /isMacPlatform \? " mac-titlebar" : ""/u);
   assert.match(app, /if \(!isMacPlatform\) return false;/u);
 });
