@@ -121,9 +121,6 @@ export function ComposerModelMenu({
           setPanel("root");
         }}
       >
-        <span className="provider-mark generic" aria-hidden="true">
-          ◇
-        </span>
         <span>{switching ? "Changing…" : currentSelectionLabel}</span>
         <Icon name="chevron-down" size={12} />
       </button>

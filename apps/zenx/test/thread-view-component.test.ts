@@ -107,6 +107,47 @@ test("assistant messages omit the identity row while preserving metadata and con
   assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
 });
 
+test("message controls are Turn-backed, accessible, and stable while hovering", () => {
+  const html = renderTurns([
+    turnWithItems(
+      "completed",
+      [user("Copy this *raw* Markdown"), agent("Answer")],
+      1_000,
+    ),
+  ]);
+
+  assert.match(html, /class="message-actions user-message-actions"/u);
+  assert.match(html, /aria-label="Copy user message"/u);
+  assert.match(html, /class="message-time"[^>]*>Completed /u);
+  assert.match(html, /class="message-actions assistant-message-actions"/u);
+  assert.match(html, /aria-label="Copy assistant message"/u);
+  assert.match(html, /class="message-time"[^>]*>Completed /u);
+  assert.equal((html.match(/class="message-time"/gu) ?? []).length, 2);
+});
+
+test("running Turns do not invent a completion timestamp in message controls", () => {
+  const html = renderTurns([
+    turnWithItems("inProgress", [user("Still running"), agent("Partial")]),
+  ]);
+
+  assert.match(html, /class="message-actions user-message-actions"/u);
+  assert.doesNotMatch(html, /class="message-time"/u);
+  assert.match(html, /aria-label="Copy user message"/u);
+});
+
+test("reasoning detail uses the safe Markdown renderer", async () => {
+  await withDom(async (root) => {
+    const row = await openReasoningRow(
+      root,
+      reasoningItem("reasoning-markdown", ["Reasoning"], ["**bold**\n\n`code`"]),
+    );
+    await act(async () => requiredButton(".trace-item-toggle").click());
+    const detail = requiredElement(".trace-detail");
+    assert.match(detail.innerHTML, /<strong>bold<\/strong>/u);
+    assert.match(detail.innerHTML, /<code>code<\/code>/u);
+  });
+});
+
 test("renders compact token-weighted cache usage for the Thread and each Turn", () => {
   const html = renderTurns(
     [

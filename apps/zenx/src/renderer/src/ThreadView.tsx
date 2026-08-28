@@ -503,6 +503,7 @@ function TurnBlock({
             key={item.id}
             onOpenImage={onOpenImage}
             onReadAttachment={onReadAttachment}
+            turn={turn}
           />
         ) : (
           <WakeupCard entry={wakeup} key={item.id} />
@@ -536,18 +537,20 @@ function TurnBlock({
             <DisplayNode
               key={node.kind === "agent" ? node.item.id : node.id}
               node={node}
+              turn={turn}
+              usage={usage}
               pluginSnapshot={pluginSnapshot}
               pluginUiRegistry={pluginUiRegistry}
             />
           ))}
           {!complete && projection.finalItem !== null ? (
-            <AgentMessage item={projection.finalItem} />
+            <AgentMessage item={projection.finalItem} turn={turn} usage={usage} />
           ) : null}
         </div>
       ) : null}
       {complete && projection.finalItem !== null ? (
         <div className="turn-final">
-          <AgentMessage item={projection.finalItem} />
+          <AgentMessage item={projection.finalItem} turn={turn} usage={usage} />
         </div>
       ) : projection.terminalFallback === null ? null : (
         <div className="turn-terminal" role="status">
@@ -576,15 +579,19 @@ function formatTokenCount(value: number): string {
 
 function DisplayNode({
   node,
+  turn,
+  usage,
   pluginSnapshot,
   pluginUiRegistry,
 }: {
   node: TurnDisplayNode;
+  turn: Turn;
+  usage?: ModelUsageAggregate;
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
   return node.kind === "agent" ? (
-    <AgentMessage item={node.item} />
+    <AgentMessage item={node.item} turn={turn} usage={usage} />
   ) : (
     <TraceSequence
       node={node}
@@ -747,7 +754,11 @@ function TraceDetail({
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
   if (item.type === "reasoning") {
-    return <div className="trace-detail">{reasoningContentText(item)}</div>;
+    return (
+      <div className="trace-detail trace-detail-markdown">
+        <Markdown text={reasoningContentText(item)} />
+      </div>
+    );
   }
   if (item.type !== "commandExecution") return null;
   return (
@@ -776,11 +787,13 @@ function reasoningContentText(
 function UserMessage({
   item,
   attachments,
+  turn,
   onOpenImage,
   onReadAttachment,
 }: {
   item: Extract<ThreadItem, { type: "userMessage" }>;
   attachments: readonly AttachmentRef[];
+  turn: Turn;
   onOpenImage(
     attachment: AttachmentRef,
     name: string,
@@ -807,6 +820,12 @@ function UserMessage({
         )}
         {text.length === 0 ? null : <Markdown text={text} />}
       </div>
+      <MessageActions
+        className="user-message-actions"
+        copyLabel="Copy user message"
+        text={text}
+        turn={turn}
+      />
     </article>
   );
 }
@@ -991,14 +1010,67 @@ function hasImageFiles(files: FileList): boolean {
 
 function AgentMessage({
   item,
+  turn,
+  usage,
 }: {
   item: Extract<ThreadItem, { type: "agentMessage" }>;
+  turn: Turn;
+  usage?: ModelUsageAggregate;
 }) {
   return (
     <article className="agent-copy">
       <Markdown text={item.text} />
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
+      <MessageActions
+        className="assistant-message-actions"
+        copyLabel="Copy assistant message"
+        text={item.text}
+        turn={turn}
+        usage={usage}
+      />
     </article>
+  );
+}
+
+function MessageActions({
+  className,
+  copyLabel,
+  text,
+  turn,
+  usage,
+}: {
+  className: string;
+  copyLabel: string;
+  text: string;
+  turn: Turn;
+  usage?: ModelUsageAggregate;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <div className={`message-actions ${className}`}>
+      {turn.completedAt === null ? null : (
+        <span className="message-time">
+          Completed {formatCompletedAt(turn.completedAt)}
+        </span>
+      )}
+      {usage === undefined ? null : (
+        <span className="message-cache" title="Turn cache telemetry">
+          {usageLabel(usage, "Cache")}
+        </span>
+      )}
+      <button type="button" aria-label={copyLabel} onClick={() => void copy()}>
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
   );
 }
 
@@ -1079,6 +1151,13 @@ function completedTurnLabel(turn: Turn): string {
         : "Failed";
   if (duration === null) return result;
   return `${result} for ${formatDuration(duration)}`;
+}
+
+function formatCompletedAt(seconds: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(seconds * 1_000));
 }
 
 function formatDuration(milliseconds: number): string {
