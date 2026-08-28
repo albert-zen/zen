@@ -139,6 +139,41 @@ test("message controls are Turn-backed, accessible, and stable while hovering", 
   );
 });
 
+test("Turn disclosure does not repeat cache telemetry from assistant actions", () => {
+  const html = renderTurns(
+    [turnWithItems("completed", [user("request"), agent("Done")], 1_000)],
+    [],
+    emptyComposerState(),
+    {},
+    {
+      thread: {
+        responseCount: 1,
+        inputTokens: 150,
+        cachedInputTokens: 40,
+        outputTokens: 17,
+        cacheHitRate: 0.4,
+      },
+      turns: {
+        "turn-1": {
+          responseCount: 1,
+          inputTokens: 150,
+          cachedInputTokens: 40,
+          outputTokens: 17,
+          cacheHitRate: 0.4,
+        },
+      },
+    },
+  );
+  const disclosure = html.match(
+    /<button class="turn-toggle"[\s\S]*?<\/button>/u,
+  )?.[0];
+
+  assert.ok(disclosure);
+  assert.doesNotMatch(disclosure, /Cache/u);
+  assert.equal((html.match(/Cache 40% · 150 in · 17 out/gu) ?? []).length, 1);
+  assert.doesNotMatch(html, /class="turn-usage"/u);
+});
+
 test("running Turns do not invent a completion timestamp in message controls", () => {
   const html = renderTurns([
     turnWithItems("inProgress", [user("Still running"), agent("Partial")]),
@@ -261,9 +296,8 @@ test("renders compact token-weighted cache usage for the Thread and each Turn", 
   );
 
   assert.match(html, /Thread cache 33% · 200 in · 25 out/u);
-  assert.equal((html.match(/Cache 40% · 150 in · 17 out/gu) ?? []).length, 1);
-  assert.equal((html.match(/Cache unknown · 50 in · 8 out/gu) ?? []).length, 1);
-  assert.doesNotMatch(html, /class="turn-usage"/u);
+  assert.match(html, /Cache 40% · 150 in · 17 out/u);
+  assert.match(html, /Cache unknown · 50 in · 8 out/u);
   assert.doesNotMatch(html, /Cache 0% · 50 in/u);
 });
 
