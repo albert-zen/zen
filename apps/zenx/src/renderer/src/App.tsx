@@ -87,6 +87,7 @@ type ProductPage = string;
 const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
 
 export function App() {
+  const isMacPlatform = window.zenx.platform === "darwin";
   const selectionEpoch = useRef(0);
   const newThreadPendingRef = useRef(false);
   const threadUsageLoadEpoch = useRef(0);
@@ -101,6 +102,7 @@ export function App() {
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (!isMacPlatform) return false;
     try {
       return readSidebarCollapsed(window.localStorage);
     } catch {
@@ -936,29 +938,35 @@ export function App() {
   };
 
   return (
-    <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-      <div className="window-titlebar">
-        <button
-          className="window-sidebar-toggle"
-          type="button"
-          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-controls="zenx-sidebar"
-          aria-pressed={sidebarCollapsed}
-          onClick={() => {
-            setSidebarCollapsed((collapsed) => {
-              const next = !collapsed;
-              try {
-                writeSidebarCollapsed(window.localStorage, next);
-              } catch {
-                // The preference remains valid for this window.
-              }
-              return next;
-            });
-          }}
-        >
-          <Icon name="panel-left" size={15} />
-        </button>
-      </div>
+    <div
+      className={`app-shell${isMacPlatform && sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+    >
+      {isMacPlatform ? (
+        <div className="window-titlebar">
+          <button
+            className="window-sidebar-toggle"
+            type="button"
+            aria-label={
+              sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
+            }
+            aria-controls="zenx-sidebar"
+            aria-pressed={sidebarCollapsed}
+            onClick={() => {
+              setSidebarCollapsed((collapsed) => {
+                const next = !collapsed;
+                try {
+                  writeSidebarCollapsed(window.localStorage, next);
+                } catch {
+                  // The preference remains valid for this window.
+                }
+                return next;
+              });
+            }}
+          >
+            <Icon name="panel-left" size={15} />
+          </button>
+        </div>
+      ) : null}
       <Sidebar
         liveThread={threadDetail}
         mode={sidebarMode}

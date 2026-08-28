@@ -103,3 +103,20 @@ test("desktop sidebar collapse hides the panel and reserves the native title bar
     /\.sidebar-collapsed \.workspace-header,[\s\S]*padding-left: 122px;/u,
   );
 });
+
+test("title-bar DOM and collapsed classes are gated to macOS", async () => {
+  const app = await readFile(
+    new URL("../src/renderer/src/App.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    app,
+    /const isMacPlatform = window\.zenx\.platform === "darwin";/u,
+  );
+  assert.match(app, /\{isMacPlatform \? \(/u);
+  assert.match(
+    app,
+    /isMacPlatform && sidebarCollapsed \? " sidebar-collapsed" : ""/u,
+  );
+  assert.match(app, /if \(!isMacPlatform\) return false;/u);
+});
