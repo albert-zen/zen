@@ -63,19 +63,6 @@ test("pending approvals render in the bottom zone next to the composer", () => {
   assert.match(html, /Allow once/u);
 });
 
-test("assistant messages omit the identity row while preserving metadata and content", () => {
-  const html = renderTurns([
-    turnWithItems("completed", [user("request"), agent("Final answer")], 1_000),
-  ]);
-
-  assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
-  assert.match(
-    html,
-    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
-  );
-  assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
-});
-
 test("message controls are Turn-backed, accessible, and stable while hovering", () => {
   const html = renderTurns([
     turnWithItems(
@@ -133,6 +120,19 @@ test("reasoning detail uses the safe Markdown renderer", async () => {
     assert.match(detail.innerHTML, /<strong>bold<\/strong>/u);
     assert.match(detail.innerHTML, /<code>code<\/code>/u);
   });
+});
+
+test("assistant messages omit the identity row while preserving metadata and content", () => {
+  const html = renderTurns([
+    turnWithItems("completed", [user("request"), agent("Final answer")], 1_000),
+  ]);
+
+  assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
+  assert.match(
+    html,
+    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
+  );
+  assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
 });
 
 test("renders compact token-weighted cache usage for the Thread and each Turn", () => {
