@@ -253,7 +253,7 @@ a:focus-visible {
     padding-left: 122px;
   }
   .app-shell.mac-titlebar .sidebar-header {
-    padding-top: 44px;
+    padding-top: 38px;
   }
 }
 .sidebar {
@@ -4032,7 +4032,7 @@ a:focus-visible {
     padding-left: 122px;
   }
   .app-shell.mac-titlebar .sidebar-header {
-    padding-top: 44px;
+    padding-top: 38px;
   }
   .mobile-menu {
     display: inline-grid;

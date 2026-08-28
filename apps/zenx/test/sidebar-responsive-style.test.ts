@@ -97,11 +97,11 @@ test("desktop sidebar collapse hides the panel and reserves the native title bar
   assert.match(styles, /\.workspace\s*\{[^}]*grid-column:\s*2;/su);
   assert.match(
     desktop,
-    /\.app-shell\.mac-titlebar \.sidebar-header\s*\{[^}]*padding-top: 44px;/su,
+    /\.app-shell\.mac-titlebar \.sidebar-header\s*\{[^}]*padding-top: 38px;/su,
   );
   assert.doesNotMatch(
     desktop,
-    /(?<!mac-titlebar)\.app-shell \.sidebar-header\s*\{[^}]*padding-top: 44px;/su,
+    /(?<!mac-titlebar)\.app-shell \.sidebar-header\s*\{[^}]*padding-top: 38px;/su,
   );
   assert.match(
     desktop,
@@ -125,7 +125,7 @@ test("compact macOS chrome clears the traffic lights without changing other plat
   );
   assert.match(
     mobile,
-    /\.app-shell\.mac-titlebar \.sidebar-header\s*\{[^}]*padding-top:\s*44px;/su,
+    /\.app-shell\.mac-titlebar \.sidebar-header\s*\{[^}]*padding-top:\s*38px;/su,
   );
   assert.match(mobile, /\.mobile-menu\s*\{[^}]*display:\s*inline-grid;/su);
   assert.match(
