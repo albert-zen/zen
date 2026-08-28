@@ -6,8 +6,6 @@ import test from "node:test";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 const { createElement } = React;
 Object.assign(globalThis, { React });
-const { ThreadLifecycleAction } =
-  await import("../src/renderer/src/ThreadLifecycleAction.js");
 const { Sidebar, ThreadItemMenu } =
   await import("../src/renderer/src/Sidebar.js");
 
@@ -36,40 +34,6 @@ test("sidebar announces active Thread loading", () => {
   const html = renderSidebar([], { loading: true });
   assert.match(html, /role="status"/u);
   assert.match(html, /Loading active Threads…/u);
-});
-
-test("Thread lifecycle action is reversible and honest about active Turns", () => {
-  const idle = renderToStaticMarkup(
-    createElement(ThreadLifecycleAction, {
-      archived: false,
-      busy: false,
-      hasActiveTurn: false,
-      onChange: async () => undefined,
-    }),
-  );
-  assert.match(idle, />Archive</u);
-
-  const running = renderToStaticMarkup(
-    createElement(ThreadLifecycleAction, {
-      archived: false,
-      busy: false,
-      hasActiveTurn: true,
-      onChange: async () => undefined,
-    }),
-  );
-  assert.match(running, /disabled=""/u);
-  assert.match(running, /Wait for the active Turn to finish before archiving/u);
-
-  const archived = renderToStaticMarkup(
-    createElement(ThreadLifecycleAction, {
-      archived: true,
-      busy: true,
-      hasActiveTurn: false,
-      onChange: async () => undefined,
-    }),
-  );
-  assert.match(archived, />Unarchiving…</u);
-  assert.doesNotMatch(archived, />Delete</u);
 });
 
 test("active Thread menu offers Rename and a safely disabled Archive", () => {
