@@ -135,6 +135,20 @@ test("running Turns do not invent a completion timestamp in message controls", (
   assert.match(html, /aria-label="Copy user message"/u);
 });
 
+test("terminal Turn timestamps keep their actual status", () => {
+  for (const [status, label] of [
+    ["completed", "Completed"],
+    ["interrupted", "Interrupted"],
+    ["failed", "Failed"],
+  ] as const) {
+    const html = renderTurns([
+      turnWithItems(status, [user(`${label} request`), agent(label)]),
+    ]);
+
+    assert.match(html, new RegExp(`class="message-time"[^>]*>${label} `, "u"));
+  }
+});
+
 test("reasoning detail uses the safe Markdown renderer", async () => {
   await withDom(async (root) => {
     const row = await openReasoningRow(

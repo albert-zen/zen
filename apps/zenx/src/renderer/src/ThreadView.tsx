@@ -1062,7 +1062,7 @@ function MessageActions({
           className="message-time"
           dateTime={new Date(turn.completedAt * 1_000).toISOString()}
         >
-          Completed {formatCompletedAt(turn.completedAt)}
+          {terminalTimeLabel(turn.status)} {formatCompletedAt(turn.completedAt)}
         </time>
       )}
       {usage === undefined ? null : (
@@ -1154,6 +1154,16 @@ function completedTurnLabel(turn: Turn): string {
         : "Failed";
   if (duration === null) return result;
   return `${result} for ${formatDuration(duration)}`;
+}
+
+function terminalTimeLabel(status: Turn["status"]): string {
+  return status === "completed"
+    ? "Completed"
+    : status === "interrupted"
+      ? "Interrupted"
+      : status === "failed"
+        ? "Failed"
+        : "Ended";
 }
 
 function formatCompletedAt(seconds: number): string {
