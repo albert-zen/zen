@@ -94,6 +94,7 @@ test("desktop sidebar collapse hides the panel and reserves the native title bar
     desktop,
     /\.sidebar-collapsed \.sidebar\s*\{[^}]*display: none;/su,
   );
+  assert.match(styles, /\.workspace\s*\{[^}]*grid-column:\s*2;/su);
   assert.match(
     desktop,
     /\.app-shell\.mac-titlebar \.sidebar-header\s*\{[^}]*padding-top: 44px;/su,

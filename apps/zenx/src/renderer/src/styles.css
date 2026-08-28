@@ -1020,6 +1020,7 @@ a:focus-visible {
 
 .workspace {
   position: relative;
+  grid-column: 2;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
