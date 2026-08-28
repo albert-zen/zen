@@ -1374,6 +1374,16 @@ a:focus-visible {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+.top-actions .thread-usage {
+  margin: 0;
+  font-size: 10px;
+}
+.turn-usage {
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
 .turn-toggle {
   border: 0;
   border-radius: 8px;
@@ -4302,9 +4312,6 @@ a:focus-visible {
   }
   .directory-picker-dialog > footer > div {
     flex-basis: 100%;
-  }
-  .search-thread {
-    display: none;
   }
   .messages {
     padding: 20px 14px 28px;

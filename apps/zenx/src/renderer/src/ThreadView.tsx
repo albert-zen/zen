@@ -220,18 +220,9 @@ export function ThreadView({
         }}
       >
         <div className="messages-inner">
-          {threadUsage === undefined ||
-          threadUsage.thread.responseCount === 0 ? null : (
-            <div className="thread-usage">
-              {usageLabel(threadUsage.thread, "Thread cache")}
-            </div>
-          )}
           {turns.length === 0
             ? (emptyContent ?? (
                 <div className="thread-empty">
-                  <div className="empty-glyph" aria-hidden="true">
-                    <Icon name="compose" size={20} />
-                  </div>
                   <h2>Start a new thread</h2>
                   <p>
                     Describe the outcome you want. ZenX will use this Thread’s
@@ -559,7 +550,7 @@ function TurnBlock({
   );
 }
 
-function usageLabel(usage: ModelUsageAggregate, prefix: string): string {
+export function usageLabel(usage: ModelUsageAggregate, prefix: string): string {
   const cache =
     usage.cacheHitRate === undefined
       ? `${prefix} unknown`
