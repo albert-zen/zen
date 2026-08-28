@@ -1148,6 +1148,10 @@ a:focus-visible {
   flex-wrap: nowrap;
   margin-left: auto;
 }
+.top-actions .thread-usage {
+  margin: 0;
+  font-size: 10px;
+}
 .thread-view {
   position: relative;
   min-width: 0;
@@ -1331,10 +1335,6 @@ a:focus-visible {
   color: var(--text-3);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-}
-.top-actions .thread-usage {
-  margin: 0;
-  font-size: 10px;
 }
 .turn-usage {
   color: var(--text-3);
