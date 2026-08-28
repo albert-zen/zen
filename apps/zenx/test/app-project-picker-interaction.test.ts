@@ -26,7 +26,10 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
   let addWorkspaceCalls = 0;
   let markWorkspaceCalls = 0;
   const startedWorkspaces: string[] = [];
-  const turnStarts: Array<{ clientUserMessageId?: string }> = [];
+  const turnStarts: Array<{
+    clientUserMessageId?: string;
+    input?: Array<{ type: string; text?: string }>;
+  }> = [];
   let created = false;
   const projects: ZenXProjectProjectionSnapshot = {
     projects: [
@@ -62,7 +65,12 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
     },
     request: async (method, params) => {
       if (method === "turn/start") {
-        turnStarts.push(params as { clientUserMessageId?: string });
+        turnStarts.push(
+          params as {
+            clientUserMessageId?: string;
+            input?: Array<{ type: string; text?: string }>;
+          },
+        );
         return {};
       }
       throw new Error(`Unexpected protocol request: ${method}`);
@@ -133,6 +141,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
       document.body.textContent ?? "",
       /Loading conversation/u,
     );
+    await setTextareaValue(composer, "Second message stays queued");
 
     await act(async () => {
       selectedStart.resolve(started(liveThread(), "/work/documents"));
@@ -140,6 +149,11 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
       await Promise.resolve();
     });
     await waitFor(() => turnStarts.length === 1);
+    assert.equal(turnStarts[0]?.input?.[0]?.text, "Build the documents flow");
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
+      "Second message stays queued",
+    );
     assert.equal(addWorkspaceCalls, 1);
     assert.equal(markWorkspaceCalls, 1);
   } finally {
@@ -596,6 +610,64 @@ test("first Turn starts before ancillary Project refresh completes", async () =>
     await waitFor(() => turnStarts === 1);
   } finally {
     marked.resolve(publicSettings([]));
+    await unmountApp(harness);
+  }
+});
+
+test("summary failure stays non-covering after real Thread promotion", async () => {
+  let created = false;
+  let turnStarts = 0;
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: false,
+          threadIds: [],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      startProjectThread: async (workspace) => {
+        created = true;
+        return started(liveThread(), workspace);
+      },
+      threads: async () => {
+        if (created) throw new Error("summary unavailable");
+        return [];
+      },
+      request: async (method) => {
+        if (method === "turn/start") {
+          turnStarts += 1;
+          return {};
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Keep the conversation visible");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click(),
+    );
+    await waitFor(() => turnStarts === 1);
+    assert.ok(document.querySelector("#thread-composer"));
+    assert.match(document.body.textContent ?? "", /summary unavailable/u);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /ZenX could not load data/u,
+    );
+  } finally {
     await unmountApp(harness);
   }
 });
