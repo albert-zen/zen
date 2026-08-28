@@ -130,6 +130,10 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       messages,
       n: 1,
       stream: true,
+      ...(reasoningPolicy.supportsUsageInStreaming &&
+      !Object.hasOwn(this.#defaultParams, "stream_options")
+        ? { stream_options: { include_usage: true } }
+        : {}),
       reasoning_effort: compatibleReasoningEffort({
         policy: reasoningPolicy,
         requestEffort: request.reasoningEffort,
@@ -200,6 +204,7 @@ interface CompatibleReasoningPolicy {
   replay: ReasoningReplay;
   forwardReasoningEffort: boolean;
   enableToolStream: boolean;
+  supportsUsageInStreaming: boolean;
 }
 
 function compatibleReasoningPolicy(options: {
@@ -214,6 +219,10 @@ function compatibleReasoningPolicy(options: {
   const familyModel = model.split("/").at(-1) ?? model;
   const isDashScope =
     provider.includes("dashscope") || isDashScopeHostname(endpointHostname);
+  const supportsUsageInStreaming =
+    isDashScope ||
+    provider === "deepseek" ||
+    isDeepSeekHostname(endpointHostname);
   const isZhipu =
     provider.includes("zhipu") || endpointHostname.endsWith(".bigmodel.cn");
 
@@ -225,6 +234,7 @@ function compatibleReasoningPolicy(options: {
           : "all-assistant",
       forwardReasoningEffort: true,
       enableToolStream: false,
+      supportsUsageInStreaming,
     };
   }
 
@@ -239,6 +249,7 @@ function compatibleReasoningPolicy(options: {
           : "tool-calls",
       forwardReasoningEffort: isDashScope || isZhipu,
       enableToolStream: true,
+      supportsUsageInStreaming,
     };
   }
 
@@ -247,6 +258,7 @@ function compatibleReasoningPolicy(options: {
       replay: "tool-calls",
       forwardReasoningEffort: false,
       enableToolStream: false,
+      supportsUsageInStreaming,
     };
   }
 
@@ -254,6 +266,7 @@ function compatibleReasoningPolicy(options: {
     replay: "all-assistant",
     forwardReasoningEffort: true,
     enableToolStream: false,
+    supportsUsageInStreaming,
   };
 }
 
@@ -289,6 +302,10 @@ function isDashScopeHostname(hostname: string): boolean {
     labels[3] === "aliyuncs" &&
     labels[4] === "com"
   );
+}
+
+function isDeepSeekHostname(hostname: string): boolean {
+  return hostname === "api.deepseek.com";
 }
 
 function zhipuPreservedThinking(

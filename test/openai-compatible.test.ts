@@ -441,6 +441,69 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
   );
 });
 
+test("requests streaming usage for known DeepSeek and DashScope endpoints", async (t) => {
+  for (const scenario of [
+    {
+      name: "direct DeepSeek provider",
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-chat",
+    },
+    {
+      name: "DashScope hostname",
+      provider: "custom-provider",
+      baseUrl:
+        "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      model: "deepseek-v3",
+    },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const body = await captureRequestBody({ ...scenario, messages: [] });
+      assert.deepEqual(body.stream_options, { include_usage: true });
+    });
+  }
+});
+
+test("does not infer streaming usage support from a DeepSeek-looking model name", async () => {
+  const body = await captureRequestBody({
+    provider: "custom-provider",
+    baseUrl: "https://unknown-proxy.test/v1",
+    model: "deepseek-chat",
+    messages: [],
+  });
+
+  assert.equal("stream_options" in body, false);
+});
+
+test("parses DashScope terminal usage chunk with empty choices", async () => {
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    apiKey: fakeKey,
+    provider: "dashscope",
+    fetch: (async () =>
+      streamResponse([
+        chunk({
+          choices: [],
+          usage: {
+            prompt_tokens: 13,
+            completion_tokens: 5,
+            prompt_tokens_details: { cached_tokens: 8 },
+          },
+        }),
+        "[DONE]",
+      ])) as typeof fetch,
+  });
+
+  assert.deepEqual(await collect(adapter.stream(request())), [
+    {
+      type: "usage",
+      inputTokens: 13,
+      cachedInputTokens: 8,
+      outputTokens: 5,
+    },
+  ]);
+});
+
 test("removes configured tools when a request exposes no tools", async () => {
   let capturedBody: Readonly<Record<string, unknown>> = {};
   const adapter = new OpenAiCompatibleModel({
