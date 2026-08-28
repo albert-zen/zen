@@ -72,7 +72,7 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
       ),
     );
     const trigger = requiredButton(".composer-model-trigger");
-    assert.equal(trigger.textContent?.trim(), "◇Alpha Text Medium");
+    assert.equal(trigger.textContent?.trim(), "Alpha Text Medium");
     await act(async () => trigger.click());
     assert.equal(trigger.getAttribute("aria-expanded"), "true");
     const tools = requiredElement<HTMLElement>(".composer-tools");
