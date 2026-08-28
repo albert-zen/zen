@@ -140,7 +140,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
       await Promise.resolve();
     });
     await waitFor(() => turnStarts.length === 1);
-    assert.equal(addWorkspaceCalls, 0);
+    assert.equal(addWorkspaceCalls, 1);
     assert.equal(markWorkspaceCalls, 1);
   } finally {
     await unmountApp(harness);
@@ -505,6 +505,97 @@ test("New thread without a last-used Project opens an unselected draft menu", as
     );
     assert.equal(document.activeElement, trigger);
   } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("same-leaf Projects show their parent paths in the draft chooser", async () => {
+  const harness = await mountApp({
+    projects: [
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: false,
+        threadIds: [],
+      },
+      {
+        key: "/tmp/zen",
+        workspace: "/tmp/zen",
+        configured: true,
+        isDefault: false,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  });
+  try {
+    await act(async () => exactButton("Choose project")?.click());
+    const menu = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        '[role="menu"][aria-label="Choose a Project"]',
+      ),
+    );
+    assert.match(menu.textContent ?? "", /zen — \/work/u);
+    assert.match(menu.textContent ?? "", /zen — \/tmp/u);
+    const tmp = Array.from(
+      menu.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    ).find((button) => button.getAttribute("aria-label")?.includes("/tmp/zen"));
+    assert.ok(tmp);
+    await act(async () => tmp.click());
+    assert.match(
+      document.body.textContent ?? "",
+      /What should we build in zen — \/tmp\?/u,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("first Turn starts before ancillary Project refresh completes", async () => {
+  const marked = deferred<ReturnType<typeof publicSettings>>();
+  let turnStarts = 0;
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: false,
+          threadIds: [],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      markWorkspaceUsed: async () => marked.promise,
+      startProjectThread: async (workspace) => started(liveThread(), workspace),
+      request: async (method) => {
+        if (method === "turn/start") {
+          turnStarts += 1;
+          return {};
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Start promptly");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click(),
+    );
+    await waitFor(() => turnStarts === 1);
+  } finally {
+    marked.resolve(publicSettings([]));
     await unmountApp(harness);
   }
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
@@ -25,6 +25,7 @@ import type {
   ServerNotificationParams,
   Thread,
 } from "../../protocol-client/index.js";
+import { decodeModelKey } from "../../../../../src/protocol/codex/model-key.js";
 import {
   addApprovalRequest,
   markApprovalResponding,
@@ -87,6 +88,7 @@ type ProductPage = string;
 const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
 
 interface NewThreadDraft {
+  id: string;
   workspace: string | null;
   composer: ComposerState;
 }
@@ -95,6 +97,12 @@ export function App() {
   const selectionEpoch = useRef(0);
   const newThreadPendingRef = useRef(false);
   const newThreadDraftRef = useRef<NewThreadDraft | null>(null);
+  const newThreadPromotionsRef = useRef(new Map<string, string>());
+  const projectPickerOperationEpoch = useRef(0);
+  const projectPickerPendingRef = useRef(false);
+  const projectPickerIntentRef = useRef<"add-project" | "new-thread" | null>(
+    null,
+  );
   const threadUsageLoadEpoch = useRef(0);
   const threadSummaryLoadEpoch = useRef(0);
   const projectLoadEpoch = useRef(0);
@@ -221,6 +229,20 @@ export function App() {
     setNewThreadDraft(draft);
   };
 
+  const openProjectPicker = (intent: "add-project" | "new-thread") => {
+    projectPickerOperationEpoch.current += 1;
+    projectPickerPendingRef.current = false;
+    projectPickerIntentRef.current = intent;
+    setProjectPickerIntent(intent);
+  };
+
+  const closeProjectPicker = () => {
+    projectPickerOperationEpoch.current += 1;
+    projectPickerPendingRef.current = false;
+    projectPickerIntentRef.current = null;
+    setProjectPickerIntent(null);
+  };
+
   const abandonNewThreadDraft = () => {
     if (newThreadDraftRef.current === null) return;
     selectionEpoch.current += 1;
@@ -296,6 +318,27 @@ export function App() {
     } catch (error) {
       if (projectLoadEpoch.current === epoch)
         setProjectError(describeError(error));
+    }
+  };
+
+  const selectProjectDirectory = async (workspace: string) => {
+    const intent = projectPickerIntentRef.current;
+    if (intent === null || projectPickerPendingRef.current) return;
+    projectPickerPendingRef.current = true;
+    const epoch = projectPickerOperationEpoch.current;
+    try {
+      await window.zenx.settings.addWorkspace(workspace);
+      if (projectPickerOperationEpoch.current !== epoch) return;
+      await loadProjects();
+      if (projectPickerOperationEpoch.current !== epoch) return;
+      closeProjectPicker();
+      if (intent === "new-thread") openNewThreadDraft(workspace);
+    } catch (error) {
+      if (projectPickerOperationEpoch.current === epoch)
+        setRequestError(describeError(error));
+    } finally {
+      if (projectPickerOperationEpoch.current === epoch)
+        projectPickerPendingRef.current = false;
     }
   };
 
@@ -543,7 +586,7 @@ export function App() {
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (projectPickerIntent !== null) setProjectPickerIntent(null);
+      if (projectPickerIntent !== null) closeProjectPicker();
       else if (workspaceOpen) setWorkspaceOpen(false);
       else if (sidebarOpen) setSidebarOpen(false);
     };
@@ -590,7 +633,7 @@ export function App() {
 
   const openNewThreadDraft = (workspace?: string) => {
     if (workspace === undefined && configuredProjects.length === 0) {
-      setProjectPickerIntent("new-thread");
+      openProjectPicker("new-thread");
       return;
     }
     const selectedWorkspace = workspace ?? lastUsedWorkspace;
@@ -609,6 +652,7 @@ export function App() {
     setThreadError(null);
     setModelUpdateError(null);
     confirmNewThreadDraft({
+      id: crypto.randomUUID(),
       workspace: selectedWorkspace,
       composer: emptyComposerState(),
     });
@@ -639,6 +683,21 @@ export function App() {
       setComposerStates(composerStatesRef.current);
     }
     return next;
+  };
+
+  const updateNewThreadComposer = (
+    draftId: string,
+    update: (state: ComposerState) => ComposerState,
+  ) => {
+    if (newThreadDraftRef.current?.id === draftId) {
+      updateNewThreadDraft((draft) => ({
+        ...draft,
+        composer: update(draft.composer),
+      }));
+      return;
+    }
+    const threadId = newThreadPromotionsRef.current.get(draftId);
+    if (threadId !== undefined) updateComposer(threadId, update);
   };
 
   const deliverComposerSubmission = async (
@@ -756,26 +815,30 @@ export function App() {
     newThreadPendingRef.current = true;
     setNewThreadPending(true);
     const epoch = selectionEpoch.current;
+    const draftId = current.id;
     let createdThreadId: string | null = null;
     try {
+      await window.zenx.settings.addWorkspace(workspace);
       const result = await window.zenx.projects.startThread(workspace);
       createdThreadId = result.thread.id;
+      newThreadPromotionsRef.current.set(draftId, createdThreadId);
+      const activeDraft = newThreadDraftRef.current;
+      const promotedComposer =
+        activeDraft?.id === draftId &&
+        activeDraft.composer.submission?.clientUserMessageId ===
+          submission.clientUserMessageId
+          ? activeDraft.composer
+          : startedComposer;
       const promotedStates = {
         ...composerStatesRef.current,
-        [createdThreadId]: startedComposer,
+        [createdThreadId]: promotedComposer,
       };
       composerStatesRef.current = promotedStates;
       setComposerStates(promotedStates);
-      try {
-        await window.zenx.settings.markWorkspaceUsed(workspace);
-      } catch (error) {
-        setRequestError(describeError(error));
-      }
-      await loadThreadSummaries();
-      await loadProjects();
       const stillCurrent =
         selectionEpoch.current === epoch &&
-        newThreadDraftRef.current?.composer.submission?.clientUserMessageId ===
+        activeDraft?.id === draftId &&
+        activeDraft.composer.submission?.clientUserMessageId ===
           submission.clientUserMessageId;
       if (stillCurrent) {
         selectedThreadIdRef.current = createdThreadId;
@@ -787,6 +850,14 @@ export function App() {
         setSelectedSettings(settingsFromSnapshot(createdThreadId, result));
         confirmNewThreadDraft(null);
       }
+      void window.zenx.settings
+        .markWorkspaceUsed(workspace)
+        .then(async () => await loadProjects())
+        .catch((error: unknown) => {
+          if (selectedThreadIdRef.current === createdThreadId)
+            setRequestError(describeError(error));
+        });
+      void loadThreadSummaries();
       await deliverComposerSubmission(createdThreadId, submission);
       updateComposer(createdThreadId, (state) =>
         acceptComposerSubmission(state, submission.clientUserMessageId),
@@ -821,8 +892,6 @@ export function App() {
               message,
             ),
           }));
-        } else {
-          setRequestError(`New thread failed: ${message}`);
         }
       } else {
         updateComposer(createdThreadId, (state) =>
@@ -979,6 +1048,7 @@ export function App() {
   };
 
   const openPage = (next: ProductPage) => {
+    if (projectPickerIntentRef.current !== null) closeProjectPicker();
     if (next !== "agent") abandonNewThreadDraft();
     setPage(next);
     setSidebarOpen(false);
@@ -1151,7 +1221,7 @@ export function App() {
         onNewThread={(workspace) => {
           openNewThreadDraft(workspace);
         }}
-        onAddProject={() => setProjectPickerIntent("add-project")}
+        onAddProject={() => openProjectPicker("add-project")}
         newThreadDisabled={newThreadPending}
         onRemoveProject={(workspace) => {
           void window.zenx.settings
@@ -1237,6 +1307,7 @@ export function App() {
             onNewThreadProjectChange={(workspace) => {
               setModelUpdateError(null);
               updateNewThreadDraft((current) => ({
+                ...current,
                 workspace,
                 composer: {
                   ...current.composer,
@@ -1261,6 +1332,8 @@ export function App() {
               );
             }}
             onImportNewThreadImages={async (files) => {
+              const draftId = newThreadDraftRef.current?.id;
+              if (draftId === undefined) return;
               const imports = await Promise.all(
                 files.map(async (file) => ({
                   name: file.name,
@@ -1269,10 +1342,9 @@ export function App() {
                 })),
               );
               const images = await window.zenx.imageAttachments.import(imports);
-              updateNewThreadDraft((current) => ({
-                ...current,
-                composer: addComposerImages(current.composer, images),
-              }));
+              updateNewThreadComposer(draftId, (state) =>
+                addComposerImages(state, images),
+              );
             }}
             onPickImages={async (threadId) => {
               const images = await window.zenx.imageAttachments.pick();
@@ -1281,11 +1353,12 @@ export function App() {
               );
             }}
             onPickNewThreadImages={async () => {
+              const draftId = newThreadDraftRef.current?.id;
+              if (draftId === undefined) return;
               const images = await window.zenx.imageAttachments.pick();
-              updateNewThreadDraft((current) => ({
-                ...current,
-                composer: addComposerImages(current.composer, images),
-              }));
+              updateNewThreadComposer(draftId, (state) =>
+                addComposerImages(state, images),
+              );
             }}
             onRemoveImage={(threadId, imageId) =>
               updateComposer(threadId, (state) =>
@@ -1316,7 +1389,7 @@ export function App() {
               (project) => project.configured,
             )}
             hasLastUsedProject={lastUsedWorkspace !== null}
-            onAddProject={() => setProjectPickerIntent("add-project")}
+            onAddProject={() => openProjectPicker("add-project")}
             onNewThread={() => {
               openNewThreadDraft();
             }}
@@ -1370,29 +1443,8 @@ export function App() {
       ) : null}
       {projectPickerIntent !== null ? (
         <DirectoryPicker
-          onCancel={() => setProjectPickerIntent(null)}
-          onSelect={(workspace) => {
-            if (projectPickerIntent === "new-thread") {
-              void window.zenx.settings
-                .addWorkspace(workspace)
-                .then(async () => {
-                  await loadProjects();
-                  setProjectPickerIntent(null);
-                  openNewThreadDraft(workspace);
-                })
-                .catch((error: unknown) =>
-                  setRequestError(describeError(error)),
-                );
-              return;
-            }
-            void window.zenx.settings
-              .addWorkspace(workspace)
-              .then(async () => {
-                await loadProjects();
-                setProjectPickerIntent(null);
-              })
-              .catch((error: unknown) => setRequestError(describeError(error)));
-          }}
+          onCancel={closeProjectPicker}
+          onSelect={(workspace) => void selectProjectDirectory(workspace)}
         />
       ) : null}
     </div>
@@ -1519,7 +1571,9 @@ function AgentSurface({
   const draftProjectLabel =
     newThreadDraft?.workspace === null || newThreadDraft === null
       ? null
-      : projectLabel(newThreadDraft.workspace);
+      : draftProject === undefined
+        ? projectLabel(newThreadDraft.workspace)
+        : projectDisplayLabel(draftProject.workspace, configuredProjects);
   const draftProjectError =
     newThreadDraft?.workspace !== null &&
     newThreadDraft !== null &&
@@ -1800,6 +1854,7 @@ function NewThreadProjectSelector({
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef(false);
   const selectedProject = projects.find(
     (project) => project.workspace === selectedWorkspace,
   );
@@ -1808,15 +1863,21 @@ function NewThreadProjectSelector({
       ? "Choose a Project"
       : selectedProject === undefined
         ? `${projectLabel(selectedWorkspace)} unavailable`
-        : projectLabel(selectedProject.workspace);
+        : projectDisplayLabel(selectedProject.workspace, projects);
 
-  const closeAndRestoreFocus = () => {
+  const closeMenu = (restoreFocus: boolean) => {
+    restoreFocusRef.current = restoreFocus;
     setOpen(false);
-    queueMicrotask(() => triggerRef.current?.focus());
   };
 
+  useLayoutEffect(() => {
+    if (open || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    triggerRef.current?.focus();
+  }, [open]);
+
   useEffect(() => {
-    if (disabled && open) setOpen(false);
+    if (disabled && open) closeMenu(false);
   }, [disabled, open]);
 
   useEffect(() => {
@@ -1835,12 +1896,13 @@ function NewThreadProjectSelector({
     queueMicrotask(focusSelected);
     const onPointerDown = (event: PointerEvent) => {
       if (rootRef.current?.contains(event.target as Node)) return;
-      setOpen(false);
+      const focusWasInMenu = menuRef.current?.contains(document.activeElement);
+      closeMenu(Boolean(focusWasInMenu && !isFocusableTarget(event.target)));
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      closeAndRestoreFocus();
+      closeMenu(true);
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -1854,6 +1916,11 @@ function NewThreadProjectSelector({
     <div className="new-thread-project-context" ref={rootRef}>
       <div
         className="new-thread-project-current"
+        aria-label={
+          selectedWorkspace === null
+            ? "No Project selected"
+            : `Selected Project: ${selectedWorkspace}`
+        }
         title={selectedWorkspace ?? undefined}
       >
         <Icon name="folder" size={13} />
@@ -1866,8 +1933,13 @@ function NewThreadProjectSelector({
         aria-controls={open ? "new-thread-project-menu" : undefined}
         aria-expanded={open}
         aria-haspopup="menu"
+        aria-label={
+          selectedWorkspace === null
+            ? "Choose a Project"
+            : `Change Project. Current Project: ${selectedWorkspace}`
+        }
         disabled={disabled}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => (open ? closeMenu(false) : setOpen(true))}
       >
         Change Project
         <Icon name="chevron-down" size={12} />
@@ -1880,6 +1952,10 @@ function NewThreadProjectSelector({
           role="menu"
           aria-label="Choose a Project"
           onKeyDown={(event) => {
+            if (event.key === "Tab") {
+              closeMenu(false);
+              return;
+            }
             if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
               return;
             const options = Array.from(
@@ -1915,14 +1991,15 @@ function NewThreadProjectSelector({
                 type="button"
                 role="menuitemradio"
                 aria-checked={selected}
+                aria-label={`${selected ? "Selected Project" : "Select Project"}: ${project.workspace}`}
                 title={project.workspace}
                 onClick={() => {
                   onChange(project.workspace);
-                  closeAndRestoreFocus();
+                  closeMenu(true);
                 }}
               >
                 <Icon name="folder" size={13} />
-                <span>{projectLabel(project.workspace)}</span>
+                <span>{projectDisplayLabel(project.workspace, projects)}</span>
                 {selected ? <Icon name="check" size={13} /> : null}
               </button>
             );
@@ -2204,19 +2281,50 @@ function defaultDraftSettings(
   const model = models.find(
     (candidate) => candidate.isDefault && !candidate.hidden,
   );
-  return model === undefined
-    ? null
-    : {
-        threadId: "",
-        model: model.id,
-        modelProvider: model.model,
-        reasoningEffort: model.defaultReasoningEffort,
-      };
+  if (model === undefined) return null;
+  let modelProvider = model.model;
+  try {
+    modelProvider = decodeModelKey(model.id).providerProfileId;
+  } catch {
+    // Preserve compatibility with legacy model catalogs that used unencoded ids.
+  }
+  return {
+    threadId: "",
+    model: model.id,
+    modelProvider,
+    reasoningEffort: model.defaultReasoningEffort,
+  };
 }
 
 function projectLabel(workspace: string): string {
   const normalized = workspace.replace(/[\\/]+$/u, "");
   return normalized.split(/[\\/]/u).filter(Boolean).at(-1) ?? workspace;
+}
+
+function projectDisplayLabel(
+  workspace: string,
+  projects: readonly ZenXProjectProjectionEntry[],
+): string {
+  const leaf = projectLabel(workspace);
+  const ambiguous = projects.some(
+    (project) =>
+      project.workspace !== workspace &&
+      projectLabel(project.workspace) === leaf,
+  );
+  if (!ambiguous) return leaf;
+  const normalized = workspace.replace(/[\\/]+$/u, "");
+  const parent = normalized.replace(/[\\/][^\\/]+$/u, "") || workspace;
+  return `${leaf} — ${parent}`;
+}
+
+function isFocusableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Node) || target.nodeType !== Node.ELEMENT_NODE)
+    return false;
+  return (
+    (target as Element).closest(
+      'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    ) !== null
+  );
 }
 
 async function composerSubmissionInput(
