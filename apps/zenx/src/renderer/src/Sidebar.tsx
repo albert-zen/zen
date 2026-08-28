@@ -112,7 +112,6 @@ export function Sidebar({
     (() => Promise<void>) | null
   >(null);
   const [projectsOpen, setProjectsOpen] = useState(true);
-  const [projectChooserOpen, setProjectChooserOpen] = useState(false);
   const lastUsedProject =
     projects.lastUsedWorkspace === null
       ? undefined
@@ -208,22 +207,13 @@ export function Sidebar({
             <button
               className="new-thread-action"
               type="button"
-              aria-expanded={
-                configuredProjects.length > 0 && lastUsedProject === undefined
-                  ? projectChooserOpen
-                  : undefined
-              }
               disabled={newThreadDisabled}
               onClick={() => {
                 if (configuredProjects.length === 0) {
                   onNewThread();
                   return;
                 }
-                if (lastUsedProject !== undefined) {
-                  onNewThread(lastUsedProject.workspace);
-                  return;
-                }
-                setProjectChooserOpen((value) => !value);
+                onNewThread(lastUsedProject?.workspace);
               }}
             >
               <Icon name="compose" size={14} />
@@ -236,27 +226,6 @@ export function Sidebar({
                   : projectLabelForSidebar(lastUsedProject.workspace)}
               </small>
             </button>
-            {configuredProjects.length > 0 &&
-            lastUsedProject === undefined &&
-            projectChooserOpen ? (
-              <div className="new-thread-project-chooser">
-                {configuredProjects.map((project) => (
-                  <button
-                    key={project.key}
-                    type="button"
-                    title={project.workspace}
-                    disabled={newThreadDisabled}
-                    onClick={() => {
-                      setProjectChooserOpen(false);
-                      onNewThread(project.workspace);
-                    }}
-                  >
-                    <Icon name="folder" size={13} />
-                    <span>{projectLabelForSidebar(project.workspace)}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
           </div>
 
           <div className="sidebar-view-head">
@@ -963,7 +932,6 @@ function ProjectRows({
         >
           <Icon name="folder" size={14} />
           <span>{group.label}</span>
-          {group.isDefault ? <small>Default</small> : null}
         </button>
         {group.workspace === null || !group.configured ? null : (
           <div className="project-actions" ref={menuRef}>

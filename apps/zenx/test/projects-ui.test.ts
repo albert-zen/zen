@@ -77,5 +77,6 @@ test("configured Project exposes the recent and scoped New thread actions", asyn
   assert.match(html, /title="\/work\/zen">zen</u);
   assert.match(html, /aria-label="New thread in zen"/u);
   assert.match(html, /aria-label="More actions for zen"/u);
+  assert.doesNotMatch(html, />Default</u);
   assert.doesNotMatch(html, /aria-label="Remove zen from ZenX"/u);
 });

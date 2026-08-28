@@ -20,9 +20,23 @@ interface AppHarness {
   root: Root;
 }
 
-test("desktop Choose project opens the existing directory picker", async () => {
-  const harness = await mountApp({
+test("New thread stays local, switches Project, and creates on first Send", async () => {
+  const selectedStart = deferred<ReturnType<typeof started>>();
+  let projectReads = 0;
+  let addWorkspaceCalls = 0;
+  let markWorkspaceCalls = 0;
+  const startedWorkspaces: string[] = [];
+  const turnStarts: Array<{ clientUserMessageId?: string }> = [];
+  let created = false;
+  const projects: ZenXProjectProjectionSnapshot = {
     projects: [
+      {
+        key: "/work/documents",
+        workspace: "/work/documents",
+        configured: true,
+        isDefault: false,
+        threadIds: [],
+      },
       {
         key: "/work/zen",
         workspace: "/work/zen",
@@ -32,186 +46,112 @@ test("desktop Choose project opens the existing directory picker", async () => {
       },
     ],
     unavailableThreadIds: [],
-    lastUsedWorkspace: null,
-  });
-  try {
-    const chooseProject = await waitFor(() => exactButton("Choose project"));
-    await act(async () => chooseProject.click());
-    await waitFor(() => document.querySelector('[role="dialog"]'));
-    assert.match(
-      document.querySelector('[role="dialog"]')?.textContent ?? "",
-      /Add a project folder/u,
-    );
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-test("zero-Project New thread opens the existing directory picker", async () => {
-  const startedWorkspaces: string[] = [];
-  const harness = await mountApp(
-    {
-      projects: [],
-      unavailableThreadIds: [],
-      lastUsedWorkspace: null,
-    },
-    {
-      startProjectThread: async (workspace) => {
-        startedWorkspaces.push(workspace);
-        return started(liveThread(), workspace);
-      },
-    },
-  );
-  try {
-    const newThread = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(".new-thread-action"),
-    );
-    assert.match(newThread.textContent ?? "", /Add project first/u);
-    await act(async () => newThread.click());
-    await waitFor(() => document.querySelector('[role="dialog"]'));
-    assert.match(
-      document.querySelector('[role="dialog"]')?.textContent ?? "",
-      /Add a project folder/u,
-    );
-    await act(async () => exactButton("Add folder")?.click());
-    await waitFor(() => startedWorkspaces.length === 1);
-    assert.deepEqual(startedWorkspaces, ["/"]);
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-test("Project quick-create keeps the clicked workspace authoritative and fences duplicate starts", async () => {
-  const selectedWorkspace = "/work/documents";
-  const startResponse = deferred<ReturnType<typeof started>>();
-  const scopedStarts: string[] = [];
-  const genericStarts: unknown[] = [];
-  const projects: ZenXProjectProjectionSnapshot = {
-    projects: [
-      {
-        key: "/work/documents",
-        workspace: selectedWorkspace,
-        configured: true,
-        isDefault: false,
-        threadIds: [],
-      },
-      {
-        key: "/work",
-        workspace: "/work",
-        configured: true,
-        isDefault: true,
-        threadIds: [],
-      },
-    ],
-    unavailableThreadIds: [],
-    lastUsedWorkspace: "/work",
+    lastUsedWorkspace: "/work/zen",
   };
   const harness = await mountApp(projects, {
-    startProjectThread: async (workspace) => {
-      scopedStarts.push(workspace);
-      return await startResponse.promise;
+    addWorkspace: async () => {
+      addWorkspaceCalls += 1;
+    },
+    markWorkspaceUsed: async () => {
+      markWorkspaceCalls += 1;
+      return publicSettings([]);
+    },
+    projectsGet: async () => {
+      projectReads += 1;
+      return projects;
     },
     request: async (method, params) => {
-      if (method === "thread/start") {
-        genericStarts.push(params);
-        return await startResponse.promise;
+      if (method === "turn/start") {
+        turnStarts.push(params as { clientUserMessageId?: string });
+        return {};
       }
       throw new Error(`Unexpected protocol request: ${method}`);
     },
-  });
-  try {
-    const createInDocuments = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(
-        '[aria-label="New thread in documents"]',
-      ),
-    );
-    await act(async () => {
-      createInDocuments.click();
-      createInDocuments.click();
-      await Promise.resolve();
-    });
-
-    await waitFor(() => scopedStarts.length + genericStarts.length === 1);
-    assert.deepEqual(scopedStarts, [selectedWorkspace]);
-    assert.deepEqual(genericStarts, []);
-    assert.equal(createInDocuments.disabled, true);
-    assert.equal(
-      document.querySelector<HTMLButtonElement>(".new-thread-action")?.disabled,
-      true,
-    );
-
-    await act(async () => {
-      startResponse.resolve(started(liveThread(), selectedWorkspace));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-test("successful Project quick-create commits profile, summaries, and projection before settling", async () => {
-  const workspace = "/work/zen";
-  const profileCommit = deferred<ReturnType<typeof publicSettings>>();
-  let committed = false;
-  let starts = 0;
-  const emptyProjects: ZenXProjectProjectionSnapshot = {
-    projects: [
-      {
-        key: workspace,
-        workspace,
-        configured: true,
-        isDefault: true,
-        threadIds: [],
-      },
-    ],
-    unavailableThreadIds: [],
-    lastUsedWorkspace: workspace,
-  };
-  const populatedProjects: ZenXProjectProjectionSnapshot = {
-    ...emptyProjects,
-    projects: [{ ...emptyProjects.projects[0]!, threadIds: ["thread-1"] }],
-  };
-  const harness = await mountApp(emptyProjects, {
-    markWorkspaceUsed: async () => {
-      const result = await profileCommit.promise;
-      committed = true;
-      return result;
-    },
-    projectsGet: async () => (committed ? populatedProjects : emptyProjects),
-    startProjectThread: async () => {
-      starts += 1;
-      return started(liveThread(), workspace);
+    startProjectThread: async (workspace) => {
+      startedWorkspaces.push(workspace);
+      const value = await selectedStart.promise;
+      created = true;
+      return value;
     },
     threads: async (archived) =>
-      !archived && committed ? [summary(false)] : [],
+      !archived && created
+        ? [summary(false, "thread-1", "Thread one", "/work/documents")]
+        : [],
   });
   try {
-    const create = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(
-        '[aria-label="New thread in zen"]',
-      ),
+    await waitFor(() => projectReads > 0);
+    const readsBeforeDraft = projectReads;
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
     );
-    await act(async () => create.click());
-    await waitFor(() => starts === 1);
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /What should we build in zen\?/u,
+    );
+    assert.deepEqual(startedWorkspaces, []);
+    assert.equal(addWorkspaceCalls, 0);
+    assert.equal(markWorkspaceCalls, 0);
+    assert.equal(projectReads, readsBeforeDraft);
+
+    await act(async () => exactButton("Change Project")?.click());
+    const documents = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      ).find((button) => button.textContent?.includes("documents")),
+    );
+    await act(async () => documents.click());
+    assert.match(
+      document.body.textContent ?? "",
+      /What should we build in documents\?/u,
+    );
+    assert.deepEqual(startedWorkspaces, []);
+    assert.equal(addWorkspaceCalls, 0);
+    assert.equal(markWorkspaceCalls, 0);
+    assert.equal(projectReads, readsBeforeDraft);
+
+    await setTextareaValue(composer, "Build the documents flow");
+    const send = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    await act(async () => exactButton("Change Project")?.click());
+    await waitFor(() =>
+      document.querySelector('[role="menu"][aria-label="Choose a Project"]'),
+    );
+    await invokeButtonClick(send, 2);
+    await waitFor(() => startedWorkspaces.length === 1);
+    assert.deepEqual(startedWorkspaces, ["/work/documents"]);
+    assert.equal(turnStarts.length, 0);
     assert.equal(
-      document.querySelector(".project-group .thread-row-shell"),
+      document.querySelector('[role="menu"][aria-label="Choose a Project"]'),
       null,
+    );
+    assert.equal(exactButton("Change Project")?.disabled, true);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Loading conversation/u,
     );
 
     await act(async () => {
-      profileCommit.resolve(publicSettings([]));
+      selectedStart.resolve(started(liveThread(), "/work/documents"));
+      await Promise.resolve();
       await Promise.resolve();
     });
-    await waitFor(() =>
-      document.querySelector(".project-group .thread-row-shell"),
-    );
+    await waitFor(() => turnStarts.length === 1);
+    assert.equal(addWorkspaceCalls, 0);
+    assert.equal(markWorkspaceCalls, 1);
   } finally {
     await unmountApp(harness);
   }
 });
 
-test("New thread failure stays visible on Settings and retries in place", async () => {
+test("abandoning an untouched new-thread draft performs no Project mutation", async () => {
+  let projectReads = 0;
+  let addWorkspaceCalls = 0;
+  let markWorkspaceCalls = 0;
+  let starts = 0;
   const projects: ZenXProjectProjectionSnapshot = {
     projects: [
       {
@@ -225,47 +165,46 @@ test("New thread failure stays visible on Settings and retries in place", async 
     unavailableThreadIds: [],
     lastUsedWorkspace: "/work/zen",
   };
-  let starts = 0;
-  const populatedProjects: ZenXProjectProjectionSnapshot = {
-    ...projects,
-    projects: [{ ...projects.projects[0]!, threadIds: ["thread-1"] }],
-  };
   const harness = await mountApp(projects, {
-    projectsGet: async () => (starts >= 2 ? populatedProjects : projects),
+    addWorkspace: async () => {
+      addWorkspaceCalls += 1;
+    },
+    markWorkspaceUsed: async () => {
+      markWorkspaceCalls += 1;
+      return publicSettings([]);
+    },
+    projectsGet: async () => {
+      projectReads += 1;
+      return projects;
+    },
     startProjectThread: async (workspace) => {
       starts += 1;
-      if (starts === 1) throw new Error("runtime offline");
       return started(liveThread(), workspace);
     },
-    threads: async (archived) =>
-      !archived && starts >= 2 ? [summary(false)] : [],
   });
   try {
+    await waitFor(() => projectReads > 0);
+    const readsBeforeDraft = projectReads;
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    await waitFor(() => document.getElementById("thread-composer"));
     await act(async () =>
       document.querySelector<HTMLButtonElement>(".settings-nav-row")?.click(),
     );
     await waitFor(() => /Settings/u.test(document.body.textContent ?? ""));
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="New thread in zen"]')
-        ?.click(),
-    );
-
-    const retry = await waitFor(() => exactButton("Try again"));
-    assert.match(document.body.textContent ?? "", /New thread failed/u);
-    assert.match(document.body.textContent ?? "", /runtime offline/u);
-    assert.match(document.body.textContent ?? "", /Settings/u);
-
-    await act(async () => retry.click());
-    await waitFor(() => starts === 2);
-    await waitFor(() => /Thread one/u.test(document.body.textContent ?? ""));
+    assert.equal(document.getElementById("thread-composer"), null);
+    assert.equal(starts, 0);
+    assert.equal(addWorkspaceCalls, 0);
+    assert.equal(markWorkspaceCalls, 0);
+    assert.equal(projectReads, readsBeforeDraft);
   } finally {
     await unmountApp(harness);
   }
 });
 
-test("Project quick-create releases its loading fence after selection epoch changes and failure", async () => {
-  const firstStart = deferred<ReturnType<typeof started>>();
+test("New thread replaces a pending Thread resume with the local draft", async () => {
+  const resumeResponse = deferred<ReturnType<typeof resumed>>();
   let starts = 0;
   const projects: ZenXProjectProjectionSnapshot = {
     projects: [
@@ -282,43 +221,440 @@ test("Project quick-create releases its loading fence after selection epoch chan
   };
   const harness = await mountApp(projects, {
     request: async (method) => {
-      if (method === "thread/resume") return resumed(liveThread());
+      if (method === "thread/resume") return await resumeResponse.promise;
       throw new Error(`Unexpected protocol request: ${method}`);
     },
     startProjectThread: async (workspace) => {
       starts += 1;
-      if (starts === 1) return await firstStart.promise;
       return started(liveThread(), workspace);
     },
     threads: async (archived) => (archived ? [] : [summary(false)]),
   });
   try {
-    const create = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(
-        '[aria-label="New thread in zen"]',
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    await waitFor(() =>
+      /Loading conversation/u.test(document.body.textContent ?? ""),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    await waitFor(() => document.getElementById("thread-composer"));
+    assert.match(
+      document.body.textContent ?? "",
+      /What should we build in zen\?/u,
+    );
+    assert.equal(starts, 0);
+
+    await act(async () => {
+      resumeResponse.resolve(resumed(liveThread()));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.match(
+      document.body.textContent ?? "",
+      /What should we build in zen\?/u,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("thread creation failure preserves the local draft for retry", async () => {
+  let starts = 0;
+  let created = false;
+  const turnStarts: unknown[] = [];
+  const projects: ZenXProjectProjectionSnapshot = {
+    projects: [
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work/zen",
+  };
+  const harness = await mountApp(projects, {
+    request: async (method, params) => {
+      if (method === "turn/start") {
+        turnStarts.push(params);
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    startProjectThread: async (workspace) => {
+      starts += 1;
+      if (starts === 1) throw new Error("runtime offline");
+      created = true;
+      return started(liveThread(), workspace);
+    },
+    threads: async (archived) => (!archived && created ? [summary(false)] : []),
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Retry this first message");
+    const send = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    await invokeButtonClick(send);
+    await waitFor(() =>
+      /runtime offline/u.test(document.body.textContent ?? ""),
+    );
+    assert.equal(composer.value, "Retry this first message");
+    assert.equal(turnStarts.length, 0);
+
+    await invokeButtonClick(send);
+    await waitFor(() => turnStarts.length === 1);
+    assert.equal(starts, 2);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("turn failure retries on the created Thread with the stable message id", async () => {
+  let starts = 0;
+  let created = false;
+  const turnStarts: Array<{ clientUserMessageId?: string }> = [];
+  const projects: ZenXProjectProjectionSnapshot = {
+    projects: [
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work/zen",
+  };
+  const harness = await mountApp(projects, {
+    request: async (method, params) => {
+      if (method === "turn/start") {
+        turnStarts.push(params as { clientUserMessageId?: string });
+        if (turnStarts.length === 1) throw new Error("turn rejected");
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    startProjectThread: async (workspace) => {
+      starts += 1;
+      created = true;
+      return started(liveThread(), workspace);
+    },
+    threads: async (archived) => (!archived && created ? [summary(false)] : []),
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Keep one message identity");
+    const send = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    await invokeButtonClick(send);
+    await waitFor(() => /turn rejected/u.test(document.body.textContent ?? ""));
+    assert.equal(starts, 1);
+    assert.equal(composer.value, "Keep one message identity");
+
+    await invokeButtonClick(
+      await waitFor(() =>
+        document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
       ),
     );
-    await act(async () => create.click());
-    await waitFor(() => starts === 1);
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>(".thread-row")?.click(),
+    await waitFor(() => turnStarts.length === 2);
+    assert.equal(starts, 1);
+    assert.equal(
+      turnStarts[1]?.clientUserMessageId,
+      turnStarts[0]?.clientUserMessageId,
     );
-    await waitFor(() => /Thread one/u.test(document.body.textContent ?? ""));
-    await act(async () => {
-      firstStart.reject(new Error("first start failed"));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+  } finally {
+    await unmountApp(harness);
+  }
+});
 
-    const retryCreate = await waitFor(() => {
-      const button = document.querySelector<HTMLButtonElement>(
-        '[aria-label="New thread in zen"]',
-      );
-      return button !== null && !button.disabled ? button : null;
+test("a pending first Send finishes without stealing a newer navigation", async () => {
+  const createResponse = deferred<ReturnType<typeof started>>();
+  let created = false;
+  const turnStarts: unknown[] = [];
+  const projects: ZenXProjectProjectionSnapshot = {
+    projects: [
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work/zen",
+  };
+  const harness = await mountApp(projects, {
+    request: async (method, params) => {
+      if (method === "turn/start") {
+        turnStarts.push(params);
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    startProjectThread: async () => {
+      const value = await createResponse.promise;
+      created = true;
+      return value;
+    },
+    threads: async (archived) => (!archived && created ? [summary(false)] : []),
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Finish in the background");
+    await invokeButtonClick(
+      await waitFor(() =>
+        document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+      ),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")?.click(),
+    );
+    await waitFor(() => /Settings/u.test(document.body.textContent ?? ""));
+
+    await act(async () => {
+      createResponse.resolve(started(liveThread(), "/work/zen"));
+      await Promise.resolve();
+      await Promise.resolve();
     });
-    assert.match(document.body.textContent ?? "", /first start failed/u);
-    await act(async () => retryCreate.click());
-    await waitFor(() => starts === 2);
+    await waitFor(() => turnStarts.length === 1);
+    assert.match(document.body.textContent ?? "", /Settings/u);
+    assert.equal(document.getElementById("thread-composer"), null);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("New thread without a last-used Project opens an unselected draft menu", async () => {
+  let starts = 0;
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: [],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: null,
+    },
+    {
+      startProjectThread: async (workspace) => {
+        starts += 1;
+        return started(liveThread(), workspace);
+      },
+    },
+  );
+  try {
+    const chooseProject = await waitFor(() => exactButton("Choose project"));
+    await act(async () => chooseProject.click());
+    await waitFor(() => document.getElementById("thread-composer"));
+    const menu = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        '[role="menu"][aria-label="Choose a Project"]',
+      ),
+    );
+    const trigger = exactButton("Change Project");
+    assert.ok(trigger);
+    assert.equal(trigger.getAttribute("aria-haspopup"), "menu");
+    assert.equal(trigger.getAttribute("aria-expanded"), "true");
+    await waitFor(
+      () => document.activeElement?.getAttribute("role") === "menuitemradio",
+    );
+    assert.match(menu.textContent ?? "", /zen/u);
+    assert.match(document.body.textContent ?? "", /What should we build\?/u);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(starts, 0);
+
+    await act(async () => {
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+      );
+      await Promise.resolve();
+    });
+    assert.equal(
+      document.querySelector('[role="menu"][aria-label="Choose a Project"]'),
+      null,
+    );
+    assert.equal(document.activeElement, trigger);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("a Project revision lets an open draft reselect after its Project disappears", async () => {
+  let starts = 0;
+  let addWorkspaceCalls = 0;
+  let markWorkspaceCalls = 0;
+  let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+  let currentProjects: ZenXProjectProjectionSnapshot = {
+    projects: [
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+      {
+        key: "/work/docs",
+        workspace: "/work/docs",
+        configured: true,
+        isDefault: false,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work/zen",
+  };
+  const harness = await mountApp(currentProjects, {
+    addWorkspace: async () => {
+      addWorkspaceCalls += 1;
+    },
+    markWorkspaceUsed: async () => {
+      markWorkspaceCalls += 1;
+      return publicSettings([]);
+    },
+    onStatus: (listener) => {
+      statusListener = listener;
+      return () => {
+        statusListener = undefined;
+      };
+    },
+    projectsGet: async () => currentProjects,
+    startProjectThread: async (workspace) => {
+      starts += 1;
+      return started(liveThread(), workspace);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    await waitFor(() => document.getElementById("thread-composer"));
+    assert.match(
+      document.body.textContent ?? "",
+      /What should we build in zen\?/u,
+    );
+
+    currentProjects = {
+      projects: [
+        {
+          key: "/work/docs",
+          workspace: "/work/docs",
+          configured: true,
+          isDefault: true,
+          threadIds: [],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/docs",
+    };
+    await act(async () => {
+      statusListener?.({ type: "ready", reconnected: false });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      /zen unavailable/u.test(document.body.textContent ?? ""),
+    );
+    assert.match(
+      document.querySelector(".composer-error")?.textContent ?? "",
+      /no longer available/u,
+    );
+
+    await act(async () => exactButton("Change Project")?.click());
+    const docs = await waitFor(() =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      ).find((button) => button.textContent?.includes("docs")),
+    );
+    assert.equal(docs.getAttribute("aria-checked"), "false");
+    await act(async () => docs.click());
+    assert.match(
+      document.body.textContent ?? "",
+      /What should we build in docs\?/u,
+    );
+    assert.equal(starts, 0);
+    assert.equal(addWorkspaceCalls, 0);
+    assert.equal(markWorkspaceCalls, 0);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("zero-Project New thread adds a Project but still does not create a Thread", async () => {
+  const startedWorkspaces: string[] = [];
+  let added = false;
+  const emptyProjects: ZenXProjectProjectionSnapshot = {
+    projects: [],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  };
+  const addedProjects: ZenXProjectProjectionSnapshot = {
+    projects: [
+      {
+        key: "/",
+        workspace: "/",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  };
+  const harness = await mountApp(emptyProjects, {
+    addWorkspace: async () => {
+      added = true;
+    },
+    projectsGet: async () => (added ? addedProjects : emptyProjects),
+    startProjectThread: async (workspace) => {
+      startedWorkspaces.push(workspace);
+      return started(liveThread(), workspace);
+    },
+  });
+  try {
+    const newThread = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action"),
+    );
+    assert.match(newThread.textContent ?? "", /Add project first/u);
+    await act(async () => newThread.click());
+    await waitFor(() => document.querySelector('[role="dialog"]'));
+    assert.match(
+      document.querySelector('[role="dialog"]')?.textContent ?? "",
+      /Add a project folder/u,
+    );
+    await act(async () => exactButton("Add folder")?.click());
+    await waitFor(() => document.getElementById("thread-composer"));
+    assert.deepEqual(startedWorkspaces, []);
   } finally {
     await unmountApp(harness);
   }
@@ -1129,6 +1465,7 @@ test("serializes cross-row Pin mutations against the latest confirmed order", as
 async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
+    addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
@@ -1228,7 +1565,10 @@ async function mountApp(
           ? currentSettings
           : await options.markWorkspaceUsed(workspace),
       onManualCodeRequested: () => () => undefined,
-      addWorkspace: async () => ({ profile: { onboardingComplete: true } }),
+      addWorkspace: async (workspace: string) => {
+        await options.addWorkspace?.(workspace);
+        return { profile: { onboardingComplete: true } };
+      },
       getDirectoryBrowser: async () => ({
         locations: [{ label: "Root", path: "/" }],
         initialPath: "/",
@@ -1339,13 +1679,14 @@ function summary(
   archived: boolean,
   threadId = "thread-1",
   name = "Thread one",
+  cwd = "/work/zen",
 ): NativeThreadSummary {
   return {
     threadId,
     currentMetadata: {
       model: "fake",
       provider: "fake",
-      cwd: "/work/zen",
+      cwd,
       sandbox: "danger-full-access",
       approvalPolicy: "never",
     },

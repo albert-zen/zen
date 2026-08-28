@@ -381,43 +381,6 @@ a:focus-visible {
   text-align: left;
   box-shadow: inset 0 1px var(--surface-highlight);
 }
-.new-thread-project-chooser {
-  position: absolute;
-  z-index: 12;
-  top: calc(100% + 4px);
-  right: 0;
-  left: 0;
-  display: grid;
-  gap: 3px;
-  padding: 5px;
-  border: 1px solid var(--border-control);
-  border-radius: 9px;
-  background: var(--surface-control);
-  box-shadow: 0 14px 32px var(--shadow-color);
-}
-.new-thread-project-chooser button {
-  min-width: 0;
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-2);
-  text-align: left;
-}
-.new-thread-project-chooser button:hover,
-.new-thread-project-chooser button:focus-visible {
-  background: var(--surface-3);
-  color: var(--text);
-}
-.new-thread-project-chooser span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .new-thread-action:hover {
   border-color: var(--border-focus);
   background: var(--surface-control-hover);
@@ -984,39 +947,6 @@ a:focus-visible {
     ),
     var(--main);
 }
-.new-thread-error-banner {
-  position: absolute;
-  z-index: 20;
-  top: 72px;
-  right: 22px;
-  left: 22px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 16px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--danger) 52%, var(--border));
-  border-radius: 10px;
-  background: var(--surface-danger);
-  box-shadow: var(--shadow-medium);
-  color: var(--danger);
-}
-.new-thread-error-banner > div {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-.new-thread-error-banner strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 600;
-}
-.new-thread-error-banner span {
-  overflow-wrap: anywhere;
-  font-size: 10px;
-}
 .agent-surface,
 .product-page {
   width: 100%;
@@ -1025,6 +955,16 @@ a:focus-visible {
   min-height: 0;
   display: grid;
   grid-template-rows: 60px minmax(0, 1fr);
+}
+.agent-surface.new-thread-draft-surface {
+  position: relative;
+  grid-template-rows: minmax(0, 1fr);
+}
+.new-thread-draft-mobile {
+  position: absolute;
+  z-index: 8;
+  top: 8px;
+  left: 8px;
 }
 .workspace-header,
 .page-header {
@@ -1560,6 +1500,89 @@ a:focus-visible {
   min-width: 0;
   padding: 0 max(18px, calc((100% - 840px) / 2)) 18px;
   background: linear-gradient(180deg, transparent, var(--main) 18%);
+}
+.new-thread-project-context {
+  position: relative;
+  width: 100%;
+  max-width: 840px;
+  min-height: 32px;
+  margin: 0 auto 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px;
+  color: var(--text-3);
+  font-size: 10px;
+}
+.new-thread-project-current,
+.new-thread-project-trigger {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.new-thread-project-current span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-thread-project-trigger {
+  min-height: 32px;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 10px;
+}
+.new-thread-project-trigger:hover:not(:disabled),
+.new-thread-project-trigger:focus-visible,
+.new-thread-project-trigger[aria-expanded="true"] {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.new-thread-project-menu {
+  position: absolute;
+  z-index: 40;
+  right: 8px;
+  bottom: calc(100% + 6px);
+  width: min(280px, calc(100vw - 32px));
+  max-height: min(360px, 45vh);
+  overflow-y: auto;
+  display: grid;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid var(--border-control);
+  border-radius: 12px;
+  background: var(--surface-control);
+  box-shadow: 0 18px 48px var(--shadow-color-strong);
+}
+.new-thread-project-menu button {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+}
+.new-thread-project-menu button:hover,
+.new-thread-project-menu button:focus-visible {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.new-thread-project-menu button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .approval-bar {
   width: 100%;
@@ -3961,11 +3984,6 @@ a:focus-visible {
   .product-page {
     width: 100%;
     height: 100%;
-  }
-  .new-thread-error-banner {
-    top: 68px;
-    right: 12px;
-    left: 12px;
   }
   .agent-surface,
   .product-page {

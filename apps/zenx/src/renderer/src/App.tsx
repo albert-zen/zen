@@ -8,7 +8,10 @@ import type {
 } from "../../main/app-server-manager.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
-import type { ZenXProjectProjectionSnapshot } from "../../main/project-projection.js";
+import type {
+  ZenXProjectProjectionEntry,
+  ZenXProjectProjectionSnapshot,
+} from "../../main/project-projection.js";
 import type {
   ZenXProviderProfile,
   ZenXSidebarOrder,
@@ -72,7 +75,6 @@ import {
   lastUsedProjectWorkspace,
   moveSidebarProject,
   moveSidebarThread,
-  startProjectThread,
   threadTitle,
   writeSidebarMode,
   type SidebarMode,
@@ -84,12 +86,23 @@ import { ThreadView } from "./ThreadView.js";
 type ProductPage = string;
 const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
 
+interface NewThreadDraft {
+  workspace: string | null;
+  composer: ComposerState;
+}
+
 export function App() {
   const selectionEpoch = useRef(0);
   const newThreadPendingRef = useRef(false);
+  const newThreadDraftRef = useRef<NewThreadDraft | null>(null);
   const threadUsageLoadEpoch = useRef(0);
   const threadSummaryLoadEpoch = useRef(0);
   const projectLoadEpoch = useRef(0);
+  const projectsRef = useRef<ZenXProjectProjectionSnapshot>({
+    projects: [],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  });
   const selectedThreadIdRef = useRef<string | null>(null);
   const archivingThreadIdsRef = useRef<ReadonlySet<string>>(new Set());
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
@@ -135,11 +148,10 @@ export function App() {
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
-  const [newThreadFailure, setNewThreadFailure] = useState<{
-    workspace: string;
-    message: string;
-  } | null>(null);
   const [newThreadPending, setNewThreadPending] = useState(false);
+  const [newThreadDraft, setNewThreadDraft] = useState<NewThreadDraft | null>(
+    null,
+  );
   const [approvals, setApprovals] = useState<ApprovalCardState[]>([]);
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [providerProfiles, setProviderProfiles] = useState<
@@ -204,6 +216,17 @@ export function App() {
     confirmSidebarOrder(profile.sidebarOrder);
   };
 
+  const confirmNewThreadDraft = (draft: NewThreadDraft | null) => {
+    newThreadDraftRef.current = draft;
+    setNewThreadDraft(draft);
+  };
+
+  const abandonNewThreadDraft = () => {
+    if (newThreadDraftRef.current === null) return;
+    selectionEpoch.current += 1;
+    confirmNewThreadDraft(null);
+  };
+
   const queuePinMutation = (
     update: (current: readonly string[]) => readonly string[],
   ): Promise<void> => {
@@ -266,6 +289,7 @@ export function App() {
     try {
       const snapshot = await window.zenx.projects.get({ archived: false });
       if (projectLoadEpoch.current === epoch) {
+        projectsRef.current = snapshot;
         setProjects(snapshot);
         setProjectError(null);
       }
@@ -299,6 +323,7 @@ export function App() {
 
   const resumeThread = async (threadId: string, preserveNavigation = false) => {
     const epoch = ++selectionEpoch.current;
+    confirmNewThreadDraft(null);
     const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
     if (!preserveNavigation) {
@@ -559,45 +584,45 @@ export function App() {
     page;
   const lastUsedWorkspace = lastUsedProjectWorkspace(projects);
 
-  const newThread = async (workspace: string) => {
-    if (newThreadPendingRef.current) return;
-    newThreadPendingRef.current = true;
-    const epoch = ++selectionEpoch.current;
-    setNewThreadPending(true);
-    setNewThreadFailure(null);
+  const configuredProjects = projects.projects.filter(
+    (project) => project.configured,
+  );
+
+  const openNewThreadDraft = (workspace?: string) => {
+    if (workspace === undefined && configuredProjects.length === 0) {
+      setProjectPickerIntent("new-thread");
+      return;
+    }
+    const selectedWorkspace = workspace ?? lastUsedWorkspace;
+    selectionEpoch.current += 1;
+    threadUsageLoadEpoch.current += 1;
+    selectedThreadIdRef.current = null;
+    setPage("agent");
+    setSidebarOpen(false);
+    setWorkspaceOpen(false);
+    setSelectedThreadId(null);
+    setThreadDetail(null);
+    setThreadLoading(false);
+    setThreadAttachments({});
+    setThreadUsage(undefined);
+    setSelectedSettings(null);
     setThreadError(null);
     setModelUpdateError(null);
-    try {
-      const result = await startProjectThread(
-        workspace,
-        async (candidate) => await window.zenx.settings.addWorkspace(candidate),
-        async (params) => await window.zenx.projects.startThread(params.cwd),
-        async (startedWorkspace) => {
-          try {
-            await window.zenx.settings.markWorkspaceUsed(startedWorkspace);
-          } catch (error) {
-            setRequestError(describeError(error));
-          }
-          await loadThreadSummaries();
-          await loadProjects();
-        },
-      );
-      if (selectionEpoch.current !== epoch) return;
-      selectedThreadIdRef.current = result.thread.id;
-      threadUsageLoadEpoch.current += 1;
-      setPage("agent");
-      setSidebarOpen(false);
-      setSelectedThreadId(result.thread.id);
-      setThreadDetail(result.thread);
-      setThreadAttachments({});
-      setThreadUsage(undefined);
-      setSelectedSettings(settingsFromSnapshot(result.thread.id, result));
-    } catch (error) {
-      setNewThreadFailure({ workspace, message: describeError(error) });
-    } finally {
-      newThreadPendingRef.current = false;
-      setNewThreadPending(false);
-    }
+    confirmNewThreadDraft({
+      workspace: selectedWorkspace,
+      composer: emptyComposerState(),
+    });
+    void loadComposerCatalog();
+  };
+
+  const updateNewThreadDraft = (
+    update: (draft: NewThreadDraft) => NewThreadDraft,
+  ): NewThreadDraft | null => {
+    const current = newThreadDraftRef.current;
+    if (current === null) return null;
+    const next = update(current);
+    if (next !== current) confirmNewThreadDraft(next);
+    return next;
   };
 
   const updateComposer = (
@@ -614,6 +639,204 @@ export function App() {
       setComposerStates(composerStatesRef.current);
     }
     return next;
+  };
+
+  const deliverComposerSubmission = async (
+    threadId: string,
+    submission: ComposerSubmission,
+  ) => {
+    if (submission.text.length > 0)
+      await window.zenx.titles
+        .observe(threadId, submission.text)
+        .then((projection) => {
+          if (projection !== undefined)
+            setTitleSnapshot((current) => ({
+              ...current,
+              [threadId]: projection,
+            }));
+        })
+        .catch((error: unknown) =>
+          setRequestError(
+            `Thread title could not be staged: ${describeError(error)}`,
+          ),
+        );
+    const input = await composerSubmissionInput(submission);
+    if (submission.intent === "start") {
+      if (archivingThreadIdsRef.current.has(threadId))
+        throw new Error(
+          "This Thread is being archived. Try again if archiving fails.",
+        );
+      await window.zenx.protocol.request("turn/start", {
+        threadId,
+        input,
+        clientUserMessageId: submission.clientUserMessageId,
+      });
+    } else if (submission.intent === "steer") {
+      if (submission.expectedTurnId === null)
+        throw new Error("The active turn changed before steering");
+      if (archivingThreadIdsRef.current.has(threadId))
+        throw new Error(
+          "This Thread is being archived. Try again if archiving fails.",
+        );
+      await window.zenx.protocol.request("turn/steer", {
+        threadId,
+        expectedTurnId: submission.expectedTurnId,
+        input,
+        clientUserMessageId: submission.clientUserMessageId,
+      });
+    } else {
+      if (submission.expectedTurnId === null)
+        throw new Error("The active turn changed before replacement");
+      if (archivingThreadIdsRef.current.has(threadId))
+        throw new Error(
+          "This Thread is being archived. Try again if archiving fails.",
+        );
+      await window.zenx.protocol.request("turn/replace", {
+        threadId,
+        expectedTurnId: submission.expectedTurnId,
+        input,
+        clientUserMessageId: submission.clientUserMessageId,
+      });
+    }
+  };
+
+  const submitNewThreadDraft = async (
+    intent: ComposerIntent,
+    expectedTurnId: string | null,
+  ) => {
+    if (intent !== "start" || expectedTurnId !== null) return;
+    const current = newThreadDraftRef.current;
+    if (current === null) return;
+    if (current.workspace === null) {
+      setModelUpdateError("Choose a Project before sending.");
+      return;
+    }
+    const project = projectsRef.current.projects.find(
+      (candidate) =>
+        candidate.configured && candidate.workspace === current.workspace,
+    );
+    if (project === undefined) {
+      setModelUpdateError(
+        "This Project is no longer available. Choose another Project.",
+      );
+      return;
+    }
+    const workspace = project.workspace;
+    const draftSettings = defaultDraftSettings(models);
+    if (current.composer.draft.images.length > 0) {
+      const capabilityError = imageCapabilityMessage(
+        providerProfiles,
+        draftSettings,
+      );
+      if (capabilityError !== null) {
+        setModelUpdateError(capabilityError);
+        return;
+      }
+    }
+    if (draftSettings === null) {
+      setModelUpdateError(modelCatalogError ?? MODEL_CATALOG_LOADING);
+      return;
+    }
+    if (!canSendWithModel(models, draftSettings.model)) {
+      setModelUpdateError("Choose an available model before sending.");
+      return;
+    }
+    const startedComposer = beginComposerSubmission(
+      current.composer,
+      intent,
+      expectedTurnId,
+      () => crypto.randomUUID(),
+    );
+    if (startedComposer === current.composer) return;
+    const startedDraft = { ...current, composer: startedComposer };
+    confirmNewThreadDraft(startedDraft);
+    const submission = startedComposer.submission;
+    if (submission === null || submission.status !== "pending") return;
+    if (newThreadPendingRef.current) return;
+    newThreadPendingRef.current = true;
+    setNewThreadPending(true);
+    const epoch = selectionEpoch.current;
+    let createdThreadId: string | null = null;
+    try {
+      const result = await window.zenx.projects.startThread(workspace);
+      createdThreadId = result.thread.id;
+      const promotedStates = {
+        ...composerStatesRef.current,
+        [createdThreadId]: startedComposer,
+      };
+      composerStatesRef.current = promotedStates;
+      setComposerStates(promotedStates);
+      try {
+        await window.zenx.settings.markWorkspaceUsed(workspace);
+      } catch (error) {
+        setRequestError(describeError(error));
+      }
+      await loadThreadSummaries();
+      await loadProjects();
+      const stillCurrent =
+        selectionEpoch.current === epoch &&
+        newThreadDraftRef.current?.composer.submission?.clientUserMessageId ===
+          submission.clientUserMessageId;
+      if (stillCurrent) {
+        selectedThreadIdRef.current = createdThreadId;
+        threadUsageLoadEpoch.current += 1;
+        setSelectedThreadId(createdThreadId);
+        setThreadDetail(result.thread);
+        setThreadAttachments({});
+        setThreadUsage(undefined);
+        setSelectedSettings(settingsFromSnapshot(createdThreadId, result));
+        confirmNewThreadDraft(null);
+      }
+      await deliverComposerSubmission(createdThreadId, submission);
+      updateComposer(createdThreadId, (state) =>
+        acceptComposerSubmission(state, submission.clientUserMessageId),
+      );
+      if (selectedThreadIdRef.current === createdThreadId) {
+        void window.zenx.imageAttachments
+          .forThread(createdThreadId)
+          .then((attachments) => {
+            if (selectedThreadIdRef.current === createdThreadId)
+              setThreadAttachments(attachments);
+          })
+          .catch((error: unknown) =>
+            setRequestError(
+              `Thread images could not be loaded: ${describeError(error)}`,
+            ),
+          );
+      }
+    } catch (error) {
+      const message = describeError(error);
+      if (createdThreadId === null) {
+        const activeDraft = newThreadDraftRef.current;
+        if (
+          selectionEpoch.current === epoch &&
+          activeDraft?.composer.submission?.clientUserMessageId ===
+            submission.clientUserMessageId
+        ) {
+          updateNewThreadDraft((draft) => ({
+            ...draft,
+            composer: failComposerSubmission(
+              draft.composer,
+              submission.clientUserMessageId,
+              message,
+            ),
+          }));
+        } else {
+          setRequestError(`New thread failed: ${message}`);
+        }
+      } else {
+        updateComposer(createdThreadId, (state) =>
+          failComposerSubmission(
+            state,
+            submission.clientUserMessageId,
+            message,
+          ),
+        );
+      }
+    } finally {
+      newThreadPendingRef.current = false;
+      setNewThreadPending(false);
+    }
   };
 
   const submitComposer = async (
@@ -670,59 +893,7 @@ export function App() {
     const submission = started.submission;
     if (submission === null || submission.status !== "pending") return;
     try {
-      if (submission.text.length > 0)
-        await window.zenx.titles
-          .observe(threadId, submission.text)
-          .then((projection) => {
-            if (projection !== undefined)
-              setTitleSnapshot((current) => ({
-                ...current,
-                [threadId]: projection,
-              }));
-          })
-          .catch((error: unknown) =>
-            setRequestError(
-              `Thread title could not be staged: ${describeError(error)}`,
-            ),
-          );
-      const input = await composerSubmissionInput(submission);
-      if (submission.intent === "start") {
-        if (archivingThreadIdsRef.current.has(threadId))
-          throw new Error(
-            "This Thread is being archived. Try again if archiving fails.",
-          );
-        await window.zenx.protocol.request("turn/start", {
-          threadId,
-          input,
-          clientUserMessageId: submission.clientUserMessageId,
-        });
-      } else if (submission.intent === "steer") {
-        if (submission.expectedTurnId === null)
-          throw new Error("The active turn changed before steering");
-        if (archivingThreadIdsRef.current.has(threadId))
-          throw new Error(
-            "This Thread is being archived. Try again if archiving fails.",
-          );
-        await window.zenx.protocol.request("turn/steer", {
-          threadId,
-          expectedTurnId: submission.expectedTurnId,
-          input,
-          clientUserMessageId: submission.clientUserMessageId,
-        });
-      } else {
-        if (submission.expectedTurnId === null)
-          throw new Error("The active turn changed before replacement");
-        if (archivingThreadIdsRef.current.has(threadId))
-          throw new Error(
-            "This Thread is being archived. Try again if archiving fails.",
-          );
-        await window.zenx.protocol.request("turn/replace", {
-          threadId,
-          expectedTurnId: submission.expectedTurnId,
-          input,
-          clientUserMessageId: submission.clientUserMessageId,
-        });
-      }
+      await deliverComposerSubmission(threadId, submission);
       updateComposer(threadId, (state) =>
         acceptComposerSubmission(state, submission.clientUserMessageId),
       );
@@ -808,6 +979,7 @@ export function App() {
   };
 
   const openPage = (next: ProductPage) => {
+    if (next !== "agent") abandonNewThreadDraft();
     setPage(next);
     setSidebarOpen(false);
     setWorkspaceOpen(false);
@@ -977,8 +1149,7 @@ export function App() {
           }
         }}
         onNewThread={(workspace) => {
-          if (workspace === undefined) setProjectPickerIntent("new-thread");
-          else void newThread(workspace);
+          openNewThreadDraft(workspace);
         }}
         onAddProject={() => setProjectPickerIntent("add-project")}
         newThreadDisabled={newThreadPending}
@@ -1022,22 +1193,6 @@ export function App() {
       />
 
       <main className="workspace">
-        {newThreadFailure === null ? null : (
-          <div className="new-thread-error-banner" role="alert">
-            <div>
-              <strong>New thread failed</strong>
-              <span>{newThreadFailure.message}</span>
-            </div>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={newThreadPending}
-              onClick={() => void newThread(newThreadFailure.workspace)}
-            >
-              Try again
-            </button>
-          </div>
-        )}
         {page === "settings" ? (
           <SettingsView
             archivedError={threadListErrors.archived}
@@ -1062,6 +1217,8 @@ export function App() {
             approvals={approvals}
             pluginSnapshot={pluginSnapshot}
             composerStates={composerStates}
+            configuredProjects={configuredProjects}
+            newThreadDraft={newThreadDraft}
             threadAttachments={threadAttachments}
             threadUsage={threadUsage}
             models={models}
@@ -1071,6 +1228,25 @@ export function App() {
             onDraftChange={(threadId, draft) =>
               updateComposer(threadId, (state) => editComposer(state, draft))
             }
+            onNewThreadDraftChange={(draft) =>
+              updateNewThreadDraft((current) => ({
+                ...current,
+                composer: editComposer(current.composer, draft),
+              }))
+            }
+            onNewThreadProjectChange={(workspace) => {
+              setModelUpdateError(null);
+              updateNewThreadDraft((current) => ({
+                workspace,
+                composer: {
+                  ...current.composer,
+                  submission:
+                    current.composer.submission?.status === "failed"
+                      ? null
+                      : current.composer.submission,
+                },
+              }));
+            }}
             onImportImages={async (threadId, files) => {
               const imports = await Promise.all(
                 files.map(async (file) => ({
@@ -1084,16 +1260,43 @@ export function App() {
                 addComposerImages(state, images),
               );
             }}
+            onImportNewThreadImages={async (files) => {
+              const imports = await Promise.all(
+                files.map(async (file) => ({
+                  name: file.name,
+                  mediaType: file.type,
+                  bytes: new Uint8Array(await file.arrayBuffer()),
+                })),
+              );
+              const images = await window.zenx.imageAttachments.import(imports);
+              updateNewThreadDraft((current) => ({
+                ...current,
+                composer: addComposerImages(current.composer, images),
+              }));
+            }}
             onPickImages={async (threadId) => {
               const images = await window.zenx.imageAttachments.pick();
               updateComposer(threadId, (state) =>
                 addComposerImages(state, images),
               );
             }}
+            onPickNewThreadImages={async () => {
+              const images = await window.zenx.imageAttachments.pick();
+              updateNewThreadDraft((current) => ({
+                ...current,
+                composer: addComposerImages(current.composer, images),
+              }));
+            }}
             onRemoveImage={(threadId, imageId) =>
               updateComposer(threadId, (state) =>
                 removeComposerImage(state, imageId),
               )
+            }
+            onRemoveNewThreadImage={(imageId) =>
+              updateNewThreadDraft((current) => ({
+                ...current,
+                composer: removeComposerImage(current.composer, imageId),
+              }))
             }
             onReadAttachment={(attachment) =>
               window.zenx.imageAttachments.read(attachment)
@@ -1115,8 +1318,7 @@ export function App() {
             hasLastUsedProject={lastUsedWorkspace !== null}
             onAddProject={() => setProjectPickerIntent("add-project")}
             onNewThread={() => {
-              if (lastUsedWorkspace !== null) void newThread(lastUsedWorkspace);
-              else setProjectPickerIntent("new-thread");
+              openNewThreadDraft();
             }}
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
@@ -1136,6 +1338,7 @@ export function App() {
               }));
             }}
             onSubmit={submitComposer}
+            onSubmitNewThread={submitNewThreadDraft}
             requestError={projectError ?? requestError}
             selectedSettings={selectedSettings}
             selectedSummary={selectedSummary}
@@ -1148,7 +1351,7 @@ export function App() {
             }
             threadDetail={threadDetail}
             threadError={threadError}
-            threadLoading={threadLoading || newThreadPending}
+            threadLoading={threadLoading}
             titleProjection={
               selectedSummary === null
                 ? undefined
@@ -1170,8 +1373,16 @@ export function App() {
           onCancel={() => setProjectPickerIntent(null)}
           onSelect={(workspace) => {
             if (projectPickerIntent === "new-thread") {
-              setProjectPickerIntent(null);
-              void newThread(workspace);
+              void window.zenx.settings
+                .addWorkspace(workspace)
+                .then(async () => {
+                  await loadProjects();
+                  setProjectPickerIntent(null);
+                  openNewThreadDraft(workspace);
+                })
+                .catch((error: unknown) =>
+                  setRequestError(describeError(error)),
+                );
               return;
             }
             void window.zenx.settings
@@ -1192,6 +1403,8 @@ function AgentSurface({
   approvals,
   pluginSnapshot,
   composerStates,
+  configuredProjects,
+  newThreadDraft,
   threadAttachments,
   threadUsage,
   models,
@@ -1201,9 +1414,14 @@ function AgentSurface({
   onChangeThreadLifecycle,
   onDraftChange,
   onImportImages,
+  onImportNewThreadImages,
   onPickImages,
+  onPickNewThreadImages,
   onReadAttachment,
   onRemoveImage,
+  onRemoveNewThreadImage,
+  onNewThreadDraftChange,
+  onNewThreadProjectChange,
   hasProjects,
   hasLastUsedProject,
   onAddProject,
@@ -1217,6 +1435,7 @@ function AgentSurface({
   onRespondToApproval,
   onRetryTitle,
   onSubmit,
+  onSubmitNewThread,
   requestError,
   selectedSettings,
   selectedSummary,
@@ -1233,6 +1452,8 @@ function AgentSurface({
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
   composerStates: Record<string, ComposerState>;
+  configuredProjects: ZenXProjectProjectionEntry[];
+  newThreadDraft: NewThreadDraft | null;
   threadAttachments: ZenXThreadAttachmentProjection;
   threadUsage: ModelUsageProjection | undefined;
   models: ModelSummary[];
@@ -1242,11 +1463,16 @@ function AgentSurface({
   onChangeThreadLifecycle(): Promise<void>;
   onDraftChange(threadId: string, draft: string): void;
   onImportImages(threadId: string, files: readonly File[]): Promise<void>;
+  onImportNewThreadImages(files: readonly File[]): Promise<void>;
   onPickImages(threadId: string): Promise<void>;
+  onPickNewThreadImages(): Promise<void>;
   onReadAttachment(
     attachment: import("../../../../../src/attachment.js").AttachmentRef,
   ): Promise<Uint8Array>;
   onRemoveImage(threadId: string, imageId: string): void;
+  onRemoveNewThreadImage(imageId: string): void;
+  onNewThreadDraftChange(draft: string): void;
+  onNewThreadProjectChange(workspace: string): void;
   hasProjects: boolean;
   hasLastUsedProject: boolean;
   onAddProject(): void;
@@ -1266,6 +1492,10 @@ function AgentSurface({
     intent: ComposerIntent,
     expectedTurnId: string | null,
   ): Promise<void>;
+  onSubmitNewThread(
+    intent: ComposerIntent,
+    expectedTurnId: string | null,
+  ): Promise<void>;
   requestError: string | null;
   selectedSettings: SelectedThreadSettings | null;
   selectedSummary: NativeThreadSummary | null;
@@ -1279,71 +1509,104 @@ function AgentSurface({
   threadLoading: boolean;
   titleProjection: ThreadTitleProjection | undefined;
 }) {
+  const draftSettings = defaultDraftSettings(models);
+  const draftProject =
+    newThreadDraft === null
+      ? undefined
+      : configuredProjects.find(
+          (project) => project.workspace === newThreadDraft.workspace,
+        );
+  const draftProjectLabel =
+    newThreadDraft?.workspace === null || newThreadDraft === null
+      ? null
+      : projectLabel(newThreadDraft.workspace);
+  const draftProjectError =
+    newThreadDraft?.workspace !== null &&
+    newThreadDraft !== null &&
+    draftProject === undefined
+      ? "This Project is no longer available. Choose another Project."
+      : null;
   return (
-    <section className="agent-surface">
-      <header className="workspace-header">
-        <div className="workspace-heading-row">
-          <button
-            className="icon-button mobile-menu"
-            type="button"
-            aria-label="Open sidebar"
-            onClick={onOpenSidebar}
-          >
-            <Icon name="tree" />
-          </button>
-          <div className="thread-heading">
-            {selectedSummary === null ? (
-              <strong>Start a conversation</strong>
-            ) : (
-              <ThreadTitleEditor
-                editable={!selectedSummary.archived}
-                onRename={onRename}
-                onRetry={onRetryTitle}
-                projection={titleProjection}
-                title={threadTitle(selectedSummary)}
+    <section
+      className={`agent-surface${newThreadDraft === null ? "" : " new-thread-draft-surface"}`}
+    >
+      {newThreadDraft !== null ? (
+        <button
+          className="icon-button mobile-menu new-thread-draft-mobile"
+          type="button"
+          aria-label="Open sidebar"
+          onClick={onOpenSidebar}
+        >
+          <Icon name="tree" />
+        </button>
+      ) : (
+        <header className="workspace-header">
+          <div className="workspace-heading-row">
+            <button
+              className="icon-button mobile-menu"
+              type="button"
+              aria-label="Open sidebar"
+              onClick={onOpenSidebar}
+            >
+              <Icon name="tree" />
+            </button>
+            <div className="thread-heading">
+              {selectedSummary === null ? (
+                <strong>Start a conversation</strong>
+              ) : (
+                <ThreadTitleEditor
+                  editable={!selectedSummary.archived}
+                  onRename={onRename}
+                  onRetry={onRetryTitle}
+                  projection={titleProjection}
+                  title={threadTitle(selectedSummary)}
+                />
+              )}
+              <span>
+                {selectedSummary === null
+                  ? "Select a Thread or create a new one"
+                  : selectedSummary.status === "systemError"
+                    ? "Unavailable journal"
+                    : selectedSummary.currentMetadata.cwd}
+              </span>
+            </div>
+          </div>
+          <div className="top-actions">
+            {selectedSummary === null ||
+            selectedSummary.status === "systemError" ||
+            selectedSummary.archived ? null : (
+              <ThreadLifecycleAction
+                archived={selectedSummary.archived}
+                busy={threadLifecycleBusy || threadArchiving}
+                error={threadLifecycleError}
+                hasActiveTurn={threadHasActiveTurn(
+                  selectedSummary,
+                  threadDetail,
+                )}
+                onChange={onChangeThreadLifecycle}
               />
             )}
-            <span>
-              {selectedSummary === null
-                ? "Select a Thread or create a new one"
-                : selectedSummary.status === "systemError"
-                  ? "Unavailable journal"
-                  : selectedSummary.currentMetadata.cwd}
-            </span>
+            <button
+              className="icon-button search-thread"
+              type="button"
+              aria-label="Thread search is not available in this build"
+              disabled
+            >
+              <Icon name="search" />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="Open workspace panel"
+              aria-haspopup="dialog"
+              disabled={threadDetail === null}
+              onClick={onOpenWorkspace}
+            >
+              <Icon name="panel-right" />
+            </button>
           </div>
-        </div>
-        <div className="top-actions">
-          {selectedSummary === null ||
-          selectedSummary.status === "systemError" ||
-          selectedSummary.archived ? null : (
-            <ThreadLifecycleAction
-              archived={selectedSummary.archived}
-              busy={threadLifecycleBusy || threadArchiving}
-              error={threadLifecycleError}
-              hasActiveTurn={threadHasActiveTurn(selectedSummary, threadDetail)}
-              onChange={onChangeThreadLifecycle}
-            />
-          )}
-          <button
-            className="icon-button search-thread"
-            type="button"
-            aria-label="Thread search is not available in this build"
-            disabled
-          >
-            <Icon name="search" />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            aria-label="Open workspace panel"
-            aria-haspopup="dialog"
-            disabled={threadDetail === null}
-            onClick={onOpenWorkspace}
-          >
-            <Icon name="panel-right" />
-          </button>
-        </div>
-      </header>
+        </header>
+      )}
 
       {serverStatus.type === "error" || requestError !== null ? (
         <EmptyState
@@ -1383,6 +1646,59 @@ function AgentSurface({
           error
           title="Could not open conversation"
           detail={threadError}
+        />
+      ) : newThreadDraft !== null ? (
+        <ThreadView
+          approvals={[]}
+          composer={newThreadDraft.composer}
+          composerContext={
+            <NewThreadProjectSelector
+              disabled={
+                newThreadDraft.composer.submission?.status === "pending"
+              }
+              onChange={onNewThreadProjectChange}
+              projects={configuredProjects}
+              selectedWorkspace={newThreadDraft.workspace}
+            />
+          }
+          emptyContent={
+            <div className="thread-empty new-thread-draft-empty">
+              <div className="empty-glyph" aria-hidden="true">
+                <Icon name="compose" size={20} />
+              </div>
+              <h2>
+                {draftProjectLabel === null
+                  ? "What should we build?"
+                  : `What should we build in ${draftProjectLabel}?`}
+              </h2>
+            </div>
+          }
+          imageCapabilityError={imageCapabilityMessage(
+            providerProfiles,
+            draftSettings,
+          )}
+          imageCapabilityNotice={imageCapabilityNotice(
+            providerProfiles,
+            draftSettings,
+          )}
+          modelDisabled
+          modelError={
+            draftProjectError ?? modelUpdateError ?? modelCatalogError
+          }
+          models={models}
+          providerProfiles={providerProfiles}
+          permissionLabel={null}
+          selectedModel={draftSettings?.model}
+          selectedReasoningEffort={draftSettings?.reasoningEffort}
+          thread={null}
+          onDraftChange={onNewThreadDraftChange}
+          onImportImages={onImportNewThreadImages}
+          onPickImages={onPickNewThreadImages}
+          onReadAttachment={onReadAttachment}
+          onRemoveImage={onRemoveNewThreadImage}
+          onInterrupt={async () => undefined}
+          onRespondToApproval={onRespondToApproval}
+          onSubmit={onSubmitNewThread}
         />
       ) : selectedSummary === null || threadDetail === null ? (
         <EmptyState
@@ -1466,6 +1782,154 @@ function AgentSurface({
         </>
       )}
     </section>
+  );
+}
+
+function NewThreadProjectSelector({
+  disabled,
+  onChange,
+  projects,
+  selectedWorkspace,
+}: {
+  disabled: boolean;
+  onChange(workspace: string): void;
+  projects: readonly ZenXProjectProjectionEntry[];
+  selectedWorkspace: string | null;
+}) {
+  const [open, setOpen] = useState(selectedWorkspace === null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const selectedProject = projects.find(
+    (project) => project.workspace === selectedWorkspace,
+  );
+  const selectedLabel =
+    selectedWorkspace === null
+      ? "Choose a Project"
+      : selectedProject === undefined
+        ? `${projectLabel(selectedWorkspace)} unavailable`
+        : projectLabel(selectedProject.workspace);
+
+  const closeAndRestoreFocus = () => {
+    setOpen(false);
+    queueMicrotask(() => triggerRef.current?.focus());
+  };
+
+  useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const focusSelected = () => {
+      const selected = menuRef.current?.querySelector<HTMLButtonElement>(
+        '[role="menuitemradio"][aria-checked="true"]',
+      );
+      (
+        selected ??
+        menuRef.current?.querySelector<HTMLButtonElement>(
+          '[role="menuitemradio"]',
+        )
+      )?.focus();
+    };
+    queueMicrotask(focusSelected);
+    const onPointerDown = (event: PointerEvent) => {
+      if (rootRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeAndRestoreFocus();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="new-thread-project-context" ref={rootRef}>
+      <div
+        className="new-thread-project-current"
+        title={selectedWorkspace ?? undefined}
+      >
+        <Icon name="folder" size={13} />
+        <span>{selectedLabel}</span>
+      </div>
+      <button
+        ref={triggerRef}
+        className="new-thread-project-trigger"
+        type="button"
+        aria-controls={open ? "new-thread-project-menu" : undefined}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        disabled={disabled}
+        onClick={() => setOpen((value) => !value)}
+      >
+        Change Project
+        <Icon name="chevron-down" size={12} />
+      </button>
+      {open ? (
+        <div
+          ref={menuRef}
+          className="new-thread-project-menu"
+          id="new-thread-project-menu"
+          role="menu"
+          aria-label="Choose a Project"
+          onKeyDown={(event) => {
+            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
+              return;
+            const options = Array.from(
+              event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                '[role="menuitemradio"]',
+              ),
+            );
+            if (options.length === 0) return;
+            event.preventDefault();
+            const currentIndex = options.indexOf(
+              document.activeElement as HTMLButtonElement,
+            );
+            const nextIndex =
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? options.length - 1
+                  : currentIndex === -1
+                    ? event.key === "ArrowUp"
+                      ? options.length - 1
+                      : 0
+                    : event.key === "ArrowUp"
+                      ? (currentIndex - 1 + options.length) % options.length
+                      : (currentIndex + 1) % options.length;
+            options[nextIndex]?.focus();
+          }}
+        >
+          {projects.map((project) => {
+            const selected = project.workspace === selectedWorkspace;
+            return (
+              <button
+                key={project.key}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selected}
+                title={project.workspace}
+                onClick={() => {
+                  onChange(project.workspace);
+                  closeAndRestoreFocus();
+                }}
+              >
+                <Icon name="folder" size={13} />
+                <span>{projectLabel(project.workspace)}</span>
+                {selected ? <Icon name="check" size={13} /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1732,6 +2196,27 @@ function unavailableSelectionMessage(
   return provider === undefined
     ? `Provider profile “${settings.modelProvider}” was deleted. Choose a model before sending.`
     : `The configured model from “${provider.displayName}” is hidden or unavailable. Choose another model before sending.`;
+}
+
+function defaultDraftSettings(
+  models: readonly ModelSummary[],
+): SelectedThreadSettings | null {
+  const model = models.find(
+    (candidate) => candidate.isDefault && !candidate.hidden,
+  );
+  return model === undefined
+    ? null
+    : {
+        threadId: "",
+        model: model.id,
+        modelProvider: model.model,
+        reasoningEffort: model.defaultReasoningEffort,
+      };
+}
+
+function projectLabel(workspace: string): string {
+  const normalized = workspace.replace(/[\\/]+$/u, "");
+  return normalized.split(/[\\/]/u).filter(Boolean).at(-1) ?? workspace;
 }
 
 async function composerSubmissionInput(

@@ -8,9 +8,7 @@ import {
   deriveProjectGroups,
   moveSidebarProject,
   moveSidebarThread,
-  projectThreadStartParams,
   readSidebarMode,
-  startProjectThread,
   lastUsedProjectWorkspace,
   threadModelIdentity,
   threadPreview,
@@ -244,17 +242,13 @@ test("keeps a configured project visible when it has no threads", () => {
   );
 });
 
-test("blocks no-project Thread creation and binds creation after Add project", () => {
+test("resolves last-used Project only from an explicit configured projection", () => {
   const empty = {
     projects: [],
     unavailableThreadIds: [],
     lastUsedWorkspace: null,
   };
   assert.equal(lastUsedProjectWorkspace(empty), null);
-  assert.throws(
-    () => projectThreadStartParams(lastUsedProjectWorkspace(empty)),
-    /Add a Project/u,
-  );
   const configured = {
     projects: [
       {
@@ -268,10 +262,6 @@ test("blocks no-project Thread creation and binds creation after Add project", (
     unavailableThreadIds: [],
     lastUsedWorkspace: null,
   };
-  assert.deepEqual(
-    projectThreadStartParams(configured.projects[0]!.workspace),
-    { cwd: "/work/selected" },
-  );
   assert.equal(lastUsedProjectWorkspace(configured), null);
   assert.equal(
     lastUsedProjectWorkspace({
@@ -280,80 +270,6 @@ test("blocks no-project Thread creation and binds creation after Add project", (
     }),
     "/work/selected",
   );
-});
-
-test("records last-used only after Project Thread creation succeeds", async () => {
-  const remembered: string[] = [];
-  await assert.rejects(
-    startProjectThread(
-      "/work/failing",
-      async () => undefined,
-      async () => {
-        throw new Error("start failed");
-      },
-      (workspace) => remembered.push(workspace),
-    ),
-    /start failed/u,
-  );
-  assert.equal(remembered.length, 0);
-
-  const result = await startProjectThread(
-    "/work/created",
-    async () => undefined,
-    async (params) => ({ id: "thread-created", ...params }),
-    (workspace) => remembered.push(workspace),
-  );
-  assert.deepEqual(result, {
-    id: "thread-created",
-    cwd: "/work/created",
-  });
-  assert.deepEqual(remembered, ["/work/created"]);
-});
-
-test("configures a derived Project before starting its Thread", async () => {
-  const events: string[] = [];
-
-  await startProjectThread(
-    "/work/derived",
-    async (workspace) => {
-      events.push(`configure:${workspace}`);
-    },
-    async ({ cwd }) => {
-      events.push(`start:${cwd}`);
-      return { id: "thread-derived" };
-    },
-    (workspace) => events.push(`started:${workspace}`),
-  );
-
-  assert.deepEqual(events, [
-    "configure:/work/derived",
-    "start:/work/derived",
-    "started:/work/derived",
-  ]);
-});
-
-test("waits for the successful Project Thread post-start commit", async () => {
-  const commitEntered = deferred<void>();
-  const releaseCommit = deferred<void>();
-  let completed = false;
-
-  const pending = startProjectThread(
-    "/work/committed",
-    async () => undefined,
-    async () => ({ id: "thread-committed" }),
-    async () => {
-      commitEntered.resolve();
-      await releaseCommit.promise;
-    },
-  ).then(() => {
-    completed = true;
-  });
-  await commitEntered.promise;
-  assert.equal(completed, false);
-
-  releaseCommit.resolve();
-  await pending;
-  assert.equal(completed, true);
 });
 
 test("presents trigger wakeups without leaking raw system prompts", () => {
@@ -455,15 +371,4 @@ function project(key: string, threadIds: string[]) {
     isDefault: false,
     threadIds,
   };
-}
-
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve(value: T | PromiseLike<T>): void;
-} {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((onResolve) => {
-    resolve = onResolve;
-  });
-  return { promise, resolve };
 }
