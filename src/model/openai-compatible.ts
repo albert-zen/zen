@@ -130,6 +130,10 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       messages,
       n: 1,
       stream: true,
+      ...(reasoningPolicy.supportsUsageInStreaming &&
+      !Object.hasOwn(this.#defaultParams, "stream_options")
+        ? { stream_options: { include_usage: true } }
+        : {}),
       reasoning_effort: compatibleReasoningEffort({
         policy: reasoningPolicy,
         requestEffort: request.reasoningEffort,
@@ -200,6 +204,7 @@ interface CompatibleReasoningPolicy {
   replay: ReasoningReplay;
   forwardReasoningEffort: boolean;
   enableToolStream: boolean;
+  supportsUsageInStreaming: boolean;
 }
 
 function compatibleReasoningPolicy(options: {
@@ -225,6 +230,7 @@ function compatibleReasoningPolicy(options: {
           : "all-assistant",
       forwardReasoningEffort: true,
       enableToolStream: false,
+      supportsUsageInStreaming: isDashScope,
     };
   }
 
@@ -239,6 +245,7 @@ function compatibleReasoningPolicy(options: {
           : "tool-calls",
       forwardReasoningEffort: isDashScope || isZhipu,
       enableToolStream: true,
+      supportsUsageInStreaming: isDashScope,
     };
   }
 
@@ -247,6 +254,7 @@ function compatibleReasoningPolicy(options: {
       replay: "tool-calls",
       forwardReasoningEffort: false,
       enableToolStream: false,
+      supportsUsageInStreaming: true,
     };
   }
 
@@ -254,6 +262,7 @@ function compatibleReasoningPolicy(options: {
     replay: "all-assistant",
     forwardReasoningEffort: true,
     enableToolStream: false,
+    supportsUsageInStreaming: false,
   };
 }
 
