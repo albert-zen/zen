@@ -166,6 +166,19 @@ test("reasoning detail uses the safe Markdown renderer", async () => {
   });
 });
 
+test("assistant messages omit the identity row while preserving metadata and content", () => {
+  const html = renderTurns([
+    turnWithItems("completed", [user("request"), agent("Final answer")], 1_000),
+  ]);
+
+  assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
+  assert.match(
+    html,
+    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
+  );
+  assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
+});
+
 test("renders compact token-weighted cache usage for the Thread and each Turn", () => {
   const html = renderTurns(
     [
