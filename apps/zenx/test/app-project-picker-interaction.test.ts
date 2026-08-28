@@ -616,6 +616,110 @@ test("a pending first Send finishes without stealing a newer navigation", async 
   }
 });
 
+test("explicit newer draft discards stale recovery before unrelated errors", async () => {
+  const create = deferred<ReturnType<typeof started>>();
+  let starts = 0;
+  const harness = await mountApp(oneProject(), {
+    markWorkspaceUsed: async () => {
+      throw new Error("later metadata error");
+    },
+    startProjectThread: async (workspace) => {
+      starts += 1;
+      if (starts === 1) return create.promise;
+      return started(liveThread(), workspace);
+    },
+    request: async (method) => {
+      if (method === "turn/start") return {};
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    let composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Old recoverable draft");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click(),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")?.click(),
+    );
+    await act(async () => create.reject(new Error("old create failed")));
+    await waitFor(() => exactButton("Restore draft"));
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "New draft wins");
+    assert.equal(exactButton("Restore draft"), undefined);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click(),
+    );
+    await waitFor(() =>
+      /later metadata error/u.test(document.body.textContent ?? ""),
+    );
+    assert.equal(exactButton("Restore draft"), undefined);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("selecting an existing Thread discards stale recovery", async () => {
+  const create = deferred<ReturnType<typeof started>>();
+  const existing = summary(false, "existing-thread", "Existing thread");
+  const harness = await mountApp(
+    {
+      projects: [
+        { ...oneProject().projects[0]!, threadIds: [existing.threadId] },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async (archived) => (archived ? [] : [existing]),
+      startProjectThread: async () => create.promise,
+      request: async (method) => {
+        if (method === "thread/resume") return resumed(liveThread());
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Recover me once");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click(),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")?.click(),
+    );
+    await act(async () => create.reject(new Error("create failed")));
+    await waitFor(() => exactButton("Restore draft"));
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[data-thread-id="existing-thread"] > .thread-row',
+        )
+        ?.click(),
+    );
+    await waitFor(() => document.querySelector("#thread-composer"));
+    assert.equal(exactButton("Restore draft"), undefined);
+    assert.match(document.body.textContent ?? "", /Existing thread/u);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("New thread without a last-used Project opens an unselected draft menu", async () => {
   let starts = 0;
   const harness = await mountApp(

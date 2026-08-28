@@ -184,8 +184,10 @@ export function App() {
   const [requestError, setRequestError] = useState<string | null>(null);
   const [optimisticSummary, setOptimisticSummary] =
     useState<NativeThreadSummary | null>(null);
-  const [recoverableDraft, setRecoverableDraft] =
-    useState<NewThreadDraft | null>(null);
+  const [draftRecoveryNotice, setDraftRecoveryNotice] = useState<{
+    draft: NewThreadDraft;
+    message: string;
+  } | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [threadLifecycleBusy, setThreadLifecycleBusy] = useState(false);
   const [threadLifecycleError, setThreadLifecycleError] = useState<
@@ -229,6 +231,8 @@ export function App() {
     confirmPinnedThreadIds(profile.pinnedThreadIds);
     confirmSidebarOrder(profile.sidebarOrder);
   };
+
+  const discardRecoverableDraft = () => setDraftRecoveryNotice(null);
 
   const confirmNewThreadDraft = (draft: NewThreadDraft | null) => {
     if (
@@ -377,6 +381,7 @@ export function App() {
   };
 
   const resumeThread = async (threadId: string, preserveNavigation = false) => {
+    discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
     confirmNewThreadDraft(null);
     const usageEpoch = ++threadUsageLoadEpoch.current;
@@ -647,6 +652,7 @@ export function App() {
   );
 
   const openNewThreadDraft = (workspace?: string) => {
+    discardRecoverableDraft();
     if (workspace === undefined && configuredProjects.length === 0) {
       openProjectPicker("new-thread");
       return;
@@ -933,15 +939,17 @@ export function App() {
             newThreadPendingDraftRef.current?.id === draftId
               ? newThreadPendingDraftRef.current
               : startedDraft;
-          setRecoverableDraft({
-            ...latestDraft,
-            composer: failComposerSubmission(
-              latestDraft.composer,
-              submission.clientUserMessageId,
-              message,
-            ),
+          setDraftRecoveryNotice({
+            draft: {
+              ...latestDraft,
+              composer: failComposerSubmission(
+                latestDraft.composer,
+                submission.clientUserMessageId,
+                message,
+              ),
+            },
+            message: `New Thread could not be created: ${message}`,
           });
-          setRequestError(`New Thread could not be created: ${message}`);
         }
       } else {
         updateComposer(createdThreadId, (state) =>
@@ -1099,6 +1107,7 @@ export function App() {
   };
 
   const openPage = (next: ProductPage) => {
+    discardRecoverableDraft();
     if (projectPickerIntentRef.current !== null) closeProjectPicker();
     if (next !== "agent") abandonNewThreadDraft();
     setPage(next);
@@ -1313,10 +1322,14 @@ export function App() {
         threads={activeSummaries}
       />
 
-      {projectError !== null || requestError !== null ? (
+      {projectError !== null ||
+      requestError !== null ||
+      draftRecoveryNotice !== null ? (
         <div className="app-notice" role="alert">
-          <span>{projectError ?? requestError}</span>
-          {recoverableDraft !== null ? (
+          <span>
+            {projectError ?? requestError ?? draftRecoveryNotice?.message}
+          </span>
+          {draftRecoveryNotice !== null ? (
             <button
               type="button"
               onClick={() => {
@@ -1330,9 +1343,8 @@ export function App() {
                 setSelectedSettings(null);
                 setThreadError(null);
                 setWorkspaceOpen(false);
-                confirmNewThreadDraft(recoverableDraft);
-                setRecoverableDraft(null);
-                setRequestError(null);
+                confirmNewThreadDraft(draftRecoveryNotice.draft);
+                discardRecoverableDraft();
               }}
             >
               Restore draft
@@ -1343,7 +1355,7 @@ export function App() {
             onClick={() => {
               setProjectError(null);
               setRequestError(null);
-              setRecoverableDraft(null);
+              discardRecoverableDraft();
             }}
           >
             Dismiss
