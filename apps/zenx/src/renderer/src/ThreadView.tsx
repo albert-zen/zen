@@ -544,7 +544,11 @@ function TurnBlock({
             />
           ))}
           {!complete && projection.finalItem !== null ? (
-            <AgentMessage item={projection.finalItem} turn={turn} usage={usage} />
+            <AgentMessage
+              item={projection.finalItem}
+              turn={turn}
+              usage={usage}
+            />
           ) : null}
         </div>
       ) : null}
