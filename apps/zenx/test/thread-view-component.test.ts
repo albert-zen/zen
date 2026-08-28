@@ -122,7 +122,11 @@ test("reasoning detail uses the safe Markdown renderer", async () => {
   await withDom(async (root) => {
     const row = await openReasoningRow(
       root,
-      reasoningItem("reasoning-markdown", ["Reasoning"], ["**bold**\n\n`code`"]),
+      reasoningItem(
+        "reasoning-markdown",
+        ["Reasoning"],
+        ["**bold**\n\n`code`"],
+      ),
     );
     await act(async () => requiredButton(".trace-item-toggle").click());
     const detail = requiredElement(".trace-detail");
