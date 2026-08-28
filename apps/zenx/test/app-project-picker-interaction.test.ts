@@ -7,6 +7,7 @@ import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
+import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
 import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projection.js";
 import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
@@ -709,6 +710,82 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
   }
 });
 
+test("conversation header owns thread cache telemetry and only retains workspace action", async () => {
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async (archived) => (archived ? [] : [summary(false)]),
+      modelUsage: async () => ({
+        thread: {
+          responseCount: 1,
+          inputTokens: 200,
+          cachedInputTokens: 50,
+          outputTokens: 25,
+          cacheHitRate: undefined,
+        },
+        turns: {},
+      }),
+      request: async (method) => {
+        if (method === "thread/resume")
+          return { thread: liveThread(), model: "fake", modelProvider: "fake" };
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")?.click(),
+    );
+    await waitFor(() => document.getElementById("thread-composer"));
+    assert.match(
+      document.querySelector(".workspace-header .thread-usage")?.textContent ??
+        "",
+      /Thread cache unknown · 200 in · 25 out/u,
+    );
+    assert.equal(
+      document.querySelector(".messages-inner > .thread-usage"),
+      null,
+    );
+    const workspaceAction = document.querySelector(
+      '.workspace-header [aria-label="Open workspace panel"]',
+    );
+    assert.equal(
+      workspaceAction?.previousElementSibling?.className,
+      "thread-usage",
+    );
+    assert.equal(
+      document
+        .querySelector('.workspace-header [aria-label="Open workspace panel"]')
+        ?.getAttribute("disabled"),
+      null,
+    );
+    assert.equal(
+      document.querySelector(
+        '.workspace-header [aria-label="Thread search is not available in this build"]',
+      ),
+      null,
+    );
+    assert.doesNotMatch(
+      document.querySelector(".workspace-header")?.textContent ?? "",
+      /Archive/u,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("Sidebar archive clears the selected Chat and opens its Settings restore entry", async () => {
   let archived = false;
   let persistedPins = ["thread-1"];
@@ -1134,6 +1211,7 @@ async function mountApp(
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
     models?: ModelSummary[];
+    modelUsage?(): Promise<ModelUsageProjection>;
     markWorkspaceUsed?(
       workspace: string,
     ): Promise<ReturnType<typeof publicSettings>>;
@@ -1197,10 +1275,13 @@ async function mountApp(
       forThread: async () => ({}),
     },
     modelUsage: {
-      forThread: async () => ({
-        thread: { responseCount: 0, inputTokens: 0, outputTokens: 0 },
-        turns: {},
-      }),
+      forThread: async () =>
+        options.modelUsage === undefined
+          ? {
+              thread: { responseCount: 0, inputTokens: 0, outputTokens: 0 },
+              turns: {},
+            }
+          : await options.modelUsage(),
     },
     projects: {
       get: async () =>

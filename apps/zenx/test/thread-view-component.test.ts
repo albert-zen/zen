@@ -76,7 +76,7 @@ test("assistant messages omit the identity row while preserving metadata and con
   assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
 });
 
-test("renders compact token-weighted cache usage for the Thread and each Turn", () => {
+test("renders compact token-weighted cache usage for each Turn, not the message body", () => {
   const html = renderTurns(
     [
       turnWithItems("completed", [user("request"), agent("Done")], 1_000),
@@ -110,7 +110,7 @@ test("renders compact token-weighted cache usage for the Thread and each Turn", 
     },
   );
 
-  assert.match(html, /Thread cache 33% · 200 in · 25 out/u);
+  assert.doesNotMatch(html, /Thread cache 33% · 200 in · 25 out/u);
   assert.match(html, /Cache 40% · 150 in · 17 out/u);
   assert.match(html, /Cache unknown · 50 in · 8 out/u);
   assert.doesNotMatch(html, /Cache 0% · 50 in/u);

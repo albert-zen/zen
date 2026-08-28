@@ -78,8 +78,7 @@ import {
   type SidebarMode,
 } from "./thread-list.js";
 import { applyThreadViewNotification } from "./thread-view-state.js";
-import { ThreadLifecycleAction } from "./ThreadLifecycleAction.js";
-import { ThreadView } from "./ThreadView.js";
+import { ThreadView, usageLabel } from "./ThreadView.js";
 
 type ProductPage = string;
 const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
@@ -161,10 +160,6 @@ export function App() {
   });
   const [requestError, setRequestError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
-  const [threadLifecycleBusy, setThreadLifecycleBusy] = useState(false);
-  const [threadLifecycleError, setThreadLifecycleError] = useState<
-    string | null
-  >(null);
   const [archivingThreadIds, setArchivingThreadIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
@@ -312,7 +307,6 @@ export function App() {
     setThreadUsage(undefined);
     setSelectedSettings(null);
     setModelUpdateError(null);
-    setThreadLifecycleError(null);
     setThreadLoading(true);
     setThreadError(null);
     void loadComposerCatalog();
@@ -913,19 +907,6 @@ export function App() {
     await loadProjects();
   };
 
-  const changeThreadLifecycle = async () => {
-    if (selectedSummary === null) return;
-    setThreadLifecycleBusy(true);
-    setThreadLifecycleError(null);
-    try {
-      await performThreadLifecycle(selectedSummary, true);
-    } catch (error) {
-      setThreadLifecycleError(describeError(error));
-    } finally {
-      setThreadLifecycleBusy(false);
-    }
-  };
-
   return (
     <div className="app-shell">
       <Sidebar
@@ -1108,7 +1089,6 @@ export function App() {
             }}
             onModelChange={(model) => void changeModel(model)}
             onReasoningChange={(effort) => void changeReasoning(effort)}
-            onChangeThreadLifecycle={changeThreadLifecycle}
             hasProjects={projects.projects.some(
               (project) => project.configured,
             )}
@@ -1141,8 +1121,6 @@ export function App() {
             selectedSummary={selectedSummary}
             serverStatus={serverStatus}
             switchingModel={switchingModel}
-            threadLifecycleBusy={threadLifecycleBusy}
-            threadLifecycleError={threadLifecycleError}
             threadArchiving={
               threadDetail !== null && archivingThreadIds.has(threadDetail.id)
             }
@@ -1198,7 +1176,6 @@ function AgentSurface({
   providerProfiles,
   modelCatalogError,
   modelUpdateError,
-  onChangeThreadLifecycle,
   onDraftChange,
   onImportImages,
   onPickImages,
@@ -1222,8 +1199,6 @@ function AgentSurface({
   selectedSummary,
   serverStatus,
   switchingModel,
-  threadLifecycleBusy,
-  threadLifecycleError,
   threadArchiving,
   threadDetail,
   threadError,
@@ -1239,7 +1214,6 @@ function AgentSurface({
   providerProfiles: ZenXProviderProfile[];
   modelCatalogError: string | null;
   modelUpdateError: string | null;
-  onChangeThreadLifecycle(): Promise<void>;
   onDraftChange(threadId: string, draft: string): void;
   onImportImages(threadId: string, files: readonly File[]): Promise<void>;
   onPickImages(threadId: string): Promise<void>;
@@ -1271,8 +1245,6 @@ function AgentSurface({
   selectedSummary: NativeThreadSummary | null;
   serverStatus: AppServerHostStatus;
   switchingModel: boolean;
-  threadLifecycleBusy: boolean;
-  threadLifecycleError: string | null;
   threadArchiving: boolean;
   threadDetail: Thread | null;
   threadError: string | null;
@@ -1313,25 +1285,12 @@ function AgentSurface({
           </div>
         </div>
         <div className="top-actions">
-          {selectedSummary === null ||
-          selectedSummary.status === "systemError" ||
-          selectedSummary.archived ? null : (
-            <ThreadLifecycleAction
-              archived={selectedSummary.archived}
-              busy={threadLifecycleBusy || threadArchiving}
-              error={threadLifecycleError}
-              hasActiveTurn={threadHasActiveTurn(selectedSummary, threadDetail)}
-              onChange={onChangeThreadLifecycle}
-            />
+          {threadUsage === undefined ||
+          threadUsage.thread.responseCount === 0 ? null : (
+            <small className="thread-usage">
+              {usageLabel(threadUsage.thread, "Thread cache")}
+            </small>
           )}
-          <button
-            className="icon-button search-thread"
-            type="button"
-            aria-label="Thread search is not available in this build"
-            disabled
-          >
-            <Icon name="search" />
-          </button>
           <button
             className="icon-button"
             type="button"

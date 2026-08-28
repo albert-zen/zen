@@ -215,12 +215,6 @@ export function ThreadView({
         }}
       >
         <div className="messages-inner">
-          {threadUsage === undefined ||
-          threadUsage.thread.responseCount === 0 ? null : (
-            <div className="thread-usage">
-              {usageLabel(threadUsage.thread, "Thread cache")}
-            </div>
-          )}
           {thread.turns.length === 0 ? (
             <div className="thread-empty">
               <div className="empty-glyph" aria-hidden="true">
@@ -550,7 +544,7 @@ function TurnBlock({
   );
 }
 
-function usageLabel(usage: ModelUsageAggregate, prefix: string): string {
+export function usageLabel(usage: ModelUsageAggregate, prefix: string): string {
   const cache =
     usage.cacheHitRate === undefined
       ? `${prefix} unknown`
