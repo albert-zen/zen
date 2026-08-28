@@ -219,6 +219,10 @@ function compatibleReasoningPolicy(options: {
   const familyModel = model.split("/").at(-1) ?? model;
   const isDashScope =
     provider.includes("dashscope") || isDashScopeHostname(endpointHostname);
+  const supportsUsageInStreaming =
+    isDashScope ||
+    provider === "deepseek" ||
+    isDeepSeekHostname(endpointHostname);
   const isZhipu =
     provider.includes("zhipu") || endpointHostname.endsWith(".bigmodel.cn");
 
@@ -230,7 +234,7 @@ function compatibleReasoningPolicy(options: {
           : "all-assistant",
       forwardReasoningEffort: true,
       enableToolStream: false,
-      supportsUsageInStreaming: isDashScope,
+      supportsUsageInStreaming,
     };
   }
 
@@ -245,7 +249,7 @@ function compatibleReasoningPolicy(options: {
           : "tool-calls",
       forwardReasoningEffort: isDashScope || isZhipu,
       enableToolStream: true,
-      supportsUsageInStreaming: isDashScope,
+      supportsUsageInStreaming,
     };
   }
 
@@ -254,7 +258,7 @@ function compatibleReasoningPolicy(options: {
       replay: "tool-calls",
       forwardReasoningEffort: false,
       enableToolStream: false,
-      supportsUsageInStreaming: true,
+      supportsUsageInStreaming,
     };
   }
 
@@ -262,7 +266,7 @@ function compatibleReasoningPolicy(options: {
     replay: "all-assistant",
     forwardReasoningEffort: true,
     enableToolStream: false,
-    supportsUsageInStreaming: false,
+    supportsUsageInStreaming,
   };
 }
 
@@ -298,6 +302,10 @@ function isDashScopeHostname(hostname: string): boolean {
     labels[3] === "aliyuncs" &&
     labels[4] === "com"
   );
+}
+
+function isDeepSeekHostname(hostname: string): boolean {
+  return hostname === "api.deepseek.com";
 }
 
 function zhipuPreservedThinking(

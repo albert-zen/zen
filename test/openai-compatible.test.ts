@@ -464,6 +464,17 @@ test("requests streaming usage for known DeepSeek and DashScope endpoints", asyn
   }
 });
 
+test("does not infer streaming usage support from a DeepSeek-looking model name", async () => {
+  const body = await captureRequestBody({
+    provider: "custom-provider",
+    baseUrl: "https://unknown-proxy.test/v1",
+    model: "deepseek-chat",
+    messages: [],
+  });
+
+  assert.equal("stream_options" in body, false);
+});
+
 test("parses DashScope terminal usage chunk with empty choices", async () => {
   const adapter = new OpenAiCompatibleModel({
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
