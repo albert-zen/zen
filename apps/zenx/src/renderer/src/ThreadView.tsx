@@ -517,18 +517,12 @@ function TurnBlock({
           onClick={() => setExpanded((value) => !value)}
         >
           <span>{completedTurnLabel(turn)}</span>
-          {usage === undefined ? null : (
-            <small className="turn-usage">{usageLabel(usage, "Cache")}</small>
-          )}
           <Icon name="chevron-down" size={14} />
         </button>
       ) : (
         <div className="turn-running-label" aria-live="polite">
           <span className="mini-spinner" aria-hidden="true" />
           <span>Working</span>
-          {usage === undefined ? null : (
-            <small className="turn-usage">{usageLabel(usage, "Cache")}</small>
-          )}
         </div>
       )}
       {!complete || expanded ? (
@@ -1066,7 +1060,7 @@ function MessageActions({
           className="message-time"
           dateTime={new Date(turn.completedAt * 1_000).toISOString()}
         >
-          {terminalTimeLabel(turn.status)} {formatCompletedAt(turn.completedAt)}
+          {formatCompletedAt(turn.completedAt)}
         </time>
       )}
       {usage === undefined ? null : (
@@ -1074,8 +1068,14 @@ function MessageActions({
           {usageLabel(usage, "Cache")}
         </span>
       )}
-      <button type="button" aria-label={copyLabel} onClick={() => void copy()}>
-        {copied ? "Copied" : "Copy"}
+      <button
+        className="message-copy"
+        type="button"
+        aria-label={copied ? copyLabel.replace(/^Copy/u, "Copied") : copyLabel}
+        title={copied ? "Copied" : "Copy"}
+        onClick={() => void copy()}
+      >
+        <Icon name={copied ? "check" : "copy"} size={14} />
       </button>
     </div>
   );
@@ -1160,21 +1160,28 @@ function completedTurnLabel(turn: Turn): string {
   return `${result} for ${formatDuration(duration)}`;
 }
 
-function terminalTimeLabel(status: Turn["status"]): string {
-  return status === "completed"
-    ? "Completed"
-    : status === "interrupted"
-      ? "Interrupted"
-      : status === "failed"
-        ? "Failed"
-        : "Ended";
-}
-
 function formatCompletedAt(seconds: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(seconds * 1_000));
+  const completed = new Date(seconds * 1_000);
+  const now = new Date();
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(completed);
+  if (
+    completed.getFullYear() === now.getFullYear() &&
+    completed.getMonth() === now.getMonth() &&
+    completed.getDate() === now.getDate()
+  ) {
+    return time;
+  }
+  const date = new Intl.DateTimeFormat(
+    undefined,
+    completed.getFullYear() === now.getFullYear()
+      ? { month: "short", day: "numeric" }
+      : { year: "numeric", month: "short", day: "numeric" },
+  ).format(completed);
+  return `${date} ${time}`;
 }
 
 function formatDuration(milliseconds: number): string {
