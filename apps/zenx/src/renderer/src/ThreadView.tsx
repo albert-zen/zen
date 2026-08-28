@@ -1058,9 +1058,12 @@ function MessageActions({
   return (
     <div className={`message-actions ${className}`}>
       {turn.completedAt === null ? null : (
-        <span className="message-time">
+        <time
+          className="message-time"
+          dateTime={new Date(turn.completedAt * 1_000).toISOString()}
+        >
           Completed {formatCompletedAt(turn.completedAt)}
-        </span>
+        </time>
       )}
       {usage === undefined ? null : (
         <span className="message-cache" title="Turn cache telemetry">
