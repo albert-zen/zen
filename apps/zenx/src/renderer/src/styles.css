@@ -1125,48 +1125,6 @@ a:focus-visible {
   flex-wrap: nowrap;
   margin-left: auto;
 }
-.thread-lifecycle-control {
-  position: relative;
-}
-.thread-lifecycle-action {
-  min-height: 36px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-3);
-  font-size: 11px;
-  transition:
-    color 160ms ease,
-    border-color 160ms ease,
-    background 160ms ease;
-}
-.thread-lifecycle-action:hover:not(:disabled),
-.thread-lifecycle-action:focus-visible {
-  border-color: var(--border);
-  background: var(--surface-2);
-  color: var(--text);
-}
-.thread-action-error {
-  position: absolute;
-  top: calc(100% + 7px);
-  right: 0;
-  z-index: 10;
-  width: max-content;
-  max-width: min(320px, 70vw);
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-  border-radius: 8px;
-  background: var(--surface-danger);
-  box-shadow: 0 10px 28px var(--shadow-color);
-  color: var(--danger);
-  font-size: 10px;
-  line-height: 1.4;
-}
-
 .thread-view {
   position: relative;
   min-width: 0;
@@ -4000,19 +3958,6 @@ a:focus-visible {
   }
   .thread-row {
     padding-right: 52px;
-  }
-  .thread-lifecycle-action {
-    width: 44px;
-    height: 44px;
-    justify-content: center;
-    padding: 0;
-  }
-  .thread-lifecycle-action > span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
   }
   .directory-picker-backdrop {
     padding: 0;
