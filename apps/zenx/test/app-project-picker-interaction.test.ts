@@ -710,11 +710,14 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
 });
 
 test("macOS title-bar toggle controls the compact sidebar without changing desktop collapse preference", async () => {
-  const harness = await mountApp({
-    projects: [],
-    unavailableThreadIds: [],
-    lastUsedWorkspace: null,
-  });
+  const harness = await mountApp(
+    {
+      projects: [],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: null,
+    },
+    { initialSidebarCollapsed: true },
+  );
   try {
     Object.defineProperty(harness.dom.window, "innerWidth", {
       configurable: true,
@@ -728,15 +731,53 @@ test("macOS title-bar toggle controls the compact sidebar without changing deskt
       ".window-sidebar-toggle",
     );
     assert.ok(toggle);
+    const sidebar = document.querySelector<HTMLElement>("#zenx-sidebar");
+    assert.ok(sidebar);
     assert.equal(toggle.getAttribute("aria-label"), "Expand sidebar");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
     assert.equal(document.querySelector(".sidebar.open"), null);
+    assert.equal(sidebar.getAttribute("aria-hidden"), "true");
+    assert.equal(sidebar.hasAttribute("inert"), true);
+    const scrim = document.querySelector<HTMLButtonElement>(".sidebar-scrim");
+    assert.ok(scrim);
+    assert.equal(scrim.disabled, true);
+    assert.equal(scrim.getAttribute("aria-hidden"), "true");
 
+    toggle.focus();
     await act(async () => toggle.click());
     assert.ok(document.querySelector(".sidebar.open"));
     assert.equal(toggle.getAttribute("aria-label"), "Collapse sidebar");
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    assert.equal(sidebar.getAttribute("aria-hidden"), null);
+    assert.equal(sidebar.hasAttribute("inert"), false);
+    assert.equal(scrim.disabled, false);
+    assert.equal(scrim.getAttribute("aria-hidden"), null);
+    assert.equal(document.activeElement, sidebar);
+
+    await act(async () => {
+      harness.dom.window.dispatchEvent(
+        new harness.dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      );
+    });
+    assert.equal(document.querySelector(".sidebar.open"), null);
+    assert.equal(sidebar.getAttribute("aria-hidden"), "true");
+    assert.equal(sidebar.hasAttribute("inert"), true);
+    assert.equal(document.activeElement, toggle);
 
     await act(async () => toggle.click());
+    await act(async () => scrim.click());
     assert.equal(document.querySelector(".sidebar.open"), null);
+    assert.equal(document.activeElement, toggle);
+
+    await act(async () => toggle.click());
+    assert.ok(document.querySelector(".sidebar.open"));
+    assert.equal(
+      harness.dom.window.localStorage.getItem("zenx-sidebar-collapsed"),
+      "true",
+    );
 
     Object.defineProperty(harness.dom.window, "innerWidth", {
       configurable: true,
@@ -745,7 +786,24 @@ test("macOS title-bar toggle controls the compact sidebar without changing deskt
     await act(async () =>
       harness.dom.window.dispatchEvent(new harness.dom.window.Event("resize")),
     );
-    assert.equal(toggle.getAttribute("aria-label"), "Collapse sidebar");
+    assert.equal(toggle.getAttribute("aria-label"), "Expand sidebar");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.querySelector(".sidebar.open"), null);
+
+    Object.defineProperty(harness.dom.window, "innerWidth", {
+      configurable: true,
+      value: 480,
+    });
+    await act(async () =>
+      harness.dom.window.dispatchEvent(new harness.dom.window.Event("resize")),
+    );
+    assert.equal(toggle.getAttribute("aria-label"), "Expand sidebar");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.querySelector(".sidebar.open"), null);
+    assert.equal(
+      harness.dom.window.localStorage.getItem("zenx-sidebar-collapsed"),
+      "true",
+    );
   } finally {
     await unmountApp(harness);
   }
@@ -1173,6 +1231,7 @@ async function mountApp(
   options: {
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
+    initialSidebarCollapsed?: boolean;
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
     models?: ModelSummary[];
@@ -1202,6 +1261,12 @@ async function mountApp(
     window: dom.window,
     IS_REACT_ACT_ENVIRONMENT: true,
   });
+  if (options.initialSidebarCollapsed !== undefined) {
+    dom.window.localStorage.setItem(
+      "zenx-sidebar-collapsed",
+      String(options.initialSidebarCollapsed),
+    );
+  }
   let currentSettings = publicSettings(options.initialPinnedThreadIds ?? []);
   const zenx = {
     platform: "darwin",

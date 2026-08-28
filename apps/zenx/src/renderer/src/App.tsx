@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
@@ -99,6 +99,7 @@ export function App() {
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
   const pinnedThreadIdsRef = useRef<string[]>([]);
   const sidebarOrderRef = useRef<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
+  const sidebarOpenerRef = useRef<HTMLElement | null>(null);
   const profilePreferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -193,12 +194,35 @@ export function App() {
     ModelUsageProjection | undefined
   >();
 
+  const openSidebar = useCallback(() => {
+    const activeElement = document.activeElement;
+    sidebarOpenerRef.current =
+      activeElement instanceof HTMLElement ? activeElement : null;
+    setSidebarOpen(true);
+  }, []);
+
+  const closeSidebar = useCallback(() => {
+    setSidebarOpen(false);
+    const opener = sidebarOpenerRef.current;
+    sidebarOpenerRef.current = null;
+    opener?.focus();
+  }, []);
+
   useEffect(() => {
     const updateCompactLayout = () =>
       setCompactLayout(window.innerWidth <= COMPACT_LAYOUT_MAX_WIDTH);
     window.addEventListener("resize", updateCompactLayout);
     return () => window.removeEventListener("resize", updateCompactLayout);
   }, []);
+
+  useEffect(() => {
+    if (!compactLayout && sidebarOpen) closeSidebar();
+  }, [closeSidebar, compactLayout, sidebarOpen]);
+
+  useEffect(() => {
+    if (!compactLayout || !sidebarOpen) return;
+    document.getElementById("zenx-sidebar")?.focus();
+  }, [compactLayout, sidebarOpen]);
 
   const confirmPinnedThreadIds = (threadIds: readonly string[]) => {
     const confirmed = [...threadIds];
@@ -326,7 +350,7 @@ export function App() {
     selectedThreadIdRef.current = threadId;
     if (!preserveNavigation) {
       setPage("agent");
-      setSidebarOpen(false);
+      closeSidebar();
       setWorkspaceOpen(false);
     }
     setSelectedThreadId(threadId);
@@ -543,11 +567,11 @@ export function App() {
       if (event.key !== "Escape") return;
       if (projectPickerIntent !== null) setProjectPickerIntent(null);
       else if (workspaceOpen) setWorkspaceOpen(false);
-      else if (sidebarOpen) setSidebarOpen(false);
+      else if (sidebarOpen) closeSidebar();
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [projectPickerIntent, sidebarOpen, workspaceOpen]);
+  }, [closeSidebar, projectPickerIntent, sidebarOpen, workspaceOpen]);
 
   const activeSummaries = threadSummaries.map((summary) =>
     titleSnapshot[summary.threadId]?.title === undefined
@@ -609,7 +633,7 @@ export function App() {
       selectedThreadIdRef.current = result.thread.id;
       threadUsageLoadEpoch.current += 1;
       setPage("agent");
-      setSidebarOpen(false);
+      closeSidebar();
       setSelectedThreadId(result.thread.id);
       setThreadDetail(result.thread);
       setThreadAttachments({});
@@ -832,7 +856,7 @@ export function App() {
 
   const openPage = (next: ProductPage) => {
     setPage(next);
-    setSidebarOpen(false);
+    closeSidebar();
     setWorkspaceOpen(false);
   };
 
@@ -949,7 +973,10 @@ export function App() {
     }
   };
 
-  const sidebarHidden = compactLayout ? !sidebarOpen : sidebarCollapsed;
+  const sidebarVisible = compactLayout
+    ? sidebarOpen
+    : !isMacPlatform || !sidebarCollapsed;
+  const sidebarHidden = !sidebarVisible;
 
   return (
     <div
@@ -962,10 +989,11 @@ export function App() {
             type="button"
             aria-label={sidebarHidden ? "Expand sidebar" : "Collapse sidebar"}
             aria-controls="zenx-sidebar"
-            aria-pressed={sidebarHidden}
+            aria-expanded={sidebarVisible}
             onClick={() => {
               if (compactLayout) {
-                setSidebarOpen((open) => !open);
+                if (sidebarOpen) closeSidebar();
+                else openSidebar();
                 return;
               }
               setSidebarCollapsed((collapsed) => {
@@ -986,8 +1014,8 @@ export function App() {
       <Sidebar
         liveThread={threadDetail}
         mode={sidebarMode}
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
+        open={sidebarVisible}
+        onClose={closeSidebar}
         onChangeThreadLifecycle={(summary) =>
           performThreadLifecycle(summary, true)
         }
@@ -1101,7 +1129,7 @@ export function App() {
             onRetryArchived={() => void loadThreadSummaries(true)}
             onTabChange={setSettingsTab}
             onUnarchive={performThreadLifecycle}
-            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenSidebar={openSidebar}
             tab={settingsTab}
             pluginSnapshot={pluginSnapshot}
           />
@@ -1110,7 +1138,7 @@ export function App() {
             snapshot={pluginSnapshot}
             route={page}
             navigate={openPage}
-            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenSidebar={openSidebar}
           />
         ) : (
           <AgentSurface
@@ -1173,7 +1201,7 @@ export function App() {
               if (lastUsedWorkspace !== null) void newThread(lastUsedWorkspace);
               else setProjectPickerIntent("new-thread");
             }}
-            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenSidebar={openSidebar}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
             onRename={async (title) => {
               if (selectedSummary === null) return;

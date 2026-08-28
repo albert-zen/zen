@@ -175,6 +175,9 @@ export function Sidebar({
         id="zenx-sidebar"
         className={`sidebar${open ? " open" : ""}`}
         aria-label="Projects and threads"
+        aria-hidden={open ? undefined : true}
+        inert={!open}
+        tabIndex={-1}
       >
         <header className="sidebar-header">
           <div className="brand-row">
@@ -410,6 +413,8 @@ export function Sidebar({
         className={`sidebar-scrim${open ? " open" : ""}`}
         type="button"
         aria-label="Close sidebar"
+        aria-hidden={open ? undefined : true}
+        disabled={!open}
         onClick={onClose}
       />
     </>
