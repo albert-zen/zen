@@ -61,6 +61,8 @@ export async function runProjectWorkspaceAcceptance(
       await waitForButton(options.window, "Remove from ZenX");
 
       await clickButton(options.window, `New thread in ${config.projectB}`);
+      await enterFirstMessage(options.window);
+      await clickButton(options.window, "Send");
       await waitForProjectThread(options.window, config.projectB);
 
       await clickButton(options.window, "Set as default");
@@ -140,6 +142,23 @@ async function waitForProjectState(
     restarted
       ? "persisted Project state after restart"
       : "Project removal to settle",
+  );
+}
+
+async function enterFirstMessage(window: BrowserWindow): Promise<void> {
+  const message = "Packaged Project workspace acceptance";
+  await waitForRenderer(
+    window,
+    `(() => {
+      const composer = document.querySelector("#thread-composer");
+      if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) return false;
+      const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      if (setValue === undefined) return false;
+      setValue.call(composer, ${JSON.stringify(message)});
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    })()`,
+    "editable New thread draft",
   );
 }
 
