@@ -131,6 +131,7 @@ test("packaged Project acceptance opens each Project menu before its actions", a
       "More actions for project-b",
       "Remove from ZenX",
       "New thread in project-b",
+      "Send",
       "New thread in project-b",
       "Set as default",
       "More actions for project-a",
@@ -138,6 +139,14 @@ test("packaged Project acceptance opens each Project menu before its actions", a
       "More actions for project-b",
       "More actions for project-a",
     ]);
+    assert.ok(
+      expressions.some(
+        (expression) =>
+          expression.includes("HTMLTextAreaElement.prototype") &&
+          expression.includes("Packaged Project workspace acceptance"),
+      ),
+      "the packaged acceptance should enter a first message before waiting for the Thread",
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

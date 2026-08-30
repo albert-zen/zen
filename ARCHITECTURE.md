@@ -4,6 +4,8 @@
 
 五个概念，各一句话。新抽象必须先在这里获得自己的一句话。
 
+`NewThreadDraft` 是 Renderer 中非持久的临时编辑 UI，在通过 App Server 正常创建前不拥有任何 Thread 或 session 权威。
+
 - **Item** — agent 运行的最小事实单元：Turn 生命周期、用户消息、模型输出、推理、
   工具调用、工具结果与失败，都是 Item。
 - **Thread** — 一个 agent 上下文，权威状态是一条 append-only 的 Item list。

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type {
@@ -39,18 +39,20 @@ import {
 interface ThreadViewProps {
   approvals: readonly ApprovalCardState[];
   composer: ComposerState;
+  composerContext?: ReactNode;
   composerDisabled?: boolean;
+  emptyContent?: ReactNode;
   modelDisabled?: boolean;
   modelError?: string | null;
   imageCapabilityError?: string | null;
   imageCapabilityNotice?: string | null;
   models?: readonly ModelSummary[];
-  permissionLabel?: string;
+  permissionLabel?: string | null;
   providerProfiles?: readonly ZenXProviderProfile[];
   selectedModel?: string;
   selectedReasoningEffort?: string | null;
   switchingModel?: boolean;
-  thread: Thread;
+  thread: Thread | null;
   threadAttachments?: ZenXThreadAttachmentProjection;
   threadUsage?: ModelUsageProjection;
   wakeups?: readonly TriggerHistoryEntry[];
@@ -78,7 +80,9 @@ interface ThreadViewProps {
 export function ThreadView({
   approvals,
   composer,
+  composerContext = null,
   composerDisabled = false,
+  emptyContent = null,
   modelDisabled = false,
   modelError = null,
   imageCapabilityError = null,
@@ -121,7 +125,8 @@ export function ThreadView({
   const [atLive, setAtLive] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldFollowRef = useRef(true);
-  const runningTurn = activeTurn(thread);
+  const runningTurn = thread === null ? null : activeTurn(thread);
+  const turns = thread?.turns ?? [];
   const pendingApprovals = approvals.filter(
     (approval) => approval.status === "pending",
   );
@@ -136,7 +141,7 @@ export function ThreadView({
       scroll.scrollTop = scroll.scrollHeight;
       setAtLive(true);
     }
-  }, [thread.turns, approvals]);
+  }, [thread?.turns, approvals]);
 
   const submit = (intent: ComposerIntent) => {
     if (composerDisabled || !hasDraft || submitting || blockedByImageCapability)
@@ -221,35 +226,35 @@ export function ThreadView({
               {usageLabel(threadUsage.thread, "Thread cache")}
             </div>
           )}
-          {thread.turns.length === 0 ? (
-            <div className="thread-empty">
-              <div className="empty-glyph" aria-hidden="true">
-                <Icon name="compose" size={20} />
-              </div>
-              <h2>Start a new thread</h2>
-              <p>
-                Describe the outcome you want. ZenX will use this Thread’s
-                workspace, model, and permission policy.
-              </p>
-            </div>
-          ) : (
-            thread.turns.map((turn, index) => (
-              <TurnBlock
-                index={index}
-                key={turn.id}
-                turn={turn}
-                usage={threadUsage?.turns[turn.id]}
-                wakeups={wakeups}
-                attachments={threadAttachments}
-                onOpenImage={(attachment, name, trigger) =>
-                  setPreview({ attachment, name, trigger })
-                }
-                onReadAttachment={onReadAttachment}
-                pluginSnapshot={pluginSnapshot}
-                pluginUiRegistry={pluginUiRegistry}
-              />
-            ))
-          )}
+          {turns.length === 0
+            ? (emptyContent ?? (
+                <div className="thread-empty">
+                  <div className="empty-glyph" aria-hidden="true">
+                    <Icon name="compose" size={20} />
+                  </div>
+                  <h2>Start a new thread</h2>
+                  <p>
+                    Describe the outcome you want. ZenX will use this Thread’s
+                    workspace, model, and permission policy.
+                  </p>
+                </div>
+              ))
+            : turns.map((turn, index) => (
+                <TurnBlock
+                  index={index}
+                  key={turn.id}
+                  turn={turn}
+                  usage={threadUsage?.turns[turn.id]}
+                  wakeups={wakeups}
+                  attachments={threadAttachments}
+                  onOpenImage={(attachment, name, trigger) =>
+                    setPreview({ attachment, name, trigger })
+                  }
+                  onReadAttachment={onReadAttachment}
+                  pluginSnapshot={pluginSnapshot}
+                  pluginUiRegistry={pluginUiRegistry}
+                />
+              ))}
         </div>
       </div>
 
@@ -271,6 +276,7 @@ export function ThreadView({
       )}
 
       <div className="bottom-zone">
+        {composerContext}
         {pendingApprovals.map((approval) => (
           <ApprovalBar
             approval={approval}
@@ -369,15 +375,17 @@ export function ThreadView({
                   switching={switchingModel}
                 />
               )}
-              <button
-                className="composer-tool permission-control"
-                type="button"
-                aria-label={`Permission policy: ${permissionLabel}`}
-                disabled
-              >
-                <Icon name="lock" size={14} />
-                <span>{permissionLabel}</span>
-              </button>
+              {permissionLabel === null ? null : (
+                <button
+                  className="composer-tool permission-control"
+                  type="button"
+                  aria-label={`Permission policy: ${permissionLabel}`}
+                  disabled
+                >
+                  <Icon name="lock" size={14} />
+                  <span>{permissionLabel}</span>
+                </button>
+              )}
             </div>
             <div className="composer-actions">
               {runningTurn !== null && hasDraft ? (

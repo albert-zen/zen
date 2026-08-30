@@ -69,26 +69,6 @@ export function lastUsedProjectWorkspace(
   );
 }
 
-export function projectThreadStartParams(workspace: string | null): {
-  cwd: string;
-} {
-  if (workspace === null)
-    throw new Error("Add a Project before creating a Thread");
-  return { cwd: workspace };
-}
-
-export async function startProjectThread<T>(
-  workspace: string,
-  configure: (workspace: string) => Promise<unknown>,
-  start: (params: { cwd: string }) => Promise<T>,
-  onStarted: (workspace: string) => unknown | Promise<unknown>,
-): Promise<T> {
-  await configure(workspace);
-  const result = await start(projectThreadStartParams(workspace));
-  await onStarted(workspace);
-  return result;
-}
-
 export function readSidebarMode(
   storage: Pick<SidebarStorage, "getItem">,
 ): SidebarMode {
