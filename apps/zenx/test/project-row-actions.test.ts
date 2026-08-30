@@ -47,7 +47,6 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
           onClose: () => undefined,
           onChangeThreadLifecycle: async () => undefined,
           onChangeThreadPinned: async () => undefined,
-          onModeChange: () => undefined,
           onNewThread: (workspace?: string) => {
             if (workspace !== undefined) created.push(workspace);
           },

@@ -111,6 +111,7 @@ Thread
 ### 3.4 原生应用菜单与按需面板
 
 - Packaged Windows/Linux 不安装 Electron 默认 application menu；macOS 只保留系统合规的 application、edit 和 window roles。原生菜单不得引入第二套产品导航。
+- 桌面窗口使用与产品壳连续的 integrated title bar：Renderer 左侧按 ZenX mark / wordmark、Inbox、Sidebar 收起入口的顺序形成一个紧凑品牌控制组，Sidebar 控制固定在该组最右侧；系统窗口控制仍由 Electron/OS 持有。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
 - 不提供常驻右侧 Activity rail。Tool details 留在聊天流内；Workspace/Artifact 使用按需面板。
 - Thread header 只保留职责明确的 search 与按需 Workspace/Artifact icon entry，不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。
 - Workspace/Artifact 面板的最终内容组成与 tabs 仍为 **TBD**。早期原型中的 Files / Trigger / Room 等内容不是已确认合同；Trigger 与 Room 作为 plugin 不能被预设为核心 Workspace tabs。

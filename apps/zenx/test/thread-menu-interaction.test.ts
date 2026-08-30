@@ -157,7 +157,6 @@ function TestSidebar() {
     liveThread: null,
     open: true,
     onClose: noop,
-    onModeChange: noop,
     onNewThread: noop,
     onAddProject: noop,
     onRemoveProject: noop,

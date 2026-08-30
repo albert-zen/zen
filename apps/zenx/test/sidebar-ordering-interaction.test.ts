@@ -408,7 +408,6 @@ function StaticSidebar({
     mode: "projects",
     open: true,
     onClose: noop,
-    onModeChange: noop,
     onNewThread: noop,
     onAddProject: noop,
     onRemoveProject: noop,

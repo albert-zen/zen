@@ -17,7 +17,6 @@ import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import { ProviderLogo } from "./ProviderLogo.js";
-import { ZenXBrand } from "./ZenXBrand.js";
 import {
   deriveInboxSections,
   deriveProjectGroups,
@@ -31,6 +30,7 @@ import {
 } from "./thread-list.js";
 
 interface SidebarProps {
+  collapsed?: boolean;
   mode: SidebarMode;
   open: boolean;
   onClose(): void;
@@ -48,7 +48,6 @@ interface SidebarProps {
     targetThreadId: string,
     placement: SidebarOrderPlacement,
   ): Promise<void>;
-  onModeChange(mode: SidebarMode): void;
   onNewThread(workspace?: string): void;
   newThreadDisabled?: boolean;
   onAddProject(): void;
@@ -74,6 +73,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
+  collapsed = false,
   mode,
   open,
   onClose,
@@ -81,7 +81,6 @@ export function Sidebar({
   onChangeThreadPinned,
   onReorderProject,
   onReorderThread,
-  onModeChange,
   onNewThread,
   newThreadDisabled = false,
   onAddProject,
@@ -172,32 +171,12 @@ export function Sidebar({
   return (
     <>
       <aside
+        id="primary-sidebar"
         className={`sidebar${open ? " open" : ""}`}
         aria-label="Projects and threads"
+        aria-hidden={collapsed && !open ? true : undefined}
       >
         <header className="sidebar-header">
-          <div className="brand-row">
-            <ZenXBrand />
-            <div className="brand-actions">
-              <button
-                className="icon-button inbox-button"
-                type="button"
-                aria-label={
-                  mode === "inbox" ? "Return to projects" : "Open inbox"
-                }
-                aria-pressed={mode === "inbox"}
-                onClick={() =>
-                  onModeChange(mode === "inbox" ? "projects" : "inbox")
-                }
-              >
-                <Icon name="inbox" />
-                {pendingApprovalThreadIds.size > 0 ? (
-                  <span className="inbox-dot" aria-hidden="true" />
-                ) : null}
-              </button>
-            </div>
-          </div>
-
           <PluginSpaces
             contributions={pluginContributions}
             onOpen={onOpenContribution}

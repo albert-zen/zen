@@ -20,6 +20,84 @@ interface AppHarness {
   root: Root;
 }
 
+test("desktop title bar collapses and restores the Sidebar", async () => {
+  const harness = await mountApp({
+    projects: [],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  });
+  try {
+    const inbox = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Open inbox"]'),
+    );
+    const collapse = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Collapse sidebar"]',
+      ),
+    );
+    const titlebarActions = document.querySelector(".window-titlebar-actions");
+    assert.equal(titlebarActions?.children[0], inbox);
+    assert.equal(titlebarActions?.children[1], collapse);
+    assert.equal(inbox.getAttribute("aria-pressed"), "false");
+    assert.equal(collapse.getAttribute("aria-expanded"), "true");
+    assert.equal(document.querySelector(".app-shell")?.className, "app-shell");
+
+    await act(async () => inbox.click());
+    const returnToProjects = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Return to projects"]',
+      ),
+    );
+    assert.equal(returnToProjects.getAttribute("aria-pressed"), "true");
+    assert.equal(
+      harness.dom.window.localStorage.getItem("zenx-sidebar-mode"),
+      "inbox",
+    );
+
+    await act(async () => returnToProjects.click());
+    await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Open inbox"]'),
+    );
+
+    await act(async () => collapse.click());
+    const expand = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Expand sidebar"]',
+      ),
+    );
+    assert.equal(expand.getAttribute("aria-expanded"), "false");
+    assert.match(
+      document.querySelector(".app-shell")?.className ?? "",
+      /sidebar-collapsed/u,
+    );
+    assert.equal(
+      document.getElementById("primary-sidebar")?.getAttribute("aria-hidden"),
+      "true",
+    );
+    assert.equal(
+      harness.dom.window.localStorage.getItem("zenx.sidebar-collapsed"),
+      "true",
+    );
+
+    await act(async () => expand.click());
+    await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Collapse sidebar"]',
+      ),
+    );
+    assert.equal(
+      document.getElementById("primary-sidebar")?.hasAttribute("aria-hidden"),
+      false,
+    );
+    assert.equal(
+      harness.dom.window.localStorage.getItem("zenx.sidebar-collapsed"),
+      "false",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("desktop Choose project opens the existing directory picker", async () => {
   const harness = await mountApp({
     projects: [

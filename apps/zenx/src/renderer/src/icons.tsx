@@ -22,6 +22,7 @@ export type IconName =
   | "moon"
   | "more"
   | "paperclip"
+  | "panel-left"
   | "panel-right"
   | "pin"
   | "pin-off"
@@ -115,6 +116,12 @@ const paths: Record<IconName, ReactNode> = {
   ),
   paperclip: (
     <path d="m13.5 7.7-6.2 6.2a3.5 3.5 0 0 1-5-5l7-7a2.4 2.4 0 0 1 3.4 3.4l-7 7a1.3 1.3 0 0 1-1.8-1.8l6.2-6.2" />
+  ),
+  "panel-left": (
+    <>
+      <rect x="1.8" y="2.2" width="12.4" height="11.6" rx="1.5" />
+      <path d="M5.8 2.2v11.6" />
+    </>
   ),
   "panel-right": (
     <>

@@ -95,7 +95,6 @@ function TestSidebar() {
     mode: "projects",
     open: true,
     onClose: () => undefined,
-    onModeChange: () => undefined,
     onNewThread: () => undefined,
     onAddProject: () => undefined,
     onRemoveProject: () => undefined,

@@ -8,7 +8,6 @@ const baseProps = {
   mode: "projects" as const,
   open: true,
   onClose: () => undefined,
-  onModeChange: () => undefined,
   onNewThread: () => undefined,
   onAddProject: () => undefined,
   onRemoveProject: () => undefined,

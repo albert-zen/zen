@@ -130,6 +130,13 @@ function createWindow(): BrowserWindow {
     minHeight: 560,
     show: false,
     backgroundColor: "#0b0d10",
+    title: "ZenX",
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#00000000",
+      symbolColor: "#737b8a",
+      height: 44,
+    },
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,

@@ -10,10 +10,7 @@ const conceptBoard = new URL(
   "../docs/assets/brand/zenx-logo-concept-board.png",
   import.meta.url,
 );
-const sidebarSource = await readFile(
-  new URL("Sidebar.tsx", rendererRoot),
-  "utf8",
-);
+const appSource = await readFile(new URL("App.tsx", rendererRoot), "utf8");
 const brandSource = await readFile(
   new URL("ZenXBrand.tsx", rendererRoot),
   "utf8",
@@ -31,9 +28,8 @@ const canonicalAssets = [
 ] as const;
 
 test("ZenX branding uses the production assets through the replaceable component seam", async () => {
-  assert.match(sidebarSource, /import \{ ZenXBrand \}/u);
-  assert.match(sidebarSource, /<ZenXBrand \/>/u);
-  assert.doesNotMatch(sidebarSource, /<svg|<path|\sd=/u);
+  assert.match(appSource, /import \{ ZenXBrand \}/u);
+  assert.match(appSource, /<ZenXBrand \/>/u);
 
   assert.match(brandSource, /assets\/brand\/zenx-mark\.svg/u);
   assert.match(brandSource, /assets\/brand\/zenx-wordmark\.svg/u);

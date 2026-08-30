@@ -18,7 +18,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/zenx.plugin.schema.json dist/zenx.plugin.schema.json",
+    "build": "tsc -p tsconfig.json && node --input-type=module -e \"import { copyFileSync } from 'node:fs'; copyFileSync('src/zenx.plugin.schema.json', 'dist/zenx.plugin.schema.json')\"",
     "test": "npm run build && node --test test/**/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

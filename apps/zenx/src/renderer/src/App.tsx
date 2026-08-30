@@ -80,9 +80,11 @@ import {
 import { applyThreadViewNotification } from "./thread-view-state.js";
 import { ThreadLifecycleAction } from "./ThreadLifecycleAction.js";
 import { ThreadView } from "./ThreadView.js";
+import { ZenXBrand } from "./ZenXBrand.js";
 
 type ProductPage = string;
 const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "zenx.sidebar-collapsed";
 
 export function App() {
   const selectionEpoch = useRef(0);
@@ -98,6 +100,15 @@ export function App() {
   const profilePreferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [page, setPage] = useState<ProductPage>("agent");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return (
+        window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true"
+      );
+    } catch {
+      return false;
+    }
+  });
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [projectPickerIntent, setProjectPickerIntent] = useState<
@@ -926,9 +937,43 @@ export function App() {
     }
   };
 
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(
+          SIDEBAR_COLLAPSED_STORAGE_KEY,
+          String(next),
+        );
+      } catch {
+        // The preference remains valid for this window.
+      }
+      return next;
+    });
+  };
+
+  const changeSidebarMode = (mode: SidebarMode) => {
+    setSidebarMode(mode);
+    try {
+      writeSidebarMode(window.localStorage, mode);
+    } catch {
+      // The preference remains valid for this window.
+    }
+  };
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+      <WindowTitleBar
+        mode={sidebarMode}
+        pendingApprovalCount={pendingThreadIds.size}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleInbox={() =>
+          changeSidebarMode(sidebarMode === "inbox" ? "projects" : "inbox")
+        }
+        onToggleSidebar={toggleSidebarCollapsed}
+      />
       <Sidebar
+        collapsed={sidebarCollapsed}
         liveThread={threadDetail}
         mode={sidebarMode}
         open={sidebarOpen}
@@ -968,14 +1013,6 @@ export function App() {
             ),
           )
         }
-        onModeChange={(mode) => {
-          setSidebarMode(mode);
-          try {
-            writeSidebarMode(window.localStorage, mode);
-          } catch {
-            // The preference remains valid for this window.
-          }
-        }}
         onNewThread={(workspace) => {
           if (workspace === undefined) setProjectPickerIntent("new-thread");
           else void newThread(workspace);
@@ -1185,6 +1222,57 @@ export function App() {
         />
       ) : null}
     </div>
+  );
+}
+
+function WindowTitleBar({
+  mode,
+  pendingApprovalCount,
+  sidebarCollapsed,
+  onToggleInbox,
+  onToggleSidebar,
+}: {
+  mode: SidebarMode;
+  pendingApprovalCount: number;
+  sidebarCollapsed: boolean;
+  onToggleInbox(): void;
+  onToggleSidebar(): void;
+}) {
+  return (
+    <header className="window-titlebar" aria-label="ZenX window controls">
+      <div className="window-titlebar-brand">
+        <ZenXBrand />
+        <div className="window-titlebar-actions">
+          <button
+            className="icon-button inbox-button"
+            type="button"
+            aria-label={mode === "inbox" ? "Return to projects" : "Open inbox"}
+            aria-pressed={mode === "inbox"}
+            title={mode === "inbox" ? "Return to projects" : "Open inbox"}
+            onClick={onToggleInbox}
+          >
+            <Icon name="inbox" />
+            {pendingApprovalCount > 0 ? (
+              <span className="inbox-dot" aria-hidden="true" />
+            ) : null}
+          </button>
+          <button
+            className="icon-button sidebar-collapse-button"
+            type="button"
+            aria-controls="primary-sidebar"
+            aria-expanded={!sidebarCollapsed}
+            aria-label={
+              sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
+            }
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            onClick={onToggleSidebar}
+          >
+            <Icon name="panel-left" />
+          </button>
+        </div>
+      </div>
+      <div className="window-titlebar-drag" aria-hidden="true" />
+    </header>
   );
 }
 
