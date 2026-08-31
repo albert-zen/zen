@@ -4,7 +4,7 @@ import test from "node:test";
 
 const rendererRoot = new URL("../src/renderer/src/", import.meta.url);
 
-test("integrated title bar orders ZenX branding, Inbox, and Sidebar controls", async () => {
+test("integrated title bar keeps controls while macOS moves ZenX branding into the Sidebar", async () => {
   const [app, sidebar, styles, main] = await Promise.all([
     readFile(new URL("App.tsx", rendererRoot), "utf8"),
     readFile(new URL("Sidebar.tsx", rendererRoot), "utf8"),
@@ -22,7 +22,8 @@ test("integrated title bar orders ZenX branding, Inbox, and Sidebar controls", a
     /sidebarCollapsed \? "Expand sidebar" : "Collapse sidebar"/u,
   );
   assert.match(sidebar, /id="primary-sidebar"/u);
-  assert.doesNotMatch(sidebar, /<ZenXBrand/u);
+  assert.match(sidebar, /className="sidebar-platform-brand"/u);
+  assert.match(sidebar, /<ZenXBrand \/>/u);
   assert.doesNotMatch(sidebar, /className="icon-button inbox-button"/u);
   assert.match(styles, /-webkit-app-region: drag;/u);
   assert.match(
@@ -32,6 +33,14 @@ test("integrated title bar orders ZenX branding, Inbox, and Sidebar controls", a
   assert.match(
     styles,
     /\.app-shell\.sidebar-collapsed\s*\{[^}]*--sidebar-track: 0px;/su,
+  );
+  assert.match(
+    styles,
+    /:root\[data-platform="darwin"\] \.window-titlebar-brand > \.brand\s*\{[^}]*display: none;/su,
+  );
+  assert.match(
+    styles,
+    /:root\[data-platform="darwin"\] \.sidebar-platform-brand\s*\{[^}]*display: flex;/su,
   );
   assert.match(main, /titleBarStyle: "hidden"/u);
   assert.match(main, /titleBarOverlay:/u);

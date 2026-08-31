@@ -165,6 +165,7 @@ export function App() {
     unavailableThreadIds: [],
     lastUsedWorkspace: null,
   });
+  const [projectListLoaded, setProjectListLoaded] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
@@ -341,6 +342,7 @@ export function App() {
         projectsRef.current = snapshot;
         setProjects(snapshot);
         setProjectError(null);
+        setProjectListLoaded(true);
       }
     } catch (error) {
       if (projectLoadEpoch.current === epoch)
@@ -679,13 +681,8 @@ export function App() {
     (project) => project.configured,
   );
 
-  const openNewThreadDraft = (workspace?: string) => {
+  const showNewThreadDraft = (workspace: string | null) => {
     discardRecoverableDraft();
-    if (workspace === undefined && configuredProjects.length === 0) {
-      openProjectPicker("new-thread");
-      return;
-    }
-    const selectedWorkspace = workspace ?? lastUsedWorkspace;
     selectionEpoch.current += 1;
     threadUsageLoadEpoch.current += 1;
     selectedThreadIdRef.current = null;
@@ -702,11 +699,42 @@ export function App() {
     setModelUpdateError(null);
     confirmNewThreadDraft({
       id: crypto.randomUUID(),
-      workspace: selectedWorkspace,
+      workspace,
       composer: emptyComposerState(),
     });
     void loadComposerCatalog();
   };
+
+  const openNewThreadDraft = (workspace?: string) => {
+    if (workspace === undefined && configuredProjects.length === 0) {
+      openProjectPicker("new-thread");
+      return;
+    }
+    showNewThreadDraft(workspace ?? lastUsedWorkspace);
+  };
+
+  useEffect(() => {
+    if (
+      !projectListLoaded ||
+      serverStatus.type !== "ready" ||
+      page !== "agent" ||
+      selectedThreadIdRef.current !== null ||
+      newThreadDraftRef.current !== null
+    )
+      return;
+    showNewThreadDraft(
+      lastUsedWorkspace ??
+        configuredProjects.find((project) => project.isDefault)?.workspace ??
+        configuredProjects[0]?.workspace ??
+        null,
+    );
+  }, [
+    configuredProjects,
+    lastUsedWorkspace,
+    page,
+    projectListLoaded,
+    serverStatus.type,
+  ]);
 
   const updateNewThreadDraft = (
     update: (draft: NewThreadDraft) => NewThreadDraft,
@@ -1552,14 +1580,6 @@ export function App() {
             onModelChange={(model) => void changeModel(model)}
             onReasoningChange={(effort) => void changeReasoning(effort)}
             onChangeThreadLifecycle={changeThreadLifecycle}
-            hasProjects={projects.projects.some(
-              (project) => project.configured,
-            )}
-            hasLastUsedProject={lastUsedWorkspace !== null}
-            onAddProject={() => openProjectPicker("add-project")}
-            onNewThread={() => {
-              openNewThreadDraft();
-            }}
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
             onRename={async (title) => {
@@ -1692,13 +1712,9 @@ function AgentSurface({
   onNewThreadDraftChange,
   onNewThreadProjectChange,
   onAddNewThreadProject,
-  hasProjects,
-  hasLastUsedProject,
-  onAddProject,
   onInterrupt,
   onModelChange,
   onReasoningChange,
-  onNewThread,
   onOpenSidebar,
   onOpenWorkspace,
   onRename,
@@ -1743,13 +1759,9 @@ function AgentSurface({
   onNewThreadDraftChange(draft: string): void;
   onNewThreadProjectChange(workspace: string): void;
   onAddNewThreadProject(): void;
-  hasProjects: boolean;
-  hasLastUsedProject: boolean;
-  onAddProject(): void;
   onInterrupt(turnId: string): Promise<void>;
   onModelChange(model: string): void;
   onReasoningChange(effort: string): void;
-  onNewThread(): void;
   onOpenSidebar(): void;
   onOpenWorkspace(): void;
   onRename(title: string): Promise<void>;
@@ -1795,7 +1807,7 @@ function AgentSurface({
     <section
       className={`agent-surface${newThreadDraft === null ? "" : " new-thread-draft-surface"}`}
     >
-      {newThreadDraft !== null ? (
+      {newThreadDraft !== null || selectedSummary === null ? (
         <button
           className="icon-button mobile-menu new-thread-draft-mobile"
           type="button"
@@ -1918,9 +1930,6 @@ function AgentSurface({
           }
           emptyContent={
             <div className="thread-empty new-thread-draft-empty">
-              <div className="empty-glyph" aria-hidden="true">
-                <Icon name="compose" size={20} />
-              </div>
               <div
                 className="new-thread-draft-heading"
                 role="heading"
@@ -1967,25 +1976,7 @@ function AgentSurface({
           onRespondToApproval={onRespondToApproval}
           onSubmit={onSubmitNewThread}
         />
-      ) : selectedSummary === null || threadDetail === null ? (
-        <EmptyState
-          title={hasProjects ? "No thread selected" : "Add your first project"}
-          detail={
-            hasProjects
-              ? "Choose New thread to start working in the selected Project."
-              : "Choose a folder before ZenX creates a Thread. Your files stay where they are."
-          }
-          action={hasProjects ? onNewThread : onAddProject}
-          actionLabel={
-            hasProjects
-              ? hasLastUsedProject
-                ? "New thread"
-                : "Choose project"
-              : "Add project"
-          }
-          actionIcon={hasProjects ? "compose" : "folder"}
-        />
-      ) : (
+      ) : selectedSummary === null || threadDetail === null ? null : (
         <>
           <ThreadView
             approvals={approvals.filter(
@@ -2067,6 +2058,11 @@ function NewThreadProjectSelector({
 }) {
   const [open, setOpen] = useState(selectedWorkspace === null);
   const [query, setQuery] = useState("");
+  const [popoverLayout, setPopoverLayout] = useState<{
+    placement: "above" | "below";
+    maxHeight: number;
+    offsetX: number;
+  }>({ placement: "above", maxHeight: 360, offsetX: 0 });
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -2102,9 +2098,78 @@ function NewThreadProjectSelector({
     triggerRef.current?.focus();
   }, [open]);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    const updatePopoverLayout = () => {
+      const trigger = triggerRef.current;
+      if (trigger === null) return;
+      const rect = trigger.getBoundingClientRect();
+      const clippingRect = trigger
+        .closest<HTMLElement>(".messages")
+        ?.getBoundingClientRect();
+      const viewportMargin = 16;
+      const triggerGap = 12;
+      const preferredHeight = 360;
+      const preferredWidth = 286;
+      const comfortableHeight = 240;
+      const topLimit = Math.max(
+        viewportMargin,
+        (clippingRect?.top ?? 0) + viewportMargin,
+      );
+      const bottomLimit = Math.min(
+        window.innerHeight - viewportMargin,
+        (clippingRect?.bottom ?? window.innerHeight) - viewportMargin,
+      );
+      const availableAbove = Math.max(0, rect.top - topLimit - triggerGap);
+      const availableBelow = Math.max(
+        0,
+        bottomLimit - rect.bottom - triggerGap,
+      );
+      const placement =
+        availableAbove >= Math.min(preferredHeight, comfortableHeight) ||
+        availableAbove >= availableBelow
+          ? "above"
+          : "below";
+      const available = placement === "above" ? availableAbove : availableBelow;
+      const popoverWidth = Math.min(
+        preferredWidth,
+        Math.max(0, window.innerWidth - viewportMargin * 2),
+      );
+      const triggerCenter = rect.left + rect.width / 2;
+      const halfPopoverWidth = popoverWidth / 2;
+      const clampedCenter = Math.min(
+        window.innerWidth - viewportMargin - halfPopoverWidth,
+        Math.max(viewportMargin + halfPopoverWidth, triggerCenter),
+      );
+      const next = {
+        placement,
+        maxHeight: Math.floor(Math.min(preferredHeight, available)),
+        offsetX: Math.round(clampedCenter - triggerCenter),
+      } as const;
+      setPopoverLayout((current) =>
+        current.placement === next.placement &&
+        current.maxHeight === next.maxHeight &&
+        current.offsetX === next.offsetX
+          ? current
+          : next,
+      );
+    };
+    updatePopoverLayout();
+    window.addEventListener("resize", updatePopoverLayout);
+    window.addEventListener("scroll", updatePopoverLayout, true);
+    return () => {
+      window.removeEventListener("resize", updatePopoverLayout);
+      window.removeEventListener("scroll", updatePopoverLayout, true);
+    };
+  }, [open]);
+
   useEffect(() => {
     if (disabled && open) closeMenu(false);
   }, [disabled, open]);
+
+  useEffect(() => {
+    if (selectedWorkspace === null && !disabled) setOpen(true);
+  }, [disabled, selectedWorkspace]);
 
   useEffect(() => {
     if (!open) return;
@@ -2161,11 +2226,20 @@ function NewThreadProjectSelector({
       {open ? (
         <div
           className="new-thread-project-popover"
+          data-placement={popoverLayout.placement}
           id={popoverId}
           role="dialog"
           aria-label="Switch Project"
-          onKeyDown={(event) => {
-            if (event.key === "Tab") {
+          style={{
+            maxHeight: `${popoverLayout.maxHeight}px`,
+            transform: `translateX(calc(-50% + ${popoverLayout.offsetX}px))`,
+          }}
+          onBlur={(event) => {
+            const nextFocus = event.relatedTarget;
+            if (
+              !(nextFocus instanceof Node) ||
+              !event.currentTarget.contains(nextFocus)
+            ) {
               closeMenu(false);
             }
           }}
@@ -2247,11 +2321,12 @@ function NewThreadProjectSelector({
             {filteredProjects.length === 0 ? (
               <p className="new-thread-project-empty">No projects found</p>
             ) : null}
+          </div>
+          <div className="new-thread-project-actions">
             <div className="new-thread-project-separator" role="separator" />
             <button
               className="new-thread-project-add"
               type="button"
-              role="menuitem"
               onClick={() => {
                 closeMenu(false);
                 onAddProject();
