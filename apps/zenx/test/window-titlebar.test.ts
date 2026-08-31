@@ -52,4 +52,16 @@ test("integrated title bar keeps controls while macOS moves ZenX branding into t
     styles,
     /:root\[data-platform="win32"\] \.window-titlebar\s*\{[^}]*padding-right:\s*138px;/su,
   );
+  assert.match(
+    styles,
+    /\.window-titlebar-brand\s*\{[^}]*background:\s*var\(--color-surface-sidebar\)/su,
+  );
+  assert.match(
+    styles,
+    /\.window-titlebar-drag\s*\{[^}]*background:\s*var\(--color-surface-glass\)/su,
+  );
+  assert.match(
+    styles,
+    /\.sidebar\s*\{[^}]*background:\s*var\(--color-surface-sidebar\)/su,
+  );
 });
