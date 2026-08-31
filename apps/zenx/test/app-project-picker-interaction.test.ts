@@ -70,6 +70,13 @@ test("startup opens the lazy welcome draft without creating a Thread", async () 
   }
 });
 
+function projectSwitcher(): HTMLButtonElement | undefined {
+  return (
+    document.querySelector<HTMLButtonElement>(".new-thread-project-trigger") ??
+    undefined
+  );
+}
+
 test("desktop title bar collapses and restores the Sidebar", async () => {
   const harness = await mountApp({
     projects: [],
@@ -256,7 +263,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
     assert.equal(markWorkspaceCalls, 0);
     assert.equal(projectReads, readsBeforeDraft);
 
-    await act(async () => exactButton("Change Project")?.click());
+    await act(async () => projectSwitcher()?.click());
     const documents = await waitFor(() =>
       Array.from(
         document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
@@ -276,7 +283,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
     const send = await waitFor(() =>
       document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
     );
-    await act(async () => exactButton("Change Project")?.click());
+    await act(async () => projectSwitcher()?.click());
     await waitFor(() =>
       document.querySelector('[role="menu"][aria-label="Choose a Project"]'),
     );
@@ -289,7 +296,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
       document.querySelector('[role="menu"][aria-label="Choose a Project"]'),
       null,
     );
-    assert.equal(exactButton("Change Project")?.disabled, true);
+    assert.equal(projectSwitcher()?.disabled, true);
     assert.doesNotMatch(
       document.body.textContent ?? "",
       /Loading conversation/u,
@@ -858,16 +865,24 @@ test("New thread without a last-used Project opens an unselected draft menu", as
         '[role="menu"][aria-label="Choose a Project"]',
       ),
     );
-    const trigger = exactButton("Change Project");
+    const trigger = projectSwitcher();
     assert.ok(trigger);
-    assert.equal(trigger.getAttribute("aria-haspopup"), "menu");
+    assert.equal(trigger.getAttribute("aria-haspopup"), "dialog");
     assert.equal(trigger.getAttribute("aria-expanded"), "true");
-    await waitFor(
-      () => document.activeElement?.getAttribute("role") === "menuitemradio",
+    const search = await waitFor(() =>
+      document.querySelector<HTMLInputElement>(
+        'input[aria-label="Search projects"]',
+      ),
     );
+    await waitFor(() => document.activeElement === search);
     assert.match(menu.textContent ?? "", /zen/u);
-    assert.match(document.body.textContent ?? "", /What should we build\?/u);
-    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.match(
+      document.body.textContent ?? "",
+      /What should we build in Choose a Project/u,
+    );
+    assert.ok(
+      document.querySelector('[role="dialog"][aria-label="Switch Project"]'),
+    );
     assert.equal(starts, 0);
 
     await act(async () => {
@@ -882,7 +897,7 @@ test("New thread without a last-used Project opens an unselected draft menu", as
     assert.notEqual(document.activeElement, trigger);
     await act(async () => trigger.click());
     await waitFor(
-      () => document.activeElement?.getAttribute("role") === "menuitemradio",
+      () => document.activeElement?.getAttribute("type") === "search",
     );
 
     await act(async () => {
@@ -898,7 +913,7 @@ test("New thread without a last-used Project opens an unselected draft menu", as
     assert.equal(document.activeElement, trigger);
     await act(async () => trigger.click());
     await waitFor(
-      () => document.activeElement?.getAttribute("role") === "menuitemradio",
+      () => document.activeElement?.getAttribute("type") === "search",
     );
     await act(async () => {
       document
@@ -943,6 +958,25 @@ test("same-leaf Projects show their parent paths in the draft chooser", async ()
     );
     assert.match(menu.textContent ?? "", /zen — \/work/u);
     assert.match(menu.textContent ?? "", /zen — \/tmp/u);
+    const search = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Search projects"]',
+    );
+    assert.ok(search);
+    await setInputValue(search, "/tmp");
+    await waitFor(
+      () => menu.querySelectorAll('[role="menuitemradio"]').length === 1,
+    );
+    assert.doesNotMatch(menu.textContent ?? "", /zen — \/work/u);
+    assert.match(menu.textContent ?? "", /zen — \/tmp/u);
+    await act(async () => {
+      search.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          bubbles: true,
+          key: "ArrowDown",
+        }),
+      );
+    });
+    assert.equal(document.activeElement?.getAttribute("role"), "menuitemradio");
     const tmp = Array.from(
       menu.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
     ).find((button) => button.getAttribute("aria-label")?.includes("/tmp/zen"));
@@ -952,6 +986,57 @@ test("same-leaf Projects show their parent paths in the draft chooser", async ()
       document.body.textContent ?? "",
       /What should we build in zen — \/tmp\?/u,
     );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("adding a Project from the central switcher preserves the local draft", async () => {
+  let currentProjects = oneProject();
+  let addWorkspaceCalls = 0;
+  let starts = 0;
+  const harness = await mountApp(currentProjects, {
+    addWorkspace: async (workspace) => {
+      addWorkspaceCalls += 1;
+      currentProjects = {
+        projects: [
+          ...currentProjects.projects,
+          {
+            key: workspace,
+            workspace,
+            configured: true,
+            isDefault: false,
+            threadIds: [],
+          },
+        ],
+        unavailableThreadIds: [],
+        lastUsedWorkspace: workspace,
+      };
+    },
+    projectsGet: async () => currentProjects,
+    startProjectThread: async (workspace) => {
+      starts += 1;
+      return started(liveThread(), workspace);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Keep this draft");
+    await act(async () => projectSwitcher()?.click());
+    const addProject = await waitFor(() => exactButton("Add project"));
+    await act(async () => addProject.click());
+    const addFolder = await waitFor(() => exactButton("Add folder"));
+    await waitFor(() => addFolder.disabled === false);
+    await act(async () => addFolder.click());
+    await waitFor(() => projectSwitcher()?.textContent?.trim() === "/");
+    assert.equal(composer.value, "Keep this draft");
+    assert.equal(addWorkspaceCalls, 1);
+    assert.equal(starts, 0);
   } finally {
     await unmountApp(harness);
   }
@@ -1189,7 +1274,7 @@ test("a Project revision lets an open draft reselect after its Project disappear
       /no longer available/u,
     );
 
-    await act(async () => exactButton("Change Project")?.click());
+    await act(async () => projectSwitcher()?.click());
     const docs = await waitFor(() =>
       Array.from(
         document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
@@ -2130,6 +2215,10 @@ async function mountApp(
     window: dom.window,
     IS_REACT_ACT_ENVIRONMENT: true,
   });
+  Object.defineProperties(dom.window.HTMLInputElement.prototype, {
+    attachEvent: { value: () => undefined },
+    detachEvent: { value: () => undefined },
+  });
   let currentSettings = publicSettings(options.initialPinnedThreadIds ?? []);
   const zenx = {
     platform: "darwin",
@@ -2533,6 +2622,18 @@ async function setTextareaValue(
   const props = reactProps<{
     onChange?(event: { target: { value: string } }): void;
   }>(textarea);
+  const onChange = props?.onChange;
+  assert.ok(onChange);
+  await act(async () => {
+    onChange({ target: { value } });
+    await Promise.resolve();
+  });
+}
+
+async function setInputValue(input: HTMLInputElement, value: string) {
+  const props = reactProps<{
+    onChange?(event: { target: { value: string } }): void;
+  }>(input);
   const onChange = props?.onChange;
   assert.ok(onChange);
   await act(async () => {
