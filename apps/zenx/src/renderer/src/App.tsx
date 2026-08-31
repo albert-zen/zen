@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
@@ -359,7 +359,24 @@ export function App() {
       await loadProjects();
       if (projectPickerOperationEpoch.current !== epoch) return;
       closeProjectPicker();
-      if (intent === "new-thread") openNewThreadDraft(workspace);
+      if (intent === "new-thread") {
+        const draft = newThreadDraftRef.current;
+        if (draft === null) openNewThreadDraft(workspace);
+        else {
+          setModelUpdateError(null);
+          confirmNewThreadDraft({
+            ...draft,
+            workspace,
+            composer: {
+              ...draft.composer,
+              submission:
+                draft.composer.submission?.status === "failed"
+                  ? null
+                  : draft.composer.submission,
+            },
+          });
+        }
+      }
     } catch (error) {
       if (projectPickerOperationEpoch.current === epoch)
         setRequestError(describeError(error));
@@ -1456,6 +1473,7 @@ export function App() {
                 },
               }));
             }}
+            onAddNewThreadProject={() => openProjectPicker("new-thread")}
             onImportImages={async (threadId, files) => {
               const imports = await Promise.all(
                 files.map(async (file) => ({
@@ -1673,6 +1691,7 @@ function AgentSurface({
   onRemoveNewThreadImage,
   onNewThreadDraftChange,
   onNewThreadProjectChange,
+  onAddNewThreadProject,
   hasProjects,
   hasLastUsedProject,
   onAddProject,
@@ -1723,6 +1742,7 @@ function AgentSurface({
   onRemoveNewThreadImage(imageId: string): void;
   onNewThreadDraftChange(draft: string): void;
   onNewThreadProjectChange(workspace: string): void;
+  onAddNewThreadProject(): void;
   hasProjects: boolean;
   hasLastUsedProject: boolean;
   onAddProject(): void;
@@ -1765,12 +1785,6 @@ function AgentSurface({
       : configuredProjects.find(
           (project) => project.workspace === newThreadDraft.workspace,
         );
-  const draftProjectLabel =
-    newThreadDraft?.workspace === null || newThreadDraft === null
-      ? null
-      : draftProject === undefined
-        ? projectLabel(newThreadDraft.workspace)
-        : projectDisplayLabel(draftProject.workspace, configuredProjects);
   const draftProjectError =
     newThreadDraft?.workspace !== null &&
     newThreadDraft !== null &&
@@ -1897,11 +1911,7 @@ function AgentSurface({
           approvals={[]}
           composer={newThreadDraft.composer}
           composerContext={
-            <NewThreadProjectSelector
-              disabled={
-                newThreadDraft.composer.submission?.status === "pending"
-              }
-              onChange={onNewThreadProjectChange}
+            <NewThreadProjectContext
               projects={configuredProjects}
               selectedWorkspace={newThreadDraft.workspace}
             />
@@ -1911,11 +1921,23 @@ function AgentSurface({
               <div className="empty-glyph" aria-hidden="true">
                 <Icon name="compose" size={20} />
               </div>
-              <h2>
-                {draftProjectLabel === null
-                  ? "What should we build?"
-                  : `What should we build in ${draftProjectLabel}?`}
-              </h2>
+              <div
+                className="new-thread-draft-heading"
+                role="heading"
+                aria-level={2}
+              >
+                What should we build in{" "}
+                <NewThreadProjectSelector
+                  disabled={
+                    newThreadDraft.composer.submission?.status === "pending"
+                  }
+                  onAddProject={onAddNewThreadProject}
+                  onChange={onNewThreadProjectChange}
+                  projects={configuredProjects}
+                  selectedWorkspace={newThreadDraft.workspace}
+                />
+                ?
+              </div>
             </div>
           }
           imageCapabilityError={imageCapabilityMessage(
@@ -2032,20 +2054,25 @@ function AgentSurface({
 
 function NewThreadProjectSelector({
   disabled,
+  onAddProject,
   onChange,
   projects,
   selectedWorkspace,
 }: {
   disabled: boolean;
+  onAddProject(): void;
   onChange(workspace: string): void;
   projects: readonly ZenXProjectProjectionEntry[];
   selectedWorkspace: string | null;
 }) {
   const [open, setOpen] = useState(selectedWorkspace === null);
+  const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef(false);
+  const popoverId = useId();
   const selectedProject = projects.find(
     (project) => project.workspace === selectedWorkspace,
   );
@@ -2055,10 +2082,18 @@ function NewThreadProjectSelector({
       : selectedProject === undefined
         ? `${projectLabel(selectedWorkspace)} unavailable`
         : projectDisplayLabel(selectedProject.workspace, projects);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filteredProjects = projects.filter((project) => {
+    if (normalizedQuery.length === 0) return true;
+    return `${projectDisplayLabel(project.workspace, projects)} ${project.workspace}`
+      .toLocaleLowerCase()
+      .includes(normalizedQuery);
+  });
 
   const closeMenu = (restoreFocus: boolean) => {
     restoreFocusRef.current = restoreFocus;
     setOpen(false);
+    setQuery("");
   };
 
   useLayoutEffect(() => {
@@ -2073,22 +2108,13 @@ function NewThreadProjectSelector({
 
   useEffect(() => {
     if (!open) return;
-    const focusSelected = () => {
-      const selected = menuRef.current?.querySelector<HTMLButtonElement>(
-        '[role="menuitemradio"][aria-checked="true"]',
-      );
-      (
-        selected ??
-        menuRef.current?.querySelector<HTMLButtonElement>(
-          '[role="menuitemradio"]',
-        )
-      )?.focus();
-    };
-    queueMicrotask(focusSelected);
+    queueMicrotask(() => searchRef.current?.focus());
     const onPointerDown = (event: PointerEvent) => {
       if (rootRef.current?.contains(event.target as Node)) return;
-      const focusWasInMenu = menuRef.current?.contains(document.activeElement);
-      closeMenu(Boolean(focusWasInMenu && !isFocusableTarget(event.target)));
+      const focusWasInPopover = rootRef.current?.contains(
+        document.activeElement,
+      );
+      closeMenu(Boolean(focusWasInPopover && !isFocusableTarget(event.target)));
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -2103,27 +2129,25 @@ function NewThreadProjectSelector({
     };
   }, [open]);
 
+  const focusProject = (direction: "first" | "selected") => {
+    const selected = menuRef.current?.querySelector<HTMLButtonElement>(
+      '[role="menuitemradio"][aria-checked="true"]',
+    );
+    const first = menuRef.current?.querySelector<HTMLButtonElement>(
+      '[role="menuitemradio"]',
+    );
+    (direction === "selected" ? (selected ?? first) : first)?.focus();
+  };
+
   return (
-    <div className="new-thread-project-context" ref={rootRef}>
-      <div
-        className="new-thread-project-current"
-        aria-label={
-          selectedWorkspace === null
-            ? "No Project selected"
-            : `Selected Project: ${selectedWorkspace}`
-        }
-        title={selectedWorkspace ?? undefined}
-      >
-        <Icon name="folder" size={13} />
-        <span>{selectedLabel}</span>
-      </div>
+    <div className="new-thread-project-switcher" ref={rootRef}>
       <button
         ref={triggerRef}
         className="new-thread-project-trigger"
         type="button"
-        aria-controls={open ? "new-thread-project-menu" : undefined}
+        aria-controls={open ? popoverId : undefined}
         aria-expanded={open}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-label={
           selectedWorkspace === null
             ? "Choose a Project"
@@ -2132,71 +2156,145 @@ function NewThreadProjectSelector({
         disabled={disabled}
         onClick={() => (open ? closeMenu(false) : setOpen(true))}
       >
-        Change Project
-        <Icon name="chevron-down" size={12} />
+        {selectedLabel}
       </button>
       {open ? (
         <div
-          ref={menuRef}
-          className="new-thread-project-menu"
-          id="new-thread-project-menu"
-          role="menu"
-          aria-label="Choose a Project"
+          className="new-thread-project-popover"
+          id={popoverId}
+          role="dialog"
+          aria-label="Switch Project"
           onKeyDown={(event) => {
             if (event.key === "Tab") {
               closeMenu(false);
-              return;
             }
-            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
-              return;
-            const options = Array.from(
-              event.currentTarget.querySelectorAll<HTMLButtonElement>(
-                '[role="menuitemradio"]',
-              ),
-            );
-            if (options.length === 0) return;
-            event.preventDefault();
-            const currentIndex = options.indexOf(
-              document.activeElement as HTMLButtonElement,
-            );
-            const nextIndex =
-              event.key === "Home"
-                ? 0
-                : event.key === "End"
-                  ? options.length - 1
-                  : currentIndex === -1
-                    ? event.key === "ArrowUp"
-                      ? options.length - 1
-                      : 0
-                    : event.key === "ArrowUp"
-                      ? (currentIndex - 1 + options.length) % options.length
-                      : (currentIndex + 1) % options.length;
-            options[nextIndex]?.focus();
           }}
         >
-          {projects.map((project) => {
-            const selected = project.workspace === selectedWorkspace;
-            return (
-              <button
-                key={project.key}
-                type="button"
-                role="menuitemradio"
-                aria-checked={selected}
-                aria-label={`${selected ? "Selected Project" : "Select Project"}: ${project.workspace}`}
-                title={project.workspace}
-                onClick={() => {
-                  onChange(project.workspace);
-                  closeMenu(true);
-                }}
-              >
-                <Icon name="folder" size={13} />
-                <span>{projectDisplayLabel(project.workspace, projects)}</span>
-                {selected ? <Icon name="check" size={13} /> : null}
-              </button>
-            );
-          })}
+          <label className="new-thread-project-search">
+            <Icon name="search" size={13} />
+            <span className="sr-only">Search projects</span>
+            <input
+              ref={searchRef}
+              type="search"
+              value={query}
+              placeholder="Search projects"
+              aria-label="Search projects"
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowDown" && event.key !== "ArrowUp")
+                  return;
+                event.preventDefault();
+                focusProject(event.key === "ArrowUp" ? "selected" : "first");
+              }}
+            />
+          </label>
+          <div
+            ref={menuRef}
+            className="new-thread-project-menu"
+            role="menu"
+            aria-label="Choose a Project"
+            onKeyDown={(event) => {
+              if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
+                return;
+              const options = Array.from(
+                event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                  '[role="menuitemradio"]',
+                ),
+              );
+              if (options.length === 0) return;
+              event.preventDefault();
+              const currentIndex = options.indexOf(
+                document.activeElement as HTMLButtonElement,
+              );
+              const nextIndex =
+                event.key === "Home"
+                  ? 0
+                  : event.key === "End"
+                    ? options.length - 1
+                    : currentIndex === -1
+                      ? event.key === "ArrowUp"
+                        ? options.length - 1
+                        : 0
+                      : event.key === "ArrowUp"
+                        ? (currentIndex - 1 + options.length) % options.length
+                        : (currentIndex + 1) % options.length;
+              options[nextIndex]?.focus();
+            }}
+          >
+            {filteredProjects.map((project) => {
+              const selected = project.workspace === selectedWorkspace;
+              return (
+                <button
+                  key={project.key}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selected}
+                  aria-label={`${selected ? "Selected Project" : "Select Project"}: ${project.workspace}`}
+                  title={project.workspace}
+                  onClick={() => {
+                    onChange(project.workspace);
+                    closeMenu(true);
+                  }}
+                >
+                  <Icon name="folder" size={13} />
+                  <span>
+                    {projectDisplayLabel(project.workspace, projects)}
+                  </span>
+                  {selected ? <Icon name="check" size={13} /> : null}
+                </button>
+              );
+            })}
+            {filteredProjects.length === 0 ? (
+              <p className="new-thread-project-empty">No projects found</p>
+            ) : null}
+            <div className="new-thread-project-separator" role="separator" />
+            <button
+              className="new-thread-project-add"
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                closeMenu(false);
+                onAddProject();
+              }}
+            >
+              <Icon name="folder-plus" size={13} />
+              <span>Add project</span>
+            </button>
+          </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function NewThreadProjectContext({
+  projects,
+  selectedWorkspace,
+}: {
+  projects: readonly ZenXProjectProjectionEntry[];
+  selectedWorkspace: string | null;
+}) {
+  const selectedProject = projects.find(
+    (project) => project.workspace === selectedWorkspace,
+  );
+  const selectedLabel =
+    selectedWorkspace === null
+      ? "Choose a Project"
+      : selectedProject === undefined
+        ? `${projectLabel(selectedWorkspace)} unavailable`
+        : projectDisplayLabel(selectedProject.workspace, projects);
+  return (
+    <div
+      className="new-thread-project-context"
+      aria-label={
+        selectedWorkspace === null
+          ? "No Project selected"
+          : `Selected Project: ${selectedWorkspace}`
+      }
+      title={selectedWorkspace ?? undefined}
+    >
+      <Icon name="folder" size={13} />
+      <span>{selectedLabel}</span>
     </div>
   );
 }
