@@ -63,6 +63,37 @@ test("pending approvals render in the bottom zone next to the composer", () => {
   assert.match(html, /Allow once/u);
 });
 
+test("message actions use the terminal Turn time and icon-only copy controls", () => {
+  const completedAt = new Date();
+  completedAt.setHours(12, 34, 0, 0);
+  const html = renderTurns([
+    {
+      ...turnWithItems(
+        "completed",
+        [user("Copy this *raw* Markdown"), agent("Answer")],
+        1_000,
+      ),
+      completedAt: Math.floor(completedAt.getTime() / 1_000),
+    },
+  ]);
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(completedAt);
+
+  assert.match(html, /class="message-actions user-message-actions"/u);
+  assert.match(html, /aria-label="Copy user message"/u);
+  assert.match(html, /class="message-actions assistant-message-actions"/u);
+  assert.match(html, /aria-label="Copy assistant message"/u);
+  assert.equal((html.match(/data-icon="copy"/gu) ?? []).length, 2);
+  assert.equal(
+    (html.match(new RegExp(`>${time}</time>`, "gu")) ?? []).length,
+    2,
+  );
+  assert.doesNotMatch(html, />Copy<|>Completed /u);
+});
+
 test("assistant messages omit the identity row while preserving metadata and content", () => {
   const html = renderTurns([
     turnWithItems("completed", [user("request"), agent("Final answer")], 1_000),

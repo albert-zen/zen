@@ -42,6 +42,34 @@ function oneProject(): ZenXProjectProjectionSnapshot {
   };
 }
 
+test("startup opens the lazy welcome draft without creating a Thread", async () => {
+  let starts = 0;
+  const harness = await mountApp(oneProject(), {
+    startProjectThread: async (workspace) => {
+      starts += 1;
+      return started(liveThread(), workspace);
+    },
+  });
+  try {
+    const heading = await waitFor(() =>
+      document.querySelector<HTMLElement>(".new-thread-draft-heading"),
+    );
+    assert.match(heading.textContent ?? "", /What should we build in zen\?/u);
+    assert.equal(
+      document.querySelector(".new-thread-draft-empty .empty-glyph"),
+      null,
+    );
+    assert.ok(document.getElementById("thread-composer"));
+    assert.equal(starts, 0);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Start a conversation|No thread selected/u,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("desktop title bar collapses and restores the Sidebar", async () => {
   const harness = await mountApp({
     projects: [],
