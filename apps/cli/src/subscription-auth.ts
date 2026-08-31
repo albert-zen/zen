@@ -421,9 +421,235 @@ interface OAuthServer {
   waitForCode(): Promise<{ code: string } | null>;
 }
 
+function openAiLoginSuccessPage(nonce: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>OpenAI sign-in recognized · Zen</title>
+  <style nonce="${nonce}">
+    :root {
+      color-scheme: light dark;
+      --color-canvas: #090a0c;
+      --color-surface: #15171c;
+      --color-surface-emphasis: #20232a;
+      --color-border: #292c34;
+      --color-text-primary: #f0f1f3;
+      --color-text-secondary: #b4b6bd;
+      --color-text-muted: #898c96;
+      --color-accent: #8ea9ff;
+      --color-accent-soft: rgb(142 169 255 / 13%);
+      --color-focus-ring: #8ea9ff;
+      --color-status-success: #73d2ad;
+      --color-status-success-soft: rgb(115 210 173 / 10%);
+      --color-shadow: rgb(0 0 0 / 35%);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    html { min-width: 0; background: var(--color-canvas); }
+    body {
+      min-width: 0;
+      min-height: 100vh;
+      min-height: 100svh;
+      margin: 0;
+      padding: 32px;
+      display: grid;
+      place-items: center;
+      color: var(--color-text-primary);
+      background: var(--color-canvas);
+    }
+    .confirmation {
+      width: min(100%, 560px);
+      overflow: hidden;
+      border: 1px solid var(--color-border);
+      border-radius: 18px;
+      background: var(--color-surface);
+      box-shadow: 0 24px 64px var(--color-shadow);
+    }
+    .brand {
+      min-height: 88px;
+      padding: 20px 28px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      border-bottom: 1px solid var(--color-border);
+      background: var(--color-surface-emphasis);
+    }
+    .brand svg { width: 48px; height: 48px; flex: 0 0 auto; color: var(--color-text-primary); }
+    .brand-name { font-size: 18px; font-weight: 650; letter-spacing: 0.08em; }
+    .content { padding: 42px 44px 36px; }
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--color-accent);
+      font-size: 13px;
+      font-weight: 650;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 13ch;
+      margin: 0;
+      font-size: clamp(32px, 7vw, 46px);
+      font-weight: 620;
+      line-height: 1.08;
+      letter-spacing: -0.035em;
+      text-wrap: balance;
+    }
+    .lead {
+      max-width: 43ch;
+      margin: 20px 0 0;
+      color: var(--color-text-secondary);
+      font-size: 17px;
+      line-height: 1.6;
+    }
+    .receipt {
+      margin: 28px 0;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      border: 1px solid color-mix(in srgb, var(--color-status-success) 35%, transparent);
+      border-radius: 10px;
+      color: var(--color-text-primary);
+      background: var(--color-status-success-soft);
+      font-size: 15px;
+      line-height: 1.45;
+    }
+    .receipt svg { width: 20px; height: 20px; flex: 0 0 auto; color: var(--color-status-success); }
+    button {
+      min-width: 152px;
+      min-height: 48px;
+      padding: 12px 22px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      color: #10131b;
+      background: var(--color-accent);
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: background-color 160ms ease, box-shadow 160ms ease;
+    }
+    button:hover { background: color-mix(in srgb, var(--color-accent) 88%, white); }
+    button:active { background: color-mix(in srgb, var(--color-accent) 82%, black); }
+    button:focus-visible {
+      outline: 3px solid var(--color-focus-ring);
+      outline-offset: 3px;
+    }
+    .shortcut {
+      margin: 14px 0 0;
+      color: var(--color-text-muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .repeat-help { margin-top: 28px; border-top: 1px solid var(--color-border); padding-top: 14px; }
+    button.repeat-trigger {
+      width: auto;
+      min-width: 0;
+      min-height: 44px;
+      padding: 8px 0;
+      border: 0;
+      border-radius: 4px;
+      color: var(--color-text-secondary);
+      background: transparent;
+      font-size: 14px;
+      font-weight: 600;
+      text-align: left;
+    }
+    button.repeat-trigger:hover { color: var(--color-text-primary); background: transparent; }
+    button.repeat-trigger:active { color: var(--color-accent); background: transparent; }
+    .repeat-trigger svg { width: 14px; height: 14px; margin-right: 5px; vertical-align: -2px; transition: transform 160ms ease; }
+    .repeat-trigger[aria-expanded="true"] svg { transform: rotate(90deg); }
+    .repeat-guidance { margin: 4px 0 0; color: var(--color-text-muted); font-size: 14px; line-height: 1.55; }
+    [role="status"] { margin-top: 14px; color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
+    [hidden] { display: none; }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --color-canvas: #e8eaf1;
+        --color-surface: #fbfcff;
+        --color-surface-emphasis: #f0f2f8;
+        --color-border: #cbd0dc;
+        --color-text-primary: #1c2029;
+        --color-text-secondary: #4d5361;
+        --color-text-muted: #616878;
+        --color-accent: #526fb9;
+        --color-accent-soft: rgb(82 111 185 / 13%);
+        --color-focus-ring: #526fb9;
+        --color-status-success: #287a60;
+        --color-status-success-soft: rgb(40 122 96 / 11%);
+        --color-shadow: rgb(45 52 73 / 14%);
+      }
+    }
+    @media (max-width: 480px) {
+      body { padding: 16px; place-items: start center; }
+      .confirmation { border-radius: 14px; }
+      .brand { min-height: 76px; padding: 14px 20px; }
+      .brand svg { width: 42px; height: 42px; }
+      .content { padding: 30px 24px 28px; }
+      h1 { font-size: clamp(30px, 10vw, 38px); }
+      .lead { font-size: 16px; }
+      button { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="confirmation" aria-labelledby="confirmation-title">
+    <header class="brand">
+      <svg viewBox="0 0 64 64" fill="currentColor" role="img" aria-label="Zen logo">
+        <path d="M 196.529 17.500 C 188.341 22.175, 181.518 26, 181.368 26 C 181.218 26, 175.032 29.937, 167.622 34.750 C 160.211 39.563, 149.053 46.753, 142.824 50.730 C 136.596 54.706, 124.300 62.687, 115.500 68.466 C 106.700 74.244, 99.050 79.130, 98.500 79.323 C 97.185 79.784, 98.772 84.102, 105.498 98.361 L 110.896 109.806 119.198 115.291 C 123.764 118.308, 136.002 126.706, 146.392 133.955 C 172.471 152.147, 194.479 167, 195.356 167 C 196.162 167, 195.171 160.393, 194.007 158 C 191.110 152.048, 191.487 151.399, 200.500 146.826 C 205.177 144.453, 208.854 142.059, 208.672 141.506 C 208.489 140.953, 206.714 139.375, 204.728 138 C 202.741 136.625, 195.352 131.534, 188.308 126.687 C 181.264 121.840, 172.800 115.958, 169.500 113.616 C 166.200 111.275, 155.513 103.832, 145.750 97.078 C 135.988 90.323, 128.014 84.505, 128.030 84.148 C 128.065 83.420, 175.916 47.951, 182.356 43.881 C 184.635 42.440, 187.607 39.744, 188.959 37.888 C 190.312 36.033, 195.683 29.787, 200.896 24.008 C 215.359 7.974, 214.540 9, 212.883 9 C 212.077 9, 204.718 12.825, 196.529 17.500" transform="translate(0 5) scale(.29)"/>
+        <path d="M 25.696 45.637 C 25.411 45.922, 26.263 48.608, 27.589 51.606 C 30.892 59.073, 30.848 59.193, 23.500 62.850 C 19.925 64.629, 17 66.248, 17 66.448 C 17 66.648, 21.387 69.927, 26.750 73.735 C 32.112 77.543, 45.877 87.318, 57.337 95.457 C 74.362 107.546, 77.930 110.483, 76.837 111.507 C 76.102 112.196, 65.600 120.181, 53.500 129.251 C 36.054 142.327, 30.051 147.451, 24.500 154.002 C 20.650 158.546, 14.913 165.175, 11.750 168.733 C 3.421 178.103, 3.876 179.205, 13.500 172.976 C 18.989 169.424, 28.805 163.685, 38.207 158.532 C 40.246 157.414, 44.296 154.888, 47.207 152.917 C 53.139 148.901, 85.736 128.357, 104.302 116.933 C 106.943 115.308, 108.908 113.645, 108.668 113.239 C 108.428 112.833, 105.548 106.847, 102.269 99.939 C 97.266 89.402, 95.722 85.242, 92.685 85.242 C 90.694 84.067, 78.627 75.856, 65.870 66.995 C 53.112 58.135, 41.285 50.609, 39.587 50.272 C 37.889 49.935, 34.186 48.637, 31.357 47.389 C 28.528 46.141, 25.981 45.353, 25.696 45.637" transform="translate(0 5) scale(.29)"/>
+      </svg>
+      <span class="brand-name">ZEN</span>
+    </header>
+    <section class="content">
+      <p class="eyebrow">OpenAI sign-in</p>
+      <h1 id="confirmation-title">Zen recognized your OpenAI sign-in.</h1>
+      <p class="lead">Return to Zen to continue. You can safely close this tab.</p>
+      <div class="receipt">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+        <span>Sign-in response received</span>
+      </div>
+      <button id="close-tab" type="button" autofocus>Close this tab</button>
+      <p class="shortcut">If this tab stays open, use Ctrl+W or Command+W, then return to Zen.</p>
+      <p id="close-status" role="status" hidden>Your browser kept this tab open. Close it with Ctrl+W or Command+W, then return to Zen.</p>
+      <div class="repeat-help">
+        <button class="repeat-trigger" id="repeat-trigger" type="button" aria-expanded="false" aria-controls="repeat-guidance">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg>
+          Opened this page again?
+        </button>
+        <p class="repeat-guidance" id="repeat-guidance" hidden>Zen already received the sign-in response. Close this copy and return to Zen.</p>
+      </div>
+    </section>
+  </main>
+  <script nonce="${nonce}">
+    const closeButton = document.querySelector("#close-tab");
+    const closeStatus = document.querySelector("#close-status");
+    const repeatTrigger = document.querySelector("#repeat-trigger");
+    const repeatGuidance = document.querySelector("#repeat-guidance");
+    closeButton.addEventListener("click", () => {
+      window.close();
+      window.setTimeout(() => { closeStatus.hidden = false; }, 150);
+    });
+    repeatTrigger.addEventListener("click", () => {
+      const expanded = repeatTrigger.getAttribute("aria-expanded") === "true";
+      repeatTrigger.setAttribute("aria-expanded", String(!expanded));
+      repeatGuidance.hidden = expanded;
+    });
+  </script>
+</body>
+</html>`;
+}
+
 async function startLocalOAuthServer(
   state: string,
 ): Promise<OAuthServer | undefined> {
+  const nonce = randomBytes(16).toString("base64");
   let settle: ((value: { code: string } | null) => void) | undefined;
   const result = new Promise<{ code: string } | null>((resolve) => {
     let settled = false;
@@ -461,10 +687,13 @@ async function startLocalOAuthServer(
         response.end("Authorization code missing.");
         return;
       }
-      response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-      response.end(
-        "OpenAI authentication completed. You can close this window.",
-      );
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'`,
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(openAiLoginSuccessPage(nonce));
       settle?.({ code });
     } catch {
       response.writeHead(500, { "content-type": "text/plain; charset=utf-8" });

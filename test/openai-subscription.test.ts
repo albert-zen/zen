@@ -965,6 +965,84 @@ test("browser PKCE login stores an independent mode-0600 profile", async () => {
   }
 });
 
+test("browser callback presents a repeat-safe Zen login confirmation", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-callback-page-"));
+  const profilePath = path.join(root, "openai-subscription-auth.json");
+  let releaseTokenExchange!: () => void;
+  const tokenExchangeReleased = new Promise<void>((resolve) => {
+    releaseTokenExchange = resolve;
+  });
+  let markTokenExchangeStarted!: () => void;
+  const tokenExchangeStarted = new Promise<void>((resolve) => {
+    markTokenExchangeStarted = resolve;
+  });
+  let publishAuthorizationUrl!: (url: URL) => void;
+  const authorizationUrl = new Promise<URL>((resolve) => {
+    publishAuthorizationUrl = resolve;
+  });
+  const profile = new OpenAiSubscriptionAuthProfile(profilePath, {
+    fetch: async () => {
+      markTokenExchangeStarted();
+      await tokenExchangeReleased;
+      return Response.json({
+        access_token: secretAccessToken,
+        refresh_token: "zen-refresh",
+        expires_in: 3600,
+      });
+    },
+    tokenEndpoint: "https://example.test/oauth/token",
+  });
+
+  const login = profile.login({
+    readManualCode: async ({ signal }) =>
+      await new Promise<string>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+      }),
+    notifyAuthUrl: (url) => publishAuthorizationUrl(new URL(url)),
+  });
+
+  try {
+    const state = (await authorizationUrl).searchParams.get("state");
+    assert.ok(state);
+    const callbackUrl = `http://127.0.0.1:1455/auth/callback?code=browser-code&state=${encodeURIComponent(state)}`;
+    const first = await fetch(callbackUrl);
+    await tokenExchangeStarted;
+    const repeated = await fetch(callbackUrl);
+    const html = await first.text();
+
+    assert.equal(first.status, 200);
+    assert.match(first.headers.get("content-type") ?? "", /^text\/html/u);
+    assert.match(
+      first.headers.get("content-security-policy") ?? "",
+      /^default-src 'none'; style-src 'nonce-[^']+'; script-src 'nonce-[^']+'; base-uri 'none'; form-action 'none'$/u,
+    );
+    assert.equal(await repeated.text(), html);
+    assert.match(html, /<html lang="en">/u);
+    assert.match(html, /<meta name="viewport"/u);
+    assert.match(html, /<svg[^>]+aria-label="Zen logo"/u);
+    assert.match(html, /Zen recognized your OpenAI sign-in/u);
+    assert.match(html, /Return to Zen/u);
+    assert.match(html, /<button[^>]+autofocus/u);
+    assert.match(
+      html,
+      /aria-expanded="false" aria-controls="repeat-guidance"/u,
+    );
+    assert.doesNotMatch(html, /access_token|refresh_token|browser-code/u);
+    assert.match(html, /:focus-visible/u);
+    assert.match(html, /@media \(max-width: 480px\)/u);
+    assert.match(html, /@media \(prefers-reduced-motion: reduce\)/u);
+  } finally {
+    releaseTokenExchange();
+    try {
+      await login;
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("serializes rotating refresh across independent profile instances", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-refresh-"));
   const profilePath = path.join(root, "openai-subscription-auth.json");
