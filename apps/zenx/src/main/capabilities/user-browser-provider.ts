@@ -2060,6 +2060,31 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     }
     contextState.invalidExecutionContextIds.clear();
     await this.#documentBarrier(fence, signal);
+    const settledContextState = this.#targetDocuments.get(targetId);
+    if (
+      settledContextState !== undefined &&
+      settledContextState.revision === fence.documentRevision
+    ) {
+      const settledReplacement = [
+        ...settledContextState.pendingIsolatedContexts,
+      ].some(
+        ([contextId, frameId]) =>
+          frameId === fence.frameId && contextId !== world.executionContextId,
+      );
+      if (
+        settledReplacement ||
+        settledContextState.invalidExecutionContextIds.has(
+          world.executionContextId,
+        )
+      ) {
+        this.#invalidateTarget(targetId, false);
+        throw new UserBrowserDocumentChangedBeforeDispatchError(
+          "isolated execution context invalidated",
+        );
+      }
+      settledContextState.pendingIsolatedContexts.clear();
+      settledContextState.invalidExecutionContextIds.clear();
+    }
     this.#assertDocumentFence(fence, true);
     const identity = JSON.stringify({
       targetId,

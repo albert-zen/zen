@@ -2487,6 +2487,29 @@ test("repeated isolated-context invalidations remain bounded and recover", async
   }
 });
 
+test("settled late isolated-context invalidation does not poison recovery", async () => {
+  const cdp = await createFakeCdpServer();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    cdp.invalidateSetupAt("before-post-isolated-world-barrier-response", {
+      method: "Runtime.executionContextDestroyed",
+      params: { executionContextId: 100 },
+    });
+    await assert.rejects(
+      connection.backend.inspect("work", "target-1"),
+      /document changed|invalidated|execution context/u,
+    );
+    assert.equal(cdp.count("Runtime.evaluate"), 0);
+
+    const inspection = await connection.backend.inspect("work", "target-1");
+    assert.match(inspection.visibleText, /Signed in as Alice/u);
+    assert.equal(cdp.count("Runtime.evaluate"), 2);
+  } finally {
+    await cdp.close();
+  }
+});
+
 test("Windows browser discovery covers machine and per-user Chrome Edge and Chromium", () => {
   const candidates = windowsBrowserExecutableCandidates({
     ProgramFiles: "C:\\Program Files",
@@ -2910,7 +2933,8 @@ async function createFakeCdpServer(): Promise<{
     phase:
       | "before-frame-tree-response"
       | "after-frame-tree"
-      | "after-isolated-world",
+      | "after-isolated-world"
+      | "before-post-isolated-world-barrier-response",
     event?: { method: string; params: Record<string, unknown> },
   ): void;
   loseNextCreateReply(): void;
@@ -2972,7 +2996,14 @@ async function createFakeCdpServer(): Promise<{
         phase:
           | "before-frame-tree-response"
           | "after-frame-tree"
-          | "after-isolated-world";
+          | "after-isolated-world"
+          | "before-post-isolated-world-barrier-response";
+        event: { method: string; params: Record<string, unknown> };
+      }
+    | undefined;
+  let postIsolatedWorldInvalidation:
+    | {
+        sessionId: string | undefined;
         event: { method: string; params: Record<string, unknown> };
       }
     | undefined;
@@ -3158,6 +3189,21 @@ async function createFakeCdpServer(): Promise<{
             },
           },
         };
+        const postBarrierInvalidation = postIsolatedWorldInvalidation;
+        if (
+          postBarrierInvalidation !== undefined &&
+          postBarrierInvalidation.sessionId === request.sessionId
+        ) {
+          postIsolatedWorldInvalidation = undefined;
+          emitSetupInvalidation(
+            socket,
+            request.sessionId,
+            postBarrierInvalidation.event,
+            runtimeEnabledSessions,
+          );
+          socket.send(JSON.stringify({ id: request.id, result }));
+          return;
+        }
         if (setupInvalidation?.phase === "before-frame-tree-response") {
           const invalidation = setupInvalidation;
           setupInvalidation = undefined;
@@ -3188,6 +3234,17 @@ async function createFakeCdpServer(): Promise<{
           sessionContexts.set(sessionId, context);
         }
         result = { executionContextId: context };
+        if (
+          setupInvalidation?.phase ===
+          "before-post-isolated-world-barrier-response"
+        ) {
+          const invalidation = setupInvalidation;
+          setupInvalidation = undefined;
+          postIsolatedWorldInvalidation = {
+            sessionId: request.sessionId,
+            event: invalidation.event,
+          };
+        }
         if (setupInvalidation?.phase === "after-isolated-world") {
           const invalidation = setupInvalidation;
           setupInvalidation = undefined;
