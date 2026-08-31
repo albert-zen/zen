@@ -272,6 +272,9 @@ a:focus-visible {
 :root[data-platform="darwin"] .app-shell.sidebar-collapsed {
   --titlebar-brand-track: 224px;
 }
+:root[data-platform="win32"] .window-titlebar {
+  padding-right: 138px;
+}
 .sidebar {
   position: relative;
   z-index: 20;

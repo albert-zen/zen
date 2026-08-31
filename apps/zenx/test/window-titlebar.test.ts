@@ -44,4 +44,12 @@ test("integrated title bar keeps controls while macOS moves ZenX branding into t
   );
   assert.match(main, /titleBarStyle: "hidden"/u);
   assert.match(main, /titleBarOverlay:/u);
+  assert.match(
+    styles,
+    /:root\[data-platform="darwin"\] \.window-titlebar-brand\s*\{[^}]*padding-left:\s*84px;/su,
+  );
+  assert.match(
+    styles,
+    /:root\[data-platform="win32"\] \.window-titlebar\s*\{[^}]*padding-right:\s*138px;/su,
+  );
 });
