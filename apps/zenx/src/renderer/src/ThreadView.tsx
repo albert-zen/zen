@@ -531,6 +531,7 @@ function TurnBlock({
           {!complete && projection.finalItem !== null ? (
             <AgentMessage
               item={projection.finalItem}
+              showActions={false}
               turn={turn}
               usage={usage}
             />
@@ -539,7 +540,12 @@ function TurnBlock({
       ) : null}
       {complete && projection.finalItem !== null ? (
         <div className="turn-final">
-          <AgentMessage item={projection.finalItem} turn={turn} usage={usage} />
+          <AgentMessage
+            item={projection.finalItem}
+            showActions
+            turn={turn}
+            usage={usage}
+          />
         </div>
       ) : projection.terminalFallback === null ? null : (
         <div className="turn-terminal" role="status">
@@ -580,7 +586,12 @@ function DisplayNode({
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
   return node.kind === "agent" ? (
-    <AgentMessage item={node.item} turn={turn} usage={usage} />
+    <AgentMessage
+      item={node.item}
+      showActions={false}
+      turn={turn}
+      usage={usage}
+    />
   ) : (
     <TraceSequence
       node={node}
@@ -999,10 +1010,12 @@ function hasImageFiles(files: FileList): boolean {
 
 function AgentMessage({
   item,
+  showActions,
   turn,
   usage,
 }: {
   item: Extract<ThreadItem, { type: "agentMessage" }>;
+  showActions: boolean;
   turn: Turn;
   usage?: ModelUsageAggregate;
 }) {
@@ -1010,13 +1023,15 @@ function AgentMessage({
     <article className="agent-copy">
       <Markdown text={item.text} />
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
-      <MessageActions
-        className="assistant-message-actions"
-        copyLabel="Copy assistant message"
-        text={item.text}
-        turn={turn}
-        usage={usage}
-      />
+      {showActions ? (
+        <MessageActions
+          className="assistant-message-actions"
+          copyLabel="Copy assistant message"
+          text={item.text}
+          turn={turn}
+          usage={usage}
+        />
+      ) : null}
     </article>
   );
 }

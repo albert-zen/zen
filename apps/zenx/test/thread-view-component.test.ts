@@ -143,6 +143,55 @@ test("Turn disclosure does not repeat cache telemetry from assistant actions", (
   assert.doesNotMatch(html, /class="turn-usage"/u);
 });
 
+test("only the final assistant message exposes metadata and hover actions", async () => {
+  await withDom(async (root) => {
+    await renderInteractive(
+      root,
+      turnWithItems(
+        "completed",
+        [
+          user("request"),
+          agent("Intermediate update"),
+          reasoning("Checked the result"),
+          agent("Final answer"),
+        ],
+        1_000,
+      ),
+      {
+        thread: {
+          responseCount: 1,
+          inputTokens: 150,
+          cachedInputTokens: 40,
+          outputTokens: 17,
+          cacheHitRate: 0.4,
+        },
+        turns: {
+          "turn-1": {
+            responseCount: 1,
+            inputTokens: 150,
+            cachedInputTokens: 40,
+            outputTokens: 17,
+            cacheHitRate: 0.4,
+          },
+        },
+      },
+    );
+    await act(async () => requiredButton(".turn-toggle").click());
+
+    const messages = document.querySelectorAll(".agent-copy");
+    assert.equal(messages.length, 2);
+    assert.match(messages[0]?.textContent ?? "", /Intermediate update/u);
+    assert.equal(messages[0]?.querySelector(".message-actions"), null);
+    assert.match(messages[1]?.textContent ?? "", /Final answer/u);
+    assert.ok(messages[1]?.querySelector(".assistant-message-actions"));
+    assert.equal(
+      document.querySelectorAll(".assistant-message-actions .message-cache")
+        .length,
+      1,
+    );
+  });
+});
+
 test("running Turns do not invent a completion timestamp in message controls", () => {
   const html = renderTurns([
     turnWithItems("inProgress", [user("Still running"), agent("Partial")]),
@@ -730,13 +779,18 @@ async function openReasoningRow(
   return requiredElement<HTMLElement>(".trace-singleton");
 }
 
-async function renderInteractive(root: Root, value: Turn): Promise<void> {
+async function renderInteractive(
+  root: Root,
+  value: Turn,
+  threadUsage?: ModelUsageProjection,
+): Promise<void> {
   await act(async () =>
     root.render(
       createElement(ThreadView, {
         approvals: [],
         composer: emptyComposerState(),
         thread: thread([value]),
+        threadUsage,
         onDraftChange: () => undefined,
         onInterrupt: noop,
         onRespondToApproval: noop,
