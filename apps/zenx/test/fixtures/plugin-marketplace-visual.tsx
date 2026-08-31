@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import type { ZenXPluginSnapshot } from "../../src/main/capabilities/types.js";
 import { PluginSettings } from "../../src/renderer/src/PluginSettings.js";
+import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 
 const snapshot: ZenXPluginSnapshot = {

@@ -246,6 +246,8 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   必须在首屏前写入根文档并驱动同一套语义 token、原生控件 `color-scheme` 与组件实现，不能成为
   Core / Thread / Project 状态或平行主题框架。Light 保留 ZenX 的冷中性层级、紫蓝强调色、密度与
   单色品牌资产，Dark 保持既有视觉稳定。
+- 主题 token 命名、平台表面、第三方边界、静态 guard 与渐进迁移方式见
+  [`themes.md`](./themes.md)。本文仍是 durable product authority；实现文档不得扩张产品语义。
 - restart-required changes 必须在当前 route 明确反馈 pending、success 和 failure；具体使用顶部或内容区动作、动作名称、何时 enabled/emphasized，待 Settings action contract 确认。
 - 本地 service state 是弱状态信息：Sidebar 左下 Settings row 的最右侧显示一个不单独可点击的状态点，hover tooltip 与 Settings 的 accessible name 提供具体状态；它不再占用独立文字行，也不得盖过用户可执行设置。主区仍保留 starting、reconnecting 与 error 的阻断说明。
 - 未配置 host 的首次启动进入 provider onboarding；Subscription、OpenAI-compatible API 与 local demo 的 credential/configuration 仍遵守 Host/Core 安全边界。

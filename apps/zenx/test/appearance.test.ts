@@ -65,96 +65,131 @@ test("persists switches and follows live system changes only in System", () => {
   dom.window.close();
 });
 
-test("light semantic text, primary actions, and control boundaries meet contrast targets", async () => {
-  const css = await readFile(
+test("light and dark semantic text, actions, boundaries, and focus meet contrast targets", async () => {
+  const theme = await readFile(
+    new URL("../src/renderer/src/theme.css", import.meta.url),
+    "utf8",
+  );
+  const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
   );
-  const lightTokens = css.match(
+  const darkTokens = theme.match(/:root\s*\{([\s\S]*?)\n\}/u)?.[1];
+  const lightTokens = theme.match(
     /:root\[data-appearance="light"\]\s*\{([\s\S]*?)\n\}/u,
   )?.[1];
+  assert.ok(darkTokens);
   assert.ok(lightTokens);
-  const token = (name: string) => {
-    const value = lightTokens.match(
+  const token = (tokens: string, name: string) => {
+    const value = tokens.match(
       new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "iu"),
     )?.[1];
-    assert.ok(value, `missing light --${name}`);
+    assert.ok(value, `missing --${name}`);
     return value;
   };
 
-  for (const surface of ["surface-inset", "sidebar", "main", "surface"]) {
+  for (const [name, tokens] of [
+    ["dark", darkTokens],
+    ["light", lightTokens],
+  ] as const) {
+    for (const surface of [
+      "color-surface-inset",
+      "color-surface-sidebar",
+      "color-surface-main",
+      "color-surface",
+      "color-surface-hover",
+    ]) {
+      assert.ok(
+        contrastRatio(
+          token(tokens, "color-text-muted"),
+          token(tokens, surface),
+        ) >= 4.5,
+        `${name} muted text must meet 4.5:1 against --${surface}`,
+      );
+    }
     assert.ok(
-      contrastRatio(token("text-3"), token(surface)) >= 4.5,
-      `--text-3 must meet 4.5:1 against --${surface}`,
-    );
-  }
-  assert.ok(
-    contrastRatio(token("text-3"), token("surface-hover")) >= 4.5,
-    "selected Thread metadata must meet 4.5:1",
-  );
-  assert.ok(
-    contrastRatio(token("text-on-accent"), token("accent")) >= 4.5,
-    "primary action text must meet 4.5:1",
-  );
-  assert.ok(
-    contrastRatio(token("border-control"), token("surface-inset")) >= 3,
-    "control boundaries must meet 3:1",
-  );
-  assert.ok(
-    contrastRatio(token("border-accent"), token("surface-inset")) >= 3,
-    "selected control boundaries must meet 3:1",
-  );
-  assert.match(
-    css,
-    /\.primary-button\s*\{[^}]*color:\s*var\(--text-on-accent\)/u,
-  );
-  assert.match(
-    css,
-    /\.appearance-options label > span\s*\{[^}]*border:\s*1px solid var\(--border-control\)/u,
-  );
-  assert.match(
-    css,
-    /\.composer > textarea::placeholder\s*\{[^}]*color:\s*var\(--text-3\)[^}]*opacity:\s*1/u,
-  );
-  assert.match(css, /\.field small\s*\{[^}]*color:\s*var\(--text-3\)/u);
-  assert.match(
-    css,
-    /\.thread-row\.selected\s*\{[^}]*background:\s*var\(--surface-hover\)/u,
-  );
-  assert.match(
-    css,
-    /\.thread-project,\s*\.model-line\s*\{[^}]*color:\s*var\(--text-3\)/u,
-  );
-  for (const selector of ["thread-menu-rename", "thread-title-form"]) {
-    const inputRule = css.match(
-      new RegExp(`\\.${selector} input\\s*\\{([^}]*)\\}`, "u"),
-    )?.[1];
-    assert.ok(inputRule, `missing .${selector} input rule`);
-    assert.match(inputRule, /border:\s*1px solid var\(--border-control\)/u);
-    assert.match(inputRule, /background:\s*var\(--surface-inset\)/u);
-  }
-
-  const lightOpacity = (selector: string) => {
-    const value = css.match(
-      new RegExp(
-        `:root\\[data-appearance="light"\\] \\.${selector}\\s*\\{[^}]*opacity:\\s*([0-9.]+)`,
-        "u",
-      ),
-    )?.[1];
-    assert.ok(value, `missing Light opacity override for .${selector}`);
-    return Number(value);
-  };
-  const unavailableThreadOpacity = lightOpacity("thread-row\\.system-error");
-  assert.equal(unavailableThreadOpacity, 1);
-  for (const surface of ["sidebar", "surface-hover"]) {
-    assert.ok(
-      effectiveContrastRatio(
-        token("text-3"),
-        token(surface),
-        unavailableThreadOpacity,
+      contrastRatio(
+        token(tokens, "color-text-on-accent"),
+        token(tokens, "color-accent"),
       ) >= 4.5,
-      `unavailable Thread metadata must remain readable over --${surface}`,
+      `${name} primary action text must meet 4.5:1`,
     );
+    assert.ok(
+      contrastRatio(
+        token(tokens, "color-border-control"),
+        token(tokens, "color-surface-inset"),
+      ) >= 3,
+      `${name} control boundaries must meet 3:1`,
+    );
+    assert.ok(
+      contrastRatio(
+        token(tokens, "color-border-accent"),
+        token(tokens, "color-surface-inset"),
+      ) >= 3,
+      `${name} selected boundaries must meet 3:1`,
+    );
+    for (const surface of ["color-surface", "color-surface-main"]) {
+      assert.ok(
+        contrastRatio(
+          token(tokens, "color-focus-ring"),
+          token(tokens, surface),
+        ) >= 3,
+        `${name} focus ring must meet 3:1 against --${surface}`,
+      );
+    }
+  }
+  assert.match(
+    styles,
+    /\.primary-button\s*\{[^}]*color:\s*var\(--color-text-on-accent\)/u,
+  );
+  assert.match(
+    styles,
+    /button:focus-visible,[\s\S]*?outline:\s*2px solid var\(--color-focus-ring\)/u,
+  );
+  assert.match(
+    styles,
+    /\.composer:focus-within\s*\{[^}]*border-color:\s*var\(--color-border-focus\);[^}]*outline:\s*2px solid var\(--color-focus-ring\);[^}]*outline-offset:\s*1px;[^}]*box-shadow:[^}]*var\(--color-shadow-low\)/u,
+  );
+  assert.match(
+    styles,
+    /\.composer > textarea::placeholder\s*\{[^}]*color:\s*var\(--color-text-muted\)[^}]*opacity:\s*1/u,
+  );
+  assert.match(
+    styles,
+    /\.field small\s*\{[^}]*color:\s*var\(--color-text-muted\)/u,
+  );
+  assert.match(
+    styles,
+    /\.thread-row\.selected\s*\{[^}]*background:\s*var\(--color-surface-hover\)/u,
+  );
+  assert.match(
+    styles,
+    /\.thread-project,\s*\.model-line\s*\{[^}]*color:\s*var\(--color-text-muted\)/u,
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.thread-row\.system-error\s*\{[^}]*opacity:/u,
+    "system-error must not fade the entire Thread row",
+  );
+  for (const [name, tokens] of [
+    ["dark", darkTokens],
+    ["light", lightTokens],
+  ] as const) {
+    for (const surface of ["sidebar", "surface-hover"]) {
+      assert.ok(
+        effectiveContrastRatio(
+          token(tokens, "color-text-muted"),
+          token(
+            tokens,
+            surface === "sidebar"
+              ? "color-surface-sidebar"
+              : "color-surface-hover",
+          ),
+          1,
+        ) >= 4.5,
+        `${name} unavailable Thread metadata must remain readable over --${surface}`,
+      );
+    }
   }
 });
 
