@@ -127,6 +127,34 @@ test("desktop title bar collapses and restores the Sidebar", async () => {
   }
 });
 
+test("startup opens a local welcome draft without creating a Thread", async () => {
+  let starts = 0;
+  const harness = await mountApp(oneProject(), {
+    startProjectThread: async (workspace) => {
+      starts += 1;
+      return started(liveThread(), workspace);
+    },
+  });
+  try {
+    const heading = await waitFor(() =>
+      document.querySelector<HTMLElement>(".new-thread-draft-heading"),
+    );
+    assert.match(heading.textContent ?? "", /What should we build in zen\?/u);
+    assert.equal(
+      document.querySelector(".new-thread-draft-empty .empty-glyph"),
+      null,
+    );
+    assert.ok(document.getElementById("thread-composer"));
+    assert.equal(starts, 0);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Start a conversation|No thread selected/u,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("optimistic summary preserves Thread seconds, identity, and idle status", () => {
   const value = optimisticThreadSummary(
     started(liveThread(), "/work/zen"),
@@ -829,8 +857,12 @@ test("New thread without a last-used Project opens an unselected draft menu", as
     },
   );
   try {
-    const chooseProject = await waitFor(() => exactButton("Choose project"));
-    await act(async () => chooseProject.click());
+    await waitFor(() =>
+      document.querySelector<HTMLElement>(".new-thread-draft-heading"),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
     await waitFor(() => document.getElementById("thread-composer"));
     const menu = await waitFor(() =>
       document.querySelector<HTMLElement>(
@@ -857,9 +889,29 @@ test("New thread without a last-used Project opens an unselected draft menu", as
     );
     assert.equal(starts, 0);
 
+    const addProject = exactButton("Add project");
+    assert.ok(addProject);
     await act(async () => {
-      menu.dispatchEvent(
-        new window.KeyboardEvent("keydown", { bubbles: true, key: "Tab" }),
+      search.dispatchEvent(
+        new window.FocusEvent("focusout", {
+          bubbles: true,
+          relatedTarget: addProject,
+        }),
+      );
+    });
+    assert.ok(
+      document.querySelector('[role="menu"][aria-label="Choose a Project"]'),
+    );
+    const nextOutsideControl =
+      document.querySelector<HTMLButtonElement>(".new-thread-action");
+    assert.ok(nextOutsideControl);
+    await act(async () => {
+      addProject.focus();
+      addProject.dispatchEvent(
+        new window.FocusEvent("focusout", {
+          bubbles: true,
+          relatedTarget: nextOutsideControl,
+        }),
       );
     });
     assert.equal(
@@ -922,7 +974,8 @@ test("same-leaf Projects show their parent paths in the draft chooser", async ()
     lastUsedWorkspace: null,
   });
   try {
-    await act(async () => exactButton("Choose project")?.click());
+    const trigger = await waitFor(() => projectSwitcher());
+    await act(async () => trigger.click());
     const menu = await waitFor(() =>
       document.querySelector<HTMLElement>(
         '[role="menu"][aria-label="Choose a Project"]',
@@ -959,6 +1012,97 @@ test("same-leaf Projects show their parent paths in the draft chooser", async ()
       /What should we build in zen — \/tmp\?/u,
     );
   } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("draft Project chooser stays within the viewport and only scrolls its results", async () => {
+  const harness = await mountApp(oneProject());
+  const originalInnerHeight = Object.getOwnPropertyDescriptor(
+    window,
+    "innerHeight",
+  );
+  const originalInnerWidth = Object.getOwnPropertyDescriptor(
+    window,
+    "innerWidth",
+  );
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const trigger = await waitFor(() => projectSwitcher());
+    let triggerTop = 40;
+    let triggerBottom = 60;
+    const messages = document.querySelector<HTMLElement>(".messages");
+    assert.ok(messages);
+    messages.getBoundingClientRect = () =>
+      ({
+        top: 24,
+        bottom: 396,
+        left: 0,
+        right: 320,
+        width: 320,
+        height: 372,
+        x: 0,
+        y: 24,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    trigger.getBoundingClientRect = () =>
+      ({
+        top: triggerTop,
+        bottom: triggerBottom,
+        left: 400,
+        right: 500,
+        width: 100,
+        height: triggerBottom - triggerTop,
+        x: 400,
+        y: triggerTop,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: 420,
+    });
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 320,
+    });
+
+    await act(async () => trigger.click());
+    let popover = await waitFor(() =>
+      document.querySelector<HTMLElement>(".new-thread-project-popover"),
+    );
+    assert.equal(popover.dataset.placement, "below");
+    assert.equal(popover.style.maxHeight, "308px");
+    assert.equal(popover.style.transform, "translateX(calc(-50% + -289px))");
+    const results = popover.querySelector(".new-thread-project-menu");
+    const actions = popover.querySelector(".new-thread-project-actions");
+    assert.ok(results);
+    assert.ok(actions);
+    assert.equal(results.querySelector(".new-thread-project-add"), null);
+    assert.ok(actions.querySelector(".new-thread-project-add"));
+
+    triggerTop = 350;
+    triggerBottom = 370;
+    await act(async () => window.dispatchEvent(new window.Event("resize")));
+    popover = await waitFor(() => {
+      const candidate = document.querySelector<HTMLElement>(
+        ".new-thread-project-popover",
+      );
+      return candidate?.dataset.placement === "above" ? candidate : undefined;
+    });
+    assert.equal(popover.style.maxHeight, "298px");
+  } finally {
+    if (originalInnerHeight === undefined) {
+      Reflect.deleteProperty(window, "innerHeight");
+    } else {
+      Object.defineProperty(window, "innerHeight", originalInnerHeight);
+    }
+    if (originalInnerWidth === undefined) {
+      Reflect.deleteProperty(window, "innerWidth");
+    } else {
+      Object.defineProperty(window, "innerWidth", originalInnerWidth);
+    }
     await unmountApp(harness);
   }
 });
@@ -1392,7 +1536,14 @@ test("packaged startup clears a transient Project failure after the App Server b
       document.querySelector<HTMLButtonElement>(".settings-nav-row")?.title,
       "Local service ready",
     );
-    assert.match(document.body.textContent ?? "", /No thread selected/u);
+    await waitFor(() =>
+      document.querySelector<HTMLElement>(".new-thread-draft-heading"),
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /What should we build in zen\?/u,
+    );
+    assert.doesNotMatch(document.body.textContent ?? "", /No thread selected/u);
 
     await act(async () => {
       statusListener?.({ type: "error", message: "host exited" });
@@ -1424,15 +1575,14 @@ test("zero-Project picker cancel fences delayed and duplicate folder selection",
     await act(async () =>
       document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
     );
-    await waitFor(() => document.querySelector('[role="dialog"]'));
-    const addFolder = exactButton("Add folder");
-    assert.ok(addFolder);
+    await waitFor(() => document.querySelector(".directory-picker-dialog"));
+    const addFolder = await waitFor(() => exactButton("Add folder"));
     await invokeButtonClick(addFolder, 2);
     assert.equal(adds, 1);
     await act(async () => exactButton("Cancel")?.click());
     await act(async () => add.resolve());
-    assert.equal(document.querySelector("#thread-composer"), null);
-    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.ok(document.querySelector("#thread-composer"));
+    assert.equal(document.querySelector(".directory-picker-dialog"), null);
   } finally {
     await unmountApp(harness);
   }

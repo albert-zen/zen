@@ -1,55 +1,55 @@
-# ZenX central Project switcher design QA
+# ZenX welcome draft and Project switcher design QA
 
-**Source visual truth**
+## Source visual truth
 
-- `/var/folders/kn/qprvl_8n6vn88tcp8tv_h2ph0000gn/T/codex-clipboard-9682f21f-cbaf-4bef-8726-5a7507b8be04.png`
-- 1638 × 1037 pixels, dark macOS desktop state, New chat draft with the central Project menu open.
+- `/var/folders/kn/qprvl_8n6vn88tcp8tv_h2ph0000gn/T/codex-clipboard-0995f127-24d2-4d6c-80f0-3341ad7dbe63.png`
+  - 2560 × 1640 pixels. User-marked packaged ZenX welcome state: remove or replace the generic compose glyph, lower the welcome content, and verify horizontal centering.
+- `/var/folders/kn/qprvl_8n6vn88tcp8tv_h2ph0000gn/T/codex-clipboard-36207038-e6bb-4761-96aa-bc6a043d7f46.png`
+  - 830 × 598 pixels. Codex reference for a fixed search row, scrollable Project results, fixed bottom actions, and viewport containment.
 
-**Implementation evidence**
+## Implementation evidence
 
-- `/Users/xbjt/work/agent-data/projects/zen/evidence/zenx-ui7-packaged-start.png`
-- 1199 × 768 pixels, dark macOS desktop state, packaged ZenX startup screen.
-- Packaged app: `/private/tmp/ZenX-ui7.app` from branch `codex/zenx-draft-project-switcher`.
+- `/Users/xbjt/work/agent-data/projects/zen/evidence/zenx-ui7-final-welcome.png`
+  - 1199 × 768 pixels. Final packaged ZenX welcome state.
+- `/Users/xbjt/work/agent-data/projects/zen/evidence/zenx-ui7-final-project-menu.png`
+  - 1199 × 768 pixels. Final packaged ZenX Project menu state.
+- `/Users/xbjt/work/agent-data/projects/zen/evidence/zenx-ui7-welcome-comparison.png`
+  - 2398 × 802 pixels. The 2560 × 1640 user screenshot normalized to the 1199 × 768 implementation size and placed beside the final packaged capture.
+- `/Users/xbjt/work/agent-data/projects/zen/evidence/zenx-ui7-project-menu-comparison.png`
+  - 1040 × 424 pixels. Focused Codex-menu reference and final packaged ZenX menu in one comparison image.
+- Packaged app: `/tmp/zenx-ui7-final-h4o1d9/ZenX.app`.
 
-**Viewport and normalization**
+## Viewport and state
 
-- The source and implementation have different window dimensions and do not show the same interaction state.
-- No density normalization or side-by-side fidelity judgment was performed because the packaged implementation could not be advanced to the open-menu state through the available desktop-control channel.
+- Final Electron CSS viewport: 1280 × 820; macOS dark mode.
+- Computer Use screenshots are 1199 × 768 pixels for that window. The user's 2560 × 1640 screenshot has the same aspect ratio and was downsampled to the implementation screenshot size for the welcome comparison.
+- The Project menu was opened in the packaged app. Runtime geometry confirms the scroll clipping region is `top=44, bottom=638`, while the menu is `top=60.25, bottom=313.25`; it remains fully inside the visible messages region with a 16px top inset.
 
-**State and interaction evidence**
+## Findings and fidelity surfaces
 
-- Component tests exercise the central trigger, automatic search focus, text filtering, Arrow-key transfer into the result list, selected-state semantics, Escape/Tab/outside dismissal, Project switching, and Add Project draft preservation.
-- The packaged application starts successfully from the short path and reaches `Local service ready` with the real Project list.
-- Computer Use could read and capture the window, but its native action channel closed on both semantic and coordinate clicks before New thread could be opened. No message was sent and no Thread was created during QA.
+- Fonts and typography: ZenX keeps its established system typography and hierarchy. The central prompt remains one concise heading with the Project name as its only interactive emphasis.
+- Spacing and layout rhythm: the generic compose glyph is removed. The heading now fills and centers within the available message region, moving it visibly down from the user-marked state. Its geometric center matches the right-side workspace center; the earlier apparent horizontal drift came from the Sidebar's visual weight and the glyph above the heading.
+- Colors and visual tokens: all changed surfaces reuse existing ZenX border, surface, text, focus, and shadow tokens.
+- Image and asset fidelity: the welcome state no longer adds a redundant icon or substitute asset. The existing production ZenX brand remains in the macOS Sidebar brand row.
+- Copy and content: Project names, search, selected state, and `Add project` match ZenX product semantics. The Codex reference's projectless action is intentionally omitted because ZenX still requires a Project for first Send.
+- Interaction and containment: search and bottom actions remain fixed while only Project results scroll. The menu is clamped against the actual `.messages` clipping region, not only the browser viewport, so the search row no longer disappears behind the titlebar.
 
-**Full-view comparison evidence**
+## Comparison history
 
-- Blocked: the source is the open central Project menu while the captured implementation is the pre-draft startup screen. Treating these as a visual comparison would be misleading.
+- Pass 1 found the Project list could exceed the visible region and the macOS brand occupied the traffic-light row.
+- Pass 2 fixed internal Project scrolling, viewport placement, and the macOS-only second-row brand, but packaged evidence exposed that the menu could still cross the workspace's own clipping boundary.
+- Pass 3 fixed placement against the `.messages` clipping rectangle. Packaged geometry and the final menu screenshot confirm the complete search row, scrollable results, and fixed action are visible.
+- Pass 4 addressed the user's welcome-state polish: removed the generic compose glyph and centered the heading through the available message region. The normalized before/after comparison confirms the content moved down and remains horizontally centered.
 
-**Focused region comparison evidence**
+## Verification evidence
 
-- Blocked for the same reason; there is no implementation capture of the central prompt/menu region.
+- Project/titlebar UI tests: 37/37 passed.
+- ZenX typecheck, repository format check, lint, and `git diff --check`: passed.
+- Portable packaging passed with provider manifest digest `f4c4c70eee9be26166d804534126569e0dde22b18ac9d6e855b2d3eeabb8f0dd`.
+- Packaged startup reached `Local service ready`; welcome and open-menu states were captured from the final package.
 
-**Findings**
+## Follow-up polish
 
-- [P1] Missing rendered open-menu comparison evidence.
-  Location: New-thread empty state, central Project switcher.
-  Evidence: source shows the open searchable menu; available implementation capture does not.
-  Impact: typography, popup anchoring, spacing, and overflow cannot be signed off visually from the actual packaged screen.
-  Fix: open New thread in the packaged app, click the underlined Project name, capture the window at the same state, and compare the central region against the source.
+- No P0/P1/P2 visual findings remain. Additional spacing or typography changes would be subjective iteration rather than fidelity blockers.
 
-**Comparison history**
-
-- Pass 1: blocked before comparison because the Computer Use click channel closed; no visual findings were inferred from code or separate-state screenshots.
-
-**Implementation checklist**
-
-- Capture the packaged open-menu state.
-- Compare full view and a focused central-menu crop against the source.
-- Fix any P0/P1/P2 typography, anchoring, spacing, color, icon, copy, focus, or overflow mismatch and repeat the capture.
-
-**Follow-up polish**
-
-- None recorded until the required same-state comparison is available.
-
-**final result: blocked**
+**final result: passed**
