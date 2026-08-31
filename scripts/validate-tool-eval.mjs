@@ -9,12 +9,7 @@ const expectedPhase1Models = [
   {
     provider: "openai-subscription",
     modelId: "gpt-5.6-terra",
-    applicableProfiles: [
-      "shell_only",
-      "generic_exact_replace",
-      "vendor_native",
-    ],
-    nativeContract: "openai_apply_patch_v4a",
+    applicableProfiles: ["shell_only", "generic_exact_replace"],
   },
   {
     provider: "deepseek",
@@ -25,6 +20,15 @@ const expectedPhase1Models = [
     provider: "kimi",
     modelId: "kimi-k2",
     applicableProfiles: ["shell_only", "generic_exact_replace"],
+  },
+];
+const expectedDeferredNativeComparisons = [
+  {
+    provider: "openai-subscription",
+    modelId: "gpt-5.6-terra",
+    profile: "vendor_native",
+    nativeContract: "openai_apply_patch_v4a",
+    blockedBy: "json_function_only_model_tool_boundary",
   },
 ];
 const requiredMetricNames = [
@@ -64,6 +68,11 @@ assert(
   JSON.stringify(cases.phase1Models) === JSON.stringify(expectedPhase1Models),
   "phase-1 model matrix must match the reviewed exact identities and profiles",
 );
+assert(
+  JSON.stringify(cases.deferredNativeComparisons) ===
+    JSON.stringify(expectedDeferredNativeComparisons),
+  "deferred native comparisons must match the reviewed blocked contract",
+);
 const phase1ModelsByIdentity = new Map();
 for (const model of cases.phase1Models) {
   assertOnlyKeys(
@@ -93,12 +102,30 @@ for (const model of cases.phase1Models) {
     `${model.provider} / ${model.modelId}: invalid applicable profiles`,
   );
   assert(
-    model.applicableProfiles.includes("vendor_native") ===
-      (typeof model.nativeContract === "string" &&
-        model.nativeContract.length > 0),
-    `${model.provider} / ${model.modelId}: native contract and profile must agree`,
+    !model.applicableProfiles.includes("vendor_native") &&
+      !Object.hasOwn(model, "nativeContract"),
+    `${model.provider} / ${model.modelId}: vendor-native is not runnable in phase 1`,
   );
   phase1ModelsByIdentity.set(identity, model);
+}
+for (const comparison of cases.deferredNativeComparisons) {
+  assertOnlyKeys(
+    comparison,
+    new Set(["provider", "modelId", "profile", "nativeContract", "blockedBy"]),
+    "deferred native comparison",
+  );
+  assert(
+    comparison.profile === "vendor_native" &&
+      comparison.nativeContract === "openai_apply_patch_v4a" &&
+      comparison.blockedBy === "json_function_only_model_tool_boundary",
+    "deferred native comparison must remain blocked on the full reviewed contract",
+  );
+  assert(
+    phase1ModelsByIdentity.has(
+      `${comparison.provider}\u0000${comparison.modelId}`,
+    ),
+    "deferred native comparison must reference a reviewed identity",
+  );
 }
 assert(
   Array.isArray(cases.cases) && cases.cases.length >= 8,

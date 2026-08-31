@@ -74,18 +74,38 @@ benchmark service.
 Phase 1 uses this exact, bounded matrix from
 [`tool-eval-cases.json`](tool-eval-cases.json):
 
-| Configured identity                   | Applicable profiles                                    | Basis                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openai-subscription / gpt-5.6-terra` | `shell_only`, `generic_exact_replace`, `vendor_native` | Zen's public base includes `gpt-5.6-terra` in the subscription preset. As reviewed on 2026-08-31, the official OpenAI model page lists Apply Patch as supported. This is **current feature support**, not evidence that GPT-5.6 Terra shares GPT-5.2's published post-training history. [Zen model preset @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/apps/cli/src/model-presets.ts#L24-L40), [GPT-5.6 Terra model page](https://developers.openai.com/api/docs/models/gpt-5.6-terra) |
-| `deepseek / deepseek-chat`            | `shell_only`, `generic_exact_replace`                  | Zen publicly exposes the DeepSeek OpenAI-compatible host preset. No direct native-signature training evidence was found, so phase 1 does not invent a DeepSeek-native profile. [Zen provider presets @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/apps/zenx/src/main/provider-presets.ts#L18-L22)                                                                                                                                                                                      |
-| `kimi / kimi-k2`                      | `shell_only`, `generic_exact_replace`                  | Zen publicly exposes the Kimi OpenAI-compatible host preset. No direct native-signature training evidence was found, so phase 1 does not invent a Kimi-native profile. [Zen provider presets @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/apps/zenx/src/main/provider-presets.ts#L18-L22)                                                                                                                                                                                              |
+| Configured identity                   | Applicable profiles                   | Basis                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openai-subscription / gpt-5.6-terra` | `shell_only`, `generic_exact_replace` | Zen's public base includes `gpt-5.6-terra` in the subscription preset. As reviewed on 2026-08-31, the official OpenAI model page lists Apply Patch as supported. This is **current feature support**, not evidence that GPT-5.6 Terra shares GPT-5.2's published post-training history. [Zen model preset @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/apps/cli/src/model-presets.ts#L24-L40), [GPT-5.6 Terra model page](https://developers.openai.com/api/docs/models/gpt-5.6-terra) |
+| `deepseek / deepseek-chat`            | `shell_only`, `generic_exact_replace` | Zen publicly exposes the DeepSeek OpenAI-compatible host preset. No direct native-signature training evidence was found, so phase 1 does not invent a DeepSeek-native profile. [Zen provider presets @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/apps/zenx/src/main/provider-presets.ts#L18-L22)                                                                                                                                                                                      |
+| `kimi / kimi-k2`                      | `shell_only`, `generic_exact_replace` | Zen publicly exposes the Kimi OpenAI-compatible host preset. No direct native-signature training evidence was found, so phase 1 does not invent a Kimi-native profile. [Zen provider presets @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/apps/zenx/src/main/provider-presets.ts#L18-L22)                                                                                                                                                                                              |
 
-The OpenAI native profile must reproduce the complete official `apply_patch` freeform V4A
-grammar and `apply_patch_call_output` result contract; a same-named custom patch helper is
-not applicable. Anthropic's versioned API editor remains a direct-evidence future
-comparison, but it is outside phase 1 because Zen currently has no native Anthropic
-provider path. This proposal does not approve an eval-only provider driver or a production
-Anthropic adapter.
+Phase 1 is deliberately limited to profiles that the current Zen model/tool boundary can
+represent: the existing shell baseline and a narrow eval-only exact replacement JSON
+function. Current `ModelTool` has only a name, description, and JSON input schema, and the
+subscription adapter always projects it as Responses `type: "function"`.
+[Zen `ModelTool` @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/src/model.ts#L70-L74),
+[subscription tool mapping @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/src/model/openai-subscription.ts#L170-L184)
+
+### Deferred native comparison
+
+The fixture mechanically reserves one deferred comparison:
+`openai-subscription / gpt-5.6-terra`, profile `vendor_native`, contract
+`openai_apply_patch_v4a`, blocked by the current JSON-function-only model/tool boundary.
+That contract means the complete official `apply_patch` freeform V4A grammar and
+`apply_patch_call_output` result contract, not a same-named custom function. The current
+OpenAI model page supports the feature; the direct post-training claim cited earlier is
+for GPT-5.2 and must not be transferred to GPT-5.6 Terra.
+
+No `vendor_native` result may be recorded under the current fixture and validator. The
+result schema retains its shape only for the deferred plan. Unlocking it requires a
+separate reviewed fixture revision and one explicitly authorized path: either a disposable
+evaluation driver capable of the complete vendor contract, or a production model/provider
+interface change. This proposal chooses and approves neither path.
+
+Anthropic's versioned API editor remains a direct-evidence future comparison, but phase 1
+has no configured Anthropic identity or run because Zen has no native Anthropic provider
+path. Adding an eval-only Anthropic driver or production adapter is likewise not approved.
 
 Before recording any result, an eval runner must verify that the exact configured
 `provider / modelId` identity is available. If it is unavailable, that run fails before
@@ -98,8 +118,6 @@ identical temporary fixture. Compare:
 1. `shell_only`: today's baseline;
 2. `generic_exact_replace`: a proposed exact-one local replacement contract, supplied only
    in the evaluation harness;
-3. `vendor_native`: in phase 1, only the complete OpenAI `apply_patch` contract with
-   `openai-subscription / gpt-5.6-terra`, based on current model feature support.
 
 The generic evaluation contract is intentionally narrow: `path`, `old_string`, and
 `new_string`; exactly one literal current-content match; zero or multiple matches fail
@@ -134,15 +152,18 @@ Do not select a profile from a single successful run. Compare per-model medians 
 every unintended change or incomplete run. A candidate may proceed to a separate design
 and implementation review only when it improves completion or interaction cost without
 increasing unintended changes, and the benefit repeats across the intended model set.
-Vendor-native complexity requires a material advantage over the generic profile for that
-vendor. Whole-file `write` requires evidence from create/overwrite cases independently of
-local-edit performance.
+If a future native evaluation is separately authorized, vendor-native complexity will
+require a material advantage over the generic profile for that vendor. Whole-file `write`
+requires evidence from create/overwrite cases independently of local-edit performance.
 
 ## Decisions requested from reviewers
 
-1. Approve or reject the exact three-identity phase-1 matrix and its profile applicability.
-2. Approve or reject this small evaluation direction before any editing tool is designed.
+1. Approve or reject the exact three-identity phase-1 shell/generic matrix.
+2. Approve or reject this bounded Phase-1 evaluation plan before any editing tool is
+   designed.
 3. Confirm that a missing exact identity aborts that run before result recording and is
    never replaced ad hoc.
 4. Confirm the repetition count and acceptance interpretation; the proposed minimum is
    three runs per applicable model/profile/case, with zero tolerance for unintended edits.
+5. Decide later whether a native evaluation is warranted and, if so, separately authorize
+   either a disposable full-contract driver or a production interface change.

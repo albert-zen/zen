@@ -5,12 +5,7 @@
     {
       "provider": "openai-subscription",
       "modelId": "gpt-5.6-terra",
-      "applicableProfiles": [
-        "shell_only",
-        "generic_exact_replace",
-        "vendor_native"
-      ],
-      "nativeContract": "openai_apply_patch_v4a"
+      "applicableProfiles": ["shell_only", "generic_exact_replace"]
     },
     {
       "provider": "deepseek",
@@ -21,6 +16,15 @@
       "provider": "kimi",
       "modelId": "kimi-k2",
       "applicableProfiles": ["shell_only", "generic_exact_replace"]
+    }
+  ],
+  "deferredNativeComparisons": [
+    {
+      "provider": "openai-subscription",
+      "modelId": "gpt-5.6-terra",
+      "profile": "vendor_native",
+      "nativeContract": "openai_apply_patch_v4a",
+      "blockedBy": "json_function_only_model_tool_boundary"
     }
   ],
   "cases": [
