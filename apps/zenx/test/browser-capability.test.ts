@@ -216,6 +216,45 @@ test("browser advertises a cross-platform dedicated background-safe provider", (
   );
 });
 
+test("browser contributes its trusted observer-only product page", () => {
+  assert.deepEqual(browserCapabilityManifest.ui, {
+    bundles: [
+      {
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "zenx/bundled/browser-ui",
+      },
+    ],
+    surfaces: [
+      {
+        id: "browser-page",
+        bundleId: "main",
+        exportName: "browser-page",
+      },
+    ],
+  });
+  assert.deepEqual(browserCapabilityManifest.contributions, {
+    pages: [
+      {
+        id: "browser",
+        title: "Browser",
+        route: "/plugins/browser/browser",
+        surfaceId: "browser-page",
+      },
+    ],
+    sidebar: [
+      {
+        id: "browser",
+        label: "Browser",
+        icon: "layers",
+        pageId: "browser",
+        order: 5,
+      },
+    ],
+  });
+});
+
 function browserBackend(calls: string[]): ZenXBrowserBackend {
   const summary: BrowserTabSummary = {
     sessionId: "research",

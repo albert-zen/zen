@@ -53,6 +53,7 @@ import type {
 import type { ModelUsageProjection } from "../../../../src/model-usage.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../marketplace.js";
+import type { BrowserLiveObservationEvent } from "../main/capabilities/browser-provider.js";
 
 contextBridge.exposeInMainWorld("zenx", {
   platform: process.platform,
@@ -263,6 +264,35 @@ contextBridge.exposeInMainWorld("zenx", {
   marketplace: {
     get: async (): Promise<MarketplaceCatalogLoadSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.marketplaceGet),
+  },
+  browserObservation: {
+    subscribe: (
+      listener: (event: BrowserLiveObservationEvent) => void,
+    ): (() => void) => {
+      let active = true;
+      const wrapped = (
+        _event: Electron.IpcRendererEvent,
+        value: BrowserLiveObservationEvent,
+      ) => {
+        if (active) listener(value);
+      };
+      ipcRenderer.on(ipcChannels.browserLiveEvent, wrapped);
+      void ipcRenderer.invoke(ipcChannels.browserLiveSubscribe).catch(() => {
+        if (active) {
+          listener({
+            type: "status",
+            status: "failed",
+            message: "The live browser view could not be connected.",
+          });
+        }
+      });
+      return () => {
+        if (!active) return;
+        active = false;
+        ipcRenderer.off(ipcChannels.browserLiveEvent, wrapped);
+        void ipcRenderer.invoke(ipcChannels.browserLiveUnsubscribe);
+      };
+    },
   },
   plugins: {
     get: async (): Promise<ZenXPluginSnapshot> =>

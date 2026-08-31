@@ -18,6 +18,7 @@ import {
   type OwnedChildObservation,
   type OwnedChildTerminalOutcome,
 } from "./owned-child-process.js";
+import type { BrowserLiveObservationEvent } from "./capabilities/browser-provider.js";
 
 if (process.platform !== "win32") {
   throw new Error("The real user-browser CDP smoke is Windows-only");
@@ -90,6 +91,9 @@ try {
   );
   assert.equal(selected?.providerId, "user-browser-cdp");
   assert.equal(selection.manifest.provider.id, "user-browser-cdp");
+  assert.equal(typeof backend.observeLive, "function");
+  const liveEvents: BrowserLiveObservationEvent[] = [];
+  const stopLive = backend.observeLive!((event) => liveEvents.push(event));
   const tabs = await retry(async () => {
     try {
       const current = await backend.listTabs("windows-smoke");
@@ -105,6 +109,9 @@ try {
   assert.ok(account, "Expected the already-running authenticated account tab");
   const inspection = await retryDocumentInspection(() =>
     backend.inspect("windows-smoke", account.tabId),
+  );
+  await retry(async () =>
+    liveEvents.some((event) => event.type === "frame") ? true : undefined,
   );
   assert.match(
     inspection.visibleText,
@@ -123,6 +130,15 @@ try {
     account.tabId,
     inspection.observationId,
     target.targetId,
+  );
+  const framesAfterAction = liveEvents.filter(
+    (event) => event.type === "frame",
+  ).length;
+  await retry(async () =>
+    liveEvents.filter((event) => event.type === "frame").length >
+    framesAfterAction
+      ? true
+      : undefined,
   );
   await activateBrowserTarget(endpoint, account.tabId);
   const fixtureBrowserHwnd = foregroundSmokeBrowserWindow();
@@ -186,6 +202,14 @@ try {
     "background_safe browser_open must leave the created tab hidden",
   );
   const detached = await backend.closeSession("windows-smoke");
+  await retry(async () =>
+    liveEvents.some(
+      (event) => event.type === "status" && event.status === "idle",
+    )
+      ? true
+      : undefined,
+  );
+  stopLive();
   await backend.close();
   const runtimeContextEventsObserved = await probeRuntimeContextEvents(
     endpoint,
@@ -234,6 +258,10 @@ try {
       product: selected?.version,
       inheritedAuthenticatedState: true,
       agentReceivedSessionMaterial: false,
+      exactAgentTargetLiveFramesObserved: liveEvents.filter(
+        (event) => event.type === "frame",
+      ).length,
+      liveObservationCleanedUp: true,
       browserAndTabsSurvivedDetach: true,
       runtimeContextEventsObserved,
       providerOpenPreservedForegroundWindow: true,

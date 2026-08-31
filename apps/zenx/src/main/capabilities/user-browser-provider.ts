@@ -10,6 +10,8 @@ import {
   resolveBrowserObservedTarget,
   BrowserScreenshotArtifactStore,
   type BrowserInspection,
+  type BrowserLiveObservationEvent,
+  type BrowserLiveObservationListener,
   type BrowserScreenshotArtifact,
   type BrowserObservation,
   type BrowserTabSummary,
@@ -27,6 +29,10 @@ const USER_BROWSER_MAX_PENDING_CDP_REQUESTS = 128;
 const USER_BROWSER_MAX_ACTIVE_SESSIONS = 32;
 const USER_BROWSER_LATE_RESPONSE_RETENTION_MS = 5_000;
 const USER_BROWSER_DOCUMENT_WORLD_NAME = "__zenx_user_browser_document__";
+export const USER_BROWSER_LIVE_FRAME_INTERVAL_MS = 100;
+export const USER_BROWSER_MAX_LIVE_FRAME_BYTES = 1024 * 1024;
+const USER_BROWSER_MAX_LIVE_FRAME_WIDTH = 1920;
+const USER_BROWSER_MAX_LIVE_FRAME_HEIGHT = 1200;
 const FALLBACK_SCREENSHOT_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
@@ -73,6 +79,25 @@ interface ZenXUserBrowserDocumentExecutionFence extends UserBrowserAttachmentOwn
   executionContextId?: number;
 }
 
+interface UserBrowserScreencastState {
+  targetId: string;
+  sessionId: string;
+  fence: ZenXUserBrowserDocumentExecutionFence;
+  subscription: UserBrowserScreencastSubscription;
+  latestFrame?: Extract<BrowserLiveObservationEvent, { type: "frame" }>;
+  publishTimer?: NodeJS.Timeout;
+  lastPublishedAt: number;
+  nextSequence: number;
+}
+
+interface UserBrowserScreencastSubscription {
+  targetId: string;
+  owner: UserBrowserAttachmentOwner;
+  listener: BrowserLiveObservationListener;
+  active: boolean;
+  restartQueued: boolean;
+}
+
 export interface UserBrowserCdpTarget {
   targetId: string;
   type: string;
@@ -81,6 +106,11 @@ export interface UserBrowserCdpTarget {
 }
 
 export interface UserBrowserCdpClient {
+  observeScreencast?(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    listener: BrowserLiveObservationListener,
+  ): Promise<() => Promise<void>>;
   listTargets(signal?: AbortSignal): Promise<UserBrowserCdpTarget[]>;
   createTarget(url: string, signal?: AbortSignal): Promise<string>;
   findTargetsByUrl(
@@ -244,6 +274,15 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   #backendCloseQueued = false;
   #closing = false;
   #nextSessionIncarnation = 1;
+  readonly #liveObservers = new Set<BrowserLiveObservationListener>();
+  #liveTarget?: { targetId: string; owner: UserBrowserAttachmentOwner };
+  #liveStop?: () => Promise<void>;
+  #liveGeneration = 0;
+  #liveStatus: BrowserLiveObservationEvent = {
+    type: "status",
+    status: "idle",
+    message: "Waiting for the Agent to use a browser tab.",
+  };
 
   constructor(
     client: UserBrowserCdpClient,
@@ -253,6 +292,34 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     this.#artifacts = new BrowserScreenshotArtifactStore(
       options.artifactDirectory,
     );
+  }
+
+  observeLive(listener: BrowserLiveObservationListener): () => void {
+    if (
+      this.#backendCloseQueued ||
+      this.#closing ||
+      this.#client.observeScreencast === undefined
+    ) {
+      listener({
+        type: "status",
+        status: "unavailable",
+        message: "Live observation is unavailable for this Browser provider.",
+      });
+      return () => undefined;
+    }
+    this.#liveObservers.add(listener);
+    listener(this.#liveStatus);
+    if (this.#liveObservers.size === 1 && this.#liveTarget !== undefined) {
+      this.#replaceLiveScreencast();
+    }
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.#liveObservers.delete(listener);
+      if (this.#liveObservers.size === 0)
+        void this.#stopLiveScreencast().catch(() => undefined);
+    };
   }
 
   async listTabs(
@@ -467,7 +534,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         throw error;
       }
     });
-    return await raceAbort(operation, signal);
+    const result = await raceAbort(operation, signal);
+    this.#selectLiveTarget(session, result.tabId);
+    return result;
   }
 
   navigate(
@@ -515,7 +584,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       }
     });
     try {
-      return await raceAbort(operation, signal);
+      const result = await raceAbort(operation, signal);
+      this.#selectLiveTarget(session, tabId);
+      return result;
     } catch (error) {
       if (
         error instanceof UserBrowserMutationOutcomeUnknownError ||
@@ -676,7 +747,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         targets: projected,
       };
     });
-    return await raceAbort(operation, signal);
+    const result = await raceAbort(operation, signal);
+    this.#selectLiveTarget(session, tabId);
+    return result;
   }
 
   async #freshDocumentIdentity(
@@ -795,6 +868,15 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       true,
     );
     await operation;
+    if (this.#liveTarget?.targetId === tabId) {
+      this.#liveTarget = undefined;
+      await this.#stopLiveScreencast();
+      this.#emitLive({
+        type: "status",
+        status: "idle",
+        message: "Waiting for the Agent to use a browser tab.",
+      });
+    }
     await this.#artifacts.clearScope(`${sessionId}/${tabId}`);
   }
 
@@ -879,7 +961,17 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           this.#sessionCloseOperations.delete(sessionId);
       })
       .catch(() => undefined);
-    return await closing;
+    const count = await closing;
+    if (this.#liveTarget?.owner.logicalSessionId === sessionId) {
+      this.#liveTarget = undefined;
+      await this.#stopLiveScreencast();
+      this.#emitLive({
+        type: "status",
+        status: "idle",
+        message: "Waiting for the Agent to use a browser tab.",
+      });
+    }
+    return count;
   }
 
   async close(): Promise<void> {
@@ -893,6 +985,13 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         requestedSessionClosures,
       );
       this.#closing = true;
+      await this.#stopLiveScreencast();
+      this.#emitLive({
+        type: "status",
+        status: "unavailable",
+        message: "The Browser provider is no longer available.",
+      });
+      this.#liveObservers.clear();
       let closeFailure: unknown;
       try {
         await this.#client.close();
@@ -983,7 +1082,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       }
     });
     try {
-      return await raceAbort(operation, signal);
+      const result = await raceAbort(operation, signal);
+      this.#selectLiveTarget(session, tabId);
+      return result;
     } catch (error) {
       if (error instanceof UserBrowserDocumentChangedBeforeDispatchError) {
         throw new Error("User browser document changed; inspect again");
@@ -1005,6 +1106,81 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       }
       throw error;
     }
+  }
+
+  #selectLiveTarget(session: UserBrowserSession, targetId: string): void {
+    this.#liveTarget = {
+      targetId,
+      owner: this.#attachmentOwner(session),
+    };
+    if (this.#liveObservers.size > 0) this.#replaceLiveScreencast();
+  }
+
+  #replaceLiveScreencast(): void {
+    const observe = this.#client.observeScreencast;
+    const target = this.#liveTarget;
+    if (
+      observe === undefined ||
+      target === undefined ||
+      this.#liveObservers.size === 0
+    )
+      return;
+    const generation = ++this.#liveGeneration;
+    const previousStop = this.#liveStop;
+    this.#liveStop = undefined;
+    this.#emitLive({
+      type: "status",
+      status: "connecting",
+      message: "Connecting to the Agent's browser tab…",
+    });
+    void (async () => {
+      await previousStop?.();
+      if (generation !== this.#liveGeneration || this.#liveObservers.size === 0)
+        return;
+      const stop = await observe.call(
+        this.#client,
+        target.targetId,
+        target.owner,
+        (event) => {
+          if (generation === this.#liveGeneration) this.#emitLive(event);
+        },
+      );
+      if (
+        generation !== this.#liveGeneration ||
+        this.#liveObservers.size === 0
+      ) {
+        await stop();
+        return;
+      }
+      this.#liveStop = stop;
+    })().catch(() => {
+      if (generation !== this.#liveGeneration) return;
+      this.#emitLive({
+        type: "status",
+        status: "failed",
+        message: "The live browser view could not be connected.",
+      });
+    });
+  }
+
+  async #stopLiveScreencast(): Promise<void> {
+    this.#liveGeneration += 1;
+    const stop = this.#liveStop;
+    this.#liveStop = undefined;
+    await stop?.();
+  }
+
+  #emitLive(event: BrowserLiveObservationEvent): void {
+    if (event.type === "status") this.#liveStatus = event;
+    for (const observer of [...this.#liveObservers]) {
+      try {
+        observer(event);
+      } catch {
+        this.#liveObservers.delete(observer);
+      }
+    }
+    if (this.#liveObservers.size === 0)
+      void this.#stopLiveScreencast().catch(() => undefined);
   }
 
   #startOperation<T>(
@@ -1552,6 +1728,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   #providerRevision = 0;
   #closed = false;
   #closing = false;
+  #screencast?: UserBrowserScreencastState;
+  #screencastSubscription?: UserBrowserScreencastSubscription;
 
   private constructor(socket: WebSocket, httpBase: URL) {
     this.#socket = socket;
@@ -1888,6 +2066,260 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     signal?: AbortSignal,
   ): Promise<string> {
     return (await this.#executionDocument(targetId, owner, signal)).identity;
+  }
+
+  async observeScreencast(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    listener: BrowserLiveObservationListener,
+  ): Promise<() => Promise<void>> {
+    await this.#stopScreencast();
+    const subscription: UserBrowserScreencastSubscription = {
+      targetId,
+      owner,
+      listener,
+      active: true,
+      restartQueued: false,
+    };
+    this.#screencastSubscription = subscription;
+    try {
+      await this.#startScreencast(subscription);
+    } catch (error) {
+      subscription.active = false;
+      if (this.#screencastSubscription === subscription)
+        this.#screencastSubscription = undefined;
+      throw error;
+    }
+    return async () => {
+      if (!subscription.active) return;
+      subscription.active = false;
+      if (this.#screencastSubscription === subscription)
+        await this.#stopScreencast();
+    };
+  }
+
+  async #startScreencast(
+    subscription: UserBrowserScreencastSubscription,
+  ): Promise<void> {
+    if (!subscription.active || this.#screencastSubscription !== subscription)
+      return;
+    const fence = await this.#executionDocument(
+      subscription.targetId,
+      subscription.owner,
+    );
+    if (!subscription.active || this.#screencastSubscription !== subscription)
+      return;
+    const state: UserBrowserScreencastState = {
+      targetId: subscription.targetId,
+      sessionId: fence.sessionId,
+      fence,
+      subscription,
+      lastPublishedAt: 0,
+      nextSequence: 1,
+    };
+    this.#screencast = state;
+    let started = false;
+    try {
+      await this.#send(
+        "Page.startScreencast",
+        {
+          format: "jpeg",
+          quality: 70,
+          maxWidth: 1600,
+          maxHeight: 1000,
+          everyNthFrame: 1,
+        },
+        fence.sessionId,
+      );
+      started = true;
+      this.#assertDocumentFence(fence, true);
+      if (
+        this.#screencast !== state ||
+        !subscription.active ||
+        this.#screencastSubscription !== subscription
+      )
+        throw new Error("Browser observation target changed during connection");
+      subscription.listener({
+        type: "status",
+        status: "live",
+        message: "Watching the Agent's browser tab live.",
+      });
+    } catch (error) {
+      if (this.#screencast === state) this.#clearScreencast(state);
+      if (started && !this.#closed) {
+        await this.#send("Page.stopScreencast", {}, state.sessionId).catch(
+          () => undefined,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async #stopScreencast(): Promise<void> {
+    const subscription = this.#screencastSubscription;
+    if (subscription !== undefined) {
+      subscription.active = false;
+      subscription.restartQueued = false;
+      this.#screencastSubscription = undefined;
+    }
+    const state = this.#screencast;
+    if (state === undefined) return;
+    this.#clearScreencast(state);
+    if (this.#closed) return;
+    await this.#send("Page.stopScreencast", {}, state.sessionId);
+  }
+
+  #restartScreencastForDocumentChange(targetId: string): void {
+    const subscription = this.#screencastSubscription;
+    const state = this.#screencast;
+    if (
+      subscription === undefined ||
+      state === undefined ||
+      subscription.targetId !== targetId ||
+      subscription.restartQueued ||
+      !subscription.active
+    )
+      return;
+    subscription.restartQueued = true;
+    this.#clearScreencast(state);
+    subscription.listener({
+      type: "status",
+      status: "connecting",
+      message: "The browser page changed. Reconnecting to the same tab…",
+    });
+    queueMicrotask(() => {
+      void (async () => {
+        try {
+          if (!this.#closed)
+            await this.#send("Page.stopScreencast", {}, state.sessionId);
+          if (
+            !subscription.active ||
+            this.#screencastSubscription !== subscription
+          )
+            return;
+          subscription.restartQueued = false;
+          await this.#startScreencast(subscription);
+        } catch {
+          subscription.restartQueued = false;
+          if (
+            subscription.active &&
+            this.#screencastSubscription === subscription
+          ) {
+            subscription.listener({
+              type: "status",
+              status: "failed",
+              message:
+                "The live browser view could not resume after the page changed.",
+            });
+          }
+        }
+      })();
+    });
+  }
+
+  #clearScreencast(state: UserBrowserScreencastState): void {
+    if (state.publishTimer !== undefined) clearTimeout(state.publishTimer);
+    state.publishTimer = undefined;
+    state.latestFrame = undefined;
+    if (this.#screencast === state) this.#screencast = undefined;
+  }
+
+  #receiveScreencastFrame(
+    message: Record<string, unknown>,
+    params: Record<string, unknown>,
+  ): void {
+    const cdpSessionId = message.sessionId;
+    const frameSessionId = params.sessionId;
+    if (
+      typeof cdpSessionId !== "string" ||
+      typeof frameSessionId !== "number" ||
+      !Number.isSafeInteger(frameSessionId)
+    )
+      return;
+    const state = this.#screencast;
+    void this.#send(
+      "Page.screencastFrameAck",
+      { sessionId: frameSessionId },
+      cdpSessionId,
+    ).catch((error: unknown) => {
+      if (state !== undefined && this.#screencast === state)
+        this.#failScreencast(state, error);
+    });
+    if (state === undefined || state.sessionId !== cdpSessionId) return;
+    try {
+      this.#assertDocumentFence(state.fence, true);
+      const data = params.data;
+      const metadata = asRecord(params.metadata);
+      const width = metadata?.deviceWidth;
+      const height = metadata?.deviceHeight;
+      const maxEncodedLength =
+        Math.ceil(USER_BROWSER_MAX_LIVE_FRAME_BYTES / 3) * 4 + 4;
+      if (
+        typeof data !== "string" ||
+        data.length === 0 ||
+        data.length > maxEncodedLength ||
+        !/^[A-Za-z0-9+/]*={0,2}$/u.test(data) ||
+        Buffer.byteLength(data, "base64") > USER_BROWSER_MAX_LIVE_FRAME_BYTES ||
+        typeof width !== "number" ||
+        !Number.isFinite(width) ||
+        width <= 0 ||
+        width > USER_BROWSER_MAX_LIVE_FRAME_WIDTH ||
+        typeof height !== "number" ||
+        !Number.isFinite(height) ||
+        height <= 0 ||
+        height > USER_BROWSER_MAX_LIVE_FRAME_HEIGHT
+      ) {
+        throw new Error("Browser screencast frame exceeded its size bound");
+      }
+      const event: Extract<BrowserLiveObservationEvent, { type: "frame" }> = {
+        type: "frame",
+        frame: {
+          sequence: state.nextSequence++,
+          mimeType: "image/jpeg",
+          data,
+          width,
+          height,
+        },
+      };
+      const elapsed = Date.now() - state.lastPublishedAt;
+      if (
+        state.lastPublishedAt === 0 ||
+        elapsed >= USER_BROWSER_LIVE_FRAME_INTERVAL_MS
+      ) {
+        state.lastPublishedAt = Date.now();
+        state.subscription.listener(event);
+        return;
+      }
+      state.latestFrame = event;
+      if (state.publishTimer !== undefined) return;
+      state.publishTimer = setTimeout(() => {
+        state.publishTimer = undefined;
+        const latest = state.latestFrame;
+        state.latestFrame = undefined;
+        if (latest === undefined || this.#screencast !== state) return;
+        state.lastPublishedAt = Date.now();
+        state.subscription.listener(latest);
+      }, USER_BROWSER_LIVE_FRAME_INTERVAL_MS - elapsed);
+      state.publishTimer.unref();
+    } catch (error) {
+      this.#failScreencast(state, error);
+    }
+  }
+
+  #failScreencast(state: UserBrowserScreencastState, _error: unknown): void {
+    if (this.#screencast !== state) return;
+    this.#clearScreencast(state);
+    if (!this.#closed) {
+      void this.#send("Page.stopScreencast", {}, state.sessionId).catch(() => {
+        // The observation is already failed and detached from renderer delivery.
+      });
+    }
+    state.subscription.listener({
+      type: "status",
+      status: "failed",
+      message:
+        "The live browser view stopped because a frame or connection was invalid.",
+    });
   }
 
   async #sendDocumentRuntimeEvaluate(
@@ -2715,6 +3147,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const method = message.method;
     const params = asRecord(message.params);
     if (typeof method !== "string" || params === undefined) return;
+    if (method === "Page.screencastFrame") {
+      this.#receiveScreencastFrame(message, params);
+      return;
+    }
     if (
       method === "Target.targetDestroyed" &&
       typeof params.targetId === "string"
@@ -2889,6 +3325,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     state.invalidExecutionContextIds.clear();
     state.pendingIsolatedContexts.clear();
     this.#targetDocuments.set(targetId, state);
+    if (!disappeared) this.#restartScreencastForDocumentChange(targetId);
   }
 
   #reapTarget(targetId: string, ownershipClosed = false): void {
@@ -2915,6 +3352,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (epoch === undefined) return;
     const sessionId = epoch.cdpSessionId;
     if (sessionId !== undefined) {
+      if (this.#screencast?.sessionId === sessionId) {
+        this.#endScreencast(
+          "unavailable",
+          "The observed browser tab is no longer attached.",
+        );
+      }
       this.#sessionTargets.delete(sessionId);
       this.#sessionEpochs.delete(sessionId);
       this.#rememberRetiredSession(sessionId);
@@ -3005,6 +3448,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   #failAll(error: Error): void {
     this.#providerRevision += 1;
     this.#closed = true;
+    this.#endScreencast(
+      "unavailable",
+      "The user browser connection is unavailable.",
+    );
     if (!this.#closing && this.#attachmentClosures.size > 0) {
       this.#recordConnectionTaint(`connection failed (${error.message})`);
     }
@@ -3027,6 +3474,19 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       );
     }
     this.#pending.clear();
+  }
+
+  #endScreencast(status: "unavailable" | "failed", message: string): void {
+    const subscription = this.#screencastSubscription;
+    const state = this.#screencast;
+    if (subscription === undefined && state === undefined) return;
+    if (subscription !== undefined) {
+      subscription.active = false;
+      subscription.restartQueued = false;
+      this.#screencastSubscription = undefined;
+    }
+    if (state !== undefined) this.#clearScreencast(state);
+    subscription?.listener({ type: "status", status, message });
   }
 }
 
