@@ -1,6 +1,28 @@
 {
   "version": 1,
   "profiles": ["shell_only", "generic_exact_replace", "vendor_native"],
+  "phase1Models": [
+    {
+      "provider": "openai-subscription",
+      "modelId": "gpt-5.6-terra",
+      "applicableProfiles": [
+        "shell_only",
+        "generic_exact_replace",
+        "vendor_native"
+      ],
+      "nativeContract": "openai_apply_patch_v4a"
+    },
+    {
+      "provider": "deepseek",
+      "modelId": "deepseek-chat",
+      "applicableProfiles": ["shell_only", "generic_exact_replace"]
+    },
+    {
+      "provider": "kimi",
+      "modelId": "kimi-k2",
+      "applicableProfiles": ["shell_only", "generic_exact_replace"]
+    }
+  ],
   "cases": [
     {
       "id": "unique-small-replacement",

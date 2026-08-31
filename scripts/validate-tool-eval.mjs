@@ -5,6 +5,28 @@ const profiles = new Set([
   "generic_exact_replace",
   "vendor_native",
 ]);
+const expectedPhase1Models = [
+  {
+    provider: "openai-subscription",
+    modelId: "gpt-5.6-terra",
+    applicableProfiles: [
+      "shell_only",
+      "generic_exact_replace",
+      "vendor_native",
+    ],
+    nativeContract: "openai_apply_patch_v4a",
+  },
+  {
+    provider: "deepseek",
+    modelId: "deepseek-chat",
+    applicableProfiles: ["shell_only", "generic_exact_replace"],
+  },
+  {
+    provider: "kimi",
+    modelId: "kimi-k2",
+    applicableProfiles: ["shell_only", "generic_exact_replace"],
+  },
+];
 const requiredMetricNames = [
   "completed",
   "firstEditAttemptSucceeded",
@@ -38,6 +60,46 @@ assert(
   JSON.stringify(cases.profiles) === JSON.stringify([...profiles]),
   "tool eval profiles do not match the result schema",
 );
+assert(
+  JSON.stringify(cases.phase1Models) === JSON.stringify(expectedPhase1Models),
+  "phase-1 model matrix must match the reviewed exact identities and profiles",
+);
+const phase1ModelsByIdentity = new Map();
+for (const model of cases.phase1Models) {
+  assertOnlyKeys(
+    model,
+    new Set(["provider", "modelId", "applicableProfiles", "nativeContract"]),
+    "phase-1 model",
+  );
+  assert(
+    typeof model.provider === "string" && model.provider.length > 0,
+    "phase-1 provider is required",
+  );
+  assert(
+    typeof model.modelId === "string" && model.modelId.length > 0,
+    "phase-1 modelId is required",
+  );
+  const identity = `${model.provider}\u0000${model.modelId}`;
+  assert(
+    !phase1ModelsByIdentity.has(identity),
+    `duplicate phase-1 identity: ${model.provider} / ${model.modelId}`,
+  );
+  assert(
+    Array.isArray(model.applicableProfiles) &&
+      model.applicableProfiles.length > 0 &&
+      model.applicableProfiles.every((profile) => profiles.has(profile)) &&
+      new Set(model.applicableProfiles).size ===
+        model.applicableProfiles.length,
+    `${model.provider} / ${model.modelId}: invalid applicable profiles`,
+  );
+  assert(
+    model.applicableProfiles.includes("vendor_native") ===
+      (typeof model.nativeContract === "string" &&
+        model.nativeContract.length > 0),
+    `${model.provider} / ${model.modelId}: native contract and profile must agree`,
+  );
+  phase1ModelsByIdentity.set(identity, model);
+}
 assert(
   Array.isArray(cases.cases) && cases.cases.length >= 8,
   "expected at least 8 cases",
@@ -129,12 +191,22 @@ function validateResult(result, path) {
     typeof result.model.modelId === "string" && result.model.modelId.length > 0,
     `${path}: model.modelId is required`,
   );
+  const phase1Model = phase1ModelsByIdentity.get(
+    `${result.model.provider}\u0000${result.model.modelId}`,
+  );
+  assert(phase1Model, `${path}: model identity is not in the phase-1 matrix`);
+  assert(
+    phase1Model.applicableProfiles.includes(result.profile),
+    `${path}: profile is not applicable to this phase-1 model`,
+  );
   if (result.profile === "vendor_native") {
     assert(
-      typeof result.model.nativeContract === "string" &&
-        result.model.nativeContract.length > 0,
-      `${path}: vendor_native requires model.nativeContract`,
+      result.model.nativeContract === phase1Model.nativeContract,
+      `${path}: vendor_native requires the reviewed native contract`,
     );
+  }
+  if (Object.hasOwn(result, "notes")) {
+    assert(typeof result.notes === "string", `${path}: notes must be a string`);
   }
   assert(
     result.metrics && typeof result.metrics === "object",

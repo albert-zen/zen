@@ -4,8 +4,8 @@
   "caseId": "unique-small-replacement",
   "profile": "shell_only",
   "model": {
-    "provider": "example-provider",
-    "modelId": "example-model"
+    "provider": "openai-subscription",
+    "modelId": "gpt-5.6-terra"
   },
   "repetition": 1,
   "metrics": {

@@ -71,16 +71,35 @@ The evaluation compares tool surfaces, not executor engineering. It should use t
 Zen runtime and representative configured models, with no persistent coordinator or new
 benchmark service.
 
-For each provider/model family that Zen intends to support, select one currently usable
-model and record the exact provider label and model id. Run at least three repetitions of
-each applicable case in [`tool-eval-cases.json`](tool-eval-cases.json), starting each run
-from an identical temporary fixture. Compare:
+Phase 1 uses this exact, bounded matrix from
+[`tool-eval-cases.json`](tool-eval-cases.json):
+
+| Configured identity                   | Applicable profiles                                    | Basis                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openai-subscription / gpt-5.6-terra` | `shell_only`, `generic_exact_replace`, `vendor_native` | Zen's public base includes `gpt-5.6-terra` in the subscription preset. As reviewed on 2026-08-31, the official OpenAI model page lists Apply Patch as supported. This is **current feature support**, not evidence that GPT-5.6 Terra shares GPT-5.2's published post-training history. [Zen model preset @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/apps/cli/src/model-presets.ts#L24-L40), [GPT-5.6 Terra model page](https://developers.openai.com/api/docs/models/gpt-5.6-terra) |
+| `deepseek / deepseek-chat`            | `shell_only`, `generic_exact_replace`                  | Zen publicly exposes the DeepSeek OpenAI-compatible host preset. No direct native-signature training evidence was found, so phase 1 does not invent a DeepSeek-native profile. [Zen provider presets @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/apps/zenx/src/main/provider-presets.ts#L18-L22)                                                                                                                                                                                      |
+| `kimi / kimi-k2`                      | `shell_only`, `generic_exact_replace`                  | Zen publicly exposes the Kimi OpenAI-compatible host preset. No direct native-signature training evidence was found, so phase 1 does not invent a Kimi-native profile. [Zen provider presets @ `6a81252`](https://github.com/albert-zen/zen/blob/6a812525cc277f865eb0ca8439ea4d2cfc1624db/apps/zenx/src/main/provider-presets.ts#L18-L22)                                                                                                                                                                                              |
+
+The OpenAI native profile must reproduce the complete official `apply_patch` freeform V4A
+grammar and `apply_patch_call_output` result contract; a same-named custom patch helper is
+not applicable. Anthropic's versioned API editor remains a direct-evidence future
+comparison, but it is outside phase 1 because Zen currently has no native Anthropic
+provider path. This proposal does not approve an eval-only provider driver or a production
+Anthropic adapter.
+
+Before recording any result, an eval runner must verify that the exact configured
+`provider / modelId` identity is available. If it is unavailable, that run fails before
+result recording; the runner must not substitute an alias, newer model, or another
+provider. Changing the matrix requires a reviewed fixture and validator update.
+
+Run at least three repetitions of each applicable case, starting each run from an
+identical temporary fixture. Compare:
 
 1. `shell_only`: today's baseline;
 2. `generic_exact_replace`: a proposed exact-one local replacement contract, supplied only
    in the evaluation harness;
-3. `vendor_native`: only where a complete supported native contract and direct evidence
-   exist—OpenAI `apply_patch` or an Anthropic versioned API text editor.
+3. `vendor_native`: in phase 1, only the complete OpenAI `apply_patch` contract with
+   `openai-subscription / gpt-5.6-terra`, based on current model feature support.
 
 The generic evaluation contract is intentionally narrow: `path`, `old_string`, and
 `new_string`; exactly one literal current-content match; zero or multiple matches fail
@@ -121,9 +140,9 @@ local-edit performance.
 
 ## Decisions requested from reviewers
 
-1. Approve or reject this small evaluation direction before any editing tool is designed.
-2. Confirm the representative provider/model families and exact model ids to test.
-3. Confirm whether vendor-native evaluation is limited initially to OpenAI and Anthropic,
-   the only surveyed systems with direct signature/training evidence.
+1. Approve or reject the exact three-identity phase-1 matrix and its profile applicability.
+2. Approve or reject this small evaluation direction before any editing tool is designed.
+3. Confirm that a missing exact identity aborts that run before result recording and is
+   never replaced ad hoc.
 4. Confirm the repetition count and acceptance interpretation; the proposed minimum is
    three runs per applicable model/profile/case, with zero tolerance for unintended edits.
