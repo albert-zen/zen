@@ -108,13 +108,14 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 - Add project 使用 ZenX 只读 directory picker；Thread 创建最终必须解析为明确的 cwd，并消费同一个 canonical Project projection。
 - Project 内入口把被点击 Project 作为唯一作用域；全局入口使用仍有效的 last-used Project，否则要求用户明确选择。不得用默认 Project、Documents 或 `process.cwd()` 隐式替代。
 - 点击入口、切换 Project 或目录确认只更新非持久本地 draft；第一条有效 Send 才配置 Project、创建 Thread，并立即启动 Turn，不等待 summaries / Project projection。失败必须不遮盖当前页面，并提供恢复 draft 的直接重试路径。
+- Agent 入口直接打开同一个 welcome draft，不显示单独的未选择 Thread 页面。welcome 中央 Project 控件可以在首发前切换和搜索 Project；候选列表有视口内最大高度并只在列表内部滚动。welcome 保持紧凑并相对主内容列视觉居中，不使用通用 compose 装饰图标。
 
 ### 3.4 原生应用菜单与按需面板
 
 - Packaged Windows/Linux 不安装 Electron 默认 application menu；macOS 只保留系统合规的 application、edit 和 window roles。原生菜单不得引入第二套产品导航。
-- 桌面窗口使用与产品壳连续的 integrated title bar：Renderer 左侧按 ZenX mark / wordmark、Inbox、Sidebar 收起入口的顺序形成一个紧凑品牌控制组，Sidebar 控制固定在该组最右侧；系统窗口控制仍由 Electron/OS 持有。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
+- 桌面窗口使用与产品壳连续的 integrated title bar：macOS 顶行只为 traffic lights 与紧凑窗口控制保留必要高度，ZenX mark / wordmark 位于其下一个 Sidebar 品牌行；Inbox 与 Sidebar 收起入口保持清晰且 Sidebar 控制位于控制组最右侧。其他平台可以在标题栏品牌轨道中显示同一正式品牌。系统窗口控制仍由 Electron/OS 持有。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
 - 不提供常驻右侧 Activity rail。Tool details 留在聊天流内；Workspace/Artifact 使用按需面板。
-- Thread header 只保留职责明确的 search 与按需 Workspace/Artifact icon entry，不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。
+- Thread header 显示 Thread cache telemetry，并只保留按需 Workspace/Artifact icon entry；不显示 Search 或 Archive 控件，也不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。归档能力继续位于 Thread 管理菜单与 Settings。
 - Workspace/Artifact 面板的最终内容组成与 tabs 仍为 **TBD**。早期原型中的 Files / Trigger / Room 等内容不是已确认合同；Trigger 与 Room 作为 plugin 不能被预设为核心 Workspace tabs。
 
 ## 4. Interaction 与 state rules

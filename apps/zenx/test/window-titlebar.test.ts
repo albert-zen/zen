@@ -45,14 +45,3 @@ test("integrated title bar keeps controls while macOS moves ZenX branding into t
   assert.match(main, /titleBarStyle: "hidden"/u);
   assert.match(main, /titleBarOverlay:/u);
 });
-
-test("macOS keeps traffic lights compact and places branding on the Sidebar row", async () => {
-  const [app, styles] = await Promise.all([
-    readFile(new URL("App.tsx", rendererRoot), "utf8"),
-    readFile(new URL("styles.css", rendererRoot), "utf8"),
-  ]);
-
-  assert.match(app, /className="sidebar-brand-row"/u);
-  assert.match(styles, /:root\[data-platform="darwin"\] \.window-titlebar/u);
-  assert.match(styles, /:root\[data-platform="darwin"\] \.sidebar-brand-row/u);
-});
