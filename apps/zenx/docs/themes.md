@@ -11,6 +11,18 @@ module loads, and System follows `prefers-color-scheme` changes live. Appearance
 is not Core, Thread, Project, or journal state. There is no second theme provider,
 theme preview page, import/export flow, or custom theme editor in v0.
 
+## Visual evidence
+
+These views use the production CSS in a static renderer harness. The current
+host Electron package has no executable, so they are not native Electron
+screenshots.
+
+![System preference resolved to Dark with macOS shell selectors](./assets/theme-v0/zenx-theme-v0-system-dark-macos.png)
+
+![Light appearance with Windows shell selectors](./assets/theme-v0/zenx-theme-v0-light-windows.png)
+
+![System preference resolved to Light at the narrow layout](./assets/theme-v0/zenx-theme-v0-system-light-narrow.png)
+
 ## Color tokens
 
 `src/renderer/src/theme.css` is the only production source of raw colors. Its
