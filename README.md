@@ -93,6 +93,7 @@ ZenX 插件开发合同与命令见 [packages/zenx-plugin-sdk/README.md](package
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 不变量、核心概念、协议、adapter 边界
 - [LESSONS.md](LESSONS.md) — 非目标与 zen-legacy 的教训
 - [PRODUCTS.md](PRODUCTS.md) — 各接入端的定位与里程碑
+- [docs/tool-strategy.md](docs/tool-strategy.md) — 多模型工具策略与编辑评测提案
 - [SALVAGE.md](SALVAGE.md) — 从 zen-legacy 移植的清单
 - [src/protocol/codex/README.md](src/protocol/codex/README.md) — 固定协议版本与精确子集
 

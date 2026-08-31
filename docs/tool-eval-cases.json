@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "profiles": ["shell_only", "generic_exact_replace", "vendor_native"],
+  "cases": [
+    {
+      "id": "unique-small-replacement",
+      "category": "local_edit",
+      "prompt": "Change the only development port from 3000 to 3100 and preserve all other bytes.",
+      "setup": {
+        "config.txt": "host=127.0.0.1\nport=3000\nmode=development\n"
+      },
+      "checks": [
+        "config.txt equals host=127.0.0.1\\nport=3100\\nmode=development\\n",
+        "no other path changed"
+      ]
+    },
+    {
+      "id": "repeated-text-disambiguation",
+      "category": "local_edit",
+      "prompt": "Change only the beta service timeout from 30 to 45.",
+      "setup": { "services.txt": "[alpha]\ntimeout=30\n[beta]\ntimeout=30\n" },
+      "checks": [
+        "alpha remains timeout=30",
+        "beta equals timeout=45",
+        "no other path changed"
+      ]
+    },
+    {
+      "id": "stale-after-observation",
+      "category": "failure_recovery",
+      "prompt": "Change the release channel from stable to preview without losing concurrent changes.",
+      "setup": { "release.txt": "channel=stable\nrevision=1\n" },
+      "mutationAfterFirstRead": {
+        "release.txt": "channel=stable\nrevision=2\n"
+      },
+      "checks": [
+        "release.txt equals channel=preview\\nrevision=2\\n",
+        "the concurrent revision change is preserved"
+      ]
+    },
+    {
+      "id": "crlf-bom-unicode",
+      "category": "encoding",
+      "prompt": "Change the quoted status from “draft” to “ready” while preserving BOM and CRLF line endings.",
+      "setup": { "status.txt": "\ufeffname=Zen\r\nstatus=“draft”\r\n" },
+      "checks": [
+        "status is “ready”",
+        "UTF-8 BOM is preserved",
+        "all line endings remain CRLF"
+      ]
+    },
+    {
+      "id": "multiple-edits-one-file",
+      "category": "local_edit",
+      "prompt": "Rename the declared color token from ocean to lake and update both uses in this file.",
+      "setup": {
+        "theme.css": ":root { --ocean: #06c; }\n.button { color: var(--ocean); }\n.link { color: var(--ocean); }\n"
+      },
+      "checks": [
+        "--lake is declared once",
+        "var(--lake) occurs twice",
+        "ocean does not occur"
+      ]
+    },
+    {
+      "id": "create-new-file",
+      "category": "whole_file",
+      "prompt": "Create NOTICE.txt containing exactly Zen followed by one newline.",
+      "setup": {},
+      "checks": ["NOTICE.txt equals Zen\\n", "no other path changed"]
+    },
+    {
+      "id": "multi-file-change",
+      "category": "multi_file",
+      "prompt": "Rename the public greeting from hello to welcome in both source and test.",
+      "setup": {
+        "src.txt": "export const greeting = 'hello';\n",
+        "test.txt": "expect(greeting).toBe('hello');\n"
+      },
+      "checks": [
+        "src.txt contains 'welcome'",
+        "test.txt contains 'welcome'",
+        "hello does not occur"
+      ]
+    },
+    {
+      "id": "recover-after-no-match",
+      "category": "failure_recovery",
+      "prompt": "After any failed edit, inspect the current file and change maxRetries from 4 to 5.",
+      "setup": {
+        "retry.json": "{\n  \"maxRetries\": 4,\n  \"backoffMs\": 100\n}\n"
+      },
+      "initialMisleadingContext": "The file was previously formatted as {\"maxRetries\":4}.",
+      "checks": [
+        "maxRetries equals 5",
+        "backoffMs equals 100",
+        "JSON remains valid"
+      ]
+    }
+  ]
+}

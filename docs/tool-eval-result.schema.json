@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/albert-zen/zen/docs/tool-eval-result.schema.json",
+  "title": "Zen tool strategy evaluation result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "runId",
+    "caseId",
+    "profile",
+    "model",
+    "repetition",
+    "metrics",
+    "failureCodes"
+  ],
+  "allOf": [
+    {
+      "if": { "properties": { "profile": { "const": "vendor_native" } } },
+      "then": {
+        "properties": { "model": { "required": ["nativeContract"] } }
+      }
+    }
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "caseId": { "type": "string", "minLength": 1 },
+    "profile": {
+      "enum": ["shell_only", "generic_exact_replace", "vendor_native"]
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "modelId"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "modelId": { "type": "string", "minLength": 1 },
+        "nativeContract": { "type": "string", "minLength": 1 }
+      }
+    },
+    "repetition": { "type": "integer", "minimum": 1 },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "completed",
+        "firstEditAttemptSucceeded",
+        "unintendedChanges",
+        "schemaValidCalls",
+        "schemaInvalidCalls",
+        "toolCalls",
+        "modelTurns",
+        "inputTokens",
+        "outputTokens",
+        "elapsedMs"
+      ],
+      "properties": {
+        "completed": { "type": "boolean" },
+        "firstEditAttemptSucceeded": { "type": ["boolean", "null"] },
+        "unintendedChanges": { "type": "integer", "minimum": 0 },
+        "schemaValidCalls": { "type": "integer", "minimum": 0 },
+        "schemaInvalidCalls": { "type": "integer", "minimum": 0 },
+        "toolCalls": { "type": "integer", "minimum": 0 },
+        "modelTurns": { "type": "integer", "minimum": 1 },
+        "inputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "outputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "elapsedMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "failureCodes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "notes": { "type": "string" }
+  }
+}

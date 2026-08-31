@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "runId": "example-only-not-an-eval-result",
+  "caseId": "unique-small-replacement",
+  "profile": "shell_only",
+  "model": {
+    "provider": "example-provider",
+    "modelId": "example-model"
+  },
+  "repetition": 1,
+  "metrics": {
+    "completed": true,
+    "firstEditAttemptSucceeded": null,
+    "unintendedChanges": 0,
+    "schemaValidCalls": 1,
+    "schemaInvalidCalls": 0,
+    "toolCalls": 1,
+    "modelTurns": 1,
+    "inputTokens": null,
+    "outputTokens": null,
+    "elapsedMs": 1
+  },
+  "failureCodes": [],
+  "notes": "Shape example only; these values are not evaluation evidence."
+}

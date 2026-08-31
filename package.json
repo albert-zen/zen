@@ -25,7 +25,8 @@
     "test": "npm run test:node && npm run test:imzen",
     "test:imzen": "uv run --project apps/imzen --extra dev pytest -q apps/imzen/tests",
     "test:node": "npm test --workspace @zenx/plugin-sdk && npm run build && node --test dist/test/*.test.js",
-    "typecheck": "npm run typecheck --workspace @zenx/plugin-sdk && tsc -p tsconfig.json --noEmit"
+    "typecheck": "npm run typecheck --workspace @zenx/plugin-sdk && tsc -p tsconfig.json --noEmit",
+    "validate:tool-eval": "node scripts/validate-tool-eval.mjs"
   },
   "engines": {
     "node": ">=22"
