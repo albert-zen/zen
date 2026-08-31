@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import type {
   BrowserLiveObservationEvent,
@@ -33,9 +33,29 @@ export function BrowserPage() {
 
   useEffect(() => {
     let dispose: (() => void) | undefined;
+    let isLive = false;
+    const clearFrame = () => {
+      const image = imageRef.current;
+      image?.removeAttribute("src");
+      if (image !== null) {
+        image.width = 1600;
+        image.height = 1000;
+      }
+      hasFrameRef.current = false;
+      lastSequence.current = 0;
+      setHasFrame(false);
+    };
+    const stopObservation = () => {
+      const stop = dispose;
+      dispose = undefined;
+      stop?.();
+      isLive = false;
+      clearFrame();
+    };
     const receive = (event: BrowserLiveObservationEvent) => {
       if (event.type === "status") {
-        if (event.status === "connecting") lastSequence.current = 0;
+        isLive = event.status === "live";
+        if (!isLive) clearFrame();
         setStatus((current) =>
           current.status === event.status && current.message === event.message
             ? current
@@ -43,6 +63,7 @@ export function BrowserPage() {
         );
         return;
       }
+      if (!isLive) return;
       if (event.frame.sequence <= lastSequence.current) return;
       lastSequence.current = event.frame.sequence;
       const image = imageRef.current;
@@ -56,8 +77,7 @@ export function BrowserPage() {
       }
     };
     const updateVisibility = () => {
-      dispose?.();
-      dispose = undefined;
+      stopObservation();
       if (document.visibilityState === "visible") {
         dispose = window.zenx.browserObservation.subscribe(receive);
       } else {
@@ -72,7 +92,7 @@ export function BrowserPage() {
     updateVisibility();
     return () => {
       document.removeEventListener("visibilitychange", updateVisibility);
-      dispose?.();
+      stopObservation();
     };
   }, []);
 
