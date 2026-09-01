@@ -1,6 +1,6 @@
 # ZenX UI/UX decisions
 
-更新日期：2026-08-28
+更新日期：2026-09-01
 
 New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 
@@ -241,11 +241,15 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   不把 credential presence 呈现成 live connectivity。删除当前 Default/Title 所属 profile 时，
   UI 必须收集对应替换选择并通过一次 host mutation 原子提交；其他 profile 正常删除，既有
   Thread 选择保持 ZAS 权威且不由 Settings 自动切换。
-- Settings → General 的 Appearance 提供 System / Light / Dark。它是 renderer-local app-profile
-  preference，切换立即生效且不触发 host restart；System 实时跟随操作系统。解析后的 Light / Dark
-  必须在首屏前写入根文档并驱动同一套语义 token、原生控件 `color-scheme` 与组件实现，不能成为
-  Core / Thread / Project 状态或平行主题框架。Light 保留 ZenX 的冷中性层级、紫蓝强调色、密度与
-  单色品牌资产，Dark 保持既有视觉稳定。
+- Settings → Appearance 是独立分区，提供 System / Light / Dark，并让 Light 与 Dark 分别记住
+  Graphite、Cobalt、Ember 三套 Zen 内置 preset；accent 提供 Azure、Iris、Jade，contrast 提供
+  Standard / High，Sidebar material 可在 opaque / translucent 间即时切换。它是 renderer-local
+  app-profile preference，所有改动立即生效、持久化且不触发 host restart；System 实时跟随操作系统，
+  Reset 恢复 System、Graphite、Azure、Standard 与 opaque Sidebar。解析后的模式、当前 preset 和控制值
+  必须在首屏前写入根文档，并经同一套语义 token 同时驱动 shell、Sidebar、内容区、紧凑 live preview、
+  原生控件 `color-scheme` 与基础组件，不能成为 Core / Thread / Project 状态、设置壳或平行主题框架。
+  Graphite 保留 v0 的冷中性基线；Cobalt 与 Ember 通过语义角色提供可辨的冷蓝/暖中性方向，单色品牌
+  资产、信息密度和键盘/focus 行为保持一致。
 - 主题 token 命名、平台表面、第三方边界、静态 guard 与渐进迁移方式见
   [`themes.md`](./themes.md)。本文仍是 durable product authority；实现文档不得扩张产品语义。
 - restart-required changes 必须在当前 route 明确反馈 pending、success 和 failure；具体使用顶部或内容区动作、动作名称、何时 enabled/emphasized，待 Settings action contract 确认。

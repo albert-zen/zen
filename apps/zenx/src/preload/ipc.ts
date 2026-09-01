@@ -52,4 +52,7 @@ export const ipcChannels = {
   pluginsExecuteCommand: "zenx:plugins:execute-command",
   pluginsReadHandle: "zenx:plugins:read-handle",
   pluginsChanged: "zenx:plugins:changed",
+  browserLiveSubscribe: "zenx:browser-live:subscribe",
+  browserLiveUnsubscribe: "zenx:browser-live:unsubscribe",
+  browserLiveEvent: "zenx:browser-live:event",
 } as const;

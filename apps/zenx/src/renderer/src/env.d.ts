@@ -51,6 +51,7 @@ import type {
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../../marketplace.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
+import type { BrowserLiveObservationEvent } from "../../main/capabilities/browser-provider.js";
 
 declare global {
   interface Window {
@@ -156,6 +157,11 @@ declare global {
       };
       marketplace: {
         get(): Promise<MarketplaceCatalogLoadSnapshot>;
+      };
+      browserObservation: {
+        subscribe(
+          listener: (event: BrowserLiveObservationEvent) => void,
+        ): () => void;
       };
       plugins: {
         get(): Promise<ZenXPluginSnapshot>;

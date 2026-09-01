@@ -33,6 +33,14 @@ export function installApplicationMenu(
       ],
     },
     {
+      label: "View",
+      submenu: [
+        { role: "resetZoom", accelerator: "CommandOrControl+0" },
+        { role: "zoomIn", accelerator: "CommandOrControl+Plus" },
+        { role: "zoomOut", accelerator: "CommandOrControl+-" },
+      ],
+    },
+    {
       label: "Window",
       submenu: [{ role: "minimize" }, { role: "close" }],
     },

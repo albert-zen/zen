@@ -84,6 +84,7 @@ import {
 import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
 import { createDelegatingFirstPartyProfileLoader } from "./first-party-profile-loader.js";
 import { installZenXBundledPluginsAtStartup } from "./bundled-plugin-startup.js";
+import { BrowserLiveObservationIpcBridge } from "./browser-live-observation-ipc.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -984,6 +985,16 @@ function installCapabilityIpc(
   manager: AppServerManager,
   marketplace: MarketplaceCatalogService,
 ): void {
+  const browserLive = new BrowserLiveObservationIpcBridge(
+    capabilities,
+    ipcChannels.browserLiveEvent,
+  );
+  ipcMain.handle(ipcChannels.browserLiveSubscribe, (event) => {
+    browserLive.subscribe(event.sender);
+  });
+  ipcMain.handle(ipcChannels.browserLiveUnsubscribe, (event) => {
+    browserLive.unsubscribe(event.sender);
+  });
   ipcMain.handle(ipcChannels.marketplaceGet, async () => {
     const builtIns = capabilities.marketplaceBuiltIns();
     try {
