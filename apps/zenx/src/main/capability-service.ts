@@ -142,6 +142,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         ),
       {
         allowForegroundRequired: this.#foregroundRequiredAllowed,
+        platform: options.providerCatalogOptions?.platform ?? process.platform,
         pluginDataDirectory: path.join(
           options.userDataDirectory,
           "plugin-data",

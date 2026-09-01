@@ -63,6 +63,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       bundledProvidersOnly: true,
       browserBackend: browserBackend(),
       computerBackend: computerBackend(),
+      providerCatalogOptions: { platform: "darwin" },
       trustedProfileLoaders: {
         browser: createDelegatingFirstPartyProfileLoader(() =>
           service.browserProfilePackage(),
