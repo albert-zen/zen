@@ -46,6 +46,7 @@ export function SettingsView({
   onRetryArchived,
   onTabChange,
   onUnarchive,
+  showHeader = true,
   tab,
   pluginSnapshot = null,
 }: {
@@ -56,6 +57,7 @@ export function SettingsView({
   onRetryArchived(): void;
   onTabChange(tab: SettingsTab): void;
   onUnarchive(thread: NativeThreadSummary): Promise<void>;
+  showHeader?: boolean;
   tab: SettingsTab;
   pluginSnapshot?: ZenXPluginSnapshot | null;
 }) {
@@ -137,22 +139,24 @@ export function SettingsView({
   ];
   return (
     <section className="product-page settings-view" aria-label="ZenX settings">
-      <header className="page-header">
-        <div className="page-title">
-          <button
-            className="icon-button mobile-menu"
-            type="button"
-            aria-label="Open sidebar"
-            onClick={onOpenSidebar}
-          >
-            <Icon name="tree" />
-          </button>
-          <div>
-            <h1>Settings</h1>
-            <p>Account, appearance, models, plugins, and local host</p>
+      {showHeader ? (
+        <header className="page-header">
+          <div className="page-title">
+            <button
+              className="icon-button mobile-menu"
+              type="button"
+              aria-label="Open sidebar"
+              onClick={onOpenSidebar}
+            >
+              <Icon name="tree" />
+            </button>
+            <div>
+              <h1>Settings</h1>
+              <p>Account, appearance, models, plugins, and local host</p>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      ) : null}
       <div className="page-scroll">
         <div className="settings-layout">
           <nav

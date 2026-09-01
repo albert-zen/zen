@@ -18,13 +18,12 @@ export function PluginProductPage({
   snapshot,
   route,
   navigate,
-  onOpenSidebar,
   registry = pluginUiRegistry,
 }: {
   snapshot: ZenXPluginSnapshot;
   route: string;
   navigate(route: string): void;
-  onOpenSidebar(): void;
+  onOpenSidebar?(): void;
   registry?: PluginUiRegistry;
 }) {
   const target =
@@ -49,42 +48,30 @@ export function PluginProductPage({
       className="product-page plugin-product-page"
       aria-label={target.title}
     >
-      <header className="page-header">
-        <div className="page-title">
-          <button
-            className="icon-button mobile-menu"
-            type="button"
-            aria-label="Open sidebar"
-            onClick={onOpenSidebar}
+      {menus.length > 0 ? (
+        <header className="page-header plugin-menu-header">
+          <div
+            className="plugin-menu"
+            role="toolbar"
+            aria-label={`${target.title} commands`}
           >
-            <Icon name="tree" />
-          </button>
-          <div>
-            <h1>{target.title}</h1>
-            <p>Provided by {target.pluginId}</p>
+            {menus.map((menu) => (
+              <button
+                key={menu.key}
+                type="button"
+                onClick={() =>
+                  void window.zenx.plugins.executeCommand(
+                    menu.pluginId,
+                    menu.commandId,
+                  )
+                }
+              >
+                {menu.label}
+              </button>
+            ))}
           </div>
-        </div>
-        <div
-          className="plugin-menu"
-          role="toolbar"
-          aria-label={`${target.title} commands`}
-        >
-          {menus.map((menu) => (
-            <button
-              key={menu.key}
-              type="button"
-              onClick={() =>
-                void window.zenx.plugins.executeCommand(
-                  menu.pluginId,
-                  menu.commandId,
-                )
-              }
-            >
-              {menu.label}
-            </button>
-          ))}
-        </div>
-      </header>
+        </header>
+      ) : null}
       <div className="page-scroll plugin-page-scroll">
         <GenericPluginUiHost
           registry={registry}
