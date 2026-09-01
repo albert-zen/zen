@@ -95,6 +95,10 @@ harness. They are retained as historical artifacts, but they are not Electron
 evidence and their different modes, platform selectors, viewport, and screen
 states do not form a comparable visual matrix. Appearance v1 acceptance uses
 real Electron screenshots at controlled viewport/state in its pull request.
+The checked-in `after-narrow-r2-system.jpeg` capture is the 592px narrow-window
+regression evidence: the Sidebar is closed off-canvas, all six Settings tabs
+reflow without horizontal clipping, and the Appearance panel owns the full
+content width.
 
 Reproduce the raw-color inventory with:
 

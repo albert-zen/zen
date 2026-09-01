@@ -990,6 +990,59 @@ test("Appearance is an independent Settings section and persists the complete pr
   }
 });
 
+test("every Settings tab remains keyboard reachable after narrow-screen reflow", async () => {
+  const harness = await mountSettings("appearance");
+  try {
+    await waitFor(() => exactButton("Appearance"));
+    const tabs = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        '.settings-nav [role="tab"]',
+      ),
+    );
+    assert.deepEqual(
+      tabs.map((tab) => tab.textContent?.trim()),
+      [
+        "Account",
+        "Models & provider",
+        "Plugins",
+        "Appearance",
+        "General",
+        "Archived threads",
+      ],
+    );
+
+    tabs[0]?.focus();
+    await act(async () => {
+      tabs[0]?.dispatchEvent(
+        new harness.dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          key: "End",
+        }),
+      );
+      await Promise.resolve();
+    });
+    assert.equal(
+      document.activeElement?.textContent?.trim(),
+      "Archived threads",
+    );
+    assert.equal(tabs[5]?.getAttribute("aria-selected"), "true");
+
+    await act(async () => {
+      tabs[5]?.dispatchEvent(
+        new harness.dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          key: "Home",
+        }),
+      );
+      await Promise.resolve();
+    });
+    assert.equal(document.activeElement?.textContent?.trim(), "Account");
+    assert.equal(tabs[0]?.getAttribute("aria-selected"), "true");
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("General exposes an optional maximum tool round setting", async () => {
   const saved: ZenXSettingsUpdate[] = [];
   const harness = await mountSettings("general", {

@@ -4295,13 +4295,19 @@ a:focus-visible {
   }
   .settings-nav {
     position: static;
-    grid-auto-flow: column;
-    grid-auto-columns: max-content;
-    overflow-x: auto;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     margin-bottom: 18px;
   }
   .settings-nav button {
-    padding-inline: 10px;
+    min-width: 0;
+    min-height: 44px;
+    height: auto;
+    padding: 7px 10px;
+    line-height: 1.35;
+  }
+  .settings-nav button span {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .provider-profile-card {
     grid-template-columns: minmax(0, 1fr) auto;
@@ -4329,7 +4335,7 @@ a:focus-visible {
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 720px) {
   .app-shell {
     --sidebar-track: 0px;
     --titlebar-brand-track: min(264px, calc(100% - 138px));
@@ -4377,6 +4383,12 @@ a:focus-visible {
     grid-column: 1;
     grid-row: 2;
   }
+  .mobile-menu {
+    display: inline-grid;
+  }
+}
+
+@media (max-width: 640px) {
   .new-thread-error-banner {
     top: 68px;
     right: 12px;
@@ -4384,7 +4396,7 @@ a:focus-visible {
   }
   .agent-surface,
   .product-page {
-    grid-template-rows: 56px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .active-room {
     grid-template-rows: 56px auto auto minmax(0, 1fr) auto;
@@ -4392,10 +4404,14 @@ a:focus-visible {
   .workspace-header,
   .page-header {
     gap: 8px;
-    padding: 0 8px;
+    min-height: 56px;
+    padding: 6px 8px;
   }
-  .mobile-menu {
-    display: inline-grid;
+  .page-title h1,
+  .page-title p {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
   }
   .icon-button {
     width: 44px;
@@ -4505,6 +4521,21 @@ a:focus-visible {
   }
   .page-scroll {
     padding: 20px 14px 34px;
+  }
+  .settings-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .settings-panel > header h2,
+  .settings-panel > header p,
+  .settings-card h3,
+  .settings-card p,
+  .settings-card-head span,
+  .settings-row strong,
+  .settings-row span {
+    overflow-wrap: anywhere;
+  }
+  .settings-card-head {
+    align-items: flex-start;
   }
   .page-intro {
     flex-direction: column;
@@ -4660,6 +4691,18 @@ a:focus-visible {
 }
 
 @media (max-width: 380px) {
+  .settings-nav,
+  .appearance-options,
+  .appearance-preset-options,
+  .appearance-accent-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .appearance-preview {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+  .appearance-preview-content button {
+    padding-inline: 8px;
+  }
   .permission-control {
     display: none;
   }
