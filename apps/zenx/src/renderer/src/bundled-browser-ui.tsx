@@ -99,20 +99,26 @@ export function BrowserPage() {
   const presentation = statusPresentation(status.status);
   return (
     <div className="browser-live-page">
-      <div className="browser-live-intro">
-        <div>
-          <p className="browser-live-eyebrow">Observer only</p>
-          <h2>The tab your Agent is using, as it happens.</h2>
-          <p>
-            This page mirrors the exact browser target selected by the latest
-            Agent browser operation. It has no controls and cannot take over the
-            tab.
-          </p>
+      <header className="browser-live-toolbar" aria-label="Browser observation">
+        <div className="browser-live-mode">
+          <Icon name="layers" aria-hidden="true" />
+          <span>
+            <strong>Observer only</strong>
+            <small>Agent browser target</small>
+          </span>
+        </div>
+        <div className="browser-live-privacy-note">
+          <Icon name="warning" aria-hidden="true" />
+          <span>
+            Private page content may be visible · Frames stay on this device and
+            are not recorded.
+          </span>
         </div>
         <div
           className="browser-live-status"
           data-status={status.status}
           role="status"
+          aria-live="polite"
           aria-atomic="true"
         >
           <Icon name={presentation.icon} aria-hidden="true" />
@@ -121,9 +127,13 @@ export function BrowserPage() {
             <small>{status.message}</small>
           </span>
         </div>
-      </div>
+      </header>
 
-      <div className="browser-live-stage" data-has-frame={String(hasFrame)}>
+      <div
+        className="browser-live-stage"
+        data-has-frame={String(hasFrame)}
+        data-status={status.status}
+      >
         <img
           ref={imageRef}
           className="browser-live-frame"
@@ -134,19 +144,13 @@ export function BrowserPage() {
         {hasFrame ? null : (
           <div className="browser-live-placeholder" aria-hidden="true">
             <Icon name={presentation.icon} />
-            <span>{presentation.label}</span>
+            <span>
+              <strong>{presentation.placeholderTitle}</strong>
+              <small>{presentation.placeholderDetail}</small>
+            </span>
           </div>
         )}
       </div>
-
-      <aside className="browser-live-privacy" aria-label="Privacy notice">
-        <Icon name="warning" aria-hidden="true" />
-        <p>
-          <strong>Private page content may be visible.</strong> Frames stay in
-          this app on this device and are not recorded in thread history, plugin
-          storage, or files.
-        </p>
-      </aside>
     </div>
   );
 }
@@ -154,17 +158,44 @@ export function BrowserPage() {
 function statusPresentation(status: BrowserLiveObservationStatus): {
   icon: IconName;
   label: string;
+  placeholderTitle: string;
+  placeholderDetail: string;
 } {
   switch (status) {
     case "connecting":
-      return { icon: "clock", label: "Connecting" };
+      return {
+        icon: "clock",
+        label: "Connecting",
+        placeholderTitle: "Connecting to the browser target",
+        placeholderDetail: "The read-only view will appear here.",
+      };
     case "live":
-      return { icon: "search", label: "Live" };
+      return {
+        icon: "search",
+        label: "Live",
+        placeholderTitle: "Waiting for the first frame",
+        placeholderDetail: "The browser target is connected.",
+      };
     case "failed":
-      return { icon: "warning", label: "View failed" };
+      return {
+        icon: "warning",
+        label: "View failed",
+        placeholderTitle: "The live view could not connect",
+        placeholderDetail: "Use another Agent browser action to retry.",
+      };
     case "unavailable":
-      return { icon: "warning", label: "Unavailable" };
+      return {
+        icon: "warning",
+        label: "Unavailable",
+        placeholderTitle: "The observed tab is no longer attached",
+        placeholderDetail: "Ask the Agent to open or inspect a tab.",
+      };
     case "idle":
-      return { icon: "layers", label: "Waiting" };
+      return {
+        icon: "layers",
+        label: "Waiting",
+        placeholderTitle: "No browser target yet",
+        placeholderDetail: "Ask the Agent to open or inspect a tab.",
+      };
   }
 }

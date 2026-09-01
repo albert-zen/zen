@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
 import React from "react";
 import { act } from "react";
@@ -7,6 +8,86 @@ import test from "node:test";
 
 import type { BrowserLiveObservationEvent } from "../src/main/capabilities/browser-provider.js";
 import { BrowserPage } from "../src/renderer/src/bundled-browser-ui.js";
+
+test("Browser observer keeps status, privacy, and mode in one compact toolbar", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    value: dom.window.navigator,
+    configurable: true,
+  });
+  Object.defineProperty(dom.window.document, "visibilityState", {
+    configurable: true,
+    value: "visible",
+  });
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      browserObservation: {
+        subscribe() {
+          return () => {};
+        },
+      },
+    },
+  });
+
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => root.render(React.createElement(BrowserPage)));
+
+  const toolbar = dom.window.document.querySelector(
+    ".browser-live-toolbar[aria-label='Browser observation']",
+  );
+  assert.ok(toolbar);
+  assert.match(toolbar.textContent ?? "", /observer only/iu);
+  assert.match(
+    toolbar.textContent ?? "",
+    /private page content may be visible/iu,
+  );
+  assert.match(toolbar.textContent ?? "", /not recorded/iu);
+  assert.equal(
+    dom.window.document.querySelectorAll("[role='status']").length,
+    1,
+  );
+  const status = dom.window.document.querySelector("[role='status']");
+  assert.equal(status?.getAttribute("aria-live"), "polite");
+  assert.equal(status?.getAttribute("aria-atomic"), "true");
+  assert.equal(dom.window.document.querySelector(".browser-live-intro"), null);
+  assert.equal(
+    dom.window.document.querySelector(".browser-live-privacy"),
+    null,
+  );
+  assert.equal(dom.window.document.querySelector("h2"), null);
+  assert.match(
+    dom.window.document.querySelector(".browser-live-placeholder")
+      ?.textContent ?? "",
+    /ask the agent to open or inspect a tab/iu,
+  );
+
+  await act(async () => root.unmount());
+  dom.window.close();
+});
+
+test("Browser observer gives the live stage the remaining page height", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /\.browser-live-page\s*\{[^}]*height:\s*100%;[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\);/su,
+  );
+  assert.match(
+    css,
+    /\.browser-live-stage\s*\{[^}]*min-height:\s*0;[^}]*height:\s*100%;/su,
+  );
+  assert.doesNotMatch(css, /\.browser-live-stage\s*\{[^}]*aspect-ratio:/su);
+});
 
 test("Browser page updates frames without moving focus or announcing every frame", async () => {
   const dom = new JSDOM(
