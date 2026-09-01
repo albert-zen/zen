@@ -16,7 +16,6 @@ import type {
   ZenXProviderProfile,
   ZenXSettingsUpdate,
 } from "../src/main/host-profile.js";
-import type { AppearancePreference } from "../src/renderer/src/appearance.js";
 import type { SettingsTab } from "../src/renderer/src/SettingsView.js";
 import type { ZenXProviderCatalogSnapshot } from "../src/main/settings-service.js";
 import type { ZenXImageCapabilityProbeResult } from "../src/main/settings-service.js";
@@ -896,36 +895,96 @@ test("Archived threads is a Settings section with keyboard-reachable Unarchive",
   }
 });
 
-test("General switches Appearance immediately without restarting the host", async () => {
+test("Appearance is an independent Settings section and persists the complete profile without restarting the host", async () => {
   const saved: ZenXSettingsUpdate[] = [];
-  const harness = await mountSettings("general", {
+  const harness = await mountSettings("appearance", {
     save: async (profile) => {
       saved.push(profile);
       return { ...settings, profile: { ...settings.profile, ...profile } };
     },
   });
   try {
-    await waitFor(() => appearanceRadio("light"));
-    const system = appearanceRadio("system");
-    const light = appearanceRadio("light");
-    const dark = appearanceRadio("dark");
+    await waitFor(() => appearanceModeRadio("light"));
+    const system = appearanceModeRadio("system");
+    const light = appearanceModeRadio("light");
+    const dark = appearanceModeRadio("dark");
     assert.ok(system);
     assert.ok(light);
     assert.ok(dark);
     assert.equal(system.type, "radio");
     assert.equal(light.type, "radio");
     assert.equal(dark.type, "radio");
-    assert.equal(system.name, "appearance");
+    assert.equal(system.name, "appearance-mode");
     assert.equal(light.name, system.name);
     assert.equal(dark.name, system.name);
+    assert.ok(exactButton("Appearance"));
+    assert.match(document.body.textContent ?? "", /Soft violet/u);
+    assert.match(document.body.textContent ?? "", /Fresh green/u);
+    assert.equal(
+      document.querySelectorAll(".appearance-accent-options label").length,
+      3,
+    );
     await act(async () => light.click());
     assert.equal(document.documentElement.dataset.appearance, "light");
-    assert.equal(localStorage.getItem("zenx.appearance"), "light");
+    assert.deepEqual(
+      JSON.parse(localStorage.getItem("zenx.appearance") ?? ""),
+      {
+        mode: "light",
+        lightPreset: "graphite",
+        darkPreset: "graphite",
+        accent: "azure",
+        contrast: "standard",
+        translucentSidebar: false,
+      },
+    );
     assert.equal(light.checked, true);
     assert.equal(system.checked, false);
     assert.equal(dark.checked, false);
     assert.equal(saved.length, 0);
-    assert.equal(exactButton("Apply & restart")?.disabled, true);
+    assert.equal(exactButton("Apply & restart"), undefined);
+
+    const cobaltLight = appearanceChoice("light-preset", "cobalt");
+    const emberDark = appearanceChoice("dark-preset", "ember");
+    const jade = appearanceChoice("appearance-accent", "jade");
+    const highContrast = appearanceChoice("appearance-contrast", "high");
+    const translucent = appearanceChoice("sidebar-translucency", "on");
+    assert.ok(cobaltLight);
+    assert.ok(emberDark);
+    assert.ok(jade);
+    assert.ok(highContrast);
+    assert.ok(translucent);
+    assert.equal(translucent.getAttribute("role"), "switch");
+    await act(async () => cobaltLight.click());
+    await act(async () => emberDark.click());
+    await act(async () => jade.click());
+    await act(async () => highContrast.click());
+    await act(async () => translucent.click());
+    assert.equal(document.documentElement.dataset.themePreset, "cobalt");
+    assert.equal(document.documentElement.dataset.accent, "jade");
+    assert.equal(document.documentElement.dataset.contrast, "high");
+    assert.equal(document.documentElement.dataset.sidebarTranslucency, "on");
+    assert.ok(document.querySelector('[aria-label="Live appearance preview"]'));
+    assert.deepEqual(
+      JSON.parse(localStorage.getItem("zenx.appearance") ?? ""),
+      {
+        mode: "light",
+        lightPreset: "cobalt",
+        darkPreset: "ember",
+        accent: "jade",
+        contrast: "high",
+        translucentSidebar: true,
+      },
+    );
+
+    const reset = exactButtonRequired("Reset appearance");
+    assert.equal(reset.disabled, false);
+    await act(async () => reset.click());
+    assert.equal(document.documentElement.dataset.appearance, "light");
+    assert.equal(document.documentElement.dataset.themePreset, "graphite");
+    assert.equal(document.documentElement.dataset.accent, "azure");
+    assert.equal(document.documentElement.dataset.contrast, "standard");
+    assert.equal(document.documentElement.dataset.sidebarTranslucency, "off");
+    assert.equal(appearanceModeRadio("system")?.checked, true);
   } finally {
     await unmount(harness);
   }
@@ -1198,11 +1257,22 @@ async function changeControl(
   });
 }
 
-function appearanceRadio(
-  value: AppearancePreference,
+function appearanceModeRadio(
+  value: "system" | "light" | "dark",
 ): HTMLInputElement | undefined {
   return Array.from(
-    document.querySelectorAll<HTMLInputElement>('input[name="appearance"]'),
+    document.querySelectorAll<HTMLInputElement>(
+      'input[name="appearance-mode"]',
+    ),
+  ).find((input) => input.value === value);
+}
+
+function appearanceChoice(
+  name: string,
+  value: string,
+): HTMLInputElement | undefined {
+  return Array.from(
+    document.querySelectorAll<HTMLInputElement>(`input[name="${name}"]`),
   ).find((input) => input.value === value);
 }
 

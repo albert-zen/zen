@@ -1,29 +1,51 @@
-# ZenX theme v0
+# ZenX Appearance v1
 
-[`ui-ux.md`](./ui-ux.md) remains the durable product authority. This file only
+[`ui-ux.md`](./ui-ux.md) remains the durable product authority. This file
 documents the current renderer implementation and migration boundary.
 
-## Theme entry
+## Preference and first paint
 
-ZenX keeps the existing renderer-local `system | light | dark` preference in
-`appearance.ts`. `index.html` resolves the saved choice before the renderer
-module loads, and System follows `prefers-color-scheme` changes live. Appearance
-is not Core, Thread, Project, or journal state. There is no second theme provider,
-theme preview page, import/export flow, or custom theme editor in v0.
+`appearance.ts` owns one renderer-local `ZenXAppearancePreference`. The
+versionless JSON value stored at `zenx.appearance` contains:
 
-## Visual evidence
+- `mode`: `system | light | dark`;
+- independent `lightPreset` and `darkPreset` values;
+- `accent`, `contrast`, and `translucentSidebar` controls.
 
-These views use the production CSS in a static renderer harness. The current
-host Electron package has no executable, so they are not native Electron
-screenshots.
+Legacy string values (`system`, `light`, or `dark`) migrate in memory to the v1
+defaults. Invalid or unavailable storage falls back to System, Graphite for both
+modes, Azure, Standard contrast, and an opaque Sidebar.
 
-![System preference resolved to Dark with macOS shell selectors](./assets/theme-v0/zenx-theme-v0-system-dark-macos.png)
+The hashed inline bootstrap in `index.html` validates and resolves the same
+value before the renderer module loads. It writes `data-appearance`,
+`data-theme-preset`, `data-accent`, `data-contrast`, and
+`data-sidebar-translucency` on the root, along with native `color-scheme`.
+System follows `prefers-color-scheme` changes live. The controller uses the same
+projection after React mounts, so reload and relaunch do not flash the default
+palette.
 
-![Light appearance with Windows shell selectors](./assets/theme-v0/zenx-theme-v0-light-windows.png)
+Appearance remains outside Core, Thread, Project, host restart, and canonical
+ItemList state. There is no second theme provider, import/export flow, theme
+marketplace, custom theme editor, or third-party editor/terminal palette.
 
-![System preference resolved to Light at the narrow layout](./assets/theme-v0/zenx-theme-v0-system-light-narrow.png)
+## Built-in choices
 
-## Color tokens
+Graphite preserves the v0 cool-neutral baseline. Cobalt intentionally shifts
+the surface hierarchy toward cool blue; Ember shifts it toward warm neutral.
+All three have explicit Light and Dark mappings, and the selected Light and Dark
+presets persist independently.
+
+Azure, Iris, and Jade remap accent, focus, selected boundary, and on-accent text
+roles. High contrast strengthens muted text and boundaries without changing
+component CSS. Translucent Sidebar remaps the shared Sidebar surface role and
+adds the renderer material treatment; opaque remains the default.
+
+The independent Settings → Appearance section exposes native radio,
+checkbox/switch, and button semantics,
+a compact live preview, and Reset. Every change applies immediately and persists
+without an App Server restart.
+
+## Semantic color seam
 
 `src/renderer/src/theme.css` is the only production source of raw colors. Its
 canonical roles cover:
@@ -34,56 +56,47 @@ canonical roles cover:
 - accent and status: `--color-accent*`, `--color-status-*`;
 - overlay and shadow colors: `--color-overlay*`, `--color-shadow*`.
 
-Migrated components use canonical roles. Short existing names such as
-`--surface-2`, `--text-3`, and `--good` remain compatibility aliases so the rest
-of the renderer can migrate by component family. The aliases are semantic
-bridges, not a raw color scale; do not add new consumers when touching a migrated
-component. `--surface-raised`, `--text-1`, and `--text-secondary` are defined in
-that bridge to close earlier dangling references.
+Preset, accent, contrast, and material selectors only remap these roles. The
+shell, titlebar, Sidebar, main content, Composer, form controls, buttons, and live
+preview consume the same semantic seam. Component code does not select palette
+values or carry raw colors.
 
-Geometry stays local in v0. Font stacks, spacing, radius, and shadow geometry are
-not a new token system; they remain inventory for later component-led work.
+Short existing names such as `--surface-2`, `--text-3`, and `--good` remain
+compatibility aliases for untouched component families. They are semantic
+bridges, not a raw color scale; touched Appearance v1 selectors and components
+use canonical roles. Geometry, typography, spacing, and radii remain local and
+are not a second token system.
 
-## Migrated slice
+## Contrast, focus, and boundaries
 
-- window canvas, app shell, titlebar, Sidebar root and its primary controls;
-- thread workspace/header, selected Thread row, message canvas, user bubble,
-  and agent copy;
-- Composer surface, input, model trigger, primary orb, and bottom fade;
-- global focus, shared icon/primary/secondary controls, and shared form fields;
-- service status dots and the enabled-switch knob that previously used raw color.
+Automated checks exercise every Light/Dark × preset × accent × contrast
+combination. Normal text keeps at least 4.5:1 contrast on shell, Sidebar, and
+content surfaces; control boundaries and focus rings keep at least 3:1; accent
+text keeps at least 4.5:1. Mode, preset, accent, contrast, and material controls
+retain native checked/switch state, visible labels, and `:focus-visible`; color
+is not the only state signal.
 
-Status and selection retain text, icons, native checked/current semantics, or an
-accessible name; color is not their only signal. macOS and Windows keep their
-existing titlebar selectors while consuming the same shell surface roles.
+Provider and ZenX brand files are assets, not theme colors. Isolated plugin
+iframe documents and test fixtures remain separate documents/boundaries.
 
-## Boundaries and guard
+## Source policy and evidence
 
-Provider and ZenX brand files are assets, not theme colors. Isolated plugin iframe
-documents and test fixtures are separate documents/boundaries. The static theme
-test scans production renderer CSS/TSX, excluding the asset directory, and checks:
+The static source guard scans production renderer CSS/TSX, excluding assets, and
+checks:
 
 1. raw hex/rgb/hsl values occur only in `theme.css`;
 2. every consumed product custom property is defined or is the documented
    component-owned `--zenx-brand-asset` seam;
-3. the migrated v0 selector groups consume canonical roles.
+3. all live Appearance controls reach root attributes before first paint;
+4. shell, Sidebar, content, preview, and controls consume canonical roles.
 
-## Inventory and follow-up
+The v0 images under `docs/assets/theme-v0/` used production CSS in a static
+harness. They are retained as historical artifacts, but they are not Electron
+evidence and their different modes, platform selectors, viewport, and screen
+states do not form a comparable visual matrix. Appearance v1 acceptance uses
+real Electron screenshots at controlled viewport/state in its pull request.
 
-Baseline `6a812525` had 106 raw renderer color matches: 102 palette declarations
-in `styles.css` plus four product leaks. It also had 54 statically defined and 57
-consumed custom properties, including the three dangling references above.
-
-Remaining work is intentionally grouped rather than mechanically replaced:
-
-- **later:** settings/provider/plugin/room colors still using compatibility
-  aliases; 105 radius declarations across 19 shapes; local spacing, type sizes,
-  three monospace stacks, and shadow geometry;
-- **boundary:** future syntax-highlighter/editor/terminal palettes and isolated
-  plugin iframe content;
-- **asset:** Provider SVG/PNG/ICO, ZenX brand masks, prototypes, and fixtures.
-
-Reproduce the color inventory with:
+Reproduce the raw-color inventory with:
 
 ```sh
 rg -n --glob '*.{css,tsx,ts,html}' \
