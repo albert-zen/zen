@@ -295,7 +295,16 @@ app.whenReady().then(async () => {
     });
     triggersPackage = new ZenXTriggersCapabilityPackage(automationService);
     await capabilityService.initialize();
-    await capabilityService.syncProfileManagedProviderVariants();
+    try {
+      await capabilityService.syncProfileManagedProviderVariants();
+    } catch (error) {
+      // Provider profile synchronization is optional plugin state. Keep the
+      // core App Server available with the previously committed provider and
+      // expose the failure through the normal capability diagnostics.
+      capabilityService.recordDiscoveryError(
+        `Provider profile synchronization is unavailable: ${describeError(error)}`,
+      );
+    }
     await installZenXBundledPluginsAtStartup(
       capabilityService,
       resourcesDirectory,
@@ -1160,6 +1169,10 @@ function pluginPackageSource(value: unknown): ZenXPluginPackageSource {
     mode: value.mode as ZenXPluginPackageSource["mode"],
     packageSpec: value.packageSpec,
   };
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isApprovalDecision(value: unknown): value is ApprovalDecision {
