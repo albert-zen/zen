@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 
 import type { ZenXCapabilityService } from "./capability-service.js";
@@ -22,13 +23,23 @@ export async function installZenXBundledPluginsAtStartup(
       const installedRooms = capabilities
         .pluginSnapshot()
         .plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID);
-      if (installedRooms?.profileSource !== undefined) return;
+      const tarballPath = path.join(
+        resourcesDirectory,
+        "plugins",
+        ZENX_ROOMS_TARBALL,
+      );
+      const action = await bundledPluginStartupAction(
+        installedRooms,
+        tarballPath,
+      );
+      if (action === "skip") return;
       await capabilities.installBundledPluginPackage(
-        path.join(resourcesDirectory, "plugins", ZENX_ROOMS_TARBALL),
+        tarballPath,
         {
           pluginId: ZENX_ROOMS_CAPABILITY_ID,
           packageName: ZENX_ROOMS_PACKAGE_NAME,
         },
+        { allowSameVersionBundledVariant: action === "repair" },
       );
     },
   );
@@ -55,7 +66,6 @@ export async function installZenXBundledPluginsAtStartup(
         const installed = capabilities
           .pluginSnapshot()
           .plugins.find((plugin) => plugin.id === definition.pluginId);
-        if (installed?.profileSource !== undefined) return;
         const tarball =
           definition.pluginId === "browser"
             ? firstPartyProviderTarball(
@@ -68,16 +78,42 @@ export async function installZenXBundledPluginsAtStartup(
                   capabilities.computerProfilePackage().manifest.provider.id,
                 )
               : definition.tarball;
+        const tarballPath = path.join(resourcesDirectory, "plugins", tarball);
+        const action = await bundledPluginStartupAction(installed, tarballPath);
+        if (action === "skip") return;
         await capabilities.installBundledPluginPackage(
-          path.join(resourcesDirectory, "plugins", tarball),
+          tarballPath,
           {
             pluginId: definition.pluginId,
             packageName: definition.packageName,
           },
+          { allowSameVersionBundledVariant: action === "repair" },
         );
       },
     );
   }
+}
+
+type BundledPluginStartupAction = "skip" | "install" | "repair";
+
+async function bundledPluginStartupAction(
+  installed:
+    | ReturnType<ZenXCapabilityService["pluginSnapshot"]>["plugins"][number]
+    | undefined,
+  tarballPath: string,
+): Promise<BundledPluginStartupAction> {
+  // An explicit uninstall is user intent; startup must not resurrect it.
+  if (installed?.lifecycle === "uninstalled") return "skip";
+  const source = installed?.profileSource;
+  if (source === undefined) return "install";
+  // A non-bundled source is a user-selected override and must be preserved.
+  if (source.mode !== "bundled") return "skip";
+  try {
+    if ((await realpath(tarballPath)) === source.packageSpec) return "skip";
+  } catch {
+    // Let the normal install path report a missing App Resource package.
+  }
+  return "repair";
 }
 
 async function isolateBundledPluginInstall(
