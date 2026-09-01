@@ -1,4 +1,11 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
@@ -1289,8 +1296,27 @@ export function App() {
     }
   };
 
+  const titleProjection =
+    selectedSummary === null
+      ? undefined
+      : titleSnapshot[selectedSummary.threadId];
+  const renameSelectedThread = async (title: string) => {
+    if (selectedSummary === null) return;
+    await renameThread(selectedSummary.threadId, title);
+  };
+  const retrySelectedTitle = async () => {
+    if (selectedSummary === null) return;
+    const projection = await window.zenx.titles.retry(selectedSummary.threadId);
+    setTitleSnapshot((current) => ({
+      ...current,
+      [selectedSummary.threadId]: projection,
+    }));
+  };
+
   return (
-    <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+    <div
+      className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
+    >
       <WindowTitleBar
         mode={sidebarMode}
         pendingApprovalCount={pendingThreadIds.size}
@@ -1299,7 +1325,22 @@ export function App() {
           changeSidebarMode(sidebarMode === "inbox" ? "projects" : "inbox")
         }
         onToggleSidebar={toggleSidebarCollapsed}
-      />
+      >
+        {page === "agent" &&
+        newThreadDraft === null &&
+        selectedSummary !== null ? (
+          <ConversationTitleBar
+            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenWorkspace={() => setWorkspaceOpen(true)}
+            onRename={renameSelectedThread}
+            onRetryTitle={retrySelectedTitle}
+            selectedSummary={selectedSummary}
+            threadDetail={threadDetail}
+            threadUsage={threadUsage}
+            titleProjection={titleProjection}
+          />
+        ) : null}
+      </WindowTitleBar>
       <Sidebar
         collapsed={sidebarCollapsed}
         liveThread={threadDetail}
@@ -1561,22 +1602,7 @@ export function App() {
             onModelChange={(model) => void changeModel(model)}
             onReasoningChange={(effort) => void changeReasoning(effort)}
             onOpenSidebar={() => setSidebarOpen(true)}
-            onOpenWorkspace={() => setWorkspaceOpen(true)}
-            onRename={async (title) => {
-              if (selectedSummary === null) return;
-              await renameThread(selectedSummary.threadId, title);
-            }}
             onRespondToApproval={respondToApproval}
-            onRetryTitle={async () => {
-              if (selectedSummary === null) return;
-              const projection = await window.zenx.titles.retry(
-                selectedSummary.threadId,
-              );
-              setTitleSnapshot((current) => ({
-                ...current,
-                [selectedSummary.threadId]: projection,
-              }));
-            }}
             onSubmit={submitComposer}
             onSubmitNewThread={submitNewThreadDraft}
             selectedSettings={selectedSettings}
@@ -1589,11 +1615,6 @@ export function App() {
             threadDetail={threadDetail}
             threadError={threadError}
             threadLoading={threadLoading}
-            titleProjection={
-              selectedSummary === null
-                ? undefined
-                : titleSnapshot[selectedSummary.threadId]
-            }
           />
         )}
       </main>
@@ -1616,12 +1637,14 @@ export function App() {
 }
 
 function WindowTitleBar({
+  children,
   mode,
   pendingApprovalCount,
   sidebarCollapsed,
   onToggleInbox,
   onToggleSidebar,
 }: {
+  children?: ReactNode;
   mode: SidebarMode;
   pendingApprovalCount: number;
   sidebarCollapsed: boolean;
@@ -1630,9 +1653,9 @@ function WindowTitleBar({
 }) {
   return (
     <header className="window-titlebar" aria-label="ZenX window controls">
-      <div className="window-titlebar-brand">
+      <div className="window-titlebar-product">
         <ZenXBrand />
-        <div className="window-titlebar-actions">
+        <div className="window-titlebar-inbox">
           <button
             className="icon-button inbox-button"
             type="button"
@@ -1646,23 +1669,93 @@ function WindowTitleBar({
               <span className="inbox-dot" aria-hidden="true" />
             ) : null}
           </button>
-          <button
-            className="icon-button sidebar-collapse-button"
-            type="button"
-            aria-controls="primary-sidebar"
-            aria-expanded={!sidebarCollapsed}
-            aria-label={
-              sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
-            }
-            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            onClick={onToggleSidebar}
-          >
-            <Icon name="panel-left" />
-          </button>
         </div>
       </div>
-      <div className="window-titlebar-drag" aria-hidden="true" />
+      <div className="window-titlebar-native-actions">
+        <button
+          className="icon-button sidebar-collapse-button"
+          type="button"
+          aria-controls="primary-sidebar"
+          aria-expanded={!sidebarCollapsed}
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={onToggleSidebar}
+        >
+          <Icon name="panel-left" />
+        </button>
+      </div>
+      <div className="window-titlebar-session">
+        <div className="window-titlebar-drag" aria-hidden="true" />
+        {children}
+      </div>
     </header>
+  );
+}
+
+function ConversationTitleBar({
+  onOpenSidebar,
+  onOpenWorkspace,
+  onRename,
+  onRetryTitle,
+  selectedSummary,
+  threadDetail,
+  threadUsage,
+  titleProjection,
+}: {
+  onOpenSidebar(): void;
+  onOpenWorkspace(): void;
+  onRename(title: string): Promise<void>;
+  onRetryTitle(): Promise<void>;
+  selectedSummary: NativeThreadSummary;
+  threadDetail: Thread | null;
+  threadUsage: ModelUsageProjection | undefined;
+  titleProjection: ThreadTitleProjection | undefined;
+}) {
+  return (
+    <div className="workspace-header">
+      <div className="workspace-heading-row">
+        <button
+          className="icon-button mobile-menu"
+          type="button"
+          aria-label="Open sidebar"
+          onClick={onOpenSidebar}
+        >
+          <Icon name="tree" />
+        </button>
+        <div className="thread-heading">
+          <ThreadTitleEditor
+            editable={!selectedSummary.archived}
+            onRename={onRename}
+            onRetry={onRetryTitle}
+            projection={titleProjection}
+            title={threadTitle(selectedSummary)}
+          />
+          <span>
+            {selectedSummary.status === "systemError"
+              ? "Unavailable journal"
+              : selectedSummary.currentMetadata.cwd}
+          </span>
+        </div>
+      </div>
+      <div className="top-actions">
+        {threadUsage === undefined ||
+        threadUsage.thread.responseCount === 0 ? null : (
+          <small className="thread-usage">
+            {usageLabel(threadUsage.thread, "Thread cache")}
+          </small>
+        )}
+        <button
+          className="icon-button"
+          type="button"
+          aria-label="Open workspace panel"
+          aria-haspopup="dialog"
+          disabled={threadDetail === null}
+          onClick={onOpenWorkspace}
+        >
+          <Icon name="panel-right" />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1693,10 +1786,7 @@ function AgentSurface({
   onModelChange,
   onReasoningChange,
   onOpenSidebar,
-  onOpenWorkspace,
-  onRename,
   onRespondToApproval,
-  onRetryTitle,
   onSubmit,
   onSubmitNewThread,
   selectedSettings,
@@ -1707,7 +1797,6 @@ function AgentSurface({
   threadDetail,
   threadError,
   threadLoading,
-  titleProjection,
 }: {
   approvals: ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
@@ -1737,13 +1826,10 @@ function AgentSurface({
   onModelChange(model: string): void;
   onReasoningChange(effort: string): void;
   onOpenSidebar(): void;
-  onOpenWorkspace(): void;
-  onRename(title: string): Promise<void>;
   onRespondToApproval(
     requestId: string,
     decision: ApprovalDecision,
   ): Promise<void>;
-  onRetryTitle(): Promise<void>;
   onSubmit(
     intent: ComposerIntent,
     expectedTurnId: string | null,
@@ -1760,7 +1846,6 @@ function AgentSurface({
   threadDetail: Thread | null;
   threadError: string | null;
   threadLoading: boolean;
-  titleProjection: ThreadTitleProjection | undefined;
 }) {
   const draftSettings = defaultDraftSettings(models);
   const draftProject =
@@ -1788,58 +1873,7 @@ function AgentSurface({
         >
           <Icon name="tree" />
         </button>
-      ) : (
-        <header className="workspace-header">
-          <div className="workspace-heading-row">
-            <button
-              className="icon-button mobile-menu"
-              type="button"
-              aria-label="Open sidebar"
-              onClick={onOpenSidebar}
-            >
-              <Icon name="tree" />
-            </button>
-            <div className="thread-heading">
-              {selectedSummary === null ? (
-                <strong>Start a conversation</strong>
-              ) : (
-                <ThreadTitleEditor
-                  editable={!selectedSummary.archived}
-                  onRename={onRename}
-                  onRetry={onRetryTitle}
-                  projection={titleProjection}
-                  title={threadTitle(selectedSummary)}
-                />
-              )}
-              <span>
-                {selectedSummary === null
-                  ? "Select a Thread or create a new one"
-                  : selectedSummary.status === "systemError"
-                    ? "Unavailable journal"
-                    : selectedSummary.currentMetadata.cwd}
-              </span>
-            </div>
-          </div>
-          <div className="top-actions">
-            {threadUsage === undefined ||
-            threadUsage.thread.responseCount === 0 ? null : (
-              <small className="thread-usage">
-                {usageLabel(threadUsage.thread, "Thread cache")}
-              </small>
-            )}
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="Open workspace panel"
-              aria-haspopup="dialog"
-              disabled={threadDetail === null}
-              onClick={onOpenWorkspace}
-            >
-              <Icon name="panel-right" />
-            </button>
-          </div>
-        </header>
-      )}
+      ) : null}
 
       {serverStatus.type === "error" ? (
         <EmptyState
@@ -2550,7 +2584,7 @@ function ThreadTitleEditor({
   }
   return (
     <div className="thread-title-line">
-      <strong>{title}</strong>
+      <strong title={title}>{title}</strong>
       {editable ? (
         <button
           type="button"

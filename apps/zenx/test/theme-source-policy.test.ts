@@ -58,7 +58,8 @@ test("Appearance v1 drives shell, sidebar, content, preview, and controls throug
   const styles = await readFile(path.join(rendererRoot, "styles.css"), "utf8");
   for (const expectation of [
     /\.app-shell\s*\{[^}]*background:\s*var\(--color-surface-main\)/su,
-    /\.window-titlebar-brand\s*\{[^}]*background:\s*var\(--color-surface-sidebar-active\)/su,
+    /\.window-titlebar-product\s*\{[^}]*background:\s*var\(--color-surface-sidebar-active\)/su,
+    /\.window-titlebar-session\s*\{[^}]*background:\s*var\(--color-surface-main\)/su,
     /\.sidebar\s*\{[^}]*background:\s*var\(--color-surface-sidebar-active\)/su,
     /\.workspace\s*\{[^}]*var\(--color-surface-main\)/su,
     /\.user-bubble\s*\{[^}]*background:\s*var\(--color-surface-elevated\)/su,
