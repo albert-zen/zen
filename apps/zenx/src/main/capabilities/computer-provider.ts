@@ -217,13 +217,25 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
 export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXComputerBackend;
+  #foregroundControlAllowed: boolean;
+  #foregroundConsent = new AbortController();
 
   constructor(
     backend: ZenXComputerBackend,
     manifest: ZenXPluginManifestV2 = computerCapabilityManifest,
+    foregroundControlAllowed = false,
   ) {
     this.#backend = backend;
     this.manifest = manifest;
+    this.#foregroundControlAllowed = foregroundControlAllowed;
+    if (!foregroundControlAllowed) this.#revokeForegroundConsent();
+  }
+
+  setForegroundControlAllowed(allowed: boolean): void {
+    if (allowed === this.#foregroundControlAllowed) return;
+    this.#foregroundControlAllowed = allowed;
+    if (allowed) this.#foregroundConsent = new AbortController();
+    else this.#revokeForegroundConsent();
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
@@ -269,6 +281,11 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     toolName: string,
     invocation: ToolInvocation,
   ): Promise<unknown> {
+    this.#assertForegroundControlAllowed(toolName);
+    const signal = AbortSignal.any([
+      invocation.signal,
+      this.#foregroundConsent.signal,
+    ]);
     switch (toolName) {
       case "computer_foreground_click": {
         const x = requiredFiniteNumber(invocation.arguments, "x");
@@ -277,14 +294,16 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         if (button !== "left" && button !== "right") {
           throw new Error("button must be left or right");
         }
-        await foregroundTakeoverNotice(invocation.signal);
-        await this.#backend.foregroundClick(x, y, button, invocation.signal);
+        await foregroundTakeoverNotice(signal);
+        this.#assertForegroundControlAllowed(toolName);
+        await this.#backend.foregroundClick(x, y, button, signal);
         return { action: "click", x, y, button, impact: "foreground_takeover" };
       }
       case "computer_foreground_key_press": {
         const key = requiredComputerKey(invocation.arguments);
-        await foregroundTakeoverNotice(invocation.signal);
-        await this.#backend.foregroundKeyPress(key, invocation.signal);
+        await foregroundTakeoverNotice(signal);
+        this.#assertForegroundControlAllowed(toolName);
+        await this.#backend.foregroundKeyPress(key, signal);
         return { action: "key_press", key, impact: "foreground_takeover" };
       }
       case "computer_foreground_scroll": {
@@ -294,13 +313,29 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
             "deltaY must be non-zero and between -10000 and 10000",
           );
         }
-        await foregroundTakeoverNotice(invocation.signal);
-        await this.#backend.foregroundScroll(deltaY, invocation.signal);
+        await foregroundTakeoverNotice(signal);
+        this.#assertForegroundControlAllowed(toolName);
+        await this.#backend.foregroundScroll(deltaY, signal);
         return { action: "scroll", deltaY, impact: "foreground_takeover" };
       }
       default:
         throw new Error(`Unsupported foreground computer tool: ${toolName}`);
     }
+  }
+
+  #assertForegroundControlAllowed(toolName: string): void {
+    if (this.#foregroundControlAllowed) return;
+    throw new Error(
+      `${toolName} is foreground_required; enable Foreground computer control in ZenX Settings before use`,
+    );
+  }
+
+  #revokeForegroundConsent(): void {
+    this.#foregroundConsent.abort(
+      new Error(
+        "Foreground computer control was revoked; foreground_required operation cancelled",
+      ),
+    );
   }
 
   async close(): Promise<void> {

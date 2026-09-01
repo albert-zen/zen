@@ -264,6 +264,22 @@ void app.whenReady().then(async () => {
       );
     }
 
+    await check("foreground-computer-default-policy", async () => {
+      assert.equal(
+        capabilities!
+          .hostSnapshot()
+          .definitions.some(({ name }) =>
+            name.startsWith("computer_foreground_"),
+          ),
+        false,
+      );
+      await assert.rejects(
+        invokeCapability("computer_foreground_click", { x: 0, y: 0 }),
+        /foreground_required/u,
+      );
+      return "Fresh isolated ZenX data projected no foreground Computer tools, and a stale direct invocation was rejected with foreground_required";
+    });
+
     await check("hosted-app-server", async () => {
       await manager!.start();
       assert.deepEqual(manager!.status, { type: "ready", reconnected: false });
@@ -524,43 +540,68 @@ void app.whenReady().then(async () => {
       );
     } else {
       await check("macos-foreground-computer", async () => {
-        let fixture: ForegroundFixture;
+        capabilities!.setForegroundRequiredAllowed(true);
+        assert.equal(
+          capabilities!
+            .hostSnapshot()
+            .definitions.some(({ name }) =>
+              name.startsWith("computer_foreground_"),
+            ),
+          true,
+        );
         try {
-          fixture = await launchForegroundFixture();
-        } catch (error) {
-          const message = safeError(error);
-          if (message.includes("ownerName=loginwindow")) {
-            throw blocked(
-              "The macOS GUI session is locked (loginwindow is frontmost); unlock it and rerun to exercise the real foreground CGEvent baseline",
-            );
+          let fixture: ForegroundFixture;
+          try {
+            fixture = await launchForegroundFixture();
+          } catch (error) {
+            const message = safeError(error);
+            if (message.includes("ownerName=loginwindow")) {
+              throw blocked(
+                "The macOS GUI session is locked (loginwindow is frontmost); unlock it and rerun to exercise the real foreground CGEvent baseline",
+              );
+            }
+            throw error;
           }
-          throw error;
-        }
-        try {
-          await invokeForegroundCapability(
-            fixture,
-            "computer_foreground_click",
-            {
-              x: fixture.clickX,
-              y: fixture.clickY,
-              button: "left",
-            },
-          );
-          await waitForFile(fixture.clickedPath, 2_000, "fixture click marker");
-          await invokeForegroundCapability(
-            fixture,
-            "computer_foreground_key_press",
-            { key: "escape" },
-          );
-          await invokeForegroundCapability(
-            fixture,
-            "computer_foreground_scroll",
-            { deltaY: 120 },
-          );
-          await assertForegroundFixtureOwned(fixture);
-          return "Real CGEvent click/key/scroll ran against a separately spawned smoke-owned AppKit process/window; exact PID/title/key-window ownership was checked every 25ms";
+          try {
+            await invokeForegroundCapability(
+              fixture,
+              "computer_foreground_click",
+              {
+                x: fixture.clickX,
+                y: fixture.clickY,
+                button: "left",
+              },
+            );
+            await waitForFile(
+              fixture.clickedPath,
+              2_000,
+              "fixture click marker",
+            );
+            await invokeForegroundCapability(
+              fixture,
+              "computer_foreground_key_press",
+              { key: "escape" },
+            );
+            await invokeForegroundCapability(
+              fixture,
+              "computer_foreground_scroll",
+              { deltaY: 120 },
+            );
+            await assertForegroundFixtureOwned(fixture);
+            return "Real CGEvent click/key/scroll ran against a separately spawned smoke-owned AppKit process/window; exact PID/title/key-window ownership was checked every 25ms";
+          } finally {
+            await stopForegroundFixture(fixture);
+          }
         } finally {
-          await stopForegroundFixture(fixture);
+          capabilities!.setForegroundRequiredAllowed(false);
+          assert.equal(
+            capabilities!
+              .hostSnapshot()
+              .definitions.some(({ name }) =>
+                name.startsWith("computer_foreground_"),
+              ),
+            false,
+          );
         }
       });
     }

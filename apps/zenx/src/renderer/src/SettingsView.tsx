@@ -85,6 +85,8 @@ export function SettingsView({
     try {
       const value = await window.zenx.settings.save({
         onboardingComplete: true,
+        computerForegroundControlEnabled:
+          draft.computerForegroundControlEnabled === true,
         providerProfiles: draft.providerProfiles,
         defaultModel: draft.defaultModel,
         titleModel: draft.titleModel,
@@ -1919,6 +1921,47 @@ function GeneralPanel({
         <p className="settings-note">
           Appearance changes immediately. System follows your operating system
           setting.
+        </p>
+      </div>
+      <div className="page-card settings-card">
+        <div className="settings-card-head">
+          <div>
+            <h3>Foreground computer control</h3>
+            <p>High-impact access to the desktop you are actively using.</p>
+          </div>
+          <span className="status-muted">
+            {draft.computerForegroundControlEnabled === true
+              ? "Opted in"
+              : "Blocked"}
+          </span>
+        </div>
+        <div className="settings-row">
+          <div>
+            <strong>Allow foreground takeover</strong>
+            <span>
+              This lets ZenX agents move the pointer, type keys, change focus,
+              or scroll the app you are currently using.
+            </span>
+          </div>
+          <button
+            className="plugin-switch"
+            type="button"
+            role="switch"
+            aria-label="Allow foreground computer control"
+            aria-checked={draft.computerForegroundControlEnabled === true}
+            onClick={() =>
+              setDraft({
+                ...draft,
+                computerForegroundControlEnabled:
+                  draft.computerForegroundControlEnabled !== true,
+              })
+            }
+          />
+        </div>
+        <p className="settings-note">
+          Off by default. Browser automation and background-safe Computer tools
+          do not need this permission. Apply and restart to change which tools
+          agents can use.
         </p>
       </div>
       <div className="page-card settings-card">

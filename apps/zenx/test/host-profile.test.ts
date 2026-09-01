@@ -17,6 +17,7 @@ import {
 const profile: ZenXHostProfile = {
   version: 3,
   onboardingComplete: true,
+  computerForegroundControlEnabled: false,
   providerProfiles: [
     {
       providerProfileId: "local",
@@ -40,6 +41,49 @@ const profile: ZenXHostProfile = {
   pinnedThreadIds: [],
   sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
 };
+
+test("foreground computer control is an explicit persisted opt-in", async () => {
+  assert.equal(
+    validateHostProfile(profile).computerForegroundControlEnabled,
+    false,
+  );
+  assert.equal(
+    validateHostProfile({ ...profile, computerForegroundControlEnabled: true })
+      .computerForegroundControlEnabled,
+    true,
+  );
+
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-foreground-profile-"),
+  );
+  const file = path.join(directory, "host-profile.json");
+  try {
+    const legacyV3 = { ...profile } as Record<string, unknown>;
+    delete legacyV3.computerForegroundControlEnabled;
+    await writeFile(file, JSON.stringify(legacyV3), { mode: 0o600 });
+
+    const migrated = await new ZenXHostProfileStore(file).readOptional();
+    assert.equal(migrated?.computerForegroundControlEnabled, false);
+    assert.equal(
+      (JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>)[
+        "computerForegroundControlEnabled"
+      ],
+      false,
+    );
+
+    await new ZenXHostProfileStore(file).write({
+      ...profile,
+      computerForegroundControlEnabled: true,
+    });
+    assert.equal(
+      (await new ZenXHostProfileStore(file).readOptional())
+        ?.computerForegroundControlEnabled,
+      true,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("round-trips credential-free v3 profiles and builds all host registry entries", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-"));
@@ -132,6 +176,7 @@ test("migrates v1 deterministically, persists v3, and preserves adapter identity
     });
     assert.deepEqual(first?.pinnedThreadIds, ["thread-1"]);
     assert.equal(first?.lastUsedWorkspace, path.resolve("/tmp/other"));
+    assert.equal(first?.computerForegroundControlEnabled, false);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

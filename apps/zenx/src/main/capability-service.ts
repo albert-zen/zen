@@ -73,6 +73,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #browserBackend?: ZenXBrowserBackend;
   readonly #computerBackend?: ZenXComputerBackend;
   readonly #computerManifest?: ZenXPluginManifestV2;
+  #foregroundRequiredAllowed: boolean;
   readonly #bundledProvidersOnly: boolean;
   readonly #resourcesDirectory?: string;
   readonly #bundledManifestSha256?: string;
@@ -109,6 +110,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     browserBackend?: ZenXBrowserBackend;
     computerBackend?: ZenXComputerBackend;
     computerManifest?: ZenXPluginManifestV2;
+    allowForegroundRequired?: boolean;
     bundledProvidersOnly?: boolean;
     resourcesDirectory?: string;
     bundledManifestSha256?: string;
@@ -128,6 +130,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       | "electronBrowserFactory"
     >;
   }) {
+    this.#foregroundRequiredAllowed = options.allowForegroundRequired ?? false;
     this.#pluginToolEnvironment = new ToolEnvironment();
     this.#pluginRuntimeSupervisor = new PluginRuntimeSupervisor(
       this.#pluginToolEnvironment,
@@ -138,6 +141,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           path.join(options.userDataDirectory, "capability-grants.json"),
         ),
       {
+        allowForegroundRequired: this.#foregroundRequiredAllowed,
         pluginDataDirectory: path.join(
           options.userDataDirectory,
           "plugin-data",
@@ -441,7 +445,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       capabilityPackage:
         backend === undefined
           ? undefined
-          : new ComputerZenXCapabilityPackage(backend, selection.manifest),
+          : new ComputerZenXCapabilityPackage(
+              backend,
+              selection.manifest,
+              this.#foregroundRequiredAllowed,
+            ),
       diagnostics,
     };
   }
@@ -1153,7 +1161,23 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return this.#registry.hostSnapshot();
   }
 
+  setForegroundRequiredAllowed(allowed: boolean): boolean {
+    if (this.#foregroundRequiredAllowed === allowed) return false;
+    this.#foregroundRequiredAllowed = allowed;
+    for (const capabilityPackage of new Set([
+      this.#computerProfilePackage,
+      this.#stagedComputerProfilePackage,
+    ])) {
+      if (capabilityPackage instanceof ComputerZenXCapabilityPackage) {
+        capabilityPackage.setForegroundControlAllowed(allowed);
+      }
+    }
+    this.#registry.setForegroundRequiredAllowed(allowed);
+    return true;
+  }
+
   async execute(invocation: ToolInvocation) {
+    this.#registry.assertToolExposed(invocation.name);
     const prepared = this.#pluginToolEnvironment.prepare(invocation);
     return await this.#pluginToolEnvironment.execute(prepared);
   }

@@ -139,7 +139,11 @@ test("declares background-safe semantics separately from foreground takeover", a
 
 test("cancels foreground takeover before global input begins", async () => {
   const calls: string[] = [];
-  const capability = new ComputerZenXCapabilityPackage(computerBackend(calls));
+  const capability = new ComputerZenXCapabilityPackage(
+    computerBackend(calls),
+    computerCapabilityManifest,
+    true,
+  );
   const controller = new AbortController();
   controller.abort(new DOMException("stopped", "AbortError"));
   await assert.rejects(
@@ -154,7 +158,11 @@ test("cancels foreground takeover before global input begins", async () => {
 
 test("executes the explicitly labeled foreground baseline after its cancellation window", async () => {
   const calls: string[] = [];
-  const capability = new ComputerZenXCapabilityPackage(computerBackend(calls));
+  const capability = new ComputerZenXCapabilityPackage(
+    computerBackend(calls),
+    computerCapabilityManifest,
+    true,
+  );
   const result = await capability.invoke(
     "computer_foreground_click",
     invocation({ x: 10, y: 20, button: "right" }),
@@ -167,6 +175,45 @@ test("executes the explicitly labeled foreground baseline after its cancellation
     impact: "foreground_takeover",
   });
   assert.deepEqual(calls, ["foreground-click:10:20:right"]);
+});
+
+test("direct Computer package construction fails closed for foreground tools", async () => {
+  const calls: string[] = [];
+  const capability = new ComputerZenXCapabilityPackage(computerBackend(calls));
+  await assert.rejects(
+    capability.invoke(
+      "computer_foreground_click",
+      invocation({ x: 10, y: 20 }),
+    ),
+    /foreground_required/u,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("revoking foreground consent fences a stale concurrent invocation before global input", async () => {
+  const calls: string[] = [];
+  const capability = new ComputerZenXCapabilityPackage(
+    computerBackend(calls),
+    computerCapabilityManifest,
+    true,
+  );
+  const execution = capability.invoke(
+    "computer_foreground_click",
+    invocation({ x: 10, y: 20 }),
+  );
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  capability.setForegroundControlAllowed(false);
+
+  await assert.rejects(execution, /foreground_required/u);
+  assert.deepEqual(calls, []);
+  await assert.rejects(
+    capability.invoke(
+      "computer_foreground_click",
+      invocation({ x: 10, y: 20 }),
+    ),
+    /foreground_required/u,
+  );
+  assert.deepEqual(calls, []);
 });
 
 function computerBackend(calls: string[]): ZenXComputerBackend {

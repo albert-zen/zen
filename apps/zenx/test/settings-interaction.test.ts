@@ -975,6 +975,43 @@ test("General exposes an optional maximum tool round setting", async () => {
   }
 });
 
+test("General requires an explicit risk-labeled opt-in for foreground computer takeover", async () => {
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    save: async (profile) => {
+      saved.push(profile);
+      return { ...settings, profile: { ...settings.profile, ...profile } };
+    },
+  });
+  try {
+    const control = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[role="switch"][aria-label="Allow foreground computer control"]',
+      ),
+    );
+    assert.equal(control.getAttribute("aria-checked"), "false");
+    assert.match(
+      document.body.textContent ?? "",
+      /move the pointer, type keys, change focus, or scroll the app you are currently using/u,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Browser automation and background-safe Computer tools do not need this permission/u,
+    );
+
+    await click(control);
+    assert.equal(control.getAttribute("aria-checked"), "true");
+    await click(exactButtonRequired("Apply & restart"));
+    assert.equal(saved[0]?.computerForegroundControlEnabled, true);
+
+    await click(control);
+    await click(exactButtonRequired("Apply & restart"));
+    assert.equal(saved[1]?.computerForegroundControlEnabled, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 interface Harness {
   dom: JSDOM;
   root: Root;
