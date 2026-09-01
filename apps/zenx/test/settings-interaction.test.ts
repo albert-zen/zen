@@ -963,7 +963,12 @@ test("Appearance is an independent Settings section and persists the complete pr
     assert.equal(document.documentElement.dataset.accent, "jade");
     assert.equal(document.documentElement.dataset.contrast, "high");
     assert.equal(document.documentElement.dataset.sidebarTranslucency, "on");
-    assert.ok(document.querySelector('[aria-label="Live appearance preview"]'));
+    const preview = document.querySelector(
+      '[aria-label="Live appearance preview"]',
+    );
+    assert.ok(preview);
+    assert.match(preview.textContent ?? "", /Accent/u);
+    assert.doesNotMatch(preview.textContent ?? "", /Action/u);
     assert.deepEqual(
       JSON.parse(localStorage.getItem("zenx.appearance") ?? ""),
       {

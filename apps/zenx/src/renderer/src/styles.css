@@ -3082,7 +3082,12 @@ a:focus-visible {
 .appearance-preview-content > span:nth-child(3) {
   width: 54%;
 }
-.appearance-preview-content button {
+.appearance-preview-content > .appearance-preview-accent {
+  display: inline-flex;
+  width: auto;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
   grid-column: 2;
   grid-row: 1 / span 2;
   align-self: center;
@@ -4700,7 +4705,7 @@ a:focus-visible {
   .appearance-preview {
     grid-template-columns: 48px minmax(0, 1fr);
   }
-  .appearance-preview-content button {
+  .appearance-preview-accent {
     padding-inline: 8px;
   }
   .permission-control {

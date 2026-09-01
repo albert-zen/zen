@@ -1931,9 +1931,7 @@ function AppearancePanel() {
             <span className="appearance-preview-heading" />
             <span />
             <span />
-            <button type="button" tabIndex={-1} aria-hidden="true">
-              Action
-            </button>
+            <span className="appearance-preview-accent">Accent</span>
           </div>
         </div>
         <div className="appearance-editor-grid">
