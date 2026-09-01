@@ -693,12 +693,22 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
   }
 }
 
-class MacForegroundInputDriver {
+export class MacForegroundInputDriver {
   readonly #directory: string;
+  readonly #compileHelper: () => Promise<string>;
+  readonly #runProcess: typeof runProcess;
   #executable: Promise<string> | undefined;
 
-  constructor(directory: string) {
+  constructor(
+    directory: string,
+    dependencies: {
+      compile?: () => Promise<string>;
+      runProcess?: typeof runProcess;
+    } = {},
+  ) {
     this.#directory = directory;
+    this.#compileHelper = dependencies.compile ?? (() => this.#compile());
+    this.#runProcess = dependencies.runProcess ?? runProcess;
   }
 
   async run(
@@ -706,13 +716,20 @@ class MacForegroundInputDriver {
     signal: AbortSignal,
   ): Promise<void> {
     signal.throwIfAborted();
-    const executable = await (this.#executable ??= this.#compile());
-    await runProcess(executable, [], 10_000, JSON.stringify(request), signal);
+    const executable = await (this.#executable ??= this.#compileHelper());
+    signal.throwIfAborted();
+    await this.#runProcess(
+      executable,
+      [],
+      10_000,
+      JSON.stringify(request),
+      signal,
+    );
   }
 
   async prepare(signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    await (this.#executable ??= this.#compile());
+    await (this.#executable ??= this.#compileHelper());
     signal.throwIfAborted();
   }
 
@@ -1073,15 +1090,17 @@ default:
 }
 `;
 
-async function runProcess(
+export async function runProcess(
   command: string,
   args: readonly string[],
   timeoutMs: number,
   stdin?: string,
   signal?: AbortSignal,
+  spawnProcess: typeof spawn = spawn,
 ): Promise<string> {
+  signal?.throwIfAborted();
   return await new Promise<string>((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnProcess(command, args, {
       shell: false,
       stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
