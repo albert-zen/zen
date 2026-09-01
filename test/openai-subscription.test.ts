@@ -965,7 +965,7 @@ test("browser PKCE login stores an independent mode-0600 profile", async () => {
   }
 });
 
-test("browser callback presents a repeat-safe Zen login confirmation", async () => {
+test("browser callback presents compact, repeat-safe Zen login feedback", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-callback-page-"));
   const profilePath = path.join(root, "openai-subscription-auth.json");
   let releaseTokenExchange!: () => void;
@@ -1007,10 +1007,44 @@ test("browser callback presents a repeat-safe Zen login confirmation", async () 
     const state = (await authorizationUrl).searchParams.get("state");
     assert.ok(state);
     const callbackUrl = `http://127.0.0.1:1455/auth/callback?code=browser-code&state=${encodeURIComponent(state)}`;
+    const mismatch = await fetch(
+      "http://127.0.0.1:1455/auth/callback?code=browser-code&state=unexpected",
+    );
+    const missingCode = await fetch(
+      `http://127.0.0.1:1455/auth/callback?state=${encodeURIComponent(state)}`,
+    );
     const first = await fetch(callbackUrl);
     await tokenExchangeStarted;
     const repeated = await fetch(callbackUrl);
     const html = await first.text();
+    const mismatchHtml = await mismatch.text();
+    const missingCodeHtml = await missingCode.text();
+
+    for (const errorResponse of [mismatch, missingCode]) {
+      assert.equal(errorResponse.status, 400);
+      assert.match(
+        errorResponse.headers.get("content-type") ?? "",
+        /^text\/html/u,
+      );
+      assert.match(
+        errorResponse.headers.get("content-security-policy") ?? "",
+        /^default-src 'none'; style-src 'nonce-[^']+'; script-src 'nonce-[^']+'; base-uri 'none'; form-action 'none'$/u,
+      );
+      assert.equal(errorResponse.headers.get("referrer-policy"), "no-referrer");
+      assert.equal(
+        errorResponse.headers.get("x-content-type-options"),
+        "nosniff",
+      );
+    }
+    assert.match(mismatchHtml, /Sign-in could not be verified/u);
+    assert.match(mismatchHtml, /OAuth state mismatch/u);
+    assert.match(mismatchHtml, /Return to Zen and start OpenAI sign-in again/u);
+    assert.match(missingCodeHtml, /Sign-in was not completed/u);
+    assert.match(missingCodeHtml, /Authorization code missing/u);
+    assert.match(
+      missingCodeHtml,
+      /Return to Zen and start OpenAI sign-in again/u,
+    );
 
     assert.equal(first.status, 200);
     assert.match(first.headers.get("content-type") ?? "", /^text\/html/u);
@@ -1021,14 +1055,26 @@ test("browser callback presents a repeat-safe Zen login confirmation", async () 
     assert.equal(await repeated.text(), html);
     assert.match(html, /<html lang="en">/u);
     assert.match(html, /<meta name="viewport"/u);
-    assert.match(html, /<svg[^>]+aria-label="Zen logo"/u);
-    assert.match(html, /Zen recognized your OpenAI sign-in/u);
-    assert.match(html, /Return to Zen/u);
+    assert.match(html, /<svg[^>]+aria-hidden="true"/u);
+    assert.match(html, /class="openai-mark"[^>]+aria-hidden="true"/u);
+    assert.match(html, /<span>OpenAI sign-in<\/span>/u);
+    assert.match(
+      html,
+      /<h1 id="confirmation-title">[\s\S]*Sign-in received<\/h1>/u,
+    );
+    assert.match(html, /Return to Zen to continue/u);
+    assert.match(html, /width: min\(100%, 520px\)/u);
+    assert.match(html, /font-size: 27px/u);
+    assert.match(html, /\.content \{[\s\S]*?text-align: center;/u);
     assert.match(html, /<button[^>]+autofocus/u);
     assert.match(
       html,
-      /aria-expanded="false" aria-controls="repeat-guidance"/u,
+      /button \{[\s\S]*?min-height: 44px;[\s\S]*?border: 1px solid var\(--color-border\);[\s\S]*?border-radius: 999px;[\s\S]*?background: var\(--color-surface-subtle\);/u,
     );
+    assert.match(html, /closeButton\.hidden = true/u);
+    assert.match(html, /aria-live="polite"/u);
+    assert.doesNotMatch(html, /Opened this page again|repeat-guidance/u);
+    assert.doesNotMatch(html, /Sign-in response received|recognized/u);
     assert.doesNotMatch(html, /access_token|refresh_token|browser-code/u);
     assert.match(html, /:focus-visible/u);
     assert.match(html, /@media \(max-width: 480px\)/u);

@@ -421,29 +421,41 @@ interface OAuthServer {
   waitForCode(): Promise<{ code: string } | null>;
 }
 
-function openAiLoginSuccessPage(nonce: string): string {
+function openAiLoginCallbackPage(
+  nonce: string,
+  state: "success" | "state-mismatch" | "missing-code",
+): string {
+  const isSuccess = state === "success";
+  const pageTitle = isSuccess
+    ? "Sign-in received"
+    : state === "state-mismatch"
+      ? "Sign-in could not be verified"
+      : "Sign-in was not completed";
+  const documentTitle = isSuccess ? "OpenAI sign-in received" : pageTitle;
+  const detail =
+    state === "state-mismatch"
+      ? "OAuth state mismatch."
+      : "Authorization code missing.";
+
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>OpenAI sign-in recognized · Zen</title>
+  <title>${documentTitle} · Zen</title>
   <style nonce="${nonce}">
     :root {
       color-scheme: light dark;
       --color-canvas: #090a0c;
       --color-surface: #15171c;
-      --color-surface-emphasis: #20232a;
+      --color-surface-subtle: #1b1e24;
       --color-border: #292c34;
       --color-text-primary: #f0f1f3;
       --color-text-secondary: #b4b6bd;
-      --color-text-muted: #898c96;
-      --color-accent: #8ea9ff;
-      --color-accent-soft: rgb(142 169 255 / 13%);
       --color-focus-ring: #8ea9ff;
-      --color-status-success: #73d2ad;
-      --color-status-success-soft: rgb(115 210 173 / 10%);
+      --color-status-error: #ff9b9b;
+      --color-status-error-soft: rgb(255 155 155 / 9%);
       --color-shadow: rgb(0 0 0 / 35%);
       font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       font-synthesis: none;
@@ -455,143 +467,135 @@ function openAiLoginSuccessPage(nonce: string): string {
       min-height: 100vh;
       min-height: 100svh;
       margin: 0;
-      padding: 32px;
+      padding: 24px;
       display: grid;
       place-items: center;
       color: var(--color-text-primary);
       background: var(--color-canvas);
     }
     .confirmation {
-      width: min(100%, 560px);
+      width: min(100%, 520px);
       overflow: hidden;
       border: 1px solid var(--color-border);
-      border-radius: 18px;
+      border-radius: 14px;
       background: var(--color-surface);
-      box-shadow: 0 24px 64px var(--color-shadow);
+      box-shadow: 0 18px 48px var(--color-shadow);
     }
     .brand {
-      min-height: 88px;
-      padding: 20px 28px;
+      min-height: 56px;
+      padding: 12px 24px;
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 9px;
       border-bottom: 1px solid var(--color-border);
-      background: var(--color-surface-emphasis);
+      background: var(--color-surface-subtle);
     }
-    .brand svg { width: 48px; height: 48px; flex: 0 0 auto; color: var(--color-text-primary); }
-    .brand-name { font-size: 18px; font-weight: 650; letter-spacing: 0.08em; }
-    .content { padding: 42px 44px 36px; }
-    .eyebrow {
-      margin: 0 0 12px;
-      color: var(--color-accent);
-      font-size: 13px;
-      font-weight: 650;
-      letter-spacing: 0.09em;
-      text-transform: uppercase;
+    .brand svg { width: 26px; height: 26px; flex: 0 0 auto; color: var(--color-text-primary); }
+    .brand-name { font-size: 13px; font-weight: 680; letter-spacing: 0.1em; }
+    .content {
+      padding: 30px;
+      text-align: center;
+    }
+    .provider-context {
+      margin: 0 0 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      color: var(--color-text-secondary);
+      font-size: 14px;
+      font-weight: 620;
+      line-height: 1.4;
+    }
+    .openai-mark {
+      width: 24px;
+      height: 24px;
+      flex: 0 0 auto;
+      filter: invert(1);
     }
     h1 {
-      max-width: 13ch;
       margin: 0;
-      font-size: clamp(32px, 7vw, 46px);
-      font-weight: 620;
-      line-height: 1.08;
-      letter-spacing: -0.035em;
+      font-size: 27px;
+      font-weight: 640;
+      line-height: 1.2;
+      letter-spacing: -0.02em;
       text-wrap: balance;
     }
     .lead {
-      max-width: 43ch;
-      margin: 20px 0 0;
+      margin: 10px 0 0;
       color: var(--color-text-secondary);
-      font-size: 17px;
-      line-height: 1.6;
-    }
-    .receipt {
-      margin: 28px 0;
-      padding: 14px 16px;
-      display: flex;
-      align-items: center;
-      gap: 11px;
-      border: 1px solid color-mix(in srgb, var(--color-status-success) 35%, transparent);
-      border-radius: 10px;
-      color: var(--color-text-primary);
-      background: var(--color-status-success-soft);
       font-size: 15px;
-      line-height: 1.45;
-    }
-    .receipt svg { width: 20px; height: 20px; flex: 0 0 auto; color: var(--color-status-success); }
-    button {
-      min-width: 152px;
-      min-height: 48px;
-      padding: 12px 22px;
-      border: 1px solid transparent;
-      border-radius: 10px;
-      color: #10131b;
-      background: var(--color-accent);
-      font: inherit;
-      font-weight: 650;
-      cursor: pointer;
-      touch-action: manipulation;
-      transition: background-color 160ms ease, box-shadow 160ms ease;
-    }
-    button:hover { background: color-mix(in srgb, var(--color-accent) 88%, white); }
-    button:active { background: color-mix(in srgb, var(--color-accent) 82%, black); }
-    button:focus-visible {
-      outline: 3px solid var(--color-focus-ring);
-      outline-offset: 3px;
-    }
-    .shortcut {
-      margin: 14px 0 0;
-      color: var(--color-text-muted);
-      font-size: 14px;
       line-height: 1.55;
     }
-    .repeat-help { margin-top: 28px; border-top: 1px solid var(--color-border); padding-top: 14px; }
-    button.repeat-trigger {
-      width: auto;
-      min-width: 0;
+    button {
       min-height: 44px;
-      padding: 8px 0;
-      border: 0;
-      border-radius: 4px;
-      color: var(--color-text-secondary);
-      background: transparent;
+      margin-top: 22px;
+      padding: 10px 17px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      color: var(--color-text-primary);
+      background: var(--color-surface-subtle);
+      font: inherit;
       font-size: 14px;
-      font-weight: 600;
-      text-align: left;
+      font-weight: 620;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: background-color 160ms ease, border-color 160ms ease;
     }
-    button.repeat-trigger:hover { color: var(--color-text-primary); background: transparent; }
-    button.repeat-trigger:active { color: var(--color-accent); background: transparent; }
-    .repeat-trigger svg { width: 14px; height: 14px; margin-right: 5px; vertical-align: -2px; transition: transform 160ms ease; }
-    .repeat-trigger[aria-expanded="true"] svg { transform: rotate(90deg); }
-    .repeat-guidance { margin: 4px 0 0; color: var(--color-text-muted); font-size: 14px; line-height: 1.55; }
-    [role="status"] { margin-top: 14px; color: var(--color-text-secondary); font-size: 14px; line-height: 1.5; }
+    button:hover {
+      border-color: color-mix(in srgb, var(--color-text-primary) 22%, var(--color-border));
+      background: color-mix(in srgb, var(--color-text-primary) 7%, var(--color-surface-subtle));
+    }
+    button:active {
+      background: color-mix(in srgb, var(--color-text-primary) 11%, var(--color-surface-subtle));
+    }
+    button:focus-visible {
+      outline: 2px solid var(--color-focus-ring);
+      outline-offset: 3px;
+    }
+    button:disabled { cursor: default; opacity: 0.72; }
+    [role="status"] {
+      margin: 18px 0 0;
+      color: var(--color-text-secondary);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .error-detail {
+      margin: 18px 0 0;
+      padding: 11px 13px;
+      border: 1px solid color-mix(in srgb, var(--color-status-error) 30%, transparent);
+      border-radius: 8px;
+      color: var(--color-text-primary);
+      background: var(--color-status-error-soft);
+      font-size: 14px;
+      line-height: 1.45;
+    }
     [hidden] { display: none; }
     @media (prefers-color-scheme: light) {
       :root {
         --color-canvas: #e8eaf1;
         --color-surface: #fbfcff;
-        --color-surface-emphasis: #f0f2f8;
+        --color-surface-subtle: #f0f2f8;
         --color-border: #cbd0dc;
         --color-text-primary: #1c2029;
         --color-text-secondary: #4d5361;
-        --color-text-muted: #616878;
-        --color-accent: #526fb9;
-        --color-accent-soft: rgb(82 111 185 / 13%);
         --color-focus-ring: #526fb9;
-        --color-status-success: #287a60;
-        --color-status-success-soft: rgb(40 122 96 / 11%);
+        --color-status-error: #a33e3e;
+        --color-status-error-soft: rgb(163 62 62 / 8%);
         --color-shadow: rgb(45 52 73 / 14%);
       }
+      .openai-mark { filter: none; }
     }
     @media (max-width: 480px) {
       body { padding: 16px; place-items: start center; }
-      .confirmation { border-radius: 14px; }
-      .brand { min-height: 76px; padding: 14px 20px; }
-      .brand svg { width: 42px; height: 42px; }
-      .content { padding: 30px 24px 28px; }
-      h1 { font-size: clamp(30px, 10vw, 38px); }
-      .lead { font-size: 16px; }
-      button { width: 100%; }
+      .confirmation { border-radius: 12px; }
+      .brand { min-height: 52px; padding: 11px 18px; }
+      .brand svg { width: 24px; height: 24px; }
+      .content { padding: 24px 22px 26px; }
+      h1 { font-size: 25px; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
@@ -601,47 +605,46 @@ function openAiLoginSuccessPage(nonce: string): string {
 <body>
   <main class="confirmation" aria-labelledby="confirmation-title">
     <header class="brand">
-      <svg viewBox="0 0 64 64" fill="currentColor" role="img" aria-label="Zen logo">
+      <svg viewBox="0 0 64 64" fill="currentColor" aria-hidden="true">
         <path d="M 196.529 17.500 C 188.341 22.175, 181.518 26, 181.368 26 C 181.218 26, 175.032 29.937, 167.622 34.750 C 160.211 39.563, 149.053 46.753, 142.824 50.730 C 136.596 54.706, 124.300 62.687, 115.500 68.466 C 106.700 74.244, 99.050 79.130, 98.500 79.323 C 97.185 79.784, 98.772 84.102, 105.498 98.361 L 110.896 109.806 119.198 115.291 C 123.764 118.308, 136.002 126.706, 146.392 133.955 C 172.471 152.147, 194.479 167, 195.356 167 C 196.162 167, 195.171 160.393, 194.007 158 C 191.110 152.048, 191.487 151.399, 200.500 146.826 C 205.177 144.453, 208.854 142.059, 208.672 141.506 C 208.489 140.953, 206.714 139.375, 204.728 138 C 202.741 136.625, 195.352 131.534, 188.308 126.687 C 181.264 121.840, 172.800 115.958, 169.500 113.616 C 166.200 111.275, 155.513 103.832, 145.750 97.078 C 135.988 90.323, 128.014 84.505, 128.030 84.148 C 128.065 83.420, 175.916 47.951, 182.356 43.881 C 184.635 42.440, 187.607 39.744, 188.959 37.888 C 190.312 36.033, 195.683 29.787, 200.896 24.008 C 215.359 7.974, 214.540 9, 212.883 9 C 212.077 9, 204.718 12.825, 196.529 17.500" transform="translate(0 5) scale(.29)"/>
         <path d="M 25.696 45.637 C 25.411 45.922, 26.263 48.608, 27.589 51.606 C 30.892 59.073, 30.848 59.193, 23.500 62.850 C 19.925 64.629, 17 66.248, 17 66.448 C 17 66.648, 21.387 69.927, 26.750 73.735 C 32.112 77.543, 45.877 87.318, 57.337 95.457 C 74.362 107.546, 77.930 110.483, 76.837 111.507 C 76.102 112.196, 65.600 120.181, 53.500 129.251 C 36.054 142.327, 30.051 147.451, 24.500 154.002 C 20.650 158.546, 14.913 165.175, 11.750 168.733 C 3.421 178.103, 3.876 179.205, 13.500 172.976 C 18.989 169.424, 28.805 163.685, 38.207 158.532 C 40.246 157.414, 44.296 154.888, 47.207 152.917 C 53.139 148.901, 85.736 128.357, 104.302 116.933 C 106.943 115.308, 108.908 113.645, 108.668 113.239 C 108.428 112.833, 105.548 106.847, 102.269 99.939 C 97.266 89.402, 95.722 85.242, 92.685 85.242 C 90.694 84.067, 78.627 75.856, 65.870 66.995 C 53.112 58.135, 41.285 50.609, 39.587 50.272 C 37.889 49.935, 34.186 48.637, 31.357 47.389 C 28.528 46.141, 25.981 45.353, 25.696 45.637" transform="translate(0 5) scale(.29)"/>
       </svg>
       <span class="brand-name">ZEN</span>
     </header>
     <section class="content">
-      <p class="eyebrow">OpenAI sign-in</p>
-      <h1 id="confirmation-title">Zen recognized your OpenAI sign-in.</h1>
-      <p class="lead">Return to Zen to continue. You can safely close this tab.</p>
-      <div class="receipt">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
-        <span>Sign-in response received</span>
+      <div class="provider-context">
+        <svg class="openai-mark" viewBox="146.694 227.042 267.198 264.812" aria-hidden="true">
+          <path d="M249.176 323.434V298.276C249.176 296.158 249.971 294.569 251.825 293.509L302.406 264.381C309.29 260.409 317.5 258.555 325.973 258.555C357.75 258.555 377.877 283.185 377.877 309.399C377.877 311.253 377.877 313.371 377.611 315.49L325.178 284.771C322.001 282.919 318.822 282.919 315.645 284.771L249.176 323.434ZM367.283 421.415V361.301C367.283 357.592 365.694 354.945 362.516 353.092L296.048 314.43L317.763 301.982C319.617 300.925 321.206 300.925 323.058 301.982L373.639 331.112C388.205 339.586 398.003 357.592 398.003 375.069C398.003 395.195 386.087 413.733 367.283 421.412V421.415ZM233.553 368.452L211.838 355.742C209.986 354.684 209.19 353.095 209.19 350.975V292.718C209.19 264.383 230.905 242.932 260.301 242.932C271.423 242.932 281.748 246.641 290.49 253.26L238.321 283.449C235.146 285.303 233.555 287.951 233.555 291.659V368.455L233.553 368.452ZM280.292 395.462L249.176 377.985V340.913L280.292 323.436L311.407 340.913V377.985L280.292 395.462ZM300.286 475.968C289.163 475.968 278.837 472.259 270.097 465.64L322.264 435.449C325.441 433.597 327.03 430.949 327.03 427.239V350.445L349.011 363.155C350.865 364.213 351.66 365.802 351.66 367.922V426.179C351.66 454.514 329.679 475.965 300.286 475.965V475.968ZM237.525 416.915L186.944 387.785C172.378 379.31 162.582 361.305 162.582 343.827C162.582 323.436 174.763 305.164 193.563 297.485V357.861C193.563 361.571 195.154 364.217 198.33 366.071L264.535 404.467L242.82 416.915C240.967 417.972 239.377 417.972 237.525 416.915ZM234.614 460.343C204.689 460.343 182.71 437.833 182.71 410.028C182.71 407.91 182.976 405.792 183.238 403.672L235.405 433.863C238.582 435.715 241.763 435.715 244.938 433.863L311.407 395.466V420.622C311.407 422.742 310.612 424.331 308.758 425.389L258.179 454.519C251.293 458.491 243.083 460.343 234.611 460.343H234.614ZM300.286 491.854C332.329 491.854 359.073 469.082 365.167 438.892C394.825 431.211 413.892 403.406 413.892 375.073C413.892 356.535 405.948 338.529 391.648 325.552C392.972 319.991 393.766 314.43 393.766 308.87C393.766 271.003 363.048 242.666 327.562 242.666C320.413 242.666 313.528 243.723 306.644 246.109C294.725 234.457 278.307 227.042 260.301 227.042C228.258 227.042 201.513 249.815 195.42 280.004C165.761 287.685 146.694 315.49 146.694 343.824C146.694 362.362 154.638 380.368 168.938 393.344C167.613 398.906 166.819 404.467 166.819 410.027C166.819 447.894 197.538 476.231 233.024 476.231C240.172 476.231 247.058 475.173 253.943 472.788C265.859 484.441 282.278 491.854 300.286 491.854Z" fill="#000"/>
+        </svg>
+        <span>OpenAI sign-in</span>
       </div>
+      <h1 id="confirmation-title">${pageTitle}</h1>
+      ${
+        isSuccess
+          ? `<p class="lead">Return to Zen to continue.</p>
       <button id="close-tab" type="button" autofocus>Close this tab</button>
-      <p class="shortcut">If this tab stays open, use Ctrl+W or Command+W, then return to Zen.</p>
-      <p id="close-status" role="status" hidden>Your browser kept this tab open. Close it with Ctrl+W or Command+W, then return to Zen.</p>
-      <div class="repeat-help">
-        <button class="repeat-trigger" id="repeat-trigger" type="button" aria-expanded="false" aria-controls="repeat-guidance">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg>
-          Opened this page again?
-        </button>
-        <p class="repeat-guidance" id="repeat-guidance" hidden>Zen already received the sign-in response. Close this copy and return to Zen.</p>
-      </div>
+      <p id="close-status" role="status" aria-live="polite" hidden>Your browser kept this tab open. Use Ctrl+W or Command+W, then return to Zen.</p>`
+          : `<p class="lead">Return to Zen and start OpenAI sign-in again.</p>
+      <p class="error-detail">${detail}</p>`
+      }
     </section>
   </main>
-  <script nonce="${nonce}">
+  ${
+    isSuccess
+      ? `<script nonce="${nonce}">
     const closeButton = document.querySelector("#close-tab");
     const closeStatus = document.querySelector("#close-status");
-    const repeatTrigger = document.querySelector("#repeat-trigger");
-    const repeatGuidance = document.querySelector("#repeat-guidance");
     closeButton.addEventListener("click", () => {
+      closeButton.disabled = true;
       window.close();
-      window.setTimeout(() => { closeStatus.hidden = false; }, 150);
+      window.setTimeout(() => {
+        closeButton.hidden = true;
+        closeStatus.hidden = false;
+      }, 150);
     });
-    repeatTrigger.addEventListener("click", () => {
-      const expanded = repeatTrigger.getAttribute("aria-expanded") === "true";
-      repeatTrigger.setAttribute("aria-expanded", String(!expanded));
-      repeatGuidance.hidden = expanded;
-    });
-  </script>
+  </script>`
+      : ""
+  }
 </body>
 </html>`;
 }
@@ -674,17 +677,23 @@ async function startLocalOAuthServer(
       }
       if (url.searchParams.get("state") !== state) {
         response.writeHead(400, {
-          "content-type": "text/plain; charset=utf-8",
+          "content-type": "text/html; charset=utf-8",
+          "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'`,
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
         });
-        response.end("OAuth state mismatch.");
+        response.end(openAiLoginCallbackPage(nonce, "state-mismatch"));
         return;
       }
       const code = url.searchParams.get("code");
       if (code === null || code.length === 0) {
         response.writeHead(400, {
-          "content-type": "text/plain; charset=utf-8",
+          "content-type": "text/html; charset=utf-8",
+          "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'`,
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
         });
-        response.end("Authorization code missing.");
+        response.end(openAiLoginCallbackPage(nonce, "missing-code"));
         return;
       }
       response.writeHead(200, {
@@ -693,7 +702,7 @@ async function startLocalOAuthServer(
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       });
-      response.end(openAiLoginSuccessPage(nonce));
+      response.end(openAiLoginCallbackPage(nonce, "success"));
       settle?.({ code });
     } catch {
       response.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
