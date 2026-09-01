@@ -50,7 +50,31 @@ export interface BrowserScreenshotArtifact {
   expiresAt: string;
 }
 
+export type BrowserLiveObservationStatus =
+  "idle" | "connecting" | "live" | "unavailable" | "failed";
+
+export interface BrowserLiveObservationFrame {
+  sequence: number;
+  mimeType: "image/jpeg";
+  data: string;
+  width: number;
+  height: number;
+}
+
+export type BrowserLiveObservationEvent =
+  | {
+      type: "status";
+      status: BrowserLiveObservationStatus;
+      message: string;
+    }
+  | { type: "frame"; frame: BrowserLiveObservationFrame };
+
+export type BrowserLiveObservationListener = (
+  event: BrowserLiveObservationEvent,
+) => void;
+
 export interface ZenXBrowserBackend {
+  observeLive?(listener: BrowserLiveObservationListener): () => void;
   listTabs(
     sessionId: string,
     signal?: AbortSignal,
@@ -145,6 +169,42 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       scope: "browser-session",
     },
   ],
+  ui: {
+    bundles: [
+      {
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "zenx/bundled/browser-ui",
+      },
+    ],
+    surfaces: [
+      {
+        id: "browser-page",
+        bundleId: "main",
+        exportName: "browser-page",
+      },
+    ],
+  },
+  contributions: {
+    pages: [
+      {
+        id: "browser",
+        title: "Browser",
+        route: "/plugins/browser/browser",
+        surfaceId: "browser-page",
+      },
+    ],
+    sidebar: [
+      {
+        id: "browser",
+        label: "Browser",
+        icon: "layers",
+        pageId: "browser",
+        order: 5,
+      },
+    ],
+  },
   tools: [
     {
       name: "browser_list_tabs",
@@ -307,6 +367,18 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
       default:
         throw new Error(`Unsupported browser tool: ${toolName}`);
     }
+  }
+
+  observeLive(listener: BrowserLiveObservationListener): () => void {
+    if (this.#backend.observeLive === undefined) {
+      listener({
+        type: "status",
+        status: "unavailable",
+        message: "Live observation is unavailable for this Browser provider.",
+      });
+      return () => undefined;
+    }
+    return this.#backend.observeLive(listener);
   }
 
   async close(): Promise<void> {

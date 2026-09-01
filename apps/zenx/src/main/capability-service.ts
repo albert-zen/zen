@@ -12,6 +12,7 @@ import {
 import { ToolEnvironment, type ToolInvocation } from "../../../../src/tool.js";
 import {
   BrowserZenXCapabilityPackage,
+  type BrowserLiveObservationListener,
   type ZenXBrowserBackend,
 } from "./capabilities/browser-provider.js";
 import {
@@ -452,6 +453,19 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     if (capabilityPackage === undefined)
       throw new Error("Browser provider is unavailable");
     return capabilityPackage;
+  }
+
+  observeBrowserLive(listener: BrowserLiveObservationListener): () => void {
+    const capabilityPackage =
+      this.#stagedBrowserProfilePackage ?? this.#browserProfilePackage;
+    if (capabilityPackage instanceof BrowserZenXCapabilityPackage)
+      return capabilityPackage.observeLive(listener);
+    listener({
+      type: "status",
+      status: "unavailable",
+      message: "Live observation is unavailable for this Browser provider.",
+    });
+    return () => undefined;
   }
 
   computerProfilePackage(): ZenXCapabilityPackage {

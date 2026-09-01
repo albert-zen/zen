@@ -23,6 +23,181 @@
   min-width: 0;
 }
 
+.plugin-page-scroll > .plugin-primary-surface:only-child {
+  grid-column: 1 / -1;
+}
+
+.plugin-page-scroll:has(.browser-live-page) {
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.plugin-primary-surface:has(> .browser-live-page) {
+  min-height: 0;
+  height: 100%;
+}
+
+.browser-live-page {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.browser-live-toolbar {
+  min-width: 0;
+  display: grid;
+  grid-template-areas: "mode privacy status";
+  grid-template-columns: auto minmax(160px, 1fr) minmax(220px, auto);
+  align-items: center;
+  gap: 8px 14px;
+  padding: 7px 9px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 9px;
+  background: var(--color-surface-wash);
+}
+
+.browser-live-mode {
+  grid-area: mode;
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-secondary);
+}
+
+.browser-live-mode > span,
+.browser-live-status > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.browser-live-mode strong,
+.browser-live-status strong {
+  overflow: hidden;
+  color: currentColor;
+  font-size: 11px;
+  font-weight: 580;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-live-mode small,
+.browser-live-status small {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-live-privacy-note {
+  grid-area: privacy;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.browser-live-privacy-note svg {
+  flex: 0 0 auto;
+  color: var(--color-status-warning);
+}
+
+.browser-live-status {
+  grid-area: status;
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding-left: 12px;
+  border-left: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+}
+
+.browser-live-status[data-status="live"] {
+  color: var(--color-status-success);
+}
+
+.browser-live-status[data-status="failed"],
+.browser-live-status[data-status="unavailable"] {
+  color: var(--color-text-primary);
+}
+
+.browser-live-status[data-status="failed"] svg,
+.browser-live-status[data-status="unavailable"] svg {
+  color: var(--color-status-warning);
+}
+
+.browser-live-mode svg,
+.browser-live-status svg {
+  flex: 0 0 auto;
+}
+
+.browser-live-stage {
+  position: relative;
+  display: grid;
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface-inset);
+}
+
+.browser-live-frame {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.browser-live-stage[data-has-frame="true"] .browser-live-frame {
+  display: block;
+}
+
+.browser-live-placeholder {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 20px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.browser-live-placeholder svg {
+  width: 22px;
+  height: 22px;
+}
+
+.browser-live-placeholder span {
+  display: grid;
+  gap: 3px;
+}
+
+.browser-live-placeholder strong {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.browser-live-placeholder small {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .plugin-action-row,
 .plugin-menu {
   display: flex;
@@ -40,6 +215,32 @@
   .plugin-page-scroll {
     grid-template-columns: minmax(0, 1fr);
     padding: 14px;
+  }
+
+  .plugin-page-scroll:has(.browser-live-page) {
+    padding: 10px;
+  }
+
+  .browser-live-toolbar {
+    grid-template-areas:
+      "mode status"
+      "privacy privacy";
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+    gap: 6px 10px;
+    padding: 7px 8px;
+  }
+
+  .browser-live-status {
+    width: 100%;
+    max-width: 100%;
+    justify-self: end;
+  }
+
+  .browser-live-status small {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 
