@@ -1339,6 +1339,18 @@ export function App() {
             threadUsage={threadUsage}
             titleProjection={titleProjection}
           />
+        ) : page === "settings" ? (
+          <PageTitleBar
+            onOpenSidebar={() => setSidebarOpen(true)}
+            subtitle="Account, appearance, models, plugins, and local host"
+            title="Settings"
+          />
+        ) : genericPluginTarget !== undefined ? (
+          <PageTitleBar
+            onOpenSidebar={() => setSidebarOpen(true)}
+            subtitle={`Provided by ${genericPluginTarget.pluginId}`}
+            title={genericPluginTarget.title}
+          />
         ) : null}
       </WindowTitleBar>
       <Sidebar
@@ -1479,13 +1491,13 @@ export function App() {
             onOpenSidebar={() => setSidebarOpen(true)}
             tab={settingsTab}
             pluginSnapshot={pluginSnapshot}
+            showHeader={false}
           />
         ) : genericPluginTarget !== undefined && pluginSnapshot !== null ? (
           <PluginProductPage
             snapshot={pluginSnapshot}
             route={page}
             navigate={openPage}
-            onOpenSidebar={() => setSidebarOpen(true)}
           />
         ) : (
           <AgentSurface
@@ -1754,6 +1766,35 @@ function ConversationTitleBar({
         >
           <Icon name="panel-right" />
         </button>
+      </div>
+    </div>
+  );
+}
+
+function PageTitleBar({
+  onOpenSidebar,
+  subtitle,
+  title,
+}: {
+  onOpenSidebar(): void;
+  subtitle: string;
+  title: string;
+}) {
+  return (
+    <div className="workspace-header">
+      <div className="page-title">
+        <button
+          className="icon-button mobile-menu"
+          type="button"
+          aria-label="Open sidebar"
+          onClick={onOpenSidebar}
+        >
+          <Icon name="tree" />
+        </button>
+        <div>
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
+        </div>
       </div>
     </div>
   );

@@ -578,6 +578,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   async installBundledPluginPackage(
     tarballPath: string,
     expected: { pluginId: string; packageName: string },
+    options: { allowSameVersionBundledVariant?: boolean } = {},
   ): Promise<ZenXPluginSnapshot> {
     const source = await this.#trustedBundledSource(tarballPath);
     return await this.#serializeServiceMutation(
@@ -586,6 +587,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           source,
           expected.pluginId,
           expected.packageName,
+          options,
         ),
     );
   }
