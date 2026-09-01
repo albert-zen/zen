@@ -134,6 +134,8 @@ storage 或 auth header，连接失败时绝不回落到隔离登录态；三者
 公共 contract 暴露语义动作、平台能力与 background-safe/foreground-required 影响协商；
 当前 macOS provider 优先复用 Peekaboo 3.x 的 background-first 操作，缺失或不兼容时以 bundled
 AX/窗口定向截图和明确提示、可取消的前台输入形成基线；
+`computer_foreground_*` 在 fresh/legacy profile 中默认不向 Agent 投影且不能执行，只有用户在 ZenX
+General Settings 中阅读前台接管风险并明确开启后才可用，关闭后立即撤销且选择随正常重启保持；
 后续 Windows provider 可用 UIA/Windows Graphics Capture/SendInput 接入同一 seam；plugin manifest、
 provider 选择与诊断均由 ZenX 持有，不进入 Zen Core 或 Codex 协议；独立 Skills 平台暂缓，
 插件以 main document 承担首要说明。上述外层配置

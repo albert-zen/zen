@@ -44,6 +44,8 @@ export interface ZenXSidebarOrder {
 export interface ZenXHostProfile {
   version: 3;
   onboardingComplete: boolean;
+  /** Missing in an older v3 profile means the high-impact tools stay off. */
+  computerForegroundControlEnabled?: boolean;
   providerProfiles: ZenXProviderProfile[];
   defaultModel: ZenXModelReference;
   titleModel: ZenXModelReference;
@@ -60,6 +62,7 @@ export interface ZenXHostProfile {
 export type ZenXSettingsUpdate = Pick<
   ZenXHostProfile,
   | "onboardingComplete"
+  | "computerForegroundControlEnabled"
   | "providerProfiles"
   | "defaultModel"
   | "titleModel"
@@ -180,7 +183,15 @@ export class ZenXHostProfileStore {
       decoded,
       this.#projectPlatform,
     );
-    if (migrated || JSON.stringify(profile) !== JSON.stringify(decoded)) {
+    const foregroundPreferenceWasMissing =
+      !migrated &&
+      isRecord(value) &&
+      value.computerForegroundControlEnabled === undefined;
+    if (
+      migrated ||
+      foregroundPreferenceWasMissing ||
+      JSON.stringify(profile) !== JSON.stringify(decoded)
+    ) {
       await this.write(profile);
     }
     return profile;
@@ -266,6 +277,8 @@ export function validateHostProfile(
   return {
     version: 3,
     onboardingComplete: value.onboardingComplete === true,
+    computerForegroundControlEnabled:
+      value.computerForegroundControlEnabled === true,
     providerProfiles,
     defaultModel,
     titleModel,

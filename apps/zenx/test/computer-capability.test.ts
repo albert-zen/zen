@@ -5,6 +5,8 @@ import {
   computerCapabilityManifest,
   ComputerObservationLedger,
   ComputerZenXCapabilityPackage,
+  MacForegroundInputDriver,
+  runProcess,
   type ComputerControlSelector,
   type ComputerInspection,
   type ComputerTarget,
@@ -139,7 +141,11 @@ test("declares background-safe semantics separately from foreground takeover", a
 
 test("cancels foreground takeover before global input begins", async () => {
   const calls: string[] = [];
-  const capability = new ComputerZenXCapabilityPackage(computerBackend(calls));
+  const capability = new ComputerZenXCapabilityPackage(
+    computerBackend(calls),
+    computerCapabilityManifest,
+    true,
+  );
   const controller = new AbortController();
   controller.abort(new DOMException("stopped", "AbortError"));
   await assert.rejects(
@@ -154,7 +160,11 @@ test("cancels foreground takeover before global input begins", async () => {
 
 test("executes the explicitly labeled foreground baseline after its cancellation window", async () => {
   const calls: string[] = [];
-  const capability = new ComputerZenXCapabilityPackage(computerBackend(calls));
+  const capability = new ComputerZenXCapabilityPackage(
+    computerBackend(calls),
+    computerCapabilityManifest,
+    true,
+  );
   const result = await capability.invoke(
     "computer_foreground_click",
     invocation({ x: 10, y: 20, button: "right" }),
@@ -167,6 +177,110 @@ test("executes the explicitly labeled foreground baseline after its cancellation
     impact: "foreground_takeover",
   });
   assert.deepEqual(calls, ["foreground-click:10:20:right"]);
+});
+
+test("direct Computer package construction fails closed for foreground tools", async () => {
+  const calls: string[] = [];
+  const capability = new ComputerZenXCapabilityPackage(computerBackend(calls));
+  await assert.rejects(
+    capability.invoke(
+      "computer_foreground_click",
+      invocation({ x: 10, y: 20 }),
+    ),
+    /foreground_required/u,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("revoking foreground consent fences a stale concurrent invocation before global input", async () => {
+  const calls: string[] = [];
+  const capability = new ComputerZenXCapabilityPackage(
+    computerBackend(calls),
+    computerCapabilityManifest,
+    true,
+  );
+  const execution = capability.invoke(
+    "computer_foreground_click",
+    invocation({ x: 10, y: 20 }),
+  );
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  capability.setForegroundControlAllowed(false);
+
+  await assert.rejects(execution, /foreground_required/u);
+  assert.deepEqual(calls, []);
+  await assert.rejects(
+    capability.invoke(
+      "computer_foreground_click",
+      invocation({ x: 10, y: 20 }),
+    ),
+    /foreground_required/u,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("revoking during macOS foreground helper preparation prevents the helper spawn", async () => {
+  let releasePreparation: ((executable: string) => void) | undefined;
+  let preparationStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    preparationStarted = resolve;
+  });
+  const prepared = new Promise<string>((resolve) => {
+    releasePreparation = resolve;
+  });
+  const calls: string[] = [];
+  const driver = new MacForegroundInputDriver("/unused", {
+    compile: async () => {
+      calls.push("prepare");
+      preparationStarted?.();
+      return await prepared;
+    },
+    runProcess: async () => {
+      calls.push("spawn");
+      return "";
+    },
+  });
+  const backend = computerBackend([]);
+  backend.foregroundKeyPress = async (key, signal) => {
+    await driver.run({ operation: "key", key }, signal);
+  };
+  const capability = new ComputerZenXCapabilityPackage(
+    backend,
+    computerCapabilityManifest,
+    true,
+  );
+  const execution = capability.invoke(
+    "computer_foreground_key_press",
+    invocation({ key: "enter" }),
+  );
+  await started;
+  capability.setForegroundControlAllowed(false);
+  releasePreparation?.("/fake/zenx-foreground-input");
+
+  await assert.rejects(execution, /foreground_required/u);
+  assert.deepEqual(calls, ["prepare"]);
+});
+
+test("computer process runner rejects a pre-aborted signal before spawn", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("revoked before spawn"));
+  let spawnCount = 0;
+  const spawnProcess = (() => {
+    spawnCount += 1;
+    throw new Error("spawn must not run");
+  }) as typeof import("node:child_process").spawn;
+
+  await assert.rejects(
+    runProcess(
+      "/fake/zenx-foreground-input",
+      [],
+      10_000,
+      undefined,
+      controller.signal,
+      spawnProcess,
+    ),
+    /revoked before spawn/u,
+  );
+  assert.equal(spawnCount, 0);
 });
 
 function computerBackend(calls: string[]): ZenXComputerBackend {

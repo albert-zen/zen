@@ -205,8 +205,11 @@ app.whenReady().then(async () => {
     ),
   });
   try {
+    await settingsService.initialize(process.env);
     capabilityService = new ZenXCapabilityService({
       userDataDirectory,
+      allowForegroundRequired:
+        settingsService.computerForegroundControlEnabled(),
       bundledProvidersOnly: app.isPackaged,
       resourcesDirectory,
       pnpmCliPath: app.isPackaged
@@ -233,7 +236,6 @@ app.whenReady().then(async () => {
         ? PACKAGED_PROVIDER_MANIFEST_SHA256
         : undefined,
     });
-    await settingsService.initialize(process.env);
     await syncProjectProjection(settingsService);
     let startupError: unknown;
     let hostConfig;
@@ -824,6 +826,13 @@ function installSettingsIpc(
         throw new Error("Invalid API key");
       }
       await settings.save(update, apiKey);
+      const foregroundPolicyChanged =
+        capabilityService?.setForegroundRequiredAllowed(
+          update.computerForegroundControlEnabled === true,
+        ) ?? false;
+      if (foregroundPolicyChanged) {
+        await appServerManager?.refreshCapabilitiesAfterCommit();
+      }
       await refreshProjects();
       await restartHost();
       return await settings.publicSettings();

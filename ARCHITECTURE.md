@@ -169,7 +169,9 @@
   enablement、uninstall 与 profile generation；历史文件位置只为一次性 adoption 保留，不参与 runtime admission。
 - **ZenXCapabilityInteractionMode** — ZenX 把工具声明为不改变全局输入/焦点的 `background_safe`
   、必须接管前台的 `foreground_required` 或在独立桌面执行的 `isolated`，让产品提示、调度和 host policy
-  协商实际影响且禁止静默降级。
+  协商实际影响且禁止静默降级；`foreground_required` 默认不投影也不执行，只有本机用户在 ZenX 中明确
+  开启可撤销的 foreground computer control 后才可用，旧 permission grants 不构成授权；foreground helper
+  从准备到实际进程 spawn 的每个边界都重验当前 consent，已撤销的 signal 绝不启动全局输入 helper。
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
 - **ZenXUserBrowserAttachmentEpoch** — ZenX user-browser provider 用实际 CDP sessionId、target、逻辑 session owner 与

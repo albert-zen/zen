@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { access } from "node:fs/promises";
+import { access, writeFile } from "node:fs/promises";
 
 import { app, screen } from "electron";
 
@@ -54,6 +54,13 @@ const web = createServer((request, response) => {
 });
 
 app.commandLine.appendSwitch("force-renderer-accessibility");
+app.on("window-all-closed", () => undefined);
+
+const evidencePath =
+  process.env.ZENX_CAPABILITY_SMOKE_EVIDENCE ??
+  process.argv
+    .find((argument) => argument.startsWith("--evidence="))
+    ?.slice("--evidence=".length);
 
 void app.whenReady().then(async () => {
   app.setAccessibilitySupportEnabled(true);
@@ -63,6 +70,13 @@ void app.whenReady().then(async () => {
   const computerBackend = new ElectronMacComputerBackend();
   const computerPackage = new ComputerZenXCapabilityPackage(computerBackend);
   try {
+    if (evidencePath !== undefined) {
+      await writeFile(
+        evidencePath,
+        `${JSON.stringify({ status: "running", recordedAt: new Date().toISOString() }, null, 2)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+    }
     const port = await listen();
     await computerBackend.prepareForegroundInput(new AbortController().signal);
     const cursorBefore = screen.getCursorScreenPoint();
@@ -238,10 +252,32 @@ void app.whenReady().then(async () => {
     assert.equal(foregroundAfter.pid, foregroundBefore.pid);
     assert.equal(foregroundAfter.bundleId, foregroundBefore.bundleId);
 
+    const evidence = {
+      status: "passed",
+      recordedAt: new Date().toISOString(),
+      cursorBefore,
+      cursorAfter,
+      foregroundBefore,
+      foregroundAfter,
+    };
+    if (evidencePath !== undefined) {
+      await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    }
+    console.log(`ZenX background-safety evidence ${JSON.stringify(evidence)}`);
     console.log(
       "ZenX capability desktop smoke passed: opaque browser observe/act IDs reject forged, stale, hidden, and changed targets while password input dispatches normally; close-session resets cookie/session storage before same-ID reopen; foreground helper compiled without running input; pointer and foreground app unchanged",
     );
   } catch (error) {
+    if (evidencePath !== undefined) {
+      await writeFile(
+        evidencePath,
+        `${JSON.stringify({ status: "failed", recordedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) }, null, 2)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      ).catch(() => undefined);
+    }
     console.error("ZenX capability desktop smoke failed", error);
     process.exitCode = 1;
   } finally {
