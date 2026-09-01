@@ -116,7 +116,9 @@ export function SettingsView({
 
   if (draft === null || settings === null) {
     return (
-      <section className="product-page settings-view">
+      <section
+        className={`product-page settings-view${showHeader ? "" : " settings-view-embedded"}`}
+      >
         <div className="page-loading">
           <div className="loading-ring" />
           <p>{error ?? "Loading local settings…"}</p>
@@ -138,7 +140,10 @@ export function SettingsView({
     { id: "archived", label: "Archived threads", icon: "archive" },
   ];
   return (
-    <section className="product-page settings-view" aria-label="ZenX settings">
+    <section
+      className={`product-page settings-view${showHeader ? "" : " settings-view-embedded"}`}
+      aria-label="ZenX settings"
+    >
       {showHeader ? (
         <header className="page-header">
           <div className="page-title">
