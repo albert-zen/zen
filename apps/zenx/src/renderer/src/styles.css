@@ -130,6 +130,11 @@
 
 .browser-live-status[data-status="failed"],
 .browser-live-status[data-status="unavailable"] {
+  color: var(--color-text-primary);
+}
+
+.browser-live-status[data-status="failed"] svg,
+.browser-live-status[data-status="unavailable"] svg {
   color: var(--color-status-warning);
 }
 
@@ -226,7 +231,16 @@
   }
 
   .browser-live-status {
+    width: 100%;
+    max-width: 100%;
     justify-self: end;
+  }
+
+  .browser-live-status small {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 

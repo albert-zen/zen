@@ -89,6 +89,57 @@ test("Browser observer gives the live stage the remaining page height", async ()
   assert.doesNotMatch(css, /\.browser-live-stage\s*\{[^}]*aspect-ratio:/su);
 });
 
+test("Browser status reason remains visible at narrow and 200% CSS viewports", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const narrow = css.slice(css.indexOf("@media (max-width: 760px)"));
+  assert.match(
+    narrow,
+    /\.browser-live-status\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*100%;/su,
+  );
+  assert.match(
+    narrow,
+    /\.browser-live-status small\s*\{[^}]*overflow:\s*visible;[^}]*text-overflow:\s*clip;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/su,
+  );
+  assert.match(
+    narrow,
+    /\.browser-live-toolbar\s*\{[^}]*grid-template-columns:\s*minmax\(0, auto\) minmax\(0, 1fr\);/su,
+  );
+});
+
+test("Browser failed status text clears 4.5:1 on the composed light toolbar", async () => {
+  const [css, theme] = await Promise.all([
+    readFile(
+      new URL("../src/renderer/src/styles.css", import.meta.url),
+      "utf8",
+    ),
+    readFile(new URL("../src/renderer/src/theme.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(
+    css,
+    /\.browser-live-status\[data-status="failed"\],[\s\S]*?\.browser-live-status\[data-status="unavailable"\]\s*\{[^}]*color:\s*var\(--color-text-primary\);/u,
+  );
+  assert.match(
+    css,
+    /\.browser-live-status\[data-status="failed"\] svg,[\s\S]*?\.browser-live-status\[data-status="unavailable"\] svg\s*\{[^}]*color:\s*var\(--color-status-warning\);/u,
+  );
+
+  const lightTokens = theme.match(
+    /:root\[data-appearance="light"\]\s*\{([\s\S]*?)\n\}/u,
+  )?.[1];
+  assert.ok(lightTokens);
+  const foreground = hexToken(lightTokens, "color-text-primary");
+  const base = hexToken(lightTokens, "color-surface-main");
+  const wash = rgbaToken(lightTokens, "color-surface-wash");
+  const composedToolbar = compositeOver(wash, base);
+  assert.ok(
+    contrastRatio(foreground, composedToolbar) >= 4.5,
+    "failed and unavailable status labels must meet 4.5:1 in light mode",
+  );
+});
+
 test("Browser page updates frames without moving focus or announcing every frame", async () => {
   const dom = new JSDOM(
     '<button id="before">Before</button><div id="root"></div>',
@@ -369,3 +420,65 @@ test("Browser page clears its frame while hidden and resumes with a fresh sequen
   assert.equal(disposals, 2);
   dom.window.close();
 });
+
+type Rgb = readonly [number, number, number];
+type Rgba = readonly [number, number, number, number];
+
+function hexToken(tokens: string, name: string): Rgb {
+  const value = tokens.match(
+    new RegExp(`--${name}:\\s*#([0-9a-f]{6})`, "iu"),
+  )?.[1];
+  assert.ok(value, `missing --${name}`);
+  return [
+    Number.parseInt(value.slice(0, 2), 16),
+    Number.parseInt(value.slice(2, 4), 16),
+    Number.parseInt(value.slice(4, 6), 16),
+  ];
+}
+
+function rgbaToken(tokens: string, name: string): Rgba {
+  const value = tokens.match(
+    new RegExp(
+      `--${name}:\\s*rgb\\((\\d+)\\s+(\\d+)\\s+(\\d+)\\s*\\/\\s*([\\d.]+)%\\)`,
+      "iu",
+    ),
+  );
+  assert.ok(value, `missing --${name}`);
+  return [
+    Number(value[1]),
+    Number(value[2]),
+    Number(value[3]),
+    Number(value[4]) / 100,
+  ];
+}
+
+function compositeOver(foreground: Rgba, background: Rgb): Rgb {
+  return [0, 1, 2].map((channel) =>
+    Math.round(
+      foreground[channel]! * foreground[3] +
+        background[channel]! * (1 - foreground[3]),
+    ),
+  ) as unknown as Rgb;
+}
+
+function contrastRatio(foreground: Rgb, background: Rgb): number {
+  const lighter = Math.max(
+    relativeLuminance(foreground),
+    relativeLuminance(background),
+  );
+  const darker = Math.min(
+    relativeLuminance(foreground),
+    relativeLuminance(background),
+  );
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function relativeLuminance([red, green, blue]: Rgb): number {
+  const [r, g, b] = [red, green, blue].map((channel) => {
+    const normalized = channel / 255;
+    return normalized <= 0.04045
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
