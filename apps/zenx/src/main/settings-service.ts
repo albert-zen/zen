@@ -371,6 +371,10 @@ export class ZenXSettingsService {
     return this.#requireProfile().titleModel.modelId;
   }
 
+  computerForegroundControlEnabled(): boolean {
+    return this.#requireProfile().computerForegroundControlEnabled === true;
+  }
+
   async titleModel(): Promise<{
     adapter: ModelAdapter | null;
     model: string;
@@ -450,6 +454,8 @@ export class ZenXSettingsService {
           validateHostProfile({
             ...current,
             onboardingComplete: settings.onboardingComplete,
+            computerForegroundControlEnabled:
+              settings.computerForegroundControlEnabled === true,
             providerProfiles: settings.providerProfiles,
             defaultModel: settings.defaultModel,
             titleModel: settings.titleModel,
@@ -1082,6 +1088,7 @@ function profileFromLegacy(
   return applyBuiltInModelCatalogPresets({
     version: 3,
     onboardingComplete: false,
+    computerForegroundControlEnabled: false,
     providerProfiles: [
       {
         ...providerConnection,

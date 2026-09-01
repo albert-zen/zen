@@ -10,21 +10,78 @@ import {
   createAppearanceController,
   readAppearancePreference,
   resolveAppearance,
+  type ResolvedAppearance,
 } from "../src/renderer/src/appearance.js";
 
+const desiredPreference = {
+  mode: "system",
+  lightPreset: "cobalt",
+  darkPreset: "ember",
+  accent: "jade",
+  contrast: "high",
+  translucentSidebar: true,
+} as const;
+
+const defaultPreference = {
+  mode: "system",
+  lightPreset: "graphite",
+  darkPreset: "graphite",
+  accent: "azure",
+  contrast: "standard",
+  translucentSidebar: false,
+} as const;
+
 test("resolves explicit and system appearance preferences", () => {
-  assert.equal(resolveAppearance("light", true), "light");
-  assert.equal(resolveAppearance("dark", false), "dark");
-  assert.equal(resolveAppearance("system", true), "dark");
-  assert.equal(resolveAppearance("system", false), "light");
-  assert.equal(readAppearancePreference(storageWith("unexpected")), "system");
+  assert.equal(
+    resolveAppearance({ ...defaultPreference, mode: "light" }, true).mode,
+    "light",
+  );
+  assert.equal(
+    resolveAppearance({ ...defaultPreference, mode: "dark" }, false).mode,
+    "dark",
+  );
+  assert.equal(resolveAppearance(defaultPreference, true).mode, "dark");
+  assert.equal(resolveAppearance(defaultPreference, false).mode, "light");
+  assert.deepEqual(
+    readAppearancePreference(storageWith("unexpected")),
+    defaultPreference,
+  );
+});
+
+test("reads the versioned Appearance v1 profile and preserves legacy mode values", () => {
+  assert.deepEqual(
+    readAppearancePreference(storageWith(JSON.stringify(desiredPreference))),
+    desiredPreference,
+  );
+  assert.deepEqual(readAppearancePreference(storageWith("light")), {
+    mode: "light",
+    lightPreset: "graphite",
+    darkPreset: "graphite",
+    accent: "azure",
+    contrast: "standard",
+    translucentSidebar: false,
+  });
+  assert.deepEqual(readAppearancePreference(storageWith("unexpected")), {
+    mode: "system",
+    lightPreset: "graphite",
+    darkPreset: "graphite",
+    accent: "azure",
+    contrast: "standard",
+    translucentSidebar: false,
+  });
 });
 
 test("applies the root attribute, CSS color-scheme, and native-control meta", () => {
   const dom = new JSDOM(
     '<!doctype html><html><head><meta name="color-scheme" content="dark light"></head></html>',
   );
-  applyResolvedAppearance(dom.window.document, "light");
+  applyResolvedAppearance(dom.window.document, {
+    mode: "light",
+    preset: "graphite",
+    accent: "azure",
+    contrast: "standard",
+    translucentSidebar: false,
+  } as unknown as ResolvedAppearance);
   assert.equal(dom.window.document.documentElement.dataset.appearance, "light");
   assert.equal(dom.window.document.documentElement.style.colorScheme, "light");
   assert.equal(
@@ -34,6 +91,44 @@ test("applies the root attribute, CSS color-scheme, and native-control meta", ()
     "light",
   );
   dom.window.close();
+});
+
+test("applies the resolved preset, accent, contrast, and sidebar material before components render", () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><head><meta name="color-scheme" content="dark light"></head></html>',
+  );
+  applyResolvedAppearance(dom.window.document, {
+    mode: "dark",
+    preset: "ember",
+    accent: "jade",
+    contrast: "high",
+    translucentSidebar: true,
+  } as unknown as ResolvedAppearance);
+  const root = dom.window.document.documentElement;
+  assert.equal(root.dataset.appearance, "dark");
+  assert.equal(root.dataset.themePreset, "ember");
+  assert.equal(root.dataset.accent, "jade");
+  assert.equal(root.dataset.contrast, "high");
+  assert.equal(root.dataset.sidebarTranslucency, "on");
+  assert.equal(root.style.colorScheme, "dark");
+  dom.window.close();
+});
+
+test("resolves the independently saved Light and Dark presets", () => {
+  assert.deepEqual(resolveAppearance(desiredPreference, false), {
+    mode: "light",
+    preset: "cobalt",
+    accent: "jade",
+    contrast: "high",
+    translucentSidebar: true,
+  });
+  assert.deepEqual(resolveAppearance(desiredPreference, true), {
+    mode: "dark",
+    preset: "ember",
+    accent: "jade",
+    contrast: "high",
+    translucentSidebar: true,
+  });
 });
 
 test("persists switches and follows live system changes only in System", () => {
@@ -50,19 +145,62 @@ test("persists switches and follows live system changes only in System", () => {
   system.setDark(true);
   assert.equal(dom.window.document.documentElement.dataset.appearance, "dark");
 
-  controller.setPreference("light");
-  assert.equal(storage.getItem(APPEARANCE_STORAGE_KEY), "light");
+  controller.setPreference({ ...defaultPreference, mode: "light" });
+  assert.equal(
+    storage.getItem(APPEARANCE_STORAGE_KEY),
+    JSON.stringify({ ...defaultPreference, mode: "light" }),
+  );
   assert.equal(dom.window.document.documentElement.dataset.appearance, "light");
   system.setDark(false);
   system.setDark(true);
   assert.equal(dom.window.document.documentElement.dataset.appearance, "light");
 
-  controller.setPreference("system");
+  controller.setPreference(defaultPreference);
   assert.equal(dom.window.document.documentElement.dataset.appearance, "dark");
   controller.dispose();
   system.setDark(false);
   assert.equal(dom.window.document.documentElement.dataset.appearance, "dark");
   dom.window.close();
+});
+
+test("persists one complete Appearance v1 profile and reapplies it on controller creation", () => {
+  const firstDom = new JSDOM("<!doctype html><html></html>");
+  const storage = storageWith("system");
+  const system = new FakeSystemPreference(true);
+  const first = createAppearanceController({
+    document: firstDom.window.document,
+    storage,
+    systemPreference: system,
+  });
+  first.setPreference(desiredPreference);
+  assert.equal(
+    storage.getItem(APPEARANCE_STORAGE_KEY),
+    JSON.stringify(desiredPreference),
+  );
+  assert.equal(
+    firstDom.window.document.documentElement.dataset.themePreset,
+    "ember",
+  );
+  first.dispose();
+  firstDom.window.close();
+
+  const secondDom = new JSDOM("<!doctype html><html></html>");
+  const second = createAppearanceController({
+    document: secondDom.window.document,
+    storage,
+    systemPreference: new FakeSystemPreference(false),
+  });
+  assert.deepEqual(second.getPreference(), desiredPreference);
+  assert.equal(
+    secondDom.window.document.documentElement.dataset.appearance,
+    "light",
+  );
+  assert.equal(
+    secondDom.window.document.documentElement.dataset.themePreset,
+    "cobalt",
+  );
+  second.dispose();
+  secondDom.window.close();
 });
 
 test("light and dark semantic text, actions, boundaries, and focus meet contrast targets", async () => {
@@ -191,6 +329,70 @@ test("light and dark semantic text, actions, boundaries, and focus meet contrast
       );
     }
   }
+});
+
+test("every preset, accent, and contrast combination preserves readable semantic states", async () => {
+  const theme = await readFile(
+    new URL("../src/renderer/src/theme.css", import.meta.url),
+    "utf8",
+  );
+  const dom = new JSDOM("<!doctype html><html><head></head></html>");
+  const style = dom.window.document.createElement("style");
+  style.textContent = theme;
+  dom.window.document.head.append(style);
+  const root = dom.window.document.documentElement;
+
+  for (const mode of ["light", "dark"] as const) {
+    root.dataset.appearance = mode;
+    for (const preset of ["graphite", "cobalt", "ember"] as const) {
+      root.dataset.themePreset = preset;
+      for (const accent of ["azure", "iris", "jade"] as const) {
+        root.dataset.accent = accent;
+        for (const contrast of ["standard", "high"] as const) {
+          root.dataset.contrast = contrast;
+          const computed = dom.window.getComputedStyle(root);
+          const value = (tokenName: string) => {
+            const tokenValue = computed.getPropertyValue(tokenName).trim();
+            assert.match(tokenValue, /^#[0-9a-f]{6}$/iu, tokenName);
+            return tokenValue;
+          };
+          const state = `${mode}/${preset}/${accent}/${contrast}`;
+          for (const surface of [
+            "--color-surface-sidebar",
+            "--color-surface-main",
+            "--color-surface",
+          ]) {
+            assert.ok(
+              contrastRatio(value("--color-text-muted"), value(surface)) >= 4.5,
+              `${state} muted text must meet 4.5:1 on ${surface}`,
+            );
+          }
+          assert.ok(
+            contrastRatio(
+              value("--color-text-on-accent"),
+              value("--color-accent"),
+            ) >= 4.5,
+            `${state} accent text must meet 4.5:1`,
+          );
+          assert.ok(
+            contrastRatio(
+              value("--color-border-control"),
+              value("--color-surface-inset"),
+            ) >= 3,
+            `${state} control boundary must meet 3:1`,
+          );
+          assert.ok(
+            contrastRatio(
+              value("--color-focus-ring"),
+              value("--color-surface"),
+            ) >= 3,
+            `${state} focus ring must meet 3:1`,
+          );
+        }
+      }
+    }
+  }
+  dom.window.close();
 });
 
 class FakeSystemPreference {

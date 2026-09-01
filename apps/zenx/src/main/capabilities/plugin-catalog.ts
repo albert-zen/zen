@@ -49,6 +49,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   readonly #providerDiagnostics: ZenXCapabilityProviderDiagnostic[] = [];
   readonly #discoveryErrors: string[] = [];
   readonly #options: ZenXPluginCatalogOptions;
+  #allowForegroundRequired: boolean;
   #disabled = new Set<string>();
   #uninstalled = new Set<string>();
   #packageDescriptors: Record<string, ZenXPluginPackageDescriptor> = {};
@@ -61,10 +62,11 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   ) {
     this.#configurationStore = configurationStore;
     this.#options = {
-      allowForegroundRequired: true,
+      allowForegroundRequired: false,
       platform: process.platform,
       ...options,
     };
+    this.#allowForegroundRequired = this.#options.allowForegroundRequired;
   }
 
   async initialize(): Promise<void> {
@@ -958,6 +960,28 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
     return { definitions, plugins: this.availablePlugins() };
   }
 
+  setForegroundRequiredAllowed(allowed: boolean): void {
+    if (allowed === this.#allowForegroundRequired) return;
+    this.#allowForegroundRequired = allowed;
+    this.#emit();
+  }
+
+  assertToolExposed(toolName: string): void {
+    const owner = this.#toolOwners.get(toolName);
+    if (owner === undefined) return;
+    if (
+      owner.tool.interactionMode === "foreground_required" &&
+      !this.#allowForegroundRequired
+    ) {
+      throw new Error(
+        `${toolName} is foreground_required; enable Foreground computer control in ZenX Settings before use`,
+      );
+    }
+    if (!this.#isToolExposed(owner.capabilityId, owner.tool)) {
+      throw new Error(`ZenX capability tool is unavailable: ${toolName}`);
+    }
+  }
+
   async readPluginUiHandle(
     pluginId: string,
     handleId: string,
@@ -1050,9 +1074,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   }
 
   #isInteractionAllowed(mode: ZenXCapabilityInteractionMode): boolean {
-    return (
-      mode !== "foreground_required" || this.#options.allowForegroundRequired
-    );
+    return mode !== "foreground_required" || this.#allowForegroundRequired;
   }
 
   #isProviderAvailable(manifest: ZenXPluginManifestV2): boolean {

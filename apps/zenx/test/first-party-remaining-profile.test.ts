@@ -63,6 +63,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       bundledProvidersOnly: true,
       browserBackend: browserBackend(),
       computerBackend: computerBackend(),
+      providerCatalogOptions: { platform: "darwin" },
       trustedProfileLoaders: {
         browser: createDelegatingFirstPartyProfileLoader(() =>
           service.browserProfilePackage(),
@@ -108,6 +109,40 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
         })) as { observationId: string }
       ).observationId,
       "computer-observation",
+    );
+    assert.equal(
+      service
+        .hostSnapshot()
+        .definitions.some((tool) =>
+          tool.name.startsWith("computer_foreground_"),
+        ),
+      false,
+    );
+    await assert.rejects(
+      call(service, "computer_foreground_click", { x: 10, y: 20 }),
+      /foreground_required/u,
+    );
+    service.setForegroundRequiredAllowed(true);
+    assert.equal(
+      service
+        .hostSnapshot()
+        .definitions.some((tool) =>
+          tool.name.startsWith("computer_foreground_"),
+        ),
+      true,
+    );
+    service.setForegroundRequiredAllowed(false);
+    assert.equal(
+      service
+        .hostSnapshot()
+        .definitions.some((tool) =>
+          tool.name.startsWith("computer_foreground_"),
+        ),
+      false,
+    );
+    await assert.rejects(
+      call(service, "computer_foreground_click", { x: 10, y: 20 }),
+      /foreground_required/u,
     );
     assert.deepEqual(
       (

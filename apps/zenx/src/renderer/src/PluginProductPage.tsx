@@ -8,9 +8,11 @@ import {
   type PluginUiRegistry,
 } from "./plugin-ui-host.js";
 import { registerBundledAutomationUi } from "./bundled-automation-ui.js";
+import { registerBundledBrowserUi } from "./bundled-browser-ui.js";
 
 export const pluginUiRegistry = createPluginUiRegistry();
 registerBundledAutomationUi(pluginUiRegistry);
+registerBundledBrowserUi(pluginUiRegistry);
 
 export function PluginProductPage({
   snapshot,

@@ -171,6 +171,49 @@ test("bundled packages use the same lifecycle and reinstall from the supplied pa
   );
 });
 
+test("foreground-required tools are hidden by default and follow explicit host opt-in", async () => {
+  const foreground = manifest("computer", "computer_inspect");
+  foreground.provider.interactionModes = [
+    "background_safe",
+    "foreground_required",
+  ];
+  foreground.tools.push({
+    name: "computer_foreground_click",
+    description: "Take over the global pointer",
+    inputSchema: { type: "object" },
+    permissions: [],
+    interactionMode: "foreground_required",
+    capabilities: ["computer.run"],
+  });
+  const registry = new ZenXPluginCatalog({
+    load: async () => ({ disabled: [], uninstalled: [], packages: {} }),
+    save: async () => {},
+  });
+  await registry.initialize();
+  await registry.install(plugin(foreground), "bundled");
+
+  assert.deepEqual(
+    registry.hostSnapshot().definitions.map((definition) => definition.name),
+    ["computer_inspect"],
+  );
+  assert.deepEqual(
+    registry.availablePlugins()[0]?.tools.map((tool) => tool.name),
+    ["computer_inspect"],
+  );
+
+  registry.setForegroundRequiredAllowed(true);
+  assert.deepEqual(
+    registry.hostSnapshot().definitions.map((definition) => definition.name),
+    ["computer_inspect", "computer_foreground_click"],
+  );
+
+  registry.setForegroundRequiredAllowed(false);
+  assert.deepEqual(
+    registry.hostSnapshot().definitions.map((definition) => definition.name),
+    ["computer_inspect"],
+  );
+});
+
 test("registration and persistence failures leave lifecycle and projections unchanged", async () => {
   let failSave = false;
   const store = {

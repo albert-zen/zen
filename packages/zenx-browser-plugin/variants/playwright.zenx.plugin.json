@@ -263,5 +263,41 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Browser for targeted, inspect-before-act web automation in the selected ZenX browser provider."
+  "mainDocument": "Use Browser for targeted, inspect-before-act web automation in the selected ZenX browser provider.",
+  "ui": {
+    "bundles": [
+      {
+        "id": "main",
+        "apiVersion": 1,
+        "kind": "trusted",
+        "entry": "zenx/bundled/browser-ui"
+      }
+    ],
+    "surfaces": [
+      {
+        "id": "browser-page",
+        "bundleId": "main",
+        "exportName": "browser-page"
+      }
+    ]
+  },
+  "contributions": {
+    "pages": [
+      {
+        "id": "browser",
+        "title": "Browser",
+        "route": "/plugins/browser/browser",
+        "surfaceId": "browser-page"
+      }
+    ],
+    "sidebar": [
+      {
+        "id": "browser",
+        "label": "Browser",
+        "icon": "layers",
+        "pageId": "browser",
+        "order": 5
+      }
+    ]
+  }
 }

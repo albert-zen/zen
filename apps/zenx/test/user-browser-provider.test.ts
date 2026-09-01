@@ -12,10 +12,12 @@ import {
   UserBrowserDocumentChangedBeforeDispatchError,
   UserBrowserMutationOutcomeUnknownError,
   UserBrowserScreenshotMalformedError,
+  USER_BROWSER_MAX_LIVE_FRAME_BYTES,
   type UserBrowserCdpClient,
   validateUserBrowserVersion,
   windowsBrowserExecutableCandidates,
 } from "../src/main/capabilities/user-browser-provider.js";
+import type { ZenXBrowserBackend } from "../src/main/capabilities/browser-provider.js";
 
 test("CDP lifecycle contract invalidates history, reload, activation, and top-frame navigation", () => {
   for (const method of [
@@ -69,6 +71,168 @@ test("attached document acquisition enables Runtime before reading the frame tre
     assert.ok(
       methods.indexOf("Runtime.enable") < methods.indexOf("Page.getFrameTree"),
     );
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("live observation acks every screencast frame and publishes only the bounded latest frame", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const backend = connection.backend as ZenXBrowserBackend & {
+    observeLive?(listener: (event: unknown) => void): () => void;
+  };
+  try {
+    assert.equal(typeof backend.observeLive, "function");
+    const events: unknown[] = [];
+    const unsubscribe = backend.observeLive!((event) => events.push(event));
+
+    await backend.listTabs("work");
+    await backend.inspect("work", "target-1");
+    await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+
+    for (let frame = 1; frame <= 64; frame += 1)
+      cdp.emitScreencastFrame(`latest-${frame}`, frame);
+    await waitUntil(() => cdp.count("Page.screencastFrameAck") === 64);
+    await new Promise((resolve) => setTimeout(resolve, 140));
+
+    const frames = events.filter(
+      (event): event is { type: "frame"; frame: { data: string } } =>
+        typeof event === "object" &&
+        event !== null &&
+        (event as { type?: unknown }).type === "frame",
+    );
+    assert.ok(frames.length > 0 && frames.length <= 2, JSON.stringify(frames));
+    assert.equal(
+      frames.at(-1)?.frame.data,
+      Buffer.from("latest-64").toString("base64"),
+    );
+
+    unsubscribe();
+    await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
+    await backend.closeSession("work");
+    await backend.close();
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("live observation fences document changes and becomes unavailable on exact detach", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const backend = connection.backend as ZenXBrowserBackend & {
+    observeLive?(listener: (event: unknown) => void): () => void;
+  };
+  try {
+    const events: unknown[] = [];
+    const unsubscribe = backend.observeLive!((event) => events.push(event));
+    await backend.listTabs("work");
+    await backend.inspect("work", "target-1");
+    await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+
+    cdp.emitMainDocumentChange();
+    await waitUntil(
+      () =>
+        cdp.count("Page.stopScreencast") === 1 &&
+        cdp.count("Page.startScreencast") === 2,
+    );
+    const statuses = () =>
+      events
+        .filter(
+          (event): event is { type: "status"; status: string } =>
+            typeof event === "object" &&
+            event !== null &&
+            (event as { type?: unknown }).type === "status",
+        )
+        .map((event) => event.status);
+    assert.deepEqual(statuses().slice(-2), ["connecting", "live"]);
+
+    cdp.detachSession();
+    await waitUntil(() => statuses().at(-1) === "unavailable");
+    const framesBefore = events.filter(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        (event as { type?: unknown }).type === "frame",
+    ).length;
+    cdp.emitScreencastFrame("stale", 9);
+    await waitUntil(() => cdp.count("Page.screencastFrameAck") === 1);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(
+      events.filter(
+        (event) =>
+          typeof event === "object" &&
+          event !== null &&
+          (event as { type?: unknown }).type === "frame",
+      ).length,
+      framesBefore,
+    );
+    unsubscribe();
+    await backend.closeSession("work");
+    await backend.close();
+  } finally {
+    await cdp.close();
+  }
+});
+
+test("live observation acks and rejects oversized frames then recovers on the next Agent operation", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const backend = connection.backend as ZenXBrowserBackend & {
+    observeLive?(listener: (event: unknown) => void): () => void;
+  };
+  try {
+    const events: unknown[] = [];
+    const unsubscribe = backend.observeLive!((event) => events.push(event));
+    await backend.listTabs("work");
+    await backend.inspect("work", "target-1");
+    await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+
+    cdp.emitRawScreencastFrame(
+      Buffer.alloc(USER_BROWSER_MAX_LIVE_FRAME_BYTES + 1).toString("base64"),
+      1,
+    );
+    await waitUntil(
+      () =>
+        cdp.count("Page.screencastFrameAck") === 1 &&
+        cdp.count("Page.stopScreencast") === 1,
+    );
+    const statuses = () =>
+      events
+        .filter(
+          (event): event is { type: "status"; status: string } =>
+            typeof event === "object" &&
+            event !== null &&
+            (event as { type?: unknown }).type === "status",
+        )
+        .map((event) => event.status);
+    assert.equal(statuses().at(-1), "failed");
+    assert.equal(
+      events.some(
+        (event) =>
+          typeof event === "object" &&
+          event !== null &&
+          (event as { type?: unknown }).type === "frame",
+      ),
+      false,
+    );
+
+    await backend.inspect("work", "target-1");
+    await waitUntil(() => cdp.count("Page.startScreencast") === 2);
+    assert.equal(statuses().at(-1), "live");
+    cdp.emitScreencastFrame("recovered", 2);
+    await waitUntil(() =>
+      events.some(
+        (event) =>
+          typeof event === "object" &&
+          event !== null &&
+          (event as { type?: unknown }).type === "frame",
+      ),
+    );
+
+    unsubscribe();
+    await backend.closeSession("work");
+    await backend.close();
   } finally {
     await cdp.close();
   }
@@ -2969,6 +3133,9 @@ async function createFakeCdpServer(): Promise<{
   removeTarget(targetId: string): void;
   addTargets(count: number): void;
   disconnect(): void;
+  emitScreencastFrame(value: string, frameNumber: number): void;
+  emitRawScreencastFrame(data: string, frameNumber: number): void;
+  emitMainDocumentChange(): void;
   close(): Promise<void>;
 }> {
   const sockets = new Set<WebSocket>();
@@ -3508,6 +3675,59 @@ async function createFakeCdpServer(): Promise<{
     },
     disconnect: () => {
       for (const socket of sockets) socket.terminate();
+    },
+    emitScreencastFrame: (value, frameNumber) => {
+      for (const socket of sockets) {
+        socket.send(
+          JSON.stringify({
+            method: "Page.screencastFrame",
+            sessionId: latestSession,
+            params: {
+              data: Buffer.from(value).toString("base64"),
+              metadata: {
+                deviceWidth: 1280,
+                deviceHeight: 720,
+                timestamp: frameNumber,
+              },
+              sessionId: frameNumber,
+            },
+          }),
+        );
+      }
+    },
+    emitRawScreencastFrame: (data, frameNumber) => {
+      for (const socket of sockets) {
+        socket.send(
+          JSON.stringify({
+            method: "Page.screencastFrame",
+            sessionId: latestSession,
+            params: {
+              data,
+              metadata: {
+                deviceWidth: 1280,
+                deviceHeight: 720,
+                timestamp: frameNumber,
+              },
+              sessionId: frameNumber,
+            },
+          }),
+        );
+      }
+    },
+    emitMainDocumentChange: () => {
+      for (const socket of sockets) {
+        socket.send(
+          JSON.stringify({
+            method: "Page.frameStartedNavigating",
+            sessionId: latestSession,
+            params: {
+              frameId: "main",
+              url: "https://example.test/next",
+              navigationType: "differentDocument",
+            },
+          }),
+        );
+      }
     },
     close: async () => {
       for (const socket of sockets) socket.terminate();

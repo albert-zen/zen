@@ -65,7 +65,7 @@ test("integrated title bar aligns the product controls and conversation row arou
   );
   assert.match(
     styles,
-    /\.window-titlebar-product\s*\{[^}]*background:\s*var\(--color-surface-sidebar\)/su,
+    /\.window-titlebar-product\s*\{[^}]*background:\s*var\(--color-surface-sidebar-active\)/su,
   );
   assert.match(
     styles,
@@ -73,11 +73,11 @@ test("integrated title bar aligns the product controls and conversation row arou
   );
   assert.match(
     styles,
-    /\.sidebar\s*\{[^}]*background:\s*var\(--color-surface-sidebar\)/su,
+    /\.sidebar\s*\{[^}]*background:\s*var\(--color-surface-sidebar-active\)/su,
   );
   assert.match(
     styles,
-    /\.window-titlebar\s*\{[^}]*background:\s*linear-gradient\([^}]*var\(--color-surface-sidebar\)[^}]*var\(--color-surface-main\)/su,
+    /\.window-titlebar\s*\{[^}]*background:\s*linear-gradient\([^}]*var\(--color-surface-sidebar-active\)[^}]*var\(--color-surface-main\)/su,
   );
   assert.match(
     styles,

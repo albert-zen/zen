@@ -458,6 +458,40 @@ test("persists and clears the optional maximum tool round setting", async () => 
   }
 });
 
+test("persists explicit foreground computer consent across restart and allows revocation", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-foreground-setting-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({});
+    const initial = (await service.publicSettings()).profile;
+    assert.equal(initial.computerForegroundControlEnabled, false);
+
+    await service.save({
+      ...initial,
+      computerForegroundControlEnabled: true,
+    });
+    const restarted = settingsFor(directory, inactiveSubscription());
+    await restarted.initialize({});
+    const persisted = (await restarted.publicSettings()).profile;
+    assert.equal(persisted.computerForegroundControlEnabled, true);
+
+    await restarted.save({
+      ...persisted,
+      computerForegroundControlEnabled: false,
+    });
+    const revoked = settingsFor(directory, inactiveSubscription());
+    await revoked.initialize({});
+    assert.equal(
+      (await revoked.publicSettings()).profile.computerForegroundControlEnabled,
+      false,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("restores the previous credential when profile persistence fails", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-profile-persistence-failure-"),

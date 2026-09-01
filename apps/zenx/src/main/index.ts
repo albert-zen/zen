@@ -84,6 +84,7 @@ import {
 import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
 import { createDelegatingFirstPartyProfileLoader } from "./first-party-profile-loader.js";
 import { installZenXBundledPluginsAtStartup } from "./bundled-plugin-startup.js";
+import { BrowserLiveObservationIpcBridge } from "./browser-live-observation-ipc.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -204,8 +205,11 @@ app.whenReady().then(async () => {
     ),
   });
   try {
+    await settingsService.initialize(process.env);
     capabilityService = new ZenXCapabilityService({
       userDataDirectory,
+      allowForegroundRequired:
+        settingsService.computerForegroundControlEnabled(),
       bundledProvidersOnly: app.isPackaged,
       resourcesDirectory,
       pnpmCliPath: app.isPackaged
@@ -232,7 +236,6 @@ app.whenReady().then(async () => {
         ? PACKAGED_PROVIDER_MANIFEST_SHA256
         : undefined,
     });
-    await settingsService.initialize(process.env);
     await syncProjectProjection(settingsService);
     let startupError: unknown;
     let hostConfig;
@@ -823,6 +826,13 @@ function installSettingsIpc(
         throw new Error("Invalid API key");
       }
       await settings.save(update, apiKey);
+      const foregroundPolicyChanged =
+        capabilityService?.setForegroundRequiredAllowed(
+          update.computerForegroundControlEnabled === true,
+        ) ?? false;
+      if (foregroundPolicyChanged) {
+        await appServerManager?.refreshCapabilitiesAfterCommit();
+      }
       await refreshProjects();
       await restartHost();
       return await settings.publicSettings();
@@ -975,6 +985,16 @@ function installCapabilityIpc(
   manager: AppServerManager,
   marketplace: MarketplaceCatalogService,
 ): void {
+  const browserLive = new BrowserLiveObservationIpcBridge(
+    capabilities,
+    ipcChannels.browserLiveEvent,
+  );
+  ipcMain.handle(ipcChannels.browserLiveSubscribe, (event) => {
+    browserLive.subscribe(event.sender);
+  });
+  ipcMain.handle(ipcChannels.browserLiveUnsubscribe, (event) => {
+    browserLive.unsubscribe(event.sender);
+  });
   ipcMain.handle(ipcChannels.marketplaceGet, async () => {
     const builtIns = capabilities.marketplaceBuiltIns();
     try {
