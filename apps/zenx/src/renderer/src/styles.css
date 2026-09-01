@@ -1190,6 +1190,9 @@ a:focus-visible {
 .product-page {
   grid-template-rows: 60px minmax(0, 1fr);
 }
+.product-page.settings-view-embedded {
+  grid-template-rows: minmax(0, 1fr);
+}
 .agent-surface.new-thread-draft-surface {
   position: relative;
   grid-template-rows: minmax(0, 1fr);
