@@ -17,7 +17,6 @@ import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import { Icon } from "./icons.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import { ProviderLogo } from "./ProviderLogo.js";
-import { ZenXBrand } from "./ZenXBrand.js";
 import {
   deriveInboxSections,
   deriveProjectGroups,
@@ -176,9 +175,6 @@ export function Sidebar({
         aria-label="Projects and threads"
         aria-hidden={collapsed && !open ? true : undefined}
       >
-        <div className="sidebar-platform-brand">
-          <ZenXBrand />
-        </div>
         <header className="sidebar-header">
           <PluginSpaces
             contributions={pluginContributions}

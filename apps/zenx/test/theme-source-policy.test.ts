@@ -58,7 +58,8 @@ test("the v0 shell slice consumes canonical semantic color roles", async () => {
   const styles = await readFile(path.join(rendererRoot, "styles.css"), "utf8");
   for (const expectation of [
     /\.app-shell\s*\{[^}]*background:\s*var\(--color-surface-main\)/su,
-    /\.window-titlebar-brand\s*\{[^}]*background:\s*var\(--color-surface-sidebar\)/su,
+    /\.window-titlebar-product\s*\{[^}]*background:\s*var\(--color-surface-sidebar\)/su,
+    /\.window-titlebar-session\s*\{[^}]*background:\s*var\(--color-surface-main\)/su,
     /\.sidebar\s*\{[^}]*background:\s*var\(--color-surface-sidebar\)/su,
     /\.workspace\s*\{[^}]*var\(--color-surface-main\)/su,
     /\.user-bubble\s*\{[^}]*background:\s*var\(--color-surface-elevated\)/su,

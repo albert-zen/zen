@@ -65,9 +65,17 @@ test("desktop title bar collapses and restores the Sidebar", async () => {
         '[aria-label="Collapse sidebar"]',
       ),
     );
-    const titlebarActions = document.querySelector(".window-titlebar-actions");
-    assert.equal(titlebarActions?.children[0], inbox);
-    assert.equal(titlebarActions?.children[1], collapse);
+    const productRow = document.querySelector(".window-titlebar-product");
+    const nativeActions = document.querySelector(
+      ".window-titlebar-native-actions",
+    );
+    assert.equal(productRow?.querySelector(".inbox-button"), inbox);
+    assert.equal(productRow?.querySelector(".sidebar-collapse-button"), null);
+    assert.equal(
+      nativeActions?.querySelector(".sidebar-collapse-button"),
+      collapse,
+    );
+    assert.equal(nativeActions?.querySelector(".inbox-button"), null);
     assert.equal(inbox.getAttribute("aria-pressed"), "false");
     assert.equal(collapse.getAttribute("aria-expanded"), "true");
     assert.equal(document.querySelector(".app-shell")?.className, "app-shell");
@@ -1886,6 +1894,8 @@ test("host recovery refreshes the selected Thread without clearing draft or loca
 });
 
 test("conversation header owns thread cache telemetry and only retains workspace action", async () => {
+  const longTitle =
+    "Verify the complete ZenX integrated title bar with an intentionally long real Thread title";
   const harness = await mountApp(
     {
       projects: [
@@ -1901,7 +1911,8 @@ test("conversation header owns thread cache telemetry and only retains workspace
       lastUsedWorkspace: "/work/zen",
     },
     {
-      threads: async (archived) => (archived ? [] : [summary(false)]),
+      threads: async (archived) =>
+        archived ? [] : [{ ...summary(false), name: longTitle }],
       modelUsage: async () => ({
         thread: {
           responseCount: 1,
@@ -1924,6 +1935,24 @@ test("conversation header owns thread cache telemetry and only retains workspace
       document.querySelector<HTMLButtonElement>(".thread-row")?.click(),
     );
     await waitFor(() => document.getElementById("thread-composer"));
+    const titlebarSession = document.querySelector(
+      ".window-titlebar-session .workspace-header",
+    );
+    assert.ok(titlebarSession);
+    assert.equal(
+      titlebarSession.querySelector(".thread-title-line > strong")?.textContent,
+      longTitle,
+    );
+    assert.equal(
+      titlebarSession
+        .querySelector(".thread-title-line > strong")
+        ?.getAttribute("title"),
+      longTitle,
+    );
+    assert.equal(
+      document.querySelector(".agent-surface > .workspace-header"),
+      null,
+    );
     assert.match(
       document.querySelector(".workspace-header .thread-usage")?.textContent ??
         "",

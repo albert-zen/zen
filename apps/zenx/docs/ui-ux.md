@@ -113,7 +113,7 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 ### 3.4 原生应用菜单与按需面板
 
 - Packaged Windows/Linux 不安装 Electron 默认 application menu；macOS 只保留系统合规的 application、edit 和 window roles。原生菜单不得引入第二套产品导航。
-- 桌面窗口使用与产品壳连续的 integrated title bar：macOS 顶行只为 traffic lights 与紧凑窗口控制保留必要高度，ZenX mark / wordmark 位于其下一个 Sidebar 品牌行；Inbox 与 Sidebar 收起入口保持清晰且 Sidebar 控制位于控制组最右侧。其他平台可以在标题栏品牌轨道中显示同一正式品牌。系统窗口控制仍由 Electron/OS 持有。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
+- 桌面窗口使用与产品壳连续的 integrated title bar，并把产品行、会话行与原生窗口控件分成明确的命中区域：macOS 顶行左侧为 traffic lights 留出空间并紧接 Sidebar 展开 / 收起入口，右侧直接承载 Thread 标题、cwd 与 Thread actions；ZenX mark / wordmark 与 Inbox 共同位于其下方的 Sidebar 产品行，因此左侧原生控件不会把右侧会话行整体下压。Windows 在顶行左侧显示 ZenX 品牌与 Inbox，并把 Sidebar 展开 / 收起保持为独立的顶行按钮，中间承载会话行，右侧为 minimize / maximize-restore / close 保留原生命中区；紧凑宽度可以把会话行移到原生控件下方的第二行，但不得重叠。展开时左侧顶行与整列 Sidebar 使用同一 Sidebar surface，右侧会话标题栏与 Workspace 使用同一 main surface；唯一的 1px 语义竖分割线从窗口顶部贯穿到底，右侧标题栏底线必须精确从该竖线开始，不使用圆角或 card 式壳层过渡。系统窗口控制仍由 Electron/OS 持有，产品按钮与 Thread 标题控件均是 no-drag，剩余表面才是 drag region。Sidebar 收起后 Chat 使用完整内容宽度，标题栏保留可恢复 Sidebar 的明确入口；该偏好只属于本机产品壳，不进入 Thread 或 canonical Items。
 - 不提供常驻右侧 Activity rail。Tool details 留在聊天流内；Workspace/Artifact 使用按需面板。
 - Thread header 显示 Thread cache telemetry，并只保留按需 Workspace/Artifact icon entry；不显示 Search 或 Archive 控件，也不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。归档能力继续位于 Thread 管理菜单与 Settings。
 - Workspace/Artifact 面板的最终内容组成与 tabs 仍为 **TBD**。早期原型中的 Files / Trigger / Room 等内容不是已确认合同；Trigger 与 Room 作为 plugin 不能被预设为核心 Workspace tabs。
