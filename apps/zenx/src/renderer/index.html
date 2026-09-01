@@ -6,25 +6,68 @@
     <meta name="color-scheme" content="dark light" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-6+xEKg+XzipQDXV/blE+ogL04A+OA5UXlmOIzqYgc+s='; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self' 'sha256-4gbgSLbbtDxd/f27nkALuDaQPcByMgkyNzeUzXEww5E='; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <script>
       (() => {
-        const stored = localStorage.getItem("zenx.appearance");
-        const preference = ["system", "light", "dark"].includes(stored)
-          ? stored
-          : "system";
-        const resolved =
-          preference === "system"
+        const modes = ["system", "light", "dark"];
+        const presets = ["graphite", "cobalt", "ember"];
+        const accents = ["azure", "iris", "jade"];
+        const contrasts = ["standard", "high"];
+        const defaults = {
+          mode: "system",
+          lightPreset: "graphite",
+          darkPreset: "graphite",
+          accent: "azure",
+          contrast: "standard",
+          translucentSidebar: false,
+        };
+        let preference = defaults;
+        try {
+          const stored = localStorage.getItem("zenx.appearance");
+          if (modes.includes(stored)) {
+            preference = { ...defaults, mode: stored };
+          } else if (stored) {
+            const parsed = JSON.parse(stored);
+            preference = {
+              mode: modes.includes(parsed?.mode) ? parsed.mode : defaults.mode,
+              lightPreset: presets.includes(parsed?.lightPreset)
+                ? parsed.lightPreset
+                : defaults.lightPreset,
+              darkPreset: presets.includes(parsed?.darkPreset)
+                ? parsed.darkPreset
+                : defaults.darkPreset,
+              accent: accents.includes(parsed?.accent)
+                ? parsed.accent
+                : defaults.accent,
+              contrast: contrasts.includes(parsed?.contrast)
+                ? parsed.contrast
+                : defaults.contrast,
+              translucentSidebar: parsed?.translucentSidebar === true,
+            };
+          }
+        } catch {}
+        const mode =
+          preference.mode === "system"
             ? matchMedia("(prefers-color-scheme: dark)").matches
               ? "dark"
               : "light"
-            : preference;
-        document.documentElement.dataset.appearance = resolved;
-        document.documentElement.style.colorScheme = resolved;
+            : preference.mode;
+        const preset =
+          mode === "light" ? preference.lightPreset : preference.darkPreset;
+        const root = document.documentElement;
+        root.setAttribute("data-appearance", mode);
+        root.setAttribute("data-theme-preset", preset);
+        root.setAttribute("data-accent", preference.accent);
+        root.setAttribute("data-contrast", preference.contrast);
+        root.setAttribute(
+          "data-sidebar-translucency",
+          preference.translucentSidebar ? "on" : "off",
+        );
+        root.style.colorScheme = mode;
         document
           .querySelector('meta[name="color-scheme"]')
-          ?.setAttribute("content", resolved);
+          ?.setAttribute("content", mode);
       })();
     </script>
     <title>ZenX</title>

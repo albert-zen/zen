@@ -54,7 +54,7 @@ test("integrated title bar keeps controls while macOS moves ZenX branding into t
   );
   assert.match(
     styles,
-    /\.window-titlebar-brand\s*\{[^}]*background:\s*var\(--color-surface-sidebar\)/su,
+    /\.window-titlebar-brand\s*\{[^}]*background:\s*var\(--color-surface-sidebar-active\)/su,
   );
   assert.match(
     styles,
@@ -62,6 +62,6 @@ test("integrated title bar keeps controls while macOS moves ZenX branding into t
   );
   assert.match(
     styles,
-    /\.sidebar\s*\{[^}]*background:\s*var\(--color-surface-sidebar\)/su,
+    /\.sidebar\s*\{[^}]*background:\s*var\(--color-surface-sidebar-active\)/su,
   );
 });

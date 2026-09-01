@@ -17,8 +17,17 @@ import {
   type ZenXKnownProviderPreset,
 } from "../../main/provider-presets.js";
 import {
+  APPEARANCE_ACCENTS,
+  APPEARANCE_CONTRASTS,
+  APPEARANCE_MODES,
+  APPEARANCE_PRESETS,
+  DEFAULT_APPEARANCE_PREFERENCE,
   getAppearanceController,
+  type AppearanceAccent,
+  type AppearanceContrast,
+  type AppearanceMode,
   type AppearancePreference,
+  type AppearancePreset,
 } from "./appearance.js";
 import { PluginSettings } from "./PluginSettings.js";
 import { Icon } from "./icons.js";
@@ -27,7 +36,7 @@ import { threadModelIdentity, threadTitle } from "./thread-list.js";
 import { PluginSettingsSurfaces } from "./PluginProductPage.js";
 
 export type SettingsTab =
-  "account" | "models" | "plugins" | "general" | "archived";
+  "account" | "models" | "plugins" | "appearance" | "general" | "archived";
 
 export function SettingsView({
   archivedError,
@@ -115,11 +124,12 @@ export function SettingsView({
   const tabs: Array<{
     id: SettingsTab;
     label: string;
-    icon: "users" | "layers" | "trigger" | "settings" | "archive";
+    icon: "users" | "layers" | "trigger" | "moon" | "settings" | "archive";
   }> = [
     { id: "account", label: "Account", icon: "users" },
     { id: "models", label: "Models & provider", icon: "layers" },
     { id: "plugins", label: "Plugins", icon: "trigger" },
+    { id: "appearance", label: "Appearance", icon: "moon" },
     { id: "general", label: "General", icon: "settings" },
     { id: "archived", label: "Archived threads", icon: "archive" },
   ];
@@ -137,7 +147,7 @@ export function SettingsView({
           </button>
           <div>
             <h1>Settings</h1>
-            <p>Account, models, plugins, and local host</p>
+            <p>Account, appearance, models, plugins, and local host</p>
           </div>
         </div>
       </header>
@@ -235,6 +245,7 @@ export function SettingsView({
                 )}
               </>
             ) : null}
+            {tab === "appearance" ? <AppearancePanel /> : null}
             {tab === "general" ? (
               <GeneralPanel draft={draft} setDraft={setDraft} />
             ) : null}
@@ -1864,6 +1875,159 @@ function isRunnableModel(model: ZenXModelCatalogEntry): boolean {
   );
 }
 
+function AppearancePanel() {
+  const appearanceController = getAppearanceController();
+  const [appearance, setAppearance] = useState<AppearancePreference>(() =>
+    appearanceController.getPreference(),
+  );
+  const updateAppearance = (patch: Partial<AppearancePreference>) => {
+    const next = { ...appearance, ...patch };
+    appearanceController.setPreference(next);
+    setAppearance(next);
+  };
+  const appearanceIsDefault =
+    JSON.stringify(appearance) ===
+    JSON.stringify(DEFAULT_APPEARANCE_PREFERENCE);
+  return (
+    <>
+      <header>
+        <h2>Appearance</h2>
+        <p>Theme, color, contrast, and window material.</p>
+      </header>
+      <div className="page-card settings-card appearance-settings-card">
+        <div className="settings-card-head">
+          <div>
+            <h3>Theme and color</h3>
+            <p>Choose how ZenX feels while keeping every surface in sync.</p>
+          </div>
+          <span className="status-muted">Local</span>
+        </div>
+        <fieldset className="appearance-options appearance-mode-options">
+          <legend className="sr-only">Appearance mode</legend>
+          {APPEARANCE_MODES.map((option: AppearanceMode) => (
+            <label key={option}>
+              <input
+                type="radio"
+                name="appearance-mode"
+                value={option}
+                checked={appearance.mode === option}
+                onChange={() => updateAppearance({ mode: option })}
+              />
+              <span>{option[0]?.toUpperCase() + option.slice(1)}</span>
+            </label>
+          ))}
+        </fieldset>
+        <div
+          className="appearance-preview"
+          role="img"
+          aria-label="Live appearance preview"
+        >
+          <div className="appearance-preview-sidebar">
+            <span />
+            <span />
+            <span />
+          </div>
+          <div className="appearance-preview-content">
+            <span className="appearance-preview-heading" />
+            <span />
+            <span />
+            <span className="appearance-preview-accent">Accent</span>
+          </div>
+        </div>
+        <div className="appearance-editor-grid">
+          <PresetFieldset
+            label="Light preset"
+            name="light-preset"
+            value={appearance.lightPreset}
+            onChange={(lightPreset) => updateAppearance({ lightPreset })}
+          />
+          <PresetFieldset
+            label="Dark preset"
+            name="dark-preset"
+            value={appearance.darkPreset}
+            onChange={(darkPreset) => updateAppearance({ darkPreset })}
+          />
+        </div>
+        <fieldset className="appearance-accent-group">
+          <legend>Accent</legend>
+          <div className="appearance-accent-options">
+            {APPEARANCE_ACCENTS.map((option: AppearanceAccent) => (
+              <label key={option}>
+                <input
+                  type="radio"
+                  name="appearance-accent"
+                  value={option}
+                  checked={appearance.accent === option}
+                  onChange={() => updateAppearance({ accent: option })}
+                />
+                <span className={`accent-chip ${option}`}>
+                  <i aria-hidden="true" />
+                  <span>
+                    <strong>{appearanceLabel(option)}</strong>
+                    <small>{appearanceAccentIntent[option]}</small>
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <div className="appearance-control-list">
+          <fieldset className="appearance-control-row">
+            <legend>Contrast</legend>
+            <div className="appearance-inline-options compact">
+              {APPEARANCE_CONTRASTS.map((option: AppearanceContrast) => (
+                <label key={option}>
+                  <input
+                    type="radio"
+                    name="appearance-contrast"
+                    value={option}
+                    checked={appearance.contrast === option}
+                    onChange={() => updateAppearance({ contrast: option })}
+                  />
+                  <span>{appearanceLabel(option)}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label className="appearance-switch-row">
+            <span>
+              <strong>Translucent sidebar</strong>
+              <small>Layer the sidebar material over the window canvas.</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              name="sidebar-translucency"
+              value="on"
+              checked={appearance.translucentSidebar}
+              onChange={(event) =>
+                updateAppearance({ translucentSidebar: event.target.checked })
+              }
+            />
+          </label>
+        </div>
+        <div className="appearance-card-footer">
+          <p className="settings-note">
+            Changes apply immediately. System follows your operating system;
+            Light and Dark remember separate presets.
+          </p>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={appearanceIsDefault}
+            onClick={() => {
+              appearanceController.reset();
+              setAppearance(appearanceController.getPreference());
+            }}
+          >
+            Reset appearance
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function GeneralPanel({
   draft,
   setDraft,
@@ -1871,10 +2035,6 @@ function GeneralPanel({
   draft: ZenXHostProfile;
   setDraft(value: ZenXHostProfile): void;
 }) {
-  const appearanceController = getAppearanceController();
-  const [appearance, setAppearance] = useState<AppearancePreference>(() =>
-    appearanceController.getPreference(),
-  );
   const [maximumInput, setMaximumInput] = useState(
     draft.maxToolRounds?.toString() ?? "",
   );
@@ -1886,41 +2046,8 @@ function GeneralPanel({
     <>
       <header>
         <h2>General</h2>
-        <p>
-          Appearance, local workspace defaults, and Zen App Server behavior.
-        </p>
+        <p>Local workspace defaults and Zen App Server behavior.</p>
       </header>
-      <div className="page-card settings-card">
-        <div className="settings-card-head">
-          <div>
-            <h3>Appearance</h3>
-            <p>Use the system appearance or keep ZenX light or dark.</p>
-          </div>
-          <span className="status-muted">Local</span>
-        </div>
-        <fieldset className="appearance-options">
-          <legend className="sr-only">Appearance</legend>
-          {(["system", "light", "dark"] as const).map((option) => (
-            <label key={option}>
-              <input
-                type="radio"
-                name="appearance"
-                value={option}
-                checked={appearance === option}
-                onChange={() => {
-                  appearanceController.setPreference(option);
-                  setAppearance(option);
-                }}
-              />
-              <span>{option[0]?.toUpperCase() + option.slice(1)}</span>
-            </label>
-          ))}
-        </fieldset>
-        <p className="settings-note">
-          Appearance changes immediately. System follows your operating system
-          setting.
-        </p>
-      </div>
       <div className="page-card settings-card">
         <div className="form-grid">
           <div className="field wide">
@@ -2013,6 +2140,57 @@ function GeneralPanel({
       </div>
     </>
   );
+}
+
+const appearancePresetIntent: Record<AppearancePreset, string> = {
+  graphite: "Neutral",
+  cobalt: "Cool",
+  ember: "Warm",
+};
+
+const appearanceAccentIntent: Record<AppearanceAccent, string> = {
+  azure: "Clear blue",
+  iris: "Soft violet",
+  jade: "Fresh green",
+};
+
+function PresetFieldset({
+  label,
+  name,
+  onChange,
+  value,
+}: {
+  label: string;
+  name: "light-preset" | "dark-preset";
+  onChange(value: AppearancePreset): void;
+  value: AppearancePreset;
+}) {
+  return (
+    <fieldset className="appearance-preset-group">
+      <legend>{label}</legend>
+      <div className="appearance-preset-options">
+        {APPEARANCE_PRESETS.map((option: AppearancePreset) => (
+          <label key={option}>
+            <input
+              type="radio"
+              name={name}
+              value={option}
+              checked={value === option}
+              onChange={() => onChange(option)}
+            />
+            <span>
+              <strong>{appearanceLabel(option)}</strong>
+              <small>{appearancePresetIntent[option]}</small>
+            </span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+function appearanceLabel(value: string): string {
+  return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
 }
 
 function legacyModelCatalogEntry(id: string): ZenXModelCatalogEntry {

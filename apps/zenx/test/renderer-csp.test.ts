@@ -139,14 +139,34 @@ test("allows only the hashed pre-paint appearance bootstrap", async () => {
       runScripts: "dangerously",
       url: "http://localhost",
       beforeParse: (window) => {
-        window.localStorage.setItem("zenx.appearance", "light");
+        window.localStorage.setItem(
+          "zenx.appearance",
+          JSON.stringify({
+            mode: "system",
+            lightPreset: "cobalt",
+            darkPreset: "ember",
+            accent: "jade",
+            contrast: "high",
+            translucentSidebar: true,
+          }),
+        );
         Object.defineProperty(window, "matchMedia", {
-          value: () => ({ matches: true }),
+          value: () => ({ matches: false }),
         });
       },
     },
   );
   assert.equal(dom.window.document.documentElement.dataset.appearance, "light");
+  assert.equal(
+    dom.window.document.documentElement.dataset.themePreset,
+    "cobalt",
+  );
+  assert.equal(dom.window.document.documentElement.dataset.accent, "jade");
+  assert.equal(dom.window.document.documentElement.dataset.contrast, "high");
+  assert.equal(
+    dom.window.document.documentElement.dataset.sidebarTranslucency,
+    "on",
+  );
   assert.equal(dom.window.document.documentElement.style.colorScheme, "light");
   assert.equal(
     dom.window.document
