@@ -201,9 +201,12 @@ a single-file executable. It is written below
 together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
 Linux. `verify:portable` inspects that final directory without launching the
 GUI: it checks the platform executable and app bundle, bundled pnpm, the
-honestly empty external Marketplace catalog, all nine first-party tarballs,
-and the pinned provider manifest/assets. On Linux it additionally requires the
-pinned Chromium payload and installation marker. CI assembles this same
+honestly empty external Marketplace catalog, and all nine first-party tarballs
+with the production plugin-package validator and their expected plugin ids.
+It also requires the packaged main trust anchor to match the provider manifest,
+then uses the production provider resolver to hash the executable, runtime, and
+every pinned file or directory asset. On Linux it additionally requires the
+pinned Chromium executable and installation marker. CI assembles this same
 portable directory on Ubuntu, macOS, and Windows; GUI interactions and
 external-account flows remain separate platform acceptance evidence.
 
