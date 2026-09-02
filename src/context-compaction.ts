@@ -159,6 +159,9 @@ function validateRetainedToolClosure(
   const calls = coveredItems.filter(
     (candidate): candidate is ToolCallItem => candidate.type === "tool_call",
   );
+  const callsByIdentity = new Map(
+    calls.map((call) => [`${call.turnId}\0${call.callId}`, call]),
+  );
   for (const call of calls) {
     const matchingResults = coveredItems.filter(
       (candidate) =>
@@ -226,6 +229,19 @@ function validateRetainedToolClosure(
     if (!matchingCalls.some((call) => retained.has(call.id))) {
       throw new Error(
         `Retained tool result has no retained call: ${result.callId}`,
+      );
+    }
+  }
+
+  for (const call of calls) {
+    if (call.parentCallId === undefined) continue;
+    const parent = callsByIdentity.get(`${call.turnId}\0${call.parentCallId}`);
+    if (parent === undefined) {
+      throw new Error(`Nested tool call has no covered parent: ${call.callId}`);
+    }
+    if (retained.has(call.id) !== retained.has(parent.id)) {
+      throw new Error(
+        `Retained nested tool lifecycle is incomplete for call ${call.callId}`,
       );
     }
   }

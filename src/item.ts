@@ -192,6 +192,8 @@ export interface ToolCallItem extends ItemBase {
   callId: string;
   /** Stable id of the model response that produced this call. */
   modelResponseId?: string;
+  /** Immediate composite-tool parent; absent on legacy and model-authored calls. */
+  parentCallId?: string;
   name: string;
   arguments: Record<string, unknown>;
 }

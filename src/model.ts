@@ -168,7 +168,7 @@ function compileCanonicalModelMessages(
   targetSelection: CanonicalProviderSelection | undefined,
   turnSelections: ReadonlyMap<string, CanonicalProviderSelection>,
 ): ModelMessage[] {
-  items = orderSteeredMessagesForSampling(items);
+  items = withoutNestedToolLifecycle(orderSteeredMessagesForSampling(items));
   const messages: ModelMessage[] = [];
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
@@ -281,6 +281,23 @@ function compileCanonicalModelMessages(
     }
   }
   return messages;
+}
+
+function withoutNestedToolLifecycle(
+  items: readonly CanonicalItem[],
+): readonly CanonicalItem[] {
+  const nestedCalls = new Set<string>();
+  for (const item of items) {
+    if (item.type === "tool_call" && item.parentCallId !== undefined) {
+      nestedCalls.add(`${item.turnId}\0${item.callId}`);
+    }
+  }
+  if (nestedCalls.size === 0) return items;
+  return items.filter((item) => {
+    if (item.type === "tool_call") return item.parentCallId === undefined;
+    if (item.type !== "tool_result") return true;
+    return !nestedCalls.has(`${item.turnId}\0${item.callId}`);
+  });
 }
 
 /**

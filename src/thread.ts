@@ -56,6 +56,28 @@ export class Thread {
     if (item.type === "model_usage") {
       validateModelUsage(item);
     }
+    if (item.type === "tool_call" && item.parentCallId !== undefined) {
+      if (
+        typeof item.parentCallId !== "string" ||
+        item.parentCallId.length === 0
+      ) {
+        throw new Error("Nested tool call requires a non-empty parentCallId");
+      }
+      if (item.parentCallId === item.callId) {
+        throw new Error("Nested tool call cannot be its own parent");
+      }
+      const parents = this.#items.filter(
+        (candidate) =>
+          candidate.type === "tool_call" &&
+          candidate.turnId === item.turnId &&
+          candidate.callId === item.parentCallId,
+      );
+      if (parents.length !== 1) {
+        throw new Error(
+          `Nested tool call must have exactly one earlier parent in this Turn: ${item.parentCallId}`,
+        );
+      }
+    }
     if (item.type === "context_compaction") {
       validateContextCompactionItem(this.#items, item);
       const current = this.effectiveConfiguration();

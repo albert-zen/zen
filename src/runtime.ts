@@ -526,6 +526,18 @@ export class AgentRuntime {
     toolCall: ToolCallItem,
     options: RunTurnOptions,
   ): Promise<void> {
+    await this.#settleToolCall(turnId, toolCall, options, {
+      admission: "outer",
+      signal: options.signal,
+    });
+  }
+
+  async #settleToolCall(
+    turnId: string,
+    toolCall: ToolCallItem,
+    options: RunTurnOptions,
+    execution: { admission: "outer" | "inherited"; signal: AbortSignal },
+  ): Promise<ToolExecutionResult> {
     let prepared;
     try {
       prepared = this.#tools.prepare({
@@ -533,62 +545,58 @@ export class AgentRuntime {
         name: toolCall.name,
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,
-        signal: options.signal,
+        signal: execution.signal,
       });
     } catch (error) {
-      await this.#completeToolResult(
-        toolCall,
-        {
-          output: `Tool preparation failed: ${describeError(error)}`,
-          exitCode: options.signal.aborted ? 130 : 1,
-        },
-        options,
-      );
-      if (options.signal.aborted) throw error;
-      return;
+      const result = {
+        output: `Tool preparation failed: ${describeError(error)}`,
+        exitCode: execution.signal.aborted ? 130 : 1,
+      };
+      await this.#completeToolResult(toolCall, result, options);
+      if (execution.signal.aborted) throw error;
+      return result;
     }
 
     let decision: ApprovalDecision;
     try {
       decision = await waitForAbort(
-        this.#tools.admit(prepared, {
-          policy: toolPolicyFromApprovalPolicy(
-            options.configuration.approvalPolicy,
-          ),
-          approvalRequest: {
-            threadId: options.thread.id,
-            turnId,
-            itemId: toolCall.id,
-            callId: toolCall.callId,
-            command: readCommand(toolCall),
-            cwd: options.configuration.cwd,
-            signal: options.signal,
-          },
-          ...(options.requestApproval === undefined
-            ? {}
-            : { requestApproval: options.requestApproval }),
-        }),
-        options.signal,
+        execution.admission === "inherited"
+          ? this.#tools.admitInherited(prepared)
+          : this.#tools.admit(prepared, {
+              policy: toolPolicyFromApprovalPolicy(
+                options.configuration.approvalPolicy,
+              ),
+              approvalRequest: {
+                threadId: options.thread.id,
+                turnId,
+                itemId: toolCall.id,
+                callId: toolCall.callId,
+                command: readCommand(toolCall),
+                cwd: options.configuration.cwd,
+                signal: execution.signal,
+              },
+              ...(options.requestApproval === undefined
+                ? {}
+                : { requestApproval: options.requestApproval }),
+            }),
+        execution.signal,
       );
     } catch (error) {
-      await this.#completeToolResult(
-        toolCall,
-        {
-          output: `Tool admission failed: ${describeError(error)}`,
-          exitCode: options.signal.aborted ? 130 : 1,
-        },
-        options,
-      );
-      if (options.signal.aborted) throw error;
-      return;
+      const result = {
+        output: `Tool admission failed: ${describeError(error)}`,
+        exitCode: execution.signal.aborted ? 130 : 1,
+      };
+      await this.#completeToolResult(toolCall, result, options);
+      if (execution.signal.aborted) throw error;
+      return result;
     }
 
     if (decision === "cancel") {
-      await this.#completeToolResult(
-        toolCall,
-        { output: "User cancelled this tool call.", exitCode: 130 },
-        options,
-      );
+      const result = {
+        output: "User cancelled this tool call.",
+        exitCode: 130,
+      };
+      await this.#completeToolResult(toolCall, result, options);
       throw new DOMException("Cancelled by user", "AbortError");
     }
 
@@ -597,27 +605,72 @@ export class AgentRuntime {
       result = { output: "User declined this tool call.", exitCode: 126 };
     } else {
       try {
-        result = await this.#tools.execute(prepared);
+        const operation = this.#tools.execute(
+          prepared,
+          this.#nestedPort(turnId, toolCall, options, execution.signal),
+        );
+        result =
+          execution.admission === "inherited"
+            ? await waitForAbortGracefully(operation, execution.signal)
+            : await operation;
       } catch (error) {
-        const interrupted = options.signal.aborted;
+        const interrupted = execution.signal.aborted;
         const phase =
           error instanceof ToolResultNormalizationError
             ? "Tool result normalization failed"
             : "Tool execution failed";
-        await this.#completeToolResult(
-          toolCall,
-          {
-            output: `${phase}: ${describeError(error)}`,
-            exitCode: interrupted ? 130 : 1,
-          },
-          options,
-        );
+        const failed = {
+          output: `${phase}: ${describeError(error)}`,
+          exitCode: interrupted ? 130 : 1,
+        };
+        await this.#completeToolResult(toolCall, failed, options);
         if (interrupted) throw error;
-        return;
+        return failed;
       }
     }
 
     await this.#completeToolResult(toolCall, result, options);
+    return result;
+  }
+
+  #nestedPort(
+    turnId: string,
+    parent: ToolCallItem,
+    options: RunTurnOptions,
+    inheritedSignal: AbortSignal,
+  ) {
+    return {
+      invoke: async (
+        name: string,
+        arguments_: Record<string, unknown>,
+        signal: AbortSignal = inheritedSignal,
+      ): Promise<ToolExecutionResult> => {
+        const child: ToolCallItem = {
+          id: this.#id(),
+          threadId: options.thread.id,
+          turnId: parent.turnId,
+          createdAt: this.#now(),
+          type: "tool_call",
+          callId: this.#id(),
+          parentCallId: parent.callId,
+          name,
+          arguments: structuredClone(arguments_),
+        };
+        await this.#completeItem(child, options);
+        if (name === "run_code") {
+          const result = {
+            output: "Nested run_code is not supported.",
+            exitCode: 1,
+          };
+          await this.#completeToolResult(child, result, options);
+          return result;
+        }
+        return await this.#settleToolCall(turnId, child, options, {
+          admission: "inherited",
+          signal,
+        });
+      },
+    };
   }
 
   async #completeToolResult(
@@ -731,6 +784,42 @@ async function waitForAbort<T>(
     if (signal.aborted) {
       abort();
     }
+    void operation.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+async function waitForAbortGracefully<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+  graceMs = 300,
+): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    let timer: NodeJS.Timeout | undefined;
+    const abort = (): void => {
+      if (timer !== undefined) return;
+      timer = setTimeout(() => {
+        cleanup();
+        reject(
+          signal.reason ??
+            new DOMException("The operation was aborted", "AbortError"),
+        );
+      }, graceMs);
+    };
+    const cleanup = (): void => {
+      signal.removeEventListener("abort", abort);
+      if (timer !== undefined) clearTimeout(timer);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
     void operation.then(
       (value) => {
         cleanup();

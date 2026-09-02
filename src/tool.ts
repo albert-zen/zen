@@ -50,6 +50,23 @@ export interface ToolProvider extends ToolExecutor {
   retainPreparedInvocation?(): () => void;
 }
 
+export interface NestedToolInvocationPort {
+  invoke(
+    name: string,
+    arguments_: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<ToolExecutionResult>;
+}
+
+/** Marker contract available only to host-owned builtin composite tools. */
+export interface BuiltinCompositeToolProvider extends ToolProvider {
+  readonly identity: { readonly kind: "builtin"; readonly id: string };
+  executeComposite(
+    invocation: ToolInvocation,
+    nested: NestedToolInvocationPort,
+  ): Promise<ToolExecutionResult>;
+}
+
 export type ToolPolicy = "full_access" | "ask_unknown";
 export type StoredToolPolicyDecision = "approved" | "denied";
 
@@ -394,13 +411,35 @@ export class ToolEnvironment {
     }
   }
 
+  /** Inherited child admission: remembered deny wins; unknown never prompts. */
+  async admitInherited(
+    prepared: PreparedToolInvocation,
+  ): Promise<ApprovalDecision> {
+    this.#requirePrepared(prepared);
+    try {
+      const stored = await this.#policyStore.get(prepared.invocation.name);
+      if (stored === "denied") {
+        this.#releasePrepared(prepared);
+        return "decline";
+      }
+      return "accept";
+    } catch (error) {
+      this.#releasePrepared(prepared);
+      throw error;
+    }
+  }
+
   async execute(
     prepared: PreparedToolInvocation,
+    nested?: NestedToolInvocationPort,
   ): Promise<ToolExecutionResult> {
     const provider = this.#requirePrepared(prepared).provider;
     try {
       prepared.invocation.signal.throwIfAborted();
-      const result = await provider.execute(prepared.invocation);
+      const result =
+        nested !== undefined && isBuiltinCompositeToolProvider(provider)
+          ? await provider.executeComposite(prepared.invocation, nested)
+          : await provider.execute(prepared.invocation);
       try {
         return normalizeToolExecutionResult(result, prepared.provider);
       } catch (error) {
@@ -428,6 +467,16 @@ export class ToolEnvironment {
     this.#preparedProviders.delete(prepared);
     registration.release?.();
   }
+}
+
+function isBuiltinCompositeToolProvider(
+  provider: ToolProvider,
+): provider is BuiltinCompositeToolProvider {
+  return (
+    provider.identity.kind === "builtin" &&
+    "executeComposite" in provider &&
+    typeof provider.executeComposite === "function"
+  );
 }
 
 export class ToolResultNormalizationError extends Error {
