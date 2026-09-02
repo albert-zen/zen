@@ -36,6 +36,10 @@ import {
   toolProviderFromExecutor,
   type ToolExecutor,
 } from "../../../src/tool.js";
+import {
+  ToolOutputSpool,
+  type ToolOutputSpoolOptions,
+} from "../../../src/tool-output-spool.js";
 import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
 import { legacyModelCatalogEntries } from "./model-presets.js";
 
@@ -92,6 +96,9 @@ export interface ZenHostOptions {
   /** Compatibility input for callers that still provide one static executor. */
   tools?: ToolExecutor;
   attachments?: AttachmentStore;
+  /** Host-local owner injection, primarily for composition and lifecycle tests. */
+  toolOutputSpool?: ToolOutputSpool;
+  toolOutputSpoolOptions?: ToolOutputSpoolOptions;
 }
 
 export interface ProviderTransport {
@@ -104,6 +111,7 @@ export type ProviderFetch = typeof globalThis.fetch & {
 
 export type HostedZenAppServer = ZenAppServer & {
   closeProviderTransport(): Promise<void>;
+  closeHostResources(): Promise<void>;
 };
 
 export function createHostedAppServer(
@@ -189,6 +197,9 @@ export function createHostedAppServer(
       modelCatalog: profile.catalog,
     };
   });
+  const toolOutputSpool =
+    options.toolOutputSpool ??
+    new ToolOutputSpool(options.toolOutputSpoolOptions);
   const appServer = new ZenAppServer({
     journal:
       options.journal ??
@@ -204,6 +215,7 @@ export function createHostedAppServer(
                 new ShellToolExecutor({
                   blockedEnvironmentVariables:
                     options.secretEnvironmentVariables ?? [],
+                  toolOutputSpool,
                 }),
             ),
           ],
@@ -214,6 +226,7 @@ export function createHostedAppServer(
       ...(options.maxToolRounds === undefined
         ? {}
         : { maxToolRounds: options.maxToolRounds }),
+      toolOutputSpool,
     }),
     providerRegistry: new ProviderRegistry(profiles),
     threadMetadata:
@@ -238,21 +251,25 @@ export function createHostedAppServer(
       approvalPolicy: options.approvalPolicy,
     },
   });
-  return Object.assign(appServer, {
-    closeProviderTransport: async () => {
-      const results = await Promise.allSettled(
-        fetches.map(async (fetch) => await fetch.close?.()),
-      );
+  let closeTransportPromise: Promise<void> | undefined;
+  const closeProviderTransport = async () => {
+    closeTransportPromise ??= (async () => {
+      const results = await Promise.allSettled([
+        ...fetches.map(async (fetch) => await fetch.close?.()),
+        toolOutputSpool.close(),
+      ]);
       const failures = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );
       if (failures.length > 0) {
-        throw new AggregateError(
-          failures,
-          "Could not close provider transports",
-        );
+        throw new AggregateError(failures, "Could not close Host resources");
       }
-    },
+    })();
+    await closeTransportPromise;
+  };
+  return Object.assign(appServer, {
+    closeProviderTransport,
+    closeHostResources: closeProviderTransport,
   });
 }
 

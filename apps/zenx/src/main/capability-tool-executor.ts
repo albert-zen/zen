@@ -4,6 +4,7 @@ import type {
   ToolProvider,
 } from "../../../../src/tool.js";
 import { ShellToolExecutor, ToolEnvironment } from "../../../../src/tool.js";
+import type { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 import type { ToolDefinitionProjection } from "../../../../src/runtime.js";
 import type { CapabilityResultCommand, HostEvent } from "./host-messages.js";
 import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
@@ -96,6 +97,9 @@ export class ZenXHostToolExecutor implements ToolProvider {
               contentType: command.contentType,
               structuredContent: command.structuredContent,
             }),
+        ...(command.sourceTruncated === undefined
+          ? {}
+          : { sourceTruncated: command.sourceTruncated }),
       });
     } else {
       pending.reject(new Error(command.error));
@@ -116,6 +120,7 @@ export function createZenXHostToolEnvironment(options: {
   blockedEnvironmentVariables?: readonly string[];
   redactedValues?: readonly string[];
   send: (event: HostEvent) => void;
+  toolOutputSpool: ToolOutputSpool;
 }): {
   capabilityProvider: ZenXHostToolExecutor;
   toolEnvironment: ToolEnvironment;
@@ -133,6 +138,7 @@ export function createZenXHostToolEnvironment(options: {
       new ShellToolExecutor({
         blockedEnvironmentVariables: options.blockedEnvironmentVariables,
         redactedValues: options.redactedValues,
+        toolOutputSpool: options.toolOutputSpool,
       }),
       capabilityProvider,
     ],

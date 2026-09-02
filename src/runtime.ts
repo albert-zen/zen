@@ -19,9 +19,11 @@ import type {
 } from "./item.js";
 import type { ModelAdapter, ModelMessage, ModelTool } from "./model.js";
 import type { Thread } from "./thread.js";
+import { renderToolOutput, type ToolOutputSpool } from "./tool-output-spool.js";
 import {
   ToolEnvironment,
   ToolResultNormalizationError,
+  capturedToolOutput,
   toolProviderFromExecutor,
   type ApprovalHandler,
   type ToolExecutionResult,
@@ -114,6 +116,7 @@ export class AgentRuntime {
   readonly #now: () => string;
   readonly #maxToolRounds: number | undefined;
   readonly #toolDefinitionProjection: ToolDefinitionProjection | undefined;
+  readonly #toolOutputSpool: ToolOutputSpool | undefined;
 
   constructor(options: {
     tools?: ToolExecutor;
@@ -122,6 +125,7 @@ export class AgentRuntime {
     now?: () => string;
     maxToolRounds?: number;
     toolDefinitionProjection?: ToolDefinitionProjection;
+    toolOutputSpool?: ToolOutputSpool;
   }) {
     if (options.tools !== undefined && options.toolEnvironment !== undefined) {
       throw new Error("Provide tools or toolEnvironment, not both");
@@ -146,6 +150,7 @@ export class AgentRuntime {
     }
     this.#maxToolRounds = options.maxToolRounds;
     this.#toolDefinitionProjection = options.toolDefinitionProjection;
+    this.#toolOutputSpool = options.toolOutputSpool;
   }
 
   async runTurn(options: RunTurnOptions): Promise<void> {
@@ -620,6 +625,16 @@ export class AgentRuntime {
     result: ToolExecutionResult,
     options: RunTurnOptions,
   ): Promise<void> {
+    const capture =
+      capturedToolOutput(result) ??
+      (this.#toolOutputSpool === undefined
+        ? undefined
+        : await this.#toolOutputSpool.captureText(
+            result.output,
+            result.sourceTruncated === undefined
+              ? {}
+              : { sourceTruncated: result.sourceTruncated },
+          ));
     const resultItem: ToolResultItem = {
       id: this.#id(),
       threadId: options.thread.id,
@@ -627,7 +642,7 @@ export class AgentRuntime {
       createdAt: this.#now(),
       type: "tool_result",
       callId: toolCall.callId,
-      output: result.output,
+      output: capture === undefined ? result.output : renderToolOutput(capture),
       exitCode: result.exitCode,
       ...(result.contentType === undefined
         ? {}

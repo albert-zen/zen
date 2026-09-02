@@ -5,7 +5,11 @@ import { createInterface } from "node:readline/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { createHostedAppServer, type HostProvider } from "./host.js";
+import {
+  createHostedAppServer,
+  type HostedZenAppServer,
+  type HostProvider,
+} from "./host.js";
 import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
 import { DEFAULT_OPENAI_SUBSCRIPTION_MODEL } from "../../../src/model/openai-subscription.js";
 import {
@@ -31,6 +35,7 @@ interface ParsedArguments {
 interface ClientSession {
   client: CodexClient;
   localServer?: CodexWebSocketServer;
+  localHost?: HostedZenAppServer;
 }
 
 const DEFAULT_APPROVAL_POLICY = "never" as const;
@@ -76,27 +81,33 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
   const zenHome = dataDirectory(args);
   const hostConfig = hostOptions(args);
   const host = createHostedAppServer(hostConfig);
-  if (listen === "stdio://" || listen === "stdio") {
-    if (bearerToken !== undefined) {
-      throw new Error(
-        "--auth-token-file only applies to WebSocket listeners or --remote",
-      );
+  try {
+    if (listen === "stdio://" || listen === "stdio") {
+      if (bearerToken !== undefined) {
+        throw new Error(
+          "--auth-token-file only applies to WebSocket listeners or --remote",
+        );
+      }
+      const close = serveCodexStdio({
+        appServer: host,
+        zenHome,
+      });
+      await waitForProcessShutdown();
+      close();
+      return;
     }
-    serveCodexStdio({
+
+    const server = await serveCodexWebSocket({
       appServer: host,
       zenHome,
+      listen,
+      ...(bearerToken === undefined ? {} : { bearerToken }),
     });
-    return;
+    process.stderr.write(`Zen App Server listening on ${server.url}\n`);
+    await waitForShutdown(server);
+  } finally {
+    await host.closeHostResources();
   }
-
-  const server = await serveCodexWebSocket({
-    appServer: host,
-    zenHome,
-    listen,
-    ...(bearerToken === undefined ? {} : { bearerToken }),
-  });
-  process.stderr.write(`Zen App Server listening on ${server.url}\n`);
-  await waitForShutdown(server);
 }
 
 async function runCommand(args: ParsedArguments): Promise<void> {
@@ -120,6 +131,7 @@ async function runCommand(args: ParsedArguments): Promise<void> {
   } finally {
     session.client.close();
     await session.localServer?.close();
+    await session.localHost?.closeHostResources();
   }
 }
 
@@ -202,6 +214,7 @@ async function chatCommand(args: ParsedArguments): Promise<void> {
     terminal.close();
     session.client.close();
     await session.localServer?.close();
+    await session.localHost?.closeHostResources();
   }
 }
 
@@ -243,6 +256,7 @@ async function threadsCommand(args: ParsedArguments): Promise<void> {
   } finally {
     session.client.close();
     await session.localServer?.close();
+    await session.localHost?.closeHostResources();
   }
 }
 
@@ -312,17 +326,33 @@ async function connectClient(args: ParsedArguments): Promise<ClientSession> {
   let url = remote;
   if (remote === undefined) {
     const hostConfig = hostOptions(args);
-    localServer = await serveCodexWebSocket({
-      appServer: createHostedAppServer(hostConfig),
-      zenHome: dataDirectory(args),
-      listen: "ws://127.0.0.1:0",
-      ...(bearerToken === undefined ? {} : { bearerToken }),
-    });
-    url = localServer.url;
+    const localHost = createHostedAppServer(hostConfig);
+    try {
+      localServer = await serveCodexWebSocket({
+        appServer: localHost,
+        zenHome: dataDirectory(args),
+        listen: "ws://127.0.0.1:0",
+        ...(bearerToken === undefined ? {} : { bearerToken }),
+      });
+      url = localServer.url;
+      const client = await connectInitializedClient(url, bearerToken);
+      return { client, localServer, localHost };
+    } catch (error) {
+      await localServer?.close().catch(() => undefined);
+      await localHost.closeHostResources().catch(() => undefined);
+      throw error;
+    }
   }
   if (url === undefined) {
     throw new Error("Failed to create an App Server endpoint");
   }
+  return { client: await connectInitializedClient(url, bearerToken) };
+}
+
+async function connectInitializedClient(
+  url: string,
+  bearerToken: string | undefined,
+): Promise<CodexClient> {
   const client = await CodexClient.connect(url, {
     ...(bearerToken === undefined ? {} : { bearerToken }),
   });
@@ -331,7 +361,7 @@ async function connectClient(args: ParsedArguments): Promise<ClientSession> {
     title: "Zen CLI",
     version: "0.1.0",
   });
-  return localServer === undefined ? { client } : { client, localServer };
+  return client;
 }
 
 async function openThread(
@@ -761,6 +791,26 @@ async function waitForShutdown(server: CodexWebSocketServer): Promise<void> {
     process.once("SIGTERM", stop);
   });
   await server.close();
+}
+
+async function waitForProcessShutdown(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const stop = (): void => {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      process.stdin.off("end", stop);
+      process.stdin.off("close", stop);
+      resolve();
+    };
+    if (process.stdin.readableEnded || process.stdin.destroyed) {
+      stop();
+      return;
+    }
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+    process.stdin.once("end", stop);
+    process.stdin.once("close", stop);
+  });
 }
 
 function printHelp(): void {

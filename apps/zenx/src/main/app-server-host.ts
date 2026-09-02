@@ -18,6 +18,7 @@ import {
 import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
 import { projectThreadAttachments } from "./image-attachments.js";
 import { projectModelUsage } from "../../../../src/model-usage.js";
+import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 let server: CodexWebSocketServer | undefined;
 let appServer: HostedZenAppServer | undefined;
@@ -25,6 +26,7 @@ let tools: ZenXHostToolExecutor | undefined;
 let replaceCapabilities:
   ((capabilities: ZenXCapabilityHostSnapshot) => void) | undefined;
 let shuttingDown = false;
+let toolOutputSpool: ToolOutputSpool | undefined;
 
 process.on("message", (message: unknown) => {
   if (!isHostCommand(message)) return;
@@ -146,10 +148,12 @@ async function handleCommand(command: HostCommand): Promise<void> {
   if (server !== undefined) {
     throw new Error("ZenX App Server host already started");
   }
+  toolOutputSpool = new ToolOutputSpool(command.config.toolOutputSpoolOptions);
   const toolComposition = createZenXHostToolEnvironment({
     capabilities: command.capabilities,
     blockedEnvironmentVariables: command.config.secretEnvironmentVariables,
     send,
+    toolOutputSpool,
   });
   tools = toolComposition.capabilityProvider;
   replaceCapabilities = toolComposition.replaceCapabilities;
@@ -157,6 +161,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
     ...command.config,
     toolEnvironment: toolComposition.toolEnvironment,
     toolDefinitionProjection: toolComposition.toolDefinitionProjection,
+    toolOutputSpool,
   });
   server = await serveCodexWebSocket({
     appServer,
@@ -172,8 +177,13 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   await server?.close();
   server = undefined;
-  await appServer?.closeProviderTransport();
+  if (appServer !== undefined) {
+    await appServer.closeHostResources();
+  } else {
+    await toolOutputSpool?.close();
+  }
   appServer = undefined;
+  toolOutputSpool = undefined;
   tools?.close();
   tools = undefined;
   replaceCapabilities = undefined;

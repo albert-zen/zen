@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { CanonicalItem } from "../../../src/item.js";
+import { ToolOutputSpool } from "../../../src/tool-output-spool.js";
 import {
   createZenXHostToolEnvironment,
   ZenXHostToolExecutor,
@@ -9,7 +10,9 @@ import {
 import type { HostEvent } from "../src/main/host-messages.js";
 import { shellPrintCommand } from "./fixtures/shell-command.js";
 
-test("real ZenX host composition preserves builtin and capability provider identities", async () => {
+test("real ZenX host composition preserves builtin and capability provider identities", async (t) => {
+  const toolOutputSpool = new ToolOutputSpool();
+  t.after(async () => await toolOutputSpool.close());
   const events: HostEvent[] = [];
   const { capabilityProvider, toolEnvironment, toolDefinitionProjection } =
     createZenXHostToolEnvironment({
@@ -23,6 +26,7 @@ test("real ZenX host composition preserves builtin and capability provider ident
         ],
       },
       send: (event) => events.push(event),
+      toolOutputSpool,
     });
   assert.deepEqual(
     toolDefinitionProjection([]).map((definition) => definition.name),
@@ -64,11 +68,18 @@ test("real ZenX host composition preserves builtin and capability provider ident
     invocationId: request.invocationId,
     output: "bounded",
     exitCode: 0,
+    sourceTruncated: true,
   });
-  assert.deepEqual(await execution, { output: "bounded", exitCode: 0 });
+  assert.deepEqual(await execution, {
+    output: "bounded",
+    exitCode: 0,
+    sourceTruncated: true,
+  });
 });
 
-test("real ZenX child-host projection hides v2 schemas until canonical read history", () => {
+test("real ZenX child-host projection hides v2 schemas until canonical read history", (t) => {
+  const toolOutputSpool = new ToolOutputSpool();
+  t.after(async () => await toolOutputSpool.close());
   const pluginTool = {
     name: "fixture_echo",
     description: "Echo exact bytes",
@@ -94,6 +105,7 @@ test("real ZenX child-host projection hides v2 schemas until canonical read hist
       ],
     },
     send: () => undefined,
+    toolOutputSpool,
   });
 
   const initial = toolDefinitionProjection([]);
@@ -177,7 +189,9 @@ test("exposes capability definitions and resolves main-process execution", async
   assert.deepEqual(await execution, { output: "bounded", exitCode: 0 });
 });
 
-test("propagates cancellation to the main-process provider", async () => {
+test("propagates cancellation to the main-process provider", async (t) => {
+  const toolOutputSpool = new ToolOutputSpool();
+  t.after(async () => await toolOutputSpool.close());
   const events: HostEvent[] = [];
   const { toolEnvironment } = createZenXHostToolEnvironment({
     capabilities: {
@@ -190,6 +204,7 @@ test("propagates cancellation to the main-process provider", async () => {
       ],
     },
     send: (event) => events.push(event),
+    toolOutputSpool,
   });
   const controller = new AbortController();
   const prepared = toolEnvironment.prepare({
@@ -205,7 +220,9 @@ test("propagates cancellation to the main-process provider", async () => {
   assert.equal(events.at(-1)?.type, "capability/cancel");
 });
 
-test("replaces one target projection while an invocation from another plugin remains active", async () => {
+test("replaces one target projection while an invocation from another plugin remains active", async (t) => {
+  const toolOutputSpool = new ToolOutputSpool();
+  t.after(async () => await toolOutputSpool.close());
   const events: HostEvent[] = [];
   const neighbor = tool("neighbor_wait", "Neighbor wait");
   const targetOne = tool("target_echo", "Target one");
@@ -216,6 +233,7 @@ test("replaces one target projection while an invocation from another plugin rem
       plugins: [plugin("neighbor", neighbor), plugin("fixture", targetOne)],
     },
     send: (event) => events.push(event),
+    toolOutputSpool,
   });
   const preparedNeighbor = composition.toolEnvironment.prepare({
     callId: "neighbor-active",

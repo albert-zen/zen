@@ -1,7 +1,15 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 import type { ApprovalDecision, JsonValue } from "./item.js";
 import type { ModelTool } from "./model.js";
+import {
+  DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES,
+  type ToolOutputCaptureMetadata,
+  type ToolOutputSpool,
+} from "./tool-output-spool.js";
+
+const TOOL_OUTPUT_CAPTURE = Symbol("tool-output-capture");
 
 export interface ToolInvocation {
   callId: string;
@@ -16,6 +24,10 @@ export interface ToolExecutionResult {
   exitCode: number;
   contentType?: string;
   structuredContent?: JsonValue;
+  /** Host-local capture state; AgentRuntime renders it before canonical append. */
+  [TOOL_OUTPUT_CAPTURE]?: ToolOutputCaptureMetadata;
+  /** True when the provider already omitted source bytes before returning. */
+  sourceTruncated?: boolean;
 }
 
 export const MAX_STRUCTURED_TOOL_RESULT_BYTES = 1024 * 1024;
@@ -431,7 +443,9 @@ export function normalizeToolExecutionResult(
 ): ToolExecutionResult {
   if (
     typeof result.output !== "string" ||
-    !Number.isSafeInteger(result.exitCode)
+    !Number.isSafeInteger(result.exitCode) ||
+    (result.sourceTruncated !== undefined &&
+      typeof result.sourceTruncated !== "boolean")
   ) {
     throw new Error("Tool returned an invalid output or exit code");
   }
@@ -467,6 +481,12 @@ export function normalizeToolExecutionResult(
     exitCode: result.exitCode,
     contentType,
     structuredContent: deepFreeze(structuredClone(result.structuredContent)),
+    ...(result[TOOL_OUTPUT_CAPTURE] === undefined
+      ? {}
+      : { [TOOL_OUTPUT_CAPTURE]: result[TOOL_OUTPUT_CAPTURE] }),
+    ...(result.sourceTruncated === undefined
+      ? {}
+      : { sourceTruncated: result.sourceTruncated }),
   };
 }
 
@@ -574,6 +594,7 @@ export class ShellToolExecutor implements ToolProvider {
   readonly #redactedValues: readonly string[];
   readonly #terminationGraceMs: number;
   readonly #environment: NodeJS.ProcessEnv;
+  readonly #toolOutputSpool: ToolOutputSpool | undefined;
 
   constructor(
     options: {
@@ -582,12 +603,14 @@ export class ShellToolExecutor implements ToolProvider {
       environment?: Readonly<NodeJS.ProcessEnv>;
       blockedEnvironmentVariables?: readonly string[];
       redactedValues?: readonly string[];
+      toolOutputSpool?: ToolOutputSpool;
     } = {},
   ) {
     const sourceEnvironment = options.environment ?? process.env;
     const blockedEnvironmentVariables =
       options.blockedEnvironmentVariables ?? [];
-    this.#maxOutputBytes = options.maxOutputBytes ?? 1024 * 1024;
+    this.#maxOutputBytes =
+      options.maxOutputBytes ?? DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES;
     this.#redactedValues = Object.freeze(
       [
         ...(options.redactedValues ?? []),
@@ -599,6 +622,7 @@ export class ShellToolExecutor implements ToolProvider {
       }),
     );
     this.#terminationGraceMs = options.terminationGraceMs ?? 250;
+    this.#toolOutputSpool = options.toolOutputSpool;
     this.#environment = Object.freeze(
       sanitizeToolEnvironment(sourceEnvironment, blockedEnvironmentVariables),
     );
@@ -623,12 +647,24 @@ export class ShellToolExecutor implements ToolProvider {
         detached: process.platform !== "win32",
       });
 
+      const capture = this.#toolOutputSpool?.beginCapture({
+        redactedValues: this.#redactedValues,
+        maxCaptureBytes: this.#maxOutputBytes,
+      });
+      const stdoutDecoder =
+        capture === undefined ? undefined : new StringDecoder("utf8");
+      const stderrDecoder =
+        capture === undefined ? undefined : new StringDecoder("utf8");
       const chunks: Buffer[] = [];
       let bytes = 0;
       let settled = false;
       let terminationStarted = false;
       let forceKillTimer: NodeJS.Timeout | undefined;
-      const collect = (chunk: Buffer): void => {
+      const collect = (chunk: Buffer, decoder?: StringDecoder): void => {
+        if (capture !== undefined) {
+          capture.write(decoder!.write(chunk));
+          return;
+        }
         if (bytes >= this.#maxOutputBytes) {
           return;
         }
@@ -637,8 +673,8 @@ export class ShellToolExecutor implements ToolProvider {
         chunks.push(kept);
         bytes += kept.length;
       };
-      child.stdout.on("data", collect);
-      child.stderr.on("data", collect);
+      child.stdout.on("data", (chunk: Buffer) => collect(chunk, stdoutDecoder));
+      child.stderr.on("data", (chunk: Buffer) => collect(chunk, stderrDecoder));
 
       const killProcessTree = (signal: NodeJS.Signals): void => {
         if (process.platform !== "win32" && child.pid !== undefined) {
@@ -688,6 +724,7 @@ export class ShellToolExecutor implements ToolProvider {
         }
         settled = true;
         cleanup();
+        void capture?.discard();
         reject(error);
       };
       invocation.signal.addEventListener("abort", abort, { once: true });
@@ -715,6 +752,22 @@ export class ShellToolExecutor implements ToolProvider {
         }
         settled = true;
         cleanup();
+        if (capture !== undefined) {
+          capture.write(stdoutDecoder!.end());
+          capture.write(stderrDecoder!.end());
+          if (signal !== null) capture.write(`\n[terminated by ${signal}]`);
+          void capture
+            .finish()
+            .then((outputCapture) => {
+              resolve({
+                output: outputCapture.output ?? "",
+                [TOOL_OUTPUT_CAPTURE]: outputCapture,
+                exitCode: code ?? 128,
+              });
+            })
+            .catch((error: unknown) => reject(error));
+          return;
+        }
         const suffix =
           bytes >= this.#maxOutputBytes ? "\n[output truncated by Zen]" : "";
         const output = redactValues(
@@ -729,6 +782,12 @@ export class ShellToolExecutor implements ToolProvider {
       });
     });
   }
+}
+
+export function capturedToolOutput(
+  result: ToolExecutionResult,
+): ToolOutputCaptureMetadata | undefined {
+  return result[TOOL_OUTPUT_CAPTURE];
 }
 
 function providerIdentityKey(identity: ToolProviderIdentity): string {

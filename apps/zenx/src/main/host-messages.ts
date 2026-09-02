@@ -21,6 +21,7 @@ export type ZenXHostConfig = Omit<
   | "threadMetadata"
   | "threadSummaryProjection"
   | "toolDefinitionProjection"
+  | "toolOutputSpool"
 >;
 
 export type ZenXSingleProviderHostConfig = ZenXHostConfig &
@@ -61,6 +62,7 @@ export interface CapabilityResultCommand {
   exitCode?: number;
   contentType?: string;
   structuredContent?: JsonValue;
+  sourceTruncated?: boolean;
   error?: string;
 }
 

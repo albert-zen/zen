@@ -931,6 +931,9 @@ export class AppServerManager {
                     contentType: result.contentType,
                     structuredContent: result.structuredContent,
                   }),
+              ...(result.sourceTruncated === undefined
+                ? {}
+                : { sourceTruncated: result.sourceTruncated }),
             } satisfies HostCommand);
           }
         })
