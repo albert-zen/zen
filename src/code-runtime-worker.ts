@@ -26,12 +26,19 @@ type WorkerMessage =
       name: string;
       arguments: Record<string, unknown>;
     }
+  | { type: "tool_observed"; requestId: string }
   | { type: "completed"; text: string; unawaitedRequestIds: string[] }
-  | { type: "failed"; code: string; message: string };
+  | {
+      type: "failed";
+      code: string;
+      message: string;
+      unawaitedRequestIds: string[];
+    };
 
 const input = workerData as WorkerInput;
 const port = input.port;
 delete (input as Partial<WorkerInput>).port;
+process.argv.length = 0;
 const pending = new Map<
   string,
   {
@@ -77,6 +84,7 @@ port.on("message", (encoded: unknown) => {
       type: "failed",
       code: "INVALID_BRIDGE_MESSAGE",
       message: describeError(error),
+      unawaitedRequestIds: findUnawaitedRequestIds(),
     });
   }
 });
@@ -107,7 +115,9 @@ const tools = new Proxy(Object.create(null) as Record<string, unknown>, {
         arguments: args,
       });
       const observe = (): void => {
+        if (record.observed) return;
         record.observed = true;
+        send({ type: "tool_observed", requestId });
       };
       return {
         then(onFulfilled, onRejected) {
@@ -154,13 +164,10 @@ async function execute(): Promise<void> {
     ) => (...values: unknown[]) => Promise<unknown>;
     const body = new AsyncFunction("tools", "text", input.code);
     await body(tools, text);
-    const unawaitedRequestIds = [...requests]
-      .filter(([, request]) => !request.observed)
-      .map(([requestId]) => requestId);
     send({
       type: "completed",
       text: textParts.join("\n"),
-      unawaitedRequestIds,
+      unawaitedRequestIds: findUnawaitedRequestIds(),
     });
   } catch (error) {
     send({
@@ -168,8 +175,15 @@ async function execute(): Promise<void> {
       code:
         error instanceof WorkerExecutionError ? error.code : "EXECUTION_FAILED",
       message: describeError(error),
+      unawaitedRequestIds: findUnawaitedRequestIds(),
     });
   }
+}
+
+function findUnawaitedRequestIds(): string[] {
+  return [...requests]
+    .filter(([, request]) => !request.observed)
+    .map(([requestId]) => requestId);
 }
 
 function send(message: WorkerMessage): void {

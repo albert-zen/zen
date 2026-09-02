@@ -23,9 +23,11 @@ import { renderToolOutput, type ToolOutputSpool } from "./tool-output-spool.js";
 import {
   ToolEnvironment,
   ToolResultNormalizationError,
+  UnawaitedNestedToolCallError,
   capturedToolOutput,
   toolProviderFromExecutor,
   type ApprovalHandler,
+  type NestedToolObservation,
   type ToolExecutionResult,
   type ToolExecutor,
   type ToolPolicy,
@@ -615,20 +617,35 @@ export class AgentRuntime {
             : await operation;
       } catch (error) {
         const interrupted = execution.signal.aborted;
+        const unawaited =
+          execution.signal.reason instanceof UnawaitedNestedToolCallError;
         const phase =
           error instanceof ToolResultNormalizationError
             ? "Tool result normalization failed"
             : "Tool execution failed";
-        const failed = {
-          output: `${phase}: ${describeError(error)}`,
-          exitCode: interrupted ? 130 : 1,
-        };
+        const failed = unawaited
+          ? {
+              output:
+                "Tool call was abandoned because run_code returned without awaiting it.",
+              exitCode: 125,
+            }
+          : {
+              output: `${phase}: ${describeError(error)}`,
+              exitCode: interrupted ? 130 : 1,
+            };
         await this.#completeToolResult(toolCall, failed, options);
         if (interrupted) throw error;
         return failed;
       }
     }
 
+    if (execution.signal.reason instanceof UnawaitedNestedToolCallError) {
+      result = {
+        output:
+          "Tool call was abandoned because run_code returned without awaiting it.",
+        exitCode: 125,
+      };
+    }
     await this.#completeToolResult(toolCall, result, options);
     return result;
   }
@@ -644,6 +661,7 @@ export class AgentRuntime {
         name: string,
         arguments_: Record<string, unknown>,
         signal: AbortSignal = inheritedSignal,
+        observation?: Promise<NestedToolObservation>,
       ): Promise<ToolExecutionResult> => {
         const child: ToolCallItem = {
           id: this.#id(),
@@ -657,6 +675,15 @@ export class AgentRuntime {
           arguments: structuredClone(arguments_),
         };
         await this.#completeItem(child, options);
+        if ((await observation) === "unawaited") {
+          const result = {
+            output:
+              "Tool call was abandoned because run_code returned without awaiting it.",
+            exitCode: 125,
+          };
+          await this.#completeToolResult(child, result, options);
+          return result;
+        }
         if (name === "run_code") {
           const result = {
             output: "Nested run_code is not supported.",

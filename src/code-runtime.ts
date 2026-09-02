@@ -1,11 +1,13 @@
 import { stripTypeScriptTypes } from "node:module";
 import { MessageChannel, type MessagePort, Worker } from "node:worker_threads";
 
-import type {
-  BuiltinCompositeToolProvider,
-  NestedToolInvocationPort,
-  ToolExecutionResult,
-  ToolInvocation,
+import {
+  UnawaitedNestedToolCallError,
+  type BuiltinCompositeToolProvider,
+  type NestedToolObservation,
+  type NestedToolInvocationPort,
+  type ToolExecutionResult,
+  type ToolInvocation,
 } from "./tool.js";
 
 export interface CodeRuntimeLimits {
@@ -23,6 +25,8 @@ const DEFAULT_LIMITS: CodeRuntimeLimits = {
   maxTextBytes: 256 * 1024,
   maxToolCalls: 64,
 };
+
+const NESTED_ABORT_SETTLEMENT_GRACE_MS = 350;
 
 export class CodeRuntimeError extends Error {
   readonly code: string;
@@ -133,9 +137,16 @@ export class CodeRuntime {
     let toolCalls = 0;
     let queue = Promise.resolve();
     const nestedOperations = new Set<Promise<void>>();
+    const nestedRequests = new Map<string, NestedRequest>();
+    const rejectedRequestIds = new Set<string>();
     let finalMessage:
       | { type: "completed"; text: string; unawaitedRequestIds: string[] }
-      | { type: "failed"; code: string; message: string }
+      | {
+          type: "failed";
+          code: string;
+          message: string;
+          unawaitedRequestIds: string[];
+        }
       | undefined;
 
     try {
@@ -147,9 +158,10 @@ export class CodeRuntime {
           operation();
         };
         const abort = (): void => {
+          abandonRequests(nestedRequests, controller.signal.reason);
           void worker.terminate();
           void (async () => {
-            await Promise.allSettled([...nestedOperations]);
+            await settleNestedOperations(nestedOperations);
             finish(() => reject(controller.signal.reason));
           })();
         };
@@ -161,6 +173,7 @@ export class CodeRuntime {
           try {
             message = decodeWorkerMessage(encoded);
           } catch (error) {
+            abandonRequests(nestedRequests, error);
             void worker.terminate();
             finish(() =>
               reject(
@@ -174,8 +187,28 @@ export class CodeRuntime {
           }
           if (message.type === "tool_call") {
             const { requestId, name, arguments: arguments_ } = message;
+            if (nestedRequests.has(requestId)) {
+              abandonRequests(
+                nestedRequests,
+                new CodeRuntimeError(
+                  "INVALID_BRIDGE_MESSAGE",
+                  `Duplicate nested request id: ${requestId}`,
+                ),
+              );
+              void worker.terminate();
+              finish(() =>
+                reject(
+                  new CodeRuntimeError(
+                    "INVALID_BRIDGE_MESSAGE",
+                    `Duplicate nested request id: ${requestId}`,
+                  ),
+                ),
+              );
+              return;
+            }
             toolCalls += 1;
             if (toolCalls > this.#limits.maxToolCalls) {
+              rejectedRequestIds.add(requestId);
               post(channel.port1, {
                 type: "tool_error",
                 requestId,
@@ -184,12 +217,20 @@ export class CodeRuntime {
               });
               return;
             }
+            const request: NestedRequest = {
+              controller: new AbortController(),
+              observation: deferred<NestedToolObservation>(),
+              finished: false,
+            };
+            nestedRequests.set(requestId, request);
             const operation = queue.then(async () => {
               try {
+                request.controller.signal.throwIfAborted();
                 const result = await options.nested.invoke(
                   name,
                   arguments_,
-                  controller.signal,
+                  request.controller.signal,
+                  request.observation.promise,
                 );
                 post(channel.port1, {
                   type: "tool_result",
@@ -210,17 +251,55 @@ export class CodeRuntime {
             });
             queue = operation.catch(() => undefined);
             nestedOperations.add(operation);
-            void operation.finally(() => nestedOperations.delete(operation));
+            void operation.then(
+              () => {
+                request.finished = true;
+                nestedOperations.delete(operation);
+              },
+              () => {
+                request.finished = true;
+                nestedOperations.delete(operation);
+              },
+            );
+            return;
+          }
+          if (message.type === "tool_observed") {
+            const request = nestedRequests.get(message.requestId);
+            if (request === undefined) {
+              if (rejectedRequestIds.has(message.requestId)) return;
+              const error = new CodeRuntimeError(
+                "INVALID_BRIDGE_MESSAGE",
+                `Unknown nested request id: ${message.requestId}`,
+              );
+              abandonRequests(nestedRequests, error);
+              void worker.terminate();
+              finish(() => reject(error));
+              return;
+            }
+            request.observation.resolve("observed");
             return;
           }
           if (message.type === "completed" || message.type === "failed") {
-            finalMessage = message;
+            const unawaitedRequestIds = new Set(message.unawaitedRequestIds);
+            for (const [requestId, request] of nestedRequests) {
+              if (!request.finished) unawaitedRequestIds.add(requestId);
+            }
+            abandonRequests(
+              nestedRequests,
+              new UnawaitedNestedToolCallError(),
+              unawaitedRequestIds,
+            );
+            finalMessage = {
+              ...message,
+              unawaitedRequestIds: [...unawaitedRequestIds],
+            };
             void settleAfterNested();
           }
         });
 
         worker.once("error", (error) => {
           if (controller.signal.aborted) return;
+          abandonRequests(nestedRequests, error);
           finish(() =>
             reject(
               new CodeRuntimeError(
@@ -237,6 +316,13 @@ export class CodeRuntime {
             finalMessage === undefined &&
             !controller.signal.aborted
           ) {
+            abandonRequests(
+              nestedRequests,
+              new CodeRuntimeError(
+                "WORKER_EXITED",
+                `Code Worker exited before completion with code ${String(code)}`,
+              ),
+            );
             finish(() =>
               reject(
                 new CodeRuntimeError(
@@ -249,16 +335,10 @@ export class CodeRuntime {
         });
 
         const settleAfterNested = async (): Promise<void> => {
-          await Promise.allSettled([...nestedOperations]);
+          await settleNestedOperations(nestedOperations);
           const message = finalMessage;
           if (message === undefined || settled) return;
           await worker.terminate();
-          if (message.type === "failed") {
-            finish(() =>
-              reject(new CodeRuntimeError(message.code, message.message)),
-            );
-            return;
-          }
           if (message.unawaitedRequestIds.length > 0) {
             finish(() =>
               reject(
@@ -267,6 +347,12 @@ export class CodeRuntime {
                   `Code returned with ${String(message.unawaitedRequestIds.length)} unawaited tool call(s)`,
                 ),
               ),
+            );
+            return;
+          }
+          if (message.type === "failed") {
+            finish(() =>
+              reject(new CodeRuntimeError(message.code, message.message)),
             );
             return;
           }
@@ -393,8 +479,26 @@ type WorkerBridgeMessage =
       name: string;
       arguments: Record<string, unknown>;
     }
+  | { type: "tool_observed"; requestId: string }
   | { type: "completed"; text: string; unawaitedRequestIds: string[] }
-  | { type: "failed"; code: string; message: string };
+  | {
+      type: "failed";
+      code: string;
+      message: string;
+      unawaitedRequestIds: string[];
+    };
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly settled: boolean;
+  resolve(value: T): void;
+}
+
+interface NestedRequest {
+  controller: AbortController;
+  observation: Deferred<NestedToolObservation>;
+  finished: boolean;
+}
 
 function decodeWorkerMessage(encoded: unknown): WorkerBridgeMessage {
   if (typeof encoded !== "string")
@@ -407,6 +511,12 @@ function decodeWorkerMessage(encoded: unknown): WorkerBridgeMessage {
       requestId: requireString(message.requestId, "requestId"),
       name: requireString(message.name, "tool name"),
       arguments: requireRecord(message.arguments, "tool arguments"),
+    };
+  }
+  if (message.type === "tool_observed") {
+    return {
+      type: "tool_observed",
+      requestId: requireString(message.requestId, "requestId"),
     };
   }
   if (message.type === "completed") {
@@ -426,16 +536,70 @@ function decodeWorkerMessage(encoded: unknown): WorkerBridgeMessage {
     };
   }
   if (message.type === "failed") {
-    if (typeof message.message !== "string") {
+    if (
+      typeof message.message !== "string" ||
+      !Array.isArray(message.unawaitedRequestIds) ||
+      !message.unawaitedRequestIds.every(
+        (requestId) => typeof requestId === "string",
+      )
+    ) {
       throw new Error("Worker failure message is invalid");
     }
     return {
       type: "failed",
       code: requireString(message.code, "failure code"),
       message: message.message,
+      unawaitedRequestIds: message.unawaitedRequestIds,
     };
   }
   throw new Error("Worker message type is invalid");
+}
+
+function deferred<T>(): Deferred<T> {
+  let settle!: (value: T) => void;
+  let settled = false;
+  const promise = new Promise<T>((resolve) => {
+    settle = resolve;
+  });
+  return {
+    promise,
+    get settled() {
+      return settled;
+    },
+    resolve(value: T) {
+      if (settled) return;
+      settled = true;
+      settle(value);
+    },
+  };
+}
+
+function abandonRequests(
+  requests: ReadonlyMap<string, NestedRequest>,
+  reason: unknown,
+  only?: ReadonlySet<string>,
+): void {
+  for (const [requestId, request] of requests) {
+    if (only !== undefined && !only.has(requestId)) continue;
+    if (!request.observation.settled) {
+      request.observation.resolve("unawaited");
+    }
+    if (!request.controller.signal.aborted) {
+      request.controller.abort(reason);
+    }
+  }
+}
+
+async function settleNestedOperations(
+  operations: ReadonlySet<Promise<void>>,
+): Promise<void> {
+  const settled = Promise.allSettled([...operations]).then(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  const grace = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, NESTED_ABORT_SETTLEMENT_GRACE_MS);
+  });
+  await Promise.race([settled, grace]);
+  if (timer !== undefined) clearTimeout(timer);
 }
 
 function requireRecord(value: unknown, name: string): Record<string, unknown> {

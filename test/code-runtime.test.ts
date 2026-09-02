@@ -296,6 +296,92 @@ test("reports TypeScript strip errors, wall limits, output limits, and abort", a
   );
 });
 
+test("wall termination does not wait forever for a nested invocation that ignores abort", async () => {
+  const neverSettles: NestedToolInvocationPort = {
+    invoke: async () => await new Promise<ToolExecutionResult>(() => {}),
+  };
+  await assert.rejects(
+    Promise.race([
+      executeCode(`await tools.never({});`, { wallTimeMs: 50 }, neverSettles),
+      new Promise<string>((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error("CodeRuntime remained pending")),
+          500,
+        ),
+      ),
+    ]),
+    (error: unknown) =>
+      error instanceof CodeRuntimeError && error.code === "WALL_TIME_LIMIT",
+  );
+});
+
+test("Runtime settles an abort-ignoring observed child exactly once before the outer timeout", async () => {
+  const provider: ToolProvider = {
+    identity: { kind: "external", id: "never-provider" },
+    definitions: [
+      {
+        name: "never.provider",
+        description: "Never settles",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async () => await new Promise<ToolExecutionResult>(() => {}),
+  };
+  const environment = new ToolEnvironment({
+    providers: [
+      provider,
+      new RunCodeToolProvider(new CodeRuntime({ wallTimeMs: 50 })),
+    ],
+  });
+  const server = runtimeServer({
+    model: oneRunCodeModel(`
+      await Promise.all([
+        tools["never.provider"]({ sequence: 1 }),
+        tools["never.provider"]({ sequence: 2 }),
+      ]);
+    `),
+    tools: environment,
+  });
+  const thread = await server.startThread();
+  await Promise.race([
+    (await server.startTurn(thread.id, "never provider")).done,
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error("Turn remained pending")), 500),
+    ),
+  ]);
+  const snapshot = await server.readThread(thread.id);
+  const children = snapshot.items.filter(
+    (item) => item.type === "tool_call" && item.parentCallId !== undefined,
+  );
+  assert.equal(children.length, 1);
+  const child = children[0];
+  assert(child && child.type === "tool_call");
+  const childResultIndexes = snapshot.items.flatMap((item, index) =>
+    item.type === "tool_result" && item.callId === child.callId ? [index] : [],
+  );
+  assert.equal(childResultIndexes.length, 1);
+  const childResult = snapshot.items[childResultIndexes[0] ?? -1];
+  assert.equal(childResult?.type, "tool_result");
+  assert.equal(childResult.exitCode, 130);
+  const outerResultIndex = snapshot.items.findIndex(
+    (item) => item.type === "tool_result" && item.callId === "outer-1",
+  );
+  assert(
+    childResultIndexes[0] !== undefined &&
+      childResultIndexes[0] < outerResultIndex,
+  );
+});
+
+test("guest observes an actually empty argv through global and direct process imports", async () => {
+  assert.equal(
+    await executeCode(`
+      const imported = await import("node:process");
+      text({ global: process.argv, named: imported.argv, default: imported.default.argv });
+    `),
+    '{"global":[],"named":[],"default":[]}',
+  );
+});
+
 test("heap containment terminates an allocating Worker", async () => {
   await assert.rejects(
     executeCode(
@@ -372,6 +458,115 @@ test("serial bridge bounds tool calls, rejects unawaited calls, and preserves no
     ),
     "TOOL_CALL_LIMIT",
   );
+});
+
+test("unawaited children are aborted and canonically abandoned before the outer result", async () => {
+  let bridgeAborted = false;
+  const neverSettles: NestedToolInvocationPort = {
+    invoke: async (_name, _arguments, signal) => {
+      signal?.addEventListener("abort", () => {
+        bridgeAborted = true;
+      });
+      return await new Promise<ToolExecutionResult>(() => {});
+    },
+  };
+  await assert.rejects(
+    Promise.race([
+      executeCode(`tools.never({});`, {}, neverSettles),
+      new Promise<string>((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error("Unawaited child remained pending")),
+          500,
+        ),
+      ),
+    ]),
+    (error: unknown) =>
+      error instanceof CodeRuntimeError && error.code === "UNAWAITED_TOOL_CALL",
+  );
+  assert.equal(bridgeAborted, true);
+
+  const cases = [
+    {
+      childName: "fast.child",
+      code: `tools["fast.child"]({}); await new Promise((resolve) => setTimeout(resolve, 30));`,
+      expectedExecutions: 0,
+    },
+    {
+      childName: "never.child",
+      code: `void tools["never.child"]({}).then(() => undefined); await new Promise((resolve) => setTimeout(resolve, 30));`,
+      expectedExecutions: 1,
+    },
+  ] as const;
+  for (const testCase of cases) {
+    const { childName } = testCase;
+    let executions = 0;
+    let providerAborted = false;
+    const provider: ToolProvider = {
+      identity: { kind: "external", id: childName },
+      definitions: [
+        {
+          name: childName,
+          description: childName,
+          inputSchema: { type: "object" },
+        },
+      ],
+      execute: async (invocation) => {
+        executions += 1;
+        invocation.signal.addEventListener("abort", () => {
+          providerAborted = true;
+        });
+        if (childName === "never.child") {
+          return await new Promise<ToolExecutionResult>(() => {});
+        }
+        return { output: "too fast", exitCode: 0 };
+      },
+    };
+    const environment = new ToolEnvironment({
+      providers: [provider, new RunCodeToolProvider()],
+    });
+    const server = runtimeServer({
+      model: oneRunCodeModel(testCase.code),
+      tools: environment,
+    });
+    const thread = await server.startThread();
+    await Promise.race([
+      (await server.startTurn(thread.id, childName)).done,
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error(`${childName} Turn remained pending`)),
+          500,
+        ),
+      ),
+    ]);
+    const snapshot = await server.readThread(thread.id);
+    const child = snapshot.items.find(
+      (item) => item.type === "tool_call" && item.parentCallId !== undefined,
+    );
+    assert(child && child.type === "tool_call");
+    const lifecycle = snapshot.items.filter(
+      (item) =>
+        (item.type === "tool_call" || item.type === "tool_result") &&
+        (item.type !== "tool_result" ||
+          item.callId === child.callId ||
+          item.callId.startsWith("outer-")),
+    );
+    const childResults = lifecycle.filter(
+      (item) => item.type === "tool_result" && item.callId === child.callId,
+    );
+    assert.equal(childResults.length, 1);
+    assert.equal(childResults[0]?.type, "tool_result");
+    assert.equal(childResults[0].exitCode, 125);
+    assert.match(childResults[0].output, /without awaiting/u);
+    const outerResultIndex = lifecycle.findIndex(
+      (item) => item.type === "tool_result" && item.callId.startsWith("outer-"),
+    );
+    const childResultIndex = lifecycle.findIndex(
+      (item) => item.type === "tool_result" && item.callId === child.callId,
+    );
+    assert(childResultIndex >= 0 && childResultIndex < outerResultIndex);
+    assert.equal(executions, testCase.expectedExecutions);
+    assert.equal(providerAborted, childName === "never.child");
+  }
 });
 
 test("outer admission is remembered while inherited child admission preserves deny", async () => {
@@ -624,5 +819,56 @@ test("parent validation, restart replay, context filtering, and compaction closu
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("parentCallId accepts only an existing run_code parent", () => {
+  for (const parentName of ["shell", "arbitrary.tool"]) {
+    const thread = new Thread("parent-validation", [
+      {
+        id: "metadata",
+        threadId: "parent-validation",
+        createdAt: "2026-09-02T00:00:00.000Z",
+        type: "thread_metadata",
+        cwd: "/tmp",
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+        providerProfileId: "provider",
+        modelId: "model",
+        reasoningEffort: "medium",
+      },
+      {
+        id: "started",
+        threadId: "parent-validation",
+        turnId: "turn",
+        createdAt: "2026-09-02T00:00:01.000Z",
+        type: "turn_started",
+      },
+      {
+        id: "parent",
+        threadId: "parent-validation",
+        turnId: "turn",
+        createdAt: "2026-09-02T00:00:02.000Z",
+        type: "tool_call",
+        callId: "parent-call",
+        name: parentName,
+        arguments: {},
+      },
+    ]);
+    assert.throws(
+      () =>
+        thread.append({
+          id: "child",
+          threadId: "parent-validation",
+          turnId: "turn",
+          createdAt: "2026-09-02T00:00:03.000Z",
+          type: "tool_call",
+          callId: "child-call",
+          parentCallId: "parent-call",
+          name: "child.tool",
+          arguments: {},
+        }),
+      /run_code parent/u,
+    );
   }
 });

@@ -55,7 +55,19 @@ export interface NestedToolInvocationPort {
     name: string,
     arguments_: Record<string, unknown>,
     signal?: AbortSignal,
+    observation?: Promise<NestedToolObservation>,
   ): Promise<ToolExecutionResult>;
+}
+
+export type NestedToolObservation = "observed" | "unawaited";
+
+export class UnawaitedNestedToolCallError extends Error {
+  constructor() {
+    super(
+      "Tool call was abandoned because run_code returned without awaiting it.",
+    );
+    this.name = "UnawaitedNestedToolCallError";
+  }
 }
 
 /** Marker contract available only to host-owned builtin composite tools. */

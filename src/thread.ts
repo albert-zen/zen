@@ -67,7 +67,9 @@ export class Thread {
         throw new Error("Nested tool call cannot be its own parent");
       }
       const parents = this.#items.filter(
-        (candidate) =>
+        (
+          candidate,
+        ): candidate is Extract<CanonicalItem, { type: "tool_call" }> =>
           candidate.type === "tool_call" &&
           candidate.turnId === item.turnId &&
           candidate.callId === item.parentCallId,
@@ -76,6 +78,9 @@ export class Thread {
         throw new Error(
           `Nested tool call must have exactly one earlier parent in this Turn: ${item.parentCallId}`,
         );
+      }
+      if (parents[0]?.name !== "run_code") {
+        throw new Error("Nested tool call requires a run_code parent");
       }
     }
     if (item.type === "context_compaction") {
