@@ -59,6 +59,7 @@ test("startup repairs a bundled plugin profile that points at an old worktree", 
         `unexpected startup error for ${pluginId}: ${String(error)}`,
       );
     },
+    pluginCatalogAvailable: () => true,
   } as unknown as ZenXCapabilityService;
 
   try {
@@ -68,6 +69,35 @@ test("startup repairs a bundled plugin profile that points at an old worktree", 
     assert.deepEqual(installCalls[0]?.[2], {
       allowSameVersionBundledVariant: true,
     });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("startup does not resurrect bundled plugins while the catalog is unreadable", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-bundled-startup-unreadable-"),
+  );
+  const installCalls: unknown[][] = [];
+  const capabilities = {
+    pluginCatalogAvailable: () => false,
+    pluginSnapshot: () => ({ plugins: [] }),
+    installBundledPluginPackage: async (...args: unknown[]) => {
+      installCalls.push(args);
+    },
+    recordBundledPluginStartupError: (pluginId: string, error: unknown) => {
+      throw new Error(
+        `unexpected startup error for ${pluginId}: ${String(error)}`,
+      );
+    },
+  } as unknown as ZenXCapabilityService;
+
+  try {
+    await installZenXBundledPluginsAtStartup(
+      capabilities,
+      path.join(directory, "resources"),
+    );
+    assert.deepEqual(installCalls, []);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

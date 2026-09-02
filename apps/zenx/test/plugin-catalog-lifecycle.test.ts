@@ -8,6 +8,7 @@ import { JsonZenXPluginCatalogStore } from "../src/main/capabilities/plugin-cata
 import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 import type {
   ZenXCapabilityPackage,
+  ZenXPluginCatalogState,
   ZenXPluginManifestV2,
 } from "../src/main/capabilities/types.js";
 
@@ -168,6 +169,55 @@ test("bundled packages use the same lifecycle and reinstall from the supplied pa
   assert.equal(
     registry.hostSnapshot().definitions[0]?.name,
     "zenx_triggers_list",
+  );
+});
+
+test("an unreadable optional plugin catalog does not stop the core host", async () => {
+  const registry = new ZenXPluginCatalog({
+    load: async () => {
+      throw new Error("catalog file is unreadable");
+    },
+    save: async () => {},
+  });
+
+  await registry.initialize();
+
+  assert.deepEqual(registry.hostSnapshot().definitions, []);
+  assert.equal(registry.pluginCatalogAvailable(), false);
+  assert.match(
+    registry.diagnostics().discoveryErrors.join("\n"),
+    /catalog could not be loaded: catalog file is unreadable/u,
+  );
+});
+
+test("a malformed plugin descriptor is quarantined without hiding valid plugins", async () => {
+  const registry = new ZenXPluginCatalog({
+    load: async () => ({
+      disabled: [],
+      uninstalled: [],
+      packages: {
+        valid: {
+          manifest: manifest("valid", "valid_run"),
+          source: "local",
+        },
+        broken: {
+          manifest: { schemaVersion: 1 },
+          source: "local",
+        },
+      } as unknown as ZenXPluginCatalogState["packages"],
+    }),
+    save: async () => {},
+  });
+
+  await registry.initialize();
+
+  assert.deepEqual(
+    registry.pluginSnapshot().plugins.map((plugin) => plugin.id),
+    ["valid"],
+  );
+  assert.match(
+    registry.diagnostics().discoveryErrors.join("\n"),
+    /descriptor broken was quarantined/u,
   );
 });
 

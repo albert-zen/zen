@@ -22,6 +22,7 @@ import type {
   ZenXPluginDiagnostics,
   ZenXPluginRuntimeLifecycle,
   ZenXPluginRuntimeStage,
+  ZenXPluginCatalogState,
 } from "./types.js";
 import {
   MAX_CAPABILITY_OUTPUT_BYTES,
@@ -54,6 +55,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   #uninstalled = new Set<string>();
   #packageDescriptors: Record<string, ZenXPluginPackageDescriptor> = {};
   #profileGeneration: string | undefined;
+  #catalogAvailable = true;
   #configurationMutationTail: Promise<void> = Promise.resolve();
 
   constructor(
@@ -70,39 +72,59 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   }
 
   async initialize(): Promise<void> {
-    const configuration = await this.#configurationStore.load();
+    let configuration: ZenXPluginCatalogState;
+    try {
+      configuration = await this.#configurationStore.load();
+    } catch (error) {
+      this.#catalogAvailable = false;
+      // The catalog contains optional capabilities, not the core Thread
+      // journal. Keep the host usable with no plugins when its persisted
+      // catalog cannot be read; the diagnostic makes the loss explicit and
+      // the user can reinstall the affected plugins from Settings.
+      this.#discoveryErrors.push(
+        `ZenX plugin catalog could not be loaded: ${describeError(error)}`,
+      );
+      configuration = { disabled: [], uninstalled: [], packages: {} };
+    }
     this.#disabled = new Set(configuration.disabled);
     this.#uninstalled = new Set(configuration.uninstalled ?? []);
-    this.#packageDescriptors = structuredClone(configuration.packages ?? {});
+    const packageDescriptors = structuredClone(configuration.packages ?? {});
     this.#profileGeneration = configuration.profileGeneration;
     if (
       this.#profileGeneration !== undefined &&
       !/^[0-9a-f-]{36}$/u.test(this.#profileGeneration)
     ) {
-      throw new Error("ZenX plugin profile generation is invalid");
+      this.#discoveryErrors.push(
+        "ZenX plugin profile generation is invalid; affected plugins were quarantined",
+      );
+      this.#profileGeneration = undefined;
     }
-    for (const [pluginId, descriptor] of Object.entries(
-      this.#packageDescriptors,
-    )) {
-      if (
-        descriptor.manifest.id !== pluginId ||
-        descriptor.manifest.schemaVersion !== 2 ||
-        (descriptor.source !== "bundled" && descriptor.source !== "local") ||
-        (descriptor.profilePackageName !== undefined &&
-          (descriptor.profilePackageName.length === 0 ||
-            this.#profileGeneration === undefined)) ||
-        (descriptor.profileSource !== undefined &&
-          (!isProfileSource(descriptor.profileSource) ||
-            descriptor.profilePackageName !==
-              descriptor.profileSource.packageName ||
-            (descriptor.profileSource.mode === "bundled") !==
-              (descriptor.source === "bundled")))
-      ) {
-        throw new Error(
-          `ZenX plugin catalog descriptor ${pluginId} is invalid`,
+    this.#packageDescriptors = {};
+    for (const [pluginId, descriptor] of Object.entries(packageDescriptors)) {
+      try {
+        if (
+          descriptor.manifest.id !== pluginId ||
+          descriptor.manifest.schemaVersion !== 2 ||
+          (descriptor.source !== "bundled" && descriptor.source !== "local") ||
+          (descriptor.profilePackageName !== undefined &&
+            (descriptor.profilePackageName.length === 0 ||
+              this.#profileGeneration === undefined)) ||
+          (descriptor.profileSource !== undefined &&
+            (!isProfileSource(descriptor.profileSource) ||
+              descriptor.profilePackageName !==
+                descriptor.profileSource.packageName ||
+              (descriptor.profileSource.mode === "bundled") !==
+                (descriptor.source === "bundled")))
+        ) {
+          throw new Error("descriptor shape is invalid");
+        }
+        validateManifest(descriptor.manifest);
+        this.#packageDescriptors[pluginId] = descriptor;
+      } catch (error) {
+        this.#discoveryErrors.push(
+          `ZenX plugin catalog descriptor ${pluginId} was quarantined: ${describeError(error)}`,
         );
       }
-      validateManifest(descriptor.manifest);
     }
   }
 
@@ -850,6 +872,10 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
 
   profileGeneration(): string | undefined {
     return this.#profileGeneration;
+  }
+
+  pluginCatalogAvailable(): boolean {
+    return this.#catalogAvailable;
   }
 
   availablePlugins(): ZenXAvailablePlugin[] {

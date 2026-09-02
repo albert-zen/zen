@@ -493,8 +493,16 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return this.#registry.diagnostics();
   }
 
+  pluginCatalogAvailable(): boolean {
+    return this.#registry.pluginCatalogAvailable();
+  }
+
   recordBundledPluginStartupError(pluginId: string, error: unknown): void {
     this.#registry.recordDiscoveryError(`${pluginId}: ${describeError(error)}`);
+  }
+
+  recordDiscoveryError(message: string): void {
+    this.#registry.recordDiscoveryError(message);
   }
 
   marketplaceBuiltIns(): MarketplaceBuiltInEntry[] {

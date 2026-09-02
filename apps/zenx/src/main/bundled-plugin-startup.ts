@@ -16,6 +16,10 @@ export async function installZenXBundledPluginsAtStartup(
   capabilities: ZenXCapabilityService,
   resourcesDirectory: string,
 ): Promise<void> {
+  // Do not resurrect bundled plugins while the persisted catalog is
+  // unreadable: its disabled/uninstalled choices are unknown. The core host
+  // remains available and the user can repair or reinstall from Settings.
+  if (!capabilities.pluginCatalogAvailable()) return;
   await isolateBundledPluginInstall(
     capabilities,
     ZENX_ROOMS_CAPABILITY_ID,

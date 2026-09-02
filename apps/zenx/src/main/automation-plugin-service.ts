@@ -31,25 +31,41 @@ export async function createBundledAutomationPluginService(options: {
   appServer: ZenXTriggerAppServerPort;
   titles?: ZenXTriggerTitlePort;
 }): Promise<ZenXBundledAutomationPluginService> {
-  const legacy = await new ZenXTriggerStore(
-    path.join(options.userDataDirectory, "trigger-registry.json"),
-  ).read();
+  let legacy: TriggerSnapshot;
+  try {
+    legacy = await new ZenXTriggerStore(
+      path.join(options.userDataDirectory, "trigger-registry.json"),
+    ).read();
+  } catch (error) {
+    // Rooms and Triggers are optional capabilities. Preserve the corrupt
+    // legacy file for repair, but do not prevent the core host from starting.
+    console.error(
+      `ZenX legacy automation state is unavailable; starting with empty optional state: ${describeError(error)}`,
+    );
+    legacy = { triggers: [], history: [], rooms: [] };
+  }
   const storageRoot = path.join(options.userDataDirectory, "plugin-data");
-  await JsonPluginStorage.open({
-    pluginId: ZENX_TRIGGERS_CAPABILITY_ID,
-    root: storageRoot,
-    version: 1,
-    initialValue: {
-      triggers: legacy.triggers,
-      history: legacy.history,
+  await initializeOptionalStorage(
+    {
+      pluginId: ZENX_TRIGGERS_CAPABILITY_ID,
+      root: storageRoot,
+      version: 1,
+      initialValue: {
+        triggers: legacy.triggers,
+        history: legacy.history,
+      },
     },
-  });
-  await JsonPluginStorage.open({
-    pluginId: ZENX_ROOMS_CAPABILITY_ID,
-    root: storageRoot,
-    version: 1,
-    initialValue: { rooms: legacy.rooms },
-  });
+    ZENX_TRIGGERS_CAPABILITY_ID,
+  );
+  await initializeOptionalStorage(
+    {
+      pluginId: ZENX_ROOMS_CAPABILITY_ID,
+      root: storageRoot,
+      version: 1,
+      initialValue: { rooms: legacy.rooms },
+    },
+    ZENX_ROOMS_CAPABILITY_ID,
+  );
   const active = new Set<string>();
   return new ZenXBundledAutomationPluginService(
     options.appServer,
@@ -57,6 +73,25 @@ export async function createBundledAutomationPluginService(options: {
     active,
     options.titles,
   );
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function initializeOptionalStorage(
+  options: Parameters<typeof JsonPluginStorage.open>[0],
+  pluginId: string,
+): Promise<void> {
+  try {
+    await JsonPluginStorage.open(options);
+  } catch (error) {
+    // Keep a corrupt optional store in place for explicit repair. The
+    // capability runtime will remain unavailable, but ZenX itself can start.
+    console.error(
+      `ZenX optional plugin storage is unavailable for ${pluginId}: ${describeError(error)}`,
+    );
+  }
 }
 
 class PluginAutomationStore implements ZenXTriggerStorePort {
