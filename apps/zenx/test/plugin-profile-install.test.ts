@@ -268,9 +268,16 @@ test("a second profile install rebuilds links inside the new generation", async 
         "generation-first",
       ),
     );
+    const canonicalGeneration = await realpath(secondGeneration);
+    const packageRelativeToGeneration = path.relative(
+      canonicalGeneration,
+      firstPackage,
+    );
     assert.ok(
-      firstPackage.startsWith(`${secondGeneration}${path.sep}`),
-      `${firstPackage} must stay inside ${secondGeneration}`,
+      packageRelativeToGeneration !== "" &&
+        !packageRelativeToGeneration.startsWith("..") &&
+        !path.isAbsolute(packageRelativeToGeneration),
+      `${firstPackage} must stay inside ${canonicalGeneration}`,
     );
   } finally {
     await service.close();

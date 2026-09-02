@@ -192,22 +192,29 @@ integrity-checked provider assembly used by `smoke:packaged`:
 
 ```sh
 npm --workspace apps/zenx run package:portable
+npm --workspace apps/zenx run verify:portable
 ```
 
 The result is an **unsigned, unpacked portable directory**, not an installer or
 a single-file executable. It is written below
 `apps/zenx/.packaged/artifact/ZenX-<platform>-<arch>/`; keep that directory
 together and start `ZenX.exe` on Windows, `ZenX.app` on macOS, or `ZenX` on
-Linux.
+Linux. `verify:portable` inspects that final directory without launching the
+GUI: it checks the platform executable and app bundle, bundled pnpm, the
+honestly empty external Marketplace catalog, all nine first-party tarballs,
+and the pinned provider manifest/assets. On Linux it additionally requires the
+pinned Chromium payload and installation marker. CI assembles this same
+portable directory on Ubuntu, macOS, and Windows; GUI interactions and
+external-account flows remain separate platform acceptance evidence.
 
 Each packaging command builds a private output snapshot, validates and packs
-the first-party Rooms package with the public plugin developer kit, assembles resources,
-and runs Electron packager in its own `.packaged/runs/` directory, reusing only
-SHA-256-addressed verified archive cache files. The Playwright browser archive
-is pinned per platform in the same provider lock and its complete extracted
-payload is covered by the final manifest. A completed directory replaces the
-stable artifact under a per-target lock; a concurrent command for the same
-target fails explicitly.
+all nine first-party package variants with the public plugin developer kit,
+assembles resources, and runs Electron packager in its own `.packaged/runs/`
+directory, reusing only SHA-256-addressed verified archive cache files. The
+Playwright browser archive is pinned per platform in the same provider lock and
+its complete extracted payload is covered by the final manifest. A completed
+directory replaces the stable artifact under a per-target lock; a concurrent
+command for the same target fails explicitly.
 
 The development package identity remains `@zen/zenx`, while the portable
 runtime identity is `zenx` and its packager product/display name is `ZenX`.

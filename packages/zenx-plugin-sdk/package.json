@@ -2,6 +2,18 @@
   "name": "@zenx/plugin-sdk",
   "version": "0.1.0",
   "description": "Public ZenX plugin manifest, Host SDK v1 types, fixture Host, and create/dev/validate/pack CLI",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/albert-zen/zen.git",
+    "directory": "packages/zenx-plugin-sdk"
+  },
+  "homepage": "https://github.com/albert-zen/zen/tree/main/packages/zenx-plugin-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/albert-zen/zen/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "zenx-plugin": "./dist/cli.js"
@@ -19,6 +31,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node --input-type=module -e \"import { copyFileSync } from 'node:fs'; copyFileSync('src/zenx.plugin.schema.json', 'dist/zenx.plugin.schema.json')\"",
+    "pack:verify": "npm run build && node ./scripts/verify-pack.mjs",
     "test": "npm run build && node --test test/**/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

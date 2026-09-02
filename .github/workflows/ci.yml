@@ -53,12 +53,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Verify the reproducible public plugin SDK pack
+        run: npm --workspace @zenx/plugin-sdk run pack:verify
       - run: npm --workspace apps/zenx run check
 
   zenx-capability-smoke:
-    name: ZenX packaged capability smoke
+    name: ZenX macOS packaged capability and portable smoke
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -67,6 +69,26 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm --workspace apps/zenx run smoke:capabilities
+      - name: Package the real ZenX portable app
+        run: npm --workspace apps/zenx run package:portable
+      - name: Verify the macOS portable distribution contents
+        run: npm --workspace apps/zenx run verify:portable
+
+  zenx-linux-portable:
+    name: ZenX Linux packaged portable distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Package the real ZenX portable app
+        run: npm --workspace apps/zenx run package:portable
+      - name: Verify the Linux portable distribution contents
+        run: npm --workspace apps/zenx run verify:portable
 
   zenx-windows-computer-smoke:
     name: ZenX Windows WinApp adapter smoke
@@ -115,6 +137,8 @@ jobs:
           }
       - name: Package the real ZenX portable app
         run: npm --workspace apps/zenx run package:portable
+      - name: Verify the Windows portable distribution contents
+        run: npm --workspace apps/zenx run verify:portable
       - name: Inspect the portable app without launching it
         shell: pwsh
         run: |

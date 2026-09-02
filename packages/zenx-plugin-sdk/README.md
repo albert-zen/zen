@@ -35,4 +35,17 @@ zenx-plugin pack ./example-plugin
 
 `create` writes a runnable process plugin with only public SDK imports. `dev` first runs the same package validation, then asks one explicitly developer-enabled ZenX target to apply its canonical `dev-link` profile transaction and reload only that plugin instance; the SDK never writes Catalog or profile files. Client, request-body, interruptible package mutation, runtime admission, and target projection waits are bounded, with the client deadline kept longer than the Host's interruptible deadline. Before the durable Catalog replace, disconnect or expiry aborts and settles pnpm staging. Immediately before that single replace, the Host synchronously checks cancellation and enters a commit fence: its transaction timer is cleared, disconnect and shutdown no longer interrupt the mutation, and shutdown waits for save plus the existing non-fallible publish. A rejected save still reports failure with the prior Catalog authoritative; a successful save remains committed even if the caller disconnected. Post-commit projection has its own bound and is reported as committed-but-reload-failed. The private target descriptor exists only while that Host instance is running. `validate` checks current package metadata, manifest v2, identity, compatibility, runtime/tool/UI relationships, and package-contained runtime paths. `pack` runs that validation first and then delegates unchanged archive semantics to `npm pack --json`; it does not implement a ZenX archive, registry, dependency solver, or publisher.
 
+Before publishing the SDK package itself, run:
+
+```sh
+npm --workspace @zenx/plugin-sdk run pack:verify
+```
+
+This builds the package, performs two standard `npm pack` runs, requires
+byte-identical tarballs, checks the 27-file public package boundary, and prints
+the SHA-256, npm shasum, and integrity. The repository does not yet select or
+ship a LICENSE/NOTICE, so that legal decision and review remain required before
+the first npm publication; the verification command reports this explicitly
+and never publishes.
+
 The fixture Host keeps query, UI, and storage behavior in memory. Tests using it do not read or write ZenX user data.
