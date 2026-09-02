@@ -44,8 +44,12 @@ export interface ToolProviderIdentity {
   id: string;
 }
 
+export type ToolExecutionMode = "parallel_safe" | "exclusive";
+
 export interface ToolProvider extends ToolExecutor {
   readonly identity: ToolProviderIdentity;
+  /** Per-tool provider body scheduling only; not permission or resource scope. */
+  readonly executionModes?: Readonly<Record<string, ToolExecutionMode>>;
   /** Optional lifecycle lease held from prepare through terminal admission/execution. */
   retainPreparedInvocation?(): () => void;
 }
@@ -147,6 +151,7 @@ export interface PreparedToolInvocation {
   readonly provider: ToolProviderIdentity;
   readonly definition: ModelTool;
   readonly invocation: ToolInvocation;
+  readonly executionMode: ToolExecutionMode;
 }
 
 export interface ToolAdmissionOptions {
@@ -351,6 +356,7 @@ export class ToolEnvironment {
     const prepared: PreparedToolInvocation = Object.freeze({
       provider: registration.identity,
       definition: structuredClone(definition),
+      executionMode: executionModeFor(registration.provider, invocation.name),
       invocation: Object.freeze({
         ...invocation,
         arguments: Object.freeze(structuredClone(invocation.arguments)),
@@ -479,6 +485,21 @@ export class ToolEnvironment {
     this.#preparedProviders.delete(prepared);
     registration.release?.();
   }
+}
+
+function executionModeFor(
+  provider: ToolProvider,
+  toolName: string,
+): ToolExecutionMode {
+  if (
+    toolName === "shell" ||
+    (provider.identity.kind === "builtin" && provider.identity.id === "shell")
+  ) {
+    return "exclusive";
+  }
+  return provider.executionModes?.[toolName] === "parallel_safe"
+    ? "parallel_safe"
+    : "exclusive";
 }
 
 function isBuiltinCompositeToolProvider(

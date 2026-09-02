@@ -82,6 +82,34 @@ async function executeCode(
   return await new CodeRuntime(options).execute({ code, nested, signal });
 }
 
+function testDeferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T extends void ? void : T): void;
+} {
+  let resolve!: (value: T extends void ? void : T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise as (value: T extends void ? void : T) => void;
+  });
+  return { promise, resolve };
+}
+
+async function testWithin<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out waiting for ${label}`)),
+          1_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function oneRunCodeModel(code: string): ModelAdapter {
   let sample = 0;
   return {
@@ -315,7 +343,7 @@ test("wall termination does not wait forever for a nested invocation that ignore
   );
 });
 
-test("Runtime settles an abort-ignoring observed child exactly once before the outer timeout", async () => {
+test("Runtime settles abort-ignoring observed children exactly once before the outer timeout", async () => {
   const provider: ToolProvider = {
     identity: { kind: "external", id: "never-provider" },
     definitions: [
@@ -353,23 +381,26 @@ test("Runtime settles an abort-ignoring observed child exactly once before the o
   const children = snapshot.items.filter(
     (item) => item.type === "tool_call" && item.parentCallId !== undefined,
   );
-  assert.equal(children.length, 1);
-  const child = children[0];
-  assert(child && child.type === "tool_call");
-  const childResultIndexes = snapshot.items.flatMap((item, index) =>
-    item.type === "tool_result" && item.callId === child.callId ? [index] : [],
-  );
-  assert.equal(childResultIndexes.length, 1);
-  const childResult = snapshot.items[childResultIndexes[0] ?? -1];
-  assert.equal(childResult?.type, "tool_result");
-  assert.equal(childResult.exitCode, 130);
+  assert.equal(children.length, 2);
   const outerResultIndex = snapshot.items.findIndex(
     (item) => item.type === "tool_result" && item.callId === "outer-1",
   );
-  assert(
-    childResultIndexes[0] !== undefined &&
-      childResultIndexes[0] < outerResultIndex,
-  );
+  for (const child of children) {
+    assert(child.type === "tool_call");
+    const childResultIndexes = snapshot.items.flatMap((item, index) =>
+      item.type === "tool_result" && item.callId === child.callId
+        ? [index]
+        : [],
+    );
+    assert.equal(childResultIndexes.length, 1);
+    const childResult = snapshot.items[childResultIndexes[0] ?? -1];
+    assert.equal(childResult?.type, "tool_result");
+    assert.equal(childResult.exitCode, 130);
+    assert(
+      childResultIndexes[0] !== undefined &&
+        childResultIndexes[0] < outerResultIndex,
+    );
+  }
 });
 
 test("guest observes an actually empty argv through global and direct process imports", async () => {
@@ -396,33 +427,37 @@ test("heap containment terminates an allocating Worker", async () => {
   );
 });
 
-test("serial bridge bounds tool calls, rejects unawaited calls, and preserves nonzero results", async () => {
+test("concurrent bridge bounds tool calls, rejects unawaited calls, and preserves nonzero results", async () => {
   const active: string[] = [];
-  let overlapping = false;
+  const bothStarted = testDeferred<void>();
+  const releaseConcurrent = testDeferred<void>();
+  let gateConcurrentPair = true;
   const nested: NestedToolInvocationPort = {
     invoke: async (name): Promise<ToolExecutionResult> => {
-      if (active.length > 0) overlapping = true;
-      active.push(name);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      active.pop();
+      if (gateConcurrentPair) {
+        active.push(name);
+        if (active.length === 2) bothStarted.resolve();
+        await releaseConcurrent.promise;
+        active.pop();
+      }
       return {
         output: name === "bad" ? "failed child" : name,
         exitCode: name === "bad" ? 7 : 0,
       };
     },
   };
-  assert.equal(
-    await executeCode(
-      `
-        const values = await Promise.all([tools.first({}), tools.bad({})]);
-        text(values.map((value) => [value.output, value.exitCode]));
-      `,
-      {},
-      nested,
-    ),
-    '[["first",0],["failed child",7]]',
+  const concurrent = executeCode(
+    `
+      const values = await Promise.all([tools.first({}), tools.bad({})]);
+      text(values.map((value) => [value.output, value.exitCode]));
+    `,
+    {},
+    nested,
   );
-  assert.equal(overlapping, false);
+  await testWithin(bothStarted.promise, "both concurrent bridge calls");
+  releaseConcurrent.resolve();
+  assert.equal(await concurrent, '[["first",0],["failed child",7]]');
+  gateConcurrentPair = false;
   assert.equal(
     await executeCode(`await tools.first({});`, {}, nested),
     EMPTY_CODE_OUTPUT,

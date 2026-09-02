@@ -135,7 +135,6 @@ export class CodeRuntime {
     worker.stderr.resume();
 
     let toolCalls = 0;
-    let queue = Promise.resolve();
     const nestedOperations = new Set<Promise<void>>();
     const nestedRequests = new Map<string, NestedRequest>();
     const rejectedRequestIds = new Set<string>();
@@ -223,7 +222,7 @@ export class CodeRuntime {
               finished: false,
             };
             nestedRequests.set(requestId, request);
-            const operation = queue.then(async () => {
+            const operation = (async () => {
               try {
                 request.controller.signal.throwIfAborted();
                 const result = await options.nested.invoke(
@@ -248,8 +247,7 @@ export class CodeRuntime {
                   message: describeError(error),
                 });
               }
-            });
-            queue = operation.catch(() => undefined);
+            })();
             nestedOperations.add(operation);
             void operation.then(
               () => {

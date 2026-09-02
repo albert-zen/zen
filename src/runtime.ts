@@ -28,6 +28,7 @@ import {
   toolProviderFromExecutor,
   type ApprovalHandler,
   type NestedToolObservation,
+  type ToolExecutionMode,
   type ToolExecutionResult,
   type ToolExecutor,
   type ToolPolicy,
@@ -112,6 +113,8 @@ export type ToolDefinitionProjection = (
   items: readonly CanonicalItem[],
 ) => readonly ModelTool[];
 
+export const DEFAULT_MAX_CONCURRENT_TOOL_BODIES = 8;
+
 export class AgentRuntime {
   readonly #tools: ToolEnvironment;
   readonly #id: () => string;
@@ -119,6 +122,7 @@ export class AgentRuntime {
   readonly #maxToolRounds: number | undefined;
   readonly #toolDefinitionProjection: ToolDefinitionProjection | undefined;
   readonly #toolOutputSpool: ToolOutputSpool | undefined;
+  readonly #maxConcurrentToolBodies: number;
 
   constructor(options: {
     tools?: ToolExecutor;
@@ -128,6 +132,7 @@ export class AgentRuntime {
     maxToolRounds?: number;
     toolDefinitionProjection?: ToolDefinitionProjection;
     toolOutputSpool?: ToolOutputSpool;
+    maxConcurrentToolBodies?: number;
   }) {
     if (options.tools !== undefined && options.toolEnvironment !== undefined) {
       throw new Error("Provide tools or toolEnvironment, not both");
@@ -153,10 +158,22 @@ export class AgentRuntime {
     this.#maxToolRounds = options.maxToolRounds;
     this.#toolDefinitionProjection = options.toolDefinitionProjection;
     this.#toolOutputSpool = options.toolOutputSpool;
+    const maxConcurrentToolBodies =
+      options.maxConcurrentToolBodies ?? DEFAULT_MAX_CONCURRENT_TOOL_BODIES;
+    if (
+      !Number.isSafeInteger(maxConcurrentToolBodies) ||
+      maxConcurrentToolBodies < 1
+    ) {
+      throw new Error(
+        "Maximum concurrent tool bodies must be a positive safe integer",
+      );
+    }
+    this.#maxConcurrentToolBodies = maxConcurrentToolBodies;
   }
 
   async runTurn(options: RunTurnOptions): Promise<void> {
     const turnId = options.turnId ?? this.#id();
+    const scheduler = new TurnToolScheduler(this.#maxConcurrentToolBodies);
     const started: TurnStartedItem = {
       id: this.#id(),
       threadId: options.thread.id,
@@ -250,28 +267,7 @@ export class AgentRuntime {
           await this.#completeItem(toolCallItem, options);
           toolCallItems.push(toolCallItem);
         }
-        for (let index = 0; index < toolCallItems.length; index += 1) {
-          const toolCallItem = toolCallItems[index];
-          if (toolCallItem === undefined) {
-            continue;
-          }
-          try {
-            await this.#runTool(turnId, toolCallItem, options);
-          } catch (error) {
-            for (const abandoned of toolCallItems.slice(index + 1)) {
-              await this.#completeToolResult(
-                abandoned,
-                {
-                  output:
-                    "Tool call was abandoned because another call in the same model response did not complete.",
-                  exitCode: 125,
-                },
-                options,
-              );
-            }
-            throw error;
-          }
-        }
+        await this.#runToolBatch(turnId, toolCallItems, options, scheduler);
       }
     } catch (error) {
       if (!initialInputCommitted) throw error;
@@ -523,23 +519,108 @@ export class AgentRuntime {
     return { itemId, text, toolCalls };
   }
 
-  async #runTool(
+  async #runToolBatch(
     turnId: string,
-    toolCall: ToolCallItem,
+    toolCalls: readonly ToolCallItem[],
     options: RunTurnOptions,
+    scheduler: TurnToolScheduler,
   ): Promise<void> {
-    await this.#settleToolCall(turnId, toolCall, options, {
-      admission: "outer",
-      signal: options.signal,
-    });
+    const tickets: ScheduledToolCall[] = [];
+    for (let index = 0; index < toolCalls.length; index += 1) {
+      const toolCall = toolCalls[index];
+      if (toolCall === undefined) continue;
+      const ticket = this.#scheduleToolCall(
+        "root",
+        turnId,
+        toolCall,
+        options,
+        { admission: "outer", signal: options.signal },
+        scheduler,
+      );
+      tickets.push(ticket);
+      try {
+        if ((await ticket.ready) === "exclusive") {
+          await ticket.committed;
+        }
+      } catch (error) {
+        for (const abandoned of toolCalls.slice(index + 1)) {
+          tickets.push(
+            scheduler.schedule(
+              "root",
+              async () =>
+                immediateScheduledExecution({
+                  output:
+                    "Tool call was abandoned because another call in the same model response did not complete.",
+                  exitCode: 125,
+                }),
+              async (result) =>
+                this.#completeToolResult(abandoned, result, options),
+            ),
+          );
+        }
+        await Promise.allSettled(
+          tickets.map((candidate) => candidate.committed),
+        );
+        throw error;
+      }
+    }
+    const settlements = await Promise.allSettled(
+      tickets.map((ticket) => ticket.committed),
+    );
+    const failed = settlements.find(
+      (settlement): settlement is PromiseRejectedResult =>
+        settlement.status === "rejected",
+    );
+    if (failed !== undefined) throw failed.reason;
   }
 
-  async #settleToolCall(
+  #scheduleToolCall(
+    scope: string,
     turnId: string,
     toolCall: ToolCallItem,
     options: RunTurnOptions,
     execution: { admission: "outer" | "inherited"; signal: AbortSignal },
-  ): Promise<ToolExecutionResult> {
+    scheduler: TurnToolScheduler,
+    observation?: Promise<NestedToolObservation>,
+  ): ScheduledToolCall {
+    return scheduler.schedule(
+      scope,
+      async () => {
+        if ((await observation) === "unawaited") {
+          return immediateScheduledExecution({
+            output:
+              "Tool call was abandoned because run_code returned without awaiting it.",
+            exitCode: 125,
+          });
+        }
+        if (
+          toolCall.parentCallId !== undefined &&
+          toolCall.name === "run_code"
+        ) {
+          return immediateScheduledExecution({
+            output: "Nested run_code is not supported.",
+            exitCode: 1,
+          });
+        }
+        return await this.#prepareToolCall(
+          turnId,
+          toolCall,
+          options,
+          execution,
+          scheduler,
+        );
+      },
+      async (result) => this.#completeToolResult(toolCall, result, options),
+    );
+  }
+
+  async #prepareToolCall(
+    turnId: string,
+    toolCall: ToolCallItem,
+    options: RunTurnOptions,
+    execution: { admission: "outer" | "inherited"; signal: AbortSignal },
+    scheduler: TurnToolScheduler,
+  ): Promise<ScheduledToolExecution> {
     let prepared;
     try {
       prepared = this.#tools.prepare({
@@ -554,9 +635,10 @@ export class AgentRuntime {
         output: `Tool preparation failed: ${describeError(error)}`,
         exitCode: execution.signal.aborted ? 130 : 1,
       };
-      await this.#completeToolResult(toolCall, result, options);
-      if (execution.signal.aborted) throw error;
-      return result;
+      return immediateScheduledExecution(
+        result,
+        execution.signal.aborted ? error : undefined,
+      );
     }
 
     let decision: ApprovalDecision;
@@ -588,9 +670,10 @@ export class AgentRuntime {
         output: `Tool admission failed: ${describeError(error)}`,
         exitCode: execution.signal.aborted ? 130 : 1,
       };
-      await this.#completeToolResult(toolCall, result, options);
-      if (execution.signal.aborted) throw error;
-      return result;
+      return immediateScheduledExecution(
+        result,
+        execution.signal.aborted ? error : undefined,
+      );
     }
 
     if (decision === "cancel") {
@@ -598,56 +681,85 @@ export class AgentRuntime {
         output: "User cancelled this tool call.",
         exitCode: 130,
       };
-      await this.#completeToolResult(toolCall, result, options);
-      throw new DOMException("Cancelled by user", "AbortError");
+      return immediateScheduledExecution(
+        result,
+        new DOMException("Cancelled by user", "AbortError"),
+      );
     }
 
-    let result: ToolExecutionResult;
     if (decision === "decline") {
-      result = { output: "User declined this tool call.", exitCode: 126 };
-    } else {
-      try {
-        const operation = this.#tools.execute(
-          prepared,
-          this.#nestedPort(turnId, toolCall, options, execution.signal),
-        );
-        result =
-          execution.admission === "inherited"
-            ? await waitForAbortGracefully(operation, execution.signal)
-            : await operation;
-      } catch (error) {
-        const interrupted = execution.signal.aborted;
-        const unawaited =
-          execution.signal.reason instanceof UnawaitedNestedToolCallError;
-        const phase =
-          error instanceof ToolResultNormalizationError
-            ? "Tool result normalization failed"
-            : "Tool execution failed";
-        const failed = unawaited
-          ? {
+      return immediateScheduledExecution(
+        { output: "User declined this tool call.", exitCode: 126 },
+        undefined,
+        prepared.executionMode,
+      );
+    }
+
+    return {
+      mode:
+        toolCall.parentCallId === undefined && toolCall.name === "run_code"
+          ? "exclusive"
+          : prepared.executionMode,
+      run: async (): Promise<ScheduledToolOutcome> => {
+        let outcome: ScheduledToolOutcome;
+        try {
+          const operation = this.#tools.execute(
+            prepared,
+            this.#nestedPort(
+              turnId,
+              toolCall,
+              options,
+              execution.signal,
+              scheduler,
+            ),
+          );
+          const result =
+            execution.admission === "inherited"
+              ? await waitForAbortGracefully(operation, execution.signal)
+              : await operation;
+          outcome = { result };
+        } catch (error) {
+          const interrupted = execution.signal.aborted;
+          const unawaited =
+            execution.signal.reason instanceof UnawaitedNestedToolCallError;
+          const phase =
+            error instanceof ToolResultNormalizationError
+              ? "Tool result normalization failed"
+              : "Tool execution failed";
+          const failed = unawaited
+            ? {
+                output:
+                  "Tool call was abandoned because run_code returned without awaiting it.",
+                exitCode: 125,
+              }
+            : {
+                output: `${phase}: ${describeError(error)}`,
+                exitCode: interrupted ? 130 : 1,
+              };
+          outcome = {
+            result: failed,
+            ...(interrupted ? { controlError: error } : {}),
+          };
+        }
+
+        if (execution.signal.reason instanceof UnawaitedNestedToolCallError) {
+          outcome = {
+            result: {
               output:
                 "Tool call was abandoned because run_code returned without awaiting it.",
               exitCode: 125,
-            }
-          : {
-              output: `${phase}: ${describeError(error)}`,
-              exitCode: interrupted ? 130 : 1,
-            };
-        await this.#completeToolResult(toolCall, failed, options);
-        if (interrupted) throw error;
-        return failed;
-      }
-    }
-
-    if (execution.signal.reason instanceof UnawaitedNestedToolCallError) {
-      result = {
-        output:
-          "Tool call was abandoned because run_code returned without awaiting it.",
-        exitCode: 125,
-      };
-    }
-    await this.#completeToolResult(toolCall, result, options);
-    return result;
+            },
+          };
+        }
+        if (
+          toolCall.parentCallId === undefined &&
+          toolCall.name === "run_code"
+        ) {
+          await scheduler.drain(toolCall.callId);
+        }
+        return outcome;
+      },
+    };
   }
 
   #nestedPort(
@@ -655,6 +767,7 @@ export class AgentRuntime {
     parent: ToolCallItem,
     options: RunTurnOptions,
     inheritedSignal: AbortSignal,
+    scheduler: TurnToolScheduler,
   ) {
     return {
       invoke: async (
@@ -675,27 +788,15 @@ export class AgentRuntime {
           arguments: structuredClone(arguments_),
         };
         await this.#completeItem(child, options);
-        if ((await observation) === "unawaited") {
-          const result = {
-            output:
-              "Tool call was abandoned because run_code returned without awaiting it.",
-            exitCode: 125,
-          };
-          await this.#completeToolResult(child, result, options);
-          return result;
-        }
-        if (name === "run_code") {
-          const result = {
-            output: "Nested run_code is not supported.",
-            exitCode: 1,
-          };
-          await this.#completeToolResult(child, result, options);
-          return result;
-        }
-        return await this.#settleToolCall(turnId, child, options, {
-          admission: "inherited",
-          signal,
-        });
+        return await this.#scheduleToolCall(
+          parent.callId,
+          turnId,
+          child,
+          options,
+          { admission: "inherited", signal },
+          scheduler,
+          observation,
+        ).result;
       },
     };
   }
@@ -756,6 +857,207 @@ export class AgentRuntime {
       throw new UnsupportedSandboxError(sandbox);
     }
   }
+}
+
+interface ScheduledToolOutcome {
+  result: ToolExecutionResult;
+  controlError?: unknown;
+}
+
+interface ScheduledToolExecution {
+  mode: ToolExecutionMode;
+  run(): Promise<ScheduledToolOutcome>;
+}
+
+interface ScheduledToolCall {
+  /** Resolves after ordered preparation/admission and body scheduling. */
+  ready: Promise<ToolExecutionMode>;
+  /** Provider outcome, available before its ordered canonical commit. */
+  result: Promise<ToolExecutionResult>;
+  /** Provider outcome after its canonical result has committed. */
+  committed: Promise<ToolExecutionResult>;
+}
+
+interface ToolSchedulingLane {
+  admissionTail: Promise<void>;
+  planningTail: Promise<void>;
+  commitTail: Promise<void>;
+  hasCommitFailure: boolean;
+  commitFailure: unknown;
+  barrier: Promise<void>;
+  readonly activeBodies: Set<Promise<void>>;
+}
+
+class TurnToolScheduler {
+  readonly #semaphore: ToolBodySemaphore;
+  readonly #lanes = new Map<string, ToolSchedulingLane>();
+
+  constructor(maxConcurrentBodies: number) {
+    this.#semaphore = new ToolBodySemaphore(maxConcurrentBodies);
+  }
+
+  schedule(
+    scope: string,
+    prepare: () => Promise<ScheduledToolExecution>,
+    commit: (result: ToolExecutionResult) => Promise<void>,
+  ): ScheduledToolCall {
+    const lane = this.#lane(scope);
+    const admission = lane.admissionTail.then(prepare);
+    lane.admissionTail = admission.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    const outcome = deferred<ScheduledToolOutcome>();
+    const priorPlanning = lane.planningTail;
+    const ready = Promise.all([priorPlanning, admission]).then(
+      async ([, execution]) => {
+        const priorBarrier = lane.barrier;
+        let operation: Promise<ScheduledToolOutcome>;
+        if (execution.mode === "exclusive") {
+          const priorBodies = [...lane.activeBodies];
+          operation = (async () => {
+            await Promise.allSettled(priorBodies);
+            return await execution.run();
+          })();
+        } else {
+          operation = (async () => {
+            await priorBarrier;
+            const release = await this.#semaphore.acquire();
+            try {
+              return await execution.run();
+            } finally {
+              release();
+            }
+          })();
+        }
+
+        const bodySettled = operation.then(
+          () => undefined,
+          () => undefined,
+        );
+        lane.activeBodies.add(bodySettled);
+        if (execution.mode === "exclusive") lane.barrier = bodySettled;
+        void bodySettled.then(() => lane.activeBodies.delete(bodySettled));
+        void operation.then(outcome.resolve, outcome.reject);
+        return execution.mode;
+      },
+    );
+    lane.planningTail = ready.then(
+      () => undefined,
+      () => undefined,
+    );
+    void ready.catch(outcome.reject);
+
+    const committedOutcome = lane.commitTail.then(async () => {
+      if (lane.hasCommitFailure) throw lane.commitFailure;
+      const value = await outcome.promise;
+      await commit(value.result);
+      return value;
+    });
+    lane.commitTail = committedOutcome.then(
+      () => undefined,
+      (error: unknown) => {
+        if (!lane.hasCommitFailure) {
+          lane.hasCommitFailure = true;
+          lane.commitFailure = error;
+        }
+      },
+    );
+
+    const result = outcome.promise.then(unwrapScheduledOutcome);
+    const committed = committedOutcome.then(unwrapScheduledOutcome);
+    void result.catch(() => undefined);
+    void committed.catch(() => undefined);
+    return { ready, result, committed };
+  }
+
+  async drain(scope: string): Promise<void> {
+    const lane = this.#lanes.get(scope);
+    if (lane === undefined) return;
+    await lane.admissionTail;
+    await lane.planningTail;
+    await lane.commitTail;
+    if (lane.hasCommitFailure) throw lane.commitFailure;
+  }
+
+  #lane(scope: string): ToolSchedulingLane {
+    const current = this.#lanes.get(scope);
+    if (current !== undefined) return current;
+    const lane: ToolSchedulingLane = {
+      admissionTail: Promise.resolve(),
+      planningTail: Promise.resolve(),
+      commitTail: Promise.resolve(),
+      hasCommitFailure: false,
+      commitFailure: undefined,
+      barrier: Promise.resolve(),
+      activeBodies: new Set(),
+    };
+    this.#lanes.set(scope, lane);
+    return lane;
+  }
+}
+
+class ToolBodySemaphore {
+  #available: number;
+  readonly #waiters: Array<() => void> = [];
+
+  constructor(capacity: number) {
+    this.#available = capacity;
+  }
+
+  async acquire(): Promise<() => void> {
+    if (this.#available > 0) {
+      this.#available -= 1;
+    } else {
+      await new Promise<void>((resolve) => this.#waiters.push(resolve));
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const waiter = this.#waiters.shift();
+      if (waiter === undefined) this.#available += 1;
+      else waiter();
+    };
+  }
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function immediateScheduledExecution(
+  result: ToolExecutionResult,
+  controlError?: unknown,
+  mode: ToolExecutionMode = "exclusive",
+): ScheduledToolExecution {
+  return {
+    mode,
+    run: async () => ({
+      result,
+      ...(controlError === undefined ? {} : { controlError }),
+    }),
+  };
+}
+
+function unwrapScheduledOutcome(
+  outcome: ScheduledToolOutcome,
+): ToolExecutionResult {
+  if (outcome.controlError !== undefined) throw outcome.controlError;
+  return outcome.result;
 }
 
 function toolPolicyFromApprovalPolicy(policy: ApprovalPolicy): ToolPolicy {

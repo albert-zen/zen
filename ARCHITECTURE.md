@@ -379,8 +379,8 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   `inputSchema`；这是所有非 builtin 工具的唯一 manifest 与 discovery 合同。
 - 插件 main document 是首要模型说明；独立 Skills 平台暂缓，现有固定协议
   `skills/list` 不因此获得新的会话语义。
-- 同一模型响应产生的多个工具调用当前实现仍按顺序执行。目标执行器允许同一批 direct
-  calls 或一次 `run_code` 中的 nested calls 有界重叠：prepare、Host admission 与
+- 同一模型响应产生的 direct calls 与一次 `run_code` 中的 nested calls 共用 Turn 内
+  有界执行器：prepare、Host admission 与
   canonical result commit 保持模型提交顺序，只有标记为 `parallel_safe` 的 provider
   execution body 可以并发；`exclusive` 在前后形成 barrier。并发上限由 Host 配置，
   未声明模式时 fail-closed 为 `exclusive`。
