@@ -13,6 +13,11 @@
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
 - **AppServer** — 按 threadId 把请求路由到 Thread、驱动 AgentRuntime、向订阅者广播 item 事件的唯一服务入口。
 - **Tool Environment** — AgentRuntime 面向的混合工具执行环境，统一解析、投影、Host policy、取消、路由与结果回写，但不要求 Zen 自己实现每个工具的领域行为。
+- **Tool Presentation** — AgentRuntime 把同一个 Tool Environment 以 `direct`、`code` 或 `both` 形态投影给模型；它只改变模型调用入口，不拥有第二套工具、权限或会话语义。
+- **Code Runtime** — 每次调用在 fresh、空环境、有限 heap/time/output 且可硬终止的 Node Worker 中运行 erasable TypeScript，权限明确等同 builtin shell，并用同一个 Tool Environment 的 `tools.*` bindings 调用结构化工具。
+- **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
+- **Tool Output Spool** — Host 把超出模型 preview 上限的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
+- **Tool Execution Mode** — Tool Provider 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
 - **Tool Policy Store** — Host 按稳定 tool name 持有 `ask_unknown` 的 approved/denied 决定并通过可持久化 port 注入 Tool Environment，不进入 Thread 或 canonical ItemList。
 - **Builtin Tool Provider** — Zen 内建并直接执行的工具 provider，例如 `shell`，其执行仍经同一个 Tool Environment 和 canonical call/result 生命周期。
 - **Plugin Tool Provider** — Tool Environment 把 namespaced plugin tool 调用路由到 Plugin Runtime 的 provider，领域执行由插件拥有，Zen 只负责 admission、路由和结果回写。
@@ -316,6 +321,49 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   Runtime 不得因为累计工具轮数终止健康 Turn。
 - Tool Environment 同时组合 Builtin、Plugin 与 External Tool Providers。Zen 解析
   stable tool name、执行 Host policy、路由与回写；插件或外部服务可以拥有实际领域执行。
+- Tool Presentation 支持 `direct`、`code` 与 `both`。`direct` 投影普通 structured
+  tool schemas；`code` 只投影普通 JSON function `run_code({ code, description })`，并在
+  JavaScript SDK 中声明当前可用的 `tools.*` bindings；`both` 同时投影两者，作为目标
+  默认，使简单调用无需经过 JavaScript，而循环、分支、并发和中间结果过滤可以使用
+  `run_code`。默认 `both` 的 composition 无法初始化 Code Runtime 时明确 warning 并退回
+  `direct`；显式选择 `code` 时则启动失败，不得假装执行成功。
+- 每次模型采样捕获该次实际投影的 stable tool-name set；模型返回的 direct calls 与
+  该次 `run_code` 的 bindings 都只能调用该集合，不能靠猜测名字越过 plugin discovery，
+  后续披露从下一次采样生效。
+- `run_code` 是与 builtin `shell` 同级的 Host-authority tool：完整程序和外层结果构成
+  canonical 审计单位，Node `fs` / process / network 等直接机器动作不逐 syscall 建立
+  Item；通过 `tools.*` 调用的 browser、plugin、external 或 shell 仍逐次经过同一个
+  Tool Environment 的参数验证、路由、取消、结果归一化与 nested canonical lifecycle。
+  builtin `shell` 在 `direct` / `both` 中可直接调用，在 `code` / `both` 中也可作为
+  `tools.shell(...)` 调用。Node `fetch` / HTTP 和 curl 保证通用网络 reachability，Web
+  search 仍是不同领域语义，不能在没有搜索服务或索引时伪造。
+- Code Runtime 首版每次调用新建 Node Worker；Host 先用 Node builtin type stripping
+  处理 erasable TypeScript，Worker 使用空 environment、无继承 `execArgv`、V8 heap/
+  stack 与 wall-time/output/call-count 限制、显式 `text(...)` capture 和 hard termination；
+  异步 `tools.*` 以 plain JSON MessagePort/Promise bridge 回到 AgentRuntime。该 Worker
+  的 resource limits 与 termination 是运行控制而非安全沙箱，不保证限制外部分配、
+  回滚已发生的机器副作用或收拢程序自行 detached 的子进程。
+- `run_code` 内部每次 nested tool call/result 都必须从 append-only ItemList 推导，并
+  关联外层调用；模型上下文可以只接收程序显式返回的汇总结果，但 durable history
+  不能省略中间调用。nested tool 失败明确返回程序，由程序或后续模型调用决定是否
+  采用另一工具；Runtime 不做隐式自动 retry 或 fallback。
+- AgentRuntime 仍独占 journal append；`run_code` 只能通过 Nested Tool Invocation Port
+  请求子调用，Plugin / External Tool Provider 无法取得该 port。`ToolCallItem` 只增加
+  可选 `parentCallId`：root lineage 与 submission order 分别沿 parent chain 和 Item 顺序
+  推导，不重复保存；nested lifecycle 不编入后续模型 messages，但 compaction retention
+  必须保持完整的 outer/child closure。
+- `run_code` 只有显式 `text(value)` 形成 outer model-visible output；nested result、函数
+  return 和 console 不自动进入上下文。多次 `text` 按调用顺序连接，无输出时返回固定
+  提示；非字符串值只接受 lossless JSON。
+- direct、nested 与 outer `run_code` 的 text result 共用 Tool Output Spool。默认模型
+  preview 只保留 16 KiB head 与 16 KiB tail；完整已捕获输出以 POSIX 0700 directory /
+  0600 file 或 Windows current-user private temp/ACL 暂存，receipt 记录 captured bytes、SHA-256、绝对路径和 temporary lifetime，
+  Agent 需要中段时必须主动再读。Provider 已截断或达到 64 MiB capture hard cap 时必须
+  标记 `source_truncated: true`，不能声称 temp file 完整；caller-designated shell redaction 在写盘
+  前完成。Host clean shutdown 删除当前 instance spool，启动只 best-effort 清理 stale
+  directories，缺失路径显式失败且不建立 durable recovery。
+- `structuredContent` 继续使用既有 1 MiB JSON-compatible 校验和 canonical 存储合同，
+  不写入 Tool Output Spool，也不以临时文件替代结构化结果。
 - 模型初始只看到 builtin tools 与一个稳定入口 `zenx_plugin`。`discover` 只返回
   plugin id、name、short description、status；`read` 返回 main document 与 tool index。
   读取后，从后续模型采样开始披露该插件普通、namespaced structured tool schemas。
@@ -331,8 +379,11 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   `inputSchema`；这是所有非 builtin 工具的唯一 manifest 与 discovery 合同。
 - 插件 main document 是首要模型说明；独立 Skills 平台暂缓，现有固定协议
   `skills/list` 不因此获得新的会话语义。
-- 同一模型响应产生的多个工具调用当前仍按顺序执行；同一 Turn 的真正并行执行
-  是后续效率优化，不属于本阶段。
+- 同一模型响应产生的多个工具调用当前实现仍按顺序执行。目标执行器允许同一批 direct
+  calls 或一次 `run_code` 中的 nested calls 有界重叠：prepare、Host admission 与
+  canonical result commit 保持模型提交顺序，只有标记为 `parallel_safe` 的 provider
+  execution body 可以并发；`exclusive` 在前后形成 barrier。并发上限由 Host 配置，
+  未声明模式时 fail-closed 为 `exclusive`。
 - 每条 canonical `tool_call` 必须恰好结算一条 canonical `tool_result`。prepare、
   Host admission、provider execution 或 result normalization 的局部失败以简洁错误和
   非零 exit code 形成该结果，继续执行同一模型响应中后续调用并进入下一次模型采样；
@@ -355,6 +406,11 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
 - 目标工具策略只有两档：默认 `full_access` 直接执行；可选 `ask_unknown` 由 Host
   按稳定 tool name 维护 `approvedTools` / `deniedTools`。未知工具只询问一次，允许后
   加入 approved，拒绝后加入 denied。
+- `run_code` 不 pre-approve，按稳定 tool name 与 shell 同样 admission；由于
+  `ask_unknown` 记忆的是 capability name 而不是每次参数，批准它表示批准后续
+  shell-equivalent code capability，并非逐段代码审核。外层获得 admission 后，内部
+  `tools.*` 继承该 admission 而不重复询问；已有 stable-name denied 决定和 provider
+  自己的领域校验仍有效。
 - 安装一个 package 就表示信任其运行代码；dependency build scripts 仍只按 profile
   显式 pnpm `allowBuilds` 执行，未列入者保持 blocked，这一 package-manager policy
   不扩展成风险评分或新的权限语义。

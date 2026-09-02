@@ -22,6 +22,10 @@
   provider/plugin 能力变化只影响后续投影与调用结果
 - risk scoring、参数级 scope graph、permission rules engine 或复杂 sandbox 产品矩阵；
   工具策略只保留默认 `full_access` 与可选 `ask_unknown`
+- 把首版 `run_code` 宣传或实现成可运行 hostile code 的安全沙箱；它与 builtin shell
+  权限等同，Worker 的空环境、heap/time/output 限制和 termination 只负责运行 containment
+- 把超长 tool output 临时文件变成 durable artifact store 或第二份会话权威；canonical
+  结果只是有界 head/tail receipt，需要跨重启保存完整结果时必须另行设计内容寻址 artifact
 - 完整 marketplace 平台、registry backend、发布后台、签名 PKI、自定义 package store
   或跨插件 dependency solver。旧的“本阶段不做 Marketplace”判断是为了先闭合
   bundled/local 的 Catalog、Lifecycle、Runtime、UI 与安装入口；这些前置条件已经成立，
@@ -29,12 +33,22 @@
 - OS daemon、launch agent、云端 Plugin/ZAS service；本阶段 ZenX Host 只在应用进程中
   跨窗口存活，显式 Quit 后停止
 - 独立 Skills 平台；本阶段插件以 main document 提供首要模型说明
-- 同一 Turn 的并行工具执行，以及借 Plugin Platform 顺带进行 Provider、图片、
-  attachment 或 compaction 重构
+- 借 Plugin Platform 或 Tool Presentation 顺带进行 Provider、图片、attachment 或
+  compaction 重构
 - 工具失败后的自动重试、fallback、自愈或 durable recovery 状态机；工具局部失败只
   结算一次 canonical failed result 并让模型决定下一步
 - 覆盖率门禁、按层重复跑的测试矩阵
 - 与 zen-legacy 的数据、协议、接口兼容
+
+## 已解除的非目标
+
+- **同一 Turn 的有界并行工具执行（2026-09-02）**。最初把它整体列为非目标，是为了
+  在只有 builtin shell、Tool Environment 与 Plugin Platform 尚未闭合时避免提前引入
+  调度器。现在混合 Tool Environment、插件发现和 canonical tool call/result 生命周期
+  已经形成可运行纵向切片，programmatic tool calling 又需要在一次模型决策内组合多个
+  独立调用，原判断的阶段性前提已不存在。目标只包括有并发上限、默认 fail-closed、
+  可重建的执行重叠；无界并发、隐式重试/fallback、自愈和第二套 durable scheduler
+  仍是非目标。
 
 ## zen-legacy 的教训
 
