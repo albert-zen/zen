@@ -9,6 +9,7 @@ import {
   type ToolExecutionResult,
   type ToolInvocation,
 } from "./tool.js";
+import { createRunCodeModelTool } from "./tool-presentation.js";
 
 export interface CodeRuntimeLimits {
   wallTimeMs: number;
@@ -387,22 +388,7 @@ export const EMPTY_CODE_OUTPUT = "Code completed without explicit text output.";
 
 export class RunCodeToolProvider implements BuiltinCompositeToolProvider {
   readonly identity = { kind: "builtin", id: "run-code" } as const;
-  readonly definitions = [
-    {
-      name: "run_code",
-      description:
-        "Run erasable TypeScript with Node.js authority. Call text(...) explicitly to return selected output.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          code: { type: "string" },
-          description: { type: "string" },
-        },
-        required: ["code", "description"],
-        additionalProperties: false,
-      },
-    },
-  ];
+  readonly definitions = [createRunCodeModelTool([])];
 
   readonly #runtime: CodeRuntime;
 
@@ -428,11 +414,12 @@ export class RunCodeToolProvider implements BuiltinCompositeToolProvider {
       code.length === 0 ||
       typeof description !== "string" ||
       description.length === 0 ||
+      description.length > 160 ||
       keys.some((key) => key !== "code" && key !== "description")
     ) {
       return {
         output:
-          "run_code requires exactly non-empty string code and description",
+          "run_code requires exactly non-empty string code and a 1-160 character description",
         exitCode: 1,
       };
     }

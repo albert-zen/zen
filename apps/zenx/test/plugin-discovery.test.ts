@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ZenAppServer } from "../../../src/app-server.js";
+import { RunCodeToolProvider } from "../../../src/code-runtime.js";
 import type { CanonicalItem } from "../../../src/item.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
 import { StaticModelCatalog } from "../../../src/model-catalog.js";
@@ -90,6 +91,59 @@ test("ordinary discovery history progressively exposes one plugin and routes its
       tools: [{ name: "fixture_echo", description: "Echo exact bytes" }],
     },
   });
+
+  await fixture.close();
+});
+
+test("one discovery snapshot synchronizes direct schemas and the run_code SDK on the next sample", async () => {
+  const fixture = await fixtureEnvironment({ runCode: true });
+  const model = new DiscoveryPresentationModel();
+  const journal = new InMemoryThreadJournal();
+  const server = appServer(model, fixture, journal, "both");
+  const thread = await server.startThread();
+
+  await (
+    await server.startTurn(thread.id, "read and use fixture")
+  ).done;
+  const beforeLifecycleChanges = await journal.read(thread.id);
+  await fixture.registry.setEnabled("fixture", false);
+  await (
+    await server.startTurn(thread.id, "after disable")
+  ).done;
+  await fixture.registry.uninstall("fixture");
+  await (
+    await server.startTurn(thread.id, "after uninstall")
+  ).done;
+
+  assert.deepEqual(model.toolNamesBySample, [
+    ["shell", "zenx_plugin", "run_code"],
+    ["shell", "zenx_plugin", "fixture_echo", "run_code"],
+    ["shell", "zenx_plugin", "fixture_echo", "run_code"],
+    ["shell", "zenx_plugin", "run_code"],
+    ["shell", "zenx_plugin", "run_code"],
+  ]);
+  assert.equal(model.runCodeDescriptions.length, 5);
+  assert.doesNotMatch(model.runCodeDescriptions[0]!, /\n  fixture_echo\(/u);
+  assert.match(model.runCodeDescriptions[1]!, /\n  fixture_echo\(args:/u);
+  assert.match(model.runCodeDescriptions[2]!, /\n  fixture_echo\(args:/u);
+  assert.doesNotMatch(model.runCodeDescriptions[3]!, /\n  fixture_echo\(/u);
+  assert.doesNotMatch(model.runCodeDescriptions[4]!, /\n  fixture_echo\(/u);
+  assert(
+    model.runCodeDescriptions.every(
+      (description) => !/\n  run_code\(|\n  "run_code"\(/u.test(description),
+    ),
+  );
+  assert.equal(fixture.invocations, 1);
+  const snapshot = await server.readThread(thread.id);
+  const fixtureResult = snapshot.items.find(
+    (item) => item.type === "tool_result" && item.callId === "invoke",
+  );
+  assert(fixtureResult?.type === "tool_result");
+  assert.equal(fixtureResult.output, exactOutput);
+  assert.deepEqual(
+    (await journal.read(thread.id)).slice(0, beforeLifecycleChanges.length),
+    beforeLifecycleChanges,
+  );
 
   await fixture.close();
 });
@@ -277,7 +331,32 @@ class CaptureAndFinishModel implements ModelAdapter {
   }
 }
 
-async function fixtureEnvironment() {
+class DiscoveryPresentationModel implements ModelAdapter {
+  readonly provider = "discovery-presentation";
+  readonly toolNamesBySample: string[][] = [];
+  readonly runCodeDescriptions: string[] = [];
+  #sample = 0;
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
+    this.#sample += 1;
+    this.toolNamesBySample.push(request.tools.map(({ name }) => name));
+    const runCode = request.tools.find(({ name }) => name === "run_code");
+    assert(runCode);
+    this.runCodeDescriptions.push(runCode.description);
+    if (this.#sample === 1) {
+      yield toolCall("read", "zenx_plugin", {
+        operation: "read",
+        pluginId: "fixture",
+      });
+    } else if (this.#sample === 2) {
+      yield toolCall("invoke", "fixture_echo", { value: exactOutput });
+    } else {
+      yield { type: "text_delta", delta: "done" };
+    }
+  }
+}
+
+async function fixtureEnvironment(options: { runCode?: boolean } = {}) {
   const environment = new ToolEnvironment({
     providers: [new ShellToolExecutor()],
   });
@@ -317,6 +396,9 @@ async function fixtureEnvironment() {
   await registry.install(capabilityPackage, "bundled");
   const discovery = new PluginDiscoveryToolProvider(registry, environment);
   environment.registerProvider(discovery);
+  if (options.runCode === true) {
+    environment.registerProvider(new RunCodeToolProvider());
+  }
   const projection = new PluginDiscoveryProjection(environment, registry);
   return {
     environment,
@@ -337,6 +419,7 @@ function appServer(
   model: ModelAdapter,
   fixture: Awaited<ReturnType<typeof fixtureEnvironment>>,
   journal: InMemoryThreadJournal,
+  toolPresentation?: "direct" | "code" | "both",
 ): ZenAppServer {
   return new ZenAppServer({
     journal,
@@ -344,6 +427,7 @@ function appServer(
       toolEnvironment: fixture.environment,
       toolDefinitionProjection: (items) =>
         fixture.projection.definitions(items),
+      ...(toolPresentation === undefined ? {} : { toolPresentation }),
     }),
     providerRegistry: new ProviderRegistry([
       {

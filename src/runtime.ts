@@ -18,6 +18,11 @@ import type {
   UserMessageItem,
 } from "./item.js";
 import type { ModelAdapter, ModelMessage, ModelTool } from "./model.js";
+import {
+  buildToolPresentation,
+  type ToolPresentation,
+  type ToolPresentationSnapshot,
+} from "./tool-presentation.js";
 import type { Thread } from "./thread.js";
 import { renderToolOutput, type ToolOutputSpool } from "./tool-output-spool.js";
 import {
@@ -121,6 +126,7 @@ export class AgentRuntime {
   readonly #now: () => string;
   readonly #maxToolRounds: number | undefined;
   readonly #toolDefinitionProjection: ToolDefinitionProjection | undefined;
+  readonly #toolPresentation: ToolPresentation | undefined;
   readonly #toolOutputSpool: ToolOutputSpool | undefined;
   readonly #maxConcurrentToolBodies: number;
 
@@ -131,6 +137,7 @@ export class AgentRuntime {
     now?: () => string;
     maxToolRounds?: number;
     toolDefinitionProjection?: ToolDefinitionProjection;
+    toolPresentation?: ToolPresentation;
     toolOutputSpool?: ToolOutputSpool;
     maxConcurrentToolBodies?: number;
   }) {
@@ -157,6 +164,7 @@ export class AgentRuntime {
     }
     this.#maxToolRounds = options.maxToolRounds;
     this.#toolDefinitionProjection = options.toolDefinitionProjection;
+    this.#toolPresentation = options.toolPresentation;
     this.#toolOutputSpool = options.toolOutputSpool;
     const maxConcurrentToolBodies =
       options.maxConcurrentToolBodies ?? DEFAULT_MAX_CONCURRENT_TOOL_BODIES;
@@ -267,7 +275,13 @@ export class AgentRuntime {
           await this.#completeItem(toolCallItem, options);
           toolCallItems.push(toolCallItem);
         }
-        await this.#runToolBatch(turnId, toolCallItems, options, scheduler);
+        await this.#runToolBatch(
+          turnId,
+          toolCallItems,
+          result.presentation,
+          options,
+          scheduler,
+        );
       }
     } catch (error) {
       if (!initialInputCommitted) throw error;
@@ -337,6 +351,7 @@ export class AgentRuntime {
   ): Promise<{
     itemId: string;
     text: string;
+    presentation: ToolPresentationSnapshot;
     toolCalls: Array<{
       callId: string;
       name: string;
@@ -377,16 +392,25 @@ export class AgentRuntime {
     };
 
     const messages = await options.prepareModelSample(itemId);
+    const definitions =
+      this.#toolDefinitionProjection?.(options.thread.items) ??
+      this.#tools.definitions;
+    const presentation = buildToolPresentation(
+      definitions,
+      this.#toolPresentation ??
+        (definitions.some((definition) => definition.name === "run_code")
+          ? "both"
+          : "direct"),
+    );
 
     try {
       for await (const event of options.modelAdapter.stream({
         model: options.configuration.model,
         reasoningEffort: options.configuration.reasoningEffort,
         messages,
-        tools: (
-          this.#toolDefinitionProjection?.(options.thread.items) ??
-          this.#tools.definitions
-        ).map((definition) => structuredClone(definition)),
+        tools: presentation.modelTools.map((definition) =>
+          structuredClone(definition),
+        ),
         signal: options.signal,
         sessionId: options.thread.id,
       })) {
@@ -516,12 +540,13 @@ export class AgentRuntime {
         itemType: "agent_message",
       });
     }
-    return { itemId, text, toolCalls };
+    return { itemId, text, toolCalls, presentation };
   }
 
   async #runToolBatch(
     turnId: string,
     toolCalls: readonly ToolCallItem[],
+    presentation: ToolPresentationSnapshot,
     options: RunTurnOptions,
     scheduler: TurnToolScheduler,
   ): Promise<void> {
@@ -534,7 +559,12 @@ export class AgentRuntime {
         turnId,
         toolCall,
         options,
-        { admission: "outer", signal: options.signal },
+        {
+          admission: "outer",
+          signal: options.signal,
+          allowedToolNames: presentation.modelToolNames,
+          nestedToolNames: presentation.nestedToolNames,
+        },
         scheduler,
       );
       tickets.push(ticket);
@@ -579,7 +609,7 @@ export class AgentRuntime {
     turnId: string,
     toolCall: ToolCallItem,
     options: RunTurnOptions,
-    execution: { admission: "outer" | "inherited"; signal: AbortSignal },
+    execution: ScheduledToolCapability,
     scheduler: TurnToolScheduler,
     observation?: Promise<NestedToolObservation>,
   ): ScheduledToolCall {
@@ -618,11 +648,16 @@ export class AgentRuntime {
     turnId: string,
     toolCall: ToolCallItem,
     options: RunTurnOptions,
-    execution: { admission: "outer" | "inherited"; signal: AbortSignal },
+    execution: ScheduledToolCapability,
     scheduler: TurnToolScheduler,
   ): Promise<ScheduledToolExecution> {
     let prepared;
     try {
+      if (!execution.allowedToolNames.has(toolCall.name)) {
+        throw new Error(
+          `Unsupported tool: ${toolCall.name} (not available in this model sample)`,
+        );
+      }
       prepared = this.#tools.prepare({
         callId: toolCall.callId,
         name: toolCall.name,
@@ -711,6 +746,7 @@ export class AgentRuntime {
               options,
               execution.signal,
               scheduler,
+              execution.nestedToolNames,
             ),
           );
           const result =
@@ -768,6 +804,7 @@ export class AgentRuntime {
     options: RunTurnOptions,
     inheritedSignal: AbortSignal,
     scheduler: TurnToolScheduler,
+    allowedToolNames: ReadonlySet<string>,
   ) {
     return {
       invoke: async (
@@ -793,7 +830,12 @@ export class AgentRuntime {
           turnId,
           child,
           options,
-          { admission: "inherited", signal },
+          {
+            admission: "inherited",
+            signal,
+            allowedToolNames,
+            nestedToolNames: allowedToolNames,
+          },
           scheduler,
           observation,
         ).result;
@@ -857,6 +899,13 @@ export class AgentRuntime {
       throw new UnsupportedSandboxError(sandbox);
     }
   }
+}
+
+interface ScheduledToolCapability {
+  admission: "outer" | "inherited";
+  signal: AbortSignal;
+  allowedToolNames: ReadonlySet<string>;
+  nestedToolNames: ReadonlySet<string>;
 }
 
 interface ScheduledToolOutcome {

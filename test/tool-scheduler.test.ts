@@ -460,6 +460,187 @@ test("nested Promise.all shares the cap while outer run_code holds no child slot
   assertEveryToolCallHasOneResult(snapshot.items);
 });
 
+test("both presentation freezes direct and nested capabilities through scheduler barriers", async () => {
+  const directStarted = deferred<void>();
+  const twoNestedStarted = deferred<void>();
+  const releaseDirect = deferred<void>();
+  const releaseNested = deferred<void>();
+  let nestedStarts = 0;
+  let active = 0;
+  let maxActive = 0;
+  let hiddenExecutions = 0;
+  const visible: ToolProvider = {
+    identity: { kind: "external", id: "visible" },
+    definitions: [
+      {
+        name: "visible_child",
+        description: "Frozen scheduler fixture.",
+        inputSchema: {
+          type: "object",
+          properties: { sequence: { type: "number" } },
+          required: ["sequence"],
+          additionalProperties: false,
+        },
+      },
+    ],
+    executionModes: { visible_child: "parallel_safe" },
+    execute: async (invocation) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (invocation.callId === "direct-visible") {
+        directStarted.resolve();
+        await releaseDirect.promise;
+      } else {
+        nestedStarts += 1;
+        if (nestedStarts === 2) twoNestedStarted.resolve();
+        await releaseNested.promise;
+      }
+      active -= 1;
+      return {
+        output: String(invocation.arguments.sequence),
+        exitCode: 0,
+      };
+    },
+  };
+  const hidden: ToolProvider = {
+    identity: { kind: "external", id: "late-hidden" },
+    definitions: [
+      {
+        name: "late_hidden",
+        description: "Registered after the sample freezes.",
+        inputSchema: { type: "object" },
+      },
+    ],
+    executionModes: { late_hidden: "parallel_safe" },
+    execute: async () => {
+      hiddenExecutions += 1;
+      return { output: "hidden", exitCode: 0 };
+    },
+  };
+  const environment = new ToolEnvironment({
+    providers: [visible, new RunCodeToolProvider()],
+  });
+  const requests: ModelRequest[] = [];
+  let sample = 0;
+  const model: ModelAdapter = {
+    provider: "frozen-scheduler-model",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request));
+      sample += 1;
+      if (sample === 1) {
+        environment.registerProvider(hidden);
+        yield {
+          type: "tool_call",
+          callId: "direct-visible",
+          name: "visible_child",
+          arguments: { sequence: 0 },
+        };
+        yield {
+          type: "tool_call",
+          callId: "outer",
+          name: "run_code",
+          arguments: {
+            description: "exercise frozen nested scheduling",
+            code: `
+              const values = await Promise.all([
+                tools.visible_child({ sequence: 1 }),
+                tools.visible_child({ sequence: 2 }),
+                tools.late_hidden({}).catch((error) => ({ output: error.message, exitCode: 1 })),
+              ]);
+              text(values);
+            `,
+          },
+        };
+        yield {
+          type: "tool_call",
+          callId: "direct-hidden",
+          name: "late_hidden",
+          arguments: {},
+        };
+      } else {
+        yield { type: "text_delta", delta: "done" };
+      }
+    },
+  };
+  const catalog = new StaticModelCatalog([{ id: "model", isDefault: true }]);
+  const server = new ZenAppServer({
+    journal: new InMemoryThreadJournal(),
+    runtime: new AgentRuntime({
+      toolEnvironment: environment,
+      toolPresentation: "both",
+      maxConcurrentToolBodies: 2,
+      toolDefinitionProjection: () =>
+        environment.definitions.filter(({ name }) => name !== "late_hidden"),
+    }),
+    providerRegistry: new ProviderRegistry([
+      {
+        providerProfileId: model.provider,
+        adapter: model,
+        modelCatalog: catalog,
+      },
+    ]),
+    threadMetadata: new InMemoryThreadMetadataStore(),
+    defaults: {
+      cwd: process.cwd(),
+      providerProfileId: model.provider,
+      modelId: "model",
+      reasoningEffort: "medium",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  });
+  const thread = await server.startThread();
+  const turn = await server.startTurn(thread.id, "frozen scheduler");
+
+  await within(directStarted.promise, "the direct body before run_code");
+  await nextTask();
+  assert.equal(nestedStarts, 0);
+  releaseDirect.resolve();
+  await within(twoNestedStarted.promise, "two nested bodies at the shared cap");
+  assert.equal(active, 2);
+  assert.equal(maxActive, 2);
+  assert.equal(hiddenExecutions, 0);
+  releaseNested.resolve();
+  await within(turn.done, "the frozen scheduler Turn");
+
+  assert.deepEqual(
+    requests[0]?.tools.map(({ name }) => name),
+    ["visible_child", "run_code"],
+  );
+  assert.match(requests[0]?.tools[1]?.description ?? "", /visible_child/u);
+  assert.doesNotMatch(requests[0]?.tools[1]?.description ?? "", /late_hidden/u);
+  assert.equal(hiddenExecutions, 0);
+  const snapshot = await server.readThread(thread.id);
+  const children = snapshot.items.filter(
+    (item) => item.type === "tool_call" && item.parentCallId === "outer",
+  );
+  assert.equal(children.length, 3);
+  assert.deepEqual(
+    toolResults(snapshot.items).map((result) => result.callId),
+    [
+      "direct-visible",
+      ...children.map((child) => {
+        assert.equal(child.type, "tool_call");
+        return child.callId;
+      }),
+      "outer",
+      "direct-hidden",
+    ],
+  );
+  const hiddenResults = toolResults(snapshot.items).filter((result) => {
+    const call = snapshot.items.find(
+      (item) => item.type === "tool_call" && item.callId === result.callId,
+    );
+    return call?.type === "tool_call" && call.name === "late_hidden";
+  });
+  assert.equal(hiddenResults.length, 2);
+  for (const result of hiddenResults) {
+    assert.equal(result.exitCode, 1);
+    assert.match(result.output, /not available in this model sample/u);
+  }
+  assertEveryToolCallHasOneResult(snapshot.items);
+});
+
 test("nested body results reach guest promises before ordered canonical commit", async () => {
   const firstStarted = deferred<void>();
   const thirdStarted = deferred<void>();

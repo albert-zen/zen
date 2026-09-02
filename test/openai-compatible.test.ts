@@ -6,8 +6,95 @@ import {
   OpenAiCompatibleModel,
   OpenAiCompatibleModelError,
 } from "../src/model/openai-compatible.js";
+import { createRunCodeModelTool } from "../src/tool-presentation.js";
 
 const fakeKey = "fake-key-that-must-not-leak";
+
+test("run_code keeps the ordinary JSON-function request, stream, and replay contract", async () => {
+  let body: Readonly<Record<string, unknown>> = {};
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    fetch: (async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Readonly<
+        Record<string, unknown>
+      >;
+      return streamResponse([
+        chunk({
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call-code",
+                    function: {
+                      name: "run_code",
+                      arguments: '{"code":"text(1)","description":"one"}',
+                    },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        }),
+        "[DONE]",
+      ]);
+    }) as typeof fetch,
+  });
+  const runCode = createRunCodeModelTool([shellTool()]);
+  const events = await collect(
+    adapter.stream(
+      request({
+        tools: [runCode],
+        messages: [
+          {
+            role: "assistant",
+            toolCalls: [
+              {
+                callId: "prior-code",
+                name: "run_code",
+                arguments: { code: 'text("prior")', description: "prior" },
+              },
+            ],
+          },
+          { role: "tool", callId: "prior-code", text: "prior", exitCode: 0 },
+        ],
+      }),
+    ),
+  );
+
+  assert.deepEqual(events, [
+    {
+      type: "tool_call",
+      callId: "call-code",
+      name: "run_code",
+      arguments: { code: "text(1)", description: "one" },
+    },
+  ]);
+  assert.deepEqual((body.tools as Array<Record<string, unknown>>)[0], {
+    type: "function",
+    function: {
+      name: "run_code",
+      description: runCode.description,
+      parameters: runCode.inputSchema,
+    },
+  });
+  const messages = body.messages as Array<Record<string, unknown>>;
+  assert.deepEqual(messages[0]?.tool_calls, [
+    {
+      id: "prior-code",
+      type: "function",
+      function: {
+        name: "run_code",
+        arguments: '{"code":"text(\\"prior\\")","description":"prior"}',
+      },
+    },
+  ]);
+  assert.equal(messages[1]?.tool_call_id, "prior-code");
+});
 
 test("maps Zen context and protects model execution fields", async () => {
   let capturedUrl = "";

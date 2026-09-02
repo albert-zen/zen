@@ -17,9 +17,72 @@ import { InMemoryAttachmentStore } from "../src/attachment.js";
 import type { ModelEvent, ModelRequest, ModelTool } from "../src/model.js";
 import { OpenAiSubscriptionModel } from "../src/model/openai-subscription.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
+import { createRunCodeModelTool } from "../src/tool-presentation.js";
 
 const accountId = "acct_zen_test";
 const secretAccessToken = jwt(accountId);
+
+test("subscription transports run_code as a normal function with stable ids and arguments", async () => {
+  let body: Record<string, unknown> = {};
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async (_input, init) => {
+      body = requestBody(init);
+      return sseResponse([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_code",
+            call_id: "call_code",
+            name: "run_code",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.done",
+          output_index: 0,
+          arguments: '{"code":"text(2)","description":"two"}',
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_code",
+            call_id: "call_code",
+            name: "run_code",
+            arguments: '{"code":"text(2)","description":"two"}',
+          },
+        },
+        {
+          type: "response.completed",
+          response: { status: "completed", output: [] },
+        },
+      ]);
+    },
+  });
+  const runCode = createRunCodeModelTool([shellTool()]);
+  const events = await collect(adapter.stream(request({ tools: [runCode] })));
+
+  assert.deepEqual(events, [
+    {
+      type: "tool_call",
+      callId: "call_code|fc_code",
+      name: "run_code",
+      arguments: { code: "text(2)", description: "two" },
+    },
+    { type: "usage", inputTokens: 0, outputTokens: 0 },
+  ]);
+  assert.deepEqual((body.tools as Array<Record<string, unknown>>)[0], {
+    type: "function",
+    name: "run_code",
+    description: runCode.description,
+    parameters: runCode.inputSchema,
+    strict: null,
+  });
+});
 
 test("maps AttachmentRef input to a Responses image part", async () => {
   const attachments = new InMemoryAttachmentStore();

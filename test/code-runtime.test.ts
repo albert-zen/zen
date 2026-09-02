@@ -27,6 +27,7 @@ import {
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { projectCompletedItem } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime } from "../src/runtime.js";
+import type { ToolPresentation } from "../src/tool-presentation.js";
 import { Thread } from "../src/thread.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import {
@@ -43,11 +44,17 @@ function runtimeServer(options: {
   tools: ToolEnvironment;
   journal?: ThreadJournal;
   approvalPolicy?: "always" | "never";
+  toolPresentation?: ToolPresentation;
 }): ZenAppServer {
   const catalog = new StaticModelCatalog([{ id: "model", isDefault: true }]);
   return new ZenAppServer({
     journal: options.journal ?? new InMemoryThreadJournal(),
-    runtime: new AgentRuntime({ toolEnvironment: options.tools }),
+    runtime: new AgentRuntime({
+      toolEnvironment: options.tools,
+      ...(options.toolPresentation === undefined
+        ? {}
+        : { toolPresentation: options.toolPresentation }),
+    }),
     providerRegistry: new ProviderRegistry([
       {
         providerProfileId: options.model.provider,
@@ -258,6 +265,157 @@ test("public runtime seam executes TypeScript, Node authority, nested shell, and
   }
 });
 
+test("a run_code Worker cannot guess a tool omitted from its frozen sample", async () => {
+  let hiddenExecutions = 0;
+  const hidden: ToolProvider = {
+    identity: { kind: "plugin", id: "hidden" },
+    definitions: [
+      {
+        name: "hidden_tool",
+        description: "Must be disclosed first",
+        inputSchema: { type: "object" },
+      },
+    ],
+    execute: async () => {
+      hiddenExecutions += 1;
+      return { output: "secret", exitCode: 0 };
+    },
+  };
+  const environment = new ToolEnvironment({
+    providers: [hidden, new RunCodeToolProvider()],
+  });
+  let sample = 0;
+  const model: ModelAdapter = {
+    provider: "hidden-guess",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      sample += 1;
+      assert.deepEqual(
+        request.tools.map(({ name }) => name),
+        ["run_code"],
+      );
+      if (sample === 1) {
+        yield {
+          type: "tool_call",
+          callId: "guess",
+          name: "run_code",
+          arguments: {
+            code: `const result = await tools.hidden_tool({}); text(result);`,
+            description: "guess a hidden tool",
+          },
+        };
+        yield {
+          type: "tool_call",
+          callId: "direct-guess",
+          name: "hidden_tool",
+          arguments: {},
+        };
+      } else {
+        yield { type: "text_delta", delta: "done" };
+      }
+    },
+  };
+  const server = new ZenAppServer({
+    journal: new InMemoryThreadJournal(),
+    runtime: new AgentRuntime({
+      toolEnvironment: environment,
+      toolPresentation: "code",
+      toolDefinitionProjection: () =>
+        environment.definitions.filter(({ name }) => name !== "hidden_tool"),
+    }),
+    providerRegistry: new ProviderRegistry([
+      {
+        providerProfileId: model.provider,
+        adapter: model,
+        modelCatalog: new StaticModelCatalog([
+          { id: "model", isDefault: true },
+        ]),
+      },
+    ]),
+    threadMetadata: new InMemoryThreadMetadataStore(),
+    defaults: {
+      cwd: process.cwd(),
+      providerProfileId: model.provider,
+      modelId: "model",
+      reasoningEffort: "medium",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "guess hidden")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(hiddenExecutions, 0);
+  const childResult = snapshot.items.find(
+    (item) => item.type === "tool_result" && item.callId !== "guess",
+  );
+  assert(childResult?.type === "tool_result");
+  assert.equal(childResult.exitCode, 1);
+  assert.match(childResult.output, /not available in this model sample/u);
+  const directResult = snapshot.items.find(
+    (item) => item.type === "tool_result" && item.callId === "direct-guess",
+  );
+  assert(directResult?.type === "tool_result");
+  assert.equal(directResult.exitCode, 1);
+  assert.match(directResult.output, /not available in this model sample/u);
+});
+
+test("direct calls use the sample name set even when the live registry changes", async () => {
+  let executions = 0;
+  const lateProvider: ToolProvider = {
+    identity: { kind: "external", id: "late" },
+    definitions: [
+      { name: "late_tool", description: "Late tool", inputSchema: {} },
+    ],
+    execute: async () => {
+      executions += 1;
+      return { output: "late", exitCode: 0 };
+    },
+  };
+  const environment = new ToolEnvironment({
+    providers: [new ShellToolExecutor()],
+  });
+  const samples: string[][] = [];
+  let sample = 0;
+  const model: ModelAdapter = {
+    provider: "frozen-direct",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      samples.push(request.tools.map(({ name }) => name));
+      sample += 1;
+      if (sample === 1) {
+        environment.registerProvider(lateProvider);
+        yield {
+          type: "tool_call",
+          callId: "same-sample-guess",
+          name: "late_tool",
+          arguments: {},
+        };
+      } else {
+        yield { type: "text_delta", delta: "done" };
+      }
+    },
+  };
+  const server = runtimeServer({
+    model,
+    tools: environment,
+    toolPresentation: "direct",
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "freeze names")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  assert.deepEqual(samples, [["shell"], ["shell", "late_tool"]]);
+  assert.equal(executions, 0);
+  const result = snapshot.items.find(
+    (item) =>
+      item.type === "tool_result" && item.callId === "same-sample-guess",
+  );
+  assert(result?.type === "tool_result");
+  assert.match(result.output, /not available in this model sample/u);
+});
+
 test("only explicit lossless JSON text is visible", async () => {
   assert.equal(
     await executeCode(
@@ -461,6 +619,14 @@ test("concurrent bridge bounds tool calls, rejects unawaited calls, and preserve
   assert.equal(
     await executeCode(`await tools.first({});`, {}, nested),
     EMPTY_CODE_OUTPUT,
+  );
+  assert.equal(
+    await executeCode(
+      `const result = await tools.then({}); text(result.output);`,
+      {},
+      nested,
+    ),
+    "then",
   );
   assert.equal(
     await executeCode(

@@ -91,7 +91,7 @@ port.on("message", (encoded: unknown) => {
 
 const tools = new Proxy(Object.create(null) as Record<string, unknown>, {
   get(_target, property) {
-    if (typeof property !== "string" || property === "then") return undefined;
+    if (typeof property !== "string") return undefined;
     return (arguments_: unknown): PromiseLike<unknown> => {
       const args = clonePlainRecord(arguments_, `tools.${property} arguments`);
       const requestId = `nested-${String(++sequence)}`;
