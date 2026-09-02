@@ -23,6 +23,39 @@ export interface TurnDisplayProjection {
   terminalFallback: string | null;
 }
 
+export interface TraceDisplayRow {
+  item: Extract<ThreadItem, { type: "reasoning" | "commandExecution" }>;
+  nested: boolean;
+  parentToolName: string | null;
+}
+
+/** Derive visual lineage solely from canonical call ids carried by the wire projection. */
+export function traceDisplayRows(
+  items: readonly Extract<
+    ThreadItem,
+    { type: "reasoning" | "commandExecution" }
+  >[],
+): TraceDisplayRow[] {
+  const calls = new Map(
+    items.flatMap((item) =>
+      item.type === "commandExecution" && item.callId !== undefined
+        ? [[item.callId, item] as const]
+        : [],
+    ),
+  );
+  return items.map((item) => {
+    if (item.type !== "commandExecution" || item.parentCallId === undefined) {
+      return { item, nested: false, parentToolName: null };
+    }
+    const parent = calls.get(item.parentCallId);
+    return {
+      item,
+      nested: parent !== undefined,
+      parentToolName: parent?.toolName ?? null,
+    };
+  });
+}
+
 export function projectTurn(turn: Turn): TurnDisplayProjection {
   const userItems = turn.items.filter(
     (item): item is Extract<ThreadItem, { type: "userMessage" }> =>

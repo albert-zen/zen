@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ThreadItem, Turn } from "../src/protocol-client/index.js";
-import { projectTurn } from "../src/renderer/src/turn-projection.js";
+import {
+  projectTurn,
+  traceDisplayRows,
+} from "../src/renderer/src/turn-projection.js";
 
 test("groups only consecutive reasoning and tool Items", () => {
   const projection = projectTurn(
@@ -70,6 +73,37 @@ test("terminal turns without a final message get an honest fallback", () => {
   assert.match(projection.terminalFallback ?? "", /interrupted/u);
 });
 
+test("derives nested trace rows only from canonical call lineage", () => {
+  const outer = {
+    ...command("outer", "const child = await tools.shell({});"),
+    toolName: "run_code",
+    callId: "outer-call",
+  };
+  const child = {
+    ...command("child", "printf child"),
+    toolName: "shell",
+    callId: "child-call",
+    parentCallId: "outer-call",
+  };
+  const orphan = {
+    ...command("orphan", "printf orphan"),
+    toolName: "shell",
+    callId: "orphan-call",
+    parentCallId: "missing-call",
+  };
+
+  assert.deepEqual(
+    traceDisplayRows([outer, child, orphan]).map(
+      ({ item, nested, parentToolName }) => [item.id, nested, parentToolName],
+    ),
+    [
+      ["outer", false, null],
+      ["child", true, "run_code"],
+      ["orphan", false, null],
+    ],
+  );
+});
+
 function turn(status: Turn["status"], items: ThreadItem[]): Turn {
   return {
     id: "turn",
@@ -106,7 +140,10 @@ function reasoning(id: string, text: string): ThreadItem {
   return { type: "reasoning", id, summary: [text], content: [] };
 }
 
-function command(id: string, value: string): ThreadItem {
+function command(
+  id: string,
+  value: string,
+): Extract<ThreadItem, { type: "commandExecution" }> {
   return {
     type: "commandExecution",
     id,

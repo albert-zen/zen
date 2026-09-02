@@ -28,6 +28,25 @@ DTOs remain compatibility-only protocol types; they do not define ZenX's product
 model. The renderer and Agent self-control consume the same main-process Project
 projection instance.
 
+## Programmatic tool calling
+
+ZenX uses the same Host composition and `run_code` contract as the CLI. General
+Settings stores a Host-owned `direct | code | both` tool presentation; fresh and
+legacy profiles default to `both`, and the setting never becomes a Thread Item.
+`direct` exposes ordinary structured tools, `code` exposes only the
+shell-equivalent `run_code({ code, description })` entry, and `both` exposes both.
+An explicit `code` startup fails when the exact Worker entry is unavailable;
+`both` reports a warning and atomically falls back to direct tools.
+
+Each `run_code` call uses a fresh, cancellable Node Worker and erasable
+TypeScript. Approval presents the complete program and explains that the saved
+decision applies to the stable `run_code` capability, not to one code segment.
+Transcript indentation is derived only from projected canonical `callId` /
+`parentCallId`; code and temporary output-receipt paths remain readable through
+wrapping or local scrolling. Switching Settings back to `direct` is the rollback:
+it removes no provider and rewrites no history, so existing outer/child traces
+remain replayable from the append-only ItemList.
+
 ## Plugin platform contract and current status
 
 The checked-in implementation now has Plugin Package v2 descriptors and a
@@ -208,6 +227,13 @@ is pinned per platform in the same provider lock and its complete extracted
 payload is covered by the final manifest. A completed directory replaces the
 stable artifact under a per-target lock; a concurrent command for the same
 target fails explicitly.
+
+The portable main bundle includes `code-runtime-worker.js` beside the App Server
+Host entry. `smoke:packaged` launches that exact file from a fresh packaged
+Electron artifact and verifies a Node builtin import, nested tool call, explicit
+`text`, an oversized-output receipt, Worker interruption, and spool cleanup on
+Host close. A passing smoke is evidence only for the current platform/architecture;
+Windows and Linux require their own packaged runs.
 
 The development package identity remains `@zen/zenx`, while the portable
 runtime identity is `zenx` and its packager product/display name is `ZenX`.

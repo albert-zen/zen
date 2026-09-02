@@ -28,7 +28,7 @@
     "typecheck": "npm run typecheck --workspace @zenx/plugin-sdk && tsc -p tsconfig.json --noEmit"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "undici": "^7.29.0",

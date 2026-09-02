@@ -93,6 +93,11 @@ export interface CodexCommandItem {
   aggregatedOutput: string | null;
   exitCode: number | null;
   durationMs: null;
+  /** Zen fixed-subset extensions projected from the canonical tool call. */
+  toolName?: string;
+  toolArguments?: Readonly<Record<string, unknown>>;
+  callId?: string;
+  parentCallId?: string;
   /** Zen fixed-subset extension; omitted for ordinary and legacy results. */
   contentType?: string;
   structuredContent?: ToolResultItem["structuredContent"];
@@ -313,7 +318,9 @@ export function projectCommandStarted(
     command:
       call.name === "shell" && typeof call.arguments.command === "string"
         ? call.arguments.command
-        : `${call.name} ${JSON.stringify(call.arguments)}`,
+        : call.name === "run_code" && typeof call.arguments.code === "string"
+          ? call.arguments.code
+          : `${call.name} ${JSON.stringify(call.arguments)}`,
     cwd,
     processId: null,
     source: "agent",
@@ -322,6 +329,12 @@ export function projectCommandStarted(
     aggregatedOutput: null,
     exitCode: null,
     durationMs: null,
+    toolName: call.name,
+    toolArguments: structuredClone(call.arguments),
+    callId: call.callId,
+    ...(call.parentCallId === undefined
+      ? {}
+      : { parentCallId: call.parentCallId }),
   };
 }
 

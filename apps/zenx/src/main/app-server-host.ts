@@ -162,6 +162,12 @@ async function handleCommand(command: HostCommand): Promise<void> {
     toolEnvironment: toolComposition.toolEnvironment,
     toolDefinitionProjection: toolComposition.toolDefinitionProjection,
     toolOutputSpool,
+    codeRuntimeOptions: {
+      ...command.config.codeRuntimeOptions,
+      workerUrl: codeRuntimeWorkerEntry(),
+    },
+    onToolPresentationWarning: (warning) =>
+      console.warn(`[tool presentation] ${warning}`),
   });
   server = await serveCodexWebSocket({
     appServer,
@@ -170,6 +176,12 @@ async function handleCommand(command: HostCommand): Promise<void> {
     bearerToken: command.bearerToken,
   });
   send({ type: "ready", url: server.url });
+}
+
+function codeRuntimeWorkerEntry(): URL {
+  return import.meta.url.endsWith(".ts")
+    ? new URL("../../../../src/code-runtime-worker.ts", import.meta.url)
+    : new URL("./code-runtime-worker.js", import.meta.url);
 }
 
 async function shutdown(): Promise<void> {

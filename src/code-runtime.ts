@@ -1,5 +1,7 @@
 import { stripTypeScriptTypes } from "node:module";
+import { statSync } from "node:fs";
 import { MessageChannel, type MessagePort, Worker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
 
 import {
   UnawaitedNestedToolCallError,
@@ -68,6 +70,25 @@ export class CodeRuntime {
     };
     this.#workerUrl =
       options.workerUrl ?? new URL("./code-runtime-worker.js", import.meta.url);
+  }
+
+  /** Fail before Host startup succeeds when its exact Worker entry is unusable. */
+  assertReady(): void {
+    try {
+      if (typeof stripTypeScriptTypes !== "function") {
+        throw new Error("Node TypeScript stripping is unavailable");
+      }
+      const workerPath = fileURLToPath(this.#workerUrl);
+      if (!statSync(workerPath).isFile()) {
+        throw new Error("entry is not a regular file");
+      }
+    } catch (error) {
+      throw new CodeRuntimeError(
+        "CODE_RUNTIME_INITIALIZATION_FAILED",
+        `Code Runtime Worker entry ${this.#workerUrl.href} is unavailable: ${describeError(error)}`,
+        { cause: error },
+      );
+    }
   }
 
   async execute(options: {

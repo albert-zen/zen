@@ -33,6 +33,7 @@ import { ToolResultRenderer } from "./ToolResultRenderer.js";
 import {
   commandLabel,
   projectTurn,
+  traceDisplayRows,
   type TurnDisplayNode,
 } from "./turn-projection.js";
 
@@ -662,42 +663,52 @@ function TraceSequence({
       ) : null}
       {grouped && expanded ? (
         <div className="trace-items">
-          {node.items.map((item) => {
-            const open = openItems.has(item.id);
-            const expandable = traceItemExpandable(item);
-            return (
-              <div className="trace-item" key={item.id}>
-                {expandable ? (
-                  <button
-                    className="trace-item-toggle"
-                    type="button"
-                    aria-expanded={open}
-                    onClick={() =>
-                      setOpenItems((current) => {
-                        const next = new Set(current);
-                        if (next.has(item.id)) next.delete(item.id);
-                        else next.add(item.id);
-                        return next;
-                      })
-                    }
-                  >
-                    <TraceItemHeader item={item} expandable />
-                  </button>
-                ) : (
-                  <div className="trace-item-static">
-                    <TraceItemHeader item={item} expandable={false} />
-                  </div>
-                )}
-                {open && expandable ? (
-                  <TraceDetail
-                    item={item}
-                    pluginSnapshot={pluginSnapshot}
-                    pluginUiRegistry={pluginUiRegistry}
-                  />
-                ) : null}
-              </div>
-            );
-          })}
+          {traceDisplayRows(node.items).map(
+            ({ item, nested, parentToolName }) => {
+              const open = openItems.has(item.id);
+              const expandable = traceItemExpandable(item);
+              return (
+                <div
+                  className={`trace-item${nested ? " trace-item-nested" : ""}`}
+                  aria-label={
+                    nested
+                      ? `Nested tool invoked by ${parentToolName ?? "parent code"}`
+                      : undefined
+                  }
+                  key={item.id}
+                >
+                  {expandable ? (
+                    <button
+                      className="trace-item-toggle"
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() =>
+                        setOpenItems((current) => {
+                          const next = new Set(current);
+                          if (next.has(item.id)) next.delete(item.id);
+                          else next.add(item.id);
+                          return next;
+                        })
+                      }
+                    >
+                      <TraceItemHeader item={item} expandable />
+                    </button>
+                  ) : (
+                    <div className="trace-item-static">
+                      <TraceItemHeader item={item} expandable={false} />
+                    </div>
+                  )}
+                  {open && expandable ? (
+                    <TraceDetail
+                      item={item}
+                      pluginSnapshot={pluginSnapshot}
+                      pluginUiRegistry={pluginUiRegistry}
+                    />
+                  ) : null}
+                </div>
+              );
+            },
+          )}
         </div>
       ) : null}
     </section>
@@ -717,7 +728,13 @@ function TraceItemHeader({
         name={item.type === "reasoning" ? "reasoning" : "terminal"}
         size={14}
       />
-      <strong>{item.type === "reasoning" ? "Think" : "Tool"}</strong>
+      <strong>
+        {item.type === "reasoning"
+          ? "Think"
+          : item.toolName === "run_code"
+            ? "Code"
+            : "Tool"}
+      </strong>
       <span>{traceItemLabel(item)}</span>
       <StatusMark item={item} />
       {expandable ? <Icon name="chevron-down" size={13} /> : null}
@@ -763,7 +780,9 @@ function TraceDetail({
   if (item.type !== "commandExecution") return null;
   return (
     <div className="trace-detail">
-      <code>{item.command}</code>
+      <pre className="trace-command">
+        <code>{item.command}</code>
+      </pre>
       <ToolResultRenderer
         item={item}
         snapshot={pluginSnapshot}
@@ -1114,18 +1133,38 @@ function ApprovalBar({
     setError(null);
     try {
       await onRespond(approval.requestId, decision);
+      document.getElementById("thread-composer")?.focus();
     } catch (reason) {
       setError(describeError(reason));
     }
   };
+  const runCode = approval.params.toolName === "run_code";
+  const toolName = approval.params.toolName ?? "tool";
+  const code =
+    runCode && typeof approval.params.toolArguments?.code === "string"
+      ? approval.params.toolArguments.code
+      : approval.params.command;
   return (
-    <div className="approval-bar">
+    <section className="approval-bar" aria-label={`${toolName} approval`}>
       <span className="approval-icon" aria-hidden="true">
         <Icon name="warning" size={15} />
       </span>
       <div>
-        <strong>Allow this command for the current step?</strong>
-        <span title={approval.params.command}>{approval.params.command}</span>
+        <strong>
+          {runCode
+            ? "Allow the shell-equivalent run_code capability?"
+            : `Allow the ${toolName} capability?`}
+        </strong>
+        <p>
+          Approval is remembered for the stable {toolName} capability, not
+          granted per command or code segment.
+        </p>
+        <pre className="approval-command">
+          <code>{code}</code>
+        </pre>
+        <code className="approval-cwd">
+          Working directory: {approval.params.cwd}
+        </code>
         {error ? <small role="alert">{error}</small> : null}
       </div>
       <div className="approval-actions">
@@ -1137,10 +1176,10 @@ function ApprovalBar({
           type="button"
           onClick={() => void respond("accept")}
         >
-          Allow once
+          Allow capability
         </button>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -1150,7 +1189,10 @@ function traceItemLabel(item: ThreadItem): string {
     return summary.length > 0 ? summary : "Reasoning details";
   }
   return item.type === "commandExecution"
-    ? commandLabel(item.command)
+    ? item.toolName === "run_code" &&
+      typeof item.toolArguments?.description === "string"
+      ? item.toolArguments.description
+      : commandLabel(item.toolName ?? item.command)
     : "Item details";
 }
 

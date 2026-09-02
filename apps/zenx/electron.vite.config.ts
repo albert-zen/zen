@@ -86,6 +86,10 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, "src/main/index.ts"),
           "app-server-host": resolve(__dirname, "src/main/app-server-host.ts"),
+          "code-runtime-worker": resolve(
+            __dirname,
+            "../../src/code-runtime-worker.ts",
+          ),
           "capability-smoke": resolve(
             __dirname,
             "src/main/capability-smoke.ts",

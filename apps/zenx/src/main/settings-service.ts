@@ -460,6 +460,7 @@ export class ZenXSettingsService {
             defaultModel: settings.defaultModel,
             titleModel: settings.titleModel,
             approvalPolicy: settings.approvalPolicy,
+            toolPresentation: settings.toolPresentation ?? "both",
             maxToolRounds: settings.maxToolRounds,
           }),
           [],
@@ -1102,6 +1103,7 @@ function profileFromLegacy(
     workspaces: configureWorkspace ? [config.cwd] : [],
     lastUsedWorkspace: null,
     approvalPolicy: config.approvalPolicy,
+    toolPresentation: config.toolPresentation ?? "both",
     pinnedThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   });

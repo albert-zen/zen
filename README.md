@@ -11,7 +11,7 @@ Provider 账户和 workspace 配置由宿主持有，不进入 Thread。
 
 - append-only canonical Item 与每 Thread 一个 JSONL journal
 - FakeModel、OpenAI-compatible 与 ChatGPT subscription model adapters
-- shell tool、command item 审批、Turn interrupt
+- shell tool、shell-equivalent `run_code` programmatic tool calling、command item 审批、Turn interrupt
 - codex-cli 0.146.0 App Server 协议子集（JSONL stdio / loopback WebSocket）
 - `run`、`chat`、`threads`、`app-server` 薄 CLI
 - 独立 IMZen（QQ / Telegram / Feishu / Weixin channel adapters）
@@ -21,7 +21,8 @@ Provider 账户和 workspace 配置由宿主持有，不进入 Thread。
 
 ## 快速验证
 
-需要 Node.js 22+、Python 3.13+ 与 `uv`：
+需要 Node.js 22.13.0+、Python 3.13+ 与 `uv`。该 Node 下限来自
+`run_code` 的 builtin erasable TypeScript stripping 合同：
 
 ```sh
 npm install
@@ -70,6 +71,15 @@ CLI 与 App Server 默认使用 Full Access：`sandbox=danger-full-access` 且
 `approvalPolicy=never`。一次性 `run` 的 `--approve` / `--deny` 会自动启用
 `--approval always`；`chat` 或 App Server 需要逐项确认命令时则显式传
 `--approval always`。Full Access 没有安全隔离，只应在受信任的本机和接入端使用。
+
+CLI 与本地 App Server 默认以 `--tool-presentation both` 同时向模型提供普通
+structured tools 和 `run_code({ code, description })`；也可显式选择 `direct` 或
+`code`。`run_code` 每次在 fresh Node Worker 中执行 erasable TypeScript，可通过同一
+Tool Environment 的 `tools.*` 调用普通工具，只有显式 `text(...)` 成为外层结果。它与
+shell 权限等同，不是不可信代码沙箱。显式 `code` 无法初始化 Worker 时 Host 启动失败；
+默认 `both` 则明确 warning 并只发布 direct tools。审批按稳定 `run_code` tool name 记忆，
+同时展示完整 code。回滚到 `direct` 只改变后续模型入口，不删除 provider，也不改写已有
+outer/child canonical history；旧 Thread 仍可从 ItemList 重放。
 
 ChatGPT Plus / Pro subscription 使用 Zen 自己的宿主 profile，不读取或覆盖
 Codex CLI 的 rotating credential：

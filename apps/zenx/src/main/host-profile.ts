@@ -13,6 +13,7 @@ import {
 } from "../../../../src/model-catalog.js";
 import type { ZenXHostConfig } from "./host-messages.js";
 import { resolveProjectPath } from "./project-projection.js";
+import type { ToolPresentation } from "../../../../src/tool-presentation.js";
 
 export type ZenXProviderConnection =
   | { type: "fake"; displayName: string }
@@ -53,6 +54,8 @@ export interface ZenXHostProfile {
   workspaces: string[];
   lastUsedWorkspace: string | null;
   approvalPolicy: "always" | "never";
+  /** Missing in an older v3 profile means the product default, both. */
+  toolPresentation?: ToolPresentation;
   /** Omitted means tool rounds are unlimited. */
   maxToolRounds?: number;
   pinnedThreadIds: string[];
@@ -67,6 +70,7 @@ export type ZenXSettingsUpdate = Pick<
   | "defaultModel"
   | "titleModel"
   | "approvalPolicy"
+  | "toolPresentation"
   | "maxToolRounds"
 >;
 
@@ -187,9 +191,12 @@ export class ZenXHostProfileStore {
       !migrated &&
       isRecord(value) &&
       value.computerForegroundControlEnabled === undefined;
+    const toolPresentationWasMissing =
+      !migrated && isRecord(value) && value.toolPresentation === undefined;
     if (
       migrated ||
       foregroundPreferenceWasMissing ||
+      toolPresentationWasMissing ||
       JSON.stringify(profile) !== JSON.stringify(decoded)
     ) {
       await this.write(profile);
@@ -257,6 +264,7 @@ export function validateHostProfile(
     throw new Error("ZenX approval policy is invalid");
   }
   const maxToolRounds = optionalMaximumToolRounds(value.maxToolRounds);
+  const toolPresentation = validateToolPresentation(value.toolPresentation);
   const workspace =
     value.workspace === null
       ? null
@@ -286,6 +294,7 @@ export function validateHostProfile(
     workspaces,
     lastUsedWorkspace,
     approvalPolicy: value.approvalPolicy,
+    toolPresentation,
     ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
     pinnedThreadIds: normalizePinnedThreadIds(value.pinnedThreadIds),
     sidebarOrder: normalizeSidebarOrder(value.sidebarOrder),
@@ -413,6 +422,7 @@ export function hostConfigFromProfile(
     cwd: validated.workspace ?? path.resolve(options.fallbackWorkspace),
     dataDirectory: options.dataDirectory,
     approvalPolicy: validated.approvalPolicy,
+    toolPresentation: validated.toolPresentation ?? "both",
     ...(validated.maxToolRounds === undefined
       ? {}
       : { maxToolRounds: validated.maxToolRounds }),
@@ -424,6 +434,14 @@ export function hostConfigFromProfile(
     defaultSelection: validated.defaultModel,
     secretEnvironmentVariables: [],
   };
+}
+
+function validateToolPresentation(value: unknown): ToolPresentation {
+  if (value === undefined) return "both";
+  if (value === "direct" || value === "code" || value === "both") {
+    return value;
+  }
+  throw new Error("ZenX tool presentation must be direct, code, or both");
 }
 
 function providerRuntimeCatalog(

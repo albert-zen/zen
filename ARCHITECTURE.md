@@ -123,7 +123,8 @@
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
 - **ZenXHostProfile** — ZenX 主进程用 v3 配置以稳定 `providerProfileId` 持久化多个 Provider
   连接及各自的结构化 ModelCatalog，并把默认/标题模型保存为
-  `providerProfileId / modelId` 引用；workspace、审批默认值与本地产品偏好仍在同一
+  `providerProfileId / modelId` 引用；workspace、审批默认值、`direct | code | both`
+  Tool Presentation 与本地产品偏好仍在同一
   host-owned 配置中，credential 不在其中，配置变更也不覆盖已存 Thread 的生效设置。
 - **ZenXModelDiscovery** — ZenX 主进程用所选 OpenAI-compatible profile 的 endpoint、
   credential 与 transport 发起一次无持久状态的 `GET /models`，采信响应中可明确解析的
@@ -323,7 +324,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   stable tool name、执行 Host policy、路由与回写；插件或外部服务可以拥有实际领域执行。
 - Tool Presentation 支持 `direct`、`code` 与 `both`。`direct` 投影普通 structured
   tool schemas；`code` 只投影普通 JSON function `run_code({ code, description })`，并在
-  JavaScript SDK 中声明当前可用的 `tools.*` bindings；`both` 同时投影两者，作为目标
+  TypeScript SDK 中声明当前可用的 `tools.*` bindings；`both` 同时投影两者，作为目标
   默认，使简单调用无需经过 JavaScript，而循环、分支、并发和中间结果过滤可以使用
   `run_code`。默认 `both` 的 composition 无法初始化 Code Runtime 时明确 warning 并退回
   `direct`；显式选择 `code` 时则启动失败，不得假装执行成功。

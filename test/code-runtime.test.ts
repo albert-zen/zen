@@ -213,6 +213,10 @@ test("public runtime seam executes TypeScript, Node authority, nested shell, and
       aggregatedOutput: null,
       exitCode: null,
       durationMs: null,
+      toolName: "shell",
+      toolArguments: structuredClone(child.arguments),
+      callId: child.callId,
+      parentCallId: "outer-call",
     });
     assert.throws(
       () =>
@@ -790,7 +794,8 @@ test("outer admission is remembered while inherited child admission preserves de
       await server.startTurn(thread.id, `turn ${String(index)}`, {
         requestApproval: async (request) => {
           approvals += 1;
-          assert.match(request.command, /^run_code /u);
+          assert.equal(request.toolName, "run_code");
+          assert.equal(request.command, request.toolArguments?.code);
           return "accept";
         },
       })

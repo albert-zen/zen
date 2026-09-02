@@ -22,7 +22,15 @@ export type ZenXHostConfig = Omit<
   | "threadSummaryProjection"
   | "toolDefinitionProjection"
   | "toolOutputSpool"
->;
+  | "codeRuntimeOptions"
+  | "onToolPresentationWarning"
+> & {
+  /** Serializable containment limits only; the child Host owns its exact Worker URL. */
+  codeRuntimeOptions?: Omit<
+    NonNullable<ZenHostOptions["codeRuntimeOptions"]>,
+    "workerUrl"
+  >;
+};
 
 export type ZenXSingleProviderHostConfig = ZenXHostConfig &
   Required<Pick<ZenXHostConfig, "model" | "provider">>;

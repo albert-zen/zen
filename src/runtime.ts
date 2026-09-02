@@ -691,6 +691,8 @@ export class AgentRuntime {
                 itemId: toolCall.id,
                 callId: toolCall.callId,
                 command: readCommand(toolCall),
+                toolName: toolCall.name,
+                toolArguments: toolCall.arguments,
                 cwd: options.configuration.cwd,
                 signal: execution.signal,
               },
@@ -1129,6 +1131,12 @@ function readCommand(toolCall: {
     typeof toolCall.arguments.command === "string"
   ) {
     return toolCall.arguments.command;
+  }
+  if (
+    toolCall.name === "run_code" &&
+    typeof toolCall.arguments.code === "string"
+  ) {
+    return toolCall.arguments.code;
   }
   return `${toolCall.name} ${JSON.stringify(toolCall.arguments)}`;
 }

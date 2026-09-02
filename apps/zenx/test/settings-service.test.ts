@@ -458,6 +458,30 @@ test("persists and clears the optional maximum tool round setting", async () => 
   }
 });
 
+test("persists the Host-owned tool presentation across restart", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-tool-presentation-settings-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({});
+    const initial = (await service.publicSettings()).profile;
+    assert.equal(initial.toolPresentation, "both");
+
+    await service.save({ ...initial, toolPresentation: "direct" });
+    assert.equal((await service.hostConfig()).toolPresentation, "direct");
+
+    const restarted = settingsFor(directory, inactiveSubscription());
+    await restarted.initialize({});
+    assert.equal(
+      (await restarted.publicSettings()).profile.toolPresentation,
+      "direct",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("persists explicit foreground computer consent across restart and allows revocation", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-foreground-setting-"),

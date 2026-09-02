@@ -67,6 +67,9 @@ Thread
 - Thinking 与 Tool Call 在 sequence 内仍是独立 Item，保留 canonical 顺序和稳定 ID。
 - Tool details 位于聊天流中对应 Trace Item 的 disclosure；不迁移到第二份执行 transcript 或常驻 Activity rail。
 - 审批是 active Turn 的瞬态交互，显示在 Composer 上方；最终执行或拒绝仍由 canonical tool result 表达。
+- `run_code` 审批必须显示完整 code 与 cwd，并准确说明批准单位是稳定、与 shell 权限等同的
+  `run_code` capability，而不是某一代码片段或 hostile-code sandbox。长 code/path 在卡片内换行或
+  局部滚动；响应成功后键盘焦点返回 Composer，错误时保留可操作卡片。
 
 ### 2.4 Provider 与模型身份
 
@@ -167,6 +170,11 @@ Trace sequence projection 按 Item 顺序生成：
 Trace Group 默认收起，只显示轻量摘要、Item 数量和 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
 
 Tool 状态统一投影为 `queued / running / success / failed / cancelled / approval_required`。状态更新同一个稳定 Item，不创建重复 row；长 payload 在摘要截断，在详情内换行或局部滚动。
+
+`run_code` outer command 与 nested `tools.*` command 仍属于同一 trace sequence。展开后，UI
+只根据 fixed protocol projection 携带的 canonical `callId / parentCallId` 缩进实际 child；不得从
+显示文本、时间或本地缓存猜测层级。outer 详情展示完整 code，切回 direct 后旧 hierarchy 仍从
+ItemList replay，Renderer 不保存另一份 transcript authority。
 
 ### 4.3 Message 与 Trace 视觉层级
 

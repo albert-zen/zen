@@ -1092,6 +1092,43 @@ test("General exposes an optional maximum tool round setting", async () => {
   }
 });
 
+test("General exposes and saves the Host-owned tool presentation mode", async () => {
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    save: async (profile) => {
+      saved.push(profile);
+      return { ...settings, profile: { ...settings.profile, ...profile } };
+    },
+  });
+  try {
+    const presentation = await waitFor(() =>
+      labeledSelect("Tool presentation"),
+    );
+    assert.equal(presentation.value, "both");
+    assert.deepEqual(
+      Array.from(presentation.options).map((option) => [
+        option.value,
+        option.textContent?.trim(),
+      ]),
+      [
+        ["both", "Direct and code (recommended)"],
+        ["direct", "Direct tools only"],
+        ["code", "Code only"],
+      ],
+    );
+    assert.match(
+      document.getElementById("tool-presentation-help")?.textContent ?? "",
+      /Direct is the rollback path and does not delete providers or rewrite existing Threads/u,
+    );
+
+    await changeControl(presentation, "direct");
+    await click(exactButtonRequired("Apply & restart"));
+    assert.equal(saved[0]?.toolPresentation, "direct");
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("General requires an explicit risk-labeled opt-in for foreground computer takeover", async () => {
   const saved: ZenXSettingsUpdate[] = [];
   const harness = await mountSettings("general", {

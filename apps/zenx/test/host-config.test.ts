@@ -15,6 +15,7 @@ test("resolves fake and subscription hosts from external ZenX config", () => {
   assert.equal(fake.provider.type, "fake");
   assert.equal(fake.model, "fake");
   assert.deepEqual(fake.models, ["fake"]);
+  assert.equal(fake.toolPresentation, "both");
 
   const subscriptionDirectory = path.join(os.tmpdir(), "zenx-subscription");
   const subscription = resolveZenXHostConfig({
@@ -28,6 +29,20 @@ test("resolves fake and subscription hosts from external ZenX config", () => {
       path.join(subscriptionDirectory, "openai-subscription-auth.json"),
     );
   }
+});
+
+test("validates the Host-owned tool presentation environment setting", () => {
+  for (const toolPresentation of ["direct", "code", "both"] as const) {
+    assert.equal(
+      resolveZenXHostConfig({ ZENX_TOOL_PRESENTATION: toolPresentation })
+        .toolPresentation,
+      toolPresentation,
+    );
+  }
+  assert.throws(
+    () => resolveZenXHostConfig({ ZENX_TOOL_PRESENTATION: "automatic" }),
+    /must be direct, code, or both/u,
+  );
 });
 
 test("moves an OpenAI-compatible key into host config and blocks shell inheritance", () => {

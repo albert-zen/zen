@@ -7,6 +7,11 @@ import {
 } from "../../../src/attachment.js";
 import { ZenAppServer } from "../../../src/app-server.js";
 import {
+  CodeRuntime,
+  RunCodeToolProvider,
+  type CodeRuntimeLimits,
+} from "../../../src/code-runtime.js";
+import {
   JsonlThreadJournal,
   type ThreadJournal,
 } from "../../../src/journal.js";
@@ -40,6 +45,7 @@ import {
   ToolOutputSpool,
   type ToolOutputSpoolOptions,
 } from "../../../src/tool-output-spool.js";
+import type { ToolPresentation } from "../../../src/tool-presentation.js";
 import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
 import { legacyModelCatalogEntries } from "./model-presets.js";
 
@@ -93,6 +99,14 @@ export interface ZenHostOptions {
   toolDefinitionProjection?: ToolDefinitionProjection;
   /** Omit to allow the model to use as many tool rounds as the Turn needs. */
   maxToolRounds?: number;
+  /** Host-owned model-facing tool entry points; defaults to both. */
+  toolPresentation?: ToolPresentation;
+  /** Host-owned containment limits and exact packaged Worker entry. */
+  codeRuntimeOptions?: Partial<CodeRuntimeLimits> & { workerUrl?: URL };
+  /** Host-owned tool body limit shared by direct and nested calls. */
+  maxConcurrentToolBodies?: number;
+  /** Product warning sink used when both degrades to direct. */
+  onToolPresentationWarning?: (warning: string) => void;
   /** Compatibility input for callers that still provide one static executor. */
   tools?: ToolExecutor;
   attachments?: AttachmentStore;
@@ -187,6 +201,33 @@ export function createHostedAppServer(
       `Default model ${defaultSelection.modelId} is absent from provider profile ${defaultSelection.providerProfileId}`,
     );
   }
+  const requestedPresentation = options.toolPresentation ?? "both";
+  const codeRuntime = prepareCodeRuntime({
+    existingDefinitions: options.toolEnvironment?.definitions ?? [],
+    requestedPresentation,
+    codeRuntimeOptions: options.codeRuntimeOptions,
+    warning: options.onToolPresentationWarning,
+  });
+  const toolOutputSpool =
+    options.toolOutputSpool ??
+    new ToolOutputSpool(options.toolOutputSpoolOptions);
+  const toolEnvironment =
+    options.toolEnvironment ??
+    new ToolEnvironment({
+      providers: [
+        toolProviderFromExecutor(
+          options.tools ??
+            new ShellToolExecutor({
+              blockedEnvironmentVariables:
+                options.secretEnvironmentVariables ?? [],
+              toolOutputSpool,
+            }),
+        ),
+      ],
+    });
+  if (codeRuntime.provider !== undefined) {
+    toolEnvironment.registerProvider(codeRuntime.provider);
+  }
   const fetches: ProviderFetch[] = [];
   const profiles = preparedProfiles.map((profile) => {
     const fetch = createProviderFetch(profile.transport);
@@ -197,35 +238,23 @@ export function createHostedAppServer(
       modelCatalog: profile.catalog,
     };
   });
-  const toolOutputSpool =
-    options.toolOutputSpool ??
-    new ToolOutputSpool(options.toolOutputSpoolOptions);
   const appServer = new ZenAppServer({
     journal:
       options.journal ??
       new JsonlThreadJournal(path.join(options.dataDirectory, "threads")),
     attachments,
     runtime: new AgentRuntime({
-      toolEnvironment:
-        options.toolEnvironment ??
-        new ToolEnvironment({
-          providers: [
-            toolProviderFromExecutor(
-              options.tools ??
-                new ShellToolExecutor({
-                  blockedEnvironmentVariables:
-                    options.secretEnvironmentVariables ?? [],
-                  toolOutputSpool,
-                }),
-            ),
-          ],
-        }),
+      toolEnvironment,
+      toolPresentation: codeRuntime.presentation,
       ...(options.toolDefinitionProjection === undefined
         ? {}
         : { toolDefinitionProjection: options.toolDefinitionProjection }),
       ...(options.maxToolRounds === undefined
         ? {}
         : { maxToolRounds: options.maxToolRounds }),
+      ...(options.maxConcurrentToolBodies === undefined
+        ? {}
+        : { maxConcurrentToolBodies: options.maxConcurrentToolBodies }),
       toolOutputSpool,
     }),
     providerRegistry: new ProviderRegistry(profiles),
@@ -271,6 +300,47 @@ export function createHostedAppServer(
     closeProviderTransport,
     closeHostResources: closeProviderTransport,
   });
+}
+
+function prepareCodeRuntime(options: {
+  existingDefinitions: readonly { name: string }[];
+  requestedPresentation: ToolPresentation;
+  codeRuntimeOptions:
+    (Partial<CodeRuntimeLimits> & { workerUrl?: URL }) | undefined;
+  warning: ((warning: string) => void) | undefined;
+}): {
+  presentation: ToolPresentation;
+  provider?: RunCodeToolProvider;
+} {
+  if (options.requestedPresentation === "direct") {
+    return { presentation: "direct" };
+  }
+  try {
+    if (
+      options.existingDefinitions.some(
+        (definition) => definition.name === "run_code",
+      )
+    ) {
+      throw new Error("Tool name run_code is reserved for the Code Runtime");
+    }
+    const runtime = new CodeRuntime(options.codeRuntimeOptions);
+    runtime.assertReady();
+    return {
+      presentation: options.requestedPresentation,
+      provider: new RunCodeToolProvider(runtime),
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (options.requestedPresentation === "code") {
+      throw new Error(`Code Runtime initialization failed: ${detail}`, {
+        cause: error,
+      });
+    }
+    const warning = `Code Runtime initialization failed; falling back to direct tools: ${detail}`;
+    if (options.warning !== undefined) options.warning(warning);
+    else process.stderr.write(`Zen warning: ${warning}\n`);
+    return { presentation: "direct" };
+  }
 }
 
 function normalizeProviderProfiles(

@@ -255,6 +255,8 @@ export interface ServerRequestParams {
     environmentId: null;
     reason: null;
     command: string;
+    toolName?: string;
+    toolArguments?: Readonly<Record<string, unknown>>;
     cwd: string;
     commandActions: unknown[];
     proposedExecpolicyAmendment: null;

@@ -28,6 +28,14 @@ export function resolveZenXHostConfig(
   if (approvalPolicy !== "always" && approvalPolicy !== "never") {
     throw new Error("ZENX_APPROVAL_POLICY must be always or never");
   }
+  const toolPresentation = environment["ZENX_TOOL_PRESENTATION"] ?? "both";
+  if (
+    toolPresentation !== "direct" &&
+    toolPresentation !== "code" &&
+    toolPresentation !== "both"
+  ) {
+    throw new Error("ZENX_TOOL_PRESENTATION must be direct, code, or both");
+  }
 
   let provider: HostProvider;
   let secretEnvironmentVariables: readonly string[] = [];
@@ -64,6 +72,7 @@ export function resolveZenXHostConfig(
     model,
     models,
     approvalPolicy,
+    toolPresentation,
     provider,
     secretEnvironmentVariables,
   };

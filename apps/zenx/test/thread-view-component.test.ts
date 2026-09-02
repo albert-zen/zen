@@ -45,6 +45,8 @@ test("running draft exposes Steer and Interrupt and send", () => {
 });
 
 test("pending approvals render in the bottom zone next to the composer", () => {
+  const fullCode =
+    'const child = await tools.shell({ command: "printf <full>" });\ntext(child.output);';
   const approval = {
     requestId: "approval-1",
     status: "pending",
@@ -53,14 +55,76 @@ test("pending approvals render in the bottom zone next to the composer", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       itemId: "command-1",
-      command: "printf ok",
-      cwd: "/workspace",
+      startedAtMs: 1,
+      environmentId: null,
+      reason: null,
+      command: fullCode,
+      cwd: "/workspace/with/a/very/long/path/that/must/remain/visible",
+      toolName: "run_code",
+      toolArguments: { code: fullCode, description: "approval test" },
+      commandActions: [],
+      proposedExecpolicyAmendment: null,
+      networkApprovalContext: null,
+      proposedNetworkPolicyAmendments: null,
     },
   } as ApprovalCardState;
   const html = render(true, [approval]);
   assert.match(html, /class="bottom-zone"/u);
   assert.match(html, /class="approval-bar"/u);
-  assert.match(html, /Allow once/u);
+  assert.match(html, /Allow the shell-equivalent run_code capability\?/u);
+  assert.match(html, /remembered for the stable run_code capability/u);
+  assert.match(html, /not granted per command or code segment/u);
+  assert.match(html, /printf &lt;full&gt;/u);
+  assert.match(html, /very\/long\/path\/that\/must\/remain\/visible/u);
+  assert.match(html, /Allow capability/u);
+});
+
+test("approval response returns keyboard focus to the composer", async () => {
+  await withDom(async (root) => {
+    const approval = {
+      requestId: "approval-focus",
+      status: "pending",
+      decision: null,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "command-1",
+        startedAtMs: 1,
+        environmentId: null,
+        reason: null,
+        command: "text(42)",
+        cwd: "/workspace",
+        toolName: "run_code",
+        toolArguments: { code: "text(42)", description: "focus" },
+        commandActions: [],
+        proposedExecpolicyAmendment: null,
+        networkApprovalContext: null,
+        proposedNetworkPolicyAmendments: null,
+      },
+    } as ApprovalCardState;
+    let decision: string | undefined;
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [approval],
+          composer: emptyComposerState(),
+          thread: thread([turn()]),
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: async (_requestId, value) => {
+            decision = value;
+          },
+          onSubmit: noop,
+        }),
+      ),
+    );
+    await act(async () => {
+      requiredButton(".approval-actions .allow").click();
+      await Promise.resolve();
+    });
+    assert.equal(decision, "accept");
+    assert.equal(document.activeElement?.id, "thread-composer");
+  });
 });
 
 test("assistant messages omit the identity row while preserving metadata and content", () => {
@@ -354,6 +418,41 @@ test("renders one trace Item directly and wraps only a sequence of two or more",
   ]);
   assert.match(grouped, /class="trace-group"/u);
   assert.match(grouped, /[>]2 items[<]/u);
+});
+
+test("renders canonical run_code children as nested rows with full code", async () => {
+  await withDom(async (root) => {
+    const fullCode =
+      'const child = await tools.shell({ command: "printf nested" });\ntext(child.output);';
+    const outer = {
+      ...commandItem("outer-item", fullCode),
+      toolName: "run_code",
+      toolArguments: { code: fullCode, description: "Inspect nested output" },
+      callId: "outer-call",
+    };
+    const child = {
+      ...commandItem("child-item", "printf nested"),
+      toolName: "shell",
+      toolArguments: { command: "printf nested" },
+      callId: "child-call",
+      parentCallId: "outer-call",
+    };
+    await renderInteractive(root, turnWithItems("inProgress", [outer, child]));
+    await act(async () => requiredButton(".trace-toggle").click());
+
+    const nested = requiredElement(".trace-item-nested");
+    assert.equal(
+      nested.getAttribute("aria-label"),
+      "Nested tool invoked by run_code",
+    );
+    const outerToggle = document.querySelectorAll<HTMLButtonElement>(
+      ".trace-items .trace-item-toggle",
+    )[0];
+    assert.ok(outerToggle);
+    await act(async () => outerToggle.click());
+    assert.equal(requiredElement(".trace-command code").textContent, fullCode);
+    assert.match(document.body.textContent ?? "", /Inspect nested output/u);
+  });
 });
 
 test("singleton promotion preserves its disclosure and focused button", async () => {
@@ -805,6 +904,10 @@ async function withDom(run: (root: Root) => Promise<void>): Promise<void> {
     "<!doctype html><html><body><div id=root></div></body></html>",
     { url: "http://localhost" },
   );
+  Object.assign(dom.window.HTMLElement.prototype, {
+    attachEvent: () => undefined,
+    detachEvent: () => undefined,
+  });
   const previous = {
     document: globalThis.document,
     HTMLElement: globalThis.HTMLElement,

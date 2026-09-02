@@ -102,6 +102,7 @@ export function SettingsView({
         defaultModel: draft.defaultModel,
         titleModel: draft.titleModel,
         approvalPolicy: draft.approvalPolicy,
+        toolPresentation: draft.toolPresentation ?? "both",
         maxToolRounds: draft.maxToolRounds,
       });
       setSettings(value);
@@ -2127,6 +2128,24 @@ function GeneralPanel({
             </select>
           </label>
           <label className="field">
+            <span>Tool presentation</span>
+            <select
+              aria-describedby="tool-presentation-help"
+              value={draft.toolPresentation ?? "both"}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  toolPresentation: event.target.value as
+                    "direct" | "code" | "both",
+                })
+              }
+            >
+              <option value="both">Direct and code (recommended)</option>
+              <option value="direct">Direct tools only</option>
+              <option value="code">Code only</option>
+            </select>
+          </label>
+          <label className="field">
             <span>Maximum tool rounds</span>
             <input
               type="number"
@@ -2174,6 +2193,11 @@ function GeneralPanel({
         <p id="max-tool-rounds-help" className="settings-note">
           Leave blank for unlimited. A finite maximum stops a Turn that keeps
           requesting tools after that many model rounds.
+        </p>
+        <p id="tool-presentation-help" className="settings-note">
+          Both is the default. Code runs shell-equivalent erasable TypeScript
+          through the same tools and history. Direct is the rollback path and
+          does not delete providers or rewrite existing Threads.
         </p>
         <p className="settings-note">
           Add, remove, and select Projects from the Projects sidebar. Folder

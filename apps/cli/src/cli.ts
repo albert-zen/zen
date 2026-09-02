@@ -150,9 +150,15 @@ async function chatCommand(args: ParsedArguments): Promise<void> {
           isRecord(params) && typeof params.command === "string"
             ? params.command
             : "(unknown command)";
+        const toolName =
+          isRecord(params) && typeof params.toolName === "string"
+            ? params.toolName
+            : "tool";
+        const capability =
+          toolName === "run_code" ? "shell-equivalent run_code" : toolName;
         const answer = (
           await terminal.question(
-            `\nApprove command ${JSON.stringify(command)}? [y]es/[a]ll session/[n]o/[c]ancel: `,
+            `\nApprove stable ${capability} capability? This decision is remembered by tool name.\n${command}\n[y]es/[a]ll session/[n]o/[c]ancel: `,
           )
         )
           .trim()
@@ -545,6 +551,14 @@ function hostOptions(args: ParsedArguments) {
   if (approval !== "always" && approval !== "never") {
     throw new Error("--approval must be always or never");
   }
+  const toolPresentation = option(args, "tool-presentation") ?? "both";
+  if (
+    toolPresentation !== "direct" &&
+    toolPresentation !== "code" &&
+    toolPresentation !== "both"
+  ) {
+    throw new Error("--tool-presentation must be direct, code, or both");
+  }
   return {
     cwd: workingDirectory(args),
     dataDirectory: dataDirectory(args),
@@ -553,6 +567,7 @@ function hostOptions(args: ParsedArguments) {
     approvalPolicy: approval,
     provider,
     secretEnvironmentVariables,
+    toolPresentation,
   } as const;
 }
 
@@ -577,6 +592,7 @@ function parseArguments(args: string[]): ParsedArguments {
     "provider-name",
     "remote",
     "thread",
+    "tool-presentation",
   ]);
 
   for (let index = 0; index < args.length; index += 1) {
@@ -832,6 +848,7 @@ Core options:
   --model <name>               Model name (defaults to fake, or gpt-5.6-terra for subscription)
   --models <a,b,...>           Complete model catalog exposed by this Zen host
   --approval always|never      Tool approval policy (default: never / Full Access)
+  --tool-presentation <mode>   Model tools: direct, code, or both (default: both)
   --approve                    Accept one-shot run approvals (implies --approval always)
   --deny                       Decline one-shot run approvals (implies --approval always)
   --remote <ws://...>          Connect to an existing Zen App Server

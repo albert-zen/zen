@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { app } from "electron";
@@ -11,6 +12,9 @@ import {
 } from "./capabilities/provider-catalog.js";
 import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
 import { packagedProviderSmokeExitCode } from "./packaged-provider-smoke-exit.js";
+import { createHostedAppServer } from "../../../../apps/cli/src/host.js";
+import { ToolEnvironment, type ToolProvider } from "../../../../src/tool.js";
+import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 const portServer = createServer((_request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
@@ -104,6 +108,7 @@ void app.whenReady().then(async () => {
       );
       await computer.backend.close();
     }
+    const programmaticTool = await runPackagedProgrammaticToolSmoke();
     console.log(
       JSON.stringify(
         {
@@ -114,6 +119,7 @@ void app.whenReady().then(async () => {
           computer: computer.diagnostics,
           bundledOnly: true,
           syntheticFixtures: false,
+          programmaticTool,
         },
         null,
         2,
@@ -160,4 +166,111 @@ async function closeServer(): Promise<void> {
 async function sha256(bytes: Buffer): Promise<string> {
   const { createHash } = await import("node:crypto");
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function runPackagedProgrammaticToolSmoke(): Promise<{
+  workerEntry: string;
+  nestedReceiptBytes: number;
+  abortExitCode: number;
+  spoolRemovedOnClose: boolean;
+}> {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-packaged-programmatic-tool-"),
+  );
+  const workerEntry = new URL("./code-runtime-worker.js", import.meta.url);
+  await access(workerEntry);
+  const spoolRoot = path.join(directory, "spool");
+  const spool = new ToolOutputSpool({
+    rootDirectory: spoolRoot,
+    previewBytes: 128,
+    maxCaptureBytes: 16 * 1024,
+  });
+  const nestedProvider: ToolProvider = {
+    identity: { kind: "external", id: "packaged-smoke-nested" },
+    definitions: [
+      {
+        name: "packaged_smoke_nested",
+        description: "Return deterministic oversized text",
+        inputSchema: { type: "object", additionalProperties: false },
+      },
+    ],
+    execute: async () => ({ output: "nested:".padEnd(4096, "x"), exitCode: 0 }),
+  };
+  const host = createHostedAppServer({
+    cwd: directory,
+    dataDirectory: path.join(directory, "data"),
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    toolPresentation: "both",
+    toolEnvironment: new ToolEnvironment({ providers: [nestedProvider] }),
+    toolOutputSpool: spool,
+    codeRuntimeOptions: { workerUrl: workerEntry, wallTimeMs: 5_000 },
+  });
+  let receiptPath: string | undefined;
+  try {
+    const completed = await host.startThread();
+    await (
+      await host.startTurn(
+        completed.id,
+        '!tool run_code {"code":"const nodePath = await import(\\"node:path\\"); const nested = await tools.packaged_smoke_nested({}); text({ builtin: nodePath.basename(\\"/smoke/builtin\\"), nestedBytes: nested.output.length });","description":"packaged programmatic smoke"}',
+      )
+    ).done;
+    const completedSnapshot = await host.readThread(completed.id);
+    const calls = completedSnapshot.items.filter(
+      (item) => item.type === "tool_call",
+    );
+    assert.deepEqual(
+      calls.map((item) => [item.name, item.parentCallId ?? null]),
+      [
+        ["run_code", null],
+        ["packaged_smoke_nested", calls[0]?.callId],
+      ],
+    );
+    const results = completedSnapshot.items.filter(
+      (item) => item.type === "tool_result",
+    );
+    const nestedResult = results.find(
+      (item) => item.callId === calls[1]?.callId,
+    );
+    assert.match(nestedResult?.output ?? "", /\[tool output receipt\]/u);
+    assert.match(nestedResult?.output ?? "", /captured_bytes: 4096/u);
+    receiptPath = /full_output: (.+)/u.exec(nestedResult?.output ?? "")?.[1];
+    assert.ok(
+      receiptPath,
+      "nested output receipt must expose its temporary path",
+    );
+    assert.equal((await readFile(receiptPath, "utf8")).length, 4096);
+    assert.equal(
+      results.at(-1)?.output,
+      '{"builtin":"builtin","nestedBytes":4096}',
+    );
+
+    const aborted = await host.startThread();
+    const running = await host.startTurn(
+      aborted.id,
+      '!tool run_code {"code":"for (;;) {}","description":"packaged abort smoke"}',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await host.interruptTurn(aborted.id, running.id);
+    const abortedSnapshot = await host.readThread(aborted.id);
+    const abortResult = abortedSnapshot.items.find(
+      (item) => item.type === "tool_result",
+    );
+    assert.equal(abortResult?.exitCode, 130);
+
+    return {
+      workerEntry: workerEntry.href,
+      nestedReceiptBytes: 4096,
+      abortExitCode: 130,
+      spoolRemovedOnClose: true,
+    };
+  } finally {
+    await host.closeHostResources();
+    if (receiptPath !== undefined) {
+      await assert.rejects(access(receiptPath), { code: "ENOENT" });
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
 }

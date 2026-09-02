@@ -38,6 +38,7 @@ const profile: ZenXHostProfile = {
   workspaces: [path.join(os.tmpdir(), "workspace")],
   lastUsedWorkspace: null,
   approvalPolicy: "always",
+  toolPresentation: "both",
   pinnedThreadIds: [],
   sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
 };
@@ -60,10 +61,12 @@ test("foreground computer control is an explicit persisted opt-in", async () => 
   try {
     const legacyV3 = { ...profile } as Record<string, unknown>;
     delete legacyV3.computerForegroundControlEnabled;
+    delete legacyV3.toolPresentation;
     await writeFile(file, JSON.stringify(legacyV3), { mode: 0o600 });
 
     const migrated = await new ZenXHostProfileStore(file).readOptional();
     assert.equal(migrated?.computerForegroundControlEnabled, false);
+    assert.equal(migrated?.toolPresentation, "both");
     assert.equal(
       (JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>)[
         "computerForegroundControlEnabled"
@@ -83,6 +86,24 @@ test("foreground computer control is an explicit persisted opt-in", async () => 
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("validates and projects Host-owned tool presentation without Thread state", () => {
+  for (const toolPresentation of ["direct", "code", "both"] as const) {
+    const validated = validateHostProfile({ ...profile, toolPresentation });
+    const config = hostConfigFromProfile(validated, {
+      dataDirectory: path.join(os.tmpdir(), "data"),
+      subscriptionProfilePath: path.join(os.tmpdir(), "auth"),
+      fallbackWorkspace: path.join(os.tmpdir(), "fallback"),
+      apiKeys: { local: "secret" },
+    });
+    assert.equal(validated.toolPresentation, toolPresentation);
+    assert.equal(config.toolPresentation, toolPresentation);
+  }
+  assert.throws(
+    () => validateHostProfile({ ...profile, toolPresentation: "automatic" }),
+    /tool presentation must be direct, code, or both/u,
+  );
 });
 
 test("round-trips credential-free v3 profiles and builds all host registry entries", async () => {

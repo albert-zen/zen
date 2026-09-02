@@ -955,6 +955,12 @@ export class CodexConnection {
             environmentId: null,
             reason: null,
             command: request.command,
+            ...(request.toolName === undefined
+              ? {}
+              : { toolName: request.toolName }),
+            ...(request.toolArguments === undefined
+              ? {}
+              : { toolArguments: structuredClone(request.toolArguments) }),
             cwd: request.cwd,
             commandActions: [],
             proposedExecpolicyAmendment: null,

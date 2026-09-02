@@ -371,6 +371,9 @@ test("stages the real app without modifying reusable build output", async () => 
       "fixture-digest",
     );
     await access(path.join(appDirectory, "out", "main", "app-server-host.js"));
+    await access(
+      path.join(appDirectory, "out", "main", "code-runtime-worker.js"),
+    );
     await access(path.join(appDirectory, "out", "preload", "index.cjs"));
     await access(path.join(appDirectory, "out", "renderer", "index.html"));
     await access(path.join(appDirectory, "node_modules", "ws", "index.js"));
@@ -426,6 +429,7 @@ test("stages only the provider smoke through the same digest path", async () => 
       await readFile(path.join(appDirectory, "main", "integrity.js"), "utf8"),
       "smoke-digest",
     );
+    await access(path.join(appDirectory, "main", "code-runtime-worker.js"));
     await assert.rejects(access(path.join(appDirectory, "out")), {
       code: "ENOENT",
     });
@@ -517,6 +521,10 @@ async function createFixture() {
   await Promise.all([
     writeFile(integrityFile, placeholder),
     writeFile(path.join(outDirectory, "main", "app-server-host.js"), "host"),
+    writeFile(
+      path.join(outDirectory, "main", "code-runtime-worker.js"),
+      "worker",
+    ),
     writeFile(path.join(outDirectory, "preload", "index.cjs"), "preload"),
     writeFile(path.join(outDirectory, "renderer", "index.html"), "renderer"),
     writeFile(path.join(rootDirectory, "node_modules", "ws", "index.js"), "ws"),

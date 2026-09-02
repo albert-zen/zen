@@ -56,7 +56,11 @@ Server request：`item/commandExecution/requestApproval`。
 Zen 的 `commandExecution` DTO 在 completed item 上可选映射 canonical
 `contentType` / `structuredContent`，供 ZenX 在既有 Item 投影中选择 result renderer；
 字段缺失时字节与语义保持原样，其他固定协议客户端可以忽略该 Zen extension。
-模型上下文仍只使用 canonical `output` / `exitCode`。
+同一固定 extension 也可选投影 `toolName`、`toolArguments`、`callId` 与
+`parentCallId`：approval 用前两项准确展示完整 `run_code`，transcript 用后两项从
+canonical lineage 派生 outer/child 层级。projection 不新增权威状态；字段缺失的旧
+history 仍作为普通 command trace 显示。模型上下文仍只使用 canonical `output` /
+`exitCode`。
 
 其他方法返回 JSON-RPC `-32601`。当前只接受 `danger-full-access` sandbox；
 approval 只接受 `on-request` 与 `never`，二者是不同维度。resume 与 turn

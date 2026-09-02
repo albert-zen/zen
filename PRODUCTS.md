@@ -115,6 +115,15 @@ child process、本地服务或远程服务。模型初始只看到 builtin tool
 tool loop 默认不限轮数；ZenX General Settings 可选择一个正整数最大轮数，只有显式配置后
 Runtime 才以该上限终止持续请求工具的 Turn。
 
+CLI 与 ZenX 现在通过同一个 Host composition 默认发布 `both` Tool Presentation；Host-owned
+配置可显式切换 `direct | code | both`，不进入 Item。`run_code` 使用 fresh、可取消的 Node
+Worker 执行与 shell 权限等同的 erasable TypeScript，并通过同一 Tool Environment 形成
+canonical outer/child tool lifecycle。显式 `code` 初始化失败会阻止 Host 启动，默认 `both`
+则明确 warning 后退回 direct。ZenX approval 展示完整 code 并按稳定 `run_code` capability
+说明记忆单位，Transcript 只按 canonical parent lineage 投影层级。portable smoke 从实际
+artifact 定位 Worker，覆盖 Node builtin、nested、`text`、abort 与 temporary output spool；
+切回 `direct` 不删除 provider 或改写历史，旧 trace 仍可重放。
+
 目标插件生命周期只有 installed / enabled / uninstalled；bundled plugin 同样可卸载、以后重装，
 卸载默认保留数据，删除数据是独立动作。目标权限只有默认 `full_access` 与可选 `ask_unknown`；后者
 由 Host 按稳定 tool name 维护 approved/denied 集合，不另设细粒度 package grant UX，也不增加风险引擎。

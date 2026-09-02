@@ -647,6 +647,8 @@ export interface ApprovalRequest {
   itemId: string;
   callId: string;
   command: string;
+  toolName?: string;
+  toolArguments?: Readonly<Record<string, unknown>>;
   cwd: string;
   signal: AbortSignal;
 }
