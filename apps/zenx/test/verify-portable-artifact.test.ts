@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 
 import { npmInvocation } from "../../../packages/zenx-plugin-sdk/dist/npm-invocation.mjs";
 import {
+  readPackagedProviderManifestTrustAnchor,
   verifyFirstPartyPluginTarball,
   verifyPortableProviders,
 } from "../scripts/verify-portable-artifact.js";
@@ -108,13 +109,100 @@ test("portable verification rejects a packaged-main provider trust-anchor mismat
   const fixture = await createProviderFixture();
   try {
     await verifyPortableProviders(fixture.options);
-    await writeFile(
-      fixture.integrityChunk,
-      `const PACKAGED_PROVIDER_MANIFEST_SHA256 = "${"0".repeat(64)}";\n`,
-    );
+    await writeFile(fixture.integrityChunk, integrityModule("0".repeat(64)));
     await assert.rejects(
       verifyPortableProviders(fixture.options),
       /trust anchor does not match/u,
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("portable verification does not accept or execute a template-string trust-anchor decoy", async () => {
+  const fixture = await createProviderFixture();
+  const sentinel = "__zenxPortableVerifierExecutedDecoy";
+  try {
+    await writeFile(
+      fixture.integrityChunk,
+      `const harmless = \`const PACKAGED_PROVIDER_MANIFEST_SHA256 = "${fixture.manifestSha256}";\`;\n` +
+        `globalThis.${sentinel} = true;\n` +
+        "export const PACKAGED_PROVIDER_MANIFEST_SHA256 = getDigestAtRuntime();\n",
+    );
+    await assert.rejects(
+      readPackagedProviderManifestTrustAnchor(fixture.options.appMainDirectory),
+      /canonical pure module/u,
+    );
+    assert.equal((globalThis as Record<string, unknown>)[sentinel], undefined);
+  } finally {
+    delete (globalThis as Record<string, unknown>)[sentinel];
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("portable verification rejects a comment trust-anchor decoy", async () => {
+  const fixture = await createProviderFixture();
+  try {
+    await writeFile(
+      fixture.integrityChunk,
+      `// const PACKAGED_PROVIDER_MANIFEST_SHA256 = "${fixture.manifestSha256}";\n` +
+        "export const PACKAGED_PROVIDER_MANIFEST_SHA256 = getDigestAtRuntime();\n",
+    );
+    await assert.rejects(
+      readPackagedProviderManifestTrustAnchor(fixture.options.appMainDirectory),
+      /canonical pure module/u,
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("portable verification rejects a nonliteral provider trust-anchor export", async () => {
+  const fixture = await createProviderFixture();
+  try {
+    await writeFile(
+      fixture.integrityChunk,
+      `const PACKAGED_PROVIDER_MANIFEST_SHA256 = String("${fixture.manifestSha256}");\n` +
+        "export {\n  PACKAGED_PROVIDER_MANIFEST_SHA256 as P\n};\n",
+    );
+    await assert.rejects(
+      readPackagedProviderManifestTrustAnchor(fixture.options.appMainDirectory),
+      /canonical pure module/u,
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("portable verification rejects a literal provider digest without an export", async () => {
+  const fixture = await createProviderFixture();
+  try {
+    await writeFile(
+      fixture.integrityChunk,
+      `const PACKAGED_PROVIDER_MANIFEST_SHA256 = "${fixture.manifestSha256}";\n`,
+    );
+    await assert.rejects(
+      readPackagedProviderManifestTrustAnchor(fixture.options.appMainDirectory),
+      /canonical pure module/u,
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("portable verification rejects duplicate dedicated integrity chunks", async () => {
+  const fixture = await createProviderFixture();
+  try {
+    await writeFile(
+      path.join(
+        path.dirname(fixture.integrityChunk),
+        "packaged-provider-integrity-duplicate.js",
+      ),
+      integrityModule(fixture.manifestSha256),
+    );
+    await assert.rejects(
+      readPackagedProviderManifestTrustAnchor(fixture.options.appMainDirectory),
+      /exactly one provider integrity chunk/u,
     );
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
@@ -177,20 +265,33 @@ async function createProviderFixture() {
     chunks,
     "packaged-provider-integrity-fixture.js",
   );
-  await writeFile(
-    integrityChunk,
-    `const PACKAGED_PROVIDER_MANIFEST_SHA256 = "${manifestSha256}";\n`,
-  );
-  await writeFile(path.join(appMainDirectory, "index.js"), "main");
+  await writeFile(integrityChunk, integrityModule(manifestSha256));
+  await Promise.all([
+    writeFile(path.join(appMainDirectory, "index.js"), "main"),
+    writeFile(
+      path.join(resourcesDirectory, "app", "package.json"),
+      '{"type":"module"}\n',
+    ),
+  ]);
   return {
     root,
     executable,
     browserResource,
     integrityChunk,
+    manifestSha256,
     options: {
       resourcesDirectory,
       appMainDirectory,
       platform: "linux" as const,
     },
   };
+}
+
+function integrityModule(digest: string, exportName = "P") {
+  return (
+    `const PACKAGED_PROVIDER_MANIFEST_SHA256 = "${digest}";\n` +
+    "export {\n" +
+    `  PACKAGED_PROVIDER_MANIFEST_SHA256 as ${exportName}\n` +
+    "};\n"
+  );
 }

@@ -5,7 +5,7 @@ import { access, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { validatePluginPackage } from "@zenx/plugin-sdk";
 import { npmInvocation } from "../../../packages/zenx-plugin-sdk/dist/npm-invocation.mjs";
@@ -298,33 +298,107 @@ export async function readPackagedProviderManifestTrustAnchor(
 ): Promise<string> {
   const chunksDirectory = path.join(mainDirectory, "chunks");
   const candidates = (await readdir(chunksDirectory))
-    .filter((file) => /^packaged-provider-integrity-.+\.js$/u.test(file))
+    .filter(
+      (file) =>
+        file.startsWith("packaged-provider-integrity-") &&
+        file.endsWith(".js") &&
+        file.length > "packaged-provider-integrity-.js".length,
+    )
     .sort();
   assert.equal(
     candidates.length,
     1,
     "packaged main must contain exactly one provider integrity chunk",
   );
-  const source = await readFile(
-    path.join(chunksDirectory, candidates[0]!),
-    "utf8",
-  );
+  const chunkPath = path.join(chunksDirectory, candidates[0]!);
+  const source = await readFile(chunkPath, "utf8");
   assert.equal(
     source.includes(providerDigestPlaceholder),
     false,
     "packaged main still contains the provider manifest digest placeholder",
   );
-  const matches = [
-    ...source.matchAll(
-      /const PACKAGED_PROVIDER_MANIFEST_SHA256 = "([0-9a-f]{64})";/gu,
-    ),
-  ];
+  const declarationPrefix = 'const PACKAGED_PROVIDER_MANIFEST_SHA256 = "';
+  const exportBoundary =
+    '";\nexport {\n  PACKAGED_PROVIDER_MANIFEST_SHA256 as ';
+  const moduleSuffix = "\n};\n";
   assert.equal(
-    matches.length,
-    1,
-    "packaged main provider integrity chunk has no unique manifest trust anchor",
+    source.startsWith(declarationPrefix) && source.endsWith(moduleSuffix),
+    true,
+    "packaged main provider integrity chunk is not the canonical pure module",
   );
-  return matches[0]![1]!;
+  const body = source.slice(
+    declarationPrefix.length,
+    source.length - moduleSuffix.length,
+  );
+  const boundaryIndex = body.indexOf(exportBoundary);
+  assert.equal(
+    boundaryIndex > 0 && boundaryIndex === body.lastIndexOf(exportBoundary),
+    true,
+    "packaged main provider integrity chunk is not the canonical pure module",
+  );
+  const digest = body.slice(0, boundaryIndex);
+  const exportName = body.slice(boundaryIndex + exportBoundary.length);
+  assert.equal(
+    isSha256(digest) && isJavaScriptIdentifier(exportName),
+    true,
+    "packaged main provider integrity chunk has an invalid export binding",
+  );
+  assert.equal(
+    source,
+    `${declarationPrefix}${digest}${exportBoundary}${exportName}${moduleSuffix}`,
+    "packaged main provider integrity chunk is not the canonical pure module",
+  );
+
+  // The strict source shape above permits only one literal declaration and one
+  // export, so importing this dedicated chunk cannot load Electron or runtime
+  // code. A content-addressed query prevents a prior import from masking edits.
+  const chunkUrl = pathToFileURL(chunkPath);
+  chunkUrl.searchParams.set(
+    "zenxPortableIntegrity",
+    createHash("sha256").update(source).digest("hex"),
+  );
+  const namespace = (await import(chunkUrl.href)) as Record<string, unknown>;
+  assert.deepEqual(
+    Object.keys(namespace),
+    [exportName],
+    "packaged main provider integrity chunk has an unexpected export surface",
+  );
+  assert.equal(
+    namespace[exportName],
+    digest,
+    "packaged main provider integrity export does not match its literal trust anchor",
+  );
+  return digest;
+}
+
+function isSha256(value: string): boolean {
+  return (
+    value.length === 64 &&
+    [...value].every(
+      (character) =>
+        (character >= "0" && character <= "9") ||
+        (character >= "a" && character <= "f"),
+    )
+  );
+}
+
+function isJavaScriptIdentifier(value: string): boolean {
+  if (value.length === 0) return false;
+  const characters = [...value];
+  const isLetter = (character: string) =>
+    (character >= "A" && character <= "Z") ||
+    (character >= "a" && character <= "z") ||
+    character === "_" ||
+    character === "$";
+  return (
+    isLetter(characters[0]!) &&
+    characters
+      .slice(1)
+      .every(
+        (character) =>
+          isLetter(character) || (character >= "0" && character <= "9"),
+      )
+  );
 }
 
 async function requireResolvedProvider(
