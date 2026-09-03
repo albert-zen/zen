@@ -1,13 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import {
-  chmod,
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -21,6 +14,7 @@ import {
   type TriggerProgramRunInput,
   verifyAndTerminateWindowsProcessTree,
   type WindowsProcessIdentity,
+  type WindowsProcessOperations,
   type WindowsProcessTableSnapshot,
 } from "../src/main/trigger-program-runner.js";
 
@@ -51,6 +45,26 @@ test("timed-out process observation settles its exact helper before rejecting", 
   );
 
   assert.equal(helperClosed, true);
+});
+
+test("process observation reports bounded output and nonzero exits", async () => {
+  await assert.rejects(
+    captureProcessTableCommandOutput(
+      process.execPath,
+      ["-e", "process.stdout.write('x'.repeat(65))"],
+      { timeoutMs: 5_000, maxOutputBytes: 64 },
+    ),
+    /process-table snapshot exceeded its 64 byte bound/u,
+  );
+
+  await assert.rejects(
+    captureProcessTableCommandOutput(
+      process.execPath,
+      ["-e", "process.exit(7)"],
+      { timeoutMs: 5_000 },
+    ),
+    /exited with code 7/u,
+  );
 });
 
 test(
@@ -579,13 +593,21 @@ test(
   "program runner preserves cancellation with an overflowed process-table diagnostic",
   { skip: process.platform === "win32" },
   async () => {
-    const fixture = await installProcessTableFixture("overflow");
-    const ready = path.join(fixture.directory, "ready");
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-process-table-overflow-"),
+    );
+    const ready = path.join(directory, "ready");
     const program = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000);`;
     const controller = new AbortController();
     let pid = 0;
+    const deterministicRunner = new ZenXTriggerProgramRunner(
+      processTableFailureAfterInitialIdentity(
+        () => pid,
+        "process-table snapshot exceeded its 128 KiB bound",
+      ),
+    );
     try {
-      const running = runner.run(
+      const running = deterministicRunner.run(
         { command: process.execPath, args: ["-e", program] },
         {
           invocationId: "overflowed-process-table",
@@ -608,9 +630,8 @@ test(
         /bounded process-tree termination deadline expired/u,
       );
     } finally {
-      fixture.restorePath();
       killFixtureProcess(pid);
-      await rm(fixture.directory, { recursive: true, force: true });
+      await rm(directory, { recursive: true, force: true });
     }
   },
 );
@@ -619,13 +640,21 @@ test(
   "program runner preserves cancellation with a discovery-failure diagnostic",
   { skip: process.platform === "win32" },
   async () => {
-    const fixture = await installProcessTableFixture("failure");
-    const ready = path.join(fixture.directory, "ready");
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-process-table-failure-"),
+    );
+    const ready = path.join(directory, "ready");
     const program = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000);`;
     const controller = new AbortController();
     let pid = 0;
+    const deterministicRunner = new ZenXTriggerProgramRunner(
+      processTableFailureAfterInitialIdentity(
+        () => pid,
+        "ps exited with code 7",
+      ),
+    );
     try {
-      const running = runner.run(
+      const running = deterministicRunner.run(
         { command: process.execPath, args: ["-e", program] },
         { invocationId: "failed-process-table", stage: "action", event: {} },
         controller.signal,
@@ -641,9 +670,8 @@ test(
         /bounded process-tree termination deadline expired/u,
       );
     } finally {
-      fixture.restorePath();
       killFixtureProcess(pid);
-      await rm(fixture.directory, { recursive: true, force: true });
+      await rm(directory, { recursive: true, force: true });
     }
   },
 );
@@ -679,49 +707,33 @@ async function waitForProcessExit(pid: number): Promise<void> {
   throw new Error(`Fixture process ${String(pid)} did not exit`);
 }
 
-async function installProcessTableFixture(
-  mode: "overflow" | "failure",
-): Promise<{
-  directory: string;
-  restorePath(): void;
-}> {
-  const directory = await mkdtemp(
-    path.join(os.tmpdir(), "zenx-process-table-fixture-"),
-  );
-  const state = path.join(directory, "captured-once");
-  const ready = path.join(directory, "ready");
-  const overflowOutput = path.join(directory, "overflow-output");
-  const executable = path.join(directory, "ps");
-  const originalPath = process.env.PATH;
-  const source = `#!/bin/sh
-state=${JSON.stringify(state)}
-ready=${JSON.stringify(ready)}
-if [ ! -f "$state" ]; then
-  : > "$state"
-  IFS= read -r pid < "$ready"
-  case "$*" in
-    *sid=*) printf '%s 1 %s %s Thu Jan  1 00:00:00 1970\\n' "$pid" "$pid" "$pid" ;;
-    *) printf '%s 1 %s Thu Jan  1 00:00:00 1970\\n' "$pid" "$pid" ;;
-  esac
-  exit 0
-fi
-if [ ${JSON.stringify(mode)} = failure ]; then exit 7; fi
-exec /bin/cat ${JSON.stringify(overflowOutput)}
-`;
-  await writeFile(
-    overflowOutput,
-    "900000 1 900000 900000 Thu Jan  1 00:00:00 1970\n".repeat(8_000),
-    "utf8",
-  );
-  await writeFile(executable, source, "utf8");
-  await chmod(executable, 0o755);
-  process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
+function processTableFailureAfterInitialIdentity(
+  pid: () => number,
+  failure: string,
+): WindowsProcessOperations {
+  let captures = 0;
   return {
-    directory,
-    restorePath: () => {
-      if (originalPath === undefined) delete process.env.PATH;
-      else process.env.PATH = originalPath;
+    captureProcessTable: async () => {
+      captures += 1;
+      if (captures > 1) throw new Error(failure);
+      const rootPid = pid();
+      assert(Number.isInteger(rootPid) && rootPid > 0);
+      return {
+        entries: [
+          {
+            pid: rootPid,
+            parentPid: process.pid,
+            processGroupId: rootPid,
+            sessionId: null,
+            startTime: "fixture-root",
+          },
+        ],
+      };
     },
+    terminateProcessIdentity: async () => ({
+      ok: false,
+      error: "Windows termination is unavailable in this POSIX fixture",
+    }),
   };
 }
 

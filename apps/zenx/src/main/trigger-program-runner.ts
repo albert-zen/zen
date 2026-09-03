@@ -67,7 +67,7 @@ export interface TriggerProgramRunner {
 
 export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
   constructor(
-    private readonly windowsProcessOperations: WindowsProcessOperations = realWindowsProcessOperations,
+    private readonly processOperations: WindowsProcessOperations = realWindowsProcessOperations,
   ) {}
 
   async run(
@@ -165,7 +165,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         if (capturedTree === undefined && child.exitCode !== null) {
           const exited = await verifyExitedChild(
             child,
-            this.windowsProcessOperations.captureProcessTable,
+            this.processOperations.captureProcessTable,
           );
           if (settled || requested === null) return;
           if (exited.ok) {
@@ -180,7 +180,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
             child,
             true,
             capturedTree,
-            this.windowsProcessOperations,
+            this.processOperations,
           );
           if (
             !softTermination.ok &&
@@ -223,7 +223,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         child.stdin.destroy();
         const treeAtTermination = captureProcessTree(
           child.pid,
-          this.windowsProcessOperations.captureProcessTable,
+          this.processOperations.captureProcessTable,
         ).then(
           (tree) => ({ tree, error: null }),
           (error: unknown) => ({
@@ -238,18 +238,18 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
               child,
               false,
               snapshot.tree,
-              this.windowsProcessOperations,
+              this.processOperations,
             );
           }
           await terminateProcessTree(
             child,
             false,
             undefined,
-            this.windowsProcessOperations,
+            this.processOperations,
           );
           const exited = await verifyExitedChild(
             child,
-            this.windowsProcessOperations.captureProcessTable,
+            this.processOperations.captureProcessTable,
           );
           if (exited.ok) return exited;
           return {
@@ -456,7 +456,7 @@ function terminateProcessTree(
   child: ChildProcessWithoutNullStreams,
   force: boolean,
   tree?: ProcessTreeSnapshot,
-  windowsOperations: WindowsProcessOperations = realWindowsProcessOperations,
+  processOperations: WindowsProcessOperations = realWindowsProcessOperations,
 ): Promise<TerminationResult> {
   if (child.pid === undefined)
     return Promise.resolve({
@@ -466,8 +466,13 @@ function terminateProcessTree(
   if (!force && child.exitCode !== null)
     return Promise.resolve({ ok: true, error: "" });
   if (process.platform === "win32")
-    return terminateWindowsProcessTree(child, force, tree, windowsOperations);
-  return terminatePosixProcessTree(child, force, tree);
+    return terminateWindowsProcessTree(child, force, tree, processOperations);
+  return terminatePosixProcessTree(
+    child,
+    force,
+    tree,
+    processOperations.captureProcessTable,
+  );
 }
 
 async function terminateWindowsProcessTree(
@@ -503,6 +508,7 @@ async function terminatePosixProcessTree(
   child: ChildProcessWithoutNullStreams,
   force: boolean,
   tree?: ProcessTreeSnapshot,
+  capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
 ): Promise<TerminationResult> {
   if (child.pid === undefined)
     return { ok: false, error: "the child process did not expose a PID" };
@@ -513,7 +519,7 @@ async function terminatePosixProcessTree(
       error:
         "process-tree identity was unavailable; containment was not proven",
     };
-  return await verifyAndTerminatePosix(child.pid, tree);
+  return await verifyAndTerminatePosix(child.pid, tree, capture);
 }
 
 async function verifyExitedChild(
@@ -637,6 +643,7 @@ export const realWindowsProcessOperations: WindowsProcessOperations = {
 async function verifyAndTerminatePosix(
   rootPid: number,
   tree: ProcessTreeSnapshot,
+  capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
 ): Promise<TerminationResult> {
   let stableAbsentPasses = 0;
   const deadline = Date.now() + PROGRAM_QUIESCENCE_TIMEOUT_MS;
@@ -644,7 +651,7 @@ async function verifyAndTerminatePosix(
   while (Date.now() < deadline) {
     let table: ProcessTableSnapshot;
     try {
-      table = await captureProcessTable();
+      table = await capture();
     } catch (error) {
       return processTableDiscoveryFailure(error);
     }
