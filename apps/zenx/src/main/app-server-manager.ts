@@ -347,6 +347,20 @@ export class AppServerManager {
         },
       });
       assertCanPublish?.("descriptor");
+      if (
+        lifecycle !== this.#lifecycle ||
+        this.#stopping ||
+        this.#child !== child ||
+        this.#childObservation !== childObservation ||
+        childObservation.outcome() !== undefined ||
+        this.#client !== client ||
+        !child.connected ||
+        !client.connected
+      ) {
+        throw new Error(
+          "Zen App Server startup was invalidated during descriptor publication",
+        );
+      }
       this.#acceptingCapabilityInvocations = true;
       this.#recoverUnexpectedExits = true;
     } catch (error) {

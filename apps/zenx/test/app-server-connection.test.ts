@@ -131,6 +131,38 @@ test("a cancelled bootstrap revokes an App Server descriptor published in flight
   }
 });
 
+test("startup rejects a Host that exits while its descriptor is publishing", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-invalidated-zas-"),
+  );
+  const manager = managerFor(directory);
+  const descriptorFile = path.join(directory, "runtime", "app-server.json");
+  const tokenFile = path.join(directory, "runtime", "app-server.token");
+  let killed = false;
+  try {
+    await assert.rejects(
+      manager.start({
+        assertCanPublish: (boundary) => {
+          if (boundary !== "descriptor" || killed) return;
+          const processId = manager.processId;
+          assert.notEqual(processId, undefined);
+          killed = true;
+          process.kill(processId!, "SIGKILL");
+        },
+      }),
+      /startup was invalidated/u,
+    );
+    assert.equal(killed, true);
+    assert.equal(manager.processId, undefined);
+    assert.notEqual(manager.status.type, "ready");
+    await assert.rejects(stat(descriptorFile), { code: "ENOENT" });
+    await assert.rejects(stat(tokenFile), { code: "ENOENT" });
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("refuses a competing publisher and revokes discovery on explicit stop", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-zas-owner-"));
   const owner = managerFor(directory);
