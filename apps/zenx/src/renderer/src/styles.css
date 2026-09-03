@@ -1439,13 +1439,12 @@ a:focus-visible {
   box-shadow: inset 0 1px var(--color-surface-wash);
 }
 .message-images {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(96px, 220px));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
-  margin-bottom: 9px;
-}
-.message-images:last-child {
-  margin-bottom: 0;
+  max-width: 700px;
+  margin-bottom: 6px;
 }
 .image-thumbnail {
   width: 100%;
@@ -1474,6 +1473,7 @@ a:focus-visible {
   object-fit: cover;
 }
 .message-images .image-thumbnail {
+  width: 120px;
   aspect-ratio: 4 / 3;
 }
 .image-placeholder {
@@ -4830,8 +4830,8 @@ a:focus-visible {
   .image-preview {
     border-radius: 12px;
   }
-  .message-images {
-    grid-template-columns: repeat(2, minmax(80px, 1fr));
+  .message-images .image-thumbnail {
+    width: 96px;
   }
   .composer-rail {
     gap: 6px;
