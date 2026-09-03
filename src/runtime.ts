@@ -30,12 +30,10 @@ import {
   ToolResultNormalizationError,
   UnawaitedNestedToolCallError,
   capturedToolOutput,
-  toolProviderFromExecutor,
   type ApprovalHandler,
   type NestedToolObservation,
   type ToolExecutionMode,
   type ToolExecutionResult,
-  type ToolExecutor,
   type ToolPolicy,
 } from "./tool.js";
 
@@ -131,8 +129,7 @@ export class AgentRuntime {
   readonly #maxConcurrentToolBodies: number;
 
   constructor(options: {
-    tools?: ToolExecutor;
-    toolEnvironment?: ToolEnvironment;
+    toolEnvironment: ToolEnvironment;
     idFactory?: () => string;
     now?: () => string;
     maxToolRounds?: number;
@@ -141,18 +138,7 @@ export class AgentRuntime {
     toolOutputSpool?: ToolOutputSpool;
     maxConcurrentToolBodies?: number;
   }) {
-    if (options.tools !== undefined && options.toolEnvironment !== undefined) {
-      throw new Error("Provide tools or toolEnvironment, not both");
-    }
-    if (options.toolEnvironment !== undefined) {
-      this.#tools = options.toolEnvironment;
-    } else if (options.tools !== undefined) {
-      this.#tools = new ToolEnvironment({
-        providers: [toolProviderFromExecutor(options.tools)],
-      });
-    } else {
-      throw new Error("AgentRuntime requires a Tool Environment");
-    }
+    this.#tools = options.toolEnvironment;
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
     if (

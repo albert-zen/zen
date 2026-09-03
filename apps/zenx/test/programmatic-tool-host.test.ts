@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -70,6 +70,32 @@ test("ZenX source Host runs the CLI programmatic tool contract", async () => {
     );
     assert.equal(commands[0]?.command.includes("const value: number"), true);
     assert.equal(commands[0]?.aggregatedOutput, "42:child");
+
+    const patchThread = await manager.request("thread/start", {
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    const patchCompleted = deferred<void>();
+    const disposePatch = manager.onNotification((method) => {
+      if (method === "turn/completed") patchCompleted.resolve();
+    });
+    const patch =
+      "*** Begin Patch\n*** Add File: zenx-patch.txt\n+desktop\n*** End Patch";
+    await manager.request("turn/start", {
+      threadId: patchThread.thread.id,
+      input: [
+        {
+          type: "text",
+          text: `!tool apply_patch ${JSON.stringify({ patch })}`,
+        },
+      ],
+    });
+    await within(patchCompleted.promise);
+    disposePatch();
+    assert.equal(
+      await readFile(path.join(directory, "zenx-patch.txt"), "utf8"),
+      "desktop\n",
+    );
   } finally {
     await manager.stop();
     await rm(directory, { recursive: true, force: true });

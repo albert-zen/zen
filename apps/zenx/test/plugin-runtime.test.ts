@@ -169,17 +169,20 @@ test("runtime ownership is unique and disable drains an admitted call before rev
     /already registered/u,
   );
   const collisionEnvironment = new ToolEnvironment({
-    providers: [
+    bundles: [
       {
         identity: { kind: "external", id: "collision" },
-        definitions: [
+        tools: [
           {
             name: "other_echo",
-            description: "Owned",
-            inputSchema: { type: "object" },
+            specification: {
+              name: "other_echo",
+              description: "Owned",
+              inputSchema: { type: "object" },
+            },
+            execute: async () => ({ output: "owned", exitCode: 0 }),
           },
         ],
-        execute: async () => ({ output: "owned", exitCode: 0 }),
       },
     ],
   });
@@ -449,17 +452,20 @@ test("Catalog lifecycle transactionally registers and revokes the runtime provid
   assert.deepEqual(failedEnvironment.definitions, []);
 
   const collisionEnvironment = new ToolEnvironment({
-    providers: [
+    bundles: [
       {
         identity: { kind: "external", id: "existing-owner" },
-        definitions: [
+        tools: [
           {
             name: "fixture_echo",
-            description: "Existing owner",
-            inputSchema: { type: "object" },
+            specification: {
+              name: "fixture_echo",
+              description: "Existing owner",
+              inputSchema: { type: "object" },
+            },
+            execute: async () => ({ output: "existing", exitCode: 0 }),
           },
         ],
-        execute: async () => ({ output: "existing", exitCode: 0 }),
       },
     ],
   });
@@ -644,19 +650,22 @@ test("disabled reinstall stays installed without staging or publishing a runtime
   assert.deepEqual(toolNames(environment), ["fixture_echo"]);
 });
 
-test("provider conflict fails before Catalog commit and closes the staged runtime", async () => {
+test("bundle conflict fails before Catalog commit and closes the staged runtime", async () => {
   const environment = new ToolEnvironment({
-    providers: [
+    bundles: [
       {
         identity: { kind: "external", id: "existing" },
-        definitions: [
+        tools: [
           {
             name: "fixture_echo",
-            description: "Existing owner",
-            inputSchema: { type: "object" },
+            specification: {
+              name: "fixture_echo",
+              description: "Existing owner",
+              inputSchema: { type: "object" },
+            },
+            execute: async () => ({ output: "existing", exitCode: 0 }),
           },
         ],
-        execute: async () => ({ output: "existing", exitCode: 0 }),
       },
     ],
   });

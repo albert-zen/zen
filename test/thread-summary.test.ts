@@ -13,7 +13,8 @@ import { projectThreadSummary } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { JsonlThreadMetadataStore } from "../src/thread-metadata.js";
 import { JsonThreadSummaryProjection } from "../src/thread-summary.js";
-import { ShellToolExecutor } from "../src/tool.js";
+import { ShellToolRuntime } from "../src/tool.js";
+import { testToolEnvironment } from "./tool-fixtures.js";
 
 function createServer(directory: string): ZenAppServer {
   const model = new FakeModel();
@@ -24,7 +25,9 @@ function createServer(directory: string): ZenAppServer {
   return new ZenAppServer({
     journal: new JsonlThreadJournal(path.join(directory, "threads")),
     runtime: new AgentRuntime({
-      tools: new ShellToolExecutor(),
+      toolEnvironment: testToolEnvironment({
+        providers: [new ShellToolRuntime()],
+      }),
     }),
     providerRegistry: new ProviderRegistry([
       {

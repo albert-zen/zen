@@ -47,10 +47,10 @@ Triggers 与 Rooms 的人类 CRUD 已经由 manifest-contributed Generic UI page
 
 Plugin Runtime Supervisor 与统一 ABI 现已实现为 ZenX Host seam：trusted bundled module、持续 child
 process 和 HTTP service 都归约为同一个 namespaced tool invocation/result、取消和 close 合同，并作为
-独立 plugin provider 注入 Tool Environment。Catalog 的异步 install/enable 先启动未发布 runtime，
-持久化与内存提交后才开放 Tool Environment admission；失败会撤销 runtime/provider。disable/uninstall
+独立 plugin bundle 注入 Tool Environment。Catalog 的异步 install/enable 先启动未发布 runtime，
+持久化与内存提交后才开放 Tool Environment admission；失败会撤销 runtime/bundle。disable/uninstall
 先关闭新 admission，已 prepare/执行的调用仍在其 admitted runtime 上结算后再 close，持久化失败则恢复
-原 enabled provider；disabled plugin 重装后仍保持 disabled。runtime crash、malformed/oversized process message 与 HTTP failure
+原 enabled bundle；disabled plugin 重装后仍保持 disabled。runtime crash、malformed/oversized process message 与 HTTP failure
 都显式失败且不重试。人类产品侧可以直接经 Supervisor 调用 runtime，不创建 AppServer Turn；只有 Agent
 Tool Environment 路径产生既有 canonical tool call/result。versioned Plugin Host SDK v1 现以
 `query / actions / ui / storage` 四组公共能力注入 runtime：Project 查询复用 main 的既有 projection，
@@ -104,8 +104,9 @@ reload 仅在该显式语义下成立，并只更新目标插件 runtime 与 App
 Marketplace 现在是 ZenX 唯一的插件浏览与管理界面：五个内置 package、外部 metadata 目录和已安装的非目录 package 合并在同一库存中，Installed 只是筛选。内置 provider 不可用与外部目录失败分别显示诊断且不隐藏本地插件；npm/Git/tarball/local-copy/dev-link 收进高级 source 入口。所有 install/update/enable/disable/uninstall/reinstall/delete-data 动作仍进入同一个 profile lifecycle，不成为 registry、发布后台或新的 package authority。生产外部目录在公共 SDK/package 尚未正式发布时保持为空。
 
 目标 Plugin Platform 保持 Zen `AgentRuntime` 拥有 provider-neutral agent loop 和 canonical
-tool call/result；混合 Tool Environment 组合 builtin、plugin 与 external providers，Zen 负责解析、
-Host policy、路由和回写，插件或外部服务拥有实际领域执行。Plugin Runtime 可以是 bundled module、
+tool call/result；Tool Environment 按 exact name 注册 builtin、plugin proxy 与 external proxy
+runtimes，Zen 负责解析、Host policy、路由和回写；插件与跨进程 bridge 只用 bundle 共享身份、
+原子发布和生命周期。Plugin Runtime 可以是 bundled module、
 child process、本地服务或远程服务。模型初始只看到 builtin tools 与 `zenx_plugin`：`discover`
 返回 id/name/short description/status，`read` 返回 main document/tool index，随后采样才披露所选
 插件的普通 namespaced schemas。整个过程只使用既有 tool call/result，不新增 discovery Item。
@@ -122,7 +123,11 @@ canonical outer/child tool lifecycle。显式 `code` 初始化失败会阻止 Ho
 则明确 warning 后退回 direct。ZenX approval 展示完整 code 并按稳定 `run_code` capability
 说明记忆单位，Transcript 只按 canonical parent lineage 投影层级。portable smoke 从实际
 artifact 定位 Worker，覆盖 Node builtin、nested、`text`、abort 与 temporary output spool；
-切回 `direct` 不删除 provider 或改写历史，旧 trace 仍可重放。
+切回 `direct` 不删除 runtime 或改写历史，旧 trace 仍可重放。CLI 与 ZenX composition 还注册
+同一个 exclusive `apply_patch` runtime；direct 与 `tools.apply_patch(...)` 共享 Tool Environment、
+approval、scheduler 和 canonical lifecycle。patch 使用普通 JSON function 的 `{ patch: string }`
+包装和 Codex Begin/End Patch grammar，先精确预检全部内容，再执行 Add/Update/Move/Delete；
+I/O 阶段不是 durable transaction，失败必须报告已经落盘的前缀。
 
 目标插件生命周期只有 installed / enabled / uninstalled；bundled plugin 同样可卸载、以后重装，
 卸载默认保留数据，删除数据是独立动作。目标权限只有默认 `full_access` 与可选 `ask_unknown`；后者

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   UnawaitedNestedToolCallError,
-  type BuiltinCompositeToolProvider,
+  type CompositeToolRuntime,
   type NestedToolObservation,
   type NestedToolInvocationPort,
   type ToolExecutionResult,
@@ -407,9 +407,9 @@ export class CodeRuntime {
 
 export const EMPTY_CODE_OUTPUT = "Code completed without explicit text output.";
 
-export class RunCodeToolProvider implements BuiltinCompositeToolProvider {
-  readonly identity = { kind: "builtin", id: "run-code" } as const;
-  readonly definitions = [createRunCodeModelTool([])];
+export class RunCodeToolRuntime implements CompositeToolRuntime {
+  readonly name = "run_code";
+  readonly specification = createRunCodeModelTool([]);
 
   readonly #runtime: CodeRuntime;
 

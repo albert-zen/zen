@@ -1,10 +1,113 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { createHostedAppServer } from "../apps/cli/src/host.js";
+import { ToolEnvironment } from "../src/tool.js";
+
+test("the default Host exposes one apply_patch runtime through direct and code presentation", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-host-patch-"));
+  const host = createHostedAppServer({
+    cwd: directory,
+    dataDirectory: path.join(directory, "data"),
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    toolPresentation: "both",
+  });
+  try {
+    const directPatch =
+      "*** Begin Patch\n*** Add File: direct.txt\n+direct\n*** End Patch";
+    const direct = await host.startThread();
+    await (
+      await host.startTurn(
+        direct.id,
+        `!tool apply_patch ${JSON.stringify({ patch: directPatch })}`,
+      )
+    ).done;
+
+    const codePatch =
+      "*** Begin Patch\n*** Add File: code.txt\n+code\n*** End Patch";
+    const code = await host.startThread();
+    await (
+      await host.startTurn(
+        code.id,
+        `!tool run_code ${JSON.stringify({
+          code: `const result = await tools.apply_patch(${JSON.stringify({ patch: codePatch })}); text(result.output);`,
+          description: "edit through nested tools",
+        })}`,
+      )
+    ).done;
+
+    assert.equal(
+      await readFile(path.join(directory, "direct.txt"), "utf8"),
+      "direct\n",
+    );
+    assert.equal(
+      await readFile(path.join(directory, "code.txt"), "utf8"),
+      "code\n",
+    );
+    const calls = (await host.readThread(code.id)).items.filter(
+      (item) => item.type === "tool_call",
+    );
+    assert.deepEqual(
+      calls.map((item) => [item.name, item.parentCallId ?? null]),
+      [
+        ["run_code", null],
+        ["apply_patch", calls[0]?.callId],
+      ],
+    );
+  } finally {
+    await host.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Host preserves a caller-supplied apply_patch runtime without duplicate registration", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-host-patch-"));
+  const toolEnvironment = new ToolEnvironment({
+    runtimes: [
+      {
+        name: "apply_patch",
+        specification: {
+          name: "apply_patch",
+          description: "Caller-owned patch runtime",
+          inputSchema: { type: "object" },
+        },
+        execute: async () => ({ output: "caller runtime", exitCode: 0 }),
+      },
+    ],
+  });
+  const host = createHostedAppServer({
+    cwd: directory,
+    dataDirectory: path.join(directory, "data"),
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    toolPresentation: "direct",
+    toolEnvironment,
+  });
+  try {
+    const thread = await host.startThread();
+    await (
+      await host.startTurn(
+        thread.id,
+        '!tool apply_patch {"patch":"caller input"}',
+      )
+    ).done;
+    const result = (await host.readThread(thread.id)).items.find(
+      (item) => item.type === "tool_result",
+    );
+    assert.equal(result?.output, "caller runtime");
+  } finally {
+    await host.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("the default Host composition publishes run_code and canonical child lineage", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zen-host-code-"));

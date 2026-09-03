@@ -26,31 +26,42 @@ export interface ToolExecutionResult {
   structuredContent?: JsonValue;
   /** Host-local capture state; AgentRuntime renders it before canonical append. */
   [TOOL_OUTPUT_CAPTURE]?: ToolOutputCaptureMetadata;
-  /** True when the provider already omitted source bytes before returning. */
+  /** True when the runtime already omitted source bytes before returning. */
   sourceTruncated?: boolean;
 }
 
 export const MAX_STRUCTURED_TOOL_RESULT_BYTES = 1024 * 1024;
 
-export interface ToolExecutor {
-  readonly definitions: readonly ModelTool[];
-  execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
-}
+export type ToolBundleKind = "builtin" | "plugin" | "external";
 
-export type ToolProviderKind = "builtin" | "plugin" | "external";
-
-export interface ToolProviderIdentity {
-  kind: ToolProviderKind;
+export interface ToolBundleIdentity {
+  kind: ToolBundleKind;
   id: string;
 }
 
 export type ToolExecutionMode = "parallel_safe" | "exclusive";
 
-export interface ToolProvider extends ToolExecutor {
-  readonly identity: ToolProviderIdentity;
-  /** Per-tool provider body scheduling only; not permission or resource scope. */
-  readonly executionModes?: Readonly<Record<string, ToolExecutionMode>>;
-  /** Optional lifecycle lease held from prepare through terminal admission/execution. */
+/** One exact model-visible tool and its execution body. */
+export interface ToolRuntime {
+  readonly name: string;
+  readonly specification: ModelTool;
+  /** Provider body scheduling only; not permission or resource scope. */
+  readonly executionMode?: ToolExecutionMode;
+  execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
+}
+
+/** Runtime capability available only to host-owned builtin composite tools. */
+export interface CompositeToolRuntime extends ToolRuntime {
+  executeComposite(
+    invocation: ToolInvocation,
+    nested: NestedToolInvocationPort,
+  ): Promise<ToolExecutionResult>;
+}
+
+/** Optional shared ownership, atomic publication, and prepared-call lease. */
+export interface ToolBundle {
+  readonly identity: ToolBundleIdentity;
+  readonly tools: readonly ToolRuntime[];
   retainPreparedInvocation?(): () => void;
 }
 
@@ -72,15 +83,6 @@ export class UnawaitedNestedToolCallError extends Error {
     );
     this.name = "UnawaitedNestedToolCallError";
   }
-}
-
-/** Marker contract available only to host-owned builtin composite tools. */
-export interface BuiltinCompositeToolProvider extends ToolProvider {
-  readonly identity: { readonly kind: "builtin"; readonly id: string };
-  executeComposite(
-    invocation: ToolInvocation,
-    nested: NestedToolInvocationPort,
-  ): Promise<ToolExecutionResult>;
 }
 
 export type ToolPolicy = "full_access" | "ask_unknown";
@@ -148,7 +150,7 @@ export class SetToolPolicyStore implements ToolPolicyStore {
 }
 
 export interface PreparedToolInvocation {
-  readonly provider: ToolProviderIdentity;
+  readonly owner: ToolBundleIdentity;
   readonly definition: ModelTool;
   readonly invocation: ToolInvocation;
   readonly executionMode: ToolExecutionMode;
@@ -160,48 +162,54 @@ export interface ToolAdmissionOptions {
   requestApproval?: ApprovalHandler;
 }
 
-interface ProviderRegistration {
-  identity: ToolProviderIdentity;
-  provider: ToolProvider;
-  definitions: readonly ModelTool[];
+interface RuntimeRegistration {
+  runtime: ToolRuntime;
+  definition: ModelTool;
 }
 
-export interface StagedToolProviderRegistration {
-  /** Publishes a fully validated provider by in-memory map replacement only. */
+interface BundleRegistration {
+  identity: ToolBundleIdentity;
+  bundle: ToolBundle;
+  runtimes: readonly RuntimeRegistration[];
+}
+
+export interface StagedToolBundleRegistration {
+  /** Publishes a fully validated bundle by in-memory map replacement only. */
   publish(): () => void;
   rollback(): void;
 }
 
 export interface ToolDefinitionEntry {
-  provider: ToolProviderIdentity;
+  owner: ToolBundleIdentity;
   definition: ModelTool;
 }
 
-interface PreparedProviderRegistration {
-  provider: ToolProvider;
+interface PreparedRuntimeRegistration {
+  runtime: ToolRuntime;
   release: (() => void) | undefined;
   released: boolean;
 }
 
 /**
- * Dynamic provider projection and invocation boundary. Preparing captures the
- * exact provider so later registration changes affect only future calls.
+ * Dynamic exact-name runtime registry and invocation boundary. Preparing
+ * captures the exact runtime so later bundle changes affect only future calls.
  */
 export class ToolEnvironment {
-  readonly #providers = new Map<string, ProviderRegistration>();
-  readonly #tools = new Map<string, ProviderRegistration>();
-  readonly #reservedProviderKeys = new Set<string>();
+  readonly #bundles = new Map<string, BundleRegistration>();
+  readonly #tools = new Map<string, BundleRegistration & RuntimeRegistration>();
+  readonly #reservedBundleKeys = new Set<string>();
   readonly #reservedToolNames = new Set<string>();
-  readonly #preparedProviders = new WeakMap<
+  readonly #preparedRuntimes = new WeakMap<
     PreparedToolInvocation,
-    PreparedProviderRegistration
+    PreparedRuntimeRegistration
   >();
   readonly #policyStore: ToolPolicyStore;
   readonly #pendingAdmissions = new Map<string, Promise<void>>();
 
   constructor(
     options: {
-      providers?: readonly ToolProvider[];
+      runtimes?: readonly ToolRuntime[];
+      bundles?: readonly ToolBundle[];
       policyStore?: ToolPolicyStore;
       approvedTools?: Set<string>;
       deniedTools?: Set<string>;
@@ -223,76 +231,95 @@ export class ToolEnvironment {
             deniedTools: options.deniedTools ?? new Set<string>(),
           })
         : new InMemoryToolPolicyStore());
-    for (const provider of options.providers ?? []) {
-      this.registerProvider(provider);
+    for (const runtime of options.runtimes ?? []) {
+      this.registerRuntime(runtime);
+    }
+    for (const bundle of options.bundles ?? []) {
+      this.registerBundle(bundle);
     }
   }
 
   get definitions(): ModelTool[] {
-    return [...this.#providers.values()].flatMap((registration) =>
-      registration.definitions.map((definition) => structuredClone(definition)),
+    return [...this.#bundles.values()].flatMap((registration) =>
+      registration.runtimes.map(({ definition }) =>
+        structuredClone(definition),
+      ),
     );
   }
 
-  /** Fresh provider-aware definitions for request-time capability projection. */
+  /** Fresh owner-aware definitions for request-time capability projection. */
   get definitionEntries(): ToolDefinitionEntry[] {
-    return [...this.#providers.values()].flatMap((registration) =>
-      registration.definitions.map((definition) => ({
-        provider: { ...registration.identity },
+    return [...this.#bundles.values()].flatMap((registration) =>
+      registration.runtimes.map(({ definition }) => ({
+        owner: { ...registration.identity },
         definition: structuredClone(definition),
       })),
     );
   }
 
-  registerProvider(provider: ToolProvider): () => void {
-    return this.stageProvider(provider).publish();
+  registerBundle(bundle: ToolBundle): () => void {
+    return this.stageBundle(bundle).publish();
   }
 
-  stageProvider(
-    provider: ToolProvider,
+  /** Registers one independently owned runtime without a caller-visible bundle. */
+  registerRuntime(
+    runtime: ToolRuntime,
+    owner: ToolBundleIdentity = { kind: "builtin", id: runtime.name },
+  ): () => void {
+    return this.registerBundle({ identity: owner, tools: [runtime] });
+  }
+
+  stageBundle(
+    bundle: ToolBundle,
     options: { replaceCurrent?: boolean } = {},
-  ): StagedToolProviderRegistration {
-    const identity = Object.freeze({ ...provider.identity });
-    const key = providerIdentityKey(identity);
+  ): StagedToolBundleRegistration {
+    const identity = Object.freeze({ ...bundle.identity });
+    const key = bundleIdentityKey(identity);
     if (
-      this.#reservedProviderKeys.has(key) ||
-      (this.#providers.has(key) && !options.replaceCurrent)
+      this.#reservedBundleKeys.has(key) ||
+      (this.#bundles.has(key) && !options.replaceCurrent)
     ) {
-      throw new Error(`Tool provider is already registered: ${key}`);
+      throw new Error(`Tool bundle is already registered: ${key}`);
     }
-    const definitions = provider.definitions.map((definition) =>
-      structuredClone(definition),
-    );
-    const localNames = new Set<string>();
-    for (const definition of definitions) {
-      if (definition.name.length === 0) {
-        throw new Error(`Tool provider ${key} has an empty tool name`);
+    const runtimes = bundle.tools.map((runtime) => {
+      const definition = structuredClone(runtime.specification);
+      if (runtime.name.length === 0 || definition.name.length === 0) {
+        throw new Error(`Tool bundle ${key} has an empty tool name`);
       }
-      if (localNames.has(definition.name)) {
+      if (definition.name !== runtime.name) {
         throw new Error(
-          `Tool provider ${key} defines ${definition.name} more than once`,
+          `Tool runtime ${runtime.name} specification name must match exactly`,
         );
       }
-      const current = this.#tools.get(definition.name);
+      return { runtime, definition };
+    });
+    const localNames = new Set<string>();
+    for (const { runtime } of runtimes) {
+      if (localNames.has(runtime.name)) {
+        throw new Error(
+          `Tool bundle ${key} defines ${runtime.name} more than once`,
+        );
+      }
+      const current = this.#tools.get(runtime.name);
       if (
-        this.#reservedToolNames.has(definition.name) ||
+        this.#reservedToolNames.has(runtime.name) ||
         (current !== undefined &&
           (!options.replaceCurrent ||
-            providerIdentityKey(current.identity) !== key))
+            bundleIdentityKey(current.identity) !== key))
       ) {
-        throw new Error(`Tool is already registered: ${definition.name}`);
+        throw new Error(`Tool is already registered: ${runtime.name}`);
       }
-      localNames.add(definition.name);
+      localNames.add(runtime.name);
     }
-    const registration = { identity, provider, definitions };
-    this.#reservedProviderKeys.add(key);
-    for (const definition of definitions)
-      this.#reservedToolNames.add(definition.name);
+    const registration = { identity, bundle, runtimes };
+    this.#reservedBundleKeys.add(key);
+    for (const { runtime } of runtimes)
+      this.#reservedToolNames.add(runtime.name);
     let state: "staged" | "published" | "rolled-back" = "staged";
     const releaseReservation = (): void => {
-      this.#reservedProviderKeys.delete(key);
-      for (const definition of definitions)
-        this.#reservedToolNames.delete(definition.name);
+      this.#reservedBundleKeys.delete(key);
+      for (const { runtime } of runtimes)
+        this.#reservedToolNames.delete(runtime.name);
     };
     return {
       publish: () => {
@@ -302,11 +329,14 @@ export class ToolEnvironment {
         if (state === "rolled-back") return () => {};
         state = "published";
         releaseReservation();
-        const current = this.#providers.get(key);
+        const current = this.#bundles.get(key);
         if (current !== undefined) this.#unregisterRegistration(key, current);
-        this.#providers.set(key, registration);
-        for (const definition of definitions)
-          this.#tools.set(definition.name, registration);
+        this.#bundles.set(key, registration);
+        for (const runtime of runtimes)
+          this.#tools.set(runtime.runtime.name, {
+            ...registration,
+            ...runtime,
+          });
         return () => this.#unregisterRegistration(key, registration);
       },
       rollback: () => {
@@ -317,29 +347,29 @@ export class ToolEnvironment {
     };
   }
 
-  unregisterProvider(identity: ToolProviderIdentity): boolean {
-    const key = providerIdentityKey(identity);
-    const registration = this.#providers.get(key);
+  unregisterBundle(identity: ToolBundleIdentity): boolean {
+    const key = bundleIdentityKey(identity);
+    const registration = this.#bundles.get(key);
     if (registration === undefined) return false;
     return this.#unregisterRegistration(key, registration);
   }
 
+  removeBundle(identity: ToolBundleIdentity): boolean {
+    return this.unregisterBundle(identity);
+  }
+
   #unregisterRegistration(
     key: string,
-    registration: ProviderRegistration,
+    registration: BundleRegistration,
   ): boolean {
-    if (this.#providers.get(key) !== registration) return false;
-    this.#providers.delete(key);
-    for (const definition of registration.definitions) {
-      if (this.#tools.get(definition.name) === registration) {
-        this.#tools.delete(definition.name);
+    if (this.#bundles.get(key) !== registration) return false;
+    this.#bundles.delete(key);
+    for (const { runtime } of registration.runtimes) {
+      if (this.#tools.get(runtime.name)?.bundle === registration.bundle) {
+        this.#tools.delete(runtime.name);
       }
     }
     return true;
-  }
-
-  removeProvider(identity: ToolProviderIdentity): boolean {
-    return this.unregisterProvider(identity);
   }
 
   prepare(invocation: ToolInvocation): PreparedToolInvocation {
@@ -347,24 +377,18 @@ export class ToolEnvironment {
     if (registration === undefined) {
       throw new Error(`Unsupported tool: ${invocation.name}`);
     }
-    const definition = registration.definitions.find(
-      (candidate) => candidate.name === invocation.name,
-    );
-    if (definition === undefined) {
-      throw new Error(`Unsupported tool: ${invocation.name}`);
-    }
     const prepared: PreparedToolInvocation = Object.freeze({
-      provider: registration.identity,
-      definition: structuredClone(definition),
-      executionMode: executionModeFor(registration.provider, invocation.name),
+      owner: registration.identity,
+      definition: structuredClone(registration.definition),
+      executionMode: executionModeFor(registration.runtime),
       invocation: Object.freeze({
         ...invocation,
         arguments: Object.freeze(structuredClone(invocation.arguments)),
       }),
     });
-    this.#preparedProviders.set(prepared, {
-      provider: registration.provider,
-      release: registration.provider.retainPreparedInvocation?.(),
+    this.#preparedRuntimes.set(prepared, {
+      runtime: registration.runtime,
+      release: registration.bundle.retainPreparedInvocation?.(),
       released: false,
     });
     return prepared;
@@ -451,15 +475,15 @@ export class ToolEnvironment {
     prepared: PreparedToolInvocation,
     nested?: NestedToolInvocationPort,
   ): Promise<ToolExecutionResult> {
-    const provider = this.#requirePrepared(prepared).provider;
+    const runtime = this.#requirePrepared(prepared).runtime;
     try {
       prepared.invocation.signal.throwIfAborted();
       const result =
-        nested !== undefined && isBuiltinCompositeToolProvider(provider)
-          ? await provider.executeComposite(prepared.invocation, nested)
-          : await provider.execute(prepared.invocation);
+        nested !== undefined && isCompositeToolRuntime(runtime)
+          ? await runtime.executeComposite(prepared.invocation, nested)
+          : await runtime.execute(prepared.invocation);
       try {
-        return normalizeToolExecutionResult(result, prepared.provider);
+        return normalizeToolExecutionResult(result, prepared.owner);
       } catch (error) {
         throw new ToolResultNormalizationError(error);
       }
@@ -470,8 +494,8 @@ export class ToolEnvironment {
 
   #requirePrepared(
     prepared: PreparedToolInvocation,
-  ): PreparedProviderRegistration {
-    const registration = this.#preparedProviders.get(prepared);
+  ): PreparedRuntimeRegistration {
+    const registration = this.#preparedRuntimes.get(prepared);
     if (registration === undefined) {
       throw new Error("Tool invocation was not prepared by this environment");
     }
@@ -479,36 +503,27 @@ export class ToolEnvironment {
   }
 
   #releasePrepared(prepared: PreparedToolInvocation): void {
-    const registration = this.#preparedProviders.get(prepared);
+    const registration = this.#preparedRuntimes.get(prepared);
     if (registration === undefined || registration.released) return;
     registration.released = true;
-    this.#preparedProviders.delete(prepared);
+    this.#preparedRuntimes.delete(prepared);
     registration.release?.();
   }
 }
 
-function executionModeFor(
-  provider: ToolProvider,
-  toolName: string,
-): ToolExecutionMode {
-  if (
-    toolName === "shell" ||
-    (provider.identity.kind === "builtin" && provider.identity.id === "shell")
-  ) {
-    return "exclusive";
-  }
-  return provider.executionModes?.[toolName] === "parallel_safe"
+function executionModeFor(runtime: ToolRuntime): ToolExecutionMode {
+  if (runtime.name === "shell") return "exclusive";
+  return runtime.executionMode === "parallel_safe"
     ? "parallel_safe"
     : "exclusive";
 }
 
-function isBuiltinCompositeToolProvider(
-  provider: ToolProvider,
-): provider is BuiltinCompositeToolProvider {
+function isCompositeToolRuntime(
+  runtime: ToolRuntime,
+): runtime is CompositeToolRuntime {
   return (
-    provider.identity.kind === "builtin" &&
-    "executeComposite" in provider &&
-    typeof provider.executeComposite === "function"
+    "executeComposite" in runtime &&
+    typeof runtime.executeComposite === "function"
   );
 }
 
@@ -521,7 +536,7 @@ export class ToolResultNormalizationError extends Error {
 
 export function normalizeToolExecutionResult(
   result: ToolExecutionResult,
-  provider: ToolProviderIdentity,
+  owner: ToolBundleIdentity,
 ): ToolExecutionResult {
   if (
     typeof result.output !== "string" ||
@@ -543,12 +558,9 @@ export function normalizeToolExecutionResult(
   if (!/^[a-z][a-z0-9-]{1,62}\/[a-z][a-z0-9.-]{0,127}$/u.test(contentType)) {
     throw new Error(`Invalid structured result contentType: ${contentType}`);
   }
-  if (
-    provider.kind === "plugin" &&
-    !contentType.startsWith(`${provider.id}/`)
-  ) {
+  if (owner.kind === "plugin" && !contentType.startsWith(`${owner.id}/`)) {
     throw new Error(
-      `Plugin ${provider.id} does not own structured result contentType ${contentType}`,
+      `Plugin ${owner.id} does not own structured result contentType ${contentType}`,
     );
   }
   assertJsonValue(result.structuredContent, "$structuredContent");
@@ -626,21 +638,6 @@ function deepFreeze<T extends JsonValue>(value: T): T {
   return Object.freeze(value);
 }
 
-export function toolProviderFromExecutor(
-  executor: ToolExecutor,
-  identity: ToolProviderIdentity = {
-    kind: "external",
-    id: "legacy-tool-executor",
-  },
-): ToolProvider {
-  if ("identity" in executor) return executor as ToolProvider;
-  return {
-    identity,
-    definitions: executor.definitions,
-    execute: async (invocation) => await executor.execute(invocation),
-  };
-}
-
 export interface ApprovalRequest {
   threadId: string;
   turnId: string;
@@ -657,22 +654,20 @@ export type ApprovalHandler = (
   request: ApprovalRequest,
 ) => Promise<ApprovalDecision>;
 
-export class ShellToolExecutor implements ToolProvider {
-  readonly identity = { kind: "builtin", id: "shell" } as const;
-  readonly definitions: ModelTool[] = [
-    {
-      name: "shell",
-      description: "Run a shell command in the thread working directory.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          command: { type: "string" },
-        },
-        required: ["command"],
-        additionalProperties: false,
+export class ShellToolRuntime implements ToolRuntime {
+  readonly name = "shell";
+  readonly specification: ModelTool = {
+    name: this.name,
+    description: "Run a shell command in the thread working directory.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        command: { type: "string" },
       },
+      required: ["command"],
+      additionalProperties: false,
     },
-  ];
+  };
 
   readonly #maxOutputBytes: number;
   readonly #redactedValues: readonly string[];
@@ -874,9 +869,9 @@ export function capturedToolOutput(
   return result[TOOL_OUTPUT_CAPTURE];
 }
 
-function providerIdentityKey(identity: ToolProviderIdentity): string {
+function bundleIdentityKey(identity: ToolBundleIdentity): string {
   if (identity.id.trim().length === 0) {
-    throw new Error("Tool provider id must not be empty");
+    throw new Error("Tool bundle id must not be empty");
   }
   return `${identity.kind}:${identity.id}`;
 }

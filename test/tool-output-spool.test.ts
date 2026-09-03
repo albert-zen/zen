@@ -21,8 +21,13 @@ import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { renderToolOutput, ToolOutputSpool } from "../src/tool-output-spool.js";
-import { ShellToolExecutor, type ToolExecutor } from "../src/tool.js";
+import { ShellToolRuntime, type ToolRuntime } from "../src/tool.js";
 import { createHostedAppServer } from "../apps/cli/src/host.js";
+import {
+  testExecutorEnvironment,
+  testToolEnvironment,
+  type TestToolExecutor,
+} from "./tool-fixtures.js";
 
 test("oversized shell output becomes a bounded receipt with readable full output", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-test-"));
@@ -89,7 +94,7 @@ test("small shell output keeps its exact canonical text shape", async () => {
 test("Runtime spools ordinary text while preserving structuredContent unchanged", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-provider-"));
   const spool = new ToolOutputSpool({ rootDirectory: root, previewBytes: 12 });
-  const tools: ToolExecutor = {
+  const tools: TestToolExecutor = {
     definitions: [{ name: "fixture", description: "fixture", inputSchema: {} }],
     execute: async () => ({
       output: "head-middle-tail",
@@ -280,7 +285,7 @@ function createShellServer(
 ): ZenAppServer {
   return createToolServer(
     spool,
-    new ShellToolExecutor({ toolOutputSpool: spool }),
+    new ShellToolRuntime({ toolOutputSpool: spool }),
     "shell",
     { command },
   );
@@ -288,7 +293,7 @@ function createShellServer(
 
 function createToolServer(
   spool: ToolOutputSpool,
-  tools: ToolExecutor,
+  tools: TestToolExecutor | ToolRuntime,
   toolName: string,
   toolArguments: Record<string, unknown>,
 ): ZenAppServer {
@@ -313,7 +318,10 @@ function createToolServer(
   return new ZenAppServer({
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
-      tools,
+      toolEnvironment:
+        "specification" in tools
+          ? testToolEnvironment({ providers: [tools] })
+          : testExecutorEnvironment(tools),
       toolOutputSpool: spool,
     }),
     providerRegistry: new ProviderRegistry([

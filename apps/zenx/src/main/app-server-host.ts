@@ -13,7 +13,7 @@ import {
 } from "./host-messages.js";
 import {
   createZenXHostToolEnvironment,
-  ZenXHostToolExecutor,
+  ZenXHostToolBundle,
 } from "./capability-tool-executor.js";
 import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
 import { projectThreadAttachments } from "./image-attachments.js";
@@ -22,7 +22,7 @@ import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 let server: CodexWebSocketServer | undefined;
 let appServer: HostedZenAppServer | undefined;
-let tools: ZenXHostToolExecutor | undefined;
+let tools: ZenXHostToolBundle | undefined;
 let replaceCapabilities:
   ((capabilities: ZenXCapabilityHostSnapshot) => void) | undefined;
 let shuttingDown = false;
@@ -155,7 +155,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
     send,
     toolOutputSpool,
   });
-  tools = toolComposition.capabilityProvider;
+  tools = toolComposition.capabilityBundle;
   replaceCapabilities = toolComposition.replaceCapabilities;
   appServer = createHostedAppServer({
     ...command.config,

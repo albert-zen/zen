@@ -5,16 +5,16 @@ import type { CanonicalItem } from "../../../src/item.js";
 import { ToolOutputSpool } from "../../../src/tool-output-spool.js";
 import {
   createZenXHostToolEnvironment,
-  ZenXHostToolExecutor,
+  ZenXHostToolBundle,
 } from "../src/main/capability-tool-executor.js";
 import type { HostEvent } from "../src/main/host-messages.js";
 import { shellPrintCommand } from "./fixtures/shell-command.js";
 
-test("real ZenX host composition preserves builtin and capability provider identities", async (t) => {
+test("real ZenX host composition preserves builtin and capability bundle identities", async (t) => {
   const toolOutputSpool = new ToolOutputSpool();
   t.after(async () => await toolOutputSpool.close());
   const events: HostEvent[] = [];
-  const { capabilityProvider, toolEnvironment, toolDefinitionProjection } =
+  const { capabilityBundle, toolEnvironment, toolDefinitionProjection } =
     createZenXHostToolEnvironment({
       capabilities: {
         definitions: [
@@ -48,8 +48,8 @@ test("real ZenX host composition preserves builtin and capability provider ident
     signal,
   });
 
-  assert.deepEqual(shell.provider, { kind: "builtin", id: "shell" });
-  assert.deepEqual(capability.provider, {
+  assert.deepEqual(shell.owner, { kind: "builtin", id: "shell" });
+  assert.deepEqual(capability.owner, {
     kind: "external",
     id: "zenx-capability-host",
   });
@@ -63,7 +63,7 @@ test("real ZenX host composition preserves builtin and capability provider ident
   const request = events.find((event) => event.type === "capability/invoke");
   assert.equal(request?.type, "capability/invoke");
   if (request?.type !== "capability/invoke") throw new Error("missing request");
-  capabilityProvider.handleResult({
+  capabilityBundle.handleResult({
     type: "capability/result",
     invocationId: request.invocationId,
     output: "bounded",
@@ -154,7 +154,7 @@ test("real ZenX child-host projection hides v2 schemas until canonical read hist
 
 test("exposes capability definitions and resolves main-process execution", async () => {
   const events: HostEvent[] = [];
-  const executor = new ZenXHostToolExecutor({
+  const bundle = new ZenXHostToolBundle({
     capabilities: {
       definitions: [
         {
@@ -167,10 +167,10 @@ test("exposes capability definitions and resolves main-process execution", async
     send: (event) => events.push(event),
   });
   assert.deepEqual(
-    executor.definitions.map((definition) => definition.name),
+    bundle.tools.map((runtime) => runtime.name),
     ["fixture_inspect"],
   );
-  const execution = executor.execute({
+  const execution = bundle.tools[0]!.execute({
     callId: "call-1",
     name: "fixture_inspect",
     arguments: { target: "one" },
@@ -180,7 +180,7 @@ test("exposes capability definitions and resolves main-process execution", async
   const request = events.find((event) => event.type === "capability/invoke");
   assert.equal(request?.type, "capability/invoke");
   if (request?.type !== "capability/invoke") throw new Error("missing request");
-  executor.handleResult({
+  bundle.handleResult({
     type: "capability/result",
     invocationId: request.invocationId,
     output: "bounded",
@@ -266,7 +266,7 @@ test("replaces one target projection while an invocation from another plugin rem
       .find((definition) => definition.name === "target_echo")?.description,
     "Target two",
   );
-  composition.capabilityProvider.handleResult({
+  composition.capabilityBundle.handleResult({
     type: "capability/result",
     invocationId: neighborRequest.invocationId,
     output: "neighbor-completed",

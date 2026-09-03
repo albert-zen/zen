@@ -11,7 +11,8 @@ Provider 账户和 workspace 配置由宿主持有，不进入 Thread。
 
 - append-only canonical Item 与每 Thread 一个 JSONL journal
 - FakeModel、OpenAI-compatible 与 ChatGPT subscription model adapters
-- shell tool、shell-equivalent `run_code` programmatic tool calling、command item 审批、Turn interrupt
+- exact-name Tool Runtime registry、shell、`apply_patch` 文件编辑、shell-equivalent `run_code`
+  programmatic tool calling、command item 审批与 Turn interrupt
 - codex-cli 0.146.0 App Server 协议子集（JSONL stdio / loopback WebSocket）
 - `run`、`chat`、`threads`、`app-server` 薄 CLI
 - 独立 IMZen（QQ / Telegram / Feishu / Weixin channel adapters）
@@ -78,7 +79,9 @@ structured tools 和 `run_code({ code, description })`；也可显式选择 `dir
 Tool Environment 的 `tools.*` 调用普通工具，只有显式 `text(...)` 成为外层结果。它与
 shell 权限等同，不是不可信代码沙箱。显式 `code` 无法初始化 Worker 时 Host 启动失败；
 默认 `both` 则明确 warning 并只发布 direct tools。审批按稳定 `run_code` tool name 记忆，
-同时展示完整 code。回滚到 `direct` 只改变后续模型入口，不删除 provider，也不改写已有
+同时展示完整 code。`apply_patch({ patch })` 使用 Codex `*** Begin Patch` 文本格式；整包先做
+精确内容预检，预检失败不写文件，写盘阶段的 I/O 失败会列出已经完成的前缀。回滚到
+`direct` 只改变后续模型入口，不删除 runtime，也不改写已有
 outer/child canonical history；旧 Thread 仍可从 ItemList 重放。
 
 ChatGPT Plus / Pro subscription 使用 Zen 自己的宿主 profile，不读取或覆盖

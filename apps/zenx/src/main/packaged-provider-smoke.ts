@@ -13,7 +13,7 @@ import {
 import { PACKAGED_PROVIDER_MANIFEST_SHA256 } from "./capabilities/packaged-provider-integrity.js";
 import { packagedProviderSmokeExitCode } from "./packaged-provider-smoke-exit.js";
 import { createHostedAppServer } from "../../../../apps/cli/src/host.js";
-import { ToolEnvironment, type ToolProvider } from "../../../../src/tool.js";
+import { ToolEnvironment, type ToolRuntime } from "../../../../src/tool.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 const portServer = createServer((_request, response) => {
@@ -185,15 +185,13 @@ async function runPackagedProgrammaticToolSmoke(): Promise<{
     previewBytes: 128,
     maxCaptureBytes: 16 * 1024,
   });
-  const nestedProvider: ToolProvider = {
-    identity: { kind: "external", id: "packaged-smoke-nested" },
-    definitions: [
-      {
-        name: "packaged_smoke_nested",
-        description: "Return deterministic oversized text",
-        inputSchema: { type: "object", additionalProperties: false },
-      },
-    ],
+  const nestedRuntime: ToolRuntime = {
+    name: "packaged_smoke_nested",
+    specification: {
+      name: "packaged_smoke_nested",
+      description: "Return deterministic oversized text",
+      inputSchema: { type: "object", additionalProperties: false },
+    },
     execute: async () => ({ output: "nested:".padEnd(4096, "x"), exitCode: 0 }),
   };
   const host = createHostedAppServer({
@@ -204,7 +202,14 @@ async function runPackagedProgrammaticToolSmoke(): Promise<{
     approvalPolicy: "never",
     provider: { type: "fake" },
     toolPresentation: "both",
-    toolEnvironment: new ToolEnvironment({ providers: [nestedProvider] }),
+    toolEnvironment: new ToolEnvironment({
+      bundles: [
+        {
+          identity: { kind: "external", id: "packaged-smoke-nested" },
+          tools: [nestedRuntime],
+        },
+      ],
+    }),
     toolOutputSpool: spool,
     codeRuntimeOptions: { workerUrl: workerEntry, wallTimeMs: 5_000 },
   });

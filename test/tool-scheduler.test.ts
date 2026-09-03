@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ZenAppServer } from "../src/app-server.js";
-import { RunCodeToolProvider } from "../src/code-runtime.js";
+import { RunCodeToolRuntime } from "../src/code-runtime.js";
 import type { CanonicalItem } from "../src/item.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
@@ -15,11 +15,16 @@ import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import {
-  ShellToolExecutor,
+  ShellToolRuntime,
   ToolEnvironment,
   type ToolExecutionResult,
-  type ToolProvider,
 } from "../src/tool.js";
+import {
+  testToolBundle,
+  testToolEnvironment,
+  type TestToolProvider,
+  type TestToolSource,
+} from "./tool-fixtures.js";
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -99,7 +104,7 @@ function assertEveryToolCallHasOneResult(
 
 function runtimeServer(options: {
   model: ModelAdapter;
-  providers: readonly ToolProvider[];
+  providers: readonly TestToolSource[];
   maxConcurrentToolBodies?: number;
   approvalPolicy?: "always" | "never";
 }): ZenAppServer {
@@ -107,7 +112,7 @@ function runtimeServer(options: {
   return new ZenAppServer({
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
-      toolEnvironment: new ToolEnvironment({ providers: options.providers }),
+      toolEnvironment: testToolEnvironment({ providers: options.providers }),
       ...(options.maxConcurrentToolBodies === undefined
         ? {}
         : { maxConcurrentToolBodies: options.maxConcurrentToolBodies }),
@@ -158,7 +163,7 @@ test("parallel-safe bodies overlap while canonical results keep submission order
       }
       return { output: invocation.callId, exitCode: 0 };
     },
-  } satisfies ToolProvider;
+  } satisfies TestToolProvider;
   const server = runtimeServer({
     model: batchModel([
       { callId: "first", name: "parallel" },
@@ -202,7 +207,7 @@ test("exclusive calls form FIFO barriers around parallel-safe bodies", async () 
   const releaseFirst = deferred<void>();
   const releaseBarrier = deferred<void>();
   const releaseLast = deferred<void>();
-  const provider: ToolProvider = {
+  const provider: TestToolProvider = {
     identity: { kind: "external", id: "barrier" },
     definitions: [
       {
@@ -266,7 +271,7 @@ test("builtin shell and undeclared providers stay exclusive", async () => {
   const secondStarted = deferred<void>();
   const releaseFirst = deferred<void>();
   const releaseSecond = deferred<void>();
-  const undeclared: ToolProvider = {
+  const undeclared: TestToolProvider = {
     identity: { kind: "external", id: "undeclared" },
     definitions: [
       {
@@ -297,7 +302,7 @@ test("builtin shell and undeclared providers stay exclusive", async () => {
       },
       { callId: "second", name: "undeclared" },
     ]),
-    providers: [undeclared, new ShellToolExecutor()],
+    providers: [undeclared, new ShellToolRuntime()],
   });
   const thread = await server.startThread();
   const turn = await server.startTurn(thread.id, "fail closed");
@@ -322,7 +327,7 @@ test("the default body cap is eight and a configured cap must be positive", asyn
     assert.throws(
       () =>
         new AgentRuntime({
-          toolEnvironment: new ToolEnvironment(),
+          toolEnvironment: testToolEnvironment(),
           maxConcurrentToolBodies: invalid,
         }),
       /positive safe integer/u,
@@ -335,7 +340,7 @@ test("the default body cap is eight and a configured cap must be positive", asyn
   let starts = 0;
   let active = 0;
   let maxActive = 0;
-  const provider: ToolProvider = {
+  const provider: TestToolProvider = {
     identity: { kind: "external", id: "default-cap" },
     definitions: [
       {
@@ -386,7 +391,7 @@ test("nested Promise.all shares the cap while outer run_code holds no child slot
   let starts = 0;
   let active = 0;
   let maxActive = 0;
-  const child: ToolProvider = {
+  const child: TestToolProvider = {
     identity: { kind: "external", id: "nested-cap" },
     definitions: [
       {
@@ -426,7 +431,7 @@ test("nested Promise.all shares the cap while outer run_code holds no child slot
         },
       },
     ]),
-    providers: [child, new RunCodeToolProvider()],
+    providers: [child, new RunCodeToolRuntime()],
     maxConcurrentToolBodies: 2,
   });
   const thread = await server.startThread();
@@ -469,7 +474,7 @@ test("both presentation freezes direct and nested capabilities through scheduler
   let active = 0;
   let maxActive = 0;
   let hiddenExecutions = 0;
-  const visible: ToolProvider = {
+  const visible: TestToolProvider = {
     identity: { kind: "external", id: "visible" },
     definitions: [
       {
@@ -502,7 +507,7 @@ test("both presentation freezes direct and nested capabilities through scheduler
       };
     },
   };
-  const hidden: ToolProvider = {
+  const hidden: TestToolProvider = {
     identity: { kind: "external", id: "late-hidden" },
     definitions: [
       {
@@ -517,8 +522,8 @@ test("both presentation freezes direct and nested capabilities through scheduler
       return { output: "hidden", exitCode: 0 };
     },
   };
-  const environment = new ToolEnvironment({
-    providers: [visible, new RunCodeToolProvider()],
+  const environment = testToolEnvironment({
+    providers: [visible, new RunCodeToolRuntime()],
   });
   const requests: ModelRequest[] = [];
   let sample = 0;
@@ -528,7 +533,7 @@ test("both presentation freezes direct and nested capabilities through scheduler
       requests.push(structuredClone(request));
       sample += 1;
       if (sample === 1) {
-        environment.registerProvider(hidden);
+        environment.registerBundle(testToolBundle(hidden));
         yield {
           type: "tool_call",
           callId: "direct-visible",
@@ -645,7 +650,7 @@ test("nested body results reach guest promises before ordered canonical commit",
   const firstStarted = deferred<void>();
   const thirdStarted = deferred<void>();
   const releaseFirst = deferred<void>();
-  const provider: ToolProvider = {
+  const provider: TestToolProvider = {
     identity: { kind: "external", id: "nested-result" },
     definitions: [
       {
@@ -683,7 +688,7 @@ test("nested body results reach guest promises before ordered canonical commit",
         },
       },
     ]),
-    providers: [provider, new RunCodeToolProvider()],
+    providers: [provider, new RunCodeToolRuntime()],
     maxConcurrentToolBodies: 2,
   });
   const thread = await server.startThread();
@@ -707,7 +712,7 @@ test("parallel failure settles in order and does not suppress later calls", asyn
   const firstStarted = deferred<void>();
   const failed = deferred<void>();
   const releaseFirst = deferred<void>();
-  const provider: ToolProvider = {
+  const provider: TestToolProvider = {
     identity: { kind: "external", id: "failure" },
     definitions: [
       {
@@ -761,7 +766,7 @@ test("abort settles every admitted parallel call once and leaves no body active"
   const releaseSecondAbort = deferred<void>();
   let starts = 0;
   let active = 0;
-  const provider: ToolProvider = {
+  const provider: TestToolProvider = {
     identity: { kind: "external", id: "abort" },
     definitions: [
       {
@@ -841,7 +846,7 @@ test("parallel-safe preparation leases survive provider removal while queued", a
   const secondStarted = deferred<void>();
   const releaseFirst = deferred<void>();
   let leases = 0;
-  const provider: ToolProvider = {
+  const provider: TestToolProvider = {
     identity: { kind: "external", id: "leased" },
     definitions: [
       {
@@ -868,7 +873,7 @@ test("parallel-safe preparation leases survive provider removal while queued", a
       return { output: invocation.callId, exitCode: 0 };
     },
   };
-  const environment = new ToolEnvironment({ providers: [provider] });
+  const environment = testToolEnvironment({ providers: [provider] });
   const catalog = new StaticModelCatalog([{ id: "model", isDefault: true }]);
   const model = batchModel([
     { callId: "first", name: "parallel" },
@@ -902,7 +907,7 @@ test("parallel-safe preparation leases survive provider removal while queued", a
 
   await within(firstStarted.promise, "the first leased body");
   await within(twoLeases.promise, "both preparation leases");
-  assert.equal(environment.unregisterProvider(provider.identity), true);
+  assert.equal(environment.unregisterBundle(provider.identity), true);
   assert.equal(leases, 2);
   releaseFirst.resolve();
   await within(secondStarted.promise, "the queued leased body");
@@ -917,7 +922,7 @@ test("outer admissions stay FIFO while an admitted parallel body runs", async ()
   const releaseFirstApproval = deferred<void>();
   const releaseBodies = deferred<void>();
   const approvals: string[] = [];
-  const provider: ToolProvider = {
+  const provider: TestToolProvider = {
     identity: { kind: "external", id: "admission" },
     definitions: [
       {
@@ -977,7 +982,7 @@ test("sibling run_code calls are serial composite barriers", async () => {
   const secondStarted = deferred<void>();
   const releaseFirst = deferred<void>();
   const starts: string[] = [];
-  const child: ToolProvider = {
+  const child: TestToolProvider = {
     identity: { kind: "external", id: "composite-child" },
     definitions: [
       {
@@ -1018,7 +1023,7 @@ test("sibling run_code calls are serial composite barriers", async () => {
         },
       },
     ]),
-    providers: [child, new RunCodeToolProvider()],
+    providers: [child, new RunCodeToolRuntime()],
     maxConcurrentToolBodies: 1,
   });
   const thread = await server.startThread();

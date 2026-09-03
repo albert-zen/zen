@@ -5,19 +5,18 @@ import test from "node:test";
 
 import { createHostedAppServer } from "../../../apps/cli/src/host.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
-import type { ToolExecutor } from "../../../src/tool.js";
+import { ToolEnvironment, type ToolRuntime } from "../../../src/tool.js";
 
 test("host seam preserves compatible effort, falls back atomically, and freezes the active Turn", async () => {
   const enteredTool = deferred<void>();
   const releaseTool = deferred<void>();
-  const tools: ToolExecutor = {
-    definitions: [
-      {
-        name: "shell",
-        description: "Test shell",
-        inputSchema: { type: "object" },
-      },
-    ],
+  const runtime: ToolRuntime = {
+    name: "shell",
+    specification: {
+      name: "shell",
+      description: "Test shell",
+      inputSchema: { type: "object" },
+    },
     async execute() {
       enteredTool.resolve();
       await releaseTool.promise;
@@ -29,7 +28,14 @@ test("host seam preserves compatible effort, falls back atomically, and freezes 
     dataDirectory: path.join(os.tmpdir(), "unused-zenx-model-selection"),
     approvalPolicy: "never",
     journal: new InMemoryThreadJournal(),
-    tools,
+    toolEnvironment: new ToolEnvironment({
+      bundles: [
+        {
+          identity: { kind: "external", id: "composer-test" },
+          tools: [runtime],
+        },
+      ],
+    }),
     providers: [
       {
         providerProfileId: "alpha",

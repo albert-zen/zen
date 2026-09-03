@@ -40,7 +40,12 @@ import {
   JsonlThreadMetadataStore,
   type ThreadMetadataStore,
 } from "../src/thread-metadata.js";
-import { ShellToolExecutor, type ToolExecutor } from "../src/tool.js";
+import { ShellToolRuntime, type ToolRuntime } from "../src/tool.js";
+import {
+  testExecutorEnvironment,
+  testToolEnvironment,
+  type TestToolExecutor,
+} from "./tool-fixtures.js";
 
 function createServer(
   options: {
@@ -49,7 +54,7 @@ function createServer(
     model?: ModelAdapter;
     modelCatalog?: ModelCatalog;
     threadMetadata?: ThreadMetadataStore;
-    tools?: ToolExecutor;
+    tools?: TestToolExecutor | ToolRuntime;
     idFactory?: () => string;
     runtimeIdFactory?: () => string;
     runtime?: AgentRuntime;
@@ -64,7 +69,12 @@ function createServer(
     runtime:
       options.runtime ??
       new AgentRuntime({
-        tools: options.tools ?? new ShellToolExecutor(),
+        toolEnvironment:
+          options.tools === undefined
+            ? testToolEnvironment({ providers: [new ShellToolRuntime()] })
+            : "specification" in options.tools
+              ? testToolEnvironment({ providers: [options.tools] })
+              : testExecutorEnvironment(options.tools),
         ...(options.runtimeIdFactory === undefined
           ? {}
           : { idFactory: options.runtimeIdFactory }),
@@ -147,7 +157,7 @@ test("preserves credential-matching model and tool trace strings verbatim", asyn
       };
     },
   };
-  const tools: ToolExecutor = {
+  const tools: TestToolExecutor = {
     definitions: [
       {
         name: credentialBytes,
@@ -273,7 +283,7 @@ test("persists opaque reasoning semantics and derives replay selection", async (
       yield { type: "text_delta", delta: "done" };
     },
   };
-  const tools: ToolExecutor = {
+  const tools: TestToolExecutor = {
     definitions: [
       {
         name: "restart_tool",
@@ -817,9 +827,11 @@ function createTwoCallModel(): ModelAdapter {
   };
 }
 
-function createStubTools(execute: ToolExecutor["execute"]): ToolExecutor {
+function createStubTools(
+  execute: TestToolExecutor["execute"],
+): TestToolExecutor {
   return {
-    definitions: new ShellToolExecutor().definitions,
+    definitions: [new ShellToolRuntime().specification],
     execute,
   };
 }
@@ -958,7 +970,7 @@ test("allows more than eight tool rounds when no maximum is configured", async (
       yield { type: "text_delta", delta: "finished" };
     },
   };
-  const tools: ToolExecutor = {
+  const tools: TestToolExecutor = {
     definitions: [
       {
         name: "continue",
@@ -1002,7 +1014,7 @@ test("honors an explicitly configured maximum tool round count", async () => {
       };
     },
   };
-  const tools: ToolExecutor = {
+  const tools: TestToolExecutor = {
     definitions: [
       {
         name: "continue",
@@ -1012,7 +1024,10 @@ test("honors an explicitly configured maximum tool round count", async () => {
     ],
     execute: async () => ({ output: "continue", exitCode: 0 }),
   };
-  const runtime = new AgentRuntime({ tools, maxToolRounds: 2 });
+  const runtime = new AgentRuntime({
+    toolEnvironment: testExecutorEnvironment(tools),
+    maxToolRounds: 2,
+  });
   const server = createServer({ model, runtime });
   const thread = await server.startThread();
 
@@ -1033,7 +1048,11 @@ test("honors an explicitly configured maximum tool round count", async () => {
   );
   for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(
-      () => new AgentRuntime({ tools, maxToolRounds: invalid }),
+      () =>
+        new AgentRuntime({
+          toolEnvironment: testExecutorEnvironment(tools),
+          maxToolRounds: invalid,
+        }),
       /Maximum tool rounds/u,
     );
   }
@@ -1537,7 +1556,7 @@ test("explicit shell redaction removes caller-designated values", async () => {
   try {
     const secretFile = path.join(temporaryDirectory, "provider-secrets");
     await writeFile(secretFile, `${providerKey}|${blockedPath}`, "utf8");
-    const executor = new ShellToolExecutor({
+    const executor = new ShellToolRuntime({
       environment: {
         OPENAI_API_KEY: providerKey,
         PATH: blockedPath,
@@ -1795,7 +1814,7 @@ test(
       path.join(os.tmpdir(), "zen-shell-interrupt-"),
     );
     const marker = path.join(temporaryDirectory, "pids");
-    const tools = new ShellToolExecutor({ terminationGraceMs: 25 });
+    const tools = new ShellToolRuntime({ terminationGraceMs: 25 });
     const server = createServer({ tools });
     const thread = await server.startThread();
     const command = [
@@ -1927,7 +1946,9 @@ test("waits for a terminal predecessor handle to settle before starting its succ
     }
   }
   const runtime = new DelayedSettlementRuntime({
-    tools: new ShellToolExecutor(),
+    toolEnvironment: testToolEnvironment({
+      providers: [new ShellToolRuntime()],
+    }),
   });
   const server = createServer({ runtime });
   const thread = await server.startThread();
@@ -1986,7 +2007,9 @@ test("does not let a rejected terminal predecessor handle reject successor admis
     }
   }
   const runtime = new RejectedSettlementRuntime({
-    tools: new ShellToolExecutor(),
+    toolEnvironment: testToolEnvironment({
+      providers: [new ShellToolRuntime()],
+    }),
   });
   const server = createServer({ runtime });
   const thread = await server.startThread();
@@ -2385,7 +2408,7 @@ test("soft steer waits behind a tool result and does not cancel approval", async
       yield { type: "text_delta", delta: "done after correction" };
     },
   };
-  const tools: ToolExecutor = {
+  const tools: TestToolExecutor = {
     definitions: [
       {
         name: "shell",

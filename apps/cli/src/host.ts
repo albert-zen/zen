@@ -5,10 +5,11 @@ import {
   FileAttachmentStore,
   type AttachmentStore,
 } from "../../../src/attachment.js";
+import { ApplyPatchToolRuntime } from "../../../src/apply-patch.js";
 import { ZenAppServer } from "../../../src/app-server.js";
 import {
   CodeRuntime,
-  RunCodeToolProvider,
+  RunCodeToolRuntime,
   type CodeRuntimeLimits,
 } from "../../../src/code-runtime.js";
 import {
@@ -35,12 +36,7 @@ import {
   JsonThreadSummaryProjection,
   type ThreadSummaryProjection,
 } from "../../../src/thread-summary.js";
-import {
-  ShellToolExecutor,
-  ToolEnvironment,
-  toolProviderFromExecutor,
-  type ToolExecutor,
-} from "../../../src/tool.js";
+import { ShellToolRuntime, ToolEnvironment } from "../../../src/tool.js";
 import {
   ToolOutputSpool,
   type ToolOutputSpoolOptions,
@@ -107,8 +103,6 @@ export interface ZenHostOptions {
   maxConcurrentToolBodies?: number;
   /** Product warning sink used when both degrades to direct. */
   onToolPresentationWarning?: (warning: string) => void;
-  /** Compatibility input for callers that still provide one static executor. */
-  tools?: ToolExecutor;
   attachments?: AttachmentStore;
   /** Host-local owner injection, primarily for composition and lifecycle tests. */
   toolOutputSpool?: ToolOutputSpool;
@@ -131,9 +125,6 @@ export type HostedZenAppServer = ZenAppServer & {
 export function createHostedAppServer(
   options: ZenHostOptions,
 ): HostedZenAppServer {
-  if (options.toolEnvironment !== undefined && options.tools !== undefined) {
-    throw new Error("Provide toolEnvironment or tools, not both");
-  }
   const attachments =
     options.attachments ??
     new FileAttachmentStore(path.join(options.dataDirectory, "attachments"));
@@ -214,19 +205,28 @@ export function createHostedAppServer(
   const toolEnvironment =
     options.toolEnvironment ??
     new ToolEnvironment({
-      providers: [
-        toolProviderFromExecutor(
-          options.tools ??
-            new ShellToolExecutor({
-              blockedEnvironmentVariables:
-                options.secretEnvironmentVariables ?? [],
-              toolOutputSpool,
-            }),
-        ),
+      runtimes: [
+        new ShellToolRuntime({
+          blockedEnvironmentVariables: options.secretEnvironmentVariables ?? [],
+          toolOutputSpool,
+        }),
       ],
     });
-  if (codeRuntime.provider !== undefined) {
-    toolEnvironment.registerProvider(codeRuntime.provider);
+  if (
+    !toolEnvironment.definitions.some(
+      (definition) => definition.name === "apply_patch",
+    )
+  ) {
+    toolEnvironment.registerRuntime(new ApplyPatchToolRuntime(), {
+      kind: "builtin",
+      id: "apply-patch",
+    });
+  }
+  if (codeRuntime.runtime !== undefined) {
+    toolEnvironment.registerRuntime(codeRuntime.runtime, {
+      kind: "builtin",
+      id: "run-code",
+    });
   }
   const fetches: ProviderFetch[] = [];
   const profiles = preparedProfiles.map((profile) => {
@@ -310,7 +310,7 @@ function prepareCodeRuntime(options: {
   warning: ((warning: string) => void) | undefined;
 }): {
   presentation: ToolPresentation;
-  provider?: RunCodeToolProvider;
+  runtime?: RunCodeToolRuntime;
 } {
   if (options.requestedPresentation === "direct") {
     return { presentation: "direct" };
@@ -327,7 +327,7 @@ function prepareCodeRuntime(options: {
     runtime.assertReady();
     return {
       presentation: options.requestedPresentation,
-      provider: new RunCodeToolProvider(runtime),
+      runtime: new RunCodeToolRuntime(runtime),
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

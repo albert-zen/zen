@@ -3,11 +3,12 @@ import { randomUUID } from "node:crypto";
 
 import type { ModelTool } from "../../../../src/model.js";
 import type {
+  StagedToolBundleRegistration,
+  ToolBundle,
   ToolEnvironment,
   ToolExecutionResult,
   ToolInvocation,
-  ToolProvider,
-  StagedToolProviderRegistration,
+  ToolRuntime,
 } from "../../../../src/tool.js";
 import { normalizeToolExecutionResult } from "../../../../src/tool.js";
 import type {
@@ -59,19 +60,19 @@ export interface PluginRuntimeRegistration {
 
 interface ActiveRuntime {
   token: object;
-  provider: SupervisedPluginProvider;
-  unregisterProvider(): void;
+  bundle: SupervisedPluginBundle;
+  unregisterBundle(): void;
 }
 
 interface StagedRuntime {
   token: object;
-  provider: SupervisedPluginProvider;
-  publication: StagedToolProviderRegistration;
+  bundle: SupervisedPluginBundle;
+  publication: StagedToolBundleRegistration;
 }
 
 /**
  * Host-owned transient runtime registry. It admits exact namespaced ownership,
- * publishes one Tool Environment provider, and never retries failed runtimes.
+ * publishes one Tool Environment bundle, and never retries failed runtimes.
  */
 export class PluginRuntimeSupervisor {
   readonly #toolEnvironment: ToolEnvironment;
@@ -127,21 +128,21 @@ export class PluginRuntimeSupervisor {
         throw new Error(`Plugin runtime identity mismatch for ${pluginId}`);
       }
       const token = Object.freeze({});
-      const provider = new SupervisedPluginProvider(
+      const bundle = new SupervisedPluginBundle(
         registration.identity,
         registration.definitions,
         runtime,
       );
-      let publication: StagedToolProviderRegistration;
+      let publication: StagedToolBundleRegistration;
       try {
-        publication = this.#toolEnvironment.stageProvider(provider, {
+        publication = this.#toolEnvironment.stageBundle(bundle, {
           replaceCurrent: options.replaceCurrent ?? false,
         });
       } catch (error) {
-        await provider.retire();
+        await bundle.retire();
         throw error;
       }
-      this.#staged.set(pluginId, { token, provider, publication });
+      this.#staged.set(pluginId, { token, bundle, publication });
       let published = false;
       return {
         publish: () => {
@@ -150,15 +151,15 @@ export class PluginRuntimeSupervisor {
           const staged = this.#staged.get(pluginId);
           if (staged?.token !== token) return;
           const previous = this.#active.get(pluginId);
-          const unregisterProvider = staged.publication.publish();
+          const unregisterBundle = staged.publication.publish();
           this.#staged.delete(pluginId);
           this.#active.set(pluginId, {
             token,
-            provider: staged.provider,
-            unregisterProvider,
+            bundle: staged.bundle,
+            unregisterBundle,
           });
           if (previous !== undefined && previous.token !== token) {
-            void previous.provider.retire().catch((error: unknown) => {
+            void previous.bundle.retire().catch((error: unknown) => {
               console.warn(
                 `Plugin runtime retirement failed after replacement commit: ${describeError(error)}`,
               );
@@ -178,7 +179,7 @@ export class PluginRuntimeSupervisor {
       if (staged?.token === token) {
         this.#staged.delete(pluginId);
         staged.publication.rollback();
-        await staged.provider.retire();
+        await staged.bundle.retire();
         return;
       }
       const active = this.#active.get(pluginId);
@@ -197,8 +198,8 @@ export class PluginRuntimeSupervisor {
     const active = this.#active.get(pluginId);
     if (active === undefined) return;
     this.#active.delete(pluginId);
-    active.unregisterProvider();
-    await active.provider.retire();
+    active.unregisterBundle();
+    await active.bundle.retire();
   }
 
   async close(): Promise<void> {
@@ -215,7 +216,7 @@ export class PluginRuntimeSupervisor {
         this.#staged.delete(pluginId);
         staged.publication.rollback();
         try {
-          await staged.provider.retire();
+          await staged.bundle.retire();
         } catch (error) {
           failures.push(asError(error));
         }
@@ -237,7 +238,7 @@ export class PluginRuntimeSupervisor {
     if (active === undefined) {
       throw new Error(`Plugin runtime is not enabled: ${pluginId}`);
     }
-    return await active.provider.invoke({
+    return await active.bundle.invoke({
       ...invocation,
       invocationId: invocation.invocationId ?? randomUUID(),
     });
@@ -253,9 +254,9 @@ export class PluginRuntimeSupervisor {
   }
 }
 
-class SupervisedPluginProvider implements ToolProvider {
+class SupervisedPluginBundle implements ToolBundle {
   readonly identity;
-  readonly definitions: readonly ModelTool[];
+  readonly tools: readonly ToolRuntime[];
   readonly #runtime: PluginRuntime;
   readonly #toolNames: Set<string>;
   readonly #active = new Set<Promise<unknown>>();
@@ -269,14 +270,25 @@ class SupervisedPluginProvider implements ToolProvider {
     runtime: PluginRuntime,
   ) {
     this.identity = { kind: "plugin", id: identity.pluginId } as const;
-    this.definitions = definitions.map((definition) =>
-      structuredClone(definition),
-    );
+    this.tools = definitions.map((definition) => ({
+      name: definition.name,
+      specification: structuredClone(definition),
+      execute: async (invocation: ToolInvocation) =>
+        await this.#execute(definition.name, invocation),
+    }));
     this.#toolNames = new Set(definitions.map((definition) => definition.name));
     this.#runtime = runtime;
   }
 
-  async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
+  async #execute(
+    toolName: string,
+    invocation: ToolInvocation,
+  ): Promise<ToolExecutionResult> {
+    if (invocation.name !== toolName) {
+      throw new Error(
+        `Tool runtime ${toolName} received invocation for ${invocation.name}`,
+      );
+    }
     return await this.invoke({
       invocationId: invocation.callId,
       tool: invocation.name,

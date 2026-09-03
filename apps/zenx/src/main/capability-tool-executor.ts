@@ -1,16 +1,17 @@
 import type {
+  ToolBundle,
   ToolExecutionResult,
   ToolInvocation,
-  ToolProvider,
+  ToolRuntime,
 } from "../../../../src/tool.js";
-import { ShellToolExecutor, ToolEnvironment } from "../../../../src/tool.js";
+import { ShellToolRuntime, ToolEnvironment } from "../../../../src/tool.js";
 import type { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 import type { ToolDefinitionProjection } from "../../../../src/runtime.js";
 import type { CapabilityResultCommand, HostEvent } from "./host-messages.js";
 import type { ZenXCapabilityHostSnapshot } from "./capabilities/types.js";
 import {
   PluginDiscoveryProjection,
-  PluginDiscoveryToolProvider,
+  PluginDiscoveryToolRuntime,
 } from "./plugin-discovery.js";
 
 interface PendingInvocation {
@@ -24,13 +25,12 @@ interface CapabilityInvocationState {
   pending: Map<string, PendingInvocation>;
 }
 
-export class ZenXHostToolExecutor implements ToolProvider {
+export class ZenXHostToolBundle implements ToolBundle {
   readonly identity = {
     kind: "external",
     id: "zenx-capability-host",
   } as const;
-  readonly definitions;
-  readonly #capabilityNames: Set<string>;
+  readonly tools: readonly ToolRuntime[];
   readonly #send: (event: HostEvent) => void;
   readonly #state: CapabilityInvocationState;
 
@@ -39,17 +39,24 @@ export class ZenXHostToolExecutor implements ToolProvider {
     send: (event: HostEvent) => void;
     state?: CapabilityInvocationState;
   }) {
-    this.#capabilityNames = new Set(
-      options.capabilities.definitions.map((definition) => definition.name),
-    );
-    this.definitions = options.capabilities.definitions;
+    this.tools = options.capabilities.definitions.map((definition) => ({
+      name: definition.name,
+      specification: structuredClone(definition),
+      execute: async (invocation: ToolInvocation) =>
+        await this.#execute(definition.name, invocation),
+    }));
     this.#send = options.send;
     this.#state = options.state ?? { pending: new Map() };
   }
 
-  async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
-    if (!this.#capabilityNames.has(invocation.name)) {
-      throw new Error(`Unsupported tool: ${invocation.name}`);
+  async #execute(
+    toolName: string,
+    invocation: ToolInvocation,
+  ): Promise<ToolExecutionResult> {
+    if (invocation.name !== toolName) {
+      throw new Error(
+        `Tool runtime ${toolName} received invocation for ${invocation.name}`,
+      );
     }
     invocation.signal.throwIfAborted();
     const invocationId = `${process.pid}:${invocation.callId}:${String(Date.now())}`;
@@ -122,46 +129,50 @@ export function createZenXHostToolEnvironment(options: {
   send: (event: HostEvent) => void;
   toolOutputSpool: ToolOutputSpool;
 }): {
-  capabilityProvider: ZenXHostToolExecutor;
+  capabilityBundle: ZenXHostToolBundle;
   toolEnvironment: ToolEnvironment;
   toolDefinitionProjection: ToolDefinitionProjection;
   replaceCapabilities(capabilities: ZenXCapabilityHostSnapshot): void;
 } {
   const invocationState: CapabilityInvocationState = { pending: new Map() };
-  const capabilityProvider = new ZenXHostToolExecutor({
+  const capabilityBundle = new ZenXHostToolBundle({
     capabilities: options.capabilities,
     send: options.send,
     state: invocationState,
   });
   const toolEnvironment = new ToolEnvironment({
-    providers: [
-      new ShellToolExecutor({
+    runtimes: [
+      new ShellToolRuntime({
         blockedEnvironmentVariables: options.blockedEnvironmentVariables,
         redactedValues: options.redactedValues,
         toolOutputSpool: options.toolOutputSpool,
       }),
-      capabilityProvider,
     ],
+    bundles: [capabilityBundle],
   });
   let capabilities = structuredClone(options.capabilities);
   const catalog = {
     availablePlugins: () => structuredClone(capabilities.plugins ?? []),
   };
-  toolEnvironment.registerProvider(
-    new PluginDiscoveryToolProvider(catalog, toolEnvironment),
+  toolEnvironment.registerRuntime(
+    new PluginDiscoveryToolRuntime(catalog, toolEnvironment),
+    {
+      kind: "builtin",
+      id: "zenx-plugin-discovery",
+    },
   );
   const projection = new PluginDiscoveryProjection(toolEnvironment, catalog);
   return {
-    capabilityProvider,
+    capabilityBundle,
     toolEnvironment,
     toolDefinitionProjection: (items) => projection.definitions(items),
     replaceCapabilities: (replacement) => {
-      const nextProvider = new ZenXHostToolExecutor({
+      const nextBundle = new ZenXHostToolBundle({
         capabilities: replacement,
         send: options.send,
         state: invocationState,
       });
-      const staged = toolEnvironment.stageProvider(nextProvider, {
+      const staged = toolEnvironment.stageBundle(nextBundle, {
         replaceCurrent: true,
       });
       staged.publish();

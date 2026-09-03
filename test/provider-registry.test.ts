@@ -16,7 +16,8 @@ import {
 import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
-import { ShellToolExecutor } from "../src/tool.js";
+import { ShellToolRuntime } from "../src/tool.js";
+import { testToolEnvironment } from "./tool-fixtures.js";
 
 test("routes duplicate model ids and reasoning effort through the fixed Codex wire", async () => {
   const requestsA: ModelRequest[] = [];
@@ -65,7 +66,11 @@ test("routes duplicate model ids and reasoning effort through the fixed Codex wi
   ]);
   const appServer = new ZenAppServer({
     journal: new InMemoryThreadJournal(),
-    runtime: new AgentRuntime({ tools: new ShellToolExecutor() }),
+    runtime: new AgentRuntime({
+      toolEnvironment: testToolEnvironment({
+        providers: [new ShellToolRuntime()],
+      }),
+    }),
     providerRegistry: registry,
     threadMetadata: new InMemoryThreadMetadataStore(),
     defaults: {
@@ -772,7 +777,11 @@ function createRegistryServer(options: {
     options.defaultSelection ?? selection("profile-a", "low");
   return new ZenAppServer({
     journal: options.journal ?? new InMemoryThreadJournal(),
-    runtime: new AgentRuntime({ tools: new ShellToolExecutor() }),
+    runtime: new AgentRuntime({
+      toolEnvironment: testToolEnvironment({
+        providers: [new ShellToolRuntime()],
+      }),
+    }),
     providerRegistry: options.registry,
     threadMetadata: new InMemoryThreadMetadataStore(),
     defaults: {

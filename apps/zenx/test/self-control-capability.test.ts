@@ -19,8 +19,9 @@ import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { AgentRuntime } from "../../../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.js";
 import {
-  ShellToolExecutor,
-  type ToolExecutor,
+  ShellToolRuntime,
+  ToolEnvironment,
+  type ToolExecutionResult,
   type ToolInvocation,
 } from "../../../src/tool.js";
 import { serveCodexWebSocket } from "../../../src/protocol/codex/websocket.js";
@@ -58,9 +59,9 @@ test("real ZenX host control tools make active semantics explicit", async () => 
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-control-host-"));
   const requestPort = new MutableAppServerRequestPort();
   const capabilities = await grantedSelfControl(directory, requestPort);
+  const tools = capabilityTools(capabilities);
   const manager = managerFor(directory, capabilities);
   await requestPort.attach(manager, directory);
-  const tools = capabilityTools(capabilities);
   try {
     await manager.start();
     const created = await invoke(tools, "zenx_threads_create", {
@@ -278,7 +279,7 @@ test("an Agent drives the complete bounded tracer bullet through App Server wire
   const appServer = new ZenAppServer({
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
-      tools,
+      toolEnvironment: capabilityToolEnvironment(capabilities),
     }),
     providerRegistry: new ProviderRegistry([
       {
@@ -664,7 +665,7 @@ test("all hosted tool definitions serialize through the OpenAI subscription boun
   );
   try {
     const tools = [
-      ...new ShellToolExecutor({ environment: {} }).definitions,
+      new ShellToolRuntime({ environment: {} }).specification,
       ...capabilities.hostSnapshot().definitions,
     ];
     let capturedInit: RequestInit | undefined;
@@ -815,13 +816,37 @@ async function grantedSelfControl(
   return capabilities;
 }
 
-function capabilityTools(capabilities: SelfControlHost): ToolExecutor {
+interface CapabilityTools {
+  definitions: ReturnType<SelfControlHost["hostSnapshot"]>["definitions"];
+  execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
+}
+
+function capabilityTools(capabilities: SelfControlHost): CapabilityTools {
   return {
     definitions: capabilities.hostSnapshot().definitions,
     async execute(invocation: ToolInvocation) {
       return await capabilities.execute(invocation);
     },
   };
+}
+
+function capabilityToolEnvironment(
+  capabilities: SelfControlHost,
+): ToolEnvironment {
+  const executor = capabilityTools(capabilities);
+  return new ToolEnvironment({
+    bundles: [
+      {
+        identity: { kind: "external", id: "self-control-test" },
+        tools: executor.definitions.map((definition) => ({
+          name: definition.name,
+          specification: structuredClone(definition),
+          execute: async (invocation: ToolInvocation) =>
+            await executor.execute(invocation),
+        })),
+      },
+    ],
+  });
 }
 
 class SelfControlHost implements ZenXCapabilityHost {
@@ -886,7 +911,7 @@ function managerFor(
 }
 
 async function invoke(
-  tools: ToolExecutor,
+  tools: CapabilityTools,
   name: string,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {

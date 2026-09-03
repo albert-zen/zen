@@ -17,17 +17,16 @@
 - **Code Runtime** — 每次调用在 fresh、空环境、有限 heap/time/output 且可硬终止的 Node Worker 中运行 erasable TypeScript，权限明确等同 builtin shell，并用同一个 Tool Environment 的 `tools.*` bindings 调用结构化工具。
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
 - **Tool Output Spool** — Host 把超出模型 preview 上限的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
-- **Tool Execution Mode** — Tool Provider 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
+- **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
 - **Tool Policy Store** — Host 按稳定 tool name 持有 `ask_unknown` 的 approved/denied 决定并通过可持久化 port 注入 Tool Environment，不进入 Thread 或 canonical ItemList。
-- **Builtin Tool Provider** — Zen 内建并直接执行的工具 provider，例如 `shell`，其执行仍经同一个 Tool Environment 和 canonical call/result 生命周期。
-- **Plugin Tool Provider** — Tool Environment 把 namespaced plugin tool 调用路由到 Plugin Runtime 的 provider，领域执行由插件拥有，Zen 只负责 admission、路由和结果回写。
-- **External Tool Provider** — Tool Environment 把调用路由到 Zen/ZenX 之外服务的 provider，外部服务拥有领域执行，Zen 仍保留 Host policy 与 canonical settlement。
+- **Tool Runtime** — Tool Environment 按一个精确 stable tool name 注册的 specification、execution mode 与 execution body；builtin、plugin proxy 与 external proxy 使用同一单工具合同。
+- **Tool Bundle** — 可选的瞬时共享归属对象，用一个 identity 原子发布或替换一组 Tool Runtime，并为 plugin 或跨进程 bridge 持有 prepared-invocation lease；它不参与模型展示或按 name 二次分发。
 - **ZenX Host** — 独立于窗口生命周期的桌面宿主进程所有权边界，同时组合 Plugin Host 与 ZAS/AppServer 两项并列服务；关闭窗口不停止 Host，只有显式 Quit 才停止它。
 - **Plugin Host** — ZenX Host 中负责插件 catalog、生命周期、UI/工具注册、Host policy 与 Runtime 路由的服务；它与 ZAS/AppServer 并列，不拥有 Agent、Thread、Turn 或 transcript。
 - **Plugin Catalog** — Plugin Host 对已发布 package/profile 状态的唯一 durable 权威与提交点；每个原子 snapshot 记录 profile generation identity、直接 package 安装事实和独立 enablement，并让第一方与第三方 package 使用同一合同。
 - **Plugin Runtime** — 实际执行插件领域行为的运行边界，可以是 bundled module、child process、本地服务或远程服务，失败由调用明确返回且不建立自动修复状态机。
 - **Plugin Runtime ABI** — bundled module、child process 与 HTTP service 共享的 provider-neutral invocation/result、取消与 close 合同；它只传递稳定 package identity、namespaced tool、参数和一次调用上下文，不拥有 Agent 或会话语义。
-- **Plugin Runtime Supervisor** — ZenX Host 持有的瞬时 runtime/provider registry，启动或附着 enabled runtime、向 Tool Environment 原子发布其 tool ownership，并在 disable/uninstall/quit 时先撤销新 admission、再等待已执行调用并关闭 runtime。
+- **Plugin Runtime Supervisor** — ZenX Host 持有的瞬时 plugin runtime/bundle registry，启动或附着 enabled runtime、向 Tool Environment 原子发布其 tool ownership，并在 disable/uninstall/quit 时先撤销新 admission、再等待已准备/执行调用并关闭 runtime。
 - **Plugin Runtime Adapter** — 把 trusted module 调用、bounded JSONL child process 或有界 HTTP request/continuation 映射到同一 Plugin Runtime ABI；transport 失败显式返回且不重试或重启。
 - **ZenX Plugin Host SDK v1** — Plugin Host 按 package identity 注入的 provider-neutral 公共合同，以 `query / actions / ui / storage` 四组能力让 bundled 与隔离 runtime 使用相同产品语义，而不取得 ZenX 内部 store authority。
 - **ZenX Plugin Developer Kit** — 仓库内公开的 `@zenx/plugin-sdk` package 提供与 Host SDK v1、Plugin Runtime/UI 和 manifest v2 一致的类型、runtime schema、无会话 authority 的内存 fixture Host，以及只负责 `create` / `validate` / 标准 npm `pack` 的薄开发者 CLI。
@@ -280,14 +279,15 @@ Thread 记录实际使用的 cwd；"项目列表"是客户端按 workspace 派�
 ## Plugin Platform 与 Tool Environment 目标合同
 
 本节描述完整目标架构，不把局部实现声称为完整平台。当前 Core 已有 provider-neutral
-`AgentRuntime` 的普通 tool loop，以及组合 builtin / plugin / external identity、动态 definitions、
-prepare、Host policy、取消与执行的 Tool Environment；builtin `shell` 与可注入 provider 走同一边界。
+`AgentRuntime` 的普通 tool loop，以及按 exact name 组合 builtin / plugin proxy / external proxy
+runtimes、动态 definitions、prepare、Host policy、取消与执行的 Tool Environment；builtin
+`shell`、`apply_patch` 与可注入 bundle 走同一边界。
 Plugin Package v2、Catalog 和 installed/enabled/uninstalled 基础生命周期已经落在现有
 capability runtime seam 上；Plugin Runtime Supervisor 通过同一 Catalog mutation seam 为 bundled
 module、bounded JSONL child process 与 HTTP service 提供统一 ABI。install/enable 先在未发布状态
-启动并验证 runtime，Catalog 持久化与内存提交后才把 enabled plugin 作为独立 provider 注入 Tool
-Environment；任一步失败都会撤销该临时 runtime/provider。disable/uninstall 先撤销新调用，再等待
-已 prepare/执行的调用结算和 close，持久化失败则恢复原 enabled provider；人类产品侧可经 Supervisor
+启动并验证 runtime，Catalog 持久化与内存提交后才把 enabled plugin 作为独立 bundle 注入 Tool
+Environment；任一步失败都会撤销该临时 runtime/bundle。disable/uninstall 先撤销新调用，再等待
+已 prepare/执行的调用结算和 close，持久化失败则恢复原 enabled bundle；人类产品侧可经 Supervisor
 直接调用而不创建 Turn。ZenX 的实际桌面 composition root 由主进程 `CapabilityService` 持有 Catalog、
 Registry、Plugin Runtime Supervisor 与动态 Tool Environment；child-host 继续通过既有私有 bridge 接收
 当前 capability snapshot，把 shell、仍需兼容的 external capability 与常驻 `zenx_plugin` 组合进唯一
@@ -320,8 +320,10 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   `tool_call` / `tool_result` 的编译和记录；Plugin Runtime 不能拥有自己的 AgentRuntime。
 - tool loop 默认没有轮数上限；Host 可以显式配置正整数 `maxToolRounds`，未配置时
   Runtime 不得因为累计工具轮数终止健康 Turn。
-- Tool Environment 同时组合 Builtin、Plugin 与 External Tool Providers。Zen 解析
-  stable tool name、执行 Host policy、路由与回写；插件或外部服务可以拥有实际领域执行。
+- Tool Environment 的 registry 按 stable tool name 精确保存一个 Tool Runtime，并将模型可见
+  specification 与可执行 registry 分开投影；Builtin、Plugin 与 External runtime 使用相同
+  prepare、Host policy、调度、取消、归一化与回写路径。需要共享生命周期的插件或跨进程
+  bridge 以 Tool Bundle 原子发布多个 proxy runtimes，bundle 不按 invocation name 再分发。
 - Tool Presentation 支持 `direct`、`code` 与 `both`。`direct` 投影普通 structured
   tool schemas；`code` 只投影普通 JSON function `run_code({ code, description })`，并在
   TypeScript SDK 中声明当前可用的 `tools.*` bindings；`both` 同时投影两者，作为目标
@@ -349,7 +351,7 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   不能省略中间调用。nested tool 失败明确返回程序，由程序或后续模型调用决定是否
   采用另一工具；Runtime 不做隐式自动 retry 或 fallback。
 - AgentRuntime 仍独占 journal append；`run_code` 只能通过 Nested Tool Invocation Port
-  请求子调用，Plugin / External Tool Provider 无法取得该 port。`ToolCallItem` 只增加
+  请求子调用，Plugin / External Tool Runtime 无法取得该 port。`ToolCallItem` 只增加
   可选 `parentCallId`：root lineage 与 submission order 分别沿 parent chain 和 Item 顺序
   推导，不重复保存；nested lifecycle 不编入后续模型 messages，但 compaction retention
   必须保持完整的 outer/child closure。
@@ -382,13 +384,18 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   `skills/list` 不因此获得新的会话语义。
 - 同一模型响应产生的 direct calls 与一次 `run_code` 中的 nested calls 共用 Turn 内
   有界执行器：prepare、Host admission 与
-  canonical result commit 保持模型提交顺序，只有标记为 `parallel_safe` 的 provider
+  canonical result commit 保持模型提交顺序，只有标记为 `parallel_safe` 的 runtime
   execution body 可以并发；`exclusive` 在前后形成 barrier。并发上限由 Host 配置，
   未声明模式时 fail-closed 为 `exclusive`。
 - 每条 canonical `tool_call` 必须恰好结算一条 canonical `tool_result`。prepare、
-  Host admission、provider execution 或 result normalization 的局部失败以简洁错误和
+  Host admission、runtime execution 或 result normalization 的局部失败以简洁错误和
   非零 exit code 形成该结果，继续执行同一模型响应中后续调用并进入下一次模型采样；
   不额外写 `failure` 或把 Turn 标记为 failed。
+- builtin `apply_patch` 是一个普通的 exclusive Tool Runtime：模型通过
+  `apply_patch({ patch })` 提交 Codex `*** Begin Patch` grammar，relative path 以 Thread cwd
+  解析，Add/Update/Move/Delete 在整包精确内容预检通过后才开始写盘。它与 shell/run_code
+  拥有相同机器权限并默认跟随 Node 文件 API 的 symlink 语义；预检失败不产生文件修改，
+  真正 I/O 失败可能留下已明确报告的提交前缀，不提供 durable filesystem transaction。
 - 显式用户取消或 Turn abort 仍是中断 Turn 的控制流；模型流、journal append、Runtime
   不变量等非工具局部失败仍按既有 Turn failure 语义终止，不能伪装成 tool result。
 
@@ -685,8 +692,8 @@ Zen 只在 Codex 0.146.0 没有等价原子语义时增加明确命名的协议�
   只允许按被拒 access token 作为跨进程比较条件刷新并重试一次，避免并发刷新覆盖
   已轮换 credential。provider 的 sessionId 只允许作为可丢弃的
   transport cache / affinity hint，不得映射或持久化第二套 Thread。
-- **工具** — AgentRuntime 只依赖 Tool Environment；builtin `shell` 由 Zen 执行，plugin / external
-  tools 分别路由到拥有领域行为的 Plugin Runtime 或外部服务。
+- **工具** — AgentRuntime 只依赖 Tool Environment；builtin `shell` / `apply_patch` 由 Zen 执行，
+  plugin / external proxy runtimes 分别路由到拥有领域行为的 Plugin Runtime 或外部服务。
 - **审批** — 审批请求的呈现与应答（各接入端自行实现 UI）。
 - **接入端权限预设** — 当前固定 Codex wire 仍分别携带 sandbox 与 approval 字段；
   Plugin Platform 的目标产品策略只把它们归约为默认 `full_access` 与可选

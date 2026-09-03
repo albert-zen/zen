@@ -3,7 +3,7 @@ import type { ModelTool } from "../../../../src/model.js";
 import type {
   ToolExecutionResult,
   ToolInvocation,
-  ToolProvider,
+  ToolRuntime,
 } from "../../../../src/tool.js";
 import { ToolEnvironment } from "../../../../src/tool.js";
 import type { ZenXAvailablePlugin } from "./capabilities/types.js";
@@ -18,37 +18,32 @@ export interface PluginDiscoveryCatalog {
 }
 
 /** Persistent meta-tool whose ordinary result is the durable disclosure fact. */
-export class PluginDiscoveryToolProvider implements ToolProvider {
-  readonly identity = {
-    kind: "builtin",
-    id: "zenx-plugin-discovery",
-  } as const;
-  readonly definitions: readonly ModelTool[] = [
-    {
-      name: ZENX_PLUGIN_TOOL,
-      description:
-        "Discover available ZenX plugins or read one plugin's main document and tool index.",
-      inputSchema: {
-        oneOf: [
-          {
-            type: "object",
-            properties: { operation: { const: "discover" } },
-            required: ["operation"],
-            additionalProperties: false,
+export class PluginDiscoveryToolRuntime implements ToolRuntime {
+  readonly name = ZENX_PLUGIN_TOOL;
+  readonly specification: ModelTool = {
+    name: this.name,
+    description:
+      "Discover available ZenX plugins or read one plugin's main document and tool index.",
+    inputSchema: {
+      oneOf: [
+        {
+          type: "object",
+          properties: { operation: { const: "discover" } },
+          required: ["operation"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            operation: { const: "read" },
+            pluginId: { type: "string" },
           },
-          {
-            type: "object",
-            properties: {
-              operation: { const: "read" },
-              pluginId: { type: "string" },
-            },
-            required: ["operation", "pluginId"],
-            additionalProperties: false,
-          },
-        ],
-      },
+          required: ["operation", "pluginId"],
+          additionalProperties: false,
+        },
+      ],
     },
-  ];
+  };
   readonly #catalog: PluginDiscoveryCatalog;
   readonly #environment: ToolEnvironment;
 
@@ -127,8 +122,8 @@ export class PluginDiscoveryProjection {
     const baseTools = entries
       .filter(
         (entry) =>
-          entry.provider.kind === "builtin" ||
-          (entry.provider.kind === "external" &&
+          entry.owner.kind === "builtin" ||
+          (entry.owner.kind === "external" &&
             !allPluginTools.has(entry.definition.name)),
       )
       .map((entry) => structuredClone(entry.definition));

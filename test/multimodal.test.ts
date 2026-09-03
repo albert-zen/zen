@@ -31,7 +31,8 @@ import { CodexConnection } from "../src/protocol/codex/connection.js";
 import { projectThread } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
-import { ShellToolExecutor } from "../src/tool.js";
+import { ShellToolRuntime } from "../src/tool.js";
+import { testToolEnvironment } from "./tool-fixtures.js";
 
 test("runs typed image input through AttachmentRef to provider and replays it after restart", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-multimodal-"));
@@ -518,7 +519,11 @@ function createServer(options: {
   return new ZenAppServer({
     journal: options.journal,
     attachments: options.attachments,
-    runtime: new AgentRuntime({ tools: new ShellToolExecutor() }),
+    runtime: new AgentRuntime({
+      toolEnvironment: testToolEnvironment({
+        providers: [new ShellToolRuntime()],
+      }),
+    }),
     providerRegistry: new ProviderRegistry([
       {
         providerProfileId: model.provider,
@@ -573,7 +578,7 @@ async function drainModel(
     model: "image-model",
     reasoningEffort: "medium",
     messages,
-    tools: new ShellToolExecutor().definitions,
+    tools: [new ShellToolRuntime().specification],
     signal: new AbortController().signal,
   })) {
     // Consume the provider stream so the captured request is complete.

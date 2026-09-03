@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ZenAppServer } from "../../../src/app-server.js";
-import { RunCodeToolProvider } from "../../../src/code-runtime.js";
+import { RunCodeToolRuntime } from "../../../src/code-runtime.js";
 import type { CanonicalItem } from "../../../src/item.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
 import { StaticModelCatalog } from "../../../src/model-catalog.js";
@@ -15,7 +15,7 @@ import type {
 import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { AgentRuntime } from "../../../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.js";
-import { ShellToolExecutor, ToolEnvironment } from "../../../src/tool.js";
+import { ShellToolRuntime, ToolEnvironment } from "../../../src/tool.js";
 import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 import type {
   ZenXPluginCatalogState,
@@ -24,7 +24,7 @@ import type {
 } from "../src/main/capabilities/types.js";
 import {
   PluginDiscoveryProjection,
-  PluginDiscoveryToolProvider,
+  PluginDiscoveryToolRuntime,
 } from "../src/main/plugin-discovery.js";
 import {
   bundledPackageRegistration,
@@ -358,7 +358,12 @@ class DiscoveryPresentationModel implements ModelAdapter {
 
 async function fixtureEnvironment(options: { runCode?: boolean } = {}) {
   const environment = new ToolEnvironment({
-    providers: [new ShellToolExecutor()],
+    bundles: [
+      {
+        identity: { kind: "builtin", id: "shell" },
+        tools: [new ShellToolRuntime()],
+      },
+    ],
   });
   const supervisor = new PluginRuntimeSupervisor(environment);
   const store: {
@@ -394,10 +399,16 @@ async function fixtureEnvironment(options: { runCode?: boolean } = {}) {
     },
   };
   await registry.install(capabilityPackage, "bundled");
-  const discovery = new PluginDiscoveryToolProvider(registry, environment);
-  environment.registerProvider(discovery);
+  const discovery = new PluginDiscoveryToolRuntime(registry, environment);
+  environment.registerBundle({
+    identity: { kind: "builtin", id: "zenx-plugin-discovery" },
+    tools: [discovery],
+  });
   if (options.runCode === true) {
-    environment.registerProvider(new RunCodeToolProvider());
+    environment.registerBundle({
+      identity: { kind: "builtin", id: "run-code" },
+      tools: [new RunCodeToolRuntime()],
+    });
   }
   const projection = new PluginDiscoveryProjection(environment, registry);
   return {
