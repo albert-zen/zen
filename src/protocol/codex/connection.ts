@@ -277,7 +277,7 @@ export class CodexConnection {
       }
       case "thread/resume": {
         const threadId = requiredString(params, "threadId");
-        await this.#drainEventChain();
+        const priorEventTail = this.#eventChain;
         if (this.#resumeBarriers.has(threadId)) {
           throw new Error(`Thread ${threadId} is already being resumed`);
         }
@@ -285,6 +285,7 @@ export class CodexConnection {
         this.#resumeBarriers.set(threadId, barrier);
         let snapshot: ThreadSnapshot | undefined;
         try {
+          await priorEventTail;
           snapshot = await this.#appServer.readThread(threadId);
           const requestedModel = optionalNonEmptyString(params.model, "model");
           const requestedSelectionInput = this.#selectionForExistingThread(
@@ -618,14 +619,6 @@ export class CodexConnection {
       .catch((error: unknown) => {
         this.#sendErrorNotification(error, event);
       });
-  }
-
-  async #drainEventChain(): Promise<void> {
-    for (;;) {
-      const current = this.#eventChain;
-      await current;
-      if (current === this.#eventChain) return;
-    }
   }
 
   #selectionForExistingThread(

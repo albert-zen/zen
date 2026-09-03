@@ -751,6 +751,76 @@ test("thread/resume sends its snapshot before lossless non-duplicate catch-up", 
   }
 });
 
+test("thread/resume does not wait for later projection work from another thread", async () => {
+  const appServer = testHost();
+  const messages: JsonRpcMessage[] = [];
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    send: (message) => messages.push(message),
+  });
+  const firstReadEntered = deferred<void>();
+  const releaseFirstRead = deferred<void>();
+  const secondReadEntered = deferred<void>();
+  const releaseSecondRead = deferred<void>();
+  let resume: Promise<void> | undefined;
+
+  try {
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await connection.receive({ method: "initialized" });
+    await connection.receive({ id: 2, method: "thread/start", params: {} });
+    const started = messages.find(
+      (message) => "result" in message && message.id === 2,
+    );
+    assert(started !== undefined && "result" in started);
+    const threadA = responseResult<Record<string, unknown>>(
+      started.result,
+      "thread",
+    );
+    const threadB = await appServer.startThread();
+    const readThread = appServer.readThread.bind(appServer);
+    let threadAReads = 0;
+    appServer.readThread = async (threadId) => {
+      if (threadId === threadA.id) {
+        threadAReads += 1;
+        if (threadAReads === 1) {
+          firstReadEntered.resolve();
+          await releaseFirstRead.promise;
+        } else if (threadAReads === 2) {
+          secondReadEntered.resolve();
+          await releaseSecondRead.promise;
+        }
+      }
+      return await readThread(threadId);
+    };
+
+    const firstTurn = await appServer.startTurn(String(threadA.id), "first");
+    await within(firstReadEntered.promise);
+    await firstTurn.done;
+    resume = connection.receive({
+      id: 3,
+      method: "thread/resume",
+      params: { threadId: threadB.id },
+    });
+    const secondTurn = await appServer.startTurn(String(threadA.id), "second");
+    await secondTurn.done;
+    releaseFirstRead.resolve();
+    await within(secondReadEntered.promise);
+    await flushTasks();
+
+    assert.equal(
+      messages.some((message) => "result" in message && message.id === 3),
+      true,
+    );
+  } finally {
+    releaseFirstRead.resolve();
+    releaseSecondRead.resolve();
+    if (resume !== undefined) await within(resume);
+    connection.close();
+    await appServer.closeProviderTransport();
+  }
+});
+
 test("thread/resume never replays superseded state after its final snapshot", async () => {
   const backingMetadata = new InMemoryThreadMetadataStore();
   const readEntered = deferred<void>();
