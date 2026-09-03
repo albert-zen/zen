@@ -227,6 +227,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   Unknown 不得冒充 unsupported。文字草稿的普通发送行为不受影响。
 - transcript 从 canonical `user_message` 的 `AttachmentRef` 投影图片；send 后与 resume 后使用同一渲染路径。
   缩略图可用鼠标或键盘打开应用内 modal preview；Escape、关闭按钮和 backdrop 可关闭，关闭后焦点返回触发缩略图。
+  附件 payload 读取按 `AttachmentRef` 身份（mediaType + sha256）在 renderer 会话内缓存 object URL：流式重渲染、projection 刷新与 disclosure 折叠重建都复用同一 URL，不重新读取、不闪回 loading 占位；读取失败不缓存，后续挂载重试。
 
 ### 4.6 Settings 与 onboarding
 

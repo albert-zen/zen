@@ -1001,34 +1001,48 @@ function ImagePreview({
   );
 }
 
+// Object URLs are cached per attachment identity for the renderer session so
+// streaming re-renders and disclosure remounts reuse the same URL instead of
+// re-reading the payload and flashing the loading placeholder. Read failures
+// are not cached, so a later mount retries.
+const attachmentUrlCache = new Map<string, string>();
+
 function useAttachmentUrl(
   attachment: AttachmentRef,
   read: (attachment: AttachmentRef) => Promise<Uint8Array>,
 ): { url: string | null; error: string | null } {
+  const cacheKey = `${attachment.mediaType}:${attachment.sha256}`;
   const [state, setState] = useState<{
     url: string | null;
     error: string | null;
-  }>({ url: null, error: null });
+  }>(() => ({ url: attachmentUrlCache.get(cacheKey) ?? null, error: null }));
   useEffect(() => {
+    const cached = attachmentUrlCache.get(cacheKey);
+    if (cached !== undefined) {
+      setState((current) =>
+        current.url === cached && current.error === null
+          ? current
+          : { url: cached, error: null },
+      );
+      return;
+    }
     let active = true;
-    let objectUrl: string | null = null;
     setState({ url: null, error: null });
     void read(attachment)
       .then((bytes) => {
-        if (!active) return;
-        objectUrl = URL.createObjectURL(
+        const objectUrl = URL.createObjectURL(
           new Blob([bytes.slice().buffer], { type: attachment.mediaType }),
         );
-        setState({ url: objectUrl, error: null });
+        attachmentUrlCache.set(cacheKey, objectUrl);
+        if (active) setState({ url: objectUrl, error: null });
       })
       .catch((error: unknown) => {
         if (active) setState({ url: null, error: describeError(error) });
       });
     return () => {
       active = false;
-      if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
     };
-  }, [attachment, read]);
+  }, [cacheKey, attachment, read]);
   return state;
 }
 
