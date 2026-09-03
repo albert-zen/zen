@@ -58,6 +58,55 @@ test("keeps cache usage unknown when no response reports cache data", () => {
   assert.equal(projection.thread.cacheHitRate, undefined);
 });
 
+test("projects context pressure from provider usage and configured window", () => {
+  const projection = projectModelUsage(
+    [
+      metadata(),
+      usage("usage-a", "turn-a", "response-a", 90, undefined, 3),
+      usage("usage-b", "turn-a", "response-b", 120, undefined, 4),
+    ],
+    { contextWindow: 200 },
+  );
+
+  assert.deepEqual(projection.context, {
+    inputTokens: 120,
+    inputTokenSource: "provider",
+    contextWindow: 200,
+    ratio: 0.6,
+  });
+});
+
+test("uses estimated context pressure after compaction invalidates latest usage", () => {
+  const projection = projectModelUsage(
+    [
+      metadata(),
+      usage("usage-a", "turn-a", "response-a", 180, undefined, 3),
+      {
+        id: "compaction",
+        threadId: "thread",
+        createdAt: "2026-08-27T00:00:02.000Z",
+        type: "context_compaction",
+        coveredThroughItemId: "completed",
+        summary: "summary",
+        retainedItemIds: [],
+        providerProfileId: "provider",
+        modelId: "model",
+        reasoningEffort: "medium",
+        algorithmVersion: "zen.context-compaction.v1",
+        tokenUsage: { inputTokens: 180, outputTokens: 5 },
+      },
+    ],
+    { contextWindow: 200, estimatedInputTokens: 40 },
+  );
+
+  assert.deepEqual(projection.context, {
+    inputTokens: 40,
+    inputTokenSource: "estimated",
+    contextWindow: 200,
+    ratio: 0.2,
+  });
+});
+
 test("replays canonical model usage from the JSONL journal", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zen-usage-"));
   try {

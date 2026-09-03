@@ -2009,6 +2009,12 @@ test("conversation header owns thread cache telemetry and only retains workspace
           cacheHitRate: undefined,
         },
         turns: {},
+        context: {
+          inputTokens: 200,
+          inputTokenSource: "provider",
+          contextWindow: 400,
+          ratio: 0.5,
+        },
       }),
       request: async (method) => {
         if (method === "thread/resume")
@@ -2043,7 +2049,7 @@ test("conversation header owns thread cache telemetry and only retains workspace
     assert.match(
       document.querySelector(".workspace-header .thread-usage")?.textContent ??
         "",
-      /Thread cache unknown · 200 in · 25 out/u,
+      /Context 50% · 200 \/ 400 · Thread cache unknown · 200 in · 25 out/u,
     );
     assert.equal(
       document.querySelector(".messages-inner > .thread-usage"),
@@ -2581,6 +2587,12 @@ async function mountApp(
           ? {
               thread: { responseCount: 0, inputTokens: 0, outputTokens: 0 },
               turns: {},
+              context: {
+                inputTokens: null,
+                inputTokenSource: null,
+                contextWindow: null,
+                ratio: null,
+              },
             }
           : await options.modelUsage(),
     },

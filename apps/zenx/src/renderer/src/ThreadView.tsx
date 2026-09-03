@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type {
+  ModelContextUsageProjection,
   ModelUsageAggregate,
   ModelUsageProjection,
 } from "../../../../../src/model-usage.js";
@@ -578,6 +579,26 @@ export function usageLabel(usage: ModelUsageAggregate, prefix: string): string {
       ? `${prefix} unknown`
       : `${prefix} ${String(Math.round(usage.cacheHitRate * 100))}%`;
   return `${cache} · ${formatTokenCount(usage.inputTokens)} in · ${formatTokenCount(usage.outputTokens)} out`;
+}
+
+export function contextUsageLabel(
+  context: ModelContextUsageProjection,
+): string | null {
+  if (context.inputTokens === null && context.contextWindow === null) {
+    return null;
+  }
+  if (context.inputTokens === null) {
+    const window = context.contextWindow;
+    return window === null
+      ? null
+      : `Context unknown · ${formatTokenCount(window)} max`;
+  }
+  const input = formatTokenCount(context.inputTokens);
+  const source = context.inputTokenSource === "estimated" ? " est." : "";
+  if (context.contextWindow === null || context.ratio === null) {
+    return `Context unknown · ${input} in${source}`;
+  }
+  return `Context ${String(Math.round(context.ratio * 100))}%${source} · ${input} / ${formatTokenCount(context.contextWindow)}`;
 }
 
 function formatTokenCount(value: number): string {

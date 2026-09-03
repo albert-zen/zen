@@ -207,6 +207,12 @@ test("validates exclusive canonical Thread usage projections", () => {
         cacheHitRate: 0.25,
       },
     },
+    context: {
+      inputTokens: 100,
+      inputTokenSource: "provider",
+      contextWindow: 400,
+      ratio: 0.25,
+    },
   };
   assert.equal(
     isHostEvent({
@@ -223,6 +229,12 @@ test("validates exclusive canonical Thread usage projections", () => {
       usage: {
         thread: { responseCount: 1, inputTokens: 10, outputTokens: 2 },
         turns: {},
+        context: {
+          inputTokens: 10,
+          inputTokenSource: "provider",
+          contextWindow: null,
+          ratio: null,
+        },
       },
     }),
     true,
@@ -241,6 +253,12 @@ test("validates exclusive canonical Thread usage projections", () => {
           cacheHitRate: 1,
         },
         turns: {},
+        context: {
+          inputTokens: 10,
+          inputTokenSource: "provider",
+          contextWindow: 10,
+          ratio: 1,
+        },
       },
     }),
     true,
