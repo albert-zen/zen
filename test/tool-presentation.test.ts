@@ -111,10 +111,10 @@ test("SDK generation is deterministic and quotes illegal identifiers", () => {
 test("code presentation requires the registered run_code execution capability", () => {
   assert.throws(
     () => buildToolPresentation(ordinaryTools, "code"),
-    /requires a registered run_code provider/u,
+    /requires a registered run_code runtime/u,
   );
   assert.throws(
     () => buildToolPresentation(ordinaryTools, "both"),
-    /requires a registered run_code provider/u,
+    /requires a registered run_code runtime/u,
   );
 });

@@ -909,9 +909,9 @@ interface ScheduledToolExecution {
 interface ScheduledToolCall {
   /** Resolves after ordered preparation/admission and body scheduling. */
   ready: Promise<ToolExecutionMode>;
-  /** Provider outcome, available before its ordered canonical commit. */
+  /** Runtime outcome, available before its ordered canonical commit. */
   result: Promise<ToolExecutionResult>;
-  /** Provider outcome after its canonical result has committed. */
+  /** Runtime outcome after its canonical result has committed. */
   committed: Promise<ToolExecutionResult>;
 }
 

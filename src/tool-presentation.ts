@@ -26,7 +26,7 @@ export function buildToolPresentation(
   );
   if (mode !== "direct" && runCodeCount !== 1) {
     throw new Error(
-      "Tool presentation code requires a registered run_code provider",
+      "Tool presentation code requires a registered run_code runtime",
     );
   }
 

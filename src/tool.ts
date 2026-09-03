@@ -45,7 +45,7 @@ export type ToolExecutionMode = "parallel_safe" | "exclusive";
 export interface ToolRuntime {
   readonly name: string;
   readonly specification: ModelTool;
-  /** Provider body scheduling only; not permission or resource scope. */
+  /** Runtime body scheduling only; not permission or resource scope. */
   readonly executionMode?: ToolExecutionMode;
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
 }
