@@ -2079,7 +2079,7 @@ a:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 0 14px 8px;
+  padding: 6px 14px 8px;
   overflow: hidden;
 }
 .draft-image {
@@ -2094,30 +2094,31 @@ a:focus-visible {
 }
 .remove-draft-image {
   position: absolute;
-  top: -5px;
-  right: -5px;
-  width: 44px;
-  height: 44px;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
   padding: 0;
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: var(--text-2);
+  color: var(--text);
   cursor: pointer;
 }
 .remove-draft-image::before {
   content: "";
   position: absolute;
-  inset: 8px;
-  border: 1px solid var(--border-strong);
+  inset: 2px;
   border-radius: 50%;
   background: var(--surface-overlay);
   box-shadow: var(--shadow-low);
 }
 .remove-draft-image svg {
   position: relative;
+  width: 10px;
+  height: 10px;
 }
 .thread-view.image-dragging::after {
   content: "Drop images to attach";
