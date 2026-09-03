@@ -346,12 +346,7 @@ export function projectCommandCompleted(
   const started = projectCommandStarted(call, cwd);
   return {
     ...started,
-    status:
-      result.exitCode === 126 || result.exitCode === 130
-        ? "declined"
-        : result.exitCode === 0
-          ? "completed"
-          : "failed",
+    status: commandExecutionStatus(result),
     aggregatedOutput: result.output,
     exitCode: result.exitCode,
     ...(result.contentType === undefined
@@ -361,6 +356,21 @@ export function projectCommandCompleted(
           structuredContent: structuredClone(result.structuredContent),
         }),
   };
+}
+
+function commandExecutionStatus(
+  result: ToolResultItem,
+): "completed" | "failed" | "declined" {
+  if (result.executionStatus !== undefined) return result.executionStatus;
+  if (
+    (result.exitCode === 126 &&
+      result.output === "User declined this tool call.") ||
+    (result.exitCode === 130 &&
+      result.output === "User cancelled this tool call.")
+  ) {
+    return "declined";
+  }
+  return result.exitCode === 0 ? "completed" : "failed";
 }
 
 export function threadSettings(

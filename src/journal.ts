@@ -1,7 +1,7 @@
 import { mkdir, open, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { CanonicalItem } from "./item.js";
+import { decodeCanonicalItem, type CanonicalItem } from "./item.js";
 
 const THREAD_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
@@ -91,10 +91,21 @@ export class JsonlThreadJournal implements ThreadJournal {
         continue;
       }
       try {
-        items.push(JSON.parse(line) as CanonicalItem);
-      } catch {
+        const item = decodeCanonicalItem(JSON.parse(line));
+        if (item.threadId !== threadId) {
+          throw new Error(
+            `Item belongs to Thread ${item.threadId}, not ${threadId}`,
+          );
+        }
+        items.push(item);
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new Error(
+            `Invalid JSON in ${this.#pathFor(threadId)} at line ${String(index + 1)}`,
+          );
+        }
         throw new Error(
-          `Invalid JSON in ${this.#pathFor(threadId)} at line ${String(index + 1)}`,
+          `Invalid canonical Item in ${this.#pathFor(threadId)} at line ${String(index + 1)}: ${describeError(error)}`,
         );
       }
     }
@@ -114,4 +125,8 @@ function validateThreadId(threadId: string): void {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

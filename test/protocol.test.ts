@@ -8,7 +8,7 @@ import { png1x1, shellPrintCommand } from "./fixtures.js";
 
 import { createHostedAppServer } from "../apps/cli/src/host.js";
 import { ZenAppServer } from "../src/app-server.js";
-import { InMemoryThreadJournal } from "../src/journal.js";
+import { InMemoryThreadJournal, type ThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import type { ModelAdapter } from "../src/model.js";
 import { OpenAiSubscriptionModel } from "../src/model/openai-subscription.js";
@@ -20,8 +20,15 @@ import {
 } from "../src/protocol/codex/client.js";
 import { CodexConnection } from "../src/protocol/codex/connection.js";
 import { encodeModelKey } from "../src/protocol/codex/model-key.js";
+import {
+  projectCommandCompleted,
+  projectCommandStarted,
+} from "../src/protocol/codex/mapper.js";
 import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
-import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
+import {
+  InMemoryThreadMetadataStore,
+  type ThreadMetadataStore,
+} from "../src/thread-metadata.js";
 import { isRecord, type JsonRpcMessage } from "../src/protocol/codex/wire.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
@@ -595,6 +602,204 @@ test("enforces the Codex initialize handshake and method boundary", async () => 
     error: { code: -32601, message: "Method not found: not/a-method" },
   });
   connection.close();
+});
+
+test("does not project App Server events before both initialize phases", async () => {
+  const appServer = testHost();
+  const thread = await appServer.startThread();
+  const messages: JsonRpcMessage[] = [];
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    send: (message) => messages.push(message),
+  });
+
+  try {
+    await appServer.setThreadArchived(thread.id, true);
+    await flushTasks();
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await appServer.setThreadArchived(thread.id, false);
+    await flushTasks();
+    await connection.receive({ method: "initialized" });
+    await appServer.setThreadArchived(thread.id, true);
+    await flushTasks();
+
+    assert.deepEqual(
+      messages
+        .filter(
+          (message): message is Extract<JsonRpcMessage, { method: string }> =>
+            "method" in message,
+        )
+        .map((message) => message.method),
+      ["thread/archived"],
+    );
+  } finally {
+    connection.close();
+    await appServer.closeProviderTransport();
+  }
+});
+
+test("captures one internally consistent App Server snapshot after metadata IO", async () => {
+  const backingMetadata = new InMemoryThreadMetadataStore();
+  const readEntered = deferred<void>();
+  const releaseRead = deferred<void>();
+  let blockNextRead = false;
+  const threadMetadata: ThreadMetadataStore = {
+    read: async (threadId) => {
+      if (blockNextRead) {
+        blockNextRead = false;
+        readEntered.resolve();
+        await releaseRead.promise;
+      }
+      return await backingMetadata.read(threadId);
+    },
+    setName: async (threadId, name) =>
+      await backingMetadata.setName(threadId, name),
+    setArchived: async (threadId, archived) =>
+      await backingMetadata.setArchived(threadId, archived),
+  };
+  const appServer = createHostedAppServer({
+    cwd: process.cwd(),
+    dataDirectory: path.join(os.tmpdir(), "unused-zen-test-data"),
+    model: "fake",
+    models: ["fake", "other"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    journal: new InMemoryThreadJournal(),
+    threadMetadata,
+  });
+
+  try {
+    const thread = await appServer.startThread();
+    blockNextRead = true;
+    const pendingSnapshot = appServer.readThread(thread.id);
+    await within(readEntered.promise);
+    await appServer.updateThreadSettings(thread.id, { model: "other" });
+    releaseRead.resolve();
+
+    const snapshot = await within(pendingSnapshot);
+    assert.equal(snapshot.modelId, "other");
+    assert.equal(
+      snapshot.items.filter(
+        (item) => item.type === "thread_configuration_changed",
+      ).length,
+      1,
+    );
+  } finally {
+    await appServer.closeProviderTransport();
+  }
+});
+
+test("thread/resume sends its snapshot before lossless non-duplicate catch-up", async () => {
+  const appServer = testHost();
+  const thread = await appServer.startThread();
+  const snapshotCaptured = deferred<void>();
+  const releaseSnapshot = deferred<void>();
+  const readThread = appServer.readThread.bind(appServer);
+  let intercept = true;
+  appServer.readThread = async (threadId) => {
+    const snapshot = await readThread(threadId);
+    if (intercept) {
+      intercept = false;
+      snapshotCaptured.resolve();
+      await releaseSnapshot.promise;
+    }
+    return snapshot;
+  };
+  const messages: JsonRpcMessage[] = [];
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    send: (message) => messages.push(message),
+  });
+
+  try {
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await connection.receive({ method: "initialized" });
+    messages.length = 0;
+
+    const resume = connection.receive({
+      id: 2,
+      method: "thread/resume",
+      params: { threadId: thread.id },
+    });
+    await within(snapshotCaptured.promise);
+    await (
+      await appServer.startTurn(thread.id, "during resume")
+    ).done;
+    releaseSnapshot.resolve();
+    await within(resume);
+    await flushTasks();
+
+    const responseIndex = messages.findIndex(
+      (message) => "result" in message && message.id === 2,
+    );
+    const startedIndexes = messages.flatMap((message, index) =>
+      "method" in message && message.method === "turn/started" ? [index] : [],
+    );
+    const completedIndexes = messages.flatMap((message, index) =>
+      "method" in message && message.method === "turn/completed" ? [index] : [],
+    );
+    assert(responseIndex >= 0);
+    assert.deepEqual(startedIndexes.length, 1);
+    assert.deepEqual(completedIndexes.length, 1);
+    assert(startedIndexes[0]! > responseIndex);
+    assert(completedIndexes[0]! > startedIndexes[0]!);
+  } finally {
+    connection.close();
+    await appServer.closeProviderTransport();
+  }
+});
+
+test("closing a connection discards its transient resume catch-up buffer", async () => {
+  const appServer = testHost();
+  const thread = await appServer.startThread();
+  const snapshotCaptured = deferred<void>();
+  const releaseSnapshot = deferred<void>();
+  const readThread = appServer.readThread.bind(appServer);
+  let intercept = true;
+  appServer.readThread = async (threadId) => {
+    const snapshot = await readThread(threadId);
+    if (intercept) {
+      intercept = false;
+      snapshotCaptured.resolve();
+      await releaseSnapshot.promise;
+    }
+    return snapshot;
+  };
+  const messages: JsonRpcMessage[] = [];
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    send: (message) => messages.push(message),
+  });
+
+  try {
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await connection.receive({ method: "initialized" });
+    messages.length = 0;
+    const resume = connection.receive({
+      id: 2,
+      method: "thread/resume",
+      params: { threadId: thread.id },
+    });
+    await within(snapshotCaptured.promise);
+    await (
+      await appServer.startTurn(thread.id, "before close")
+    ).done;
+    connection.close();
+    releaseSnapshot.resolve();
+    await within(resume);
+    await flushTasks();
+
+    assert.equal(
+      messages.some((message) => "method" in message),
+      false,
+    );
+  } finally {
+    connection.close();
+    await appServer.closeProviderTransport();
+  }
 });
 
 test("projects the exact T3 Code provider bootstrap from host configuration", async () => {
@@ -2190,6 +2395,323 @@ test("resumed connections complete commands from canonical tool-call history", a
   }
 });
 
+test("projects real shell exit 126 and 130 as failed rather than declined", async () => {
+  const appServer = testHost();
+  const server = await serveCodexWebSocket({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    listen: "ws://127.0.0.1:0",
+  });
+  const client = await CodexClient.connect(server.url);
+  try {
+    await client.initialize({ name: "test", title: "Test", version: "1" });
+    const started = await client.request("thread/start", {});
+    const thread = responseResult<Record<string, unknown>>(started, "thread");
+    for (const exitCode of [126, 130]) {
+      const commandCompleted = deferred<Record<string, unknown>>();
+      const turnCompleted = deferred<void>();
+      const disposeCommand = client.onNotification(
+        "item/completed",
+        (params) => {
+          if (
+            isRecord(params) &&
+            isRecord(params.item) &&
+            params.item.type === "commandExecution"
+          ) {
+            commandCompleted.resolve(params.item);
+          }
+        },
+      );
+      const disposeTurn = client.onNotification("turn/completed", () => {
+        turnCompleted.resolve();
+      });
+      await client.request("turn/start", {
+        threadId: thread.id,
+        input: [{ type: "text", text: `!shell exit ${String(exitCode)}` }],
+      });
+      const command = await within(commandCompleted.promise);
+      await within(turnCompleted.promise);
+      disposeCommand();
+      disposeTurn();
+      assert.equal(command.exitCode, exitCode);
+      assert.equal(command.status, "failed");
+    }
+
+    const snapshot = await appServer.readThread(String(thread.id));
+    const results = snapshot.items.filter(
+      (item) => item.type === "tool_result",
+    );
+    assert.deepEqual(
+      results.map((result) =>
+        "executionStatus" in result ? result.executionStatus : undefined,
+      ),
+      ["failed", "failed"],
+    );
+  } finally {
+    client.close();
+    await server.close();
+  }
+});
+
+test("legacy declined inference requires both its sentinel code and exact output", () => {
+  const call = {
+    id: "call-item",
+    threadId: "thread",
+    turnId: "turn",
+    createdAt: "2026-09-03T00:00:00.000Z",
+    type: "tool_call" as const,
+    callId: "call",
+    name: "shell",
+    arguments: { command: "exit 126" },
+  };
+  const result = (exitCode: number, output: string) => ({
+    id: `result-${String(exitCode)}`,
+    threadId: "thread",
+    turnId: "turn",
+    createdAt: "2026-09-03T00:00:01.000Z",
+    type: "tool_result" as const,
+    callId: "call",
+    exitCode,
+    output,
+  });
+
+  assert.equal(
+    projectCommandCompleted(
+      call,
+      result(126, "User declined this tool call."),
+      "/tmp",
+    ).status,
+    "declined",
+  );
+  assert.equal(
+    projectCommandCompleted(call, result(126, "real exit"), "/tmp").status,
+    "failed",
+  );
+  assert.equal(
+    projectCommandCompleted(
+      call,
+      result(130, "User cancelled this tool call."),
+      "/tmp",
+    ).status,
+    "declined",
+  );
+  assert.equal(projectCommandStarted(call, "/tmp").status, "inProgress");
+});
+
+test("a rejected terminal append emits an error but no invented completion", async () => {
+  const backing = new InMemoryThreadJournal();
+  let rejectTerminal = false;
+  const journal: ThreadJournal = {
+    append: async (item) => {
+      await backing.append(item);
+      if (rejectTerminal && item.type === "turn_completed") {
+        throw new Error("terminal durability unknown");
+      }
+    },
+    listThreadIds: async () => await backing.listThreadIds(),
+    read: async (threadId) => await backing.read(threadId),
+  };
+  const appServer = createHostedAppServer({
+    cwd: process.cwd(),
+    dataDirectory: path.join(os.tmpdir(), "unused-zen-test-data"),
+    model: "fake",
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    journal,
+    threadMetadata: new InMemoryThreadMetadataStore(),
+  });
+  const thread = await appServer.startThread();
+  const messages: JsonRpcMessage[] = [];
+  const errorSeen = deferred<void>();
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    send: (message) => {
+      messages.push(message);
+      if ("method" in message && message.method === "error") {
+        errorSeen.resolve();
+      }
+    },
+  });
+
+  try {
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await connection.receive({ method: "initialized" });
+    rejectTerminal = true;
+    await connection.receive({
+      id: 2,
+      method: "turn/start",
+      params: {
+        threadId: thread.id,
+        input: [{ type: "text", text: "complete ambiguously" }],
+      },
+    });
+    await within(errorSeen.promise);
+
+    const turnResponse = messages.find(
+      (message) => "result" in message && message.id === 2,
+    );
+    assert(turnResponse !== undefined && "result" in turnResponse);
+    const turnId = responseResult<Record<string, unknown>>(
+      turnResponse.result,
+      "turn",
+    ).id;
+    assert.equal(
+      messages.some(
+        (message) =>
+          "method" in message &&
+          message.method === "turn/completed" &&
+          isRecord(message.params) &&
+          isRecord(message.params.turn) &&
+          message.params.turn.id === turnId,
+      ),
+      false,
+    );
+    assert.equal(
+      (await appServer.readThread(thread.id)).turns.at(-1)?.status,
+      "completed",
+    );
+  } finally {
+    connection.close();
+    await appServer.closeProviderTransport();
+  }
+});
+
+test("a rejected replacement terminal append emits no invented successor completion", async () => {
+  const backing = new InMemoryThreadJournal();
+  let rejectTerminal = false;
+  const journal: ThreadJournal = {
+    append: async (item) => {
+      await backing.append(item);
+      if (rejectTerminal && item.type === "turn_completed") {
+        throw new Error("replacement terminal durability unknown");
+      }
+    },
+    listThreadIds: async () => await backing.listThreadIds(),
+    read: async (threadId) => await backing.read(threadId),
+  };
+  let sample = 0;
+  const model: ModelAdapter = {
+    provider: "replacement-outcome",
+    async *stream(request) {
+      sample += 1;
+      if (sample === 1) {
+        await new Promise<void>((resolve) => {
+          if (request.signal.aborted) resolve();
+          else
+            request.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+        });
+        request.signal.throwIfAborted();
+      }
+      yield { type: "text_delta", delta: "replacement complete" };
+    },
+  };
+  const appServer = new ZenAppServer({
+    journal,
+    runtime: new AgentRuntime({
+      toolEnvironment: new ToolEnvironment({
+        runtimes: [new ShellToolRuntime()],
+      }),
+    }),
+    providerRegistry: new ProviderRegistry([
+      {
+        providerProfileId: model.provider,
+        adapter: model,
+        modelCatalog: new StaticModelCatalog([
+          {
+            id: "replacement-model",
+            isDefault: true,
+            supportedReasoningEfforts: ["medium"],
+            defaultReasoningEffort: "medium",
+          },
+        ]),
+      },
+    ]),
+    threadMetadata: new InMemoryThreadMetadataStore(),
+    defaults: {
+      cwd: process.cwd(),
+      providerProfileId: model.provider,
+      modelId: "replacement-model",
+      reasoningEffort: "medium",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  });
+  const thread = await appServer.startThread();
+  const messages: JsonRpcMessage[] = [];
+  const errorSeen = deferred<void>();
+  const connection = new CodexConnection({
+    appServer,
+    zenHome: path.join(os.tmpdir(), "zen-home"),
+    send: (message) => {
+      messages.push(message);
+      if ("method" in message && message.method === "error")
+        errorSeen.resolve();
+    },
+  });
+
+  try {
+    await connection.receive({ id: 1, method: "initialize", params: {} });
+    await connection.receive({ method: "initialized" });
+    await connection.receive({
+      id: 2,
+      method: "turn/start",
+      params: { threadId: thread.id, input: [{ type: "text", text: "first" }] },
+    });
+    const firstResponse = messages.find(
+      (message) => "result" in message && message.id === 2,
+    );
+    assert(firstResponse !== undefined && "result" in firstResponse);
+    const firstTurnId = responseResult<Record<string, unknown>>(
+      firstResponse.result,
+      "turn",
+    ).id;
+
+    rejectTerminal = true;
+    await connection.receive({
+      id: 3,
+      method: "turn/replace",
+      params: {
+        threadId: thread.id,
+        expectedTurnId: firstTurnId,
+        clientUserMessageId: "replacement-client",
+        input: [{ type: "text", text: "replacement" }],
+      },
+    });
+    const replacementResponse = messages.find(
+      (message) => "result" in message && message.id === 3,
+    );
+    assert(
+      replacementResponse !== undefined && "result" in replacementResponse,
+    );
+    assert(
+      isRecord(replacementResponse.result) &&
+        typeof replacementResponse.result.turnId === "string",
+    );
+    const successorTurnId = replacementResponse.result.turnId;
+    await within(errorSeen.promise);
+    assert.equal(
+      messages.some(
+        (message) =>
+          "method" in message &&
+          message.method === "turn/completed" &&
+          isRecord(message.params) &&
+          isRecord(message.params.turn) &&
+          message.params.turn.id === successorTurnId,
+      ),
+      false,
+    );
+    assert.equal(
+      (await appServer.readThread(thread.id)).turns.at(-1)?.status,
+      "completed",
+    );
+  } finally {
+    connection.close();
+  }
+});
+
 test("CLI executes one full local protocol turn", async () => {
   const temporaryDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zen-cli-test-"),
@@ -2410,4 +2932,8 @@ async function within<T>(promise: Promise<T>, timeoutMs = 2_000): Promise<T> {
       },
     );
   });
+}
+
+async function flushTasks(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }

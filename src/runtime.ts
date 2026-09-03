@@ -571,8 +571,8 @@ export class AgentRuntime {
                     "Tool call was abandoned because another call in the same model response did not complete.",
                   exitCode: 125,
                 }),
-              async (result) =>
-                this.#completeToolResult(abandoned, result, options),
+              async (outcome) =>
+                this.#completeToolResult(abandoned, outcome, options),
             ),
           );
         }
@@ -628,7 +628,7 @@ export class AgentRuntime {
           scheduler,
         );
       },
-      async (result) => this.#completeToolResult(toolCall, result, options),
+      async (outcome) => this.#completeToolResult(toolCall, outcome, options),
     );
   }
 
@@ -661,6 +661,8 @@ export class AgentRuntime {
       return immediateScheduledExecution(
         result,
         execution.signal.aborted ? error : undefined,
+        "exclusive",
+        execution.signal.aborted ? "declined" : undefined,
       );
     }
 
@@ -698,6 +700,8 @@ export class AgentRuntime {
       return immediateScheduledExecution(
         result,
         execution.signal.aborted ? error : undefined,
+        "exclusive",
+        execution.signal.aborted ? "declined" : undefined,
       );
     }
 
@@ -709,6 +713,8 @@ export class AgentRuntime {
       return immediateScheduledExecution(
         result,
         new DOMException("Cancelled by user", "AbortError"),
+        "exclusive",
+        "declined",
       );
     }
 
@@ -717,6 +723,7 @@ export class AgentRuntime {
         { output: "User declined this tool call.", exitCode: 126 },
         undefined,
         prepared.executionMode,
+        "declined",
       );
     }
 
@@ -743,7 +750,12 @@ export class AgentRuntime {
             execution.admission === "inherited"
               ? await waitForAbortGracefully(operation, execution.signal)
               : await operation;
-          outcome = { result };
+          outcome = {
+            result,
+            ...(execution.signal.aborted
+              ? { executionStatus: "declined" as const }
+              : {}),
+          };
         } catch (error) {
           if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
             throw error;
@@ -768,6 +780,7 @@ export class AgentRuntime {
           outcome = {
             result: failed,
             ...(interrupted ? { controlError: error } : {}),
+            ...(interrupted ? { executionStatus: "declined" as const } : {}),
           };
         }
 
@@ -838,9 +851,10 @@ export class AgentRuntime {
 
   async #completeToolResult(
     toolCall: ToolCallItem,
-    result: ToolExecutionResult,
+    outcome: ScheduledToolOutcome,
     options: RunTurnOptions,
   ): Promise<void> {
+    const { result } = outcome;
     const capture =
       capturedToolOutput(result) ??
       (this.#toolOutputSpool === undefined
@@ -860,6 +874,9 @@ export class AgentRuntime {
       callId: toolCall.callId,
       output: capture === undefined ? result.output : renderToolOutput(capture),
       exitCode: result.exitCode,
+      executionStatus:
+        outcome.executionStatus ??
+        (result.exitCode === 0 ? "completed" : "failed"),
       ...(result.contentType === undefined
         ? {}
         : {
@@ -904,6 +921,7 @@ interface ScheduledToolCapability {
 interface ScheduledToolOutcome {
   result: ToolExecutionResult;
   controlError?: unknown;
+  executionStatus?: ToolResultItem["executionStatus"];
 }
 
 interface ScheduledToolExecution {
@@ -941,7 +959,7 @@ class TurnToolScheduler {
   schedule(
     scope: string,
     prepare: () => Promise<ScheduledToolExecution>,
-    commit: (result: ToolExecutionResult) => Promise<void>,
+    commit: (outcome: ScheduledToolOutcome) => Promise<void>,
   ): ScheduledToolCall {
     const lane = this.#lane(scope);
     const admission = lane.admissionTail.then(prepare);
@@ -994,7 +1012,7 @@ class TurnToolScheduler {
     const committedOutcome = lane.commitTail.then(async () => {
       if (lane.hasCommitFailure) throw lane.commitFailure;
       const value = await outcome.promise;
-      await commit(value.result);
+      await commit(value);
       return value;
     });
     lane.commitTail = committedOutcome.then(
@@ -1085,12 +1103,14 @@ function immediateScheduledExecution(
   result: ToolExecutionResult,
   controlError?: unknown,
   mode: ToolExecutionMode = "exclusive",
+  executionStatus?: ToolResultItem["executionStatus"],
 ): ScheduledToolExecution {
   return {
     mode,
     run: async () => ({
       result,
       ...(controlError === undefined ? {} : { controlError }),
+      ...(executionStatus === undefined ? {} : { executionStatus }),
     }),
   };
 }

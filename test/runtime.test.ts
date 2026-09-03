@@ -769,10 +769,21 @@ test("isolates a corrupt journal and lists it as a system error", async (t) => {
       "not-json\n",
       "utf8",
     );
+    await writeFile(
+      path.join(journalDirectory, "invalid-shape-thread.jsonl"),
+      `${JSON.stringify({
+        id: "invalid-shape",
+        threadId: "invalid-shape-thread",
+        createdAt: "2026-09-03T00:00:00.000Z",
+        type: "future_item",
+      })}\n`,
+      "utf8",
+    );
     await metadata.setName("corrupt-thread", "Damaged work");
+    await metadata.setName("invalid-shape-thread", "Invalid shape");
 
     const listed = await server.listThreads();
-    assert.equal(listed.length, 2);
+    assert.equal(listed.length, 3);
     assert(listed.some((entry) => entry.id === healthy.id));
     const unavailable = listed.find((entry) => entry.id === "corrupt-thread");
     assert(unavailable !== undefined && "status" in unavailable);
@@ -784,6 +795,17 @@ test("isolates a corrupt journal and lists it as a system error", async (t) => {
       { type: "systemError" },
     );
     await assert.rejects(server.readThread("corrupt-thread"), /Invalid JSON/u);
+    const invalidShape = listed.find(
+      (entry) => entry.id === "invalid-shape-thread",
+    );
+    assert(invalidShape !== undefined && "status" in invalidShape);
+    assert.equal(invalidShape.status, "systemError");
+    assert.equal(invalidShape.name, "Invalid shape");
+    assert.match(invalidShape.error, /Invalid canonical Item/u);
+    await assert.rejects(
+      server.readThread("invalid-shape-thread"),
+      /Invalid canonical Item/u,
+    );
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
@@ -1712,6 +1734,12 @@ test("declined shell call is explicit and is not executed", async () => {
   const result = snapshot.items.find((item) => item.type === "tool_result");
   assert.equal(result?.exitCode, 126);
   assert.equal(result?.output, "User declined this tool call.");
+  assert.equal(
+    result !== undefined && "executionStatus" in result
+      ? result.executionStatus
+      : undefined,
+    "declined",
+  );
   assertEveryToolCallHasOneResult(snapshot.items);
 });
 
@@ -1782,6 +1810,14 @@ test("cancelled approval records results for the cancelled and abandoned calls",
       ["call_one", 130],
       ["call_two", 125],
     ],
+  );
+  assert.equal(
+    "executionStatus" in results[0]! ? results[0]!.executionStatus : undefined,
+    "declined",
+  );
+  assert.equal(
+    "executionStatus" in results[1]! ? results[1]!.executionStatus : undefined,
+    "failed",
   );
   assert.equal(snapshot.turns[0]?.status, "interrupted");
 });

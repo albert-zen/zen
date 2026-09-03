@@ -297,12 +297,7 @@ export class ZenAppServer {
       try {
         const thread = await this.#loadThread(threadId);
         if (thread !== undefined) {
-          snapshots.push(
-            await this.#snapshot(
-              thread,
-              this.#activeTurns.get(threadId)?.turnId,
-            ),
-          );
+          snapshots.push(await this.#snapshot(thread));
         }
       } catch (error) {
         console.warn(`Could not load Thread ${threadId}`, error);
@@ -327,10 +322,7 @@ export class ZenAppServer {
 
   async readThread(threadId: string): Promise<ThreadSnapshot> {
     const thread = await this.#requireThread(threadId);
-    return await this.#snapshot(
-      thread,
-      this.#activeTurns.get(threadId)?.turnId,
-    );
+    return await this.#snapshot(thread);
   }
 
   async updateThreadSettings(
@@ -342,10 +334,7 @@ export class ZenAppServer {
       const current = thread.effectiveConfiguration();
       const selection = this.#selectionFromInput(current, input);
       if (sameSelection(selection, current)) {
-        return await this.#snapshot(
-          thread,
-          this.#activeTurns.get(threadId)?.turnId,
-        );
+        return await this.#snapshot(thread);
       }
       this.#requireSelection(selection);
       return await this.#updateThreadSettingsUnlocked(thread, { selection });
@@ -371,10 +360,7 @@ export class ZenAppServer {
       await this.#threadMetadata.setName(threadId, name);
       await this.#refreshThreadSummary(thread);
       this.#emit({ type: "thread_name_updated", threadId, name });
-      return await this.#snapshot(
-        thread,
-        this.#activeTurns.get(threadId)?.turnId,
-      );
+      return await this.#snapshot(thread);
     });
   }
 
@@ -386,10 +372,7 @@ export class ZenAppServer {
       const thread = await this.#requireThread(threadId);
       const current = await this.#threadMetadata.read(threadId);
       if ((current.archived ?? false) === archived) {
-        return await this.#snapshot(
-          thread,
-          this.#activeTurns.get(threadId)?.turnId,
-        );
+        return await this.#snapshot(thread);
       }
       const active = this.#activeTurns.get(threadId);
       if (
@@ -409,10 +392,7 @@ export class ZenAppServer {
         threadId,
         archived,
       });
-      return await this.#snapshot(
-        thread,
-        this.#activeTurns.get(threadId)?.turnId,
-      );
+      return await this.#snapshot(thread);
     });
   }
 
@@ -1227,11 +1207,7 @@ export class ZenAppServer {
     await this.#refreshThreadSummary(thread);
   }
 
-  async #snapshot(
-    thread: Thread,
-    activeTurnId?: string,
-  ): Promise<ThreadSnapshot> {
-    const configuration = thread.effectiveConfiguration();
+  async #snapshot(thread: Thread): Promise<ThreadSnapshot> {
     let productMetadata: ThreadProductMetadata = {};
     try {
       productMetadata = await this.#threadMetadata.read(thread.id);
@@ -1241,12 +1217,16 @@ export class ZenAppServer {
         error,
       );
     }
+    const activeTurnId = this.#activeTurns.get(thread.id)?.turnId;
+    const configuration = thread.effectiveConfiguration();
+    const items = thread.items;
+    const turns = thread.deriveTurns(
+      activeTurnId === undefined ? {} : { activeTurnId },
+    );
     return {
       id: thread.id,
-      items: thread.items,
-      turns: thread.deriveTurns(
-        activeTurnId === undefined ? {} : { activeTurnId },
-      ),
+      items,
+      turns,
       cwd: configuration.cwd,
       providerProfileId: configuration.providerProfileId,
       modelId: configuration.modelId,

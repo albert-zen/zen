@@ -70,6 +70,7 @@ export class CodexConnection {
   readonly #toolCalls = new Map<string, ToolCallItem>();
   readonly #reasoningSummaryParts = new Set<string>();
   readonly #subscribedThreads = new Set<string>();
+  readonly #resumeBarriers = new Map<string, { events: AppServerEvent[] }>();
   readonly #unsubscribe: () => void;
   #initializedRequest = false;
   #initializedNotification = false;
@@ -83,13 +84,13 @@ export class CodexConnection {
     this.#send = options.send;
     this.#zenHome = options.zenHome;
     this.#unsubscribe = this.#appServer.subscribe((event) => {
-      this.#eventChain = this.#eventChain
-        .then(async () => {
-          await this.#projectEvent(event);
-        })
-        .catch((error: unknown) => {
-          this.#sendErrorNotification(error, event);
-        });
+      if (!this.#initializedRequest || !this.#initializedNotification) return;
+      const barrier = this.#resumeBarriers.get(eventThreadId(event));
+      if (barrier !== undefined) {
+        barrier.events.push(event);
+        return;
+      }
+      this.#enqueueEvent(event);
     });
   }
 
@@ -156,6 +157,7 @@ export class CodexConnection {
     }
     this.#closed = true;
     this.#unsubscribe();
+    this.#resumeBarriers.clear();
     for (const pending of this.#pending.values()) {
       pending.reject(new Error(reason));
     }
@@ -275,47 +277,66 @@ export class CodexConnection {
       }
       case "thread/resume": {
         const threadId = requiredString(params, "threadId");
-        let snapshot = await this.#appServer.readThread(threadId);
-        const requestedModel = optionalNonEmptyString(params.model, "model");
-        const requestedSelectionInput = this.#selectionForExistingThread(
-          snapshot,
-          requestedModel,
-          undefined,
-        );
-        const requestedSelection =
-          requestedSelectionInput === undefined
-            ? undefined
-            : this.#appServer.completeProviderSelection(
-                snapshot,
-                requestedSelectionInput,
-              );
-        validateMatchingThreadConfiguration(
-          params,
-          snapshot,
-          requestedSelection,
-          [
-            "threadId",
-            "cwd",
-            "model",
-            "approvalPolicy",
-            "sandbox",
-            "sandboxPolicy",
-            "approvalsReviewer",
-          ],
-        );
-        if (requestedSelectionInput !== undefined) {
-          snapshot = await this.#appServer.updateThreadSettings(threadId, {
-            selection: requestedSelectionInput,
-          });
+        await this.#drainEventChain();
+        if (this.#resumeBarriers.has(threadId)) {
+          throw new Error(`Thread ${threadId} is already being resumed`);
         }
-        this.#subscribedThreads.add(threadId);
-        this.#send({
-          id: request.id,
-          result: {
-            thread: projectThread(snapshot, { includeTurns: true }),
-            ...threadSettings(snapshot),
-          },
-        });
+        const barrier = { events: [] as AppServerEvent[] };
+        this.#resumeBarriers.set(threadId, barrier);
+        let snapshot: ThreadSnapshot | undefined;
+        try {
+          snapshot = await this.#appServer.readThread(threadId);
+          const requestedModel = optionalNonEmptyString(params.model, "model");
+          const requestedSelectionInput = this.#selectionForExistingThread(
+            snapshot,
+            requestedModel,
+            undefined,
+          );
+          const requestedSelection =
+            requestedSelectionInput === undefined
+              ? undefined
+              : this.#appServer.completeProviderSelection(
+                  snapshot,
+                  requestedSelectionInput,
+                );
+          validateMatchingThreadConfiguration(
+            params,
+            snapshot,
+            requestedSelection,
+            [
+              "threadId",
+              "cwd",
+              "model",
+              "approvalPolicy",
+              "sandbox",
+              "sandboxPolicy",
+              "approvalsReviewer",
+            ],
+          );
+          if (requestedSelectionInput !== undefined) {
+            snapshot = await this.#appServer.updateThreadSettings(threadId, {
+              selection: requestedSelectionInput,
+            });
+          }
+          this.#subscribedThreads.add(threadId);
+          this.#send({
+            id: request.id,
+            result: {
+              thread: projectThread(snapshot, { includeTurns: true }),
+              ...threadSettings(snapshot),
+            },
+          });
+        } finally {
+          this.#resumeBarriers.delete(threadId);
+          for (const event of barrier.events) {
+            if (
+              snapshot === undefined ||
+              !eventRepresentedInSnapshot(event, snapshot)
+            ) {
+              this.#enqueueEvent(event);
+            }
+          }
+        }
         return;
       }
       case "thread/name/set": {
@@ -589,6 +610,25 @@ export class CodexConnection {
   #handleNotification(method: string): void {
     if (method === "initialized" && this.#initializedRequest) {
       this.#initializedNotification = true;
+    }
+  }
+
+  #enqueueEvent(event: AppServerEvent): void {
+    if (this.#closed) return;
+    this.#eventChain = this.#eventChain
+      .then(async () => {
+        await this.#projectEvent(event);
+      })
+      .catch((error: unknown) => {
+        this.#sendErrorNotification(error, event);
+      });
+  }
+
+  async #drainEventChain(): Promise<void> {
+    for (;;) {
+      const current = this.#eventChain;
+      await current;
+      if (current === this.#eventChain) return;
     }
   }
 
@@ -1097,26 +1137,50 @@ export class CodexConnection {
         turnId,
       },
     });
-    this.#send({
-      method: "turn/completed",
-      params: {
-        threadId,
-        turn: {
-          id: turnId,
-          items: [],
-          itemsView: "full",
-          status: "failed",
-          error: {
-            message,
-            codexErrorInfo: null,
-            additionalDetails: null,
-          },
-          startedAt: null,
-          completedAt: Math.floor(Date.now() / 1000),
-          durationMs: null,
-        },
-      },
-    });
+  }
+}
+
+function eventThreadId(event: AppServerEvent): string {
+  return event.type === "item_completed" ? event.item.threadId : event.threadId;
+}
+
+function eventRepresentedInSnapshot(
+  event: AppServerEvent,
+  snapshot: ThreadSnapshot,
+): boolean {
+  switch (event.type) {
+    case "thread_archived_updated":
+      return snapshot.archived === event.archived;
+    case "thread_name_updated":
+      return snapshot.name === event.name;
+    case "thread_settings_updated":
+      return (
+        snapshot.cwd === event.settings.cwd &&
+        snapshot.providerProfileId === event.settings.providerProfileId &&
+        snapshot.modelId === event.settings.modelId &&
+        snapshot.reasoningEffort === event.settings.reasoningEffort &&
+        snapshot.sandbox === event.settings.sandbox &&
+        snapshot.approvalPolicy === event.settings.approvalPolicy
+      );
+    case "item_completed":
+      return snapshot.items.some((item) => item.id === event.item.id);
+    case "turn_started":
+      return snapshot.items.some(
+        (item) => item.type === "turn_started" && item.turnId === event.turnId,
+      );
+    case "turn_completed":
+      return snapshot.items.some(
+        (item) =>
+          item.turnId === event.turnId &&
+          (item.type === "turn_completed" || item.type === "turn_aborted"),
+      );
+    case "item_started":
+    case "item_delta":
+    case "reasoning_summary_delta":
+    case "reasoning_content_delta":
+      return snapshot.items.some((item) => item.id === event.itemId);
+    case "token_usage":
+      return true;
   }
 }
 

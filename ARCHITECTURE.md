@@ -8,6 +8,7 @@
 
 - **Item** — agent 运行的最小事实单元：Turn 生命周期、用户消息、模型输出、推理、
   工具调用、工具结果与失败，都是 Item。
+- **Canonical Item Decoder** — JSONL journal 只在读取边界用一个穷尽的 runtime decoder 接纳现行与明确 legacy Item shape，拒绝不能安全重放的结构，而写侧继续只使用同一组 canonical TypeScript 类型。
 - **Thread** — 一个 agent 上下文，权威状态是一条 append-only 的 Item list。
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
@@ -18,6 +19,7 @@
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
 - **Tool Output Spool** — Host 把超出模型 preview 上限的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明与 builtin shell 一律按 `exclusive`，该分类不是权限或资源 scope。
+- **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
 - **Tool Policy Store** — Host 按稳定 tool name 持有 `ask_unknown` 的 approved/denied 决定并通过可持久化 port 注入 Tool Environment，不进入 Thread 或 canonical ItemList。
 - **Tool Runtime** — Tool Environment 按一个精确 stable tool name 注册的 specification、execution mode 与 execution body；builtin、plugin proxy 与 external proxy 使用同一单工具合同。
 - **Tool Bundle** — 可选的瞬时共享归属对象，用一个 identity 原子发布或替换一组 Tool Runtime，并为 plugin 或跨进程 bridge 持有 prepared-invocation lease；它不参与模型展示或按 name 二次分发。
