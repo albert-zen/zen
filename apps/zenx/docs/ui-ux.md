@@ -225,6 +225,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   不以 base64 或源文件路径为权威。导入或读取失败在 Composer 附近明确显示并保留现有草稿。
 - 每张待发送图片显示紧凑、有稳定占位尺寸和 accessible name 的缩略图；删除一张不得清除文字或其他图片。
   picker、paste、drop 与 thumbnail 更新不得改变既有 Enter / Shift+Enter、组合 Model / Reasoning menu 或 primary action 语义。
+  删除控件是贴在缩略图右上角的小圆形 badge（约 18px 可见圆、22px hit target），不覆盖缩略图主体，也不沿用大号圆形按钮样式。
 - 已选模型明确不支持 image 时，Send / Interrupt & Send 在进入 Provider 前阻断并保留完整草稿。
   Unknown 必须显示为 Unknown，并提供“尝试发送”以及 Settings 中显式 probe / 手动配置的恢复入口；
   Unknown 不得冒充 unsupported。文字草稿的普通发送行为不受影响。
