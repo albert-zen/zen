@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -7,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 
+import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
@@ -339,6 +341,13 @@ export function App() {
   const [threadUsage, setThreadUsage] = useState<
     ModelUsageProjection | undefined
   >();
+  // Stable identity so streaming re-renders of App do not restart every
+  // mounted attachment read; thumbnails cache payloads per attachment.
+  const readAttachment = useCallback(
+    (attachment: AttachmentRef) =>
+      window.zenx.imageAttachments.read(attachment),
+    [],
+  );
 
   const confirmPinnedThreadIds = (threadIds: readonly string[]) => {
     const confirmed = [...threadIds];
@@ -1865,9 +1874,7 @@ export function App() {
                 composer: removeComposerImage(current.composer, imageId),
               }))
             }
-            onReadAttachment={(attachment) =>
-              window.zenx.imageAttachments.read(attachment)
-            }
+            onReadAttachment={readAttachment}
             onInterrupt={async (turnId) => {
               if (threadDetail === null)
                 throw new Error("No thread is selected");

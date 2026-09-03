@@ -232,6 +232,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - transcript 从 canonical `user_message` 的 `AttachmentRef` 投影图片；send 后与 resume 后使用同一渲染路径。
   缩略图可用鼠标或键盘打开应用内 modal preview；Escape、关闭按钮和 backdrop 可关闭，关闭后焦点返回触发缩略图。
   Transcript 附件渲染为文字气泡上方的独立紧凑缩略图行（右对齐、可换行），不被包进气泡边框内；只有存在文字时才渲染文字气泡。这是视觉校准，不改变 `AttachmentRef` 权威与投影路径。
+  附件 payload 读取按 `AttachmentRef` 身份（mediaType + sha256）在 renderer 会话内缓存 object URL：流式重渲染、projection 刷新与 disclosure 折叠重建都复用同一 URL，不重新读取、不闪回 loading 占位；读取失败不缓存，后续挂载重试。
 
 ### 4.6 Settings 与 onboarding
 
