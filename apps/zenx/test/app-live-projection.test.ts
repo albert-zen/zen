@@ -86,11 +86,18 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
       usage.resolve({
         thread: { responseCount: 1, inputTokens: 7, outputTokens: 3 },
         turns: {},
+        context: {
+          inputTokens: 7,
+          inputTokenSource: "provider",
+          contextWindow: 70,
+          ratio: 0.1,
+        },
       });
       await Promise.resolve();
       await Promise.resolve();
     });
     assert.match(document.body.textContent ?? "", /7 in/u);
+    assert.match(document.body.textContent ?? "", /Context 10% · 7 \/ 70/u);
   } finally {
     await harness.unmount();
   }
@@ -479,6 +486,12 @@ async function mountApp(options: MountOptions) {
           ? {
               thread: { responseCount: 0, inputTokens: 0, outputTokens: 0 },
               turns: {},
+              context: {
+                inputTokens: null,
+                inputTokenSource: null,
+                contextWindow: null,
+                ratio: null,
+              },
             }
           : await options.usage(threadId),
     },

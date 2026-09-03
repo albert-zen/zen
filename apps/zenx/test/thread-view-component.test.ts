@@ -253,6 +253,12 @@ test("Turn disclosure does not repeat cache telemetry from assistant actions", (
           cacheHitRate: 0.4,
         },
       },
+      context: {
+        inputTokens: 150,
+        inputTokenSource: "provider",
+        contextWindow: null,
+        ratio: null,
+      },
     },
   );
   const disclosure = html.match(
@@ -295,6 +301,12 @@ test("only the final assistant message exposes metadata and hover actions", asyn
             outputTokens: 17,
             cacheHitRate: 0.4,
           },
+        },
+        context: {
+          inputTokens: 150,
+          inputTokenSource: "provider",
+          contextWindow: null,
+          ratio: null,
         },
       },
     );
@@ -431,6 +443,12 @@ test("renders compact token-weighted cache usage for each Turn, not the message 
           inputTokens: 50,
           outputTokens: 8,
         },
+      },
+      context: {
+        inputTokens: 50,
+        inputTokenSource: "provider",
+        contextWindow: null,
+        ratio: null,
       },
     },
   );

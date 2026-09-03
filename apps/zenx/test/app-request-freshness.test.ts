@@ -378,6 +378,12 @@ function projectedUsage(inputTokens: number): ModelUsageProjection {
       outputTokens: 1,
     },
     turns: {},
+    context: {
+      inputTokens: inputTokens === 0 ? null : inputTokens,
+      inputTokenSource: inputTokens === 0 ? null : "provider",
+      contextWindow: inputTokens === 0 ? null : 100,
+      ratio: inputTokens === 0 ? null : inputTokens / 100,
+    },
   };
 }
 
