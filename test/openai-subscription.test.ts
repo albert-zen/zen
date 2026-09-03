@@ -923,6 +923,68 @@ test("redacts an access token if a provider error echoes it", async () => {
   );
 });
 
+test("reports failed response usage before preserving the provider error", async () => {
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async () =>
+      sseResponse([
+        {
+          type: "response.failed",
+          response: {
+            status: "failed",
+            error: { code: "server_error", message: "provider failed" },
+            usage: {
+              input_tokens: 11,
+              input_tokens_details: { cached_tokens: 7 },
+              output_tokens: 5,
+              output_tokens_details: { reasoning_tokens: 3 },
+            },
+          },
+        },
+      ]),
+  });
+  const events: ModelEvent[] = [];
+
+  await assert.rejects(async () => {
+    for await (const event of adapter.stream(request())) {
+      events.push(event);
+    }
+  }, /response failed \(server_error\): provider failed/u);
+  assert.deepEqual(events, [
+    {
+      type: "usage",
+      inputTokens: 11,
+      cachedInputTokens: 7,
+      outputTokens: 5,
+      reasoningOutputTokens: 3,
+    },
+  ]);
+});
+
+test("does not synthesize usage for a failed response that omits it", async () => {
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async () =>
+      sseResponse([
+        {
+          type: "response.failed",
+          response: {
+            status: "failed",
+            error: { code: "server_error", message: "provider failed" },
+          },
+        },
+      ]),
+  });
+  const events: ModelEvent[] = [];
+
+  await assert.rejects(async () => {
+    for await (const event of adapter.stream(request())) {
+      events.push(event);
+    }
+  }, /response failed \(server_error\): provider failed/u);
+  assert.deepEqual(events, []);
+});
+
 test("rejects an incomplete response after transient partial text", async () => {
   const adapter = new OpenAiSubscriptionModel({
     acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
@@ -950,7 +1012,12 @@ test("rejects an incomplete response after transient partial text", async () => 
             status: "incomplete",
             incomplete_details: { reason: "max_output_tokens" },
             output: [],
-            usage: { input_tokens: 4, output_tokens: 2 },
+            usage: {
+              input_tokens: 4,
+              input_tokens_details: { cached_tokens: 1 },
+              output_tokens: 2,
+              output_tokens_details: { reasoning_tokens: 2 },
+            },
           },
         },
       ]),
@@ -962,7 +1029,16 @@ test("rejects an incomplete response after transient partial text", async () => 
       events.push(event);
     }
   }, /response was incomplete: max_output_tokens/u);
-  assert.deepEqual(events, [{ type: "text_delta", delta: "partial answer" }]);
+  assert.deepEqual(events, [
+    { type: "text_delta", delta: "partial answer" },
+    {
+      type: "usage",
+      inputTokens: 4,
+      cachedInputTokens: 1,
+      outputTokens: 2,
+      reasoningOutputTokens: 2,
+    },
+  ]);
 });
 
 test("browser PKCE login stores an independent mode-0600 profile", async () => {

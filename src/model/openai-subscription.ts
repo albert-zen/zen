@@ -337,7 +337,14 @@ async function* parseResponsesStream(
       );
     }
 
-    if (type === "error" || type === "response.failed") {
+    if (type === "error") {
+      throw providerEventError(event, accessToken);
+    }
+
+    if (type === "response.failed") {
+      state.terminalSeen = true;
+      const usage = terminalResponseUsage(recordField(event, "response"));
+      if (usage !== undefined) yield usage;
       throw providerEventError(event, accessToken);
     }
 
@@ -437,6 +444,8 @@ async function* parseResponsesStream(
     if (type === "response.incomplete") {
       state.terminalSeen = true;
       const response = recordField(event, "response");
+      const usage = terminalResponseUsage(response);
+      if (usage !== undefined) yield usage;
       const details =
         response === undefined
           ? undefined
@@ -466,22 +475,10 @@ async function* parseResponsesStream(
           }
         }
       }
-      const usage =
-        response === undefined ? undefined : recordValue(response.usage);
-      const inputDetails = recordValue(usage?.input_tokens_details);
-      const outputDetails = recordValue(usage?.output_tokens_details);
-      const cachedInputTokens = optionalTokenCount(inputDetails?.cached_tokens);
-      const reasoningOutputTokens = optionalTokenCount(
-        outputDetails?.reasoning_tokens,
-      );
-      yield {
+      yield terminalResponseUsage(response) ?? {
         type: "usage",
-        inputTokens: tokenCount(usage?.input_tokens),
-        ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-        outputTokens: tokenCount(usage?.output_tokens),
-        ...(reasoningOutputTokens === undefined
-          ? {}
-          : { reasoningOutputTokens }),
+        inputTokens: 0,
+        outputTokens: 0,
       };
       break;
     }
@@ -492,6 +489,28 @@ async function* parseResponsesStream(
       "OpenAI subscription stream ended without a terminal response event",
     );
   }
+}
+
+function terminalResponseUsage(
+  response: Record<string, unknown> | undefined,
+): Extract<ModelEvent, { type: "usage" }> | undefined {
+  const usage =
+    response === undefined ? undefined : recordValue(response.usage);
+  if (usage === undefined) return undefined;
+
+  const inputDetails = recordValue(usage.input_tokens_details);
+  const outputDetails = recordValue(usage.output_tokens_details);
+  const cachedInputTokens = optionalTokenCount(inputDetails?.cached_tokens);
+  const reasoningOutputTokens = optionalTokenCount(
+    outputDetails?.reasoning_tokens,
+  );
+  return {
+    type: "usage",
+    inputTokens: tokenCount(usage.input_tokens),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    outputTokens: tokenCount(usage.output_tokens),
+    ...(reasoningOutputTokens === undefined ? {} : { reasoningOutputTokens }),
+  };
 }
 
 async function* finishOutputItem(
