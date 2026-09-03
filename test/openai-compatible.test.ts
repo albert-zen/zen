@@ -267,6 +267,33 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
     ]);
   });
 
+  await t.test(
+    "DeepSeek V4 uses reasoning controls only on DashScope",
+    async () => {
+      const dashScopeBody = await captureRequestBody({
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model: "deepseek-v4-pro-0813",
+        reasoningEffort: "max",
+        messages: [],
+      });
+
+      assert.equal(dashScopeBody.reasoning_effort, "max");
+      assert.equal(dashScopeBody.enable_thinking, true);
+
+      const directBody = await captureRequestBody({
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com",
+        model: "deepseek-v4-pro",
+        reasoningEffort: "max",
+        messages: [],
+      });
+
+      assert.equal("reasoning_effort" in directBody, false);
+      assert.equal("enable_thinking" in directBody, false);
+    },
+  );
+
   await t.test("Qwen preserves complete reasoning by default", async () => {
     const body = await captureRequestBody({
       provider: "custom-provider",

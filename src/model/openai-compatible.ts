@@ -261,10 +261,14 @@ function compatibleReasoningPolicy(options: {
   }
 
   if (/^deepseek(?:-|$)/u.test(familyModel) || provider === "deepseek") {
+    // DashScope documents effort controls for its hosted DeepSeek V4 models;
+    // the direct DeepSeek API has a different wire contract.
+    const usesDashScopeV4ReasoningControls =
+      isDashScope && /^deepseek-v4(?:-|$)/u.test(familyModel);
     return {
       replay: "tool-calls",
-      forwardReasoningEffort: false,
-      enableThinking: false,
+      forwardReasoningEffort: usesDashScopeV4ReasoningControls,
+      enableThinking: usesDashScopeV4ReasoningControls,
       enableToolStream: false,
       supportsUsageInStreaming,
     };
