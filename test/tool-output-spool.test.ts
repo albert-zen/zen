@@ -21,13 +21,14 @@ import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { renderToolOutput, ToolOutputSpool } from "../src/tool-output-spool.js";
-import { ShellToolRuntime, type ToolRuntime } from "../src/tool.js";
-import { createHostedAppServer } from "../apps/cli/src/host.js";
 import {
-  testExecutorEnvironment,
-  testToolEnvironment,
-  type TestToolExecutor,
-} from "./tool-fixtures.js";
+  ShellToolRuntime,
+  ToolEnvironment,
+  type ToolBundleIdentity,
+  type ToolRuntime,
+} from "../src/tool.js";
+import { createHostedAppServer } from "../apps/cli/src/host.js";
+import { testToolBundle, testToolRuntime } from "./tool-fixtures.js";
 
 test("oversized shell output becomes a bounded receipt with readable full output", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-test-"));
@@ -94,15 +95,17 @@ test("small shell output keeps its exact canonical text shape", async () => {
 test("Runtime spools ordinary text while preserving structuredContent unchanged", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-provider-"));
   const spool = new ToolOutputSpool({ rootDirectory: root, previewBytes: 12 });
-  const tools: TestToolExecutor = {
-    definitions: [{ name: "fixture", description: "fixture", inputSchema: {} }],
+  const tools = testToolRuntime({
+    name: "fixture",
+    description: "fixture",
+    inputSchema: {},
     execute: async () => ({
       output: "head-middle-tail",
       exitCode: 4,
       contentType: "fixture/value",
       structuredContent: { exact: [1, "two"] },
     }),
-  };
+  });
   try {
     const server = createToolServer(spool, tools, "fixture", {});
     const thread = await server.startThread();
@@ -288,14 +291,16 @@ function createShellServer(
     new ShellToolRuntime({ toolOutputSpool: spool }),
     "shell",
     { command },
+    { kind: "builtin", id: "shell" },
   );
 }
 
 function createToolServer(
   spool: ToolOutputSpool,
-  tools: TestToolExecutor | ToolRuntime,
+  tools: ToolRuntime,
   toolName: string,
   toolArguments: Record<string, unknown>,
+  owner: ToolBundleIdentity = { kind: "external", id: "test-runtime" },
 ): ZenAppServer {
   const model: ModelAdapter = {
     provider: "fixture",
@@ -318,10 +323,9 @@ function createToolServer(
   return new ZenAppServer({
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
-      toolEnvironment:
-        "specification" in tools
-          ? testToolEnvironment({ providers: [tools] })
-          : testExecutorEnvironment(tools),
+      toolEnvironment: new ToolEnvironment({
+        bundles: [testToolBundle(owner, [tools])],
+      }),
       toolOutputSpool: spool,
     }),
     providerRegistry: new ProviderRegistry([

@@ -75,14 +75,14 @@ export class ApplyPatchToolRuntime implements ToolRuntime {
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Apply a Codex-style patch to files relative to the thread working directory.",
+      "Apply the supported Codex-style patch subset to files relative to the thread working directory.",
     inputSchema: {
       type: "object",
       properties: {
         patch: {
           type: "string",
           description:
-            "Patch text delimited by *** Begin Patch and *** End Patch.",
+            "Patch text delimited by *** Begin Patch and *** End Patch using Add, Update, Move, Delete, @@ exact context, and optional *** End of File markers.",
         },
       },
       required: ["patch"],
@@ -189,6 +189,10 @@ function parsePatch(source: string): PatchHunk[] {
       };
       while (index < lines.length - 1 && !isFileMarker(lines[index]!)) {
         const updateLine = lines[index]!;
+        if (chunk?.endOfFile === true && updateLine.trim().length === 0) {
+          index += 1;
+          continue;
+        }
         if (updateLine === "@@" || updateLine.startsWith("@@ ")) {
           finishChunk();
           chunk = {

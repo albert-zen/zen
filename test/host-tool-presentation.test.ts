@@ -66,7 +66,7 @@ test("the default Host exposes one apply_patch runtime through direct and code p
   }
 });
 
-test("Host preserves a caller-supplied apply_patch runtime without duplicate registration", async () => {
+test("Host rejects a caller-supplied runtime that collides with reserved apply_patch", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zen-host-patch-"));
   const toolEnvironment = new ToolEnvironment({
     runtimes: [
@@ -81,30 +81,22 @@ test("Host preserves a caller-supplied apply_patch runtime without duplicate reg
       },
     ],
   });
-  const host = createHostedAppServer({
-    cwd: directory,
-    dataDirectory: path.join(directory, "data"),
-    model: "fake",
-    models: ["fake"],
-    approvalPolicy: "never",
-    provider: { type: "fake" },
-    toolPresentation: "direct",
-    toolEnvironment,
-  });
   try {
-    const thread = await host.startThread();
-    await (
-      await host.startTurn(
-        thread.id,
-        '!tool apply_patch {"patch":"caller input"}',
-      )
-    ).done;
-    const result = (await host.readThread(thread.id)).items.find(
-      (item) => item.type === "tool_result",
+    assert.throws(
+      () =>
+        createHostedAppServer({
+          cwd: directory,
+          dataDirectory: path.join(directory, "data"),
+          model: "fake",
+          models: ["fake"],
+          approvalPolicy: "never",
+          provider: { type: "fake" },
+          toolPresentation: "direct",
+          toolEnvironment,
+        }),
+      /Tool name apply_patch is reserved for the builtin runtime/u,
     );
-    assert.equal(result?.output, "caller runtime");
   } finally {
-    await host.closeHostResources();
     await rm(directory, { recursive: true, force: true });
   }
 });

@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   ToolEnvironment,
+  type CompositeToolRuntime,
+  type NestedToolInvocationPort,
   type ToolBundle,
   type ToolExecutionResult,
   type ToolInvocation,
@@ -171,4 +173,43 @@ test("prepared calls retain their exact runtime and bundle lease across replacem
     { output: "replacement", exitCode: 0 },
   );
   assert.deepEqual(calls, ["original", "replacement"]);
+});
+
+test("external composite-shaped runtimes cannot receive the nested invocation port", async () => {
+  let compositeCalls = 0;
+  let ordinaryCalls = 0;
+  const external: CompositeToolRuntime = {
+    ...runtime("external_composite", async () => {
+      ordinaryCalls += 1;
+      return { output: "ordinary", exitCode: 0 };
+    }),
+    executeComposite: async (
+      _invocation,
+      _nested: NestedToolInvocationPort,
+    ) => {
+      compositeCalls += 1;
+      return { output: "composite", exitCode: 0 };
+    },
+  };
+  const environment = new ToolEnvironment({
+    bundles: [
+      {
+        identity: { kind: "external", id: "untrusted" },
+        tools: [external],
+      },
+    ],
+  });
+  const nested: NestedToolInvocationPort = {
+    invoke: async () => ({ output: "nested", exitCode: 0 }),
+  };
+
+  assert.deepEqual(
+    await environment.execute(
+      environment.prepare(invocation("external_composite")),
+      nested,
+    ),
+    { output: "ordinary", exitCode: 0 },
+  );
+  assert.equal(ordinaryCalls, 1);
+  assert.equal(compositeCalls, 0);
 });

@@ -126,7 +126,8 @@ artifact 定位 Worker，覆盖 Node builtin、nested、`text`、abort 与 tempo
 切回 `direct` 不删除 runtime 或改写历史，旧 trace 仍可重放。CLI 与 ZenX composition 还注册
 同一个 exclusive `apply_patch` runtime；direct 与 `tools.apply_patch(...)` 共享 Tool Environment、
 approval、scheduler 和 canonical lifecycle。patch 使用普通 JSON function 的 `{ patch: string }`
-包装和 Codex Begin/End Patch grammar，先精确预检全部内容，再执行 Add/Update/Move/Delete；
+包装和 Codex-style supported subset（Begin/End Patch、Add/Update/Move/Delete、`@@` exact context、
+可选 End of File），不宣称实现完整宽松 parser；UTF-8 输入在全部内容精确预检后写回 LF。
 I/O 阶段不是 durable transaction，失败必须报告已经落盘的前缀。
 
 目标插件生命周期只有 installed / enabled / uninstalled；bundled plugin 同样可卸载、以后重装，

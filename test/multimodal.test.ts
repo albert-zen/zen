@@ -31,8 +31,7 @@ import { CodexConnection } from "../src/protocol/codex/connection.js";
 import { projectThread } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
-import { ShellToolRuntime } from "../src/tool.js";
-import { testToolEnvironment } from "./tool-fixtures.js";
+import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 
 test("runs typed image input through AttachmentRef to provider and replays it after restart", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-multimodal-"));
@@ -520,8 +519,8 @@ function createServer(options: {
     journal: options.journal,
     attachments: options.attachments,
     runtime: new AgentRuntime({
-      toolEnvironment: testToolEnvironment({
-        providers: [new ShellToolRuntime()],
+      toolEnvironment: new ToolEnvironment({
+        runtimes: [new ShellToolRuntime()],
       }),
     }),
     providerRegistry: new ProviderRegistry([

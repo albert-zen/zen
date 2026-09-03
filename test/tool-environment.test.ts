@@ -22,33 +22,30 @@ import {
   ToolEnvironment,
   MAX_STRUCTURED_TOOL_RESULT_BYTES,
 } from "../src/tool.js";
-import {
-  testToolBundle,
-  testToolEnvironment,
-  type TestToolProvider,
-} from "./tool-fixtures.js";
+import { testToolBundle, testToolRuntime } from "./tool-fixtures.js";
 
 test("structured tool results survive canonical persistence without entering model context", async () => {
   const source = { cards: [{ id: "one", title: "Verbatim" }] };
-  const provider: TestToolProvider = {
-    identity: { kind: "plugin", id: "fixture" },
-    definitions: [
-      { name: "fixture_cards", description: "Cards", inputSchema: {} },
-    ],
-    execute: async () => ({
-      output: "exact textual fallback",
-      exitCode: 0,
-      contentType: "fixture/cards",
-      structuredContent: source,
+  const bundle = testToolBundle({ kind: "plugin", id: "fixture" }, [
+    testToolRuntime({
+      name: "fixture_cards",
+      description: "Cards",
+      inputSchema: {},
+      execute: async () => ({
+        output: "exact textual fallback",
+        exitCode: 0,
+        contentType: "fixture/cards",
+        structuredContent: source,
+      }),
     }),
-  };
+  ]);
   const journalRoot = await mkdtemp(path.join(os.tmpdir(), "zen-structured-"));
   try {
     const journal = new JsonlThreadJournal(journalRoot);
     const server = new ZenAppServer({
       journal,
       runtime: new AgentRuntime({
-        toolEnvironment: testToolEnvironment({ providers: [provider] }),
+        toolEnvironment: new ToolEnvironment({ bundles: [bundle] }),
       }),
       providerRegistry: new ProviderRegistry([
         {
@@ -146,16 +143,17 @@ test("structured result admission rejects non-JSON, cyclic, oversized, and forei
     },
   ];
   for (const [index, fixture] of cases.entries()) {
-    const environment = testToolEnvironment({
-      providers: [
-        {
-          identity: { kind: "plugin", id: "fixture" },
-          definitions: [
-            { name: "fixture_value", description: "Value", inputSchema: {} },
-          ],
-          execute: async () =>
-            ({ output: "unchanged", exitCode: 7, ...fixture }) as never,
-        },
+    const environment = new ToolEnvironment({
+      bundles: [
+        testToolBundle({ kind: "plugin", id: "fixture" }, [
+          testToolRuntime({
+            name: "fixture_value",
+            description: "Value",
+            inputSchema: {},
+            execute: async () =>
+              ({ output: "unchanged", exitCode: 7, ...fixture }) as never,
+          }),
+        ]),
       ],
     });
     const prepared = environment.prepare({
@@ -170,21 +168,22 @@ test("structured result admission rejects non-JSON, cyclic, oversized, and forei
 });
 
 test("invalid structured content settles its tool call and lets the model continue", async () => {
-  const provider: TestToolProvider = {
-    identity: { kind: "plugin", id: "fixture" },
-    definitions: [
-      { name: "fixture_invalid", description: "Invalid", inputSchema: {} },
-    ],
-    execute: async () => ({
-      output: "must not be appended",
-      exitCode: 0,
-      contentType: "foreign/value",
-      structuredContent: { ok: true },
+  const bundle = testToolBundle({ kind: "plugin", id: "fixture" }, [
+    testToolRuntime({
+      name: "fixture_invalid",
+      description: "Invalid",
+      inputSchema: {},
+      execute: async () => ({
+        output: "must not be appended",
+        exitCode: 0,
+        contentType: "foreign/value",
+        structuredContent: { ok: true },
+      }),
     }),
-  };
+  ]);
   const server = createServer(
     modelCalling("fixture_invalid"),
-    testToolEnvironment({ providers: [provider] }),
+    new ToolEnvironment({ bundles: [bundle] }),
     "never",
   );
   const thread = await server.startThread();
@@ -211,31 +210,30 @@ test("invalid structured content settles its tool call and lets the model contin
   assertEveryToolCallHasOneResult(snapshot.items);
 });
 
-test("a prepared invocation keeps its exact provider after dynamic removal", async () => {
+test("a prepared invocation keeps its exact runtime after bundle removal", async () => {
   const calls: string[] = [];
   let preparedLeases = 0;
-  const provider: TestToolProvider = {
-    identity: { kind: "plugin", id: "fixture" },
-    definitions: [
-      {
+  const bundle = testToolBundle(
+    { kind: "plugin", id: "fixture" },
+    [
+      testToolRuntime({
         name: "fixture_echo",
         description: "Echo fixture input.",
-        inputSchema: { type: "object" },
-      },
+        execute: async (invocation) => {
+          calls.push(invocation.name);
+          return { output: "fixture result", exitCode: 0 };
+        },
+      }),
     ],
-    retainPreparedInvocation: () => {
+    () => {
       preparedLeases += 1;
       return () => {
         preparedLeases -= 1;
       };
     },
-    execute: async (invocation) => {
-      calls.push(invocation.name);
-      return { output: "fixture result", exitCode: 0 };
-    },
-  };
-  const environment = testToolEnvironment({
-    providers: [provider],
+  );
+  const environment = new ToolEnvironment({
+    bundles: [bundle],
     policyStore: new InMemoryToolPolicyStore(),
   });
   const prepared = environment.prepare({
@@ -261,8 +259,8 @@ test("a prepared invocation keeps its exact provider after dynamic removal", asy
 });
 
 test("concurrent unknown calls share one persisted admission decision", async () => {
-  const provider = countingProvider("plugin_shared");
-  const environment = testToolEnvironment({ providers: [provider] });
+  const bundle = countingBundle("plugin_shared");
+  const environment = new ToolEnvironment({ bundles: [bundle] });
   const signal = new AbortController().signal;
   const first = environment.prepare({
     callId: "first",
@@ -315,25 +313,21 @@ test("concurrent unknown calls share one persisted admission decision", async ()
   assert.equal(approvalRequests, 1);
 });
 
-test("provider definitions appear and disappear on consecutive model samples", async () => {
+test("bundle definitions appear and disappear on consecutive model samples", async () => {
   const sampledTools: string[][] = [];
   const executedSignals: AbortSignal[] = [];
-  const provider: TestToolProvider = {
-    identity: { kind: "plugin", id: "fixture" },
-    definitions: [
-      {
-        name: "fixture_echo",
-        description: "Echo fixture input.",
-        inputSchema: { type: "object" },
+  const bundle = testToolBundle({ kind: "plugin", id: "fixture" }, [
+    testToolRuntime({
+      name: "fixture_echo",
+      description: "Echo fixture input.",
+      execute: async (invocation) => {
+        executedSignals.push(invocation.signal);
+        return { output: String(invocation.arguments.value), exitCode: 0 };
       },
-    ],
-    execute: async (invocation) => {
-      executedSignals.push(invocation.signal);
-      return { output: String(invocation.arguments.value), exitCode: 0 };
-    },
-  };
-  const environment = testToolEnvironment({
-    providers: [new ShellToolRuntime()],
+    }),
+  ]);
+  const environment = new ToolEnvironment({
+    runtimes: [new ShellToolRuntime()],
   });
   let round = 0;
   const model: ModelAdapter = {
@@ -342,7 +336,7 @@ test("provider definitions appear and disappear on consecutive model samples", a
       sampledTools.push(request.tools.map((tool) => tool.name));
       if (round === 0) {
         round += 1;
-        environment.registerBundle(testToolBundle(provider));
+        environment.registerBundle(bundle);
         yield {
           type: "tool_call",
           callId: "builtin-call",
@@ -370,7 +364,7 @@ test("provider definitions appear and disappear on consecutive model samples", a
     await server.startTurn(thread.id, "dynamic providers", {
       requestApproval: async (request) => {
         if (request.callId === "plugin-call") {
-          environment.removeBundle(provider.identity);
+          environment.unregisterBundle(bundle.identity);
         }
         return "accept";
       },
@@ -399,8 +393,8 @@ test("provider definitions appear and disappear on consecutive model samples", a
 });
 
 test("full access bypasses approval and ask unknown persists allow and deny", async () => {
-  const provider = countingProvider("external_lookup");
-  const fullAccessEnvironment = testToolEnvironment({ providers: [provider] });
+  const bundle = countingBundle("external_lookup");
+  const fullAccessEnvironment = new ToolEnvironment({ bundles: [bundle] });
   let fullAccessApprovals = 0;
   const fullAccess = createServer(
     modelCalling("external_lookup"),
@@ -417,14 +411,14 @@ test("full access bypasses approval and ask unknown persists allow and deny", as
     })
   ).done;
   assert.equal(fullAccessApprovals, 0);
-  assert.equal(provider.executions(), 1);
+  assert.equal(bundle.executions(), 1);
 
   const approvedTools = new Set<string>();
   const deniedTools = new Set<string>();
   const policyStore = new SetToolPolicyStore({ approvedTools, deniedTools });
-  const allowedProvider = countingProvider("plugin_allowed");
-  const allowedEnvironment = testToolEnvironment({
-    providers: [allowedProvider],
+  const allowedBundle = countingBundle("plugin_allowed");
+  const allowedEnvironment = new ToolEnvironment({
+    bundles: [allowedBundle],
     policyStore,
   });
   let allowApprovals = 0;
@@ -446,11 +440,11 @@ test("full access bypasses approval and ask unknown persists allow and deny", as
   }
   assert.equal(allowApprovals, 1);
   assert.deepEqual([...approvedTools], ["plugin_allowed"]);
-  assert.equal(allowedProvider.executions(), 2);
+  assert.equal(allowedBundle.executions(), 2);
 
-  const deniedProvider = countingProvider("plugin_denied");
-  const deniedEnvironment = testToolEnvironment({
-    providers: [deniedProvider],
+  const deniedBundle = countingBundle("plugin_denied");
+  const deniedEnvironment = new ToolEnvironment({
+    bundles: [deniedBundle],
     policyStore,
   });
   let denyApprovals = 0;
@@ -473,25 +467,19 @@ test("full access bypasses approval and ask unknown persists allow and deny", as
   const deniedSnapshot = await denied.readThread(deniedThread.id);
   assert.equal(denyApprovals, 1);
   assert.deepEqual([...deniedTools], ["plugin_denied"]);
-  assert.equal(deniedProvider.executions(), 0);
+  assert.equal(deniedBundle.executions(), 0);
   assertEveryToolCallHasOneResult(deniedSnapshot.items);
 });
 
-test("interrupt sends the exact runtime signal to the admitted provider", async () => {
+test("interrupt sends the exact runtime signal to the admitted runtime", async () => {
   let started!: () => void;
   const executionStarted = new Promise<void>((resolve) => {
     started = resolve;
   });
   let receivedSignal: AbortSignal | undefined;
-  const provider: TestToolProvider = {
-    identity: { kind: "external", id: "waiter" },
-    definitions: [
-      {
-        name: "external_wait",
-        description: "Wait for cancellation.",
-        inputSchema: { type: "object" },
-      },
-    ],
+  const runtime = testToolRuntime({
+    name: "external_wait",
+    description: "Wait for cancellation.",
     execute: async (invocation) => {
       receivedSignal = invocation.signal;
       started();
@@ -503,10 +491,12 @@ test("interrupt sends the exact runtime signal to the admitted provider", async 
         );
       });
     },
-  };
+  });
   const server = createServer(
     modelCalling("external_wait"),
-    testToolEnvironment({ providers: [provider] }),
+    new ToolEnvironment({
+      bundles: [testToolBundle({ kind: "external", id: "waiter" }, [runtime])],
+    }),
     "never",
   );
   const thread = await server.startThread();
@@ -572,23 +562,20 @@ function modelCalling(toolName: string): ModelAdapter {
   };
 }
 
-function countingProvider(toolName: string): TestToolProvider & {
+function countingBundle(toolName: string): ReturnType<typeof testToolBundle> & {
   executions(): number;
 } {
   let count = 0;
   return {
-    identity: { kind: "plugin", id: toolName },
-    definitions: [
-      {
+    ...testToolBundle({ kind: "plugin", id: toolName }, [
+      testToolRuntime({
         name: toolName,
-        description: "Fixture tool.",
-        inputSchema: { type: "object" },
-      },
-    ],
-    execute: async () => {
-      count += 1;
-      return { output: "fixture", exitCode: 0 };
-    },
+        execute: async () => {
+          count += 1;
+          return { output: "fixture", exitCode: 0 };
+        },
+      }),
+    ]),
     executions: () => count,
   };
 }

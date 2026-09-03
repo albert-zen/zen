@@ -17,14 +17,11 @@ import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import {
   ShellToolRuntime,
   ToolEnvironment,
+  type ToolBundle,
   type ToolExecutionResult,
+  type ToolRuntime,
 } from "../src/tool.js";
-import {
-  testToolBundle,
-  testToolEnvironment,
-  type TestToolProvider,
-  type TestToolSource,
-} from "./tool-fixtures.js";
+import { testToolBundle, testToolRuntime } from "./tool-fixtures.js";
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -104,7 +101,8 @@ function assertEveryToolCallHasOneResult(
 
 function runtimeServer(options: {
   model: ModelAdapter;
-  providers: readonly TestToolSource[];
+  runtimes?: readonly ToolRuntime[];
+  bundles?: readonly ToolBundle[];
   maxConcurrentToolBodies?: number;
   approvalPolicy?: "always" | "never";
 }): ZenAppServer {
@@ -112,7 +110,12 @@ function runtimeServer(options: {
   return new ZenAppServer({
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
-      toolEnvironment: testToolEnvironment({ providers: options.providers }),
+      toolEnvironment: new ToolEnvironment({
+        ...(options.runtimes === undefined
+          ? {}
+          : { runtimes: options.runtimes }),
+        ...(options.bundles === undefined ? {} : { bundles: options.bundles }),
+      }),
       ...(options.maxConcurrentToolBodies === undefined
         ? {}
         : { maxConcurrentToolBodies: options.maxConcurrentToolBodies }),
@@ -142,34 +145,30 @@ test("parallel-safe bodies overlap while canonical results keep submission order
   const releaseFirst = deferred<void>();
   const releaseSecond = deferred<void>();
   const secondFinished = deferred<void>();
-  const provider = {
-    identity: { kind: "external", id: "parallel" },
-    definitions: [
-      {
-        name: "parallel",
-        description: "Controlled parallel fixture.",
-        inputSchema: { type: "object" },
+  const bundle = testToolBundle({ kind: "external", id: "parallel" }, [
+    testToolRuntime({
+      name: "parallel",
+      description: "Controlled parallel fixture.",
+      executionMode: "parallel_safe",
+      execute: async (invocation): Promise<ToolExecutionResult> => {
+        if (invocation.callId === "first") {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        } else {
+          secondStarted.resolve();
+          await releaseSecond.promise;
+          secondFinished.resolve();
+        }
+        return { output: invocation.callId, exitCode: 0 };
       },
-    ],
-    executionModes: { parallel: "parallel_safe" },
-    execute: async (invocation): Promise<ToolExecutionResult> => {
-      if (invocation.callId === "first") {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      } else {
-        secondStarted.resolve();
-        await releaseSecond.promise;
-        secondFinished.resolve();
-      }
-      return { output: invocation.callId, exitCode: 0 };
-    },
-  } satisfies TestToolProvider;
+    }),
+  ]);
   const server = runtimeServer({
     model: batchModel([
       { callId: "first", name: "parallel" },
       { callId: "second", name: "parallel" },
     ]),
-    providers: [provider],
+    bundles: [bundle],
   });
   const thread = await server.startThread();
   const turn = await server.startTurn(thread.id, "parallel");
@@ -207,46 +206,43 @@ test("exclusive calls form FIFO barriers around parallel-safe bodies", async () 
   const releaseFirst = deferred<void>();
   const releaseBarrier = deferred<void>();
   const releaseLast = deferred<void>();
-  const provider: TestToolProvider = {
-    identity: { kind: "external", id: "barrier" },
-    definitions: [
-      {
-        name: "parallel",
-        description: "Parallel fixture.",
-        inputSchema: { type: "object" },
-      },
-      {
-        name: "barrier",
-        description: "Exclusive fixture.",
-        inputSchema: { type: "object" },
-      },
-    ],
-    executionModes: {
-      parallel: "parallel_safe",
-      barrier: "exclusive",
-    },
-    execute: async (invocation): Promise<ToolExecutionResult> => {
-      starts.push(invocation.callId);
-      if (invocation.callId === "first") {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      } else if (invocation.callId === "middle") {
-        barrierStarted.resolve();
-        await releaseBarrier.promise;
-      } else {
-        lastStarted.resolve();
-        await releaseLast.promise;
-      }
-      return { output: invocation.callId, exitCode: 0 };
-    },
+  const execute = async (
+    invocation: Parameters<ToolRuntime["execute"]>[0],
+  ): Promise<ToolExecutionResult> => {
+    starts.push(invocation.callId);
+    if (invocation.callId === "first") {
+      firstStarted.resolve();
+      await releaseFirst.promise;
+    } else if (invocation.callId === "middle") {
+      barrierStarted.resolve();
+      await releaseBarrier.promise;
+    } else {
+      lastStarted.resolve();
+      await releaseLast.promise;
+    }
+    return { output: invocation.callId, exitCode: 0 };
   };
+  const bundle = testToolBundle({ kind: "external", id: "barrier" }, [
+    testToolRuntime({
+      name: "parallel",
+      description: "Parallel fixture.",
+      executionMode: "parallel_safe",
+      execute,
+    }),
+    testToolRuntime({
+      name: "barrier",
+      description: "Exclusive fixture.",
+      executionMode: "exclusive",
+      execute,
+    }),
+  ]);
   const server = runtimeServer({
     model: batchModel([
       { callId: "first", name: "parallel" },
       { callId: "middle", name: "barrier" },
       { callId: "last", name: "parallel" },
     ]),
-    providers: [provider],
+    bundles: [bundle],
   });
   const thread = await server.startThread();
   const turn = await server.startTurn(thread.id, "barriers");
@@ -265,33 +261,29 @@ test("exclusive calls form FIFO barriers around parallel-safe bodies", async () 
   await within(turn.done, "the barrier Turn");
 });
 
-test("builtin shell and undeclared providers stay exclusive", async () => {
+test("builtin shell and undeclared runtimes stay exclusive", async () => {
   const starts: string[] = [];
   const firstStarted = deferred<void>();
   const secondStarted = deferred<void>();
   const releaseFirst = deferred<void>();
   const releaseSecond = deferred<void>();
-  const undeclared: TestToolProvider = {
-    identity: { kind: "external", id: "undeclared" },
-    definitions: [
-      {
-        name: "undeclared",
-        description: "No execution mode declaration.",
-        inputSchema: { type: "object" },
+  const undeclared = testToolBundle({ kind: "external", id: "undeclared" }, [
+    testToolRuntime({
+      name: "undeclared",
+      description: "No execution mode declaration.",
+      execute: async (invocation) => {
+        starts.push(invocation.callId);
+        if (invocation.callId === "first") {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        } else {
+          secondStarted.resolve();
+          await releaseSecond.promise;
+        }
+        return { output: invocation.callId, exitCode: 0 };
       },
-    ],
-    execute: async (invocation) => {
-      starts.push(invocation.callId);
-      if (invocation.callId === "first") {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      } else {
-        secondStarted.resolve();
-        await releaseSecond.promise;
-      }
-      return { output: invocation.callId, exitCode: 0 };
-    },
-  };
+    }),
+  ]);
   const server = runtimeServer({
     model: batchModel([
       { callId: "first", name: "undeclared" },
@@ -302,7 +294,8 @@ test("builtin shell and undeclared providers stay exclusive", async () => {
       },
       { callId: "second", name: "undeclared" },
     ]),
-    providers: [undeclared, new ShellToolRuntime()],
+    bundles: [undeclared],
+    runtimes: [new ShellToolRuntime()],
   });
   const thread = await server.startThread();
   const turn = await server.startTurn(thread.id, "fail closed");
@@ -327,7 +320,7 @@ test("the default body cap is eight and a configured cap must be positive", asyn
     assert.throws(
       () =>
         new AgentRuntime({
-          toolEnvironment: testToolEnvironment(),
+          toolEnvironment: new ToolEnvironment(),
           maxConcurrentToolBodies: invalid,
         }),
       /positive safe integer/u,
@@ -340,27 +333,23 @@ test("the default body cap is eight and a configured cap must be positive", asyn
   let starts = 0;
   let active = 0;
   let maxActive = 0;
-  const provider: TestToolProvider = {
-    identity: { kind: "external", id: "default-cap" },
-    definitions: [
-      {
-        name: "parallel",
-        description: "Default cap fixture.",
-        inputSchema: { type: "object" },
+  const bundle = testToolBundle({ kind: "external", id: "default-cap" }, [
+    testToolRuntime({
+      name: "parallel",
+      description: "Default cap fixture.",
+      executionMode: "parallel_safe",
+      execute: async () => {
+        starts += 1;
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        if (starts === 8) eightStarted.resolve();
+        if (starts === 9) allStarted.resolve();
+        await release.promise;
+        active -= 1;
+        return { output: "ok", exitCode: 0 };
       },
-    ],
-    executionModes: { parallel: "parallel_safe" },
-    execute: async () => {
-      starts += 1;
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      if (starts === 8) eightStarted.resolve();
-      if (starts === 9) allStarted.resolve();
-      await release.promise;
-      active -= 1;
-      return { output: "ok", exitCode: 0 };
-    },
-  };
+    }),
+  ]);
   const server = runtimeServer({
     model: batchModel(
       Array.from({ length: 9 }, (_, index) => ({
@@ -368,7 +357,7 @@ test("the default body cap is eight and a configured cap must be positive", asyn
         name: "parallel",
       })),
     ),
-    providers: [provider],
+    bundles: [bundle],
   });
   const thread = await server.startThread();
   const turn = await server.startTurn(thread.id, "default cap");
@@ -391,28 +380,25 @@ test("nested Promise.all shares the cap while outer run_code holds no child slot
   let starts = 0;
   let active = 0;
   let maxActive = 0;
-  const child: TestToolProvider = {
-    identity: { kind: "external", id: "nested-cap" },
-    definitions: [
-      {
-        name: "child",
-        description: "Nested cap fixture.",
-        inputSchema: { type: "object" },
+  const child = testToolBundle({ kind: "external", id: "nested-cap" }, [
+    testToolRuntime({
+      name: "child",
+      description: "Nested cap fixture.",
+      executionMode: "parallel_safe",
+      execute: async (invocation) => {
+        starts += 1;
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        const sequence = Number(invocation.arguments.sequence);
+        if (starts === 2) twoStarted.resolve();
+        if (starts === 3) thirdStarted.resolve();
+        await [releaseFirst, releaseSecond, releaseThird][sequence - 1]!
+          .promise;
+        active -= 1;
+        return { output: String(sequence), exitCode: 0 };
       },
-    ],
-    executionModes: { child: "parallel_safe" },
-    execute: async (invocation) => {
-      starts += 1;
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      const sequence = Number(invocation.arguments.sequence);
-      if (starts === 2) twoStarted.resolve();
-      if (starts === 3) thirdStarted.resolve();
-      await [releaseFirst, releaseSecond, releaseThird][sequence - 1]!.promise;
-      active -= 1;
-      return { output: String(sequence), exitCode: 0 };
-    },
-  };
+    }),
+  ]);
   const server = runtimeServer({
     model: batchModel([
       {
@@ -431,7 +417,8 @@ test("nested Promise.all shares the cap while outer run_code holds no child slot
         },
       },
     ]),
-    providers: [child, new RunCodeToolRuntime()],
+    bundles: [child],
+    runtimes: [new RunCodeToolRuntime()],
     maxConcurrentToolBodies: 2,
   });
   const thread = await server.startThread();
@@ -474,56 +461,50 @@ test("both presentation freezes direct and nested capabilities through scheduler
   let active = 0;
   let maxActive = 0;
   let hiddenExecutions = 0;
-  const visible: TestToolProvider = {
-    identity: { kind: "external", id: "visible" },
-    definitions: [
-      {
-        name: "visible_child",
-        description: "Frozen scheduler fixture.",
-        inputSchema: {
-          type: "object",
-          properties: { sequence: { type: "number" } },
-          required: ["sequence"],
-          additionalProperties: false,
-        },
+  const visible = testToolBundle({ kind: "external", id: "visible" }, [
+    testToolRuntime({
+      name: "visible_child",
+      description: "Frozen scheduler fixture.",
+      inputSchema: {
+        type: "object",
+        properties: { sequence: { type: "number" } },
+        required: ["sequence"],
+        additionalProperties: false,
       },
-    ],
-    executionModes: { visible_child: "parallel_safe" },
-    execute: async (invocation) => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      if (invocation.callId === "direct-visible") {
-        directStarted.resolve();
-        await releaseDirect.promise;
-      } else {
-        nestedStarts += 1;
-        if (nestedStarts === 2) twoNestedStarted.resolve();
-        await releaseNested.promise;
-      }
-      active -= 1;
-      return {
-        output: String(invocation.arguments.sequence),
-        exitCode: 0,
-      };
-    },
-  };
-  const hidden: TestToolProvider = {
-    identity: { kind: "external", id: "late-hidden" },
-    definitions: [
-      {
-        name: "late_hidden",
-        description: "Registered after the sample freezes.",
-        inputSchema: { type: "object" },
+      executionMode: "parallel_safe",
+      execute: async (invocation) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        if (invocation.callId === "direct-visible") {
+          directStarted.resolve();
+          await releaseDirect.promise;
+        } else {
+          nestedStarts += 1;
+          if (nestedStarts === 2) twoNestedStarted.resolve();
+          await releaseNested.promise;
+        }
+        active -= 1;
+        return {
+          output: String(invocation.arguments.sequence),
+          exitCode: 0,
+        };
       },
-    ],
-    executionModes: { late_hidden: "parallel_safe" },
-    execute: async () => {
-      hiddenExecutions += 1;
-      return { output: "hidden", exitCode: 0 };
-    },
-  };
-  const environment = testToolEnvironment({
-    providers: [visible, new RunCodeToolRuntime()],
+    }),
+  ]);
+  const hidden = testToolBundle({ kind: "external", id: "late-hidden" }, [
+    testToolRuntime({
+      name: "late_hidden",
+      description: "Registered after the sample freezes.",
+      executionMode: "parallel_safe",
+      execute: async () => {
+        hiddenExecutions += 1;
+        return { output: "hidden", exitCode: 0 };
+      },
+    }),
+  ]);
+  const environment = new ToolEnvironment({
+    bundles: [visible],
+    runtimes: [new RunCodeToolRuntime()],
   });
   const requests: ModelRequest[] = [];
   let sample = 0;
@@ -533,7 +514,7 @@ test("both presentation freezes direct and nested capabilities through scheduler
       requests.push(structuredClone(request));
       sample += 1;
       if (sample === 1) {
-        environment.registerBundle(testToolBundle(hidden));
+        environment.registerBundle(hidden);
         yield {
           type: "tool_call",
           callId: "direct-visible",
@@ -650,27 +631,23 @@ test("nested body results reach guest promises before ordered canonical commit",
   const firstStarted = deferred<void>();
   const thirdStarted = deferred<void>();
   const releaseFirst = deferred<void>();
-  const provider: TestToolProvider = {
-    identity: { kind: "external", id: "nested-result" },
-    definitions: [
-      {
-        name: "child",
-        description: "Nested result fixture.",
-        inputSchema: { type: "object" },
+  const bundle = testToolBundle({ kind: "external", id: "nested-result" }, [
+    testToolRuntime({
+      name: "child",
+      description: "Nested result fixture.",
+      executionMode: "parallel_safe",
+      execute: async (invocation) => {
+        const label = String(invocation.arguments.label);
+        if (label === "first") {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        } else if (label === "third") {
+          thirdStarted.resolve();
+        }
+        return { output: label, exitCode: 0 };
       },
-    ],
-    executionModes: { child: "parallel_safe" },
-    execute: async (invocation) => {
-      const label = String(invocation.arguments.label);
-      if (label === "first") {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      } else if (label === "third") {
-        thirdStarted.resolve();
-      }
-      return { output: label, exitCode: 0 };
-    },
-  };
+    }),
+  ]);
   const server = runtimeServer({
     model: batchModel([
       {
@@ -688,7 +665,8 @@ test("nested body results reach guest promises before ordered canonical commit",
         },
       },
     ]),
-    providers: [provider, new RunCodeToolRuntime()],
+    bundles: [bundle],
+    runtimes: [new RunCodeToolRuntime()],
     maxConcurrentToolBodies: 2,
   });
   const thread = await server.startThread();
@@ -712,32 +690,28 @@ test("parallel failure settles in order and does not suppress later calls", asyn
   const firstStarted = deferred<void>();
   const failed = deferred<void>();
   const releaseFirst = deferred<void>();
-  const provider: TestToolProvider = {
-    identity: { kind: "external", id: "failure" },
-    definitions: [
-      {
-        name: "parallel",
-        description: "Failure fixture.",
-        inputSchema: { type: "object" },
+  const bundle = testToolBundle({ kind: "external", id: "failure" }, [
+    testToolRuntime({
+      name: "parallel",
+      description: "Failure fixture.",
+      executionMode: "parallel_safe",
+      execute: async (invocation) => {
+        if (invocation.callId === "first") {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+          return { output: "first", exitCode: 0 };
+        }
+        failed.resolve();
+        throw new Error("fixture failure");
       },
-    ],
-    executionModes: { parallel: "parallel_safe" },
-    execute: async (invocation) => {
-      if (invocation.callId === "first") {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-        return { output: "first", exitCode: 0 };
-      }
-      failed.resolve();
-      throw new Error("fixture failure");
-    },
-  };
+    }),
+  ]);
   const server = runtimeServer({
     model: batchModel([
       { callId: "first", name: "parallel" },
       { callId: "failed", name: "parallel" },
     ]),
-    providers: [provider],
+    bundles: [bundle],
   });
   const thread = await server.startThread();
   const turn = await server.startTurn(thread.id, "failure");
@@ -766,48 +740,44 @@ test("abort settles every admitted parallel call once and leaves no body active"
   const releaseSecondAbort = deferred<void>();
   let starts = 0;
   let active = 0;
-  const provider: TestToolProvider = {
-    identity: { kind: "external", id: "abort" },
-    definitions: [
-      {
-        name: "parallel",
-        description: "Abort fixture.",
-        inputSchema: { type: "object" },
+  const bundle = testToolBundle({ kind: "external", id: "abort" }, [
+    testToolRuntime({
+      name: "parallel",
+      description: "Abort fixture.",
+      executionMode: "parallel_safe",
+      execute: async (invocation) => {
+        starts += 1;
+        active += 1;
+        if (starts === 2) bothStarted.resolve();
+        try {
+          return await new Promise<ToolExecutionResult>((_resolve, reject) => {
+            invocation.signal.addEventListener(
+              "abort",
+              () => {
+                if (invocation.callId === "second") {
+                  secondSawAbort.resolve();
+                  void releaseSecondAbort.promise.then(() =>
+                    reject(invocation.signal.reason),
+                  );
+                } else {
+                  reject(invocation.signal.reason);
+                }
+              },
+              { once: true },
+            );
+          });
+        } finally {
+          active -= 1;
+        }
       },
-    ],
-    executionModes: { parallel: "parallel_safe" },
-    execute: async (invocation) => {
-      starts += 1;
-      active += 1;
-      if (starts === 2) bothStarted.resolve();
-      try {
-        return await new Promise<ToolExecutionResult>((_resolve, reject) => {
-          invocation.signal.addEventListener(
-            "abort",
-            () => {
-              if (invocation.callId === "second") {
-                secondSawAbort.resolve();
-                void releaseSecondAbort.promise.then(() =>
-                  reject(invocation.signal.reason),
-                );
-              } else {
-                reject(invocation.signal.reason);
-              }
-            },
-            { once: true },
-          );
-        });
-      } finally {
-        active -= 1;
-      }
-    },
-  };
+    }),
+  ]);
   const server = runtimeServer({
     model: batchModel([
       { callId: "first", name: "parallel" },
       { callId: "second", name: "parallel" },
     ]),
-    providers: [provider],
+    bundles: [bundle],
   });
   const thread = await server.startThread();
   const turn = await server.startTurn(thread.id, "abort");
@@ -840,40 +810,39 @@ test("abort settles every admitted parallel call once and leaves no body active"
   assert.equal(snapshot.turns[0]?.status, "interrupted");
 });
 
-test("parallel-safe preparation leases survive provider removal while queued", async () => {
+test("parallel-safe preparation leases survive bundle removal while queued", async () => {
   const twoLeases = deferred<void>();
   const firstStarted = deferred<void>();
   const secondStarted = deferred<void>();
   const releaseFirst = deferred<void>();
   let leases = 0;
-  const provider: TestToolProvider = {
-    identity: { kind: "external", id: "leased" },
-    definitions: [
-      {
+  const bundle = testToolBundle(
+    { kind: "external", id: "leased" },
+    [
+      testToolRuntime({
         name: "parallel",
-        description: "Provider lease fixture.",
-        inputSchema: { type: "object" },
-      },
+        description: "Bundle lease fixture.",
+        executionMode: "parallel_safe",
+        execute: async (invocation) => {
+          if (invocation.callId === "first") {
+            firstStarted.resolve();
+            await releaseFirst.promise;
+          } else {
+            secondStarted.resolve();
+          }
+          return { output: invocation.callId, exitCode: 0 };
+        },
+      }),
     ],
-    executionModes: { parallel: "parallel_safe" },
-    retainPreparedInvocation: () => {
+    () => {
       leases += 1;
       if (leases === 2) twoLeases.resolve();
       return () => {
         leases -= 1;
       };
     },
-    execute: async (invocation) => {
-      if (invocation.callId === "first") {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      } else {
-        secondStarted.resolve();
-      }
-      return { output: invocation.callId, exitCode: 0 };
-    },
-  };
-  const environment = testToolEnvironment({ providers: [provider] });
+  );
+  const environment = new ToolEnvironment({ bundles: [bundle] });
   const catalog = new StaticModelCatalog([{ id: "model", isDefault: true }]);
   const model = batchModel([
     { callId: "first", name: "parallel" },
@@ -907,11 +876,11 @@ test("parallel-safe preparation leases survive provider removal while queued", a
 
   await within(firstStarted.promise, "the first leased body");
   await within(twoLeases.promise, "both preparation leases");
-  assert.equal(environment.unregisterBundle(provider.identity), true);
+  assert.equal(environment.unregisterBundle(bundle.identity), true);
   assert.equal(leases, 2);
   releaseFirst.resolve();
   await within(secondStarted.promise, "the queued leased body");
-  await within(turn.done, "the provider-removal Turn");
+  await within(turn.done, "the bundle-removal Turn");
   assert.equal(leases, 0);
   assertEveryToolCallHasOneResult((await server.readThread(thread.id)).items);
 });
@@ -922,35 +891,32 @@ test("outer admissions stay FIFO while an admitted parallel body runs", async ()
   const releaseFirstApproval = deferred<void>();
   const releaseBodies = deferred<void>();
   const approvals: string[] = [];
-  const provider: TestToolProvider = {
-    identity: { kind: "external", id: "admission" },
-    definitions: [
-      {
-        name: "first_tool",
-        description: "First admission fixture.",
-        inputSchema: { type: "object" },
-      },
-      {
-        name: "second_tool",
-        description: "Second admission fixture.",
-        inputSchema: { type: "object" },
-      },
-    ],
-    executionModes: {
-      first_tool: "parallel_safe",
-      second_tool: "parallel_safe",
-    },
-    execute: async (invocation) => {
-      await releaseBodies.promise;
-      return { output: invocation.name, exitCode: 0 };
-    },
+  const execute = async (
+    invocation: Parameters<ToolRuntime["execute"]>[0],
+  ): Promise<ToolExecutionResult> => {
+    await releaseBodies.promise;
+    return { output: invocation.name, exitCode: 0 };
   };
+  const bundle = testToolBundle({ kind: "external", id: "admission" }, [
+    testToolRuntime({
+      name: "first_tool",
+      description: "First admission fixture.",
+      executionMode: "parallel_safe",
+      execute,
+    }),
+    testToolRuntime({
+      name: "second_tool",
+      description: "Second admission fixture.",
+      executionMode: "parallel_safe",
+      execute,
+    }),
+  ]);
   const server = runtimeServer({
     model: batchModel([
       { callId: "first", name: "first_tool" },
       { callId: "second", name: "second_tool" },
     ]),
-    providers: [provider],
+    bundles: [bundle],
     approvalPolicy: "always",
   });
   const thread = await server.startThread();
@@ -982,28 +948,24 @@ test("sibling run_code calls are serial composite barriers", async () => {
   const secondStarted = deferred<void>();
   const releaseFirst = deferred<void>();
   const starts: string[] = [];
-  const child: TestToolProvider = {
-    identity: { kind: "external", id: "composite-child" },
-    definitions: [
-      {
-        name: "child",
-        description: "Composite child fixture.",
-        inputSchema: { type: "object" },
+  const child = testToolBundle({ kind: "external", id: "composite-child" }, [
+    testToolRuntime({
+      name: "child",
+      description: "Composite child fixture.",
+      executionMode: "parallel_safe",
+      execute: async (invocation) => {
+        const label = String(invocation.arguments.label);
+        starts.push(label);
+        if (label === "first") {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        } else {
+          secondStarted.resolve();
+        }
+        return { output: label, exitCode: 0 };
       },
-    ],
-    executionModes: { child: "parallel_safe" },
-    execute: async (invocation) => {
-      const label = String(invocation.arguments.label);
-      starts.push(label);
-      if (label === "first") {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      } else {
-        secondStarted.resolve();
-      }
-      return { output: label, exitCode: 0 };
-    },
-  };
+    }),
+  ]);
   const server = runtimeServer({
     model: batchModel([
       {
@@ -1023,7 +985,8 @@ test("sibling run_code calls are serial composite barriers", async () => {
         },
       },
     ]),
-    providers: [child, new RunCodeToolRuntime()],
+    bundles: [child],
+    runtimes: [new RunCodeToolRuntime()],
     maxConcurrentToolBodies: 1,
   });
   const thread = await server.startThread();

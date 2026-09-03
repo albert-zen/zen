@@ -40,12 +40,12 @@ import {
   JsonlThreadMetadataStore,
   type ThreadMetadataStore,
 } from "../src/thread-metadata.js";
-import { ShellToolRuntime, type ToolRuntime } from "../src/tool.js";
 import {
-  testExecutorEnvironment,
-  testToolEnvironment,
-  type TestToolExecutor,
-} from "./tool-fixtures.js";
+  ShellToolRuntime,
+  ToolEnvironment,
+  type ToolRuntime,
+} from "../src/tool.js";
+import { testToolBundle, testToolRuntime } from "./tool-fixtures.js";
 
 function createServer(
   options: {
@@ -54,7 +54,7 @@ function createServer(
     model?: ModelAdapter;
     modelCatalog?: ModelCatalog;
     threadMetadata?: ThreadMetadataStore;
-    tools?: TestToolExecutor | ToolRuntime;
+    tools?: ToolRuntime;
     idFactory?: () => string;
     runtimeIdFactory?: () => string;
     runtime?: AgentRuntime;
@@ -71,10 +71,15 @@ function createServer(
       new AgentRuntime({
         toolEnvironment:
           options.tools === undefined
-            ? testToolEnvironment({ providers: [new ShellToolRuntime()] })
-            : "specification" in options.tools
-              ? testToolEnvironment({ providers: [options.tools] })
-              : testExecutorEnvironment(options.tools),
+            ? new ToolEnvironment({ runtimes: [new ShellToolRuntime()] })
+            : new ToolEnvironment({
+                bundles: [
+                  testToolBundle(
+                    { kind: "external", id: `fixture-${options.tools.name}` },
+                    [options.tools],
+                  ),
+                ],
+              }),
         ...(options.runtimeIdFactory === undefined
           ? {}
           : { idFactory: options.runtimeIdFactory }),
@@ -157,16 +162,11 @@ test("preserves credential-matching model and tool trace strings verbatim", asyn
       };
     },
   };
-  const tools: TestToolExecutor = {
-    definitions: [
-      {
-        name: credentialBytes,
-        description: "Return captured trace bytes.",
-        inputSchema: { type: "object" },
-      },
-    ],
+  const tools = testToolRuntime({
+    name: credentialBytes,
+    description: "Return captured trace bytes.",
     execute: async () => ({ output: credentialBytes, exitCode: 0 }),
-  };
+  });
   const emittedDeltas: string[] = [];
   const server = createServer({ model, tools });
   server.subscribe((event) => {
@@ -283,16 +283,11 @@ test("persists opaque reasoning semantics and derives replay selection", async (
       yield { type: "text_delta", delta: "done" };
     },
   };
-  const tools: TestToolExecutor = {
-    definitions: [
-      {
-        name: "restart_tool",
-        description: "Return a stable result.",
-        inputSchema: { type: "object" },
-      },
-    ],
+  const tools = testToolRuntime({
+    name: "restart_tool",
+    description: "Return a stable result.",
     execute: async () => ({ output: "restarted", exitCode: 0 }),
-  };
+  });
 
   try {
     const first = createServer({ journal, model, tools });
@@ -827,13 +822,13 @@ function createTwoCallModel(): ModelAdapter {
   };
 }
 
-function createStubTools(
-  execute: TestToolExecutor["execute"],
-): TestToolExecutor {
-  return {
-    definitions: [new ShellToolRuntime().specification],
+function createStubTools(execute: ToolRuntime["execute"]): ToolRuntime {
+  return testToolRuntime({
+    name: "shell",
+    description: new ShellToolRuntime().specification.description,
+    inputSchema: new ShellToolRuntime().specification.inputSchema,
     execute,
-  };
+  });
 }
 
 function assertEveryToolCallHasOneResult(
@@ -970,16 +965,11 @@ test("allows more than eight tool rounds when no maximum is configured", async (
       yield { type: "text_delta", delta: "finished" };
     },
   };
-  const tools: TestToolExecutor = {
-    definitions: [
-      {
-        name: "continue",
-        description: "Continue the deterministic fixture.",
-        inputSchema: { type: "object" },
-      },
-    ],
+  const tools = testToolRuntime({
+    name: "continue",
+    description: "Continue the deterministic fixture.",
     execute: async () => ({ output: "continue", exitCode: 0 }),
-  };
+  });
   const server = createServer({ model, tools });
   const thread = await server.startThread();
 
@@ -1014,18 +1004,15 @@ test("honors an explicitly configured maximum tool round count", async () => {
       };
     },
   };
-  const tools: TestToolExecutor = {
-    definitions: [
-      {
-        name: "continue",
-        description: "Continue the deterministic fixture.",
-        inputSchema: { type: "object" },
-      },
-    ],
+  const tools = testToolRuntime({
+    name: "continue",
+    description: "Continue the deterministic fixture.",
     execute: async () => ({ output: "continue", exitCode: 0 }),
-  };
+  });
   const runtime = new AgentRuntime({
-    toolEnvironment: testExecutorEnvironment(tools),
+    toolEnvironment: new ToolEnvironment({
+      bundles: [testToolBundle({ kind: "external", id: "continue" }, [tools])],
+    }),
     maxToolRounds: 2,
   });
   const server = createServer({ model, runtime });
@@ -1050,7 +1037,11 @@ test("honors an explicitly configured maximum tool round count", async () => {
     assert.throws(
       () =>
         new AgentRuntime({
-          toolEnvironment: testExecutorEnvironment(tools),
+          toolEnvironment: new ToolEnvironment({
+            bundles: [
+              testToolBundle({ kind: "external", id: "continue" }, [tools]),
+            ],
+          }),
           maxToolRounds: invalid,
         }),
       /Maximum tool rounds/u,
@@ -1946,8 +1937,8 @@ test("waits for a terminal predecessor handle to settle before starting its succ
     }
   }
   const runtime = new DelayedSettlementRuntime({
-    toolEnvironment: testToolEnvironment({
-      providers: [new ShellToolRuntime()],
+    toolEnvironment: new ToolEnvironment({
+      runtimes: [new ShellToolRuntime()],
     }),
   });
   const server = createServer({ runtime });
@@ -2007,8 +1998,8 @@ test("does not let a rejected terminal predecessor handle reject successor admis
     }
   }
   const runtime = new RejectedSettlementRuntime({
-    toolEnvironment: testToolEnvironment({
-      providers: [new ShellToolRuntime()],
+    toolEnvironment: new ToolEnvironment({
+      runtimes: [new ShellToolRuntime()],
     }),
   });
   const server = createServer({ runtime });
@@ -2408,18 +2399,13 @@ test("soft steer waits behind a tool result and does not cancel approval", async
       yield { type: "text_delta", delta: "done after correction" };
     },
   };
-  const tools: TestToolExecutor = {
-    definitions: [
-      {
-        name: "shell",
-        description: "shell",
-        inputSchema: { type: "object" },
-      },
-    ],
+  const tools = testToolRuntime({
+    name: "shell",
+    description: "shell",
     async execute() {
       return { output: "tool complete", exitCode: 0 };
     },
-  };
+  });
   const server = createServer({
     model,
     tools,

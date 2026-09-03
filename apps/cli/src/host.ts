@@ -125,6 +125,15 @@ export type HostedZenAppServer = ZenAppServer & {
 export function createHostedAppServer(
   options: ZenHostOptions,
 ): HostedZenAppServer {
+  if (
+    options.toolEnvironment?.definitions.some(
+      (definition) => definition.name === "apply_patch",
+    )
+  ) {
+    throw new Error(
+      "Tool name apply_patch is reserved for the builtin runtime",
+    );
+  }
   const attachments =
     options.attachments ??
     new FileAttachmentStore(path.join(options.dataDirectory, "attachments"));
@@ -212,16 +221,10 @@ export function createHostedAppServer(
         }),
       ],
     });
-  if (
-    !toolEnvironment.definitions.some(
-      (definition) => definition.name === "apply_patch",
-    )
-  ) {
-    toolEnvironment.registerRuntime(new ApplyPatchToolRuntime(), {
-      kind: "builtin",
-      id: "apply-patch",
-    });
-  }
+  toolEnvironment.registerRuntime(new ApplyPatchToolRuntime(), {
+    kind: "builtin",
+    id: "apply-patch",
+  });
   if (codeRuntime.runtime !== undefined) {
     toolEnvironment.registerRuntime(codeRuntime.runtime, {
       kind: "builtin",

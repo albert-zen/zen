@@ -22,8 +22,7 @@ import { projectThread } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
 import { Thread } from "../src/thread.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
-import { ShellToolRuntime } from "../src/tool.js";
-import { testToolEnvironment } from "./tool-fixtures.js";
+import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 
 const SUMMARY_MARKER = "ZEN_CONTEXT_COMPACTION_V1";
 
@@ -1052,8 +1051,8 @@ function createServer(options: {
     runtime:
       options.runtime ??
       new AgentRuntime({
-        toolEnvironment: testToolEnvironment({
-          providers: [new ShellToolRuntime()],
+        toolEnvironment: new ToolEnvironment({
+          runtimes: [new ShellToolRuntime()],
         }),
       }),
     providerRegistry: new ProviderRegistry([
@@ -1081,8 +1080,8 @@ class MalformedCompactionRuntime extends AgentRuntime {
 
   constructor(override: Record<string, unknown>) {
     super({
-      toolEnvironment: testToolEnvironment({
-        providers: [new ShellToolRuntime()],
+      toolEnvironment: new ToolEnvironment({
+        runtimes: [new ShellToolRuntime()],
       }),
     });
     this.#override = override;

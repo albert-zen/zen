@@ -24,8 +24,7 @@ import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { isRecord, type JsonRpcMessage } from "../src/protocol/codex/wire.js";
 import { AgentRuntime } from "../src/runtime.js";
-import { ShellToolRuntime } from "../src/tool.js";
-import { testToolEnvironment } from "./tool-fixtures.js";
+import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 
 function testHost(
   approvalPolicy: "always" | "never" = "never",
@@ -48,8 +47,8 @@ function modelTestHost(model: ModelAdapter): ZenAppServer {
   return new ZenAppServer({
     journal: new InMemoryThreadJournal(),
     runtime: new AgentRuntime({
-      toolEnvironment: testToolEnvironment({
-        providers: [new ShellToolRuntime()],
+      toolEnvironment: new ToolEnvironment({
+        runtimes: [new ShellToolRuntime()],
       }),
     }),
     providerRegistry: new ProviderRegistry([

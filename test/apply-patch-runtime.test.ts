@@ -182,6 +182,50 @@ test(
   },
 );
 
+test("apply_patch honors the fixed-source end-of-file marker and its blank boundary", async () => {
+  await withTempDirectory(async (cwd) => {
+    await writeFile(path.join(cwd, "end.txt"), "first\nlast\n", "utf8");
+    const result = await execute(
+      cwd,
+      `*** Begin Patch
+*** Update File: end.txt
+@@
+-last
++LAST
+*** End of File
+
+*** End Patch`,
+    );
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(
+      await readFile(path.join(cwd, "end.txt"), "utf8"),
+      "first\nLAST\n",
+    );
+  });
+});
+
+test("apply_patch rejects invalid UTF-8 before modifying any file", async () => {
+  await withTempDirectory(async (cwd) => {
+    const filePath = path.join(cwd, "invalid.txt");
+    const bytes = Buffer.from([0xff, 0xfe, 0xfd]);
+    await writeFile(filePath, bytes);
+    const result = await execute(
+      cwd,
+      `*** Begin Patch
+*** Update File: invalid.txt
+@@
+-old
++new
+*** End Patch`,
+    );
+
+    assert.equal(result.exitCode, 1);
+    assert.match(result.output, /not valid UTF-8/u);
+    assert.deepEqual(await readFile(filePath), bytes);
+  });
+});
+
 async function execute(cwd: string, patch: string) {
   return await new ApplyPatchToolRuntime().execute({
     callId: "call",

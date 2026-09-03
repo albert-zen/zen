@@ -354,10 +354,6 @@ export class ToolEnvironment {
     return this.#unregisterRegistration(key, registration);
   }
 
-  removeBundle(identity: ToolBundleIdentity): boolean {
-    return this.unregisterBundle(identity);
-  }
-
   #unregisterRegistration(
     key: string,
     registration: BundleRegistration,
@@ -479,7 +475,9 @@ export class ToolEnvironment {
     try {
       prepared.invocation.signal.throwIfAborted();
       const result =
-        nested !== undefined && isCompositeToolRuntime(runtime)
+        nested !== undefined &&
+        prepared.owner.kind === "builtin" &&
+        isCompositeToolRuntime(runtime)
           ? await runtime.executeComposite(prepared.invocation, nested)
           : await runtime.execute(prepared.invocation);
       try {

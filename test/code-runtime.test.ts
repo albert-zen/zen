@@ -37,11 +37,7 @@ import {
   type NestedToolInvocationPort,
   type ToolExecutionResult,
 } from "../src/tool.js";
-import {
-  testToolBundle,
-  testToolEnvironment,
-  type TestToolProvider,
-} from "./tool-fixtures.js";
+import { testToolBundle, testToolRuntime } from "./tool-fixtures.js";
 
 function runtimeServer(options: {
   model: ModelAdapter;
@@ -181,8 +177,8 @@ test("public runtime seam executes TypeScript, Node authority, nested shell, and
       }
     },
   };
-  const environment = testToolEnvironment({
-    providers: [
+  const environment = new ToolEnvironment({
+    runtimes: [
       new ShellToolRuntime(),
       new RunCodeToolRuntime(new CodeRuntime()),
     ],
@@ -275,22 +271,19 @@ test("public runtime seam executes TypeScript, Node authority, nested shell, and
 
 test("a run_code Worker cannot guess a tool omitted from its frozen sample", async () => {
   let hiddenExecutions = 0;
-  const hidden: TestToolProvider = {
-    identity: { kind: "plugin", id: "hidden" },
-    definitions: [
-      {
-        name: "hidden_tool",
-        description: "Must be disclosed first",
-        inputSchema: { type: "object" },
+  const hidden = testToolBundle({ kind: "plugin", id: "hidden" }, [
+    testToolRuntime({
+      name: "hidden_tool",
+      description: "Must be disclosed first",
+      execute: async () => {
+        hiddenExecutions += 1;
+        return { output: "secret", exitCode: 0 };
       },
-    ],
-    execute: async () => {
-      hiddenExecutions += 1;
-      return { output: "secret", exitCode: 0 };
-    },
-  };
-  const environment = testToolEnvironment({
-    providers: [hidden, new RunCodeToolRuntime()],
+    }),
+  ]);
+  const environment = new ToolEnvironment({
+    bundles: [hidden],
+    runtimes: [new RunCodeToolRuntime()],
   });
   let sample = 0;
   const model: ModelAdapter = {
@@ -371,18 +364,19 @@ test("a run_code Worker cannot guess a tool omitted from its frozen sample", asy
 
 test("direct calls use the sample name set even when the live registry changes", async () => {
   let executions = 0;
-  const lateProvider: TestToolProvider = {
-    identity: { kind: "external", id: "late" },
-    definitions: [
-      { name: "late_tool", description: "Late tool", inputSchema: {} },
-    ],
-    execute: async () => {
-      executions += 1;
-      return { output: "late", exitCode: 0 };
-    },
-  };
-  const environment = testToolEnvironment({
-    providers: [new ShellToolRuntime()],
+  const lateBundle = testToolBundle({ kind: "external", id: "late" }, [
+    testToolRuntime({
+      name: "late_tool",
+      description: "Late tool",
+      inputSchema: {},
+      execute: async () => {
+        executions += 1;
+        return { output: "late", exitCode: 0 };
+      },
+    }),
+  ]);
+  const environment = new ToolEnvironment({
+    runtimes: [new ShellToolRuntime()],
   });
   const samples: string[][] = [];
   let sample = 0;
@@ -392,7 +386,7 @@ test("direct calls use the sample name set even when the live registry changes",
       samples.push(request.tools.map(({ name }) => name));
       sample += 1;
       if (sample === 1) {
-        environment.registerBundle(testToolBundle(lateProvider));
+        environment.registerBundle(lateBundle);
         yield {
           type: "tool_call",
           callId: "same-sample-guess",
@@ -510,22 +504,16 @@ test("wall termination does not wait forever for a nested invocation that ignore
 });
 
 test("Runtime settles abort-ignoring observed children exactly once before the outer timeout", async () => {
-  const provider: TestToolProvider = {
-    identity: { kind: "external", id: "never-provider" },
-    definitions: [
-      {
-        name: "never.provider",
-        description: "Never settles",
-        inputSchema: { type: "object" },
-      },
-    ],
-    execute: async () => await new Promise<ToolExecutionResult>(() => {}),
-  };
-  const environment = testToolEnvironment({
-    providers: [
-      provider,
-      new RunCodeToolRuntime(new CodeRuntime({ wallTimeMs: 50 })),
-    ],
+  const bundle = testToolBundle({ kind: "external", id: "never-bundle" }, [
+    testToolRuntime({
+      name: "never.provider",
+      description: "Never settles",
+      execute: async () => await new Promise<ToolExecutionResult>(() => {}),
+    }),
+  ]);
+  const environment = new ToolEnvironment({
+    bundles: [bundle],
+    runtimes: [new RunCodeToolRuntime(new CodeRuntime({ wallTimeMs: 50 }))],
   });
   const server = runtimeServer({
     model: oneRunCodeModel(`
@@ -710,28 +698,25 @@ test("unawaited children are aborted and canonically abandoned before the outer 
     const { childName } = testCase;
     let executions = 0;
     let providerAborted = false;
-    const provider: TestToolProvider = {
-      identity: { kind: "external", id: childName },
-      definitions: [
-        {
-          name: childName,
-          description: childName,
-          inputSchema: { type: "object" },
+    const bundle = testToolBundle({ kind: "external", id: childName }, [
+      testToolRuntime({
+        name: childName,
+        description: childName,
+        execute: async (invocation) => {
+          executions += 1;
+          invocation.signal.addEventListener("abort", () => {
+            providerAborted = true;
+          });
+          if (childName === "never.child") {
+            return await new Promise<ToolExecutionResult>(() => {});
+          }
+          return { output: "too fast", exitCode: 0 };
         },
-      ],
-      execute: async (invocation) => {
-        executions += 1;
-        invocation.signal.addEventListener("abort", () => {
-          providerAborted = true;
-        });
-        if (childName === "never.child") {
-          return await new Promise<ToolExecutionResult>(() => {});
-        }
-        return { output: "too fast", exitCode: 0 };
-      },
-    };
-    const environment = testToolEnvironment({
-      providers: [provider, new RunCodeToolRuntime()],
+      }),
+    ]);
+    const environment = new ToolEnvironment({
+      bundles: [bundle],
+      runtimes: [new RunCodeToolRuntime()],
     });
     const server = runtimeServer({
       model: oneRunCodeModel(testCase.code),
@@ -781,9 +766,9 @@ test("unawaited children are aborted and canonically abandoned before the outer 
 test("outer admission is remembered while inherited child admission preserves deny", async () => {
   let approvals = 0;
   const policyStore = new InMemoryToolPolicyStore({ shell: "denied" });
-  const environment = testToolEnvironment({
+  const environment = new ToolEnvironment({
     policyStore,
-    providers: [new ShellToolRuntime(), new RunCodeToolRuntime()],
+    runtimes: [new ShellToolRuntime(), new RunCodeToolRuntime()],
   });
   const server = runtimeServer({
     model: oneRunCodeModel(
@@ -832,8 +817,8 @@ test("outer admission is remembered while inherited child admission preserves de
 
 test("declined outer run_code never starts a Worker", async () => {
   const missingWorker = new URL("file:///definitely/missing/worker.js");
-  const environment = testToolEnvironment({
-    providers: [
+  const environment = new ToolEnvironment({
+    runtimes: [
       new RunCodeToolRuntime(new CodeRuntime({ workerUrl: missingWorker })),
     ],
   });
@@ -867,8 +852,8 @@ test("wall containment aborts and settles a terminable nested child before outer
     "utf8",
   );
   const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)}`;
-  const environment = testToolEnvironment({
-    providers: [
+  const environment = new ToolEnvironment({
+    runtimes: [
       new ShellToolRuntime({ terminationGraceMs: 20 }),
       new RunCodeToolRuntime(new CodeRuntime({ wallTimeMs: 100 })),
     ],
@@ -911,20 +896,17 @@ test("wall containment aborts and settles a terminable nested child before outer
   }
 });
 
-test("nested provider result validation is still Runtime-owned", async () => {
-  const invalidProvider: TestToolProvider = {
-    identity: { kind: "plugin", id: "invalid" },
-    definitions: [
-      {
-        name: "invalid.result",
-        description: "invalid",
-        inputSchema: { type: "object" },
-      },
-    ],
-    execute: async () => ({ output: "bad", exitCode: 1.5 }),
-  };
-  const environment = testToolEnvironment({
-    providers: [invalidProvider, new RunCodeToolRuntime()],
+test("nested tool result validation is still Runtime-owned", async () => {
+  const invalidBundle = testToolBundle({ kind: "plugin", id: "invalid" }, [
+    testToolRuntime({
+      name: "invalid.result",
+      description: "invalid",
+      execute: async () => ({ output: "bad", exitCode: 1.5 }),
+    }),
+  ]);
+  const environment = new ToolEnvironment({
+    bundles: [invalidBundle],
+    runtimes: [new RunCodeToolRuntime()],
   });
   const server = runtimeServer({
     model: oneRunCodeModel(
@@ -948,8 +930,8 @@ test("nested provider result validation is still Runtime-owned", async () => {
 test("parent validation, restart replay, context filtering, and compaction closure stay canonical", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-run-code-replay-"));
   const journal = new JsonlThreadJournal(root);
-  const environment = testToolEnvironment({
-    providers: [new ShellToolRuntime(), new RunCodeToolRuntime()],
+  const environment = new ToolEnvironment({
+    runtimes: [new ShellToolRuntime(), new RunCodeToolRuntime()],
   });
   const model = oneRunCodeModel(
     `const result = await tools.shell({ command: "printf replay" }); text(result.output);`,

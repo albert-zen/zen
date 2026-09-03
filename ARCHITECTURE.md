@@ -392,10 +392,12 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   非零 exit code 形成该结果，继续执行同一模型响应中后续调用并进入下一次模型采样；
   不额外写 `failure` 或把 Turn 标记为 failed。
 - builtin `apply_patch` 是一个普通的 exclusive Tool Runtime：模型通过
-  `apply_patch({ patch })` 提交 Codex `*** Begin Patch` grammar，relative path 以 Thread cwd
-  解析，Add/Update/Move/Delete 在整包精确内容预检通过后才开始写盘。它与 shell/run_code
-  拥有相同机器权限并默认跟随 Node 文件 API 的 symlink 语义；预检失败不产生文件修改，
-  真正 I/O 失败可能留下已明确报告的提交前缀，不提供 durable filesystem transaction。
+  `apply_patch({ patch })` 提交 Codex-style supported subset，使用 Begin/End Patch 边界、
+  Add/Update/Move/Delete、`@@` exact context 与可选 `*** End of File`；不宣称复制
+  Codex 的完整宽松 parser。relative path 以 Thread cwd 解析，输入文件必须是 UTF-8，更新写回
+  LF；全部内容预检通过后才开始写盘。它与 shell/run_code 拥有相同机器权限并默认跟随 Node
+  文件 API 的 symlink 语义；预检失败不产生文件修改，真正 I/O 失败可能留下已明确报告的提交
+  前缀，不提供 durable filesystem transaction。
 - 显式用户取消或 Turn abort 仍是中断 Turn 的控制流；模型流、journal append、Runtime
   不变量等非工具局部失败仍按既有 Turn failure 语义终止，不能伪装成 tool result。
 
