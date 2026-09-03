@@ -68,6 +68,9 @@
   原生 summary 映射为兼容的 Codex Thread DTO，不反向定义 Zen 产品模型。
 - **ZenXThreadSummaryAdapter** — ZenX Electron main 通过既有 host-local 进程边界查询
   ZAS 原生 summary，并以 typed IPC 暴露给产品层，不拥有 Thread 语义或新增 wire method。
+- **ZenXThreadUsageProjection** — ZenX Electron main 从 canonical `model_usage`、
+  当前模型目录 `contextWindow` 和可重放模型消息投影展示用 usage / context pressure，
+  不进入 CAS schema、Agent 上下文或自动压缩决策。
 - **ZenXImageAttachmentProjection** — ZenX Electron main 通过既有 host-local 边界从 canonical
   `user_message` 投影按 Item 顺序排列的 `AttachmentRef`，并以只接受这些引用的 typed preload IPC
   导入和读取 Attachment Store payload；renderer 只持有草稿引用与短时 object URL，不取得任意文件读取权。
@@ -536,6 +539,9 @@ telemetry。`inputTokens` 始终是包含 cached 部分的 total input，uncache
 重放旧的重复 response usage 时 projection 也按 journal 顺序取最后一份，避免重复计数。即使 usage
 之后 request 失败，已经报告的最后一份 usage 仍须先落盘。Turn/Thread cache hit rate 只对报告
 cached 数据的 response 做 token-weighted 归约：`sum(cachedInputTokens) / sum(inputTokens)`。
+ZenX 的上下文占比读模型不能使用 Thread 累计 input tokens；它用最新未被 compaction 覆盖的
+Provider `inputTokens`，若 compaction 已经使该样本代表旧上下文，则用当前 `compileModelMessages`
+的固定轻量估算并在展示中标记 estimated。该估算只用于 UI 参考，不参与自动 compaction。
 
 手动 context compaction 只在没有 active / incomplete Turn 时取最新
 `turn_completed` 作为覆盖边界；调用者不能指定任意 Item。Zen 以 admission 时

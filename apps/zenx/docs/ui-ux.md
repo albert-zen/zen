@@ -152,9 +152,11 @@ New thread 可保留独立 row；它相对 Plugin spaces / Projects 的精确视
 - 如果完成后没有 Final Message，显示明确 fallback，不留下空 Turn。
 - Final Message 是完成结果，不能与中间 Agent Message 重复渲染。
 - Thread 顶部与每个 Turn metadata 使用一行弱化、紧凑的 usage 摘要展示 input/output tokens
-  与 cache hit rate。它只消费 Host 从 canonical ItemList 派生的 typed projection；当前产品
-  不需要为此新增 ZAS method 或 notification。cache rate 是仅对报告 cache 明细的 response 做 token-weighted
-  聚合；有 usage 但 Provider 未报告 cache 时显示 **Cache unknown**，不得显示 `0%`。
+  与 cache hit rate；Thread 顶部还展示当前模型上下文占比。它只消费 Host 从 canonical ItemList
+  和 host ModelCatalog 派生的 typed projection；当前产品不需要为此新增 ZAS method 或 notification。
+  cache rate 是仅对报告 cache 明细的 response 做 token-weighted 聚合；有 usage 但 Provider 未报告
+  cache 时显示 **Cache unknown**，不得显示 `0%`。context window 缺失时显示 Unknown；compaction
+  使最新 Provider usage 代表旧上下文后，可以用当前模型消息的轻量估算恢复占比，但必须标记 estimated。
 - usage 展示不包含费率、货币、成本、预算、图表或 pricing 配置；reasoning output tokens 即使
   Provider 报告也只属于 canonical usage 明细，不要求在当前紧凑摘要中展开。
 
@@ -359,8 +361,9 @@ ThreadView
 - [ ] Settings 使用左下 navigation row，并管理 Archived Threads、Provider/Account 和 Plugins；顶部 action contract 不作为本轮验收合同。
 - [ ] Tool details 位于 chat flow，approval 位于 Composer 上方，没有常驻 Activity rail。
 - [ ] Running Turn 始终展开；Completed Turn 默认只显示一次 Final Message并可展开历史。
-- [ ] Thread/Turn usage 从 canonical ItemList 的 host-local projection 派生；cache 缺失显示 Unknown，
-      已报告样本按 token-weighted rate 聚合，且不出现成本 UI。
+- [ ] Thread/Turn usage 从 canonical ItemList 的 host-local projection 派生；Thread 顶部 context
+      占比同时读取 host ModelCatalog 的 context window；cache/window 缺失显示 Unknown，已报告样本按
+      token-weighted rate 聚合，压缩后估算标记 estimated，且不出现成本 UI。
 - [ ] Agent Message 不嵌套在 Trace Group；连续 Thinking/Tool Items 保持顺序并被轻量聚合。
 - [ ] Composer 的 Steer、Stop、Interrupt & Send、Send 和 disabled 均语义明确；primary action 切换时几何稳定。
 - [ ] Composer primary action 的可见圆更小但图标和 hit target 不随之大幅缩小；底部 toolbar 更靠近容器底边。

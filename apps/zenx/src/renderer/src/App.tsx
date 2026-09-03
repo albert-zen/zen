@@ -91,7 +91,7 @@ import {
   type SidebarMode,
 } from "./thread-list.js";
 import { applyThreadViewNotification } from "./thread-view-state.js";
-import { ThreadView, usageLabel } from "./ThreadView.js";
+import { ThreadView, contextUsageLabel, usageLabel } from "./ThreadView.js";
 import { ZenXBrand } from "./ZenXBrand.js";
 
 type ProductPage = string;
@@ -2018,7 +2018,7 @@ function ConversationTitleBar({
         {threadUsage === undefined ||
         threadUsage.thread.responseCount === 0 ? null : (
           <small className="thread-usage">
-            {usageLabel(threadUsage.thread, "Thread cache")}
+            {threadHeaderUsageLabel(threadUsage)}
           </small>
         )}
         <button
@@ -2034,6 +2034,12 @@ function ConversationTitleBar({
       </div>
     </div>
   );
+}
+
+function threadHeaderUsageLabel(threadUsage: ModelUsageProjection): string {
+  const context = contextUsageLabel(threadUsage.context);
+  const usage = usageLabel(threadUsage.thread, "Thread cache");
+  return context === null ? usage : `${context} · ${usage}`;
 }
 
 function PageTitleBar({

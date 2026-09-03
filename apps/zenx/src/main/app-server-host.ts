@@ -17,7 +17,11 @@ import {
 } from "./capability-tool-executor.js";
 import type { ZenXCapabilityGenerationSnapshot } from "./capabilities/types.js";
 import { projectThreadAttachments } from "./image-attachments.js";
-import { projectModelUsage } from "../../../../src/model-usage.js";
+import { compileModelMessages } from "../../../../src/model.js";
+import {
+  estimateModelMessageInputTokens,
+  projectModelUsage,
+} from "../../../../src/model-usage.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 let server: CodexWebSocketServer | undefined;
@@ -153,12 +157,29 @@ async function handleCommand(command: HostCommand): Promise<void> {
       return;
     }
     try {
+      const snapshot = await appServer.readThread(command.threadId);
+      const selection = {
+        providerProfileId: snapshot.providerProfileId,
+        modelId: snapshot.modelId,
+        reasoningEffort: snapshot.reasoningEffort,
+      };
+      const contextWindow =
+        appServer
+          .listModels()
+          .find(
+            (entry) =>
+              entry.providerProfileId === selection.providerProfileId &&
+              entry.model.id === selection.modelId,
+          )?.model.contextWindow ?? null;
       send({
         type: "thread-usage/result",
         requestId: command.requestId,
-        usage: projectModelUsage(
-          (await appServer.readThread(command.threadId)).items,
-        ),
+        usage: projectModelUsage(snapshot.items, {
+          contextWindow,
+          estimatedInputTokens: estimateModelMessageInputTokens(
+            compileModelMessages(snapshot.items, selection),
+          ),
+        }),
       });
     } catch (error) {
       send({
