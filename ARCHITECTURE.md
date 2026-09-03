@@ -130,10 +130,14 @@
   `providerProfileId / modelId` 引用；workspace、审批默认值、`direct | code | both`
   Tool Presentation 与本地产品偏好仍在同一
   host-owned 配置中，credential 不在其中，配置变更也不覆盖已存 Thread 的生效设置。
-- **ZenXModelDiscovery** — ZenX 主进程用所选 OpenAI-compatible profile 的 endpoint、
-  credential 与 transport 发起一次无持久状态的 `GET /models`，采信响应中可明确解析的
-  modality metadata，并按完整 model id 用内建核验目录补全未知能力；匹配不到仍保持 Unknown，
-  失败明确返回且不修改已配置条目。
+- **ZenX Provider Deletion Commit Outcome** — Provider 删除只在 profile 已 durable 写入且内存已切换后标记
+  committed，使 post-commit credential cleanup 即使失败也必须先尝试把 live Host 重启到新配置再明确报错。
+- **ZenX Bootstrap Fence** — Electron 主进程用一个 process-local cancellation/join fence 把 asynchronous
+  bootstrap 与显式 Quit 串行，并只允许在未取消时发布 Host/window；它不持久化或扩展成通用 lifecycle framework。
+- **ZenXModelDiscovery** — ZenX 主进程从同一份瞬时 Provider operation snapshot 取得所选
+  OpenAI-compatible profile 的 endpoint、credential、transport 与 model metadata，发起一次无持久状态的
+  `GET /models` 并在返回前精确重验目标，采信响应中可明确解析的 modality metadata，再按完整 model id
+  用内建核验目录补全未知能力；匹配不到仍保持 Unknown，目标变化要求显式重试且不修改已配置条目。
 - **ZenXImageCapabilityProbe** — 用户明确触发一次经目标 OpenAI-compatible profile 真实 adapter
   的极小图片请求；成功或明确图片类型拒绝写回既有 Host ModelCatalog，认证、额度、限流、网络及
   模糊失败保持 inconclusive，不进入 Thread、journal 或后台调度。

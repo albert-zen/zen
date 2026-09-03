@@ -61,6 +61,10 @@ export interface AppServerManagerOptions {
   terminationGraceMs?: number;
 }
 
+export interface AppServerStartOptions {
+  assertCanPublish?(boundary: "start" | "descriptor"): void;
+}
+
 type NotificationListener = (
   method: ServerNotificationMethod,
   params: ServerNotificationParams[ServerNotificationMethod],
@@ -203,7 +207,7 @@ export class AppServerManager {
     this.#setStatus({ type: "error", message: asError(error).message });
   }
 
-  async start(): Promise<void> {
+  async start(options: AppServerStartOptions = {}): Promise<void> {
     if (this.#child !== undefined || this.#recoveryPromise !== undefined) {
       throw new Error("ZenX App Server host is already running");
     }
@@ -212,6 +216,7 @@ export class AppServerManager {
     const lifecycle = ++this.#lifecycle;
     this.#setStatus({ type: "starting" });
     try {
+      options.assertCanPublish?.("start");
       if (
         this.#options.descriptorFile !== undefined &&
         this.#connectionPublisher === undefined
@@ -224,7 +229,8 @@ export class AppServerManager {
         });
         this.#connectionPublisher = publisher;
       }
-      await this.#startHost(lifecycle);
+      options.assertCanPublish?.("start");
+      await this.#startHost(lifecycle, options.assertCanPublish);
       const reconnected = this.#hasReachedReady;
       this.#hasReachedReady = true;
       this.#setStatus({ type: "ready", reconnected });
@@ -256,12 +262,16 @@ export class AppServerManager {
     }
   }
 
-  async #startHost(lifecycle: number): Promise<void> {
+  async #startHost(
+    lifecycle: number,
+    assertCanPublish?: (boundary: "start" | "descriptor") => void,
+  ): Promise<void> {
     this.#acceptingCapabilityInvocations = false;
     const bearerToken =
       this.#bearerToken ??
       (await createPrivateTokenFile(this.#options.tokenFile));
     this.#bearerToken = bearerToken;
+    assertCanPublish?.("start");
     if (lifecycle !== this.#lifecycle || this.#stopping) {
       await removeTokenFile(this.#options.tokenFile);
       throw new Error("Zen App Server startup was cancelled");
@@ -302,6 +312,7 @@ export class AppServerManager {
           capabilities,
         },
       );
+      assertCanPublish?.("start");
       if (this.#authorityUrl !== undefined && url !== this.#authorityUrl) {
         throw new Error("Zen App Server changed its published authority");
       }
@@ -312,6 +323,12 @@ export class AppServerManager {
         clientInfo: { name: "zenx", title: "ZenX", version: "0.1.0" },
         bearerTokenFile: this.#options.tokenFile,
       });
+      try {
+        assertCanPublish?.("start");
+      } catch (error) {
+        client.close();
+        throw error;
+      }
       if (lifecycle !== this.#lifecycle || this.#stopping) {
         client.close();
         throw new Error("Zen App Server startup was cancelled");
@@ -319,6 +336,7 @@ export class AppServerManager {
       this.#client = client;
       this.#publishedCapabilitySnapshot = structuredClone(capabilities);
       this.#forwardNotifications(client);
+      assertCanPublish?.("descriptor");
       await this.#connectionPublisher?.publish({
         version: 1,
         transport: "websocket",
@@ -328,6 +346,7 @@ export class AppServerManager {
           tokenFile: path.resolve(this.#options.tokenFile),
         },
       });
+      assertCanPublish?.("descriptor");
       this.#acceptingCapabilityInvocations = true;
       this.#recoverUnexpectedExits = true;
     } catch (error) {

@@ -66,15 +66,188 @@ test("GET /models uses explicit rich modalities and exact catalog enrichment wit
       Response.json({
         data: [
           { id: "rich", architecture: { input_modalities: ["text", "image"] } },
-          { id: "gpt-5.6-sol" },
+          { id: "gpt-5.6-sol", input_modalities: ["audio"] },
+          { id: "malformed-modalities", input_modalities: [42] },
+          { id: "gpt-5.6-terra" },
           { id: "vision-looking-name" },
         ],
       }),
   });
   assert.deepEqual(models[0]?.inputModalities, ["text", "image"]);
-  assert.deepEqual(models[1]?.inputModalities, ["text", "image"]);
+  assert.deepEqual(models[1]?.inputModalities, []);
+  assert.equal(Object.isFrozen(models[1]?.inputModalities), true);
   assert.equal(models[1]?.source, "preset");
   assert.equal(models[2]?.inputModalities, null);
+  assert.deepEqual(models[3]?.inputModalities, ["text", "image"]);
+  assert.equal(models[3]?.source, "preset");
+  assert.equal(models[4]?.inputModalities, null);
+});
+
+test("discovery derives transport from one exact profile and credential snapshot", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-discovery-fence-"),
+  );
+  const profileStore = new ZenXHostProfileStore(
+    path.join(directory, "host-profile.json"),
+  );
+  const vault = new ZenXCredentialVault(
+    path.join(directory, "credentials.vault"),
+    encryption,
+  );
+  const model = structuredLegacyModelCatalog("openai-compatible", [
+    "shared",
+  ])[0]!;
+  const profile = compatibleProfile(model);
+  const selectedProvider = profile.providerProfiles[0]!;
+  assert.equal(selectedProvider.type, "openai-compatible");
+  if (selectedProvider.type !== "openai-compatible") {
+    throw new Error("Expected an OpenAI-compatible test Provider");
+  }
+  const transportStarted =
+    deferred<ZenXHostProfile["providerProfiles"][number]>();
+  const releaseTransport = deferred<void>();
+  let fetchCalls = 0;
+  try {
+    await profileStore.write(profile);
+    await vault.writeApiKey("selected", "credential-a");
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      profileStore,
+      vault,
+      subscription: inactiveSubscription,
+      providerFetchFactory: () =>
+        Object.assign(
+          async () => {
+            fetchCalls += 1;
+            return Response.json({ data: [{ id: "shared" }] });
+          },
+          { close: async () => undefined },
+        ),
+    });
+    await service.initialize({});
+    const discovery = service.discoverProviderModels("selected", {
+      resolveTransport: async (captured) => {
+        transportStarted.resolve(captured);
+        await releaseTransport.promise;
+        return { proxyUrl: "http://proxy-a.example.test:8080" };
+      },
+    });
+    const captured = await transportStarted.promise;
+    assert.equal(captured.type, "openai-compatible");
+    assert.equal(captured.baseUrl, "https://selected.example.test/v1");
+    assert.equal(Object.isFrozen(captured), true);
+    assert.equal(Object.isFrozen(captured.models), true);
+    assert.equal(Object.isFrozen(captured.models[0]), true);
+    await service.editProviderProfile(
+      "selected",
+      {
+        ...selectedProvider,
+        baseUrl: "https://changed.example.test/v1",
+      },
+      {},
+    );
+    releaseTransport.resolve();
+    await assert.rejects(
+      discovery,
+      /changed during model discovery; try again/u,
+    );
+    assert.equal(fetchCalls, 0);
+
+    await service.editProviderProfile("selected", selectedProvider, {});
+    const credentialTransportStarted = deferred<void>();
+    const releaseCredentialTransport = deferred<void>();
+    const credentialDiscovery = service.discoverProviderModels("selected", {
+      resolveTransport: async () => {
+        credentialTransportStarted.resolve();
+        await releaseCredentialTransport.promise;
+        return { proxyUrl: "http://proxy-a.example.test:8080" };
+      },
+    });
+    await credentialTransportStarted.promise;
+    await service.editProviderProfile("selected", selectedProvider, {
+      apiKey: "credential-b",
+    });
+    releaseCredentialTransport.resolve();
+    await assert.rejects(
+      credentialDiscovery,
+      /changed during model discovery; try again/u,
+    );
+    assert.equal(fetchCalls, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a conclusive image probe cannot overwrite changed model metadata", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-probe-fence-"));
+  const profileStore = new ZenXHostProfileStore(
+    path.join(directory, "host-profile.json"),
+  );
+  const vault = new ZenXCredentialVault(
+    path.join(directory, "credentials.vault"),
+    encryption,
+  );
+  const model = {
+    ...structuredLegacyModelCatalog("openai-compatible", ["shared"])[0]!,
+    inputModalities: ["text"] as const,
+    source: "manual" as const,
+  };
+  const profile = compatibleProfile(model);
+  const selectedProvider = profile.providerProfiles[0]!;
+  assert.equal(selectedProvider.type, "openai-compatible");
+  if (selectedProvider.type !== "openai-compatible") {
+    throw new Error("Expected an OpenAI-compatible test Provider");
+  }
+  const requestStarted = deferred<void>();
+  const response = deferred<Response>();
+  try {
+    await profileStore.write(profile);
+    await vault.writeApiKey("selected", "credential-a");
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      profileStore,
+      vault,
+      subscription: inactiveSubscription,
+      providerFetchFactory: () =>
+        Object.assign(
+          async () => {
+            requestStarted.resolve();
+            return await response.promise;
+          },
+          { close: async () => undefined },
+        ),
+    });
+    await service.initialize({});
+    const probe = service.probeProviderModelImage("selected", "shared", {
+      resolveTransport: async () => undefined,
+    });
+    await requestStarted.promise;
+    const changedModel = { ...model, description: "new metadata" };
+    await service.editProviderProfile(
+      "selected",
+      { ...selectedProvider, models: [changedModel] },
+      {},
+    );
+    response.resolve(
+      new Response(
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+    await assert.rejects(
+      probe,
+      /changed during image capability probe; try again/u,
+    );
+    const current = (await service.publicSettings()).profile
+      .providerProfiles[0]!;
+    assert.equal(current.models[0]?.description, "new metadata");
+    assert.equal(current.models[0]?.source, "manual");
+    assert.deepEqual(current.models[0]?.inputModalities, ["text"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("GET /models rejects duplicate, malformed, and failed discovery explicitly", async () => {
@@ -156,7 +329,9 @@ test("Host discovery keeps manual overrides and routes the selected profile tran
     await service.initialize({});
     const before = (await service.publicSettings()).profile;
     const snapshot = await service.discoverProviderModels("selected", {
-      transport: { proxyUrl: "http://proxy.example.test:8080" },
+      resolveTransport: async () => ({
+        proxyUrl: "http://proxy.example.test:8080",
+      }),
     });
     assert.deepEqual(routedTransport, {
       proxyUrl: "http://proxy.example.test:8080",
@@ -397,4 +572,14 @@ function compatibleProfile(
     pinnedThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

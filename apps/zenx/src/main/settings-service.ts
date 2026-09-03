@@ -79,6 +79,33 @@ export interface ZenXImageCapabilityProbeResult {
   model: ZenXModelCatalogEntry;
 }
 
+export class ZenXProviderDeletionCleanupError extends Error {
+  readonly committed = true;
+
+  constructor() {
+    super(
+      "Provider profile deletion was committed, but subscription credential cleanup failed",
+    );
+    this.name = "ZenXProviderDeletionCleanupError";
+  }
+}
+
+type OpenAiCompatibleProviderProfile = Extract<
+  ZenXProviderProfile,
+  { type: "openai-compatible" }
+>;
+
+type ProviderOperationTransportResolver = (
+  provider: OpenAiCompatibleProviderProfile,
+) => Promise<ProviderTransport | undefined>;
+
+interface ProviderOperationSnapshot {
+  readonly provider: OpenAiCompatibleProviderProfile;
+  readonly model: ZenXModelCatalogEntry | undefined;
+  readonly apiKey: string;
+  readonly providerFingerprint: string;
+}
+
 export class ZenXSettingsService {
   readonly #dataDirectory: string;
   readonly #profilePath: string;
@@ -235,99 +262,92 @@ export class ZenXSettingsService {
 
   async discoverProviderModels(
     providerProfileId: string,
-    options: { transport?: ProviderTransport; signal?: AbortSignal } = {},
+    options: {
+      resolveTransport?: ProviderOperationTransportResolver;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<ZenXProviderCatalogSnapshot> {
-    await this.#profileOperations;
-    const provider = this.#requireProfile().providerProfiles.find(
-      (candidate) => candidate.providerProfileId === providerProfileId,
+    const target = await this.#captureProviderOperation(
+      providerProfileId,
+      "model discovery",
     );
-    if (provider === undefined) {
-      throw new Error(
-        `Provider profile ${providerProfileId} is not configured`,
-      );
-    }
-    if (provider.type !== "openai-compatible") {
-      throw new Error(
-        `Provider profile ${providerProfileId} does not support GET /models discovery`,
-      );
-    }
-    const apiKey = await this.#vault.readApiKey(provider.providerProfileId);
-    if (apiKey === undefined) {
-      throw new Error(
-        `Provider profile ${provider.providerProfileId} has no API key`,
-      );
-    }
-    const fetch = this.#providerFetchFactory(options.transport);
+    const transport = await options.resolveTransport?.(target.provider);
+    await this.#assertProviderOperationCurrent(target, "model discovery");
+    const fetch = this.#providerFetchFactory(transport);
+    let models: ZenXModelCatalogEntry[];
     try {
       const discovered = await discoverOpenAiCompatibleModels({
-        baseUrl: provider.baseUrl,
-        apiKey,
+        baseUrl: target.provider.baseUrl,
+        apiKey: target.apiKey,
         fetch,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       });
       const discoveredById = new Map(
         discovered.map((entry) => [entry.id, entry]),
       );
-      const configuredIds = new Set(provider.models.map((entry) => entry.id));
-      return {
-        providerProfileId: provider.providerProfileId,
-        models: [
-          ...provider.models.map((entry) =>
-            enrichConfiguredModel(entry, discoveredById.get(entry.id)),
-          ),
-          ...discovered.filter((entry) => !configuredIds.has(entry.id)),
-        ],
-      };
+      const configuredIds = new Set(
+        target.provider.models.map((entry) => entry.id),
+      );
+      models = [
+        ...target.provider.models.map((entry) =>
+          enrichConfiguredModel(entry, discoveredById.get(entry.id)),
+        ),
+        ...discovered.filter((entry) => !configuredIds.has(entry.id)),
+      ];
     } finally {
       await fetch.close?.();
     }
+    await this.#assertProviderOperationCurrent(target, "model discovery");
+    return {
+      providerProfileId: target.provider.providerProfileId,
+      models,
+    };
   }
 
   async probeProviderModelImage(
     providerProfileId: string,
     modelId: string,
-    options: { transport?: ProviderTransport; signal?: AbortSignal } = {},
+    options: {
+      resolveTransport?: ProviderOperationTransportResolver;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<ZenXImageCapabilityProbeResult> {
-    await this.#profileOperations;
-    const provider = this.#requireProfile().providerProfiles.find(
-      (candidate) => candidate.providerProfileId === providerProfileId,
+    const target = await this.#captureProviderOperation(
+      providerProfileId,
+      "image capability probe",
+      modelId,
     );
-    if (provider === undefined) {
-      throw new Error(
-        `Provider profile ${providerProfileId} is not configured`,
-      );
-    }
-    if (provider.type !== "openai-compatible") {
-      throw new Error(
-        `Provider profile ${providerProfileId} does not support image probing`,
-      );
-    }
-    const model = provider.models.find((entry) => entry.id === modelId);
-    if (model === undefined) {
-      throw new Error(
-        `Model ${modelId} is not configured for Provider profile ${providerProfileId}`,
-      );
-    }
-    const apiKey = await this.#vault.readApiKey(providerProfileId);
-    if (apiKey === undefined) {
-      throw new Error(`Provider profile ${providerProfileId} has no API key`);
-    }
-    const fetch = this.#providerFetchFactory(options.transport);
+    const transport = await options.resolveTransport?.(target.provider);
+    await this.#assertProviderOperationCurrent(
+      target,
+      "image capability probe",
+    );
+    const fetch = this.#providerFetchFactory(transport);
     let outcome: ImageCapabilityProbeOutcome;
     try {
       outcome = await probeOpenAiCompatibleImage({
-        baseUrl: provider.baseUrl,
-        apiKey,
-        provider: provider.name,
-        model: model.id,
+        baseUrl: target.provider.baseUrl,
+        apiKey: target.apiKey,
+        provider: target.provider.name,
+        model: target.model!.id,
         fetch,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       });
     } finally {
       await fetch.close?.();
     }
-    if (outcome === "inconclusive") return { outcome, model };
+    if (outcome === "inconclusive") {
+      await this.#assertProviderOperationCurrent(
+        target,
+        "image capability probe",
+      );
+      return { outcome, model: target.model! };
+    }
     const updated = await this.#queueProfileOperation(async () => {
+      await this.#assertProviderOperationCurrentInQueue(
+        target,
+        "image capability probe",
+      );
       const current = this.#requireProfile();
       const providerIndex = current.providerProfiles.findIndex(
         (candidate) => candidate.providerProfileId === providerProfileId,
@@ -614,7 +634,11 @@ export class ZenXSettingsService {
       await this.#persistProfile(next, undefined, [providerProfileId]);
       this.#profile = next;
       if (deletedProvider.type === "openai-subscription") {
-        await this.#subscriptionForProfile(providerProfileId).logout();
+        try {
+          await this.#subscriptionForProfile(providerProfileId).logout();
+        } catch {
+          throw new ZenXProviderDeletionCleanupError();
+        }
       }
     });
   }
@@ -867,6 +891,83 @@ export class ZenXSettingsService {
     return this.#profile;
   }
 
+  async #captureProviderOperation(
+    providerProfileId: string,
+    operation: "model discovery" | "image capability probe",
+    modelId?: string,
+  ): Promise<ProviderOperationSnapshot> {
+    return await this.#queueProfileOperation(async () => {
+      const provider = this.#requireProfile().providerProfiles.find(
+        (candidate) => candidate.providerProfileId === providerProfileId,
+      );
+      if (provider === undefined) {
+        throw new Error(
+          `Provider profile ${providerProfileId} is not configured`,
+        );
+      }
+      if (provider.type !== "openai-compatible") {
+        throw new Error(
+          operation === "model discovery"
+            ? `Provider profile ${providerProfileId} does not support GET /models discovery`
+            : `Provider profile ${providerProfileId} does not support image probing`,
+        );
+      }
+      const providerSnapshot = deepFreeze(structuredClone(provider));
+      const model =
+        modelId === undefined
+          ? undefined
+          : providerSnapshot.models.find((entry) => entry.id === modelId);
+      if (modelId !== undefined && model === undefined) {
+        throw new Error(
+          `Model ${modelId} is not configured for Provider profile ${providerProfileId}`,
+        );
+      }
+      const apiKey = await this.#vault.readApiKey(providerProfileId);
+      if (apiKey === undefined) {
+        throw new Error(`Provider profile ${providerProfileId} has no API key`);
+      }
+      return Object.freeze({
+        provider: providerSnapshot,
+        model,
+        apiKey,
+        providerFingerprint: JSON.stringify(providerSnapshot),
+      });
+    });
+  }
+
+  async #assertProviderOperationCurrent(
+    target: ProviderOperationSnapshot,
+    operation: "model discovery" | "image capability probe",
+  ): Promise<void> {
+    await this.#queueProfileOperation(
+      async () =>
+        await this.#assertProviderOperationCurrentInQueue(target, operation),
+    );
+  }
+
+  async #assertProviderOperationCurrentInQueue(
+    target: ProviderOperationSnapshot,
+    operation: "model discovery" | "image capability probe",
+  ): Promise<void> {
+    const current = this.#requireProfile().providerProfiles.find(
+      (candidate) =>
+        candidate.providerProfileId === target.provider.providerProfileId,
+    );
+    const apiKey = await this.#vault.readApiKey(
+      target.provider.providerProfileId,
+    );
+    if (
+      current === undefined ||
+      current.type !== "openai-compatible" ||
+      JSON.stringify(current) !== target.providerFingerprint ||
+      apiKey !== target.apiKey
+    ) {
+      throw new Error(
+        `Provider profile ${target.provider.providerProfileId} changed during ${operation}; try again`,
+      );
+    }
+  }
+
   #queueProfileOperation<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.#profileOperations.then(operation);
     this.#profileOperations = result.then(
@@ -959,6 +1060,17 @@ export class ZenXSettingsService {
       throw persistenceError;
     }
   }
+}
+
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (typeof value !== "object" || value === null || seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  for (const key of Reflect.ownKeys(value)) {
+    deepFreeze((value as Record<PropertyKey, unknown>)[key], seen);
+  }
+  return Object.freeze(value);
 }
 
 function enrichConfiguredModel(

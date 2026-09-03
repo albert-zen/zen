@@ -102,6 +102,35 @@ test("publishes one private descriptor for the same ZAS used by ZenX", async () 
   }
 });
 
+test("a cancelled bootstrap revokes an App Server descriptor published in flight", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-cancelled-zas-"),
+  );
+  const manager = managerFor(directory);
+  const descriptorFile = path.join(directory, "runtime", "app-server.json");
+  const tokenFile = path.join(directory, "runtime", "app-server.token");
+  let descriptorBoundaries = 0;
+  try {
+    await assert.rejects(
+      manager.start({
+        assertCanPublish: (boundary) => {
+          if (boundary === "descriptor" && (descriptorBoundaries += 1) === 2) {
+            throw new Error("bootstrap cancelled after descriptor publication");
+          }
+        },
+      }),
+      /bootstrap cancelled after descriptor publication/u,
+    );
+    assert.equal(descriptorBoundaries, 2);
+    assert.equal(manager.processId, undefined);
+    await assert.rejects(stat(descriptorFile), { code: "ENOENT" });
+    await assert.rejects(stat(tokenFile), { code: "ENOENT" });
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("refuses a competing publisher and revokes discovery on explicit stop", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-zas-owner-"));
   const owner = managerFor(directory);

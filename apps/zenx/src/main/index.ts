@@ -66,6 +66,7 @@ import {
   type ZenXImageImport,
 } from "./image-attachments.js";
 import {
+  ZenXBootstrapFence,
   ZenXHostLifecycle,
   type ZenXDesktopPlatform,
 } from "./host-lifecycle.js";
@@ -85,6 +86,7 @@ import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
 import { createDelegatingFirstPartyProfileLoader } from "./first-party-profile-loader.js";
 import { installZenXBundledPluginsAtStartup } from "./bundled-plugin-startup.js";
 import { BrowserLiveObservationIpcBridge } from "./browser-live-observation-ipc.js";
+import { deleteProviderProfileWithHostRestart } from "./provider-deletion.js";
 
 let appServerManager: AppServerManager | undefined;
 let settingsService: ZenXSettingsService | undefined;
@@ -93,6 +95,7 @@ let pluginDevControl: ZenXPluginDevControlServer | undefined;
 const projectProjection = new ZenXProjectProjection();
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
+const bootstrapFence = new ZenXBootstrapFence();
 const ownsSingleInstance =
   secondInstanceDisposition(app.requestSingleInstanceLock()) ===
   "own-authority";
@@ -100,6 +103,7 @@ const hostLifecycle = new ZenXHostLifecycle({
   platform: desktopPlatform(process.platform),
   windowCount: () => BrowserWindow.getAllWindows().length,
   createWindow,
+  cancelBootstrap: () => bootstrapFence.cancelAndJoin(),
   stopHost: stopZenXHost,
   finishQuit: () => app.quit(),
   reportStopFailure: (error) =>
@@ -146,7 +150,9 @@ function createWindow(): BrowserWindow {
     },
   });
 
-  window.once("ready-to-show", () => window.show());
+  window.once("ready-to-show", () => {
+    if (!hostLifecycle.quitting) window.show();
+  });
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedZenXExternalUrl(url)) void shell.openExternal(url);
     return { action: "deny" };
@@ -161,8 +167,9 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
-app.whenReady().then(async () => {
+async function bootstrapZenX(): Promise<void> {
   if (!ownsSingleInstance) return;
+  bootstrapFence.throwIfCancelled();
   const userDataDirectory = app.getPath("userData");
   const entryPath = join(__dirname, "app-server-host.js");
   const tokenFile = join(userDataDirectory, "runtime", "app-server.token");
@@ -206,6 +213,7 @@ app.whenReady().then(async () => {
   });
   try {
     await settingsService.initialize(process.env);
+    bootstrapFence.throwIfCancelled();
     capabilityService = new ZenXCapabilityService({
       userDataDirectory,
       allowForegroundRequired:
@@ -239,6 +247,7 @@ app.whenReady().then(async () => {
       appServerPort: selfControlPort,
     });
     await syncProjectProjection(settingsService);
+    bootstrapFence.throwIfCancelled();
     let startupError: unknown;
     let hostConfig;
     try {
@@ -247,6 +256,7 @@ app.whenReady().then(async () => {
         async (url) => await session.defaultSession.resolveProxy(url),
       );
     } catch (error) {
+      bootstrapFence.rethrowIfCancelled(error);
       startupError = error;
       hostConfig = {
         cwd: zenDataDirectory,
@@ -257,6 +267,7 @@ app.whenReady().then(async () => {
         provider: { type: "fake" as const },
       };
     }
+    bootstrapFence.throwIfCancelled();
     appServerManager = new AppServerManager({
       entryPath,
       tokenFile,
@@ -267,6 +278,7 @@ app.whenReady().then(async () => {
       capabilityHost: capabilityService,
     });
     await selfControlPort.attach(appServerManager);
+    bootstrapFence.throwIfCancelled();
     titleCoordinator = new ZenXThreadTitleCoordinator({
       store: new ZenXThreadTitleStore(
         join(userDataDirectory, "thread-title-projections.json"),
@@ -274,10 +286,14 @@ app.whenReady().then(async () => {
       inference: new ZenXConfiguredTitleInference(settingsService),
       titleModel: () => settingsService!.configuredTitleModel(),
       setNativeName: async (threadId, name) => {
-        await appServerManager!.request("thread/name/set", { threadId, name });
+        await appServerManager!.request("thread/name/set", {
+          threadId,
+          name,
+        });
       },
     });
     await titleCoordinator.initialize();
+    bootstrapFence.throwIfCancelled();
     installProtocolIpc(
       appServerManager,
       titleCoordinator,
@@ -289,17 +305,21 @@ app.whenReady().then(async () => {
         join(resourcesDirectory, "marketplace", "catalog.json"),
       ),
     );
+    bootstrapFence.throwIfCancelled();
     installTitleIpc(titleCoordinator);
     automationService = await createBundledAutomationPluginService({
       userDataDirectory,
       appServer: appServerManager,
       titles: titleCoordinator,
     });
+    bootstrapFence.throwIfCancelled();
     triggersPackage = new ZenXTriggersCapabilityPackage(automationService);
     await capabilityService.initialize();
+    bootstrapFence.throwIfCancelled();
     try {
       await capabilityService.syncProfileManagedProviderVariants();
     } catch (error) {
+      bootstrapFence.rethrowIfCancelled(error);
       // Provider profile synchronization is optional plugin state. Keep the
       // core App Server available with the previously committed provider and
       // expose the failure through the normal capability diagnostics.
@@ -307,20 +327,31 @@ app.whenReady().then(async () => {
         `Provider profile synchronization is unavailable: ${describeError(error)}`,
       );
     }
+    bootstrapFence.throwIfCancelled();
     await installZenXBundledPluginsAtStartup(
       capabilityService,
       resourcesDirectory,
     );
+    bootstrapFence.throwIfCancelled();
     installCapabilityIpc(capabilityService, appServerManager, marketplace);
     if (startupError === undefined) {
-      await appServerManager.start();
+      await appServerManager.start({
+        assertCanPublish: () => bootstrapFence.throwIfCancelled(),
+      });
+      bootstrapFence.throwIfCancelled();
       await startPluginDevControl(
         userDataDirectory,
         capabilityService,
         appServerManager,
+        () => bootstrapFence.throwIfCancelled(),
       );
-    } else appServerManager.reportStartupError(startupError);
+      bootstrapFence.throwIfCancelled();
+    } else {
+      bootstrapFence.throwIfCancelled();
+      appServerManager.reportStartupError(startupError);
+    }
   } catch (error) {
+    bootstrapFence.rethrowIfCancelled(error);
     console.error("Could not start Zen App Server", error);
     if (appServerManager === undefined) {
       installFailedProtocolIpc(
@@ -330,6 +361,7 @@ app.whenReady().then(async () => {
       appServerManager.reportStartupError(error);
     }
   }
+  bootstrapFence.throwIfCancelled();
   installSettingsIpc(
     settingsService,
     directoryBrowser,
@@ -360,7 +392,9 @@ app.whenReady().then(async () => {
         const restartErrors: Error[] = [];
         let hostStopped = false;
         try {
-          await appServerManager.stop({ preserveConnectionAuthority: true });
+          await appServerManager.stop({
+            preserveConnectionAuthority: true,
+          });
           hostStopped = true;
         } catch (error) {
           restartErrors.push(normalizeTitleOwnershipFailure(error));
@@ -414,7 +448,9 @@ app.whenReady().then(async () => {
     },
     async () => await syncProjectProjection(settingsService!),
   );
+  bootstrapFence.throwIfCancelled();
   const mainWindow = createWindow();
+  bootstrapFence.throwIfCancelled();
   if (
     projectWorkspaceAcceptancePath !== null &&
     externalZasAcceptancePath !== null
@@ -452,10 +488,20 @@ app.whenReady().then(async () => {
       });
   }
 
+  bootstrapFence.throwIfCancelled();
   app.on("activate", () => {
     hostLifecycle.activate();
   });
-});
+}
+
+void app
+  .whenReady()
+  .then(async () => await bootstrapFence.run(bootstrapZenX))
+  .catch((error: unknown) => {
+    console.error("ZenX bootstrap failed", error);
+    process.exitCode = 1;
+    app.quit();
+  });
 
 app.on("before-quit", (event) => {
   if (!ownsSingleInstance) return;
@@ -494,6 +540,10 @@ async function stopZenXHost(): Promise<void> {
   }
   try {
     selfControlPort.detach();
+  } catch (error) {
+    errors.push(normalizeTitleOwnershipFailure(error));
+  }
+  try {
     await capabilityService?.close();
   } catch (error) {
     errors.push(normalizeTitleOwnershipFailure(error));
@@ -507,11 +557,14 @@ async function startPluginDevControl(
   userDataDirectory: string,
   capabilities: ZenXCapabilityService,
   manager: AppServerManager,
+  assertCanPublish?: () => void,
 ): Promise<void> {
   if (!pluginDevEnabled || pluginDevControl !== undefined) return;
-  pluginDevControl = await ZenXPluginDevControlServer.start({
+  assertCanPublish?.();
+  const candidate = await ZenXPluginDevControlServer.start({
     descriptorFile: join(userDataDirectory, "runtime", "plugin-dev.json"),
     tokenFile: join(userDataDirectory, "runtime", "plugin-dev.token"),
+    ...(assertCanPublish === undefined ? {} : { assertCanPublish }),
     install: async (request, signal, enterCommitPhase) =>
       await capabilities.devPluginPackage(
         request.projectDirectory,
@@ -524,6 +577,20 @@ async function startPluginDevControl(
     reload: async (pluginId) =>
       await manager.refreshPluginAfterCommit(pluginId),
   });
+  try {
+    assertCanPublish?.();
+    pluginDevControl = candidate;
+  } catch (error) {
+    try {
+      await candidate.close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Plugin dev control startup was cancelled and cleanup failed",
+      );
+    }
+    throw error;
+  }
 }
 
 function desktopPlatform(platform: NodeJS.Platform): ZenXDesktopPlatform {
@@ -889,9 +956,12 @@ function installSettingsIpc(
       if (typeof providerProfileId !== "string") {
         throw new Error("Invalid Provider profile id");
       }
-      await settings.deleteProviderProfile(providerProfileId, replacements);
-      await restartHost();
-      return await settings.publicSettings();
+      return await deleteProviderProfileWithHostRestart(
+        settings,
+        providerProfileId,
+        replacements ?? {},
+        restartHost,
+      );
     },
   );
   ipcMain.handle(
@@ -900,22 +970,12 @@ function installSettingsIpc(
       if (typeof providerProfileId !== "string") {
         throw new Error("Invalid Provider profile id");
       }
-      const profile = (
-        await settings.publicSettings()
-      ).profile.providerProfiles.find(
-        (candidate) => candidate.providerProfileId === providerProfileId,
-      );
-      if (profile === undefined) {
-        throw new Error(
-          `Provider profile ${providerProfileId} is not configured`,
-        );
-      }
-      const transport = await zenXProviderDiscoveryTransport(
-        profile,
-        async (url) => await session.defaultSession.resolveProxy(url),
-      );
       return await settings.discoverProviderModels(providerProfileId, {
-        ...(transport === undefined ? {} : { transport }),
+        resolveTransport: async (profile) =>
+          await zenXProviderDiscoveryTransport(
+            profile,
+            async (url) => await session.defaultSession.resolveProxy(url),
+          ),
       });
     },
   );
@@ -928,25 +988,15 @@ function installSettingsIpc(
       ) {
         throw new Error("Invalid image capability probe target");
       }
-      const profile = (
-        await settings.publicSettings()
-      ).profile.providerProfiles.find(
-        (candidate) => candidate.providerProfileId === providerProfileId,
-      );
-      if (profile === undefined) {
-        throw new Error(
-          `Provider profile ${providerProfileId} is not configured`,
-        );
-      }
-      const transport = await zenXProviderDiscoveryTransport(
-        profile,
-        async (url) => await session.defaultSession.resolveProxy(url),
-      );
       return await settings.probeProviderModelImage(
         providerProfileId,
         modelId,
         {
-          ...(transport === undefined ? {} : { transport }),
+          resolveTransport: async (profile) =>
+            await zenXProviderDiscoveryTransport(
+              profile,
+              async (url) => await session.defaultSession.resolveProxy(url),
+            ),
         },
       );
     },

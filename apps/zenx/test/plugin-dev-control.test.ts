@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -9,6 +10,71 @@ import { setTimeout as delay } from "node:timers/promises";
 import { requestPluginDevLink } from "@zenx/plugin-sdk";
 
 import { ZenXPluginDevControlServer } from "../src/main/plugin-dev-control.js";
+
+test("a cancelled bootstrap removes a plugin-dev descriptor published in flight", async () => {
+  const fixture = await controlFixture();
+  let publicationBoundaries = 0;
+  try {
+    await assert.rejects(
+      ZenXPluginDevControlServer.start({
+        ...fixture.options,
+        assertCanPublish: () => {
+          publicationBoundaries += 1;
+          if (publicationBoundaries === 3) {
+            throw new Error("bootstrap cancelled after plugin-dev publication");
+          }
+        },
+        install: async () => committedInstall(),
+        reload: async () => ({ status: "reloaded" }),
+      }),
+      /bootstrap cancelled after plugin-dev publication/u,
+    );
+    assert.equal(publicationBoundaries, 3);
+    await assert.rejects(readFile(fixture.options.descriptorFile), {
+      code: "ENOENT",
+    });
+    await assert.rejects(readFile(fixture.options.tokenFile), {
+      code: "ENOENT",
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("plugin-dev startup cleanup keeps the cancellation cause and attempts every resource", async () => {
+  const fixture = await controlFixture();
+  const cancellation = new Error("bootstrap cancellation evidence");
+  let publicationBoundaries = 0;
+  try {
+    await assert.rejects(
+      ZenXPluginDevControlServer.start({
+        ...fixture.options,
+        assertCanPublish: () => {
+          publicationBoundaries += 1;
+          if (publicationBoundaries !== 3) return;
+          rmSync(fixture.options.descriptorFile);
+          mkdirSync(fixture.options.descriptorFile);
+          writeFileSync(
+            path.join(fixture.options.descriptorFile, "blocks-unlink"),
+            "keep",
+          );
+          throw cancellation;
+        },
+        install: async () => committedInstall(),
+        reload: async () => ({ status: "reloaded" }),
+      }),
+      (error: unknown) =>
+        error instanceof AggregateError &&
+        error.errors[0] === cancellation &&
+        error.errors.length === 2,
+    );
+    await assert.rejects(readFile(fixture.options.tokenFile), {
+      code: "ENOENT",
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
 
 test("bounds an authenticated partial request body before install starts", async () => {
   const fixture = await controlFixture();
@@ -108,6 +174,31 @@ test("server close aborts and settles an active install", async () => {
     await server.close();
     await rejected;
     assert.equal(settled, true);
+  } finally {
+    await server.close();
+    await fixture.cleanup();
+  }
+});
+
+test("server close attempts token cleanup when descriptor cleanup fails", async () => {
+  const fixture = await controlFixture();
+  const server = await ZenXPluginDevControlServer.start({
+    ...fixture.options,
+    install: async () => committedInstall(),
+    reload: async () => ({ status: "reloaded" }),
+  });
+  try {
+    rmSync(fixture.options.descriptorFile);
+    mkdirSync(fixture.options.descriptorFile);
+    writeFileSync(
+      path.join(fixture.options.descriptorFile, "blocks-unlink"),
+      "keep",
+    );
+
+    await assert.rejects(server.close());
+    await assert.rejects(readFile(fixture.options.tokenFile), {
+      code: "ENOENT",
+    });
   } finally {
     await server.close();
     await fixture.cleanup();

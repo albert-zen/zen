@@ -116,7 +116,7 @@ function readInputModalities(
     const supported = ["text", "image"].filter((entry) =>
       candidate.includes(entry),
     ) as Array<"text" | "image">;
-    return supported.length === 0 ? null : Object.freeze(supported);
+    return Object.freeze(supported);
   }
   const image = capabilities?.image_input ?? capabilities?.vision;
   if (typeof image === "boolean") {

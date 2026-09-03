@@ -618,9 +618,11 @@ function ModelsPanel({
           setSettings(authoritative);
           setDraft(authoritative.profile);
           setStatus(
-            `${message.replace(/ · local host restarted$/u, "")} · saved, but local host restart failed`,
+            `${message.replace(/ · local host restarted$/u, "")} · saved, but finalization failed`,
           );
-          setError(`Settings were saved, but restart failed: ${originalError}`);
+          setError(
+            `Settings were saved, but finalization failed: ${originalError}`,
+          );
           return "committed-error";
         }
         setError(originalError);

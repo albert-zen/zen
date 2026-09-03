@@ -30,6 +30,7 @@ export interface ZenXPluginDevControlOptions {
   ): Promise<{ status: "reloaded" } | { status: "failed"; message: string }>;
   requestBodyTimeoutMs?: number;
   transactionTimeoutMs?: number;
+  assertCanPublish?(): void;
 }
 
 interface ActiveDevRequest {
@@ -95,6 +96,7 @@ export class ZenXPluginDevControlServer {
       });
     });
     try {
+      options.assertCanPublish?.();
       const address = server.address();
       if (address === null || typeof address === "string") {
         throw new Error("Plugin dev control server has no loopback address");
@@ -104,6 +106,7 @@ export class ZenXPluginDevControlServer {
         mode: 0o700,
       });
       await writePrivateFile(options.tokenFile, `${token}\n`);
+      options.assertCanPublish?.();
       const descriptor: ZenXPluginDevTargetDescriptor = {
         version: 1,
         transport: "http",
@@ -117,6 +120,7 @@ export class ZenXPluginDevControlServer {
         options.descriptorFile,
         `${JSON.stringify(descriptor)}\n`,
       );
+      options.assertCanPublish?.();
       return new ZenXPluginDevControlServer(
         server,
         options.descriptorFile,
@@ -124,31 +128,62 @@ export class ZenXPluginDevControlServer {
         activeRequests,
       );
     } catch (error) {
-      server.close();
-      await removeFile(options.descriptorFile);
-      await removeFile(options.tokenFile);
-      throw error;
+      const failures = [asError(error)];
+      const closing = closeServer(server);
+      for (const active of activeRequests) {
+        abortInterruptible(
+          active,
+          new Error("ZenX plugin dev control startup was cancelled"),
+        );
+      }
+      const cleanup = await Promise.allSettled([
+        Promise.allSettled(
+          [...activeRequests].map((active) => active.operation),
+        ).then(async () => {
+          server.closeAllConnections();
+          await closing;
+        }),
+        removeFile(options.descriptorFile),
+        removeFile(options.tokenFile),
+      ]);
+      for (const result of cleanup) {
+        if (result.status === "rejected") failures.push(asError(result.reason));
+      }
+      if (failures.length === 1) throw error;
+      throw new AggregateError(
+        failures,
+        "Plugin dev control startup failed and cleanup was incomplete",
+      );
     }
   }
 
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    const closing = new Promise<void>((resolve, reject) => {
-      this.#server.close((error) =>
-        error === undefined ? resolve() : reject(error),
-      );
-    });
+    const closing = closeServer(this.#server);
     for (const active of this.#activeRequests) {
       abortInterruptible(active, new Error("ZenX plugin dev control stopped"));
     }
-    await Promise.allSettled(
-      [...this.#activeRequests].map((active) => active.operation),
+    const cleanup = await Promise.allSettled([
+      Promise.allSettled(
+        [...this.#activeRequests].map((active) => active.operation),
+      ).then(async () => {
+        this.#server.closeAllConnections();
+        await closing;
+      }),
+      removeFile(this.#descriptorFile),
+      removeFile(this.#tokenFile),
+    ]);
+    const failures = cleanup.flatMap((result) =>
+      result.status === "rejected" ? [asError(result.reason)] : [],
     );
-    this.#server.closeAllConnections();
-    await closing;
-    await removeFile(this.#descriptorFile);
-    await removeFile(this.#tokenFile);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        "Plugin dev control cleanup was incomplete",
+      );
+    }
   }
 }
 
@@ -358,6 +393,16 @@ async function removeFile(filePath: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error === undefined ? resolve() : reject(error)));
+  });
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function abortError(signal: AbortSignal): Error {

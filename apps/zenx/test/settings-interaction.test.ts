@@ -776,7 +776,7 @@ test("Delete removes an unreferenced Provider without replacement selections", a
   }
 });
 
-test("Delete reconciles an applied provider when host restart rejects", async () => {
+test("Delete reports a generic finalization failure after its mutation committed", async () => {
   let authoritative = multiProviderSettings;
   let calls = 0;
   const harness = await mountSettings("models", {
@@ -794,7 +794,7 @@ test("Delete reconciles an applied provider when host restart rejects", async ()
             ),
         },
       };
-      throw new Error("host restart failed after delete");
+      throw new Error("subscription credential cleanup failed after delete");
     },
   });
   try {
@@ -810,7 +810,15 @@ test("Delete reconciles an applied provider when host restart rejects", async ()
     );
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
-      /host restart failed after delete/u,
+      /subscription credential cleanup failed after delete/u,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /saved, but finalization failed/u,
+    );
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /local host restart failed/u,
     );
     assert.doesNotMatch(document.body.textContent ?? "", /not configured/u);
   } finally {
