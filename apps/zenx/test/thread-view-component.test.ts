@@ -857,6 +857,13 @@ test("resumed user messages expose canonical attachments with accessible preview
   assert.match(html, /aria-label="Attached images"/u);
   assert.match(html, /aria-label="Preview Attached image 1"/u);
   assert.doesNotMatch(html, /base64|\/tmp\//u);
+  // An image-only transcript message renders standalone thumbnails and no
+  // text bubble; attachments are never wrapped inside the bubble itself.
+  assert.doesNotMatch(html, /class="user-bubble"/u);
+  assert.ok(
+    html.indexOf('aria-label="Attached images"') <
+      html.indexOf('aria-label="Preview Attached image 1"'),
+  );
 });
 
 test("images precede text in Composer and transcript, including image-only messages", () => {
@@ -893,6 +900,10 @@ test("images precede text in Composer and transcript, including image-only messa
   );
   assert.ok(
     transcriptHtml.indexOf('class="message-images"') <
+      transcriptHtml.indexOf('class="user-bubble"'),
+  );
+  assert.ok(
+    transcriptHtml.indexOf('class="user-bubble"') <
       transcriptHtml.indexOf("line one"),
   );
   assert.ok(
@@ -907,13 +918,8 @@ test("images precede text in Composer and transcript, including image-only messa
     { "user-1": [first] },
   );
   assert.match(imageOnlyHtml, /class="message-images"/u);
-  const userBubbleStart = imageOnlyHtml.indexOf('class="user-bubble"');
-  const userBubbleEnd = imageOnlyHtml.indexOf("</article>", userBubbleStart);
-  assert.ok(userBubbleStart >= 0 && userBubbleEnd > userBubbleStart);
-  assert.doesNotMatch(
-    imageOnlyHtml.slice(userBubbleStart, userBubbleEnd),
-    /markdown-body|<p>/u,
-  );
+  // Without text there is no empty bubble behind the standalone thumbnails.
+  assert.doesNotMatch(imageOnlyHtml, /class="user-bubble"/u);
 });
 
 function render(

@@ -229,6 +229,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   Unknown 不得冒充 unsupported。文字草稿的普通发送行为不受影响。
 - transcript 从 canonical `user_message` 的 `AttachmentRef` 投影图片；send 后与 resume 后使用同一渲染路径。
   缩略图可用鼠标或键盘打开应用内 modal preview；Escape、关闭按钮和 backdrop 可关闭，关闭后焦点返回触发缩略图。
+  Transcript 附件渲染为文字气泡上方的独立紧凑缩略图行（右对齐、可换行），不被包进气泡边框内；只有存在文字时才渲染文字气泡。这是视觉校准，不改变 `AttachmentRef` 权威与投影路径。
 
 ### 4.6 Settings 与 onboarding
 
