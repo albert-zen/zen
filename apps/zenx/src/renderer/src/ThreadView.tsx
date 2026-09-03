@@ -838,22 +838,24 @@ function UserMessage({
   const text = item.content.map((content) => content.text).join("\n");
   return (
     <article className="user-row">
-      <div className="user-bubble">
-        {attachments.length === 0 ? null : (
-          <div className="message-images" aria-label="Attached images">
-            {attachments.map((attachment, index) => (
-              <AttachmentImage
-                attachment={attachment}
-                key={`${attachment.sha256}-${String(index)}`}
-                name={`Attached image ${String(index + 1)}`}
-                onOpen={onOpenImage}
-                onReadAttachment={onReadAttachment}
-              />
-            ))}
-          </div>
-        )}
-        {text.length === 0 ? null : <Markdown text={text} />}
-      </div>
+      {attachments.length === 0 ? null : (
+        <div className="message-images" aria-label="Attached images">
+          {attachments.map((attachment, index) => (
+            <AttachmentImage
+              attachment={attachment}
+              key={`${attachment.sha256}-${String(index)}`}
+              name={`Attached image ${String(index + 1)}`}
+              onOpen={onOpenImage}
+              onReadAttachment={onReadAttachment}
+            />
+          ))}
+        </div>
+      )}
+      {text.length === 0 ? null : (
+        <div className="user-bubble">
+          <Markdown text={text} />
+        </div>
+      )}
       <MessageActions
         className="user-message-actions"
         copyLabel="Copy user message"
