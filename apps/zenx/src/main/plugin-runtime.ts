@@ -86,6 +86,8 @@ export class PluginRuntimeSupervisor {
       release(): void;
     }
   >();
+  readonly #deferredRetirements = new Set<Promise<void>>();
+  readonly #deferredRetirementFailures: Error[] = [];
   #mutationTail: Promise<void> = Promise.resolve();
 
   constructor(
@@ -166,11 +168,7 @@ export class PluginRuntimeSupervisor {
             unregisterBundle,
           });
           if (previous !== undefined && previous.token !== token) {
-            void previous.bundle.retire().catch((error: unknown) => {
-              console.warn(
-                `Plugin runtime retirement failed after replacement commit: ${describeError(error)}`,
-              );
-            });
+            this.#scheduleRetirement(previous.bundle, "replacement commit");
           }
         },
         rollback: async () => {
@@ -206,6 +204,10 @@ export class PluginRuntimeSupervisor {
     if (active === undefined) return;
     this.#active.delete(pluginId);
     active.unregisterBundle();
+    if (active.bundle.hasHostGenerationLease) {
+      this.#scheduleRetirement(active.bundle, "Catalog commit");
+      return;
+    }
     await active.bundle.retire();
   }
 
@@ -236,6 +238,8 @@ export class PluginRuntimeSupervisor {
           failures.push(asError(error));
         }
       }
+      await Promise.all([...this.#deferredRetirements]);
+      failures.push(...this.#deferredRetirementFailures.splice(0));
       if (failures.length > 0) {
         throw new AggregateError(failures, "Plugin runtime shutdown failed");
       }
@@ -256,7 +260,7 @@ export class PluginRuntimeSupervisor {
       tools.set(toolName, bundle);
     }
     const releases = [...new Set(tools.values())].map((bundle) =>
-      bundle.retainPreparedInvocation(),
+      bundle.retainHostGeneration(),
     );
     const generationToken = randomUUID();
     let retained = true;
@@ -332,6 +336,21 @@ export class PluginRuntimeSupervisor {
     );
     return await result;
   }
+
+  #scheduleRetirement(bundle: SupervisedPluginBundle, context: string): void {
+    let retirement!: Promise<void>;
+    retirement = bundle
+      .retire()
+      .catch((error: unknown) => {
+        const failure = asError(error);
+        this.#deferredRetirementFailures.push(failure);
+        console.warn(
+          `Plugin runtime retirement failed after ${context}: ${failure.message}`,
+        );
+      })
+      .finally(() => this.#deferredRetirements.delete(retirement));
+    this.#deferredRetirements.add(retirement);
+  }
 }
 
 class SupervisedPluginBundle implements ToolBundle {
@@ -342,6 +361,7 @@ class SupervisedPluginBundle implements ToolBundle {
   readonly #active = new Set<Promise<unknown>>();
   readonly #drainWaiters = new Set<() => void>();
   #prepared = 0;
+  #hostGenerationLeases = 0;
   #closePromise: Promise<void> | undefined;
 
   constructor(
@@ -389,6 +409,21 @@ class SupervisedPluginBundle implements ToolBundle {
     };
   }
 
+  retainHostGeneration(): () => void {
+    this.#hostGenerationLeases += 1;
+    let retained = true;
+    return () => {
+      if (!retained) return;
+      retained = false;
+      this.#hostGenerationLeases -= 1;
+      this.#notifyDrain();
+    };
+  }
+
+  get hasHostGenerationLease(): boolean {
+    return this.#hostGenerationLeases > 0;
+  }
+
   ownsTool(toolName: string): boolean {
     return this.#toolNames.has(toolName);
   }
@@ -416,7 +451,11 @@ class SupervisedPluginBundle implements ToolBundle {
   }
 
   async retire(): Promise<void> {
-    while (this.#prepared > 0 || this.#active.size > 0) {
+    while (
+      this.#prepared > 0 ||
+      this.#hostGenerationLeases > 0 ||
+      this.#active.size > 0
+    ) {
       await new Promise<void>((resolve) => {
         this.#drainWaiters.add(resolve);
       });

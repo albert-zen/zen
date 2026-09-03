@@ -495,8 +495,7 @@ test("current-generation confirmation keeps the old child generation and release
   });
   try {
     await fixture.manager.start();
-    const replacement =
-      await fixture.manager.refreshPluginAfterCommit("target");
+    const replacement = await fixture.manager.refreshCapabilitiesAfterCommit();
     assert.equal(replacement.status, "failed");
     assert.equal(leased.released.includes("fixture-generation-2"), true);
     assert.deepEqual(fixture.manager.status, {
@@ -516,8 +515,8 @@ test("double timeout retains both generations while ordinary work continues and 
   });
   try {
     await fixture.manager.start();
-    const replacement =
-      await fixture.manager.refreshPluginAfterCommit("target");
+    const processId = fixture.manager.processId;
+    const replacement = await fixture.manager.refreshCapabilitiesAfterCommit();
     assert.equal(replacement.status, "failed");
     if (replacement.status === "failed") {
       assert.match(replacement.message, /confirmation remains pending/u);
@@ -528,10 +527,11 @@ test("double timeout retains both generations while ordinary work continues and 
       (await fixture.manager.listThreadSummaries())[0]?.threadId,
       "fixture-thread",
     );
+    assert.equal(fixture.manager.processId, processId);
     await waitFor(() => leased.invocations.length === 1);
     assert.deepEqual(leased.invocations, ["fixture-generation-2:summary"]);
-    assert.deepEqual(await fixture.manager.refreshPluginAfterCommit("target"), {
-      status: "reloaded",
+    assert.deepEqual(await fixture.manager.refreshCapabilitiesAfterCommit(), {
+      status: "refreshed",
     });
     assert.equal(leased.captured(), 3);
   } finally {

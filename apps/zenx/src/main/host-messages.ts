@@ -69,7 +69,7 @@ export type HostCommand =
   | {
       type: "capabilities/replace";
       requestId: string;
-      targetPluginId: string;
+      targetPluginId?: string;
       capabilities: ZenXCapabilityGenerationSnapshot;
     }
   | { type: "capabilities/current"; requestId: string }
@@ -202,7 +202,8 @@ export function isHostCommand(value: unknown): value is HostCommand {
       typeof command.generationToken === "string") ||
     (type === "capabilities/replace" &&
       typeof command.requestId === "string" &&
-      typeof command.targetPluginId === "string" &&
+      (command.targetPluginId === undefined ||
+        typeof command.targetPluginId === "string") &&
       isCapabilityHostSnapshot(command.capabilities)) ||
     (type === "capabilities/current" &&
       typeof command.requestId === "string") ||

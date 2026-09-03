@@ -376,16 +376,18 @@ export class AppServerManager {
   }
 
   async refreshCapabilitiesAfterCommit(): Promise<ZenXPostCommitCapabilityRefresh> {
-    try {
-      await this.restartCapabilities();
-      return { status: "refreshed" };
-    } catch (error) {
-      return { status: "failed", message: asError(error).message };
-    }
+    const result = await this.#enqueueCapabilityRefresh();
+    return result.status === "reloaded" ? { status: "refreshed" } : result;
   }
 
   async refreshPluginAfterCommit(
     targetPluginId: string,
+  ): Promise<{ status: "reloaded" } | { status: "failed"; message: string }> {
+    return await this.#enqueueCapabilityRefresh(targetPluginId);
+  }
+
+  async #enqueueCapabilityRefresh(
+    targetPluginId?: string,
   ): Promise<{ status: "reloaded" } | { status: "failed"; message: string }> {
     const refresh = this.#pluginRefreshTail.then(
       async () => await this.#refreshPluginAfterCommit(targetPluginId),
@@ -398,12 +400,15 @@ export class AppServerManager {
   }
 
   async #refreshPluginAfterCommit(
-    targetPluginId: string,
+    targetPluginId?: string,
   ): Promise<{ status: "reloaded" } | { status: "failed"; message: string }> {
     let capturedGenerationToken: string | undefined;
     let replacementSent = false;
     try {
-      if (!/^[a-z][a-z0-9-]{1,62}$/u.test(targetPluginId)) {
+      if (
+        targetPluginId !== undefined &&
+        !/^[a-z][a-z0-9-]{1,62}$/u.test(targetPluginId)
+      ) {
         throw new Error(`Invalid target plugin id: ${targetPluginId}`);
       }
       const child = this.#child;
@@ -425,7 +430,10 @@ export class AppServerManager {
       const requestId = `capability-replace-${String(this.#nextCapabilityReplacementRequest++)}`;
       const capabilities = this.#captureCapabilitySnapshot();
       capturedGenerationToken = capabilities.generationToken;
-      if (this.#publishedCapabilitySnapshot !== undefined) {
+      if (
+        targetPluginId !== undefined &&
+        this.#publishedCapabilitySnapshot !== undefined
+      ) {
         assertTargetOnlyCapabilityChange(
           this.#publishedCapabilitySnapshot,
           capabilities,
@@ -438,7 +446,7 @@ export class AppServerManager {
           if (!this.#pendingCapabilityReplacements.delete(requestId)) return;
           reject(
             new Error(
-              `Plugin ${targetPluginId} capability replacement timed out after ${String(timeoutMs)}ms`,
+              `${targetPluginId === undefined ? "Capability" : `Plugin ${targetPluginId} capability`} replacement timed out after ${String(timeoutMs)}ms`,
             ),
           );
         }, timeoutMs);
@@ -467,7 +475,7 @@ export class AppServerManager {
           {
             type: "capabilities/replace",
             requestId,
-            targetPluginId,
+            ...(targetPluginId === undefined ? {} : { targetPluginId }),
             capabilities,
           } satisfies HostCommand,
           (error) => {

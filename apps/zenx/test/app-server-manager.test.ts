@@ -12,7 +12,10 @@ import {
   readZenXConnectionDescriptor,
   ZenXProtocolClient,
 } from "../src/protocol-client/index.js";
-import type { ZenXCapabilityHost } from "../src/main/capabilities/types.js";
+import type {
+  ZenXCapabilityHost,
+  ZenXCapabilityHostSnapshot,
+} from "../src/main/capabilities/types.js";
 import { ZenXAutomationControlCapabilityPackage } from "../src/main/capabilities/automation-control-package.js";
 import { ZenXTriggerService } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
@@ -364,7 +367,7 @@ test("refreshes one plugin projection in the existing target App Server process"
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-plugin-refresh-"),
   );
-  let snapshot = pluginHostSnapshot("Target one");
+  let snapshot: ZenXCapabilityHostSnapshot = pluginHostSnapshot("Target one");
   let generation = 1;
   const released: string[] = [];
   const capabilityHost: ZenXCapabilityHost = {
@@ -432,7 +435,12 @@ function pluginHostSnapshot(description: string) {
   const tool = {
     name: "target_echo",
     description,
-    inputSchema: { type: "object" },
+    inputSchema: {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
+    },
   };
   return {
     definitions: [tool],
@@ -805,7 +813,7 @@ test("bridges a granted structured capability through the real App Server host",
   }
 });
 
-test("stop closes capability admission before aborting and settling accepted execution", async () => {
+test("generic refresh preserves an active Turn and stop later closes capability admission", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-capability-stop-"),
   );
@@ -879,6 +887,12 @@ test("stop closes capability admission before aborting and settling accepted exe
       input: [{ type: "text", text: "!tool demo_wait {}" }],
     });
     await within(started.promise);
+
+    const processId = manager.processId;
+    assert.deepEqual(await manager.refreshCapabilitiesAfterCommit(), {
+      status: "refreshed",
+    });
+    assert.equal(manager.processId, processId);
 
     let stopReturned = false;
     const stop = manager.stop().then(() => {

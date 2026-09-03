@@ -288,6 +288,49 @@ test("host generation leases route v1 and v2 after v3 publishes and reject relea
   assert.equal(closed.includes("v3"), true);
 });
 
+test("Catalog stop revokes admission without waiting on a child host generation lease", async () => {
+  const environment = new ToolEnvironment();
+  const supervisor = new PluginRuntimeSupervisor(environment);
+  const closed: string[] = [];
+  await supervisor.start({
+    identity: { pluginId: "fixture", packageVersion: "v1" },
+    definitions: [
+      {
+        name: "fixture_echo",
+        description: "Echo a generation",
+        inputSchema: { type: "object" },
+      },
+    ],
+    start: async () => ({
+      identity: { pluginId: "fixture", packageVersion: "v1" },
+      invoke: async () => ({ output: "v1", exitCode: 0 }),
+      close: async () => {
+        closed.push("v1");
+      },
+    }),
+  });
+  const generationToken = supervisor.captureHostGeneration(["fixture_echo"]);
+  await Promise.race([
+    supervisor.stop("fixture"),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Catalog stop deadlocked")), 100),
+    ),
+  ]);
+  assert.equal(closed.length, 0);
+  assert.equal(
+    (
+      await supervisor.invokeHostGeneration(
+        generationToken,
+        invocation("fixture_echo", "old-generation"),
+      )
+    ).output,
+    "v1",
+  );
+  supervisor.releaseHostGeneration(generationToken);
+  await waitUntil(() => closed.includes("v1"));
+  await supervisor.close();
+});
+
 test("local process runtime executes, cancels, closes, and never retries failures", async () => {
   const temporaryDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-plugin-runtime-"),
