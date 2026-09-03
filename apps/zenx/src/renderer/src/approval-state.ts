@@ -5,7 +5,7 @@ import type {
 } from "../../main/app-server-manager.js";
 
 export interface ApprovalCardState extends ApprovalRequestEvent {
-  status: "pending" | "responding" | "resolved";
+  status: "pending" | "responding";
   decision: ApprovalDecision | null;
 }
 
@@ -17,7 +17,7 @@ export function replacePendingApprovals(
   pending: readonly ApprovalRequestEvent[],
   events: readonly ApprovalStateEvent[] = [],
 ): ApprovalCardState[] {
-  const projected = events.reduce<ApprovalCardState[]>(
+  return events.reduce<ApprovalCardState[]>(
     (current, update) =>
       update.type === "requested"
         ? addApprovalRequest(current, update.event)
@@ -28,7 +28,6 @@ export function replacePendingApprovals(
       decision: null,
     })),
   );
-  return projected.filter((approval) => approval.status !== "resolved");
 }
 
 export function addApprovalRequest(
@@ -68,23 +67,11 @@ export function resolveApproval(
   approvals: readonly ApprovalCardState[],
   event: ApprovalResolvedEvent,
 ): ApprovalCardState[] {
-  return approvals.map((approval) =>
-    approval.requestId === event.requestId
-      ? {
-          ...approval,
-          status: "resolved",
-          decision: event.decision,
-        }
-      : approval,
-  );
+  return approvals.filter((approval) => approval.requestId !== event.requestId);
 }
 
 export function pendingApprovalThreadIds(
   approvals: readonly ApprovalCardState[],
 ): Set<string> {
-  return new Set(
-    approvals
-      .filter((approval) => approval.status !== "resolved")
-      .map((approval) => approval.params.threadId),
-  );
+  return new Set(approvals.map((approval) => approval.params.threadId));
 }

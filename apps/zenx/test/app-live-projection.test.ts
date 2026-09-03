@@ -82,6 +82,15 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
       document.body.textContent ?? "",
       /attachment projection unavailable/u,
     );
+    await act(async () => {
+      usage.resolve({
+        thread: { responseCount: 1, inputTokens: 7, outputTokens: 3 },
+        turns: {},
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.match(document.body.textContent ?? "", /7 in/u);
   } finally {
     await harness.unmount();
   }
@@ -211,6 +220,76 @@ test("a late resume response from the previous Host generation cannot replace th
     });
     assert.match(document.body.textContent ?? "", /current generation/u);
     assert.doesNotMatch(document.body.textContent ?? "", /stale generation/u);
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("a successor ready snapshot inherits live approval events when it fails", async () => {
+  const snapshots = [
+    deferred<ApprovalRequestEvent[]>(),
+    deferred<ApprovalRequestEvent[]>(),
+  ];
+  let snapshotCalls = 0;
+  let status: ((value: AppServerHostStatus) => void) | undefined;
+  let requestApproval: ((value: ApprovalRequestEvent) => void) | undefined;
+  let resolveApproval: ((value: ApprovalResolvedEvent) => void) | undefined;
+  const live = approval("live-generation-id", "live command");
+  const harness = await mountApp({
+    request: async (method) => {
+      if (method === "thread/resume") return resumed(thread());
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    getPendingApprovals: async () => {
+      const snapshot = snapshots[snapshotCalls++];
+      assert.ok(snapshot);
+      return await snapshot.promise;
+    },
+    onStatus: (listener) => {
+      status = listener;
+      return () => {
+        status = undefined;
+      };
+    },
+    onApprovalRequest: (listener) => {
+      requestApproval = listener;
+      return () => {
+        requestApproval = undefined;
+      };
+    },
+    onApprovalResolved: (listener) => {
+      resolveApproval = listener;
+      return () => {
+        resolveApproval = undefined;
+      };
+    },
+  });
+  try {
+    await waitFor(() => snapshotCalls === 1);
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    assert.ok(status);
+    assert.ok(requestApproval);
+    assert.ok(resolveApproval);
+
+    await act(async () => {
+      requestApproval?.(live);
+      status?.({ type: "ready", reconnected: true });
+      resolveApproval?.({
+        requestId: "an-old-generation-ui-id",
+        threadId: "thread-1",
+        decision: "cancel",
+      });
+      snapshots[1]!.reject(new Error("successor snapshot failed"));
+      snapshots[0]!.resolve([]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    assert.match(document.body.textContent ?? "", /live command/u);
+    assert.match(document.body.textContent ?? "", /successor snapshot failed/u);
   } finally {
     await harness.unmount();
   }

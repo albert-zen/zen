@@ -117,6 +117,10 @@ export function App() {
     epoch: number;
     notifications: BufferedProtocolNotification[];
   } | null>(null);
+  const invalidateThreadSelection = () => {
+    selectionEpoch.current += 1;
+    pendingResumeProjectionRef.current = null;
+  };
   const approvalSnapshotEpoch = useRef(0);
   const pendingApprovalSnapshotRef = useRef<{
     epoch: number;
@@ -294,7 +298,7 @@ export function App() {
 
   const abandonNewThreadDraft = () => {
     if (newThreadDraftRef.current === null) return;
-    selectionEpoch.current += 1;
+    invalidateThreadSelection();
     confirmNewThreadDraft(null);
   };
 
@@ -574,7 +578,12 @@ export function App() {
     };
     const replaceApprovalSnapshot = async () => {
       const epoch = ++approvalSnapshotEpoch.current;
-      const pending = { epoch, events: [] as ApprovalStateEvent[] };
+      const pending = {
+        epoch,
+        events: [
+          ...(pendingApprovalSnapshotRef.current?.events ?? []),
+        ] as ApprovalStateEvent[],
+      };
       pendingApprovalSnapshotRef.current = pending;
       try {
         const snapshot = await window.zenx.protocol.getPendingApprovals();
@@ -798,7 +807,7 @@ export function App() {
 
   const showNewThreadDraft = (workspace: string | null) => {
     discardRecoverableDraft();
-    selectionEpoch.current += 1;
+    invalidateThreadSelection();
     threadUsageLoadEpoch.current += 1;
     selectedThreadIdRef.current = null;
     setPage("agent");
@@ -1321,7 +1330,7 @@ export function App() {
 
   const clearSelectedThreadForArchive = (threadId: string) => {
     if (selectedThreadIdRef.current !== threadId) return;
-    selectionEpoch.current += 1;
+    invalidateThreadSelection();
     selectedThreadIdRef.current = null;
     setSelectedThreadId(null);
     setThreadDetail(null);
@@ -1563,7 +1572,7 @@ export function App() {
             <button
               type="button"
               onClick={() => {
-                selectionEpoch.current += 1;
+                invalidateThreadSelection();
                 setPage("agent");
                 selectedThreadIdRef.current = null;
                 setSelectedThreadId(null);

@@ -49,7 +49,6 @@ test("keeps approval interaction transient and resolves the same card", () => {
     decision: "decline",
   };
   const resolved = resolveApproval(restored, resolvedEvent);
-  assert.equal(resolved[0]?.status, "resolved");
-  assert.equal(resolved[0]?.decision, "decline");
+  assert.deepEqual(resolved, []);
   assert.equal(pendingApprovalThreadIds(resolved).size, 0);
 });
