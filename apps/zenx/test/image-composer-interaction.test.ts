@@ -213,6 +213,64 @@ test("Unknown image capability warns but keeps the try-send action available", a
   });
 });
 
+test("attachment thumbnails reuse cached payloads across streaming re-renders and remounts", async () => {
+  await withDom(async (dom, root) => {
+    const streaming: AttachmentRef = {
+      type: "attachment",
+      sha256: "f".repeat(64),
+      mediaType: "image/png",
+      byteLength: 4,
+      width: 1,
+      height: 1,
+    };
+    let reads = 0;
+    let createdUrls = 0;
+    Object.assign(dom.window.URL, {
+      createObjectURL: () => `blob:zenx-stream-${String((createdUrls += 1))}`,
+    });
+    const streamingView = (attachment: AttachmentRef) =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: addComposerImages(emptyComposerState(), [
+            { id: "draft-1", name: "stream.png", attachment },
+          ]),
+          thread: emptyThread(),
+          onDraftChange: () => undefined,
+          onInterrupt: async () => undefined,
+          onReadAttachment: async () => {
+            reads += 1;
+            return new Uint8Array([1, 2, 3, 4]);
+          },
+          onRespondToApproval: async () => undefined,
+          onSubmit: async () => undefined,
+        }),
+      );
+    await act(async () => void streamingView(streaming));
+    await act(async () => Promise.resolve());
+    const firstSrc = required<HTMLImageElement>(".draft-image img").src;
+    assert.equal(reads, 1);
+    assert.equal(createdUrls, 1);
+
+    // A streaming re-render with fresh callback and attachment identities of
+    // the same attachment must not re-read, recreate the object URL, or drop
+    // back to the loading placeholder.
+    await act(async () => void streamingView({ ...streaming }));
+    await act(async () => Promise.resolve());
+    assert.equal(reads, 1);
+    assert.equal(createdUrls, 1);
+    assert.equal(required<HTMLImageElement>(".draft-image img").src, firstSrc);
+
+    // Unmount and remount (Turn disclosure collapse and reopen) also reuse
+    // the session cache instead of flashing the loading placeholder.
+    await act(async () => root.render(null));
+    await act(async () => void streamingView(streaming));
+    assert.equal(reads, 1);
+    assert.equal(createdUrls, 1);
+    assert.equal(required<HTMLImageElement>(".draft-image img").src, firstSrc);
+  });
+});
+
 async function withDom(
   run: (dom: JSDOM, root: ReturnType<typeof createRoot>) => Promise<void>,
 ) {
